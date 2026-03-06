@@ -18,12 +18,12 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Devices
 
-- [ ] **DEV-01**: User can add a device by IP/hostname with SNMP credentials
-- [ ] **DEV-02**: Device cards display hostname, IP, and hardware model
+- [x] **DEV-01**: User can add a device by IP/hostname with SNMP credentials
+- [x] **DEV-02**: Device cards display hostname, IP, and hardware model
 - [ ] **DEV-03**: Device cards show a type icon (Router, Switch, AP) with visual differentiation
 - [ ] **DEV-04**: Device cards show a status indicator (up/down/degraded)
-- [ ] **DEV-05**: User can edit device properties after creation
-- [ ] **DEV-06**: User can remove a device from the topology
+- [x] **DEV-05**: User can edit device properties after creation
+- [x] **DEV-06**: User can remove a device from the topology
 
 ### Links
 
@@ -116,12 +116,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CANV-04 | Phase 2 | Pending |
 | CANV-05 | Phase 2 | Pending |
 | CANV-06 | Phase 2 | Pending |
-| DEV-01 | Phase 1 | Pending |
-| DEV-02 | Phase 1 | Pending |
+| DEV-01 | Phase 1 | Complete |
+| DEV-02 | Phase 1 | Complete |
 | DEV-03 | Phase 2 | Pending |
 | DEV-04 | Phase 2 | Pending |
-| DEV-05 | Phase 1 | Pending |
-| DEV-06 | Phase 1 | Pending |
+| DEV-05 | Phase 1 | Complete |
+| DEV-06 | Phase 1 | Complete |
 | LINK-01 | Phase 2 | Pending |
 | LINK-02 | Phase 2 | Pending |
 | LINK-03 | Phase 3 | Pending |
