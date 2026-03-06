@@ -54,8 +54,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **INTG-01**: All metrics are sourced from an existing Prometheus instance via PromQL
 - [ ] **INTG-02**: User can click a device to open its Grafana dashboard in a new tab
 - [ ] **INTG-03**: User can click a metric to open the relevant Grafana panel
-- [ ] **INTG-04**: SNMP is used for topology discovery (LLDP/CDP neighbors, interfaces)
-- [ ] **INTG-05**: Multi-vendor support — works with any device exposing standard SNMP MIBs
+- [x] **INTG-04**: SNMP is used for topology discovery (LLDP/CDP neighbors, interfaces)
+- [x] **INTG-05**: Multi-vendor support — works with any device exposing standard SNMP MIBs
 
 ### Routing
 
@@ -140,8 +140,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INTG-01 | Phase 3 | Pending |
 | INTG-02 | Phase 4 | Pending |
 | INTG-03 | Phase 4 | Pending |
-| INTG-04 | Phase 1 | Pending |
-| INTG-05 | Phase 1 | Pending |
+| INTG-04 | Phase 1 | Complete |
+| INTG-05 | Phase 1 | Complete |
 | ROUT-01 | Phase 5 | Pending |
 | ROUT-02 | Phase 5 | Pending |
 | ROUT-03 | Phase 5 | Pending |
