@@ -5,4 +5,4 @@ data/
 .gemini/
 
 # Build output
-theia
+/theia

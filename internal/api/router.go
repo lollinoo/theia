@@ -1,0 +1,123 @@
+package api
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+
+	"github.com/azmin/mikrotik-theia/internal/domain"
+	"github.com/azmin/mikrotik-theia/internal/service"
+	"github.com/azmin/mikrotik-theia/internal/worker"
+)
+
+// NewRouter creates the HTTP handler with all /api/v1/ routes registered.
+// Uses standard net/http (no framework needed at this scale).
+func NewRouter(
+	db *sql.DB,
+	deviceService *service.DeviceService,
+	linkRepo domain.LinkRepository,
+	settingsRepo domain.SettingsRepository,
+	poller *worker.Poller,
+) http.Handler {
+	mux := http.NewServeMux()
+
+	deviceHandler := NewDeviceHandler(deviceService)
+	settingsHandler := NewSettingsHandler(settingsRepo)
+	healthHandler := NewHealthHandler(db, poller)
+
+	// Device routes
+	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			deviceHandler.HandleCreate(w, r)
+		case http.MethodGet:
+			deviceHandler.HandleList(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	mux.HandleFunc("/api/v1/devices/batch", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		deviceHandler.HandleBatchAdd(w, r)
+	})
+
+	// Device by ID routes (must be registered after /devices/batch to avoid conflicts)
+	mux.HandleFunc("/api/v1/devices/", func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is a probe request
+		if len(r.URL.Path) > len("/api/v1/devices/") {
+			pathSuffix := r.URL.Path[len("/api/v1/devices/"):]
+			if idx := indexOf(pathSuffix, "/probe"); idx >= 0 && r.Method == http.MethodPost {
+				deviceHandler.HandleProbe(w, r)
+				return
+			}
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			deviceHandler.HandleGet(w, r)
+		case http.MethodPut:
+			deviceHandler.HandleUpdate(w, r)
+		case http.MethodDelete:
+			deviceHandler.HandleDelete(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	// Links routes
+	mux.HandleFunc("/api/v1/links", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		links, err := linkRepo.GetAll()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": links})
+	})
+
+	// Settings routes
+	mux.HandleFunc("/api/v1/settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		settingsHandler.HandleGetAll(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		settingsHandler.HandleUpdate(w, r)
+	})
+
+	// Health endpoint
+	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		healthHandler.HandleHealth(w, r)
+	})
+
+	// Apply middleware chain: CORS -> Logger -> JSON Content-Type
+	var handler http.Handler = mux
+	handler = JSONContentType(handler)
+	handler = RequestLogger(handler)
+	handler = CORS(handler)
+
+	return handler
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}

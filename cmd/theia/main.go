@@ -1,17 +1,25 @@
 package main
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
+	"syscall"
+	"time"
 
+	"github.com/azmin/mikrotik-theia/internal/api"
 	"github.com/azmin/mikrotik-theia/internal/config"
+	"github.com/azmin/mikrotik-theia/internal/domain"
 	"github.com/azmin/mikrotik-theia/internal/repository/sqlite"
+	"github.com/azmin/mikrotik-theia/internal/service"
+	"github.com/azmin/mikrotik-theia/internal/snmp"
+	"github.com/azmin/mikrotik-theia/internal/worker"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -56,18 +64,87 @@ func main() {
 	}
 	log.Println("Database migrations completed")
 
-	// Health endpoint
-	http.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status": "ok",
-			"name":   "mikrotik-theia",
-		})
-	})
+	// Create repositories
+	deviceRepo := sqlite.NewDeviceRepo(db)
+	linkRepo := sqlite.NewLinkRepo(db)
+	settingsRepo := sqlite.NewSettingsRepo(db)
+
+	// Create SNMP discovery function (real gosnmp clients)
+	discoverFunc := newSNMPDiscoverFunc(settingsRepo)
+
+	// Create service layer
+	deviceService := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFunc)
+
+	// Create and start background poller
+	poller := worker.NewPoller(deviceService, settingsRepo)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	poller.Start(ctx)
+
+	// Create HTTP router with all /api/v1/ routes
+	router := api.NewRouter(db, deviceService, linkRepo, settingsRepo, poller)
+
+	// Create HTTP server
+	server := &http.Server{
+		Addr:    cfg.ListenAddr,
+		Handler: router,
+	}
+
+	// Graceful shutdown on SIGINT/SIGTERM
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		log.Printf("Received signal %s, shutting down...", sig)
+
+		// Stop the poller first
+		poller.Stop()
+
+		// Shutdown HTTP server with timeout
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP server shutdown error: %v", err)
+		}
+	}()
 
 	log.Printf("MikroTik Theia starting on %s", cfg.ListenAddr)
-	if err := http.ListenAndServe(cfg.ListenAddr, nil); err != nil {
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
 	}
-	fmt.Println()
+	log.Println("Server stopped")
+}
+
+// newSNMPDiscoverFunc creates a DiscoverFunc that uses real gosnmp clients.
+// It reads SNMP timeout and retries from the settings repository.
+func newSNMPDiscoverFunc(settingsRepo domain.SettingsRepository) service.DiscoverFunc {
+	return func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		// Read timeout and retries from settings
+		timeout := 5 * time.Second
+		retries := 2
+
+		if val, err := settingsRepo.Get(domain.SettingSNMPTimeout); err == nil {
+			if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+				timeout = time.Duration(secs) * time.Second
+			}
+		}
+		if val, err := settingsRepo.Get(domain.SettingSNMPRetries); err == nil {
+			if r, err := strconv.Atoi(val); err == nil && r >= 0 {
+				retries = r
+			}
+		}
+
+		client, err := snmp.NewClient(target, creds, timeout, retries)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := client.Connect(); err != nil {
+			return nil, err
+		}
+		defer client.Close()
+
+		return snmp.DiscoverDevice(client)
+	}
 }
