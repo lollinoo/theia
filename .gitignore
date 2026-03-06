@@ -1,0 +1,5 @@
+# Local development artifacts
+tmp/
+data/
+*.db
+.gemini/

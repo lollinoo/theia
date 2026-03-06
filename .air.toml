@@ -1,0 +1,22 @@
+# Air hot-reload configuration for MikroTik Theia
+# Docs: https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -buildvcs=false -o ./tmp/theia ./cmd/theia/"
+  bin = "./tmp/theia"
+  include_ext = ["go", "yaml"]
+  exclude_dir = ["tmp", "data", "vendor", ".git", "docker", "scripts", "frontend"]
+  exclude_regex = ["_test\\.go$"]
+  delay = 1000
+  stop_on_error = true
+  send_interrupt = true
+  kill_delay = 500
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true

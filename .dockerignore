@@ -1,0 +1,9 @@
+.git
+tmp/
+data/
+*.db
+.planning/
+.claude/
+.agents/
+.gemini/
+frontend_example.jpg

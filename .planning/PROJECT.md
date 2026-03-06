@@ -61,6 +61,19 @@ Network operators can see their entire topology at a glance with live stats on e
 - **SNMP compatibility**: Must work with any device exposing standard SNMP MIBs
 - **Real-time**: Configurable polling intervals, not just static snapshots
 
+## Current Milestone: v1.0 Network Topology Visualizer
+
+**Goal:** Deliver a functional network topology map with real-time Prometheus metrics, multi-vendor SNMP support, and Grafana integration.
+
+**Target features:**
+- Interactive canvas with drag-and-drop device positioning and auto-layout
+- Real-time device metrics (CPU, memory, uptime, temperature) from Prometheus
+- Link visualization with bandwidth labels and live throughput
+- Multi-vendor support via SNMP
+- Visual alerts for device/link status changes
+- Click-through to Grafana dashboards
+- Dark theme UI matching reference design
+
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
@@ -73,4 +86,4 @@ Network operators can see their entire topology at a glance with live stats on e
 | Skip containers for v1 | Focus on network topology first; container/service mapping is a v2 feature | — Pending |
 
 ---
-*Last updated: 2026-03-05 after initialization*
+*Last updated: 2026-03-05 after milestone v1.0 start*

@@ -1,0 +1,6 @@
+# MikroTik Theia - Default Development Configuration
+# Override via THEIA_* environment variables
+
+listen_addr: ":8080"
+db_path: "/app/data/theia.db"
+log_level: "debug"

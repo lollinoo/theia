@@ -1,0 +1,66 @@
+# =============================================================================
+# MikroTik Theia - Frontend Placeholder
+# =============================================================================
+# Phase 2 will replace this with the React app build
+FROM nginx:alpine
+
+COPY <<'EOF' /usr/share/nginx/html/index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MikroTik Theia</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0f1419;
+      color: #e1e8ed;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container { text-align: center; padding: 2rem; }
+    h1 {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, #00d4ff, #7b2ff7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    p { font-size: 1.1rem; color: #8899a6; margin-bottom: 1.5rem; }
+    .status {
+      display: inline-block;
+      padding: 0.4rem 1rem;
+      border: 1px solid #2d3e50;
+      border-radius: 4px;
+      color: #657786;
+      font-size: 0.85rem;
+    }
+    .dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      background: #00c853;
+      border-radius: 50%;
+      margin-right: 6px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>MikroTik Theia</h1>
+    <p>Network Topology Visualizer</p>
+    <div class="status">
+      <span class="dot"></span>
+      Frontend placeholder — Phase 2
+    </div>
+  </div>
+</body>
+</html>
+EOF
+
+EXPOSE 80
