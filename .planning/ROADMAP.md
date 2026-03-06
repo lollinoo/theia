@@ -53,7 +53,7 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Go project scaffold, domain model, SQLite persistence, and config system
+- [x] 01-01-PLAN.md — Go project scaffold, domain model, SQLite persistence, and config system
 - [ ] 01-02-PLAN.md — SNMP client, device discovery, and device type auto-detection
 - [ ] 01-03-PLAN.md — REST API, async device management, background poller, and main.go wiring
 

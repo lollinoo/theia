@@ -1,0 +1,23 @@
+# =============================================================================
+# MikroTik Theia — Bootstrap Configuration
+# =============================================================================
+# This file contains startup/bootstrap settings only.
+# Runtime settings (Prometheus URL, polling interval, Grafana URL, etc.)
+# are stored in the SQLite database and editable via the API.
+#
+# All values can be overridden with environment variables:
+#   THEIA_LISTEN_ADDR, THEIA_DB_PATH, THEIA_LOG_LEVEL
+# =============================================================================
+
+# Address and port the HTTP server listens on.
+# Default: ":8080"
+listen_addr: ":8080"
+
+# Path to the SQLite database file.
+# The directory will be created automatically if it does not exist.
+# Default: "./data/theia.db"
+db_path: "./data/theia.db"
+
+# Log verbosity: debug, info, warn, error
+# Default: "info"
+log_level: "info"
