@@ -67,11 +67,13 @@ Plans:
   3. Links between devices appear as lines with bandwidth capacity labels
   4. Device positions persist across browser sessions (survive page reload)
   5. User can search for a device by hostname or IP and the canvas focuses on the result
-**Plans**: TBD
+**Plans:** 4 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md — React project scaffold with Vite, TypeScript, Tailwind CSS, dark theme, and Docker integration
+- [ ] 02-02-PLAN.md — Backend position persistence: SQLite migration, repository, and REST API endpoints
+- [ ] 02-03-PLAN.md — React Flow canvas with custom device card nodes, link edges, and API data fetching
+- [ ] 02-04-PLAN.md — Force-directed auto-layout, position persistence wiring, search overlay, and zoom controls
 
 ### Phase 3: Real-Time Pipeline
 **Goal**: The topology map is alive -- device metrics update in real-time, links show live throughput, and alerts are visually reflected on the canvas
@@ -127,7 +129,7 @@ Phases execute in numeric order: 0 -> 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 0. Docker Environment | 2/2 | Completed | 2026-03-05 |
 | 1. Foundation | 0/3 | Planning complete | - |
-| 2. Interactive Canvas | 0/0 | Not started | - |
+| 2. Interactive Canvas | 0/4 | Planning complete | - |
 | 3. Real-Time Pipeline | 0/0 | Not started | - |
 | 4. Integration and Polish | 0/0 | Not started | - |
 | 5. Routing Protocols | 0/0 | Not started | - |
