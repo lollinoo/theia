@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, and drill into Grafana for deep dives
-**Current focus:** Phase 3 implementation complete; awaiting explicit human approval for Plan 04
+**Current focus:** Phase 4 planning and execution next
 
 ## Current Position
 
-Phase: 3 of 5 (Real-Time Pipeline)
-Plan: 4 of 4 in current phase
-Status: Phase 3 In Review
-Last activity: 2026-03-07 — Phase 3, Plan 04 implemented and automated verification passed
+Phase: 4 of 5 (Integration and Polish)
+Plan: 0 of 0 in current phase
+Status: Phase 3 Completed
+Last activity: 2026-03-07 — Phase 3, Plan 04 approved and Phase 3 closed
 Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3)
 
 ## Performance Metrics
@@ -33,7 +33,7 @@ Progress: [██████████] 100% (Phase 0) -> [██████
 
 **Recent Trend:**
 - Last 5 plans: P2-4, P3-1, P3-2, P3-3, P3-4
-- Trend: Phase 3 real-time pipeline is implemented end to end and waiting on explicit human sign-off
+- Trend: Phase 3 is complete and the project is ready to define Phase 4 work
 
 *Updated after each plan completion*
 
@@ -75,17 +75,17 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Human approval for `03-04-PLAN.md`: user browser confirmation / explicit `approved`
-- Decide whether to begin Phase 4 after human approval
+- Draft and sequence Phase 4 plans (`04-01`, `04-02`)
+- Decide whether to add dev Prometheus alert rules before or during Phase 4
 
 ### Blockers/Concerns
 
 - Dev simulators do not currently expose ENTITY-SENSOR temperature series, so temperature will remain nil / `N/A` unless a device reports it.
 - Prometheus alert transport is wired, but the dev Prometheus config still has no alerting rules, so alert snapshots are empty for now.
-- The plan’s blocking human verification step is still open because automated checks passed but the user has not yet explicitly approved the phase.
+- Phase 4 has not been decomposed into executable plan files yet; roadmap-level planning is the next required step.
 
 ## Session Continuity
 
 Last session: 2026-03-07
-Stopped at: Phase 3 Plan 04 implemented, proxy/runtime verified, awaiting human approval
-Resume file: .planning/phases/03-real-time-pipeline/03-04-SUMMARY.md
+Stopped at: Phase 3 complete and approved
+Resume file: .planning/ROADMAP.md

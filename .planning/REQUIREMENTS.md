@@ -9,49 +9,49 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Canvas
 
-- [ ] **CANV-01**: User can pan and zoom the topology canvas freely
-- [ ] **CANV-02**: User can drag devices to reposition them on the canvas
-- [ ] **CANV-03**: Device positions persist across browser sessions
-- [ ] **CANV-04**: Auto-layout algorithm initially positions nodes based on topology connections
-- [ ] **CANV-05**: User can manually override auto-layout positions per device
+- [x] **CANV-01**: User can pan and zoom the topology canvas freely
+- [x] **CANV-02**: User can drag devices to reposition them on the canvas
+- [x] **CANV-03**: Device positions persist across browser sessions
+- [x] **CANV-04**: Auto-layout algorithm initially positions nodes based on topology connections
+- [x] **CANV-05**: User can manually override auto-layout positions per device
 - [ ] **CANV-06**: User can upload a background image (floor plan/network diagram) to the canvas
 
 ### Devices
 
 - [x] **DEV-01**: User can add a device by IP/hostname with SNMP credentials
 - [x] **DEV-02**: Device cards display hostname, IP, and hardware model
-- [ ] **DEV-03**: Device cards show a type icon (Router, Switch, AP) with visual differentiation
-- [ ] **DEV-04**: Device cards show a status indicator (up/down/degraded)
+- [x] **DEV-03**: Device cards show a type icon (Router, Switch, AP) with visual differentiation
+- [x] **DEV-04**: Device cards show a status indicator (up/down/degraded)
 - [x] **DEV-05**: User can edit device properties after creation
 - [x] **DEV-06**: User can remove a device from the topology
 
 ### Links
 
-- [ ] **LINK-01**: Links between devices are visualized as lines on the canvas
-- [ ] **LINK-02**: Links display bandwidth capacity labels
-- [ ] **LINK-03**: Links show live throughput (TX/RX) from Prometheus metrics
-- [ ] **LINK-04**: Links are color-coded by utilization level
+- [x] **LINK-01**: Links between devices are visualized as lines on the canvas
+- [x] **LINK-02**: Links display bandwidth capacity labels
+- [x] **LINK-03**: Links show live throughput (TX/RX) from Prometheus metrics
+- [x] **LINK-04**: Links are color-coded by utilization level
 - [ ] **LINK-05**: User can click a link to see per-interface statistics (TX/RX, errors, drops)
 
 ### Metrics
 
-- [ ] **METR-01**: Device cards display live CPU utilization from Prometheus
-- [ ] **METR-02**: Device cards display live memory utilization from Prometheus
-- [ ] **METR-03**: Device cards display device uptime from Prometheus
-- [ ] **METR-04**: Device cards display temperature from Prometheus (where available)
-- [ ] **METR-05**: Metrics update in real-time via WebSocket push
+- [x] **METR-01**: Device cards display live CPU utilization from Prometheus
+- [x] **METR-02**: Device cards display live memory utilization from Prometheus
+- [x] **METR-03**: Device cards display device uptime from Prometheus
+- [x] **METR-04**: Device cards display temperature from Prometheus (where available)
+- [x] **METR-05**: Metrics update in real-time via WebSocket push
 - [ ] **METR-06**: User can configure global polling interval
 - [ ] **METR-07**: User can configure per-device polling interval override
 
 ### Alerts
 
-- [ ] **ALRT-01**: Devices visually change (color/icon) when they go down
+- [x] **ALRT-01**: Devices visually change (color/icon) when they go down
 - [ ] **ALRT-02**: Links visually change when they go down or degrade
 - [ ] **ALRT-03**: Alert states reflect Prometheus alerting rules
 
 ### Integration
 
-- [ ] **INTG-01**: All metrics are sourced from an existing Prometheus instance via PromQL
+- [x] **INTG-01**: All metrics are sourced from an existing Prometheus instance via PromQL
 - [ ] **INTG-02**: User can click a device to open its Grafana dashboard in a new tab
 - [ ] **INTG-03**: User can click a metric to open the relevant Grafana panel
 - [x] **INTG-04**: SNMP is used for topology discovery (LLDP/CDP neighbors, interfaces)
@@ -65,8 +65,8 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### UX
 
-- [ ] **UX-01**: Dark theme UI matching the reference design
-- [ ] **UX-02**: User can search for devices by hostname or IP and canvas focuses on result
+- [x] **UX-01**: Dark theme UI matching the reference design
+- [x] **UX-02**: User can search for devices by hostname or IP and canvas focuses on result
 - [ ] **UX-03**: Keyboard shortcuts for common actions (search, add device, zoom)
 - [ ] **UX-04**: Canvas supports 100+ devices without performance degradation
 
@@ -110,34 +110,34 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CANV-01 | Phase 2 | Pending |
-| CANV-02 | Phase 2 | Pending |
-| CANV-03 | Phase 2 | Pending |
-| CANV-04 | Phase 2 | Pending |
-| CANV-05 | Phase 2 | Pending |
-| CANV-06 | Phase 2 | Pending |
+| CANV-01 | Phase 2 | Complete |
+| CANV-02 | Phase 2 | Complete |
+| CANV-03 | Phase 2 | Complete |
+| CANV-04 | Phase 2 | Complete |
+| CANV-05 | Phase 2 | Complete |
+| CANV-06 | Phase 4 | Pending |
 | DEV-01 | Phase 1 | Complete |
 | DEV-02 | Phase 1 | Complete |
-| DEV-03 | Phase 2 | Pending |
-| DEV-04 | Phase 2 | Pending |
+| DEV-03 | Phase 2 | Complete |
+| DEV-04 | Phase 2 | Complete |
 | DEV-05 | Phase 1 | Complete |
 | DEV-06 | Phase 1 | Complete |
-| LINK-01 | Phase 2 | Pending |
-| LINK-02 | Phase 2 | Pending |
-| LINK-03 | Phase 3 | Pending |
-| LINK-04 | Phase 3 | Pending |
+| LINK-01 | Phase 2 | Complete |
+| LINK-02 | Phase 2 | Complete |
+| LINK-03 | Phase 3 | Complete |
+| LINK-04 | Phase 3 | Complete |
 | LINK-05 | Phase 4 | Pending |
-| METR-01 | Phase 3 | Pending |
-| METR-02 | Phase 3 | Pending |
-| METR-03 | Phase 3 | Pending |
-| METR-04 | Phase 3 | Pending |
-| METR-05 | Phase 3 | Pending |
+| METR-01 | Phase 3 | Complete |
+| METR-02 | Phase 3 | Complete |
+| METR-03 | Phase 3 | Complete |
+| METR-04 | Phase 3 | Complete |
+| METR-05 | Phase 3 | Complete |
 | METR-06 | Phase 4 | Pending |
 | METR-07 | Phase 4 | Pending |
-| ALRT-01 | Phase 3 | Pending |
-| ALRT-02 | Phase 3 | Pending |
-| ALRT-03 | Phase 3 | Pending |
-| INTG-01 | Phase 3 | Pending |
+| ALRT-01 | Phase 3 | Complete |
+| ALRT-02 | Phase 4 | Pending |
+| ALRT-03 | Phase 4 | Pending |
+| INTG-01 | Phase 3 | Complete |
 | INTG-02 | Phase 4 | Pending |
 | INTG-03 | Phase 4 | Pending |
 | INTG-04 | Phase 1 | Complete |
@@ -145,10 +145,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ROUT-01 | Phase 5 | Pending |
 | ROUT-02 | Phase 5 | Pending |
 | ROUT-03 | Phase 5 | Pending |
-| UX-01 | Phase 2 | Pending |
-| UX-02 | Phase 2 | Pending |
+| UX-01 | Phase 2 | Complete |
+| UX-02 | Phase 2 | Complete |
 | UX-03 | Phase 4 | Pending |
-| UX-04 | Phase 2 | Pending |
+| UX-04 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 39 total
@@ -157,4 +157,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-03-05*
-*Last updated: 2026-03-05 after roadmap creation*
+*Last updated: 2026-03-07 after Phase 3 completion review*

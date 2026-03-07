@@ -12,27 +12,29 @@ Network operators can see their entire topology at a glance with live stats on e
 
 ### Validated
 
-(None yet — ship to validate)
+- [x] Manual device lifecycle via REST API: add, edit, and remove devices by IP/hostname with SNMP credentials
+- [x] Multi-vendor SNMP topology discovery for devices, interfaces, and LLDP/CDP neighbor relationships
+- [x] Interactive dark-themed topology canvas with pan, zoom, drag, minimap, search, and persistent layout
+- [x] Auto-layout with manual position override and saved node positions
+- [x] Device cards showing hostname, IP, hardware model, type icon, and down/degraded status treatment
+- [x] Link visualization with bandwidth labels
+- [x] Prometheus as the primary data source for live topology metrics
+- [x] Real-time device metrics on the canvas via WebSocket (CPU, memory, uptime, temperature where available)
+- [x] Live link throughput and utilization coloring on the canvas
+- [x] Reconnect handling and stale-metric clearing for the live topology view
 
 ### Active
 
-- [ ] Interactive canvas with free-form drag positioning of network devices
-- [ ] Auto-layout algorithm that initially positions nodes based on topology, with manual adjustment
-- [ ] Rich device cards showing hostname, IP, hardware specs, and status indicator
-- [ ] Real-time metrics on device cards (CPU, memory, uptime, temperature) pulled from Prometheus
-- [ ] Link visualization between devices with bandwidth labels and live throughput stats
-- [ ] Per-interface statistics (TX/RX, errors, drops) accessible from device cards
+- [ ] Background image upload for the topology canvas
+- [ ] Per-interface statistics (TX/RX, errors, drops) accessible from links or link drill-down
+- [ ] Prometheus alert-rule-backed visual alert coverage for device and link failures
+- [ ] Grafana dashboard and panel deep-links from devices and metrics
+- [ ] Configurable polling intervals (global and per-device)
+- [ ] Keyboard shortcuts for common actions (search, add device, zoom)
+- [ ] Verified performance hardening for 100+ devices on a single map
 - [ ] Routing information display (BGP sessions, OSPF neighbors, route counts)
-- [ ] Multi-vendor support via SNMP as common denominator
-- [ ] Direct device access (SNMP/API) for topology and configuration information
-- [ ] Prometheus as primary data source for all metrics (PromQL queries)
-- [ ] Configurable polling intervals (per-device and global)
-- [ ] Visual alerts on map (color changes, status icons) when devices or links go down
-- [ ] Click-through links from devices/metrics to corresponding Grafana dashboards
-- [ ] Manual device addition by IP/hostname
-- [ ] Device type icons (Router, Switch, AP) with visual differentiation
-- [ ] Dark theme UI matching the reference design
-- [ ] Support for 100+ devices on a single map
+- [ ] Broader multi-vendor validation beyond the current dev fixtures and seeded devices
+- [ ] Vendor-specific API extensions beyond SNMP where they improve topology or routing fidelity
 
 ### Out of Scope
 
@@ -61,29 +63,35 @@ Network operators can see their entire topology at a glance with live stats on e
 - **SNMP compatibility**: Must work with any device exposing standard SNMP MIBs
 - **Real-time**: Configurable polling intervals, not just static snapshots
 
-## Current Milestone: v1.0 Network Topology Visualizer
+## Current Milestone: Phase 4 Integration And Polish
 
-**Goal:** Deliver a functional network topology map with real-time Prometheus metrics, multi-vendor SNMP support, and Grafana integration.
+**Goal:** Build on the completed live topology map with Grafana deep-links, per-interface drill-down, configurable polling, and workflow polish.
 
-**Target features:**
-- Interactive canvas with drag-and-drop device positioning and auto-layout
-- Real-time device metrics (CPU, memory, uptime, temperature) from Prometheus
+**Delivered foundation:**
+- Interactive dark-themed canvas with drag-and-drop positioning and auto-layout
+- Real-time device metrics from Prometheus via WebSocket
 - Link visualization with bandwidth labels and live throughput
-- Multi-vendor support via SNMP
-- Visual alerts for device/link status changes
-- Click-through to Grafana dashboards
-- Dark theme UI matching reference design
+- Multi-vendor SNMP-backed topology discovery and persisted layout
+
+**Remaining target features:**
+- Grafana dashboard and panel deep-links
+- Per-interface statistics and link drill-down
+- Configurable polling controls
+- Background image upload and remaining canvas polish
+- Prometheus alert-rule-backed device/link failure visuals
+- Performance validation and hardening for 100+ devices
+- Keyboard shortcuts and remaining UI polish
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| React + Go stack | Performance-oriented, good ecosystem for both network tools and interactive UIs | — Pending |
-| Prometheus as primary data source | Leverage existing monitoring infrastructure, avoid duplicate collection | — Pending |
-| Complement Grafana (not replace) | Grafana excels at deep-dive dashboards; this provides topology context | — Pending |
-| Multi-vendor via SNMP | Common denominator across vendors; direct API integration can be added per-vendor | — Pending |
-| Manual device add only (v1) | Simpler MVP; auto-discovery adds complexity and security considerations | — Pending |
-| Skip containers for v1 | Focus on network topology first; container/service mapping is a v2 feature | — Pending |
+| React + Go stack | Performance-oriented, good ecosystem for both network tools and interactive UIs | Adopted and implemented |
+| Prometheus as primary data source | Leverage existing monitoring infrastructure, avoid duplicate collection | Adopted and implemented |
+| Complement Grafana (not replace) | Grafana excels at deep-dive dashboards; this provides topology context | Adopted; deep-links scheduled for Phase 4 |
+| Multi-vendor via SNMP | Common denominator across vendors; direct API integration can be added per-vendor | Adopted and implemented for core topology and metrics |
+| Manual device add only (v1) | Simpler MVP; auto-discovery adds complexity and security considerations | Adopted and implemented |
+| Skip containers for v1 | Focus on network topology first; container/service mapping is a v2 feature | Adopted and implemented |
 
 ---
-*Last updated: 2026-03-05 after milestone v1.0 start*
+*Last updated: 2026-03-07 after Phase 3 completion review*

@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 0: Docker Development Environment** - Docker environment for development, testing, and verification — prerequisite for all phases
 - [x] **Phase 1: Foundation** - Go backend with domain model, SQLite persistence, device CRUD API, and SNMP connectivity
 - [x] **Phase 2: Interactive Canvas** - React frontend with topology canvas, device/link rendering, dark theme, and layout persistence
-- [ ] **Phase 3: Real-Time Pipeline** - Live metrics via Prometheus, WebSocket push, SNMP polling, and visual alerts
+- [x] **Phase 3: Real-Time Pipeline** - Live metrics via Prometheus, WebSocket push, SNMP polling, and visual alerts
 - [ ] **Phase 4: Integration and Polish** - Grafana deep-links, per-interface stats, configurable polling, keyboard shortcuts
 - [ ] **Phase 5: Routing Protocols** - BGP session status, OSPF neighbors, and route count visualization
 
@@ -79,6 +79,7 @@ Plans:
 **Goal**: The topology map is alive -- device metrics update in real-time, links show live throughput, and alerts are visually reflected on the canvas
 **Depends on**: Phase 2
 **Requirements**: METR-01, METR-02, METR-03, METR-04, METR-05, LINK-03, LINK-04, INTG-01, ALRT-01, ALRT-02, ALRT-03
+**Status**: Completed (2026-03-07)
 **Success Criteria** (what must be TRUE):
   1. Device cards display live CPU, memory, uptime, and temperature values that update without page refresh
   2. Links show real-time TX/RX throughput and are color-coded by utilization level
@@ -88,21 +89,24 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Prometheus + snmp_exporter Docker infra, metrics domain types, and Go Prometheus client
-- [ ] 03-02-PLAN.md — WebSocket hub, message protocol, metrics collector, and main.go wiring
-- [ ] 03-03-PLAN.md — Frontend metrics types, WebSocket hook, DeviceCard stats row, LinkEdge throughput/color, alert visuals
-- [ ] 03-04-PLAN.md — Canvas WebSocket integration, metric merging, staleness handling, and end-to-end verification
+- [x] 03-01-PLAN.md — Prometheus + snmp_exporter Docker infra, metrics domain types, and Go Prometheus client
+- [x] 03-02-PLAN.md — WebSocket hub, message protocol, metrics collector, and main.go wiring
+- [x] 03-03-PLAN.md — Frontend metrics types, WebSocket hook, DeviceCard stats row, LinkEdge throughput/color, alert visuals
+- [x] 03-04-PLAN.md — Canvas WebSocket integration, metric merging, staleness handling, and end-to-end verification
 
 ### Phase 4: Integration and Polish
 **Goal**: Operators can drill from the topology map into Grafana for deep dives, inspect per-interface statistics, and tune polling behavior
 **Depends on**: Phase 3
-**Requirements**: INTG-02, INTG-03, LINK-05, METR-06, METR-07, UX-03
+**Requirements**: CANV-06, LINK-05, METR-06, METR-07, ALRT-02, ALRT-03, INTG-02, INTG-03, UX-03, UX-04
 **Success Criteria** (what must be TRUE):
   1. User can click a device card and open its corresponding Grafana dashboard in a new tab
   2. User can click a specific metric and open the relevant Grafana panel
   3. User can click a link to see per-interface statistics (TX/RX, errors, drops)
   4. User can configure global and per-device polling intervals, and changes take effect without restart
   5. Keyboard shortcuts work for common actions (search, add device, zoom)
+  6. User can upload a background image to the canvas without breaking node/link interaction
+  7. Prometheus alert rules drive device/link failure visuals on the map in the dev stack
+  8. Canvas interaction remains responsive with 100+ devices on a single map
 **Plans**: TBD
 
 Plans:
@@ -132,6 +136,6 @@ Phases execute in numeric order: 0 -> 1 -> 2 -> 3 -> 4 -> 5
 | 0. Docker Environment | 2/2 | Completed | 2026-03-05 |
 | 1. Foundation | 3/3 | Completed | 2026-03-06 |
 | 2. Interactive Canvas | 4/4 | Completed | 2026-03-06 |
-| 3. Real-Time Pipeline | 0/4 | Not started | - |
+| 3. Real-Time Pipeline | 4/4 | Completed | 2026-03-07 |
 | 4. Integration and Polish | 0/0 | Not started | - |
 | 5. Routing Protocols | 0/0 | Not started | - |
