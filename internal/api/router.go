@@ -16,12 +16,14 @@ func NewRouter(
 	db *sql.DB,
 	deviceService *service.DeviceService,
 	linkRepo domain.LinkRepository,
+	positionRepo domain.PositionRepository,
 	settingsRepo domain.SettingsRepository,
 	poller *worker.Poller,
 ) http.Handler {
 	mux := http.NewServeMux()
 
 	deviceHandler := NewDeviceHandler(deviceService)
+	positionHandler := NewPositionHandler(positionRepo)
 	settingsHandler := NewSettingsHandler(settingsRepo)
 	healthHandler := NewHealthHandler(db, poller)
 
@@ -80,6 +82,18 @@ func NewRouter(
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"data": links})
+	})
+
+	// Position routes
+	mux.HandleFunc("/api/v1/positions", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			positionHandler.HandleList(w, r)
+		case http.MethodPut:
+			positionHandler.HandleSaveAll(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 	})
 
 	// Settings routes

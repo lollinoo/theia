@@ -59,18 +59,25 @@ services:
       start_period: 30s
 
   # ---------------------------------------------------------------------------
-  # Frontend — Nginx placeholder (Phase 2 will replace with React)
+  # Frontend — React + Vite dev server
   # ---------------------------------------------------------------------------
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ./frontend
+      dockerfile: ../Dockerfile.frontend
     profiles: ["dev"]
     container_name: theia-frontend
     ports:
-      - "3000:80"
+      - "3000:3000"
+    volumes:
+      - "./frontend/src:/app/src"
+      - "./frontend/index.html:/app/index.html"
+    environment:
+      - VITE_API_URL=http://backend:8080
     networks:
       - theia-net
+    depends_on:
+      - backend
 
   # ---------------------------------------------------------------------------
   # SNMP Simulators — 3 devices forming Router <-> Switch <-> AP topology

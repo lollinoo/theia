@@ -71,6 +71,16 @@ func RunMigrations(db *sql.DB) error {
 			value TEXT NOT NULL DEFAULT '',
 			updated_at DATETIME NOT NULL
 		)`,
+
+		// Device position table used by the interactive canvas layout
+		`CREATE TABLE IF NOT EXISTS device_positions (
+			device_id TEXT PRIMARY KEY,
+			x REAL NOT NULL DEFAULT 0,
+			y REAL NOT NULL DEFAULT 0,
+			pinned INTEGER NOT NULL DEFAULT 0,
+			updated_at DATETIME NOT NULL,
+			FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+		)`,
 	}
 
 	for i, m := range migrations {

@@ -67,6 +67,7 @@ func main() {
 	// Create repositories
 	deviceRepo := sqlite.NewDeviceRepo(db)
 	linkRepo := sqlite.NewLinkRepo(db)
+	positionRepo := sqlite.NewPositionRepo(db)
 	settingsRepo := sqlite.NewSettingsRepo(db)
 
 	// Create SNMP discovery function (real gosnmp clients)
@@ -82,7 +83,7 @@ func main() {
 	poller.Start(ctx)
 
 	// Create HTTP router with all /api/v1/ routes
-	router := api.NewRouter(db, deviceService, linkRepo, settingsRepo, poller)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, poller)
 
 	// Create HTTP server
 	server := &http.Server{

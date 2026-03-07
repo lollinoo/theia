@@ -3,6 +3,6 @@ tmp/
 data/
 *.db
 .gemini/
-
+frontend/node_modules/
 # Build output
 /theia

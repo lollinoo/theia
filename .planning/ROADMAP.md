@@ -13,8 +13,8 @@ MikroTik Theia goes from zero to a fully functional network topology visualizer 
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 0: Docker Development Environment** - Docker environment for development, testing, and verification — prerequisite for all phases
-- [ ] **Phase 1: Foundation** - Go backend with domain model, SQLite persistence, device CRUD API, and SNMP connectivity
-- [ ] **Phase 2: Interactive Canvas** - React frontend with topology canvas, device/link rendering, dark theme, and layout persistence
+- [x] **Phase 1: Foundation** - Go backend with domain model, SQLite persistence, device CRUD API, and SNMP connectivity
+- [x] **Phase 2: Interactive Canvas** - React frontend with topology canvas, device/link rendering, dark theme, and layout persistence
 - [ ] **Phase 3: Real-Time Pipeline** - Live metrics via Prometheus, WebSocket push, SNMP polling, and visual alerts
 - [ ] **Phase 4: Integration and Polish** - Grafana deep-links, per-interface stats, configurable polling, keyboard shortcuts
 - [ ] **Phase 5: Routing Protocols** - BGP session status, OSPF neighbors, and route count visualization
@@ -54,8 +54,8 @@ Plans:
 
 Plans:
 - [x] 01-01-PLAN.md — Go project scaffold, domain model, SQLite persistence, and config system
-- [ ] 01-02-PLAN.md — SNMP client, device discovery, and device type auto-detection
-- [ ] 01-03-PLAN.md — REST API, async device management, background poller, and main.go wiring
+- [x] 01-02-PLAN.md — SNMP client, device discovery, and device type auto-detection
+- [x] 01-03-PLAN.md — REST API, async device management, background poller, and main.go wiring
 
 ### Phase 2: Interactive Canvas
 **Goal**: Operators can see their full network topology on an interactive dark-themed canvas with device cards, link lines, and persistent layout
@@ -70,10 +70,10 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — React project scaffold with Vite, TypeScript, Tailwind CSS, dark theme, and Docker integration
-- [ ] 02-02-PLAN.md — Backend position persistence: SQLite migration, repository, and REST API endpoints
-- [ ] 02-03-PLAN.md — React Flow canvas with custom device card nodes, link edges, and API data fetching
-- [ ] 02-04-PLAN.md — Force-directed auto-layout, position persistence wiring, search overlay, and zoom controls
+- [x] 02-01-PLAN.md — React project scaffold with Vite, TypeScript, Tailwind CSS, dark theme, and Docker integration
+- [x] 02-02-PLAN.md — Backend position persistence: SQLite migration, repository, and REST API endpoints
+- [x] 02-03-PLAN.md — React Flow canvas with custom device card nodes, link edges, and API data fetching
+- [x] 02-04-PLAN.md — Force-directed auto-layout, position persistence wiring, search overlay, and zoom controls
 
 ### Phase 3: Real-Time Pipeline
 **Goal**: The topology map is alive -- device metrics update in real-time, links show live throughput, and alerts are visually reflected on the canvas
@@ -128,8 +128,8 @@ Phases execute in numeric order: 0 -> 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 0. Docker Environment | 2/2 | Completed | 2026-03-05 |
-| 1. Foundation | 0/3 | Planning complete | - |
-| 2. Interactive Canvas | 0/4 | Planning complete | - |
+| 1. Foundation | 3/3 | Completed | 2026-03-06 |
+| 2. Interactive Canvas | 4/4 | Completed | 2026-03-06 |
 | 3. Real-Time Pipeline | 0/0 | Not started | - |
 | 4. Integration and Polish | 0/0 | Not started | - |
 | 5. Routing Protocols | 0/0 | Not started | - |
