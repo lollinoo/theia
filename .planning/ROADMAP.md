@@ -85,11 +85,13 @@ Plans:
   3. When a device goes down, its card visually changes (color/icon) within one polling cycle
   4. When a link degrades or goes down, its visual appearance changes to reflect the state
   5. All metric data originates from the existing Prometheus instance via PromQL queries (no duplicate collection)
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md — Prometheus + snmp_exporter Docker infra, metrics domain types, and Go Prometheus client
+- [ ] 03-02-PLAN.md — WebSocket hub, message protocol, metrics collector, and main.go wiring
+- [ ] 03-03-PLAN.md — Frontend metrics types, WebSocket hook, DeviceCard stats row, LinkEdge throughput/color, alert visuals
+- [ ] 03-04-PLAN.md — Canvas WebSocket integration, metric merging, staleness handling, and end-to-end verification
 
 ### Phase 4: Integration and Polish
 **Goal**: Operators can drill from the topology map into Grafana for deep dives, inspect per-interface statistics, and tune polling behavior
@@ -130,6 +132,6 @@ Phases execute in numeric order: 0 -> 1 -> 2 -> 3 -> 4 -> 5
 | 0. Docker Environment | 2/2 | Completed | 2026-03-05 |
 | 1. Foundation | 3/3 | Completed | 2026-03-06 |
 | 2. Interactive Canvas | 4/4 | Completed | 2026-03-06 |
-| 3. Real-Time Pipeline | 0/0 | Not started | - |
+| 3. Real-Time Pipeline | 0/4 | Not started | - |
 | 4. Integration and Polish | 0/0 | Not started | - |
 | 5. Routing Protocols | 0/0 | Not started | - |
