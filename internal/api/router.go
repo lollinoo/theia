@@ -8,6 +8,7 @@ import (
 	"github.com/azmin/mikrotik-theia/internal/domain"
 	"github.com/azmin/mikrotik-theia/internal/service"
 	"github.com/azmin/mikrotik-theia/internal/worker"
+	"github.com/azmin/mikrotik-theia/internal/ws"
 )
 
 // NewRouter creates the HTTP handler with all /api/v1/ routes registered.
@@ -19,6 +20,7 @@ func NewRouter(
 	positionRepo domain.PositionRepository,
 	settingsRepo domain.SettingsRepository,
 	poller *worker.Poller,
+	wsHandler *ws.Handler,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -118,13 +120,26 @@ func NewRouter(
 		healthHandler.HandleHealth(w, r)
 	})
 
+	if wsHandler != nil {
+		mux.Handle("/api/v1/ws", wsHandler)
+	}
+
 	// Apply middleware chain: CORS -> Logger -> JSON Content-Type
 	var handler http.Handler = mux
 	handler = JSONContentType(handler)
 	handler = RequestLogger(handler)
 	handler = CORS(handler)
 
-	return handler
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// WebSocket upgrades must bypass the JSON/logger middleware chain because
+		// the wrapped ResponseWriter does not expose the hijacker interface.
+		if wsHandler != nil && r.URL.Path == "/api/v1/ws" {
+			wsHandler.ServeHTTP(w, r)
+			return
+		}
+
+		handler.ServeHTTP(w, r)
+	})
 }
 
 func indexOf(s, substr string) int {

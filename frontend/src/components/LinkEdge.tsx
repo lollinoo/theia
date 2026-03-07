@@ -5,6 +5,7 @@ import {
   type EdgeProps,
 } from 'reactflow';
 import type { Link } from '../types/api';
+import { utilizationColor, type LinkMetricsDTO } from '../types/metrics';
 
 export interface LinkEdgeData {
   link?: Link;
@@ -12,6 +13,9 @@ export interface LinkEdgeData {
   manual?: boolean;
   parallelIndex?: number;
   onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
+  metrics?: LinkMetricsDTO | null;
+  throughputLabel?: string;
+  utilization?: number | null;
 }
 
 export function formatBandwidth(speed: number): string {
@@ -59,6 +63,9 @@ export default function LinkEdge({
   const sign = index % 2 === 0 ? 1 : -1;
   const magnitude = Math.ceil(index / 2) * 26;
   const labelOffsetY = sign * magnitude;
+  const utilization = data?.utilization ?? data?.metrics?.utilization ?? null;
+  const strokeColor = utilization === null ? '#4a4a5e' : utilizationColor(utilization);
+  const throughputColor = utilization === null ? '#8899a6' : utilizationColor(utilization);
 
   return (
     <>
@@ -78,7 +85,7 @@ export default function LinkEdge({
           data.onContextMenu(event, id);
         }}
       />
-      <BaseEdge id={id} path={edgePath} style={{ stroke: '#4a4a5e', strokeWidth: 2 }} />
+      <BaseEdge id={id} path={edgePath} style={{ stroke: strokeColor, strokeWidth: 2 }} />
       {data?.bandwidthLabel ? (
         <EdgeLabelRenderer>
           <div
@@ -88,6 +95,19 @@ export default function LinkEdge({
             }}
           >
             {data.bandwidthLabel}
+          </div>
+        </EdgeLabelRenderer>
+      ) : null}
+      {data?.throughputLabel ? (
+        <EdgeLabelRenderer>
+          <div
+            className="pointer-events-none absolute rounded-md border border-border-subtle bg-bg-canvas/95 px-2 py-1 text-[10px] font-medium shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+            style={{
+              color: throughputColor,
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY + 20}px)`,
+            }}
+          >
+            {data.throughputLabel}
           </div>
         </EdgeLabelRenderer>
       ) : null}

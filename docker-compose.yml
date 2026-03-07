@@ -2,7 +2,7 @@
 # MikroTik Theia - Docker Compose
 # =============================================================================
 # Profiles:
-#   dev  — Full stack: backend + frontend + SNMP simulators
+#   dev  — Full stack: backend + frontend + Prometheus + SNMP simulators
 #   test — Backend + SNMP simulators only (for automated testing)
 #
 # Usage:
@@ -78,6 +78,53 @@ services:
       - theia-net
     depends_on:
       - backend
+
+  # ---------------------------------------------------------------------------
+  # Metrics Stack — Prometheus scraping SNMP simulators through snmp_exporter
+  # ---------------------------------------------------------------------------
+  snmp-exporter:
+    image: prom/snmp-exporter:latest
+    profiles: ["dev"]
+    container_name: theia-snmp-exporter
+    ports:
+      - "9116:9116"
+    volumes:
+      - "./docker/prometheus/snmp.yml:/etc/snmp_exporter/snmp.yml:ro"
+    networks:
+      - theia-net
+    depends_on:
+      snmp-router:
+        condition: service_healthy
+      snmp-switch:
+        condition: service_healthy
+      snmp-ap:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9116/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["dev"]
+    container_name: theia-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - "./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+    networks:
+      - theia-net
+    depends_on:
+      snmp-exporter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ---------------------------------------------------------------------------
   # SNMP Simulators — 3 devices forming Router <-> Switch <-> AP topology

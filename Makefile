@@ -5,13 +5,15 @@
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
-dev: ## Start full dev stack (backend + frontend + SNMP sims)
+dev: ## Start full dev stack (backend + frontend + Prometheus + SNMP sims)
 	@docker compose --profile dev --profile test down 2>/dev/null || true
 	docker compose --profile dev up --build -d
 	@echo ""
 	@echo "MikroTik Theia dev stack is running:"
 	@echo "  Backend:  http://localhost:8080"
 	@echo "  Frontend: http://localhost:3000"
+	@echo "  Prometheus: http://localhost:9090"
+	@echo "  SNMP exporter: http://localhost:9116"
 	@echo ""
 	@echo "Run 'make seed' to add SNMP simulator devices"
 	@echo "Run 'make logs' to follow backend logs"

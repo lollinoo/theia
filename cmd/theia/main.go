@@ -16,10 +16,12 @@ import (
 	"github.com/azmin/mikrotik-theia/internal/api"
 	"github.com/azmin/mikrotik-theia/internal/config"
 	"github.com/azmin/mikrotik-theia/internal/domain"
+	"github.com/azmin/mikrotik-theia/internal/metrics"
 	"github.com/azmin/mikrotik-theia/internal/repository/sqlite"
 	"github.com/azmin/mikrotik-theia/internal/service"
 	"github.com/azmin/mikrotik-theia/internal/snmp"
 	"github.com/azmin/mikrotik-theia/internal/worker"
+	"github.com/azmin/mikrotik-theia/internal/ws"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -82,8 +84,22 @@ func main() {
 	defer cancel()
 	poller.Start(ctx)
 
+	prometheusURL, err := ensurePrometheusURL(settingsRepo)
+	if err != nil {
+		log.Fatalf("Failed to initialize Prometheus URL: %v", err)
+	}
+
+	promClient := metrics.NewPromClient(prometheusURL, http.DefaultClient)
+	hub := ws.NewHub()
+	go hub.Run()
+
+	collector := worker.NewMetricsCollector(promClient, hub, deviceRepo, linkRepo, settingsRepo)
+	collector.Start(ctx)
+
+	wsHandler := ws.NewHandler(hub, collector.GetSnapshot)
+
 	// Create HTTP router with all /api/v1/ routes
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, poller)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, poller, wsHandler)
 
 	// Create HTTP server
 	server := &http.Server{
@@ -101,6 +117,7 @@ func main() {
 
 		// Stop the poller first
 		poller.Stop()
+		collector.Stop()
 
 		// Shutdown HTTP server with timeout
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -115,6 +132,21 @@ func main() {
 		log.Fatalf("Server error: %v", err)
 	}
 	log.Println("Server stopped")
+}
+
+func ensurePrometheusURL(settingsRepo *sqlite.SettingsRepo) (string, error) {
+	const defaultPrometheusURL = "http://prometheus:9090"
+
+	prometheusURL, err := settingsRepo.Get(domain.SettingPrometheusURL)
+	if err == nil && prometheusURL != "" {
+		return prometheusURL, nil
+	}
+
+	if err := settingsRepo.Set(domain.SettingPrometheusURL, defaultPrometheusURL); err != nil {
+		return "", err
+	}
+
+	return defaultPrometheusURL, nil
 }
 
 // newSNMPDiscoverFunc creates a DiscoverFunc that uses real gosnmp clients.
