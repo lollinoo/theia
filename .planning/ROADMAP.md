@@ -107,11 +107,13 @@ Plans:
   6. User can upload a background image to the canvas without breaking node/link interaction
   7. Prometheus alert rules drive device/link failure visuals on the map in the dev stack
   8. Canvas interaction remains responsive with 100+ devices on a single map
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md — UI infrastructure: context menus, side panel, toolbar, and keyboard shortcuts
+- [ ] 04-02-PLAN.md — Grafana deep-links and per-interface statistics side panel
+- [ ] 04-03-PLAN.md — Settings panel, polling configuration, add/edit/delete device UI
+- [ ] 04-04-PLAN.md — Background image upload, Prometheus alert rules, link alert visuals, and performance optimization
 
 ### Phase 5: Routing Protocols
 **Goal**: Operators can view routing protocol status (BGP/OSPF) and route counts directly from device cards on the topology map
@@ -137,5 +139,5 @@ Phases execute in numeric order: 0 -> 1 -> 2 -> 3 -> 4 -> 5
 | 1. Foundation | 3/3 | Completed | 2026-03-06 |
 | 2. Interactive Canvas | 4/4 | Completed | 2026-03-06 |
 | 3. Real-Time Pipeline | 4/4 | Completed | 2026-03-07 |
-| 4. Integration and Polish | 0/0 | Not started | - |
+| 4. Integration and Polish | 0/4 | In Progress | - |
 | 5. Routing Protocols | 0/0 | Not started | - |
