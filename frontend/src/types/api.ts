@@ -101,11 +101,13 @@ function parseDeviceInterface(value: unknown): DeviceInterface {
 }
 
 export function parseDevicesResponse(payload: unknown): Device[] {
-  if (!isRecord(payload) || !Array.isArray(payload.data)) {
+  if (!isRecord(payload)) {
     throw new Error('invalid devices response');
   }
 
-  return payload.data.map((resource) => {
+  const data = Array.isArray(payload.data) ? payload.data : [];
+
+  return data.map((resource) => {
     if (!isRecord(resource)) {
       throw new Error('invalid device resource');
     }
@@ -135,11 +137,13 @@ export function parseDevicesResponse(payload: unknown): Device[] {
 }
 
 export function parseLinksResponse(payload: unknown): Link[] {
-  if (!isRecord(payload) || !Array.isArray(payload.data)) {
+  if (!isRecord(payload)) {
     throw new Error('invalid links response');
   }
 
-  return payload.data.map((resource) => {
+  const data = Array.isArray(payload.data) ? payload.data : [];
+
+  return data.map((resource) => {
     if (!isRecord(resource)) {
       throw new Error('invalid link resource');
     }
@@ -156,11 +160,13 @@ export function parseLinksResponse(payload: unknown): Link[] {
 }
 
 export function parsePositionsResponse(payload: unknown): DevicePosition[] {
-  if (!isRecord(payload) || !Array.isArray(payload.data)) {
+  if (!isRecord(payload)) {
     throw new Error('invalid positions response');
   }
 
-  return payload.data.map((resource) => {
+  const data = Array.isArray(payload.data) ? payload.data : [];
+
+  return data.map((resource) => {
     if (!isRecord(resource)) {
       throw new Error('invalid position resource');
     }
