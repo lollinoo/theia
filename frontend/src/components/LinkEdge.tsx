@@ -76,7 +76,7 @@ export default function LinkEdge({
         strokeWidth={20}
         className="cursor-pointer"
         onContextMenu={(event) => {
-          if (!data?.manual || !data.onContextMenu) {
+          if (!data?.onContextMenu) {
             return;
           }
 

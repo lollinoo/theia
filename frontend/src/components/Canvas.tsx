@@ -17,6 +17,7 @@ import { fetchDevices, fetchLinks } from '../api/client';
 import { computeForceLayout } from '../hooks/useAutoLayout';
 import { usePositions, type PositionPayload } from '../hooks/usePositions';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useMemo } from 'react';
 import type { Device, Link } from '../types/api';
 import { alertStatusForDevice, formatThroughput, type LinkMetricsDTO } from '../types/metrics';
 import DeviceCard, { type DeviceNodeData } from './DeviceCard';
@@ -24,6 +25,11 @@ import LinkEdge, { formatBandwidth, type LinkEdgeData } from './LinkEdge';
 import { ReconnectBanner } from './ReconnectBanner';
 import SearchOverlay from './SearchOverlay';
 import ZoomControls from './ZoomControls';
+import { ContextMenu } from './ContextMenu';
+import { SidePanel } from './SidePanel';
+import { ShortcutHelp } from './ShortcutHelp';
+import { Toolbar } from './Toolbar';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 const nodeTypes = {
   device: DeviceCard,
@@ -45,11 +51,7 @@ interface StoredManualEdge {
   targetHandle?: string | null;
 }
 
-interface EdgeMenuState {
-  edgeID: string;
-  x: number;
-  y: number;
-}
+
 
 const defaultPollingIntervalMs = 60_000;
 const staleThresholdMs = defaultPollingIntervalMs * 2;
@@ -304,7 +306,12 @@ export default function Canvas() {
   const [topologyLinks, setTopologyLinks] = useState<Link[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [edgeMenu, setEdgeMenu] = useState<EdgeMenuState | null>(null);
+  const [deviceMenu, setDeviceMenu] = useState<{ deviceId: string, x: number, y: number } | null>(null);
+  const [edgeMenu, setEdgeMenu] = useState<{ edgeID: string, x: number, y: number } | null>(null);
+  const [panelContent, setPanelContent] = useState<{ type: string, data?: any } | null>(null);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+
   const highlightTimerRef = useRef<number | null>(null);
   const layoutInitializedRef = useRef(false);
   const lastSnapshotTimeRef = useRef<number | null>(null);
@@ -323,6 +330,71 @@ export default function Canvas() {
       y: event.clientY,
     });
   }
+
+  function openDeviceMenu(
+    event: React.MouseEvent,
+    deviceId: string,
+  ) {
+    setDeviceMenu({
+      deviceId,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }
+
+  const shortcuts = useMemo(() => ({
+    search: {
+      key: 'k',
+      ctrl: true,
+      description: 'Search devices',
+      handler: () => setShowSearch(s => !s),
+    },
+    addDevice: {
+      key: 'n',
+      ctrl: true,
+      description: 'Add device',
+      handler: () => setPanelContent({ type: 'addDevice' }),
+    },
+    settings: {
+      key: ',',
+      ctrl: true,
+      description: 'Settings',
+      handler: () => setPanelContent({ type: 'settings' }),
+    },
+    zoomIn: {
+      key: '+',
+      description: 'Zoom in',
+      handler: () => { void reactFlow.zoomIn({ duration: 200 }); },
+    },
+    zoomOut: {
+      key: '-',
+      description: 'Zoom out',
+      handler: () => { void reactFlow.zoomOut({ duration: 200 }); },
+    },
+    zoomFit: {
+      key: '0',
+      description: 'Fit view',
+      handler: () => { void reactFlow.fitView({ padding: 0.18, duration: 280 }); },
+    },
+    help: {
+      key: '?',
+      description: 'Shortcuts help',
+      handler: () => setShowShortcuts(s => !s),
+    },
+    escape: {
+      key: 'escape',
+      description: 'Close panels',
+      handler: () => {
+        if (deviceMenu) setDeviceMenu(null);
+        else if (edgeMenu) setEdgeMenu(null);
+        else if (panelContent) setPanelContent(null);
+        else if (showSearch) setShowSearch(false);
+        else if (showShortcuts) setShowShortcuts(false);
+      },
+    },
+  }), [reactFlow, deviceMenu, edgeMenu, panelContent, showSearch, showShortcuts]);
+
+  useKeyboardShortcuts(shortcuts);
 
   async function loadTopology() {
     setLoading(true);
@@ -371,6 +443,7 @@ export default function Canvas() {
             device,
             pinned: saved?.pinned ?? false,
             highlighted: false,
+            onContextMenu: openDeviceMenu,
           },
         };
       });
@@ -515,30 +588,6 @@ export default function Canvas() {
     };
   }, [setNodes]);
 
-  useEffect(() => {
-    if (!edgeMenu) {
-      return;
-    }
-
-    function closeMenu() {
-      setEdgeMenu(null);
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setEdgeMenu(null);
-      }
-    }
-
-    window.addEventListener('click', closeMenu);
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      window.removeEventListener('click', closeMenu);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [edgeMenu]);
-
   function handleEdgesChange(changes: EdgeChange[]) {
     setEdges((currentEdges) => {
       const nextEdges = applyEdgeChanges(changes, currentEdges);
@@ -627,35 +676,61 @@ export default function Canvas() {
 
   return (
     <div className="relative h-full w-full bg-bg-canvas">
-      <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />
-      <ReconnectBanner visible={reconnecting} />
-      {edgeMenu ? (
-        <div
-          className="fixed z-30 min-w-[140px] rounded-xl border border-border-subtle bg-bg-surface/95 p-2 shadow-[0_18px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl"
-          style={{
-            left: edgeMenu.x + 8,
-            top: edgeMenu.y + 8,
-          }}
-          onClick={(event) => {
-            event.stopPropagation();
-          }}
-        >
-          <button
-            type="button"
-            className="w-full rounded-lg px-3 py-2 text-left text-sm text-status-down transition-colors duration-150 hover:bg-bg-elevated"
-            onClick={() => {
-              setEdges((currentEdges) => {
-                const nextEdges = currentEdges.filter((edge) => edge.id !== edgeMenu.edgeID);
-                serializeManualEdges(nextEdges);
-                return nextEdges;
-              });
-              setEdgeMenu(null);
-            }}
-          >
-            Remove
-          </button>
+      {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
+      <Toolbar
+        onSearch={() => setShowSearch(s => !s)}
+        onAddDevice={() => setPanelContent({ type: 'addDevice' })}
+        onSettings={() => setPanelContent({ type: 'settings' })}
+      />
+
+      {deviceMenu && (
+        <ContextMenu
+          position={{ x: deviceMenu.x, y: deviceMenu.y }}
+          onClose={() => setDeviceMenu(null)}
+          items={[
+            { label: 'Open in Grafana', onClick: () => { } },
+            { label: 'Per-Interface Stats', onClick: () => { } },
+            { label: 'Configure', onClick: () => { } },
+            { label: 'Edit Device', onClick: () => { } },
+          ]}
+        />
+      )}
+
+      {edgeMenu && (
+        <ContextMenu
+          position={{ x: edgeMenu.x, y: edgeMenu.y }}
+          onClose={() => setEdgeMenu(null)}
+          items={[
+            { label: 'Per-Interface Stats', onClick: () => { } },
+            { label: 'Open in Grafana', onClick: () => { } },
+            {
+              label: 'Remove',
+              variant: 'danger',
+              onClick: () => {
+                setEdges((currentEdges) => {
+                  const nextEdges = currentEdges.filter((edge) => edge.id !== edgeMenu.edgeID);
+                  serializeManualEdges(nextEdges);
+                  return nextEdges;
+                });
+              }
+            },
+          ]}
+        />
+      )}
+
+      <SidePanel
+        open={!!panelContent}
+        onClose={() => setPanelContent(null)}
+        title={panelContent?.type === 'settings' ? 'Settings' : 'Add Device'}
+      >
+        <div className="text-text-secondary">
+          {panelContent?.type === 'settings' ? 'Settings placeholder' : 'Add Device placeholder'}
         </div>
-      ) : null}
+      </SidePanel>
+
+      <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+
+      <ReconnectBanner visible={reconnecting} />
       <ZoomControls
         onZoomIn={() => {
           void reactFlow.zoomIn({ duration: 200 });
@@ -676,6 +751,7 @@ export default function Canvas() {
         onEdgesChange={handleEdgesChange}
         onPaneClick={() => {
           setEdgeMenu(null);
+          setDeviceMenu(null);
         }}
         onConnect={(connection: Connection) => {
           if (!connection.source || !connection.target || connection.source === connection.target) {

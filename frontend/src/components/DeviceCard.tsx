@@ -15,6 +15,7 @@ export interface DeviceNodeData {
   highlighted?: boolean;
   metrics?: DeviceMetricsDTO | null;
   alertStatus?: AlertStatus;
+  onContextMenu?: (event: React.MouseEvent, deviceId: string) => void;
 }
 
 const universalHandleClassName =
@@ -78,6 +79,13 @@ export default function DeviceCard({
   return (
     <div
       className={`group relative flex w-[260px] flex-col overflow-visible rounded-[12px] bg-bg-surface text-left shadow-canvas transition-[box-shadow,opacity] duration-150 ${highlightClass}`}
+      onContextMenu={(e) => {
+        if (data.onContextMenu) {
+          e.preventDefault();
+          e.stopPropagation();
+          data.onContextMenu(e, data.device.id);
+        }
+      }}
     >
       <Handle
         id="top"
@@ -134,9 +142,8 @@ export default function DeviceCard({
 
       {/* BODY SECTION */}
       <div
-        className={`flex flex-col rounded-b-[12px] bg-[#12121a] px-4 pt-3 pb-6 ${
-          data.alertStatus === 'down' ? 'opacity-70' : ''
-        }`}
+        className={`flex flex-col rounded-b-[12px] bg-[#12121a] px-4 pt-3 pb-6 ${data.alertStatus === 'down' ? 'opacity-70' : ''
+          }`}
       >
         <span className="text-[13px] font-medium text-text-secondary/90">
           {detail}
@@ -156,9 +163,8 @@ export default function DeviceCard({
                 CPU
               </div>
               <div
-                className={`mt-1 font-mono text-[11px] font-semibold ${
-                  cpuPercent === null ? 'text-text-secondary' : metricColor(cpuPercent)
-                }`}
+                className={`mt-1 font-mono text-[11px] font-semibold ${cpuPercent === null ? 'text-text-secondary' : metricColor(cpuPercent)
+                  }`}
               >
                 {formatPercent(cpuPercent)}
               </div>
@@ -168,9 +174,8 @@ export default function DeviceCard({
                 MEM
               </div>
               <div
-                className={`mt-1 font-mono text-[11px] font-semibold ${
-                  memPercent === null ? 'text-text-secondary' : metricColor(memPercent)
-                }`}
+                className={`mt-1 font-mono text-[11px] font-semibold ${memPercent === null ? 'text-text-secondary' : metricColor(memPercent)
+                  }`}
               >
                 {formatPercent(memPercent)}
               </div>

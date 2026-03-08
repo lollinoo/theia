@@ -30,12 +30,12 @@ export default function SearchOverlay({
     normalizedQuery.length === 0
       ? []
       : devices
-          .filter((device) => {
-            const hostname = device.hostname.toLowerCase();
-            const ip = device.ip.toLowerCase();
-            return hostname.includes(normalizedQuery) || ip.includes(normalizedQuery);
-          })
-          .slice(0, 8);
+        .filter((device) => {
+          const hostname = device.hostname.toLowerCase();
+          const ip = device.ip.toLowerCase();
+          return hostname.includes(normalizedQuery) || ip.includes(normalizedQuery);
+        })
+        .slice(0, 8);
 
   const showDropdown = query.trim().length > 0;
 
@@ -58,6 +58,7 @@ export default function SearchOverlay({
             />
           </svg>
           <input
+            autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
