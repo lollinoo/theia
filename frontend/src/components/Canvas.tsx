@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ConnectionMode,
   Background,
@@ -17,9 +17,8 @@ import { fetchDevices, fetchLinks, fetchSettings } from '../api/client';
 import { computeForceLayout } from '../hooks/useAutoLayout';
 import { usePositions, type PositionPayload } from '../hooks/usePositions';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { useMemo } from 'react';
 import type { Device, Link } from '../types/api';
-import { alertStatusForDevice, formatThroughput, type LinkMetricsDTO, type SnapshotPayload } from '../types/metrics';
+import { alertStatusForDevice, formatThroughput, type AlertDTO, type AlertStatus, type LinkMetricsDTO, type SnapshotPayload } from '../types/metrics';
 import DeviceCard, { type DeviceNodeData } from './DeviceCard';
 import LinkEdge, { formatBandwidth, type LinkEdgeData } from './LinkEdge';
 import { ReconnectBanner } from './ReconnectBanner';
@@ -59,6 +58,7 @@ interface StoredManualEdge {
 
 const defaultPollingIntervalMs = 60_000;
 const staleThresholdMs = defaultPollingIntervalMs * 2;
+const canvasBackgroundImageKey = 'canvas_background_image';
 
 function buildPositionPayload(nodes: Node<DeviceNodeData>[]): PositionPayload[] {
   return nodes.map((node) => ({
@@ -296,6 +296,35 @@ function statusColor(status: Device['status']): string {
   }
 }
 
+function alertStatusForLink(link: Link, alerts: AlertDTO[]): AlertStatus {
+  const deviceIds = new Set([link.source_device_id, link.target_device_id]);
+  const sourceIfName = (link.source_if_name ?? '').toLowerCase();
+  const targetIfName = (link.target_if_name ?? '').toLowerCase();
+
+  const relevantAlerts = alerts.filter((alert) => {
+    if (!deviceIds.has(alert.device_id)) return false;
+    if (alert.state !== 'firing') return false;
+    // Interface-specific alerts: check if the summary references the interface name
+    const summary = alert.summary.toLowerCase();
+    const isLinkAlert = alert.alert_name === 'LinkDown' || alert.alert_name === 'HighLinkUtilization';
+    if (!isLinkAlert) return false;
+    // Best-effort interface name matching
+    if (sourceIfName && summary.includes(sourceIfName)) return true;
+    if (targetIfName && summary.includes(targetIfName)) return true;
+    // If no interface names to match, fall back to device-level match
+    if (!sourceIfName && !targetIfName) return true;
+    return false;
+  });
+
+  if (relevantAlerts.some((alert) => alert.severity === 'critical')) {
+    return 'down';
+  }
+  if (relevantAlerts.some((alert) => alert.severity === 'warning')) {
+    return 'degraded';
+  }
+  return 'normal';
+}
+
 function viewportSize() {
   return {
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
@@ -319,6 +348,7 @@ export default function Canvas() {
   const [panelContent, setPanelContent] = useState<{ type: string, data?: unknown } | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [canvasBgImage, setCanvasBgImage] = useState<string>('');
 
   const highlightTimerRef = useRef<number | null>(null);
   const layoutInitializedRef = useRef(false);
@@ -329,27 +359,27 @@ export default function Canvas() {
   const { fetchPositions, savePositions } = usePositions();
   const { snapshot, reconnecting } = useWebSocket('/api/v1/ws');
 
-  function openEdgeMenu(
-    event: MouseEvent | React.MouseEvent<SVGPathElement>,
-    edgeID: string,
-  ) {
-    setEdgeMenu({
-      edgeID,
-      x: event.clientX,
-      y: event.clientY,
-    });
-  }
+  const openEdgeMenu = useCallback(
+    (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => {
+      setEdgeMenu({
+        edgeID,
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    [],
+  );
 
-  function openDeviceMenu(
-    event: React.MouseEvent,
-    deviceId: string,
-  ) {
-    setDeviceMenu({
-      deviceId,
-      x: event.clientX,
-      y: event.clientY,
-    });
-  }
+  const openDeviceMenu = useCallback(
+    (event: React.MouseEvent, deviceId: string) => {
+      setDeviceMenu({
+        deviceId,
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    [],
+  );
 
   const shortcuts = useMemo(() => ({
     search: {
@@ -504,6 +534,7 @@ export default function Canvas() {
     fetchSettings()
       .then((settings) => {
         grafanaUrlRef.current = settings['grafana_url'] ?? '';
+        setCanvasBgImage(settings[canvasBackgroundImageKey] ?? '');
       })
       .catch(() => {
         // Settings fetch failure is non-fatal; Grafana links will be disabled.
@@ -537,6 +568,7 @@ export default function Canvas() {
             return edge;
           }
 
+          const linkAlertStatus = alertStatusForLink(link, snapshot.alerts);
           const metrics = findLinkMetrics(snapshot.link_metrics, link);
           if (metrics === null) {
             return {
@@ -546,6 +578,7 @@ export default function Canvas() {
                 metrics: null,
                 throughputLabel: undefined,
                 utilization: null,
+                alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
               },
             };
           }
@@ -557,6 +590,7 @@ export default function Canvas() {
               metrics,
               throughputLabel: buildThroughputLabel(metrics),
               utilization: metrics.utilization,
+              alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
             },
           };
         }),
@@ -596,6 +630,7 @@ export default function Canvas() {
               metrics: null,
               throughputLabel: undefined,
               utilization: null,
+              alertStatus: undefined,
             },
           })),
         );
@@ -714,6 +749,22 @@ export default function Canvas() {
 
   return (
     <div className="relative h-full w-full bg-bg-canvas">
+      {canvasBgImage && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 0,
+            backgroundImage: `url(${canvasBgImage})`,
+            backgroundSize: 'contain',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+            opacity: 0.15,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
       {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
       <Toolbar
         onSearch={() => setShowSearch(s => !s)}

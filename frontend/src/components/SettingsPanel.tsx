@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchSettings, updateSetting } from '../api/client';
 
+const CANVAS_BACKGROUND_IMAGE_KEY = 'canvas_background_image';
+
 const POLLING_PRESETS = [
   { label: '15 seconds', value: '15' },
   { label: '30 seconds', value: '30' },
@@ -34,6 +36,9 @@ export function SettingsPanel() {
   const [savedPolling, setSavedPolling] = useState(false);
   const [savedGrafana, setSavedGrafana] = useState(false);
   const [savedPrometheus, setSavedPrometheus] = useState(false);
+  const [backgroundImage, setBackgroundImage] = useState<string>('');
+  const [savedBackground, setSavedBackground] = useState(false);
+  const bgImageInputRef = useRef<HTMLInputElement | null>(null);
 
   const pollingTimerRef = useRef<number | null>(null);
   const grafanaTimerRef = useRef<number | null>(null);
@@ -41,6 +46,7 @@ export function SettingsPanel() {
   const savedPollingTimerRef = useRef<number | null>(null);
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const savedPrometheusTimerRef = useRef<number | null>(null);
+  const savedBackgroundTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     fetchSettings()
@@ -54,6 +60,7 @@ export function SettingsPanel() {
         }
         setGrafanaUrl(settings['grafana_url'] ?? '');
         setPrometheusUrl(settings['prometheus_url'] ?? '');
+        setBackgroundImage(settings[CANVAS_BACKGROUND_IMAGE_KEY] ?? '');
       })
       .catch(() => {/* non-fatal */});
   }, []);
@@ -101,6 +108,31 @@ export function SettingsPanel() {
     if (value !== 'custom') {
       schedulePollingUpdate(value);
     }
+  }
+
+  function handleBackgroundImageChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      setBackgroundImage(dataUrl);
+      void updateSetting(CANVAS_BACKGROUND_IMAGE_KEY, dataUrl).then(() =>
+        showSaved(setSavedBackground, savedBackgroundTimerRef),
+      );
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handleRemoveBackground() {
+    setBackgroundImage('');
+    if (bgImageInputRef.current) {
+      bgImageInputRef.current.value = '';
+    }
+    void updateSetting(CANVAS_BACKGROUND_IMAGE_KEY, '').then(() =>
+      showSaved(setSavedBackground, savedBackgroundTimerRef),
+    );
   }
 
   return (
@@ -178,6 +210,47 @@ export function SettingsPanel() {
           }}
           className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
         />
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+            Background Image
+          </label>
+          <SavedIndicator visible={savedBackground} />
+        </div>
+        {backgroundImage ? (
+          <div className="flex items-center gap-3">
+            <img
+              src={backgroundImage}
+              alt="Canvas background preview"
+              className="h-12 w-20 rounded-md border border-border-subtle object-cover"
+            />
+            <button
+              type="button"
+              onClick={handleRemoveBackground}
+              className="rounded-lg border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-status-down hover:bg-bg-surface transition-colors duration-150"
+            >
+              Remove
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs text-text-secondary/60">No background image set</p>
+        )}
+        <input
+          ref={bgImageInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleBackgroundImageChange}
+          className="hidden"
+          id="bg-image-input"
+        />
+        <label
+          htmlFor="bg-image-input"
+          className="inline-block cursor-pointer rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary hover:bg-bg-surface transition-colors duration-150"
+        >
+          Choose Image
+        </label>
       </div>
     </div>
   );

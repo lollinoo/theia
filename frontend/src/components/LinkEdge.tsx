@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -5,7 +6,7 @@ import {
   type EdgeProps,
 } from 'reactflow';
 import type { Link } from '../types/api';
-import { utilizationColor, type LinkMetricsDTO } from '../types/metrics';
+import { utilizationColor, type AlertStatus, type LinkMetricsDTO } from '../types/metrics';
 
 export interface LinkEdgeData {
   link?: Link;
@@ -16,6 +17,7 @@ export interface LinkEdgeData {
   metrics?: LinkMetricsDTO | null;
   throughputLabel?: string;
   utilization?: number | null;
+  alertStatus?: AlertStatus;
 }
 
 export function formatBandwidth(speed: number): string {
@@ -38,7 +40,7 @@ export function formatBandwidth(speed: number): string {
   return `${speed} bps`;
 }
 
-export default function LinkEdge({
+function LinkEdgeInner({
   id,
   sourceX,
   sourceY,
@@ -64,7 +66,22 @@ export default function LinkEdge({
   const magnitude = Math.ceil(index / 2) * 26;
   const labelOffsetY = sign * magnitude;
   const utilization = data?.utilization ?? data?.metrics?.utilization ?? null;
-  const strokeColor = utilization === null ? '#4a4a5e' : utilizationColor(utilization);
+  const alertStatus = data?.alertStatus;
+
+  // Alert status takes priority over utilization coloring
+  let strokeColor: string;
+  let strokeWidth: number;
+  if (alertStatus === 'down') {
+    strokeColor = '#ff1744';
+    strokeWidth = 3;
+  } else if (alertStatus === 'degraded') {
+    strokeColor = '#ffc107';
+    strokeWidth = 2.5;
+  } else {
+    strokeColor = utilization === null ? '#4a4a5e' : utilizationColor(utilization);
+    strokeWidth = 2;
+  }
+
   const throughputColor = utilization === null ? '#8899a6' : utilizationColor(utilization);
 
   return (
@@ -85,7 +102,15 @@ export default function LinkEdge({
           data.onContextMenu(event, id);
         }}
       />
-      <BaseEdge id={id} path={edgePath} style={{ stroke: strokeColor, strokeWidth: 2 }} />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        style={{
+          stroke: strokeColor,
+          strokeWidth,
+          ...(alertStatus === 'down' ? { animation: 'pulse 1.5s ease-in-out infinite' } : {}),
+        }}
+      />
       {data?.bandwidthLabel ? (
         <EdgeLabelRenderer>
           <div
@@ -114,3 +139,19 @@ export default function LinkEdge({
     </>
   );
 }
+
+const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
+  return (
+    prev.id === next.id &&
+    prev.data?.utilization === next.data?.utilization &&
+    prev.data?.throughputLabel === next.data?.throughputLabel &&
+    prev.data?.alertStatus === next.data?.alertStatus &&
+    prev.data?.bandwidthLabel === next.data?.bandwidthLabel &&
+    prev.sourceX === next.sourceX &&
+    prev.sourceY === next.sourceY &&
+    prev.targetX === next.targetX &&
+    prev.targetY === next.targetY
+  );
+});
+
+export default LinkEdge;

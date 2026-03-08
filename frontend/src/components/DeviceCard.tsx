@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Handle, Position, type NodeProps } from 'reactflow';
 import type { Device } from '../types/api';
 import {
@@ -45,7 +46,7 @@ function formatTemperature(value: number | null): string {
   return value === null ? 'N/A' : `${Math.round(value)}C`;
 }
 
-export default function DeviceCard({
+function DeviceCardInner({
   data,
   selected,
 }: NodeProps<DeviceNodeData>) {
@@ -212,3 +213,22 @@ export default function DeviceCard({
     </div>
   );
 }
+
+const DeviceCard = memo(DeviceCardInner, (prev, next) => {
+  const pd = prev.data;
+  const nd = next.data;
+  return (
+    pd.device.id === nd.device.id &&
+    pd.device.status === nd.device.status &&
+    pd.pinned === nd.pinned &&
+    pd.highlighted === nd.highlighted &&
+    pd.alertStatus === nd.alertStatus &&
+    pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
+    pd.metrics?.mem_percent === nd.metrics?.mem_percent &&
+    pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
+    pd.metrics?.uptime_secs === nd.metrics?.uptime_secs &&
+    prev.selected === next.selected
+  );
+});
+
+export default DeviceCard;
