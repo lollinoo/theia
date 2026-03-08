@@ -4,6 +4,7 @@ export interface ContextMenuItem {
     label: string;
     onClick: () => void;
     variant?: 'danger' | 'default';
+    disabled?: boolean;
 }
 
 interface ContextMenuProps {
@@ -71,12 +72,15 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
             {items.map((item, index) => (
                 <button
                     key={index}
-                    className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors hover:bg-bg-elevated ${item.variant === 'danger' ? 'text-status-down' : 'text-text-primary'
+                    disabled={item.disabled}
+                    className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors ${item.disabled ? 'cursor-not-allowed opacity-40' : 'hover:bg-bg-elevated'} ${item.variant === 'danger' ? 'text-status-down' : 'text-text-primary'
                         }`}
                     onClick={(e) => {
                         e.stopPropagation();
-                        item.onClick();
-                        onClose();
+                        if (!item.disabled) {
+                            item.onClick();
+                            onClose();
+                        }
                     }}
                 >
                     {item.label}

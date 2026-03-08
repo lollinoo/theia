@@ -13,13 +13,13 @@ import {
   type EdgeChange,
   type Node,
 } from 'reactflow';
-import { fetchDevices, fetchLinks } from '../api/client';
+import { fetchDevices, fetchLinks, fetchSettings } from '../api/client';
 import { computeForceLayout } from '../hooks/useAutoLayout';
 import { usePositions, type PositionPayload } from '../hooks/usePositions';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useMemo } from 'react';
 import type { Device, Link } from '../types/api';
-import { alertStatusForDevice, formatThroughput, type LinkMetricsDTO } from '../types/metrics';
+import { alertStatusForDevice, formatThroughput, type LinkMetricsDTO, type SnapshotPayload } from '../types/metrics';
 import DeviceCard, { type DeviceNodeData } from './DeviceCard';
 import LinkEdge, { formatBandwidth, type LinkEdgeData } from './LinkEdge';
 import { ReconnectBanner } from './ReconnectBanner';
@@ -30,6 +30,10 @@ import { SidePanel } from './SidePanel';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Toolbar } from './Toolbar';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { InterfaceStatsPanel } from './InterfaceStatsPanel';
+import { SettingsPanel } from './SettingsPanel';
+import { AddDevicePanel } from './AddDevicePanel';
+import { DeviceConfigPanel } from './DeviceConfigPanel';
 
 const nodeTypes = {
   device: DeviceCard,
@@ -299,6 +303,10 @@ function viewportSize() {
   };
 }
 
+function buildGrafanaSlug(hostname: string): string {
+  return hostname.toLowerCase().replace(/\s+/g, '-');
+}
+
 export default function Canvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNodeData>([]);
   const [edges, setEdges] = useState<Edge<LinkEdgeData>[]>([]);
@@ -308,12 +316,13 @@ export default function Canvas() {
   const [error, setError] = useState<string | null>(null);
   const [deviceMenu, setDeviceMenu] = useState<{ deviceId: string, x: number, y: number } | null>(null);
   const [edgeMenu, setEdgeMenu] = useState<{ edgeID: string, x: number, y: number } | null>(null);
-  const [panelContent, setPanelContent] = useState<{ type: string, data?: any } | null>(null);
+  const [panelContent, setPanelContent] = useState<{ type: string, data?: unknown } | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
 
   const highlightTimerRef = useRef<number | null>(null);
   const layoutInitializedRef = useRef(false);
+  const grafanaUrlRef = useRef<string>('');
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
   const reactFlow = useReactFlow<DeviceNodeData, LinkEdgeData>();
@@ -492,6 +501,16 @@ export default function Canvas() {
   }, []);
 
   useEffect(() => {
+    fetchSettings()
+      .then((settings) => {
+        grafanaUrlRef.current = settings['grafana_url'] ?? '';
+      })
+      .catch(() => {
+        // Settings fetch failure is non-fatal; Grafana links will be disabled.
+      });
+  }, []);
+
+  useEffect(() => {
     if (snapshot === null) {
       return;
     }
@@ -638,6 +657,25 @@ export default function Canvas() {
     }, 2000);
   }
 
+  // Derive panel title from panelContent
+  function getPanelTitle(): string {
+    if (!panelContent) return '';
+    if (panelContent.type === 'settings') return 'Settings';
+    if (panelContent.type === 'addDevice') return 'Add Device';
+    if (panelContent.type === 'deviceConfig') {
+      const data = panelContent.data as { device?: Device } | undefined;
+      return data?.device ? data.device.hostname : 'Configure Device';
+    }
+    if (panelContent.type === 'interfaceStats') {
+      const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device } | undefined;
+      if (data?.link && data.sourceDevice && data.targetDevice) {
+        return `${data.sourceDevice.hostname} — ${data.targetDevice.hostname}`;
+      }
+      return 'Interface Stats';
+    }
+    return '';
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center bg-bg-canvas">
@@ -683,49 +721,152 @@ export default function Canvas() {
         onSettings={() => setPanelContent({ type: 'settings' })}
       />
 
-      {deviceMenu && (
-        <ContextMenu
-          position={{ x: deviceMenu.x, y: deviceMenu.y }}
-          onClose={() => setDeviceMenu(null)}
-          items={[
-            { label: 'Open in Grafana', onClick: () => { } },
-            { label: 'Per-Interface Stats', onClick: () => { } },
-            { label: 'Configure', onClick: () => { } },
-            { label: 'Edit Device', onClick: () => { } },
-          ]}
-        />
-      )}
+      {deviceMenu && (() => {
+        const menuDevice = devices.find((d) => d.id === deviceMenu.deviceId);
+        const grafanaUrl = grafanaUrlRef.current;
+        const grafanaLabel = grafanaUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)';
+        return (
+          <ContextMenu
+            position={{ x: deviceMenu.x, y: deviceMenu.y }}
+            onClose={() => setDeviceMenu(null)}
+            items={[
+              {
+                label: grafanaLabel,
+                onClick: () => {
+                  if (grafanaUrl && menuDevice) {
+                    const slug = buildGrafanaSlug(menuDevice.hostname);
+                    window.open(`${grafanaUrl}/d/device-${slug}`, '_blank');
+                  }
+                  setDeviceMenu(null);
+                },
+              },
+              {
+                label: 'Per-Interface Stats',
+                onClick: () => {
+                  if (menuDevice) {
+                    setPanelContent({
+                      type: 'interfaceStats',
+                      data: { deviceId: menuDevice.id, device: menuDevice },
+                    });
+                  }
+                  setDeviceMenu(null);
+                },
+              },
+              {
+                label: 'Configure',
+                onClick: () => {
+                  if (menuDevice) {
+                    setPanelContent({ type: 'deviceConfig', data: { device: menuDevice } });
+                  }
+                  setDeviceMenu(null);
+                },
+              },
+            ]}
+          />
+        );
+      })()}
 
-      {edgeMenu && (
-        <ContextMenu
-          position={{ x: edgeMenu.x, y: edgeMenu.y }}
-          onClose={() => setEdgeMenu(null)}
-          items={[
-            { label: 'Per-Interface Stats', onClick: () => { } },
-            { label: 'Open in Grafana', onClick: () => { } },
-            {
-              label: 'Remove',
-              variant: 'danger',
-              onClick: () => {
-                setEdges((currentEdges) => {
-                  const nextEdges = currentEdges.filter((edge) => edge.id !== edgeMenu.edgeID);
-                  serializeManualEdges(nextEdges);
-                  return nextEdges;
-                });
-              }
-            },
-          ]}
-        />
-      )}
+      {edgeMenu && (() => {
+        const menuEdge = edges.find((e) => e.id === edgeMenu.edgeID);
+        const menuLink = menuEdge?.data?.link;
+        const devicesByID = new Map(devices.map((d) => [d.id, d]));
+        const menuSourceDevice = menuLink ? devicesByID.get(menuLink.source_device_id) : undefined;
+        const menuTargetDevice = menuLink ? devicesByID.get(menuLink.target_device_id) : undefined;
+        const grafanaUrl = grafanaUrlRef.current;
+        const grafanaLabel = grafanaUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)';
+        return (
+          <ContextMenu
+            position={{ x: edgeMenu.x, y: edgeMenu.y }}
+            onClose={() => setEdgeMenu(null)}
+            items={[
+              {
+                label: 'Per-Interface Stats',
+                onClick: () => {
+                  if (menuLink && menuSourceDevice && menuTargetDevice) {
+                    setPanelContent({
+                      type: 'interfaceStats',
+                      data: {
+                        linkId: menuLink.id,
+                        link: menuLink,
+                        sourceDevice: menuSourceDevice,
+                        targetDevice: menuTargetDevice,
+                      },
+                    });
+                  }
+                  setEdgeMenu(null);
+                },
+              },
+              {
+                label: grafanaLabel,
+                onClick: () => {
+                  if (grafanaUrl && menuSourceDevice) {
+                    const slug = buildGrafanaSlug(menuSourceDevice.hostname);
+                    window.open(`${grafanaUrl}/d/device-${slug}`, '_blank');
+                  }
+                  setEdgeMenu(null);
+                },
+              },
+              {
+                label: 'Remove',
+                variant: 'danger',
+                onClick: () => {
+                  setEdges((currentEdges) => {
+                    const nextEdges = currentEdges.filter((edge) => edge.id !== edgeMenu.edgeID);
+                    serializeManualEdges(nextEdges);
+                    return nextEdges;
+                  });
+                  setEdgeMenu(null);
+                },
+              },
+            ]}
+          />
+        );
+      })()}
 
       <SidePanel
         open={!!panelContent}
         onClose={() => setPanelContent(null)}
-        title={panelContent?.type === 'settings' ? 'Settings' : 'Add Device'}
+        title={getPanelTitle()}
       >
-        <div className="text-text-secondary">
-          {panelContent?.type === 'settings' ? 'Settings placeholder' : 'Add Device placeholder'}
-        </div>
+        {panelContent?.type === 'interfaceStats' && (() => {
+          const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device } | undefined;
+          if (data?.link && data.sourceDevice && data.targetDevice) {
+            return (
+              <InterfaceStatsPanel
+                link={data.link}
+                sourceDevice={data.sourceDevice}
+                targetDevice={data.targetDevice}
+                snapshot={snapshot as SnapshotPayload | null}
+              />
+            );
+          }
+          return <div className="text-text-secondary text-sm">No link data available.</div>;
+        })()}
+        {panelContent?.type === 'settings' && <SettingsPanel />}
+        {panelContent?.type === 'addDevice' && (
+          <AddDevicePanel
+            onDeviceAdded={() => {
+              setPanelContent(null);
+              void loadTopology();
+            }}
+          />
+        )}
+        {panelContent?.type === 'deviceConfig' && (() => {
+          const data = panelContent.data as { device?: Device } | undefined;
+          if (data?.device) {
+            return (
+              <DeviceConfigPanel
+                device={data.device}
+                onDeviceUpdated={() => { void loadTopology(); }}
+                onDeviceDeleted={() => {
+                  setPanelContent(null);
+                  void loadTopology();
+                }}
+              />
+            );
+          }
+          return null;
+        })()}
       </SidePanel>
 
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
