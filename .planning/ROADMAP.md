@@ -110,7 +110,7 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — UI infrastructure: context menus, side panel, toolbar, and keyboard shortcuts
+- [x] 04-01-PLAN.md — UI infrastructure: context menus, side panel, toolbar, and keyboard shortcuts
 - [ ] 04-02-PLAN.md — Grafana deep-links and per-interface statistics side panel
 - [ ] 04-03-PLAN.md — Settings panel, polling configuration, add/edit/delete device UI
 - [ ] 04-04-PLAN.md — Background image upload, Prometheus alert rules, link alert visuals, and performance optimization
@@ -139,5 +139,5 @@ Phases execute in numeric order: 0 -> 1 -> 2 -> 3 -> 4 -> 5
 | 1. Foundation | 3/3 | Completed | 2026-03-06 |
 | 2. Interactive Canvas | 4/4 | Completed | 2026-03-06 |
 | 3. Real-Time Pipeline | 4/4 | Completed | 2026-03-07 |
-| 4. Integration and Polish | 0/4 | In Progress | - |
+| 4. Integration and Polish | 1/4 | In Progress | - |
 | 5. Routing Protocols | 0/0 | Not started | - |

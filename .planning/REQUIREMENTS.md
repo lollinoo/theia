@@ -67,7 +67,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **UX-01**: Dark theme UI matching the reference design
 - [x] **UX-02**: User can search for devices by hostname or IP and canvas focuses on result
-- [ ] **UX-03**: Keyboard shortcuts for common actions (search, add device, zoom)
+- [x] **UX-03**: Keyboard shortcuts for common actions (search, add device, zoom)
 - [ ] **UX-04**: Canvas supports 100+ devices without performance degradation
 
 ## v2 Requirements
@@ -147,7 +147,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ROUT-03 | Phase 5 | Pending |
 | UX-01 | Phase 2 | Complete |
 | UX-02 | Phase 2 | Complete |
-| UX-03 | Phase 4 | Pending |
+| UX-03 | Phase 4 | Complete |
 | UX-04 | Phase 4 | Pending |
 
 **Coverage:**

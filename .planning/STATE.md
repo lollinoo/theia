@@ -10,10 +10,10 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 4 of 5 (Integration and Polish)
-Plan: 0 of 0 in current phase
-Status: Phase 3 Completed
-Last activity: 2026-03-07 — Phase 3, Plan 04 approved and Phase 3 closed
-Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3)
+Plan: 1 of 4 in current phase
+Status: In Progress
+Last activity: 2026-03-08 — Phase 4, Plan 01 completed (UI infrastructure: ContextMenu, SidePanel, Toolbar, ShortcutHelp, useKeyboardShortcuts)
+Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3) -> [██░░░░░░░░] 25% (Phase 4)
 
 ## Performance Metrics
 
@@ -72,20 +72,24 @@ Recent decisions affecting current work:
 - [Phase 3]: Canvas overlays WebSocket snapshot metrics onto existing React Flow nodes/edges without re-fetching topology, and stale metrics are cleared after a 2x polling-interval timeout
 - [Phase 3]: The dev frontend’s live WebSocket path is proxied through the Vite dev server at `/api/v1/ws`; the runtime config file actually loaded by the container is `frontend/vite.config.js`
 - [Phase 3]: The frontend dev container only bind-mounts `src` and `index.html`, so Vite config changes require a frontend image rebuild before runtime verification
+- [Phase 4]: Device onContextMenu callback is passed through node.data (not component props) because React Flow's NodeProps doesn't support arbitrary prop pass-through
+- [Phase 4]: ContextMenu repositions after initial render (render offscreen, measure, clamp) to handle dynamic menu heights
+- [Phase 4]: Escape key priority order for Canvas: context menu > side panel > search overlay > shortcut help
+- [Phase 4]: SidePanel uses translate-x CSS transform (always mounted) so exit animation plays; conditional render would skip it
+- [Phase 4]: panelContent state pattern (type + optional data) drives SidePanel; later plans fill specific panel types
 
 ### Pending Todos
 
-- Draft and sequence Phase 4 plans (`04-01`, `04-02`)
+- Execute Phase 4 plans 02-04 (Grafana links, settings/device management, polish)
 - Decide whether to add dev Prometheus alert rules before or during Phase 4
 
 ### Blockers/Concerns
 
 - Dev simulators do not currently expose ENTITY-SENSOR temperature series, so temperature will remain nil / `N/A` unless a device reports it.
 - Prometheus alert transport is wired, but the dev Prometheus config still has no alerting rules, so alert snapshots are empty for now.
-- Phase 4 has not been decomposed into executable plan files yet; roadmap-level planning is the next required step.
 
 ## Session Continuity
 
-Last session: 2026-03-07
-Stopped at: Phase 3 complete and approved
-Resume file: .planning/ROADMAP.md
+Last session: 2026-03-08
+Stopped at: Completed 04-01-PLAN.md (UI infrastructure for Phase 4)
+Resume file: .planning/phases/04-integration-and-polish/04-02-PLAN.md
