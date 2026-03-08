@@ -13,7 +13,7 @@ export default function ZoomControls({
     'flex h-12 w-12 items-center justify-center border-b border-border-subtle bg-bg-surface/90 text-lg text-text-primary transition-colors duration-150 hover:bg-bg-elevated last:border-b-0';
 
   return (
-    <div className="pointer-events-none fixed right-5 top-5 z-20">
+    <div className="pointer-events-none fixed left-5 bottom-5 z-20">
       <div className="pointer-events-auto overflow-hidden rounded-2xl border border-border-subtle shadow-canvas backdrop-blur-xl">
         <button type="button" onClick={onZoomIn} className={`${buttonClassName} rounded-t-2xl`}>
           +
