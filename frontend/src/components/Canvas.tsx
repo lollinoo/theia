@@ -387,8 +387,7 @@ export default function Canvas() {
       handler: () => setShowSearch(s => !s),
     },
     addDevice: {
-      key: 'n',
-      ctrl: true,
+      key: 'a',
       description: 'Add device',
       handler: () => setPanelContent({ type: 'addDevice' }),
     },

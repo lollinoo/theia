@@ -28,7 +28,7 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
 
     const shortcuts = [
         { key: `${modifier}+K`, action: 'Search' },
-        { key: `${modifier}+N`, action: 'Add device' },
+        { key: 'A', action: 'Add device' },
         { key: '+ / - / 0', action: 'Zoom In/Out/Fit' },
         { key: `${modifier}+,`, action: 'Settings' },
         { key: '?', action: 'Shortcuts help' },
