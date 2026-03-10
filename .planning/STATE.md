@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, and drill into Grafana for deep dives
-**Current focus:** Phase 4 planning and execution next
+**Current focus:** Phase 4 complete — awaiting human verification checkpoint; Phase 5 next
 
 ## Current Position
 
 Phase: 4 of 5 (Integration and Polish)
-Plan: 3 of 4 in current phase
-Status: In Progress
-Last activity: 2026-03-08 — Phase 4, Plans 02 and 03 completed (Grafana links + InterfaceStatsPanel; SettingsPanel + AddDevicePanel + DeviceConfigPanel)
-Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3) -> [████████░░] 75% (Phase 4)
+Plan: 4 of 4 in current phase
+Status: Awaiting Human Verification (Task 3 checkpoint)
+Last activity: 2026-03-10 — Phase 4, Plan 04 implementation complete (background image, Prometheus alert rules, link alert visuals, performance optimization, SNMP API bug fixes)
+Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3) -> [█████████░] 95% (Phase 4)
 
 ## Performance Metrics
 
@@ -77,19 +77,23 @@ Recent decisions affecting current work:
 - [Phase 4]: Escape key priority order for Canvas: context menu > side panel > search overlay > shortcut help
 - [Phase 4]: SidePanel uses translate-x CSS transform (always mounted) so exit animation plays; conditional render would skip it
 - [Phase 4]: panelContent state pattern (type + optional data) drives SidePanel; later plans fill specific panel types
+- [Phase 4]: LinkDown alert severity is warning (not critical) — a link down is less severe than a device becoming entirely unreachable
+- [Phase 4]: Link alert status uses best-effort interface name matching via alert summary string (Prometheus labels vary by exporter config)
+- [Phase 4]: Background image rendered as z-index 0 positioned div with 0.15 opacity behind React Flow so topology nodes/links remain readable
+- [Phase 4]: SNMP API payload uses nested snmp: { version, community } object matching backend JSON:API design; flat snmp_community/snmp_version fields were wrong
+- [Phase 4]: Device display_name stored in tags map (not a top-level field) consistent with backend domain.Device.Tags design
 
 ### Pending Todos
 
-- Execute Phase 4 plan 04 (background image, Prometheus alert rules, link alert visuals, performance)
-- Decide whether to add dev Prometheus alert rules before or during Phase 4
+- Human verification of Phase 4 complete feature set (Task 3 checkpoint in 04-04-PLAN.md)
+- Phase 5 (Routing Protocols) planning and execution
 
 ### Blockers/Concerns
 
 - Dev simulators do not currently expose ENTITY-SENSOR temperature series, so temperature will remain nil / `N/A` unless a device reports it.
-- Prometheus alert transport is wired, but the dev Prometheus config still has no alerting rules, so alert snapshots are empty for now.
 
 ## Session Continuity
 
-Last session: 2026-03-08
-Stopped at: Completed 04-02 (Grafana links + InterfaceStatsPanel) and 04-03 (Settings + AddDevice + DeviceConfig panels)
-Resume file: .planning/phases/04-integration-and-polish/04-04-PLAN.md
+Last session: 2026-03-10
+Stopped at: Completed 04-04 implementation tasks (background image, alert rules, link alert visuals, perf) — awaiting Task 3 human verification checkpoint
+Resume file: .planning/phases/04-integration-and-polish/04-04-PLAN.md (Task 3 human verify)

@@ -111,9 +111,9 @@ Plans:
 
 Plans:
 - [x] 04-01-PLAN.md — UI infrastructure: context menus, side panel, toolbar, and keyboard shortcuts
-- [ ] 04-02-PLAN.md — Grafana deep-links and per-interface statistics side panel
-- [ ] 04-03-PLAN.md — Settings panel, polling configuration, add/edit/delete device UI
-- [ ] 04-04-PLAN.md — Background image upload, Prometheus alert rules, link alert visuals, and performance optimization
+- [x] 04-02-PLAN.md — Grafana deep-links and per-interface statistics side panel
+- [x] 04-03-PLAN.md — Settings panel, polling configuration, add/edit/delete device UI
+- [x] 04-04-PLAN.md — Background image upload, Prometheus alert rules, link alert visuals, and performance optimization
 
 ### Phase 5: Routing Protocols
 **Goal**: Operators can view routing protocol status (BGP/OSPF) and route counts directly from device cards on the topology map
@@ -139,5 +139,5 @@ Phases execute in numeric order: 0 -> 1 -> 2 -> 3 -> 4 -> 5
 | 1. Foundation | 3/3 | Completed | 2026-03-06 |
 | 2. Interactive Canvas | 4/4 | Completed | 2026-03-06 |
 | 3. Real-Time Pipeline | 4/4 | Completed | 2026-03-07 |
-| 4. Integration and Polish | 1/4 | In Progress | - |
+| 4. Integration and Polish | 4/4 | Awaiting Verification | - |
 | 5. Routing Protocols | 0/0 | Not started | - |

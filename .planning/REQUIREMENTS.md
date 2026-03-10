@@ -14,7 +14,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **CANV-03**: Device positions persist across browser sessions
 - [x] **CANV-04**: Auto-layout algorithm initially positions nodes based on topology connections
 - [x] **CANV-05**: User can manually override auto-layout positions per device
-- [ ] **CANV-06**: User can upload a background image (floor plan/network diagram) to the canvas
+- [x] **CANV-06**: User can upload a background image (floor plan/network diagram) to the canvas
 
 ### Devices
 
@@ -46,8 +46,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Alerts
 
 - [x] **ALRT-01**: Devices visually change (color/icon) when they go down
-- [ ] **ALRT-02**: Links visually change when they go down or degrade
-- [ ] **ALRT-03**: Alert states reflect Prometheus alerting rules
+- [x] **ALRT-02**: Links visually change when they go down or degrade
+- [x] **ALRT-03**: Alert states reflect Prometheus alerting rules
 
 ### Integration
 
@@ -68,7 +68,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **UX-01**: Dark theme UI matching the reference design
 - [x] **UX-02**: User can search for devices by hostname or IP and canvas focuses on result
 - [x] **UX-03**: Keyboard shortcuts for common actions (search, add device, zoom)
-- [ ] **UX-04**: Canvas supports 100+ devices without performance degradation
+- [x] **UX-04**: Canvas supports 100+ devices without performance degradation
 
 ## v2 Requirements
 
@@ -115,7 +115,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CANV-03 | Phase 2 | Complete |
 | CANV-04 | Phase 2 | Complete |
 | CANV-05 | Phase 2 | Complete |
-| CANV-06 | Phase 4 | Pending |
+| CANV-06 | Phase 4 | Complete |
 | DEV-01 | Phase 1 | Complete |
 | DEV-02 | Phase 1 | Complete |
 | DEV-03 | Phase 2 | Complete |
@@ -135,8 +135,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | METR-06 | Phase 4 | Pending |
 | METR-07 | Phase 4 | Pending |
 | ALRT-01 | Phase 3 | Complete |
-| ALRT-02 | Phase 4 | Pending |
-| ALRT-03 | Phase 4 | Pending |
+| ALRT-02 | Phase 4 | Complete |
+| ALRT-03 | Phase 4 | Complete |
 | INTG-01 | Phase 3 | Complete |
 | INTG-02 | Phase 4 | Pending |
 | INTG-03 | Phase 4 | Pending |
@@ -148,7 +148,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UX-01 | Phase 2 | Complete |
 | UX-02 | Phase 2 | Complete |
 | UX-03 | Phase 4 | Complete |
-| UX-04 | Phase 4 | Pending |
+| UX-04 | Phase 4 | Complete |
 
 **Coverage:**
 - v1 requirements: 39 total
