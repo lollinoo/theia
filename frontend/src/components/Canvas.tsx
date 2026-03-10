@@ -58,7 +58,6 @@ interface StoredManualEdge {
 
 const defaultPollingIntervalMs = 60_000;
 const staleThresholdMs = defaultPollingIntervalMs * 2;
-const canvasBackgroundImageKey = 'canvas_background_image';
 
 function buildPositionPayload(nodes: Node<DeviceNodeData>[]): PositionPayload[] {
   return nodes.map((node) => ({
@@ -348,7 +347,6 @@ export default function Canvas() {
   const [panelContent, setPanelContent] = useState<{ type: string, data?: unknown } | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
-  const [canvasBgImage, setCanvasBgImage] = useState<string>('');
 
   const highlightTimerRef = useRef<number | null>(null);
   const layoutInitializedRef = useRef(false);
@@ -435,8 +433,10 @@ export default function Canvas() {
 
   useKeyboardShortcuts(shortcuts);
 
-  async function loadTopology() {
-    setLoading(true);
+  async function loadTopology(isSilentRefresh = false) {
+    if (!isSilentRefresh) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -510,13 +510,17 @@ export default function Canvas() {
         void savePositions(buildPositionPayload(nextNodes));
       }
 
-      window.requestAnimationFrame(() => {
-        reactFlow.fitView({ padding: 0.18, duration: 320 });
-      });
+      if (!isSilentRefresh) {
+        window.requestAnimationFrame(() => {
+          reactFlow.fitView({ padding: 0.18, duration: 320 });
+        });
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load topology');
     } finally {
-      setLoading(false);
+      if (!isSilentRefresh) {
+        setLoading(false);
+      }
     }
   }
 
@@ -534,7 +538,6 @@ export default function Canvas() {
     fetchSettings()
       .then((settings) => {
         grafanaUrlRef.current = settings['grafana_url'] ?? '';
-        setCanvasBgImage(settings[canvasBackgroundImageKey] ?? '');
       })
       .catch(() => {
         // Settings fetch failure is non-fatal; Grafana links will be disabled.
@@ -749,22 +752,6 @@ export default function Canvas() {
 
   return (
     <div className="relative h-full w-full bg-bg-canvas">
-      {canvasBgImage && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 0,
-            backgroundImage: `url(${canvasBgImage})`,
-            backgroundSize: 'contain',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat',
-            opacity: 0.15,
-            pointerEvents: 'none',
-          }}
-        />
-      )}
       {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
       <Toolbar
         onSearch={() => setShowSearch(s => !s)}
@@ -898,7 +885,7 @@ export default function Canvas() {
           <AddDevicePanel
             onDeviceAdded={() => {
               setPanelContent(null);
-              void loadTopology();
+              void loadTopology(true);
             }}
           />
         )}
@@ -908,10 +895,10 @@ export default function Canvas() {
             return (
               <DeviceConfigPanel
                 device={data.device}
-                onDeviceUpdated={() => { void loadTopology(); }}
+                onDeviceUpdated={() => { void loadTopology(true); }}
                 onDeviceDeleted={() => {
                   setPanelContent(null);
-                  void loadTopology();
+                  void loadTopology(true);
                 }}
               />
             );
@@ -1042,7 +1029,12 @@ export default function Canvas() {
         <MiniMap
           pannable
           zoomable
-          nodeColor={(node) => statusColor(node.data.device.status)}
+          nodeColor={(node) => {
+            const alertStatus = node.data.alertStatus as string | undefined;
+            if (alertStatus === 'down') return '#ff1744';
+            if (alertStatus === 'degraded') return '#ffc107';
+            return statusColor(node.data.device.status);
+          }}
           style={{
             backgroundColor: '#363647',
             border: '1px solid #4a4a5e',
