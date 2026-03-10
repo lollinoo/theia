@@ -42,6 +42,16 @@ export interface DevicePosition {
   updated_at?: string;
 }
 
+export interface InterfaceInfo {
+  if_name: string;
+  if_descr: string;
+  speed: number;
+  oper_status: string;
+  admin_status: string;
+  in_use: boolean;
+  in_use_by?: string;
+}
+
 type APIRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is APIRecord {
@@ -158,6 +168,30 @@ export function parseLinksResponse(payload: unknown): Link[] {
       target_device_id: readString(resource, 'target_device_id'),
       target_if_name: readString(resource, 'target_if_name'),
       discovery_protocol: readString(resource, 'discovery_protocol'),
+    };
+  });
+}
+
+export function parseInterfacesResponse(payload: unknown): InterfaceInfo[] {
+  if (!isRecord(payload)) {
+    throw new Error('invalid interfaces response');
+  }
+
+  const data = Array.isArray(payload.data) ? payload.data : [];
+
+  return data.map((resource) => {
+    if (!isRecord(resource)) {
+      throw new Error('invalid interface resource');
+    }
+
+    return {
+      if_name: readString(resource, 'if_name'),
+      if_descr: readString(resource, 'if_descr'),
+      speed: readNumber(resource, 'speed'),
+      oper_status: readString(resource, 'oper_status'),
+      admin_status: readString(resource, 'admin_status'),
+      in_use: readBoolean(resource, 'in_use'),
+      in_use_by: typeof resource['in_use_by'] === 'string' ? resource['in_use_by'] : undefined,
     };
   });
 }

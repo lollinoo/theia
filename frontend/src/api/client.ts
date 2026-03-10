@@ -1,7 +1,9 @@
 import {
   type Device,
+  type InterfaceInfo,
   type Link,
   parseDevicesResponse,
+  parseInterfacesResponse,
   parseLinksResponse,
 } from '../types/api';
 
@@ -154,4 +156,71 @@ export async function updateDevice(
 
 export async function deleteDevice(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}`, 'DELETE');
+}
+
+export async function fetchDeviceInterfaces(deviceId: string): Promise<InterfaceInfo[]> {
+  try {
+    return parseInterfacesResponse(
+      await requestJSON(`/api/v1/devices/${encodeURIComponent(deviceId)}/interfaces`),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    throw new Error(`Failed to fetch interfaces: ${message}`);
+  }
+}
+
+export async function createLink(payload: {
+  source_device_id: string;
+  source_if_name: string;
+  target_device_id: string;
+  target_if_name: string;
+}): Promise<Link> {
+  const response = await requestJSONWithBody('/api/v1/links', 'POST', payload);
+  const data = (response as Record<string, unknown>)?.data;
+  if (!data || typeof data !== 'object') {
+    throw new Error('Invalid create link response');
+  }
+  const record = data as Record<string, unknown>;
+  return {
+    id: typeof record.id === 'string' ? record.id : '',
+    source_device_id:
+      typeof record.source_device_id === 'string' ? record.source_device_id : '',
+    source_if_name: typeof record.source_if_name === 'string' ? record.source_if_name : '',
+    target_device_id:
+      typeof record.target_device_id === 'string' ? record.target_device_id : '',
+    target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
+    discovery_protocol:
+      typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
+  };
+}
+
+export async function updateLink(
+  id: string,
+  payload: { source_if_name: string; target_if_name: string },
+): Promise<Link> {
+  const response = await requestJSONWithBody(
+    `/api/v1/links/${encodeURIComponent(id)}`,
+    'PUT',
+    payload,
+  );
+  const data = (response as Record<string, unknown>)?.data;
+  if (!data || typeof data !== 'object') {
+    throw new Error('Invalid update link response');
+  }
+  const record = data as Record<string, unknown>;
+  return {
+    id: typeof record.id === 'string' ? record.id : '',
+    source_device_id:
+      typeof record.source_device_id === 'string' ? record.source_device_id : '',
+    source_if_name: typeof record.source_if_name === 'string' ? record.source_if_name : '',
+    target_device_id:
+      typeof record.target_device_id === 'string' ? record.target_device_id : '',
+    target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
+    discovery_protocol:
+      typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
+  };
+}
+
+export async function deleteLink(id: string): Promise<void> {
+  await requestJSONWithBody(`/api/v1/links/${encodeURIComponent(id)}`, 'DELETE');
 }
