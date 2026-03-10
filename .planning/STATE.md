@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, and drill into Grafana for deep dives
-**Current focus:** Phase 4 complete — awaiting human verification checkpoint; Phase 5 next
+**Current focus:** Phase 4 complete — Phase 5 (Routing Protocols) next
 
 ## Current Position
 
 Phase: 4 of 5 (Integration and Polish)
 Plan: 4 of 4 in current phase
-Status: Awaiting Human Verification (Task 3 checkpoint)
-Last activity: 2026-03-10 — Phase 4, Plan 04 implementation complete (background image, Prometheus alert rules, link alert visuals, performance optimization, SNMP API bug fixes)
-Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3) -> [█████████░] 95% (Phase 4)
+Status: Completed
+Last activity: 2026-03-10 — Phase 4, Plan 04 complete with human verification (Prometheus alert rules, link alert visuals, perf, Grafana URL fix, keyboard shortcut fix, background image feature removed)
+Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3) -> [██████████] 100% (Phase 4)
 
 ## Performance Metrics
 
@@ -82,10 +82,12 @@ Recent decisions affecting current work:
 - [Phase 4]: Background image rendered as z-index 0 positioned div with 0.15 opacity behind React Flow so topology nodes/links remain readable
 - [Phase 4]: SNMP API payload uses nested snmp: { version, community } object matching backend JSON:API design; flat snmp_community/snmp_version fields were wrong
 - [Phase 4]: Device display_name stored in tags map (not a top-level field) consistent with backend domain.Device.Tags design
+- [Phase 4]: Background image feature removed per user request — base64 approach was problematic; server-side upload would be needed if re-added
+- [Phase 4]: Grafana deep-link opens per-device configured URL if set (grafana_dashboard_url:<id> setting), then global URL; hostname-slug URL generation removed
+- [Phase 4]: Ctrl+N keyboard shortcut changed to plain A — Ctrl+N is reserved by browsers for new window
 
 ### Pending Todos
 
-- Human verification of Phase 4 complete feature set (Task 3 checkpoint in 04-04-PLAN.md)
 - Phase 5 (Routing Protocols) planning and execution
 
 ### Blockers/Concerns
@@ -95,5 +97,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Completed 04-04 implementation tasks (background image, alert rules, link alert visuals, perf) — awaiting Task 3 human verification checkpoint
-Resume file: .planning/phases/04-integration-and-polish/04-04-PLAN.md (Task 3 human verify)
+Stopped at: Phase 4 complete — all 4 plans executed and human-verified; ready for Phase 5
+Resume file: .planning/phases/05-routing-protocols/ (next phase)
