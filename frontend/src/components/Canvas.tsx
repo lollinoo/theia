@@ -4,16 +4,14 @@ import {
   Background,
   MiniMap,
   ReactFlow,
-  addEdge,
   applyEdgeChanges,
   useNodesState,
   useReactFlow,
-  type Connection,
   type Edge,
   type EdgeChange,
   type Node,
 } from 'reactflow';
-import { fetchDevices, fetchLinks, fetchSettings } from '../api/client';
+import { fetchDevices, fetchLinks, fetchSettings, createLink } from '../api/client';
 import { computeForceLayout } from '../hooks/useAutoLayout';
 import { usePositions, type PositionPayload } from '../hooks/usePositions';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -33,6 +31,8 @@ import { InterfaceStatsPanel } from './InterfaceStatsPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { AddDevicePanel } from './AddDevicePanel';
 import { DeviceConfigPanel } from './DeviceConfigPanel';
+import { LinkCreatePanel } from './LinkCreatePanel';
+import { LinkDetailsPanel } from './LinkDetailsPanel';
 
 const nodeTypes = {
   device: DeviceCard,
@@ -45,16 +45,6 @@ const edgeTypes = {
 const manualEdgeStorageKey = 'theia-manual-edges';
 
 type HandleSide = 'top' | 'right' | 'bottom' | 'left';
-
-interface StoredManualEdge {
-  id: string;
-  source: string;
-  target: string;
-  sourceHandle?: string | null;
-  targetHandle?: string | null;
-}
-
-
 
 const defaultPollingIntervalMs = 60_000;
 const staleThresholdMs = defaultPollingIntervalMs * 2;
@@ -166,42 +156,6 @@ function getHandleSide(
     : { sourceHandle: 'top', targetHandle: 'bottom' };
 }
 
-function serializeManualEdges(edges: Edge<LinkEdgeData>[]) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  const payload: StoredManualEdge[] = edges
-    .filter((edge) => edge.data?.manual)
-    .map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: edge.sourceHandle,
-      targetHandle: edge.targetHandle,
-    }));
-
-  window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(payload));
-}
-
-function loadManualEdges() {
-  if (typeof window === 'undefined') {
-    return [] as StoredManualEdge[];
-  }
-
-  const payload = window.localStorage.getItem(manualEdgeStorageKey);
-  if (!payload) {
-    return [] as StoredManualEdge[];
-  }
-
-  try {
-    const parsed = JSON.parse(payload);
-    return Array.isArray(parsed) ? (parsed as StoredManualEdge[]) : [];
-  } catch {
-    return [] as StoredManualEdge[];
-  }
-}
-
 function buildTopologyEdges(
   links: Link[],
   devicesByID: Map<string, Device>,
@@ -244,42 +198,10 @@ function buildTopologyEdges(
         sourceHandle,
         targetHandle,
         type: 'link',
-        selectable: false,
+        selectable: true,
         data,
       };
     });
-}
-
-function buildManualEdges(
-  storedEdges: StoredManualEdge[],
-  nodes: Node<DeviceNodeData>[],
-  devicesByID: Map<string, Device>,
-  existingEdgeDataByID?: Map<string, LinkEdgeData>,
-  onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void,
-): Edge<LinkEdgeData>[] {
-  const nodeIDs = new Set(nodes.map((node) => node.id));
-
-  return storedEdges
-    .filter((edge) => nodeIDs.has(edge.source) && nodeIDs.has(edge.target))
-    .map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: edge.sourceHandle ?? undefined,
-      targetHandle: edge.targetHandle ?? undefined,
-      type: 'link',
-      data: {
-        bandwidthLabel: inferSpeedLabel(
-          devicesByID.get(edge.source),
-          devicesByID.get(edge.target),
-        ),
-        manual: true,
-        onContextMenu,
-        metrics: existingEdgeDataByID?.get(edge.id)?.metrics,
-        throughputLabel: existingEdgeDataByID?.get(edge.id)?.throughputLabel,
-        utilization: existingEdgeDataByID?.get(edge.id)?.utilization,
-      },
-    }));
 }
 
 function statusColor(status: Device['status']): string {
@@ -388,6 +310,11 @@ export default function Canvas() {
       description: 'Add device',
       handler: () => setPanelContent({ type: 'addDevice' }),
     },
+    createLink: {
+      key: 'l',
+      description: 'Create link',
+      handler: () => setPanelContent({ type: 'create-link' }),
+    },
     settings: {
       key: ',',
       ctrl: true,
@@ -483,16 +410,35 @@ export default function Canvas() {
         };
       });
 
-      const nextEdges = [
-        ...buildTopologyEdges(fetchedLinks, devicesByID, nextNodes, undefined, openEdgeMenu),
-        ...buildManualEdges(
-          loadManualEdges(),
-          nextNodes,
-          devicesByID,
-          undefined,
-          openEdgeMenu,
-        ),
-      ];
+      // Migrate localStorage manual edges to backend on first load (best-effort)
+      const storedManualRaw = window.localStorage.getItem(manualEdgeStorageKey);
+      if (storedManualRaw) {
+        try {
+          const storedManual = JSON.parse(storedManualRaw) as Array<{
+            id: string;
+            source: string;
+            target: string;
+          }>;
+          if (Array.isArray(storedManual) && storedManual.length > 0) {
+            const migrations = storedManual.map((edge) =>
+              createLink({
+                source_device_id: edge.source,
+                source_if_name: '',
+                target_device_id: edge.target,
+                target_if_name: '',
+              }).catch(() => {
+                // Best-effort: ignore individual migration failures
+              }),
+            );
+            await Promise.allSettled(migrations);
+          }
+        } catch {
+          // Ignore parse errors during migration
+        }
+        window.localStorage.removeItem(manualEdgeStorageKey);
+      }
+
+      const nextEdges = buildTopologyEdges(fetchedLinks, devicesByID, nextNodes, undefined, openEdgeMenu);
 
       startTransition(() => {
         setDevices(fetchedDevices);
@@ -651,11 +597,7 @@ export default function Canvas() {
   }, [setNodes]);
 
   function handleEdgesChange(changes: EdgeChange[]) {
-    setEdges((currentEdges) => {
-      const nextEdges = applyEdgeChanges(changes, currentEdges);
-      serializeManualEdges(nextEdges);
-      return nextEdges;
-    });
+    setEdges((currentEdges) => applyEdgeChanges(changes, currentEdges));
   }
 
   function focusOnDevice(deviceID: string) {
@@ -705,6 +647,8 @@ export default function Canvas() {
     if (!panelContent) return '';
     if (panelContent.type === 'settings') return 'Settings';
     if (panelContent.type === 'addDevice') return 'Add Device';
+    if (panelContent.type === 'create-link') return 'Create Link';
+    if (panelContent.type === 'link-details') return 'Link Details';
     if (panelContent.type === 'deviceConfig') {
       const data = panelContent.data as { device?: Device } | undefined;
       return data?.device ? data.device.hostname : 'Configure Device';
@@ -761,6 +705,7 @@ export default function Canvas() {
       <Toolbar
         onSearch={() => setShowSearch(s => !s)}
         onAddDevice={() => setPanelContent({ type: 'addDevice' })}
+        onCreateLink={() => setPanelContent({ type: 'create-link' })}
         onSettings={() => setPanelContent({ type: 'settings' })}
       />
 
@@ -856,14 +801,13 @@ export default function Canvas() {
                 },
               },
               {
-                label: 'Remove',
-                variant: 'danger',
+                label: 'View Details',
                 onClick: () => {
-                  setEdges((currentEdges) => {
-                    const nextEdges = currentEdges.filter((edge) => edge.id !== edgeMenu.edgeID);
-                    serializeManualEdges(nextEdges);
-                    return nextEdges;
-                  });
+                  const menuEdgeObj = edges.find((e) => e.id === edgeMenu.edgeID);
+                  const menuLinkObj = menuEdgeObj?.data?.link;
+                  if (menuLinkObj) {
+                    setPanelContent({ type: 'link-details', data: { link: menuLinkObj } });
+                  }
                   setEdgeMenu(null);
                 },
               },
@@ -900,6 +844,37 @@ export default function Canvas() {
             }}
           />
         )}
+        {panelContent?.type === 'create-link' && (
+          <LinkCreatePanel
+            devices={devices}
+            onCreated={() => {
+              setPanelContent(null);
+              void loadTopology(true);
+            }}
+            onClose={() => setPanelContent(null)}
+          />
+        )}
+        {panelContent?.type === 'link-details' && (() => {
+          const data = panelContent.data as { link?: Link } | undefined;
+          if (data?.link) {
+            return (
+              <LinkDetailsPanel
+                link={data.link}
+                devices={devices}
+                onUpdated={() => {
+                  setPanelContent(null);
+                  void loadTopology(true);
+                }}
+                onDeleted={() => {
+                  setPanelContent(null);
+                  void loadTopology(true);
+                }}
+                onClose={() => setPanelContent(null)}
+              />
+            );
+          }
+          return null;
+        })()}
         {panelContent?.type === 'deviceConfig' && (() => {
           const data = panelContent.data as { device?: Device } | undefined;
           if (data?.device) {
@@ -943,47 +918,12 @@ export default function Canvas() {
           setEdgeMenu(null);
           setDeviceMenu(null);
         }}
-        onConnect={(connection: Connection) => {
-          if (!connection.source || !connection.target || connection.source === connection.target) {
-            return;
+        onEdgeClick={(_event, edge) => {
+          // Only open details for backend-persisted links (edges with link data)
+          const link = edge.data?.link;
+          if (link) {
+            setPanelContent({ type: 'link-details', data: { link } });
           }
-          const source = connection.source;
-          const target = connection.target;
-
-          setEdges((currentEdges) => {
-            const duplicate = currentEdges.some(
-              (edge) =>
-                edge.source === source &&
-                edge.target === target &&
-                edge.sourceHandle === connection.sourceHandle &&
-                edge.targetHandle === connection.targetHandle,
-            );
-            if (duplicate) {
-              return currentEdges;
-            }
-
-            const nextEdges = addEdge(
-              {
-                id: `manual:${source}:${connection.sourceHandle ?? 'auto'}:${target}:${connection.targetHandle ?? 'auto'}`,
-                source,
-                target,
-                sourceHandle: connection.sourceHandle ?? undefined,
-                targetHandle: connection.targetHandle ?? undefined,
-                type: 'link',
-                data: {
-                  bandwidthLabel: inferSpeedLabel(
-                    devices.find((device) => device.id === source),
-                    devices.find((device) => device.id === target),
-                  ),
-                  manual: true,
-                  onContextMenu: openEdgeMenu,
-                },
-              },
-              currentEdges,
-            );
-            serializeManualEdges(nextEdges);
-            return nextEdges;
-          });
         }}
         onNodeDragStop={(_event, node) => {
           const updatedNodes = reactFlow.getNodes().map((currentNode) =>
@@ -1002,26 +942,16 @@ export default function Canvas() {
           const existingEdgeDataByID = new Map(
             edges.map((currentEdge) => [currentEdge.id, currentEdge.data ?? {}]),
           );
-          const repositionedEdges = [
-            ...buildTopologyEdges(
-              topologyLinks,
-              devicesByID,
-              updatedNodes,
-              existingEdgeDataByID,
-              openEdgeMenu,
-            ),
-            ...buildManualEdges(
-              loadManualEdges(),
-              updatedNodes,
-              devicesByID,
-              existingEdgeDataByID,
-              openEdgeMenu,
-            ),
-          ];
+          const repositionedEdges = buildTopologyEdges(
+            topologyLinks,
+            devicesByID,
+            updatedNodes,
+            existingEdgeDataByID,
+            openEdgeMenu,
+          );
 
           setNodes(updatedNodes);
           setEdges(repositionedEdges);
-          serializeManualEdges(repositionedEdges);
           void savePositions(buildPositionPayload(updatedNodes));
         }}
         connectionMode={ConnectionMode.Loose}
