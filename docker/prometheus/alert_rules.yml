@@ -21,7 +21,7 @@ groups:
         expr: ifOperStatus{job="snmp"} == 2
         for: 30s
         labels:
-          severity: critical
+          severity: warning
         annotations:
           summary: "Interface {{ $labels.ifDescr }} down on {{ $labels.instance }}"
 

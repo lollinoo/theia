@@ -31,6 +31,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const [grafanaUrl, setGrafanaUrl] = useState('');
 
   const [hostname, setHostname] = useState(device.hostname);
+  const [displayName, setDisplayName] = useState(device.tags?.display_name || '');
   const [ip, setIp] = useState(device.ip);
   const [community, setCommunity] = useState('');
   const [editLoading, setEditLoading] = useState(false);
@@ -63,8 +64,16 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         }
         setGrafanaUrl(settings[grafanaKey] ?? '');
       })
-      .catch(() => {/* non-fatal */});
+      .catch(() => {/* non-fatal */ });
   }, [device.id, pollingKey, grafanaKey]);
+
+  // Sync inputs when the `device` prop updates from parent
+  useEffect(() => {
+    setHostname(device.hostname || '');
+    setDisplayName(device.tags?.display_name || '');
+    setIp(device.ip || '');
+    setCommunity(''); // We don't fetch community back from the API for security
+  }, [device]);
 
   function showSaved(
     setter: React.Dispatch<React.SetStateAction<boolean>>,
@@ -111,7 +120,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
       await updateDevice(device.id, {
         hostname: hostname.trim(),
         ip: ip.trim(),
-        snmp_community: community.trim() || undefined,
+        ...(community.trim() ? { snmp: { version: '2c', community: community.trim() } } : {}),
+        tags: { ...device.tags, ...(displayName.trim() ? { display_name: displayName.trim() } : {}) },
       });
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated();
@@ -210,6 +220,14 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
             Saved
           </span>
         </div>
+
+        <input
+          type="text"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          placeholder="Display Name (optional)"
+          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+        />
 
         <input
           type="text"

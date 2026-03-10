@@ -60,6 +60,7 @@ type snmpCredsRequest struct {
 
 type updateDeviceRequest struct {
 	Hostname *string            `json:"hostname,omitempty"`
+	IP       *string            `json:"ip,omitempty"`
 	Tags     *map[string]string `json:"tags,omitempty"`
 	SNMP     *snmpCredsRequest  `json:"snmp,omitempty"`
 }
@@ -156,6 +157,7 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 
 	update := service.DeviceUpdate{
 		Hostname: req.Hostname,
+		IP:       req.IP,
 		Tags:     req.Tags,
 	}
 

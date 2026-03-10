@@ -8,7 +8,7 @@ interface AddDevicePanelProps {
 export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [hostname, setHostname] = useState('');
   const [community, setCommunity] = useState('public');
-  const [version, setVersion] = useState('v2c');
+  const [version, setVersion] = useState('2c');
   const [displayName, setDisplayName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,9 +25,11 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       await createDevice({
         hostname: hostname.trim(),
         ip: hostname.trim(),
-        snmp_community: community.trim() || 'public',
-        snmp_version: version,
-        display_name: displayName.trim() || undefined,
+        snmp: {
+          version: version,
+          community: community.trim() || 'public',
+        },
+        tags: displayName.trim() ? { display_name: displayName.trim() } : undefined,
       });
       onDeviceAdded();
     } catch (err) {
@@ -75,8 +77,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
           onChange={(e) => setVersion(e.target.value)}
           className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
         >
-          <option value="v2c">v2c</option>
-          <option value="v3">v3</option>
+          <option value="2c">v2c</option>
+          <option value="3">v3</option>
         </select>
       </div>
 

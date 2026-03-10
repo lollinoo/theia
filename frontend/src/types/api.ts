@@ -21,6 +21,7 @@ export interface Device {
   sys_descr: string;
   hardware_model: string;
   managed: boolean;
+  tags?: Record<string, string>;
   interfaces: DeviceInterface[];
 }
 
@@ -113,6 +114,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
     }
 
     const attributes = isRecord(resource.attributes) ? resource.attributes : {};
+    const tags = isRecord(attributes.tags) ? attributes.tags as Record<string, string> : {};
     const relationships = isRecord(resource.relationships) ? resource.relationships : {};
     const interfacesRelationship = isRecord(relationships.interfaces)
       ? relationships.interfaces
@@ -131,6 +133,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       sys_descr: readString(attributes, 'sys_descr'),
       hardware_model: readString(attributes, 'hardware_model'),
       managed: readBoolean(attributes, 'managed', true),
+      tags,
       interfaces: interfacesData.map(parseDeviceInterface),
     };
   });

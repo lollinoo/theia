@@ -18,6 +18,7 @@ type DiscoverFunc func(target string, creds domain.SNMPCredentials) (*snmp.Disco
 // DeviceUpdate holds optional fields for partial device updates.
 type DeviceUpdate struct {
 	Hostname        *string
+	IP              *string
 	Tags            *map[string]string
 	SNMPCredentials *domain.SNMPCredentials
 }
@@ -82,6 +83,7 @@ func (s *DeviceService) AddDevice(
 	s.probeWg.Add(1)
 	go func() {
 		defer s.probeWg.Done()
+		log.Printf("DEBUG: probeDevice launched with SNMP Config - Version: %s, V2c: %+v, V3: %+v", device.SNMPCredentials.Version, device.SNMPCredentials.V2c, device.SNMPCredentials.V3)
 		s.probeDevice(device)
 	}()
 
@@ -129,71 +131,6 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		return
 	}
 
-	// Handle neighbor discovery
-	s.handleNeighbors(fresh, result.Neighbors)
-}
-
-// handleNeighbors creates placeholder devices and links for discovered neighbors.
-func (s *DeviceService) handleNeighbors(sourceDevice *domain.Device, neighbors []snmp.NeighborInfo) {
-	for _, neighbor := range neighbors {
-		neighborDevice, err := s.findOrCreateNeighbor(neighbor)
-		if err != nil {
-			log.Printf("Failed to handle neighbor %s: %v", neighbor.RemoteSysName, err)
-			continue
-		}
-
-		// Create link between source and neighbor
-		link := &domain.Link{
-			SourceDeviceID:    sourceDevice.ID,
-			SourceIfName:      neighbor.LocalIfName,
-			TargetDeviceID:    neighborDevice.ID,
-			TargetIfName:      neighbor.RemotePortID,
-			DiscoveryProtocol: neighbor.Protocol,
-		}
-		if err := s.linkRepo.Upsert(link); err != nil {
-			log.Printf("Failed to upsert link %s->%s: %v",
-				sourceDevice.IP, neighborDevice.IP, err)
-		}
-	}
-}
-
-// findOrCreateNeighbor looks up an existing device by sysName or creates
-// an unmanaged placeholder if none exists.
-func (s *DeviceService) findOrCreateNeighbor(neighbor snmp.NeighborInfo) (*domain.Device, error) {
-	// Try to find by sysName across all devices
-	devices, err := s.deviceRepo.GetAll()
-	if err != nil {
-		return nil, fmt.Errorf("listing devices: %w", err)
-	}
-
-	for i := range devices {
-		if neighbor.RemoteSysName != "" {
-			if devices[i].SysName == neighbor.RemoteSysName || devices[i].Hostname == neighbor.RemoteSysName {
-				return &devices[i], nil
-			}
-		}
-	}
-
-	// No match found -- create unmanaged placeholder
-	placeholder := &domain.Device{
-		ID:         uuid.New(),
-		Hostname:   neighbor.RemoteSysName,
-		SysName:    neighbor.RemoteSysName,
-		IP:         neighbor.RemoteChassisID, // Use chassis ID as IP placeholder
-		DeviceType: domain.DeviceTypeUnknown,
-		Status:     domain.DeviceStatusUnknown,
-		Managed:    false,
-		Tags:       map[string]string{},
-		SNMPCredentials: domain.SNMPCredentials{
-			Version: domain.SNMPVersionV2c,
-		},
-	}
-
-	if err := s.deviceRepo.Create(placeholder); err != nil {
-		return nil, fmt.Errorf("creating placeholder device: %w", err)
-	}
-
-	return placeholder, nil
 }
 
 // UpdateDevice applies partial updates to an existing device without re-probing.
@@ -205,6 +142,9 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 
 	if update.Hostname != nil {
 		device.Hostname = *update.Hostname
+	}
+	if update.IP != nil {
+		device.IP = *update.IP
 	}
 	if update.Tags != nil {
 		device.Tags = *update.Tags

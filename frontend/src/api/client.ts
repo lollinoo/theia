@@ -21,9 +21,9 @@ async function requestJSON(path: string): Promise<unknown> {
   if (!response.ok) {
     const errorMessage =
       typeof payload === 'object' &&
-      payload !== null &&
-      'error' in payload &&
-      typeof payload.error === 'string'
+        payload !== null &&
+        'error' in payload &&
+        typeof payload.error === 'string'
         ? payload.error
         : response.statusText;
     throw new Error(`${path} failed: ${response.status} ${errorMessage}`);
@@ -73,9 +73,9 @@ async function requestJSONWithBody(
   if (!response.ok) {
     const errorMessage =
       typeof payload === 'object' &&
-      payload !== null &&
-      'error' in payload &&
-      typeof payload.error === 'string'
+        payload !== null &&
+        'error' in payload &&
+        typeof payload.error === 'string'
         ? payload.error
         : response.statusText;
     throw new Error(`${path} failed: ${response.status} ${errorMessage}`);
@@ -113,9 +113,8 @@ export async function updateSetting(key: string, value: string): Promise<void> {
 export interface CreateDevicePayload {
   hostname: string;
   ip: string;
-  snmp_community: string;
-  snmp_version: string;
-  display_name?: string;
+  snmp: { version: string; community: string };
+  tags?: Record<string, string>;
 }
 
 export async function createDevice(payload: CreateDevicePayload): Promise<Device> {
@@ -134,7 +133,7 @@ export async function createDevice(payload: CreateDevicePayload): Promise<Device
 
 export async function updateDevice(
   id: string,
-  payload: Partial<{ hostname: string; ip: string; snmp_community: string; display_name: string }>,
+  payload: Partial<{ hostname: string; ip: string; snmp: { version: string; community: string }; tags: Record<string, string> }>,
 ): Promise<Device> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(id)}`,

@@ -23,10 +23,14 @@ const universalHandleClassName =
   '!h-2 !w-2 !rounded-full !border-2 !border-bg-canvas !bg-[#8899a6] shadow-none';
 
 function displayName(device: Device): string {
-  return device.hostname || device.sys_name || device.ip;
+  return device.tags?.display_name || device.hostname || device.sys_name || device.ip;
 }
 
 function secondaryText(device: Device, primaryLabel: string): string {
+  if (device.hostname && device.hostname !== primaryLabel) {
+    return device.hostname;
+  }
+
   if (device.hardware_model && device.hardware_model !== 'Unknown') {
     return device.hardware_model;
   }
