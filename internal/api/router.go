@@ -2,8 +2,8 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/azmin/mikrotik-theia/internal/domain"
 	"github.com/azmin/mikrotik-theia/internal/service"
@@ -25,6 +25,7 @@ func NewRouter(
 	mux := http.NewServeMux()
 
 	deviceHandler := NewDeviceHandler(deviceService)
+	linkHandler := NewLinkHandler(linkRepo, deviceService)
 	positionHandler := NewPositionHandler(positionRepo)
 	settingsHandler := NewSettingsHandler(settingsRepo)
 	healthHandler := NewHealthHandler(db, poller)
@@ -51,6 +52,12 @@ func NewRouter(
 
 	// Device by ID routes (must be registered after /devices/batch to avoid conflicts)
 	mux.HandleFunc("/api/v1/devices/", func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is an interfaces request
+		if strings.HasSuffix(r.URL.Path, "/interfaces") && r.Method == http.MethodGet {
+			linkHandler.HandleGetInterfaces(w, r)
+			return
+		}
+
 		// Check if this is a probe request
 		if len(r.URL.Path) > len("/api/v1/devices/") {
 			pathSuffix := r.URL.Path[len("/api/v1/devices/"):]
@@ -74,16 +81,26 @@ func NewRouter(
 
 	// Links routes
 	mux.HandleFunc("/api/v1/links", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
+			linkHandler.HandleList(w, r)
+		case http.MethodPost:
+			linkHandler.HandleCreate(w, r)
+		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
 		}
-		links, err := linkRepo.GetAll()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+	})
+
+	// Link by ID routes (PUT and DELETE)
+	mux.HandleFunc("/api/v1/links/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			linkHandler.HandleUpdate(w, r)
+		case http.MethodDelete:
+			linkHandler.HandleDelete(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"data": links})
 	})
 
 	// Position routes

@@ -43,6 +43,56 @@ func (r *LinkRepo) Create(link *domain.Link) error {
 	return nil
 }
 
+// GetByID retrieves a single link by UUID.
+func (r *LinkRepo) GetByID(id uuid.UUID) (*domain.Link, error) {
+	row := r.db.QueryRow(
+		`SELECT id, source_device_id, source_if_name,
+			target_device_id, target_if_name, discovery_protocol,
+			created_at, updated_at
+		FROM links WHERE id = ?`, id.String(),
+	)
+
+	var link domain.Link
+	var idStr, srcDeviceID, tgtDeviceID, protocol string
+
+	err := row.Scan(
+		&idStr, &srcDeviceID, &link.SourceIfName,
+		&tgtDeviceID, &link.TargetIfName, &protocol,
+		&link.CreatedAt, &link.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("link not found: %s", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying link by id: %w", err)
+	}
+
+	link.ID = uuid.MustParse(idStr)
+	link.SourceDeviceID = uuid.MustParse(srcDeviceID)
+	link.TargetDeviceID = uuid.MustParse(tgtDeviceID)
+	link.DiscoveryProtocol = domain.DiscoveryProtocol(protocol)
+
+	return &link, nil
+}
+
+// Update modifies the interface names of an existing link.
+func (r *LinkRepo) Update(link *domain.Link) error {
+	link.UpdatedAt = time.Now().UTC()
+
+	result, err := r.db.Exec(
+		`UPDATE links SET source_if_name = ?, target_if_name = ?, updated_at = ? WHERE id = ?`,
+		link.SourceIfName, link.TargetIfName, link.UpdatedAt, link.ID.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("updating link: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("link not found: %s", link.ID)
+	}
+	return nil
+}
+
 // GetByDeviceID retrieves all links where the device is either source or target.
 func (r *LinkRepo) GetByDeviceID(deviceID uuid.UUID) ([]domain.Link, error) {
 	rows, err := r.db.Query(

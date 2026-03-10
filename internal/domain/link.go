@@ -30,8 +30,10 @@ type Link struct {
 // LinkRepository defines persistence operations for links.
 type LinkRepository interface {
 	Create(link *Link) error
+	GetByID(id uuid.UUID) (*Link, error)
 	GetByDeviceID(deviceID uuid.UUID) ([]Link, error)
 	GetAll() ([]Link, error)
+	Update(link *Link) error
 	Delete(id uuid.UUID) error
 	// Upsert inserts a new link or updates an existing one matching
 	// the same source+target interface pair.
