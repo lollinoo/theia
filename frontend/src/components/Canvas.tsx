@@ -331,10 +331,6 @@ function viewportSize() {
   };
 }
 
-function buildGrafanaSlug(hostname: string): string {
-  return hostname.toLowerCase().replace(/\s+/g, '-');
-}
-
 export default function Canvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNodeData>([]);
   const [edges, setEdges] = useState<Edge<LinkEdgeData>[]>([]);
@@ -351,6 +347,7 @@ export default function Canvas() {
   const highlightTimerRef = useRef<number | null>(null);
   const layoutInitializedRef = useRef(false);
   const grafanaUrlRef = useRef<string>('');
+  const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
   const reactFlow = useReactFlow<DeviceNodeData, LinkEdgeData>();
@@ -537,6 +534,15 @@ export default function Canvas() {
     fetchSettings()
       .then((settings) => {
         grafanaUrlRef.current = settings['grafana_url'] ?? '';
+        // Parse per-device Grafana dashboard URLs stored as grafana_dashboard_url:<device_id>
+        const perDeviceUrls = new Map<string, string>();
+        for (const [key, value] of Object.entries(settings)) {
+          if (key.startsWith('grafana_dashboard_url:') && value) {
+            const deviceId = key.slice('grafana_dashboard_url:'.length);
+            perDeviceUrls.set(deviceId, value);
+          }
+        }
+        deviceGrafanaUrlsRef.current = perDeviceUrls;
       })
       .catch(() => {
         // Settings fetch failure is non-fatal; Grafana links will be disabled.
@@ -760,8 +766,12 @@ export default function Canvas() {
 
       {deviceMenu && (() => {
         const menuDevice = devices.find((d) => d.id === deviceMenu.deviceId);
-        const grafanaUrl = grafanaUrlRef.current;
-        const grafanaLabel = grafanaUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)';
+        const globalGrafanaUrl = grafanaUrlRef.current;
+        // Per-device URL takes priority; fall back to global base URL
+        const effectiveGrafanaUrl = menuDevice
+          ? (deviceGrafanaUrlsRef.current.get(menuDevice.id) || globalGrafanaUrl)
+          : globalGrafanaUrl;
+        const grafanaLabel = effectiveGrafanaUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)';
         return (
           <ContextMenu
             position={{ x: deviceMenu.x, y: deviceMenu.y }}
@@ -770,9 +780,8 @@ export default function Canvas() {
               {
                 label: grafanaLabel,
                 onClick: () => {
-                  if (grafanaUrl && menuDevice) {
-                    const slug = buildGrafanaSlug(menuDevice.hostname);
-                    window.open(`${grafanaUrl}/d/device-${slug}`, '_blank');
+                  if (effectiveGrafanaUrl) {
+                    window.open(effectiveGrafanaUrl, '_blank');
                   }
                   setDeviceMenu(null);
                 },
@@ -809,8 +818,12 @@ export default function Canvas() {
         const devicesByID = new Map(devices.map((d) => [d.id, d]));
         const menuSourceDevice = menuLink ? devicesByID.get(menuLink.source_device_id) : undefined;
         const menuTargetDevice = menuLink ? devicesByID.get(menuLink.target_device_id) : undefined;
-        const grafanaUrl = grafanaUrlRef.current;
-        const grafanaLabel = grafanaUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)';
+        const globalGrafanaUrl = grafanaUrlRef.current;
+        // Use per-device URL for source device, or fall back to global base URL
+        const effectiveGrafanaUrl = menuSourceDevice
+          ? (deviceGrafanaUrlsRef.current.get(menuSourceDevice.id) || globalGrafanaUrl)
+          : globalGrafanaUrl;
+        const grafanaLabel = effectiveGrafanaUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)';
         return (
           <ContextMenu
             position={{ x: edgeMenu.x, y: edgeMenu.y }}
@@ -836,9 +849,8 @@ export default function Canvas() {
               {
                 label: grafanaLabel,
                 onClick: () => {
-                  if (grafanaUrl && menuSourceDevice) {
-                    const slug = buildGrafanaSlug(menuSourceDevice.hostname);
-                    window.open(`${grafanaUrl}/d/device-${slug}`, '_blank');
+                  if (effectiveGrafanaUrl) {
+                    window.open(effectiveGrafanaUrl, '_blank');
                   }
                   setEdgeMenu(null);
                 },
