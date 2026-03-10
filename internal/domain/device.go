@@ -94,6 +94,7 @@ type DeviceRepository interface {
 	Create(device *Device) error
 	GetByID(id uuid.UUID) (*Device, error)
 	GetByIP(ip string) (*Device, error)
+	GetBySysName(sysName string) (*Device, error)
 	GetAll() ([]Device, error)
 	Update(device *Device) error
 	Delete(id uuid.UUID) error

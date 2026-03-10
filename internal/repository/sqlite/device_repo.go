@@ -139,6 +139,32 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 	return device, nil
 }
 
+// GetBySysName retrieves a device by SNMP sysName, or returns nil if not found.
+func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
+	device, err := r.scanDevice(
+		r.db.QueryRow(
+			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
+				sys_name, sys_descr, sys_object_id, hardware_model, managed, tags_json,
+				created_at, updated_at
+			FROM devices WHERE sys_name = ? LIMIT 1`, sysName,
+		),
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	ifaces, err := r.loadInterfaces(device.ID)
+	if err != nil {
+		return nil, err
+	}
+	device.Interfaces = ifaces
+
+	return device, nil
+}
+
 // GetAll retrieves all devices with their interfaces.
 func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 	rows, err := r.db.Query(

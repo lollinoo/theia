@@ -131,6 +131,39 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		return
 	}
 
+	// Auto-create links from LLDP/CDP neighbors
+	for _, neighbor := range result.Neighbors {
+		if neighbor.RemoteSysName == "" {
+			continue
+		}
+		remoteDevice, err := s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
+		if err != nil {
+			log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, err)
+			continue
+		}
+		if remoteDevice == nil {
+			log.Printf("Skipping neighbor %s: device not found in system", neighbor.RemoteSysName)
+			continue
+		}
+
+		link := &domain.Link{
+			SourceDeviceID:    fresh.ID,
+			SourceIfName:      neighbor.LocalIfName,
+			TargetDeviceID:    remoteDevice.ID,
+			TargetIfName:      neighbor.RemotePortID,
+			DiscoveryProtocol: neighbor.Protocol,
+		}
+		if err := s.linkRepo.Upsert(link); err != nil {
+			log.Printf("Failed to upsert link %s:%s <-> %s:%s: %v",
+				fresh.SysName, neighbor.LocalIfName,
+				neighbor.RemoteSysName, neighbor.RemotePortID, err)
+			continue
+		}
+		log.Printf("Auto-linked %s:%s <-> %s:%s via %s",
+			fresh.SysName, neighbor.LocalIfName,
+			neighbor.RemoteSysName, neighbor.RemotePortID,
+			string(neighbor.Protocol))
+	}
 }
 
 // UpdateDevice applies partial updates to an existing device without re-probing.
