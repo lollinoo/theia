@@ -115,6 +115,18 @@ Plans:
 - [x] 04-03-PLAN.md — Settings panel, polling configuration, add/edit/delete device UI
 - [x] 04-04-PLAN.md — Background image upload, Prometheus alert rules, link alert visuals, and performance optimization
 
+### Phase 04.1: Manually setup the link using detected ports from SNMP (INSERTED)
+
+**Goal:** Users can manually create, edit, and delete network links between devices by selecting from SNMP-detected interfaces/ports. LLDP/CDP neighbors are auto-created as links on device probe. All links persist to the backend database, replacing the current localStorage-only approach.
+**Requirements**: LINK-05, INTG-04
+**Depends on:** Phase 4
+**Status:** Planning complete
+**Plans:** 2 plans
+
+Plans:
+- [ ] 04.1-01-PLAN.md — Backend link CRUD API, interfaces endpoint, LLDP auto-link creation on probe
+- [ ] 04.1-02-PLAN.md — Frontend link management UI: creation panel, details/edit panel, deletion, localStorage migration
+
 ### Phase 5: Routing Protocols
 **Goal**: Operators can view routing protocol status (BGP/OSPF) and route counts directly from device cards on the topology map
 **Depends on**: Phase 3
