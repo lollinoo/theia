@@ -120,11 +120,11 @@ Plans:
 **Goal:** Users can manually create, edit, and delete network links between devices by selecting from SNMP-detected interfaces/ports. LLDP/CDP neighbors are auto-created as links on device probe. All links persist to the backend database, replacing the current localStorage-only approach.
 **Requirements**: LINK-05, INTG-04
 **Depends on:** Phase 4
-**Status:** Planning complete
+**Status:** In progress (1/2 plans complete)
 **Plans:** 2 plans
 
 Plans:
-- [ ] 04.1-01-PLAN.md — Backend link CRUD API, interfaces endpoint, LLDP auto-link creation on probe
+- [x] 04.1-01-PLAN.md — Backend link CRUD API, interfaces endpoint, LLDP auto-link creation on probe
 - [ ] 04.1-02-PLAN.md — Frontend link management UI: creation panel, details/edit panel, deletion, localStorage migration
 
 ### Phase 5: Routing Protocols
@@ -152,4 +152,5 @@ Phases execute in numeric order: 0 -> 1 -> 2 -> 3 -> 4 -> 5
 | 2. Interactive Canvas | 4/4 | Completed | 2026-03-06 |
 | 3. Real-Time Pipeline | 4/4 | Completed | 2026-03-07 |
 | 4. Integration and Polish | 4/4 | Completed | 2026-03-10 |
+| 04.1 Manually Setup Links (INSERTED) | 1/2 | In progress | - |
 | 5. Routing Protocols | 0/0 | Not started | - |

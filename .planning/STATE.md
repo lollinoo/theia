@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, and drill into Grafana for deep dives
-**Current focus:** Phase 4 complete — Phase 5 (Routing Protocols) next
+**Current focus:** Phase 04.1 in progress — manually setup links using detected ports from SNMP
 
 ## Current Position
 
-Phase: 4 of 5 (Integration and Polish)
-Plan: 4 of 4 in current phase
+Phase: 04.1 of 5 (Manually Setup Links Using Detected Ports from SNMP)
+Plan: 1 of 1 in current phase
 Status: Completed
-Last activity: 2026-03-10 — Phase 4, Plan 04 complete with human verification (Prometheus alert rules, link alert visuals, perf, Grafana URL fix, keyboard shortcut fix, background image feature removed)
-Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3) -> [██████████] 100% (Phase 4)
+Last activity: 2026-03-10 — Phase 04.1, Plan 01 complete — Link CRUD API, interfaces endpoint, and LLDP/CDP auto-link creation
+Progress: [██████████] 100% (Phase 0) -> [██████████] 100% (Phase 1) -> [██████████] 100% (Phase 2) -> [██████████] 100% (Phase 3) -> [██████████] 100% (Phase 4) -> [██████████] 100% (Phase 04.1)
 
 ## Performance Metrics
 
@@ -42,6 +42,7 @@ Progress: [██████████] 100% (Phase 0) -> [██████
 ### Roadmap Evolution
 
 - Docker environment promoted from Phase 1.1 (inserted) to Phase 0 (prerequisite for all phases)
+- Phase 04.1 inserted after Phase 04: Manually setup the link using detected ports from SNMP (URGENT)
 
 ### Decisions
 
@@ -85,10 +86,16 @@ Recent decisions affecting current work:
 - [Phase 4]: Background image feature removed per user request — base64 approach was problematic; server-side upload would be needed if re-added
 - [Phase 4]: Grafana deep-link opens per-device configured URL if set (grafana_dashboard_url:<id> setting), then global URL; hostname-slug URL generation removed
 - [Phase 4]: Ctrl+N keyboard shortcut changed to plain A — Ctrl+N is reserved by browsers for new window
+- [Phase 04.1]: Only source_if_name and target_if_name editable via PUT link; changing devices requires delete + recreate
+- [Phase 04.1]: Interface filter excludes names starting with "lo", "Null", or empty; up-first then alpha sort
+- [Phase 04.1]: in_use annotation derived from GetByDeviceID result set (no dedicated DB column)
+- [Phase 04.1]: GetBySysName added to DeviceRepository for O(1) LLDP neighbor resolution
+- [Phase 04.1]: LLDP auto-link skips neighbors where RemoteSysName not found; both devices must exist
 
 ### Pending Todos
 
 - Phase 5 (Routing Protocols) planning and execution
+- Frontend link management UI (Phase 04.1 plan 02 or later)
 
 ### Blockers/Concerns
 
@@ -97,5 +104,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-10
-Stopped at: Phase 4 complete — all 4 plans executed and human-verified; ready for Phase 5
-Resume file: .planning/phases/05-routing-protocols/ (next phase)
+Stopped at: Phase 04.1, Plan 01 complete — backend Link CRUD API, interfaces endpoint, and LLDP auto-link creation
+Resume file: .planning/phases/04.1-manually-setup-the-link-using-detected-ports-from-snmp/ (next plan in phase)
