@@ -31,7 +31,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **LINK-02**: Links display bandwidth capacity labels
 - [x] **LINK-03**: Links show live throughput (TX/RX) from Prometheus metrics
 - [x] **LINK-04**: Links are color-coded by utilization level
-- [ ] **LINK-05**: User can click a link to see per-interface statistics (TX/RX, errors, drops)
+- [x] **LINK-05**: User can click a link to see per-interface statistics (TX/RX, errors, drops)
 
 ### Metrics
 
@@ -126,7 +126,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LINK-02 | Phase 2 | Complete |
 | LINK-03 | Phase 3 | Complete |
 | LINK-04 | Phase 3 | Complete |
-| LINK-05 | Phase 4 | Pending |
+| LINK-05 | Phase 4 | Complete |
 | METR-01 | Phase 3 | Complete |
 | METR-02 | Phase 3 | Complete |
 | METR-03 | Phase 3 | Complete |
