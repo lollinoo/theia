@@ -164,16 +164,16 @@ export function LinkDetailsPanel({
     <div className="space-y-5 p-4">
       {/* Link summary */}
       <div className="rounded-lg border border-border-subtle bg-bg-elevated p-3 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-text-primary">
+        <div className="space-y-0.5">
+          <p className="text-sm font-medium text-text-primary truncate">
             {sourceDevice?.tags?.display_name || sourceDevice?.hostname || link.source_device_id}
-            <span className="text-text-secondary">:{link.source_if_name || '—'}</span>
-          </span>
-          <span className="text-text-secondary text-sm px-1">↔</span>
-          <span className="text-sm font-medium text-text-primary text-right">
+            <span className="text-text-secondary font-normal">:{link.source_if_name || '—'}</span>
+          </p>
+          <p className="text-xs text-text-secondary px-1">↕</p>
+          <p className="text-sm font-medium text-text-primary truncate">
             {targetDevice?.tags?.display_name || targetDevice?.hostname || link.target_device_id}
-            <span className="text-text-secondary">:{link.target_if_name || '—'}</span>
-          </span>
+            <span className="text-text-secondary font-normal">:{link.target_if_name || '—'}</span>
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <span

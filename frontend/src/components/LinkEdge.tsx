@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -48,8 +48,11 @@ function LinkEdgeInner({
   targetY,
   sourcePosition,
   targetPosition,
+  selected,
   data,
 }: EdgeProps<LinkEdgeData>) {
+  const [hovered, setHovered] = useState(false);
+  const isActive = selected || hovered;
   const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX,
     sourceY,
@@ -84,6 +87,13 @@ function LinkEdgeInner({
 
   const throughputColor = utilization === null ? '#8899a6' : utilizationColor(utilization);
 
+  const activeStrokeWidth = isActive ? strokeWidth + 1.5 : strokeWidth;
+  const activeStrokeColor = isActive
+    ? strokeColor === '#4a4a5e'
+      ? '#7a7a9e'
+      : strokeColor
+    : strokeColor;
+
   return (
     <>
       <path
@@ -92,6 +102,8 @@ function LinkEdgeInner({
         stroke="transparent"
         strokeWidth={20}
         className="cursor-pointer"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         onContextMenu={(event) => {
           if (!data?.onContextMenu) {
             return;
@@ -106,8 +118,10 @@ function LinkEdgeInner({
         id={id}
         path={edgePath}
         style={{
-          stroke: strokeColor,
-          strokeWidth,
+          stroke: activeStrokeColor,
+          strokeWidth: activeStrokeWidth,
+          filter: isActive ? `drop-shadow(0 0 4px ${activeStrokeColor})` : undefined,
+          transition: 'stroke-width 0.1s, filter 0.1s',
           ...(alertStatus === 'down' ? { animation: 'pulse 1.5s ease-in-out infinite' } : {}),
         }}
       />
@@ -143,6 +157,7 @@ function LinkEdgeInner({
 const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
   return (
     prev.id === next.id &&
+    prev.selected === next.selected &&
     prev.data?.utilization === next.data?.utilization &&
     prev.data?.throughputLabel === next.data?.throughputLabel &&
     prev.data?.alertStatus === next.data?.alertStatus &&

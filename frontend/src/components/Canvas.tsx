@@ -165,12 +165,21 @@ function buildTopologyEdges(
 ): Edge<LinkEdgeData>[] {
   const nodesByID = new Map(nodes.map((node) => [node.id, node]));
   const pairCounts = new Map<string, number>();
+  const seenPairs = new Set<string>();
 
   return links
-    .filter(
-      (link) =>
-        nodesByID.has(link.source_device_id) && nodesByID.has(link.target_device_id),
-    )
+    .filter((link) => {
+      if (!nodesByID.has(link.source_device_id) || !nodesByID.has(link.target_device_id)) {
+        return false;
+      }
+      // Deduplicate bidirectional links: A→B and B→A for the same port pair are the same physical link
+      const pairKey = [link.source_device_id, link.target_device_id].sort().join('-');
+      if (seenPairs.has(pairKey)) {
+        return false;
+      }
+      seenPairs.add(pairKey);
+      return true;
+    })
     .map((link) => {
       const sourceNode = nodesByID.get(link.source_device_id)!;
       const targetNode = nodesByID.get(link.target_device_id)!;

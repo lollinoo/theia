@@ -150,14 +150,16 @@ func (r *LinkRepo) Upsert(link *domain.Link) error {
 		link.ID = uuid.New()
 	}
 
-	// Check if a matching link already exists
+	// Check if a matching link already exists (either direction)
 	var existingID string
 	err := r.db.QueryRow(
 		`SELECT id FROM links
-		WHERE source_device_id = ? AND source_if_name = ?
-		  AND target_device_id = ? AND target_if_name = ?`,
+		WHERE (source_device_id = ? AND source_if_name = ? AND target_device_id = ? AND target_if_name = ?)
+		   OR (source_device_id = ? AND source_if_name = ? AND target_device_id = ? AND target_if_name = ?)`,
 		link.SourceDeviceID.String(), link.SourceIfName,
 		link.TargetDeviceID.String(), link.TargetIfName,
+		link.TargetDeviceID.String(), link.TargetIfName,
+		link.SourceDeviceID.String(), link.SourceIfName,
 	).Scan(&existingID)
 
 	if err == sql.ErrNoRows {
