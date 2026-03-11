@@ -93,7 +93,8 @@ func main() {
 	hub := ws.NewHub()
 	go hub.Run()
 
-	collector := worker.NewMetricsCollector(promClient, hub, deviceRepo, linkRepo, settingsRepo)
+	snmpPollFunc := newSNMPMetricsPollFunc(settingsRepo)
+	collector := worker.NewMetricsCollector(promClient, hub, deviceRepo, linkRepo, settingsRepo, snmpPollFunc)
 	collector.Start(ctx)
 
 	wsHandler := ws.NewHandler(hub, collector.GetSnapshot)
@@ -147,6 +148,38 @@ func ensurePrometheusURL(settingsRepo *sqlite.SettingsRepo) (string, error) {
 	}
 
 	return defaultPrometheusURL, nil
+}
+
+// newSNMPMetricsPollFunc creates an SNMPPollFunc that polls CPU/MEM/UPTIME/TEMP
+// directly from a device. Used as a fallback when Prometheus has no data.
+func newSNMPMetricsPollFunc(settingsRepo domain.SettingsRepository) worker.SNMPPollFunc {
+	return func(target string, creds domain.SNMPCredentials) (domain.DeviceMetrics, error) {
+		timeout := 5 * time.Second
+		retries := 1
+
+		if val, err := settingsRepo.Get(domain.SettingSNMPTimeout); err == nil {
+			if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+				timeout = time.Duration(secs) * time.Second
+			}
+		}
+
+		client, err := snmp.NewClient(target, creds, timeout, retries)
+		if err != nil {
+			return domain.DeviceMetrics{}, err
+		}
+		if err := client.Connect(); err != nil {
+			return domain.DeviceMetrics{}, err
+		}
+		defer client.Close()
+
+		cpu, mem, uptime, temp := snmp.PollDeviceMetrics(client)
+		return domain.DeviceMetrics{
+			CPUPercent:  cpu,
+			MemPercent:  mem,
+			UptimeSecs:  uptime,
+			TempCelsius: temp,
+		}, nil
+	}
 }
 
 // newSNMPDiscoverFunc creates a DiscoverFunc that uses real gosnmp clients.

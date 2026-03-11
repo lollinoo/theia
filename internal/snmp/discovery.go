@@ -23,9 +23,9 @@ const (
 	OidIfAdminStatus = ".1.3.6.1.2.1.2.2.1.7"
 	OidIfOperStatus  = ".1.3.6.1.2.1.2.2.1.8"
 
-	OidIfXTable     = ".1.3.6.1.2.1.31.1.1"
-	OidIfName       = ".1.3.6.1.2.1.31.1.1.1.1"
-	OidIfHighSpeed  = ".1.3.6.1.2.1.31.1.1.1.15"
+	OidIfXTable    = ".1.3.6.1.2.1.31.1.1"
+	OidIfName      = ".1.3.6.1.2.1.31.1.1.1.1"
+	OidIfHighSpeed = ".1.3.6.1.2.1.31.1.1.1.15"
 
 	OidLLDPRemChassisId = ".1.0.8802.1.1.2.1.4.1.1.5"
 	OidLLDPRemPortId    = ".1.0.8802.1.1.2.1.4.1.1.7"
@@ -33,6 +33,18 @@ const (
 
 	OidCDPDeviceID = ".1.3.6.1.4.1.9.9.23.1.2.1.1.6"
 	OidCDPPortID   = ".1.3.6.1.4.1.9.9.23.1.2.1.1.7"
+
+	// OIDs for live device metrics (HOST-RESOURCES-MIB, ENTITY-SENSOR-MIB, MikroTik)
+	OidSysUpTime           = ".1.3.6.1.2.1.1.3.0"
+	OidHrProcessorLoad     = ".1.3.6.1.2.1.25.3.2.1.5"
+	OidHrStorageType       = ".1.3.6.1.2.1.25.2.3.1.2"
+	OidHrStorageAllocUnits = ".1.3.6.1.2.1.25.2.3.1.4"
+	OidHrStorageSize       = ".1.3.6.1.2.1.25.2.3.1.5"
+	OidHrStorageUsed       = ".1.3.6.1.2.1.25.2.3.1.6"
+	OidHrStorageRam        = ".1.3.6.1.2.1.25.2.1.2" // hrStorageRam type OID
+	OidEntPhySensorType    = ".1.3.6.1.2.1.99.1.1.1.1"
+	OidEntPhySensorValue   = ".1.3.6.1.2.1.99.1.1.1.4"
+	OidMtxrTemperature     = ".1.3.6.1.4.1.14988.1.1.3.10.0" // MikroTik CPU temp (0.1°C)
 )
 
 // DiscoveryResult holds the aggregated data from an SNMP discovery walk.
@@ -332,4 +344,194 @@ func extractHardwareModel(sysDescr string) string {
 		}
 	}
 	return "Unknown"
+}
+
+// PollDeviceMetrics collects live CPU, memory, uptime, and temperature metrics
+// directly from a device via SNMP. Returns nil pointers for metrics that are
+// not available on the target device.
+func PollDeviceMetrics(client ClientInterface) (cpuPercent, memPercent, uptimeSecs, tempCelsius *float64) {
+	// Uptime — sysUpTime is in hundredths of seconds (TimeTicks)
+	if pdus, err := client.Get([]string{OidSysUpTime}); err == nil {
+		for _, pdu := range pdus {
+			if pdu.Name == OidSysUpTime {
+				if v := uint32FromPDU(pdu); v > 0 {
+					secs := float64(v) / 100.0
+					uptimeSecs = &secs
+				}
+			}
+		}
+	}
+
+	// CPU — average of all hrProcessorLoad entries (one per CPU core)
+	if pdus, err := client.BulkWalk(OidHrProcessorLoad); err == nil && len(pdus) > 0 {
+		var sum float64
+		count := 0
+		for _, pdu := range pdus {
+			if matchOIDColumn(pdu.Name, OidHrProcessorLoad) {
+				v := int64FromPDU(pdu)
+				if v >= 0 {
+					sum += float64(v)
+					count++
+				}
+			}
+		}
+		if count > 0 {
+			avg := sum / float64(count)
+			cpuPercent = &avg
+		}
+	}
+
+	// Memory — hrStorage table, find the RAM entry
+	memPercent = pollMemoryPercent(client)
+
+	// Temperature — try MikroTik-specific OID first, fall back to entity sensor MIB
+	if pdus, err := client.Get([]string{OidMtxrTemperature}); err == nil {
+		for _, pdu := range pdus {
+			if pdu.Name == OidMtxrTemperature {
+				if v := int64FromPDU(pdu); v > 0 {
+					c := float64(v) / 10.0 // MikroTik reports in 0.1°C
+					tempCelsius = &c
+				}
+			}
+		}
+	}
+	if tempCelsius == nil {
+		tempCelsius = pollEntitySensorTemp(client)
+	}
+
+	return
+}
+
+// pollMemoryPercent looks up the hrStorageRam entry and returns used/total*100.
+func pollMemoryPercent(client ClientInterface) *float64 {
+	types := make(map[int]string)
+	units := make(map[int]int64)
+	sizes := make(map[int]int64)
+	used := make(map[int]int64)
+
+	for _, pdu := range bulkWalkSafe(client, OidHrStorageType) {
+		if idx := lastOIDIndex(pdu.Name, OidHrStorageType); idx >= 0 {
+			types[idx] = stringFromPDU(pdu)
+		}
+	}
+	for _, pdu := range bulkWalkSafe(client, OidHrStorageAllocUnits) {
+		if idx := lastOIDIndex(pdu.Name, OidHrStorageAllocUnits); idx >= 0 {
+			units[idx] = int64FromPDU(pdu)
+		}
+	}
+	for _, pdu := range bulkWalkSafe(client, OidHrStorageSize) {
+		if idx := lastOIDIndex(pdu.Name, OidHrStorageSize); idx >= 0 {
+			sizes[idx] = int64FromPDU(pdu)
+		}
+	}
+	for _, pdu := range bulkWalkSafe(client, OidHrStorageUsed) {
+		if idx := lastOIDIndex(pdu.Name, OidHrStorageUsed); idx >= 0 {
+			used[idx] = int64FromPDU(pdu)
+		}
+	}
+
+	for idx, typeOID := range types {
+		// hrStorageRam OID, may appear with or without leading dot
+		if typeOID != OidHrStorageRam && typeOID != strings.TrimPrefix(OidHrStorageRam, ".") {
+			continue
+		}
+		allocUnits := units[idx]
+		total := sizes[idx]
+		usedVal := used[idx]
+		if allocUnits <= 0 || total <= 0 {
+			continue
+		}
+		pct := float64(usedVal) / float64(total) * 100.0
+		return &pct
+	}
+	return nil
+}
+
+// pollEntitySensorTemp returns the highest Celsius reading from ENTITY-SENSOR-MIB.
+func pollEntitySensorTemp(client ClientInterface) *float64 {
+	sensorTypes := make(map[int]int64)
+	for _, pdu := range bulkWalkSafe(client, OidEntPhySensorType) {
+		if idx := lastOIDIndex(pdu.Name, OidEntPhySensorType); idx >= 0 {
+			sensorTypes[idx] = int64FromPDU(pdu)
+		}
+	}
+
+	var maxTemp *float64
+	for _, pdu := range bulkWalkSafe(client, OidEntPhySensorValue) {
+		idx := lastOIDIndex(pdu.Name, OidEntPhySensorValue)
+		if idx < 0 {
+			continue
+		}
+		if sensorTypes[idx] != 8 { // 8 = celsius
+			continue
+		}
+		v := int64FromPDU(pdu)
+		if v <= 0 {
+			continue
+		}
+		c := float64(v)
+		if maxTemp == nil || c > *maxTemp {
+			maxTemp = &c
+		}
+	}
+	return maxTemp
+}
+
+// --- Numeric helpers ---
+
+func bulkWalkSafe(client ClientInterface, oid string) []gosnmp.SnmpPDU {
+	pdus, _ := client.BulkWalk(oid)
+	return pdus
+}
+
+func lastOIDIndex(oid, prefix string) int {
+	suffix := strings.TrimPrefix(oid, prefix+".")
+	if suffix == oid {
+		return -1
+	}
+	// Only accept simple integer indices (no dots)
+	if strings.Contains(suffix, ".") {
+		return -1
+	}
+	idx, err := strconv.Atoi(suffix)
+	if err != nil {
+		return -1
+	}
+	return idx
+}
+
+func uint32FromPDU(pdu gosnmp.SnmpPDU) uint32 {
+	switch v := pdu.Value.(type) {
+	case uint32:
+		return v
+	case uint:
+		return uint32(v)
+	case int:
+		if v >= 0 {
+			return uint32(v)
+		}
+	case int32:
+		if v >= 0 {
+			return uint32(v)
+		}
+	}
+	return 0
+}
+
+func int64FromPDU(pdu gosnmp.SnmpPDU) int64 {
+	switch v := pdu.Value.(type) {
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case int64:
+		return v
+	case uint:
+		return int64(v)
+	case uint32:
+		return int64(v)
+	case uint64:
+		return int64(v)
+	}
+	return 0
 }

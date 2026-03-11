@@ -16,6 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// SNMPPollFunc polls a single device via SNMP for live CPU/MEM/UPTIME/TEMP metrics.
+// It is used as a fallback when Prometheus returns no data for a device.
+type SNMPPollFunc func(target string, creds domain.SNMPCredentials) (domain.DeviceMetrics, error)
+
 // MetricsCollector queries Prometheus on a cadence and pushes full-state snapshots over WebSockets.
 type MetricsCollector struct {
 	promClient   *metrics.PromClient
@@ -23,6 +27,7 @@ type MetricsCollector struct {
 	deviceRepo   domain.DeviceRepository
 	linkRepo     domain.LinkRepository
 	settingsRepo domain.SettingsRepository
+	snmpPollFunc SNMPPollFunc // optional; fills gaps when Prometheus has no data
 
 	mu           sync.RWMutex
 	lastSnapshot *ws.SnapshotPayload
@@ -31,12 +36,15 @@ type MetricsCollector struct {
 }
 
 // NewMetricsCollector creates a background collector for live Prometheus data.
+// snmpPollFunc may be nil; when provided it is used as a fallback for devices
+// that Prometheus has no metrics for.
 func NewMetricsCollector(
 	promClient *metrics.PromClient,
 	hub *ws.Hub,
 	deviceRepo domain.DeviceRepository,
 	linkRepo domain.LinkRepository,
 	settingsRepo domain.SettingsRepository,
+	snmpPollFunc SNMPPollFunc,
 ) *MetricsCollector {
 	return &MetricsCollector{
 		promClient:   promClient,
@@ -44,6 +52,7 @@ func NewMetricsCollector(
 		deviceRepo:   deviceRepo,
 		linkRepo:     linkRepo,
 		settingsRepo: settingsRepo,
+		snmpPollFunc: snmpPollFunc,
 		lastSnapshot: ws.EmptySnapshot(),
 		done:         make(chan struct{}),
 	}
@@ -151,6 +160,35 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 	}
 
 	deviceMetricsByID := attachDeviceMetrics(devices, deviceMetricsByIP)
+
+	// For devices where Prometheus returned no metrics, fall back to direct SNMP polling.
+	if c.snmpPollFunc != nil {
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		for _, dev := range devices {
+			existing := deviceMetricsByID[dev.ID.String()]
+			if existing.CPUPercent != nil || existing.MemPercent != nil || existing.UptimeSecs != nil {
+				continue // Prometheus already provided data
+			}
+			dev := dev
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				m, err := c.snmpPollFunc(dev.IP, dev.SNMPCredentials)
+				if err != nil {
+					log.Printf("SNMP metrics fallback failed for %s: %v", dev.IP, err)
+					return
+				}
+				m.DeviceID = dev.ID
+				m.CollectedAt = time.Now().UTC()
+				mu.Lock()
+				deviceMetricsByID[dev.ID.String()] = m
+				mu.Unlock()
+			}()
+		}
+		wg.Wait()
+	}
+
 	linkMetricsByID := attachLinkMetrics(devices, links, linkMetricsByIP)
 	alertsByDevice := attachAlerts(devices, alertStates)
 
