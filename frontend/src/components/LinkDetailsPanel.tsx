@@ -77,7 +77,7 @@ export function LinkDetailsPanel({
   devices,
   onUpdated,
   onDeleted,
-  onClose,
+  onClose: _onClose,
 }: LinkDetailsPanelProps) {
   const deviceMap = new Map(devices.map((d) => [d.id, d]));
   const sourceDevice = deviceMap.get(link.source_device_id);
