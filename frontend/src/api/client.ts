@@ -112,10 +112,22 @@ export async function updateSetting(key: string, value: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/settings/${encodeURIComponent(key)}`, 'PUT', { value });
 }
 
+export interface SNMPPayload {
+  version: string;
+  community?: string;
+  // SNMPv3 fields
+  username?: string;
+  auth_protocol?: string;
+  auth_password?: string;
+  priv_protocol?: string;
+  priv_password?: string;
+  security_level?: string;
+}
+
 export interface CreateDevicePayload {
   hostname: string;
   ip: string;
-  snmp: { version: string; community: string };
+  snmp: SNMPPayload;
   tags?: Record<string, string>;
 }
 
@@ -135,7 +147,7 @@ export async function createDevice(payload: CreateDevicePayload): Promise<Device
 
 export async function updateDevice(
   id: string,
-  payload: Partial<{ hostname: string; ip: string; snmp: { version: string; community: string }; tags: Record<string, string> }>,
+  payload: Partial<{ hostname: string; ip: string; snmp: SNMPPayload; tags: Record<string, string> }>,
 ): Promise<Device> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(id)}`,

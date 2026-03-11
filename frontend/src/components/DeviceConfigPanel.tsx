@@ -33,7 +33,15 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const [hostname, setHostname] = useState(device.hostname);
   const [displayName, setDisplayName] = useState(device.tags?.display_name || '');
   const [ip, setIp] = useState(device.ip);
+  const [snmpVersion, setSnmpVersion] = useState('2c');
   const [community, setCommunity] = useState('');
+  // SNMPv3 fields
+  const [username, setUsername] = useState('');
+  const [securityLevel, setSecurityLevel] = useState('authPriv');
+  const [authProtocol, setAuthProtocol] = useState('SHA');
+  const [authPassword, setAuthPassword] = useState('');
+  const [privProtocol, setPrivProtocol] = useState('AES');
+  const [privPassword, setPrivPassword] = useState('');
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editSaved, setEditSaved] = useState(false);
@@ -72,7 +80,10 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     setHostname(device.hostname || '');
     setDisplayName(device.tags?.display_name || '');
     setIp(device.ip || '');
-    setCommunity(''); // We don't fetch community back from the API for security
+    setCommunity(''); // We don't fetch credentials back from the API for security
+    setUsername('');
+    setAuthPassword('');
+    setPrivPassword('');
   }, [device]);
 
   function showSaved(
@@ -116,11 +127,27 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     e.preventDefault();
     setEditLoading(true);
     setEditError(null);
+    const isV3 = snmpVersion === '3';
+    const needsAuth = securityLevel === 'authNoPriv' || securityLevel === 'authPriv';
+    const needsPriv = securityLevel === 'authPriv';
+    const hasSnmpChanges = isV3 ? username.trim() !== '' : community.trim() !== '';
     try {
       await updateDevice(device.id, {
         hostname: hostname.trim(),
         ip: ip.trim(),
-        ...(community.trim() ? { snmp: { version: '2c', community: community.trim() } } : {}),
+        ...(hasSnmpChanges
+          ? {
+              snmp: isV3
+                ? {
+                    version: '3',
+                    username: username.trim(),
+                    security_level: securityLevel,
+                    ...(needsAuth ? { auth_protocol: authProtocol, auth_password: authPassword } : {}),
+                    ...(needsPriv ? { priv_protocol: privProtocol, priv_password: privPassword } : {}),
+                  }
+                : { version: '2c', community: community.trim() },
+            }
+          : {}),
         tags: { ...device.tags, ...(displayName.trim() ? { display_name: displayName.trim() } : {}) },
       });
       showSaved(setEditSaved, editSavedTimerRef);
@@ -243,13 +270,86 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           placeholder="IP Address"
           className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
         />
-        <input
-          type="text"
-          value={community}
-          onChange={(e) => setCommunity(e.target.value)}
-          placeholder="SNMP Community (leave blank to keep current)"
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
-        />
+        <select
+          value={snmpVersion}
+          onChange={(e) => setSnmpVersion(e.target.value)}
+          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+        >
+          <option value="2c">SNMP v2c</option>
+          <option value="3">SNMP v3</option>
+        </select>
+
+        {snmpVersion !== '3' && (
+          <input
+            type="text"
+            value={community}
+            onChange={(e) => setCommunity(e.target.value)}
+            placeholder="SNMP Community (leave blank to keep current)"
+            className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+          />
+        )}
+
+        {snmpVersion === '3' && (
+          <div className="space-y-2 rounded-lg border border-border-subtle p-3">
+            <p className="text-xs text-text-secondary">SNMPv3 Credentials (leave blank to keep current)</p>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Username"
+              className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+            />
+            <select
+              value={securityLevel}
+              onChange={(e) => setSecurityLevel(e.target.value)}
+              className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+            >
+              <option value="noAuthNoPriv">No Auth, No Privacy</option>
+              <option value="authNoPriv">Auth, No Privacy</option>
+              <option value="authPriv">Auth + Privacy</option>
+            </select>
+            {(securityLevel === 'authNoPriv' || securityLevel === 'authPriv') && (
+              <>
+                <select
+                  value={authProtocol}
+                  onChange={(e) => setAuthProtocol(e.target.value)}
+                  className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+                >
+                  <option value="SHA">SHA</option>
+                  <option value="MD5">MD5</option>
+                </select>
+                <input
+                  type="password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="Auth Key"
+                  autoComplete="new-password"
+                  className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+                />
+              </>
+            )}
+            {securityLevel === 'authPriv' && (
+              <>
+                <select
+                  value={privProtocol}
+                  onChange={(e) => setPrivProtocol(e.target.value)}
+                  className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+                >
+                  <option value="AES">AES</option>
+                  <option value="DES">DES</option>
+                </select>
+                <input
+                  type="password"
+                  value={privPassword}
+                  onChange={(e) => setPrivPassword(e.target.value)}
+                  placeholder="Encryption Key"
+                  autoComplete="new-password"
+                  className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+                />
+              </>
+            )}
+          </div>
+        )}
 
         {editError && (
           <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">
