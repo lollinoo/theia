@@ -452,7 +452,22 @@ export default function Canvas() {
       startTransition(() => {
         setDevices(fetchedDevices);
         setTopologyLinks(fetchedLinks);
-        setNodes(nextNodes);
+        if (isSilentRefresh) {
+          // Preserve alertStatus so a topology refresh doesn't momentarily clear
+          // alert rings while the next snapshot hasn't yet re-applied them.
+          setNodes((currentNodes) => {
+            const prevDataByID = new Map(currentNodes.map((n) => [n.id, n.data]));
+            return nextNodes.map((n) => ({
+              ...n,
+              data: {
+                ...n.data,
+                alertStatus: prevDataByID.get(n.id)?.alertStatus,
+              },
+            }));
+          });
+        } else {
+          setNodes(nextNodes);
+        }
         setEdges(nextEdges);
       });
 
@@ -512,6 +527,35 @@ export default function Canvas() {
     lastSnapshotTimeRef.current = Date.now();
     staleAppliedRef.current = false;
 
+    // Apply alert status immediately (not deferred) so clearing is instant and not
+    // interrupted by concurrent UI interactions.
+    setNodes((currentNodes) =>
+      currentNodes.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
+        },
+      })),
+    );
+
+    setEdges((currentEdges) =>
+      currentEdges.map((edge) => {
+        const link = edge.data?.link;
+        if (!link) return edge;
+        const linkAlertStatus = alertStatusForLink(link, snapshot.alerts);
+        return {
+          ...edge,
+          data: {
+            ...edge.data,
+            alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
+          },
+        };
+      }),
+    );
+
+    // Metrics are non-urgent display data — defer so alert updates are always
+    // applied first and never delayed by heavy node/edge re-renders.
     startTransition(() => {
       setNodes((currentNodes) =>
         currentNodes.map((node) => ({
@@ -519,7 +563,6 @@ export default function Canvas() {
           data: {
             ...node.data,
             metrics: snapshot.device_metrics[node.id] ?? null,
-            alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
           },
         })),
       );
@@ -531,7 +574,6 @@ export default function Canvas() {
             return edge;
           }
 
-          const linkAlertStatus = alertStatusForLink(link, snapshot.alerts);
           const metrics = findLinkMetrics(snapshot.link_metrics, link);
           if (metrics === null) {
             return {
@@ -541,7 +583,6 @@ export default function Canvas() {
                 metrics: null,
                 throughputLabel: undefined,
                 utilization: null,
-                alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
               },
             };
           }
@@ -553,7 +594,6 @@ export default function Canvas() {
               metrics,
               throughputLabel: buildThroughputLabel(metrics),
               utilization: metrics.utilization,
-              alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
             },
           };
         }),
