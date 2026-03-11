@@ -37,7 +37,7 @@ The dev stack runs everything locally with hot-reload for both backend and front
 | Service | URL | Description |
 |---------|-----|-------------|
 | Backend | http://localhost:8080 | Go API with Air hot-reload |
-| Frontend | http://localhost:5173 | React + Vite dev server |
+| Frontend | http://localhost:3000 | React + Vite dev server |
 | Prometheus | http://localhost:9090 | Metrics and alerting |
 | SNMP exporter | http://localhost:9116 | Prometheus SNMP scrape adapter |
 | SNMP Router sim | `172.28.10.10:161` | MikroTik simulator (UDP) |
@@ -72,7 +72,7 @@ make seed
 
 This calls the REST API to register the three SNMP simulators. After seeding, the backend probes them immediately via SNMP and the canvas will populate within ~10 seconds.
 
-Open http://localhost:5173 to see the topology.
+Open http://localhost:3000 to see the topology.
 
 ### 4. Useful dev commands
 
@@ -93,7 +93,7 @@ make snmpwalk-ap       # snmpwalk 172.28.10.12
 
 **Backend** — Air watches `internal/` and `cmd/`. On any `.go` file change, it recompiles and restarts the server automatically. The `./tmp/` directory holds the compiled binary; do not commit it.
 
-**Frontend** — Vite's HMR is active on port 5173. The dev server proxies `/api/*` and `/api/v1/ws` to the backend at `http://backend:8080`, so the frontend container talks to the backend over the internal Docker network.
+**Frontend** — Vite's HMR is active on port 3000. The dev server proxies `/api/*` and `/api/v1/ws` to the backend at `http://backend:8080`, so the frontend container talks to the backend over the internal Docker network.
 
 ### 6. Adding a real device (optional)
 
@@ -117,113 +117,81 @@ curl -X POST http://localhost:8080/api/v1/devices \
 
 ## Production Environment
 
-Production uses a compiled Go binary in a minimal Debian image. There is no hot-reload, no SNMP simulators, and no Prometheus stack included — those are expected to be provided externally or configured separately.
+The production stack uses compiled images — no hot-reload, no source mounts, no SNMP simulators. The frontend is built into a static bundle served by nginx, which also proxies `/api` to the backend.
 
-### 1. Build the production image
+### Stack
 
-```bash
-make build
-# Produces: theia:latest
-```
+| Service | URL | Description |
+|---------|-----|-------------|
+| Frontend | http://localhost:80 | nginx serving React SPA + API proxy |
+| Backend | http://localhost:8080 | Compiled Go binary |
+| Prometheus | http://localhost:9090 | Metrics (optional, `--profile metrics`) |
+| SNMP exporter | http://localhost:9116 | Scrape adapter (optional, `--profile metrics`) |
 
-Or with a custom tag:
-
-```bash
-docker build --target production -t theia:1.0.0 -f Dockerfile .
-```
-
-### 2. Prepare storage
-
-The backend uses a single SQLite database file. Create a persistent directory:
+### 1. Configure environment (optional)
 
 ```bash
-mkdir -p /opt/theia/data
+cp .env.prod.example .env.prod
+# Edit ports or log level if needed
 ```
 
-### 3. Run the backend
+### 2. Start the stack
 
 ```bash
-docker run -d \
-  --name theia-backend \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  -v /opt/theia/data:/data \
-  -e THEIA_DB_PATH=/data/theia.db \
-  -e THEIA_LISTEN_ADDR=:8080 \
-  -e THEIA_LOG_LEVEL=info \
-  theia:latest
+make prod
 ```
 
-### 4. Build and serve the frontend
-
-The frontend is a static React SPA built with Vite. In production, point `VITE_API_URL` at your backend host and serve the output with any static file server (nginx, Caddy, etc.).
+Or with the metrics stack (Prometheus + SNMP exporter):
 
 ```bash
-cd frontend
-
-# Set the backend URL (must be reachable from the browser)
-export VITE_API_URL=http://your-backend-host:8080
-
-npm ci
-npm run build
-# Output: frontend/dist/
+make prod-metrics
 ```
 
-#### Serve with nginx (example)
+Open http://localhost in the browser.
 
-```nginx
-server {
-    listen 80;
-    server_name theia.example.com;
+### 3. Add your network devices
 
-    root /var/www/theia;
-    index index.html;
+Via the UI Settings panel, or directly via the API:
 
-    # SPA fallback
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Proxy API + WebSocket to backend
-    location /api/ {
-        proxy_pass http://backend-host:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-}
+```bash
+curl -X POST http://localhost:8080/api/v1/devices \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ip": "192.168.1.1",
+    "hostname": "core-router",
+    "snmp": {"version": "2c", "community": "public"},
+    "tags": {"vendor": "mikrotik", "role": "gateway", "site": "hq"}
+  }'
 ```
 
-### 5. Prometheus integration (optional)
+### 4. Configure SNMP scrape targets (metrics profile only)
 
-If you have an existing Prometheus instance, point it at the SNMP exporter and configure the backend's Prometheus URL through the UI (Settings panel → Prometheus URL).
-
-The alert rules file is at `docker/prometheus/alert_rules.yml`. Import it into your Prometheus setup.
-
-### 6. docker-compose for production (minimal)
+Edit `docker/prometheus/prometheus.prod.yml` and add your device IPs:
 
 ```yaml
-# docker-compose.prod.yml
-services:
-  backend:
-    image: theia:latest
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    volumes:
-      - theia-data:/data
-    environment:
-      - THEIA_DB_PATH=/data/theia.db
-      - THEIA_LISTEN_ADDR=:8080
-      - THEIA_LOG_LEVEL=info
-
-volumes:
-  theia-data:
+static_configs:
+  - targets:
+      - 192.168.1.1   # core-router
+      - 192.168.1.2   # dist-switch
 ```
 
+Then in the Theia UI Settings panel, set the Prometheus URL to `http://theia-prometheus:9090`.
+
+Restart Prometheus to pick up the new targets:
+
 ```bash
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml --profile metrics restart prometheus
+```
+
+### 5. Production commands
+
+```bash
+make prod           # Start backend + frontend
+make prod-metrics   # Start with Prometheus + SNMP exporter
+make prod-down      # Stop all production containers
+make prod-build     # Build images without starting
+make prod-logs      # Follow backend logs
+make prod-clean     # Stop + delete volumes (resets database)
 ```
 
 ---

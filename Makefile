@@ -1,4 +1,5 @@
 .PHONY: dev test test-integration build clean seed verify stop logs help \
+       prod prod-metrics prod-down prod-build prod-logs prod-clean \
        snmpwalk-router snmpwalk-switch snmpwalk-ap
 
 # Default target
@@ -31,8 +32,43 @@ test-integration: ## Run integration tests against SNMP simulators
 	docker compose --profile test run --rm backend go test ./... -tags=integration -count=1 -v
 	docker compose --profile test down
 
-build: ## Build production Docker image
-	docker build --target production -t theia:latest -f Dockerfile .
+build: ## Build production Docker images (backend + frontend)
+	docker compose -f docker-compose.prod.yml build
+
+prod: ## Start production stack (backend + nginx frontend)
+	docker compose -f docker-compose.prod.yml up --build -d
+	@echo ""
+	@echo "MikroTik Theia production stack is running:"
+	@echo "  Frontend: http://localhost:80"
+	@echo "  Backend:  http://localhost:8080"
+	@echo ""
+	@echo "Add devices via the API or the UI Settings panel."
+	@echo "Run 'make prod-logs' to follow backend logs."
+
+prod-metrics: ## Start production stack with Prometheus + SNMP exporter
+	docker compose -f docker-compose.prod.yml --profile metrics up --build -d
+	@echo ""
+	@echo "MikroTik Theia production stack (with metrics) is running:"
+	@echo "  Frontend:      http://localhost:80"
+	@echo "  Backend:       http://localhost:8080"
+	@echo "  Prometheus:    http://localhost:9090"
+	@echo "  SNMP exporter: http://localhost:9116"
+	@echo ""
+	@echo "Edit docker/prometheus/prometheus.prod.yml to add your SNMP device IPs."
+
+prod-down: ## Stop production stack
+	docker compose -f docker-compose.prod.yml --profile metrics down
+
+prod-build: ## Build production images without starting
+	docker compose -f docker-compose.prod.yml build
+
+prod-logs: ## Follow production backend logs
+	docker compose -f docker-compose.prod.yml logs -f backend
+
+prod-clean: ## Stop production stack and remove volumes (resets database)
+	docker compose -f docker-compose.prod.yml --profile metrics down -v
+	docker volume rm -f theia-data theia-prometheus-data 2>/dev/null || true
+	@echo "Cleaned all production containers and volumes"
 
 clean: ## Stop containers, remove volumes, and prune build cache
 	docker compose --profile dev --profile test down -v

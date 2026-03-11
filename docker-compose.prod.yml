@@ -1,0 +1,126 @@
+# =============================================================================
+# MikroTik Theia - Production Docker Compose
+# =============================================================================
+# Profiles:
+#   (default) — Backend + nginx frontend only
+#   metrics   — Also starts Prometheus + SNMP exporter
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml --profile metrics up -d
+#
+# First-time setup:
+#   1. Copy and edit the env file:  cp .env.prod.example .env.prod
+#   2. Edit SNMP targets:           docker/prometheus/prometheus.prod.yml
+#   3. Start the stack:             docker compose -f docker-compose.prod.yml up -d
+#   4. Add devices via the UI or:   curl -X POST http://localhost:8080/api/v1/devices ...
+# =============================================================================
+
+networks:
+  theia-net:
+    driver: bridge
+
+volumes:
+  theia-data:
+    name: theia-data
+  prometheus-data:
+    name: theia-prometheus-data
+
+services:
+  # ---------------------------------------------------------------------------
+  # Backend — Compiled Go binary (production stage)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: theia-backend:latest
+    container_name: theia-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - theia-data:/data
+    environment:
+      - THEIA_DB_PATH=/data/theia.db
+      - THEIA_LISTEN_ADDR=:8080
+      - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
+    networks:
+      - theia-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Frontend — nginx serving compiled React SPA + API proxy
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../Dockerfile.frontend
+      target: production
+    image: theia-frontend:latest
+    container_name: theia-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    networks:
+      - theia-net
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Metrics stack — enable with: --profile metrics
+  # Edit docker/prometheus/prometheus.prod.yml to add your SNMP device IPs.
+  # ---------------------------------------------------------------------------
+  snmp-exporter:
+    image: prom/snmp-exporter:latest
+    profiles: ["metrics"]
+    container_name: theia-snmp-exporter
+    restart: unless-stopped
+    ports:
+      - "9116:9116"
+    volumes:
+      - "./docker/prometheus/snmp.yml:/etc/snmp_exporter/snmp.yml:ro"
+    networks:
+      - theia-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9116/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["metrics"]
+    container_name: theia-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - "./docker/prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro"
+      - "./docker/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro"
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - theia-net
+    depends_on:
+      snmp-exporter:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
