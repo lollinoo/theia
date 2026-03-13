@@ -19,6 +19,7 @@ func NewRouter(
 	linkRepo domain.LinkRepository,
 	positionRepo domain.PositionRepository,
 	settingsRepo domain.SettingsRepository,
+	snmpProfileRepo domain.SNMPProfileRepository,
 	poller *worker.Poller,
 	wsHandler *ws.Handler,
 ) http.Handler {
@@ -28,6 +29,7 @@ func NewRouter(
 	linkHandler := NewLinkHandler(linkRepo, deviceService)
 	positionHandler := NewPositionHandler(positionRepo)
 	settingsHandler := NewSettingsHandler(settingsRepo)
+	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	healthHandler := NewHealthHandler(db, poller)
 
 	// Device routes
@@ -130,6 +132,31 @@ func NewRouter(
 			return
 		}
 		settingsHandler.HandleUpdate(w, r)
+	})
+
+	// SNMP credential profile routes
+	mux.HandleFunc("/api/v1/snmp-profiles", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			snmpProfileHandler.HandleList(w, r)
+		case http.MethodPost:
+			snmpProfileHandler.HandleCreate(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	mux.HandleFunc("/api/v1/snmp-profiles/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			snmpProfileHandler.HandleGet(w, r)
+		case http.MethodPut:
+			snmpProfileHandler.HandleUpdate(w, r)
+		case http.MethodDelete:
+			snmpProfileHandler.HandleDelete(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 	})
 
 	// Health endpoint

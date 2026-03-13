@@ -17,10 +17,13 @@ type DiscoverFunc func(target string, creds domain.SNMPCredentials) (*snmp.Disco
 
 // DeviceUpdate holds optional fields for partial device updates.
 type DeviceUpdate struct {
-	Hostname        *string
-	IP              *string
-	Tags            *map[string]string
-	SNMPCredentials *domain.SNMPCredentials
+	Hostname             *string
+	IP                   *string
+	Tags                 *map[string]string
+	SNMPCredentials      *domain.SNMPCredentials
+	MetricsSource        *domain.MetricsSource
+	PrometheusLabelName  *string
+	PrometheusLabelValue *string
 }
 
 // DeviceService orchestrates device management, combining SNMP discovery
@@ -56,6 +59,9 @@ func (s *DeviceService) AddDevice(
 	ip, hostname string,
 	creds domain.SNMPCredentials,
 	tags map[string]string,
+	metricsSource domain.MetricsSource,
+	prometheusLabelName string,
+	prometheusLabelValue string,
 ) (*domain.Device, error) {
 	if ip == "" {
 		return nil, fmt.Errorf("IP address is required")
@@ -63,16 +69,28 @@ func (s *DeviceService) AddDevice(
 	if tags == nil {
 		tags = map[string]string{}
 	}
+	if metricsSource == "" {
+		metricsSource = domain.MetricsSourcePrometheus
+	}
+	if prometheusLabelName == "" {
+		prometheusLabelName = "instance"
+	}
+	if prometheusLabelValue == "" {
+		prometheusLabelValue = ip
+	}
 
 	device := &domain.Device{
-		ID:              uuid.New(),
-		Hostname:        hostname,
-		IP:              ip,
-		SNMPCredentials: creds,
-		DeviceType:      domain.DeviceTypeUnknown,
-		Status:          domain.DeviceStatusProbing,
-		Managed:         true,
-		Tags:            tags,
+		ID:                   uuid.New(),
+		Hostname:             hostname,
+		IP:                   ip,
+		SNMPCredentials:      creds,
+		DeviceType:           domain.DeviceTypeUnknown,
+		Status:               domain.DeviceStatusProbing,
+		Managed:              true,
+		Tags:                 tags,
+		MetricsSource:        metricsSource,
+		PrometheusLabelName:  prometheusLabelName,
+		PrometheusLabelValue: prometheusLabelValue,
 	}
 
 	if err := s.deviceRepo.Create(device); err != nil {
@@ -184,6 +202,15 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 	}
 	if update.SNMPCredentials != nil {
 		device.SNMPCredentials = *update.SNMPCredentials
+	}
+	if update.MetricsSource != nil {
+		device.MetricsSource = *update.MetricsSource
+	}
+	if update.PrometheusLabelName != nil {
+		device.PrometheusLabelName = *update.PrometheusLabelName
+	}
+	if update.PrometheusLabelValue != nil {
+		device.PrometheusLabelValue = *update.PrometheusLabelValue
 	}
 
 	return s.deviceRepo.Update(device)

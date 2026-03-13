@@ -1,4 +1,23 @@
 export type DeviceType = 'router' | 'switch' | 'ap' | 'unknown';
+
+// SNMPProfile represents a reusable set of SNMP credentials.
+export interface SNMPProfile {
+  id: string;
+  name: string;
+  description: string;
+  snmp: {
+    version: string;
+    community?: string;
+    username?: string;
+    auth_protocol?: string;
+    auth_password?: string;
+    priv_protocol?: string;
+    priv_password?: string;
+    security_level?: string;
+  };
+  created_at: string;
+  updated_at: string;
+}
 export type DeviceStatus = 'up' | 'down' | 'probing' | 'unknown';
 
 export interface DeviceInterface {
@@ -10,6 +29,8 @@ export interface DeviceInterface {
   admin_status: string;
   oper_status: string;
 }
+
+export type MetricsSource = 'prometheus' | 'snmp';
 
 export interface Device {
   id: string;
@@ -23,6 +44,9 @@ export interface Device {
   managed: boolean;
   tags?: Record<string, string>;
   interfaces: DeviceInterface[];
+  metrics_source: MetricsSource;
+  prometheus_label_name: string;
+  prometheus_label_value: string;
 }
 
 export interface Link {
@@ -133,6 +157,9 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       ? interfacesRelationship.data
       : [];
 
+    const rawMetricsSource = readString(attributes, 'metrics_source', 'prometheus');
+    const metricsSource: MetricsSource = rawMetricsSource === 'snmp' ? 'snmp' : 'prometheus';
+
     return {
       id: readString(resource, 'id'),
       hostname: readString(attributes, 'hostname'),
@@ -145,6 +172,9 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       managed: readBoolean(attributes, 'managed', true),
       tags,
       interfaces: interfacesData.map(parseDeviceInterface),
+      metrics_source: metricsSource,
+      prometheus_label_name: readString(attributes, 'prometheus_label_name', 'instance'),
+      prometheus_label_value: readString(attributes, 'prometheus_label_value'),
     };
   });
 }
@@ -194,6 +224,63 @@ export function parseInterfacesResponse(payload: unknown): InterfaceInfo[] {
       in_use_by: typeof resource['in_use_by'] === 'string' ? resource['in_use_by'] : undefined,
     };
   });
+}
+
+export function parseSNMPProfilesResponse(payload: unknown): SNMPProfile[] {
+  if (!isRecord(payload)) {
+    throw new Error('invalid snmp profiles response');
+  }
+
+  const data = Array.isArray(payload.data) ? payload.data : [];
+
+  return data.map((item) => {
+    if (!isRecord(item)) {
+      throw new Error('invalid snmp profile item');
+    }
+    const snmp = isRecord(item.snmp) ? item.snmp : {};
+    return {
+      id: readString(item, 'id'),
+      name: readString(item, 'name'),
+      description: readString(item, 'description'),
+      snmp: {
+        version: readString(snmp, 'version', '2c'),
+        community: typeof snmp.community === 'string' ? snmp.community : undefined,
+        username: typeof snmp.username === 'string' ? snmp.username : undefined,
+        auth_protocol: typeof snmp.auth_protocol === 'string' ? snmp.auth_protocol : undefined,
+        auth_password: typeof snmp.auth_password === 'string' ? snmp.auth_password : undefined,
+        priv_protocol: typeof snmp.priv_protocol === 'string' ? snmp.priv_protocol : undefined,
+        priv_password: typeof snmp.priv_password === 'string' ? snmp.priv_password : undefined,
+        security_level: typeof snmp.security_level === 'string' ? snmp.security_level : undefined,
+      },
+      created_at: readString(item, 'created_at'),
+      updated_at: readString(item, 'updated_at'),
+    };
+  });
+}
+
+export function parseSNMPProfileResponse(payload: unknown): SNMPProfile {
+  if (!isRecord(payload)) {
+    throw new Error('invalid snmp profile response');
+  }
+  const data = isRecord(payload.data) ? payload.data : {};
+  const snmp = isRecord(data.snmp) ? data.snmp : {};
+  return {
+    id: readString(data, 'id'),
+    name: readString(data, 'name'),
+    description: readString(data, 'description'),
+    snmp: {
+      version: readString(snmp, 'version', '2c'),
+      community: typeof snmp.community === 'string' ? snmp.community : undefined,
+      username: typeof snmp.username === 'string' ? snmp.username : undefined,
+      auth_protocol: typeof snmp.auth_protocol === 'string' ? snmp.auth_protocol : undefined,
+      auth_password: typeof snmp.auth_password === 'string' ? snmp.auth_password : undefined,
+      priv_protocol: typeof snmp.priv_protocol === 'string' ? snmp.priv_protocol : undefined,
+      priv_password: typeof snmp.priv_password === 'string' ? snmp.priv_password : undefined,
+      security_level: typeof snmp.security_level === 'string' ? snmp.security_level : undefined,
+    },
+    created_at: readString(data, 'created_at'),
+    updated_at: readString(data, 'updated_at'),
+  };
 }
 
 export function parsePositionsResponse(payload: unknown): DevicePosition[] {

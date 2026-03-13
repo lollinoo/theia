@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { createDevice } from '../api/client';
+import { useEffect, useState } from 'react';
+import { createDevice, fetchSNMPProfiles } from '../api/client';
+import type { SNMPProfile } from '../types/api';
 
 interface AddDevicePanelProps {
   onDeviceAdded: () => void;
@@ -12,6 +13,11 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Metrics source
+  const [metricsSource, setMetricsSource] = useState<'prometheus' | 'snmp'>('prometheus');
+  const [prometheusLabelName, setPrometheusLabelName] = useState('instance');
+  const [prometheusLabelValue, setPrometheusLabelValue] = useState('');
+
   // v2c
   const [community, setCommunity] = useState('public');
 
@@ -22,6 +28,26 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [authPassword, setAuthPassword] = useState('');
   const [privProtocol, setPrivProtocol] = useState('AES');
   const [privPassword, setPrivPassword] = useState('');
+
+  // profiles
+  const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
+
+  useEffect(() => {
+    fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
+  }, []);
+
+  function applyProfile(profileId: string) {
+    const profile = profiles.find((p) => p.id === profileId);
+    if (!profile) return;
+    setVersion(profile.snmp.version);
+    setCommunity(profile.snmp.community ?? 'public');
+    setUsername(profile.snmp.username ?? '');
+    setSecurityLevel(profile.snmp.security_level ?? 'authPriv');
+    setAuthProtocol(profile.snmp.auth_protocol ?? 'SHA');
+    setAuthPassword(profile.snmp.auth_password ?? '');
+    setPrivProtocol(profile.snmp.priv_protocol ?? 'AES');
+    setPrivPassword(profile.snmp.priv_password ?? '');
+  }
 
   const isV3 = version === '3';
   const needsAuth = securityLevel === 'authNoPriv' || securityLevel === 'authPriv';
@@ -36,6 +62,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     setLoading(true);
     setError(null);
     try {
+      const effectiveLabelValue = prometheusLabelValue.trim() || hostname.trim();
       await createDevice({
         hostname: hostname.trim(),
         ip: hostname.trim(),
@@ -52,6 +79,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               community: community.trim() || 'public',
             },
         tags: displayName.trim() ? { display_name: displayName.trim() } : undefined,
+        metrics_source: metricsSource,
+        prometheus_label_name: metricsSource === 'prometheus' ? prometheusLabelName : undefined,
+        prometheus_label_value: metricsSource === 'prometheus' ? effectiveLabelValue : undefined,
       });
       onDeviceAdded();
     } catch (err) {
@@ -82,6 +112,24 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
           className={inputClass}
         />
       </div>
+
+      {profiles.length > 0 && (
+        <div className="space-y-2">
+          <label className={labelClass}>Load from Profile</label>
+          <select
+            defaultValue=""
+            onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
+            className={selectClass}
+          >
+            <option value="" disabled>Select a credential profile...</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} (SNMP {p.snmp.version})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="space-y-2">
         <label className={labelClass}>SNMP Version</label>
@@ -204,6 +252,48 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
           className={inputClass}
         />
       </div>
+
+      <div className="space-y-2">
+        <label className={labelClass}>Metrics Source</label>
+        <select
+          value={metricsSource}
+          onChange={(e) => setMetricsSource(e.target.value as 'prometheus' | 'snmp')}
+          className={selectClass}
+        >
+          <option value="prometheus">Prometheus</option>
+          <option value="snmp">SNMP Direct</option>
+        </select>
+      </div>
+
+      {metricsSource === 'prometheus' && (
+        <div className="space-y-2 rounded-lg border border-border-subtle p-3">
+          <p className={labelClass}>Prometheus Target</p>
+          <div className="space-y-1">
+            <label className="text-xs text-text-secondary">Label</label>
+            <select
+              value={prometheusLabelName}
+              onChange={(e) => setPrometheusLabelName(e.target.value)}
+              className={selectClass}
+            >
+              <option value="instance">instance (IP address)</option>
+              <option value="identity">identity</option>
+              <option value="vendor">vendor</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-text-secondary">
+              Value{prometheusLabelName === 'instance' ? ' (defaults to IP if blank)' : ''}
+            </label>
+            <input
+              type="text"
+              value={prometheusLabelValue}
+              onChange={(e) => setPrometheusLabelValue(e.target.value)}
+              placeholder={prometheusLabelName === 'instance' ? hostname || '192.168.1.1' : `e.g. my-router`}
+              className={inputClass}
+            />
+          </div>
+        </div>
+      )}
 
       {error && (
         <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">

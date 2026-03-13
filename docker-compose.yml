@@ -65,6 +65,7 @@ services:
     build:
       context: ./frontend
       dockerfile: ../Dockerfile.frontend
+      target: dev
     profiles: ["dev"]
     container_name: theia-frontend
     ports:

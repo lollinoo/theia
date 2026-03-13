@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchSettings, updateSetting } from '../api/client';
+import { SNMPProfileManager } from './SNMPProfileManager';
 
 const POLLING_PRESETS = [
   { label: '15 seconds', value: '15' },
@@ -178,6 +179,10 @@ export function SettingsPanel() {
           }}
           className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
         />
+      </div>
+
+      <div className="border-t border-border-subtle pt-4">
+        <SNMPProfileManager />
       </div>
 
     </div>

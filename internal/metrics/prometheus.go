@@ -36,46 +36,49 @@ func NewPromClient(baseURL string, httpClient *http.Client) *PromClient {
 	}
 }
 
-// QueryDeviceMetrics fetches CPU, memory, uptime, and temperature for the requested device IPs.
-func (c *PromClient) QueryDeviceMetrics(ctx context.Context, deviceIPs []string) (map[string]domain.DeviceMetrics, error) {
-	results := make(map[string]domain.DeviceMetrics, len(deviceIPs))
-	if len(deviceIPs) == 0 {
+// QueryDeviceMetrics fetches CPU, memory, uptime, and temperature for the requested label values.
+// labelName is the Prometheus label to filter on (e.g. "instance", "identity", "vendor").
+// labelValues are the label values to include.
+// Returns a map keyed by the matched label value.
+func (c *PromClient) QueryDeviceMetrics(ctx context.Context, labelName string, labelValues []string) (map[string]domain.DeviceMetrics, error) {
+	results := make(map[string]domain.DeviceMetrics, len(labelValues))
+	if len(labelValues) == 0 {
 		return results, nil
 	}
 
 	collectedAt := time.Now().UTC()
-	for _, ip := range uniqueSorted(deviceIPs) {
-		results[ip] = domain.DeviceMetrics{CollectedAt: collectedAt}
+	for _, v := range uniqueSorted(labelValues) {
+		results[v] = domain.DeviceMetrics{CollectedAt: collectedAt}
 	}
 
-	targets := buildTargetMatcher(deviceIPs)
+	targets := buildTargetMatcher(labelValues)
 	queries := []struct {
 		promql string
 		apply  func(domain.DeviceMetrics, float64) domain.DeviceMetrics
 	}{
 		{
-			promql: fmt.Sprintf(`avg by (instance) (hrProcessorLoad{instance=~"%s"})`, targets),
+			promql: fmt.Sprintf(`avg by (%[1]s) (hrProcessorLoad{%[1]s=~"%[2]s"})`, labelName, targets),
 			apply: func(metric domain.DeviceMetrics, value float64) domain.DeviceMetrics {
 				metric.CPUPercent = floatPtr(value)
 				return metric
 			},
 		},
 		{
-			promql: fmt.Sprintf(`100 * (hrStorageUsed{hrStorageDescr="Physical memory",instance=~"%s"} / hrStorageSize{hrStorageDescr="Physical memory",instance=~"%s"})`, targets, targets),
+			promql: fmt.Sprintf(`100 * (hrStorageUsed{hrStorageDescr="Physical memory",%[1]s=~"%[2]s"} / hrStorageSize{hrStorageDescr="Physical memory",%[1]s=~"%[2]s"})`, labelName, targets),
 			apply: func(metric domain.DeviceMetrics, value float64) domain.DeviceMetrics {
 				metric.MemPercent = floatPtr(value)
 				return metric
 			},
 		},
 		{
-			promql: fmt.Sprintf(`sysUpTime{instance=~"%s"} / 100`, targets),
+			promql: fmt.Sprintf(`sysUpTime{%[1]s=~"%[2]s"} / 100`, labelName, targets),
 			apply: func(metric domain.DeviceMetrics, value float64) domain.DeviceMetrics {
 				metric.UptimeSecs = floatPtr(value)
 				return metric
 			},
 		},
 		{
-			promql: fmt.Sprintf(`max by (instance) (entPhySensorValue{entPhySensorType="8",instance=~"%s"})`, targets),
+			promql: fmt.Sprintf(`max by (%[1]s) (entPhySensorValue{entPhySensorType="8",%[1]s=~"%[2]s"})`, labelName, targets),
 			apply: func(metric domain.DeviceMetrics, value float64) domain.DeviceMetrics {
 				metric.TempCelsius = floatPtr(value)
 				return metric
@@ -90,8 +93,8 @@ func (c *PromClient) QueryDeviceMetrics(ctx context.Context, deviceIPs []string)
 		}
 
 		for _, sample := range samples {
-			instance := sample.Metric["instance"]
-			metric, ok := results[instance]
+			labelValue := sample.Metric[labelName]
+			metric, ok := results[labelValue]
 			if !ok {
 				continue
 			}
@@ -99,26 +102,28 @@ func (c *PromClient) QueryDeviceMetrics(ctx context.Context, deviceIPs []string)
 			if err != nil {
 				return nil, err
 			}
-			results[instance] = query.apply(metric, value)
+			results[labelValue] = query.apply(metric, value)
 		}
 	}
 
 	return results, nil
 }
 
-// QueryLinkMetrics fetches interface throughput and utilization for the requested device IPs.
-func (c *PromClient) QueryLinkMetrics(ctx context.Context, deviceIPs []string) (map[string][]domain.LinkMetrics, error) {
-	results := make(map[string][]domain.LinkMetrics, len(deviceIPs))
-	if len(deviceIPs) == 0 {
+// QueryLinkMetrics fetches interface throughput and utilization for the requested label values.
+// labelName is the Prometheus label to filter on (e.g. "instance", "identity", "vendor").
+// Returns a map keyed by the matched label value.
+func (c *PromClient) QueryLinkMetrics(ctx context.Context, labelName string, labelValues []string) (map[string][]domain.LinkMetrics, error) {
+	results := make(map[string][]domain.LinkMetrics, len(labelValues))
+	if len(labelValues) == 0 {
 		return results, nil
 	}
 
 	collectedAt := time.Now().UTC()
-	for _, ip := range uniqueSorted(deviceIPs) {
-		results[ip] = nil
+	for _, v := range uniqueSorted(labelValues) {
+		results[v] = nil
 	}
 
-	targets := buildTargetMatcher(deviceIPs)
+	targets := buildTargetMatcher(labelValues)
 	interfaces := make(map[string]map[string]*linkAccumulator)
 
 	type linkQuery struct {
@@ -128,25 +133,25 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, deviceIPs []string) (
 
 	queries := []linkQuery{
 		{
-			promql: fmt.Sprintf(`rate(ifHCOutOctets{instance=~"%s"}[5m]) * 8`, targets),
+			promql: fmt.Sprintf(`rate(ifHCOutOctets{%[1]s=~"%[2]s"}[5m]) * 8`, labelName, targets),
 			apply: func(metric *linkAccumulator, value float64) {
 				metric.txBps = floatPtr(value)
 			},
 		},
 		{
-			promql: fmt.Sprintf(`rate(ifHCInOctets{instance=~"%s"}[5m]) * 8`, targets),
+			promql: fmt.Sprintf(`rate(ifHCInOctets{%[1]s=~"%[2]s"}[5m]) * 8`, labelName, targets),
 			apply: func(metric *linkAccumulator, value float64) {
 				metric.rxBps = floatPtr(value)
 			},
 		},
 		{
-			promql: fmt.Sprintf(`ifSpeed{instance=~"%s"}`, targets),
+			promql: fmt.Sprintf(`ifSpeed{%[1]s=~"%[2]s"}`, labelName, targets),
 			apply: func(metric *linkAccumulator, value float64) {
 				metric.ifSpeed = floatPtr(value)
 			},
 		},
 		{
-			promql: fmt.Sprintf(`ifHighSpeed{instance=~"%s"}`, targets),
+			promql: fmt.Sprintf(`ifHighSpeed{%[1]s=~"%[2]s"}`, labelName, targets),
 			apply: func(metric *linkAccumulator, value float64) {
 				metric.ifHighSpeedMbps = floatPtr(value)
 			},
@@ -160,8 +165,8 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, deviceIPs []string) (
 		}
 
 		for _, sample := range samples {
-			instance := sample.Metric["instance"]
-			if _, ok := results[instance]; !ok {
+			labelValue := sample.Metric[labelName]
+			if _, ok := results[labelValue]; !ok {
 				continue
 			}
 
@@ -170,13 +175,13 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, deviceIPs []string) (
 				return nil, err
 			}
 
-			entry := getLinkAccumulator(interfaces, instance, sample.Metric)
+			entry := getLinkAccumulator(interfaces, labelValue, sample.Metric)
 			query.apply(entry, value)
 		}
 	}
 
-	for _, ip := range uniqueSorted(deviceIPs) {
-		interfaceMap := interfaces[ip]
+	for _, v := range uniqueSorted(labelValues) {
+		interfaceMap := interfaces[v]
 		if len(interfaceMap) == 0 {
 			continue
 		}
@@ -190,7 +195,7 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, deviceIPs []string) (
 		for _, key := range keys {
 			entry := interfaceMap[key]
 			linkMetric := domain.LinkMetrics{
-				LinkID:      fmt.Sprintf("%s:%s", ip, key),
+				LinkID:      fmt.Sprintf("%s:%s", v, key),
 				IfName:      entry.ifName,
 				TxBps:       entry.txBps,
 				RxBps:       entry.rxBps,
@@ -203,7 +208,7 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, deviceIPs []string) (
 				linkMetric.Utilization = floatPtr(utilization)
 			}
 
-			results[ip] = append(results[ip], linkMetric)
+			results[v] = append(results[v], linkMetric)
 		}
 	}
 

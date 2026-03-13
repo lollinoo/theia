@@ -26,6 +26,14 @@ const (
 	DeviceStatusUnknown DeviceStatus = "unknown"
 )
 
+// MetricsSource indicates where live metrics are collected from for this device.
+type MetricsSource string
+
+const (
+	MetricsSourcePrometheus MetricsSource = "prometheus"
+	MetricsSourceSNMP       MetricsSource = "snmp"
+)
+
 // SNMPVersion indicates which SNMP version is configured.
 type SNMPVersion string
 
@@ -82,11 +90,14 @@ type Device struct {
 	SysDescr        string            `json:"sys_descr"`
 	SysObjectID     string            `json:"sys_object_id"`
 	HardwareModel   string            `json:"hardware_model"`
-	Managed         bool              `json:"managed"` // true=user-added, false=discovered placeholder
-	Tags            map[string]string `json:"tags"`
-	Interfaces      []Interface       `json:"interfaces"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	Managed              bool              `json:"managed"` // true=user-added, false=discovered placeholder
+	Tags                 map[string]string `json:"tags"`
+	Interfaces           []Interface       `json:"interfaces"`
+	MetricsSource        MetricsSource     `json:"metrics_source"`
+	PrometheusLabelName  string            `json:"prometheus_label_name"`
+	PrometheusLabelValue string            `json:"prometheus_label_value"`
+	CreatedAt            time.Time         `json:"created_at"`
+	UpdatedAt            time.Time         `json:"updated_at"`
 }
 
 // DeviceRepository defines persistence operations for devices.

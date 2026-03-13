@@ -40,10 +40,13 @@ type jsonAPIList struct {
 // --- Request types ---
 
 type createDeviceRequest struct {
-	IP       string            `json:"ip"`
-	Hostname string            `json:"hostname"`
-	SNMP     snmpCredsRequest  `json:"snmp"`
-	Tags     map[string]string `json:"tags"`
+	IP                   string            `json:"ip"`
+	Hostname             string            `json:"hostname"`
+	SNMP                 snmpCredsRequest  `json:"snmp"`
+	Tags                 map[string]string `json:"tags"`
+	MetricsSource        string            `json:"metrics_source,omitempty"`
+	PrometheusLabelName  string            `json:"prometheus_label_name,omitempty"`
+	PrometheusLabelValue string            `json:"prometheus_label_value,omitempty"`
 }
 
 type snmpCredsRequest struct {
@@ -59,10 +62,13 @@ type snmpCredsRequest struct {
 }
 
 type updateDeviceRequest struct {
-	Hostname *string            `json:"hostname,omitempty"`
-	IP       *string            `json:"ip,omitempty"`
-	Tags     *map[string]string `json:"tags,omitempty"`
-	SNMP     *snmpCredsRequest  `json:"snmp,omitempty"`
+	Hostname             *string            `json:"hostname,omitempty"`
+	IP                   *string            `json:"ip,omitempty"`
+	Tags                 *map[string]string `json:"tags,omitempty"`
+	SNMP                 *snmpCredsRequest  `json:"snmp,omitempty"`
+	MetricsSource        *string            `json:"metrics_source,omitempty"`
+	PrometheusLabelName  *string            `json:"prometheus_label_name,omitempty"`
+	PrometheusLabelValue *string            `json:"prometheus_label_value,omitempty"`
 }
 
 type batchAddRequest struct {
@@ -94,7 +100,11 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname, creds, req.Tags)
+	metricsSource := domain.MetricsSource(req.MetricsSource)
+	prometheusLabelName := req.PrometheusLabelName
+	prometheusLabelValue := req.PrometheusLabelValue
+
+	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname, creds, req.Tags, metricsSource, prometheusLabelName, prometheusLabelValue)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -168,6 +178,16 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		update.SNMPCredentials = &creds
+	}
+	if req.MetricsSource != nil {
+		ms := domain.MetricsSource(*req.MetricsSource)
+		update.MetricsSource = &ms
+	}
+	if req.PrometheusLabelName != nil {
+		update.PrometheusLabelName = req.PrometheusLabelName
+	}
+	if req.PrometheusLabelValue != nil {
+		update.PrometheusLabelValue = req.PrometheusLabelValue
 	}
 
 	if err := h.svc.UpdateDevice(r.Context(), id, update); err != nil {
@@ -253,7 +273,8 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 			// Skip devices with bad credentials, continue with others
 			continue
 		}
-		_, _ = h.svc.AddDevice(r.Context(), d.IP, d.Hostname, creds, d.Tags)
+		ms := domain.MetricsSource(d.MetricsSource)
+		_, _ = h.svc.AddDevice(r.Context(), d.IP, d.Hostname, creds, d.Tags, ms, d.PrometheusLabelName, d.PrometheusLabelValue)
 	}
 
 	w.WriteHeader(http.StatusAccepted)
@@ -268,18 +289,21 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 
 func deviceToResource(d *domain.Device) jsonAPIResource {
 	attrs := map[string]interface{}{
-		"hostname":       d.Hostname,
-		"ip":             d.IP,
-		"device_type":    string(d.DeviceType),
-		"status":         string(d.Status),
-		"sys_name":       d.SysName,
-		"sys_descr":      d.SysDescr,
-		"sys_object_id":  d.SysObjectID,
-		"hardware_model": d.HardwareModel,
-		"managed":        d.Managed,
-		"tags":           d.Tags,
-		"created_at":     d.CreatedAt,
-		"updated_at":     d.UpdatedAt,
+		"hostname":               d.Hostname,
+		"ip":                     d.IP,
+		"device_type":            string(d.DeviceType),
+		"status":                 string(d.Status),
+		"sys_name":               d.SysName,
+		"sys_descr":              d.SysDescr,
+		"sys_object_id":          d.SysObjectID,
+		"hardware_model":         d.HardwareModel,
+		"managed":                d.Managed,
+		"tags":                   d.Tags,
+		"metrics_source":         string(d.MetricsSource),
+		"prometheus_label_name":  d.PrometheusLabelName,
+		"prometheus_label_value": d.PrometheusLabelValue,
+		"created_at":             d.CreatedAt,
+		"updated_at":             d.UpdatedAt,
 	}
 
 	// Include interfaces as a relationship

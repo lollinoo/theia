@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Device } from '../types/api';
-import { deleteDevice, fetchSettings, updateDevice, updateSetting } from '../api/client';
+import type { Device, SNMPProfile } from '../types/api';
+import { deleteDevice, fetchSettings, fetchSNMPProfiles, updateDevice, updateSetting } from '../api/client';
 
 const POLLING_PRESETS = [
   { label: 'Use Global', value: 'global' },
@@ -42,12 +42,18 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const [authPassword, setAuthPassword] = useState('');
   const [privProtocol, setPrivProtocol] = useState('AES');
   const [privPassword, setPrivPassword] = useState('');
+  // Metrics source
+  const [metricsSource, setMetricsSource] = useState<'prometheus' | 'snmp'>(device.metrics_source || 'prometheus');
+  const [prometheusLabelName, setPrometheusLabelName] = useState(device.prometheus_label_name || 'instance');
+  const [prometheusLabelValue, setPrometheusLabelValue] = useState(device.prometheus_label_value || '');
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editSaved, setEditSaved] = useState(false);
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+
+  const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
 
   const [savedPolling, setSavedPolling] = useState(false);
   const [savedGrafana, setSavedGrafana] = useState(false);
@@ -57,6 +63,10 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const savedPollingTimerRef = useRef<number | null>(null);
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const editSavedTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
+  }, []);
 
   useEffect(() => {
     fetchSettings()
@@ -84,7 +94,23 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     setUsername('');
     setAuthPassword('');
     setPrivPassword('');
+    setMetricsSource(device.metrics_source || 'prometheus');
+    setPrometheusLabelName(device.prometheus_label_name || 'instance');
+    setPrometheusLabelValue(device.prometheus_label_value || '');
   }, [device]);
+
+  function applyProfile(profileId: string) {
+    const profile = profiles.find((p) => p.id === profileId);
+    if (!profile) return;
+    setSnmpVersion(profile.snmp.version);
+    setCommunity(profile.snmp.community ?? '');
+    setUsername(profile.snmp.username ?? '');
+    setSecurityLevel(profile.snmp.security_level ?? 'authPriv');
+    setAuthProtocol(profile.snmp.auth_protocol ?? 'SHA');
+    setAuthPassword(profile.snmp.auth_password ?? '');
+    setPrivProtocol(profile.snmp.priv_protocol ?? 'AES');
+    setPrivPassword(profile.snmp.priv_password ?? '');
+  }
 
   function showSaved(
     setter: React.Dispatch<React.SetStateAction<boolean>>,
@@ -132,6 +158,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     const needsPriv = securityLevel === 'authPriv';
     const hasSnmpChanges = isV3 ? username.trim() !== '' : community.trim() !== '';
     try {
+      const effectiveLabelValue = prometheusLabelValue.trim() || ip.trim();
       await updateDevice(device.id, {
         hostname: hostname.trim(),
         ip: ip.trim(),
@@ -149,6 +176,9 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
             }
           : {}),
         tags: { ...device.tags, ...(displayName.trim() ? { display_name: displayName.trim() } : {}) },
+        metrics_source: metricsSource,
+        prometheus_label_name: metricsSource === 'prometheus' ? prometheusLabelName : undefined,
+        prometheus_label_value: metricsSource === 'prometheus' ? effectiveLabelValue : undefined,
       });
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated();
@@ -270,6 +300,21 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           placeholder="IP Address"
           className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
         />
+        {profiles.length > 0 && (
+          <select
+            defaultValue=""
+            onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
+            className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+          >
+            <option value="" disabled>Load credentials from profile...</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} (SNMP {p.snmp.version})
+              </option>
+            ))}
+          </select>
+        )}
+
         <select
           value={snmpVersion}
           onChange={(e) => setSnmpVersion(e.target.value)}
@@ -348,6 +393,48 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
                 />
               </>
             )}
+          </div>
+        )}
+
+        <div className="space-y-1">
+          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">Metrics Source</label>
+          <select
+            value={metricsSource}
+            onChange={(e) => setMetricsSource(e.target.value as 'prometheus' | 'snmp')}
+            className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+          >
+            <option value="prometheus">Prometheus</option>
+            <option value="snmp">SNMP Direct</option>
+          </select>
+        </div>
+
+        {metricsSource === 'prometheus' && (
+          <div className="space-y-2 rounded-lg border border-border-subtle p-3">
+            <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">Prometheus Target</p>
+            <div className="space-y-1">
+              <label className="text-xs text-text-secondary">Label</label>
+              <select
+                value={prometheusLabelName}
+                onChange={(e) => setPrometheusLabelName(e.target.value)}
+                className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+              >
+                <option value="instance">instance (IP address)</option>
+                <option value="identity">identity</option>
+                <option value="vendor">vendor</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-text-secondary">
+                Value{prometheusLabelName === 'instance' ? ' (defaults to IP if blank)' : ''}
+              </label>
+              <input
+                type="text"
+                value={prometheusLabelValue}
+                onChange={(e) => setPrometheusLabelValue(e.target.value)}
+                placeholder={prometheusLabelName === 'instance' ? ip || device.ip : 'e.g. my-router'}
+                className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+              />
+            </div>
           </div>
         )}
 

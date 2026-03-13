@@ -128,30 +128,66 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 		links = nil
 	}
 
-	deviceIPs := make([]string, 0, len(devices))
+	// Group Prometheus-sourced devices by label name so we can batch queries per label type.
+	type promGroup struct {
+		labelValues   []string
+		ipByLabelValue map[string]string // label value → device IP (for link metrics translation)
+	}
+	promGroups := make(map[string]*promGroup) // keyed by labelName
+
 	for _, device := range devices {
-		if device.IP != "" {
-			deviceIPs = append(deviceIPs, device.IP)
+		src := device.MetricsSource
+		if src == "" {
+			src = domain.MetricsSourcePrometheus
+		}
+		if src != domain.MetricsSourcePrometheus {
+			continue
+		}
+
+		labelName := device.PrometheusLabelName
+		if labelName == "" {
+			labelName = "instance"
+		}
+		labelValue := device.PrometheusLabelValue
+		if labelValue == "" {
+			labelValue = device.IP
+		}
+		if labelValue == "" {
+			continue
+		}
+
+		if promGroups[labelName] == nil {
+			promGroups[labelName] = &promGroup{ipByLabelValue: make(map[string]string)}
+		}
+		promGroups[labelName].labelValues = append(promGroups[labelName].labelValues, labelValue)
+		promGroups[labelName].ipByLabelValue[labelValue] = device.IP
+	}
+
+	// Query Prometheus for each label group and merge results.
+	metricsByLabelValue := make(map[string]domain.DeviceMetrics)
+	linkMetricsByLabelValue := make(map[string][]domain.LinkMetrics)
+	alertStates := []domain.AlertState{}
+
+	for labelName, group := range promGroups {
+		if m, err := c.promClient.QueryDeviceMetrics(ctx, labelName, group.labelValues); err != nil {
+			log.Printf("Metrics collector: failed to query device metrics (label=%s): %v", labelName, err)
+		} else {
+			for k, v := range m {
+				metricsByLabelValue[k] = v
+			}
+		}
+
+		if m, err := c.promClient.QueryLinkMetrics(ctx, labelName, group.labelValues); err != nil {
+			log.Printf("Metrics collector: failed to query link metrics (label=%s): %v", labelName, err)
+		} else {
+			for k, v := range m {
+				linkMetricsByLabelValue[k] = v
+			}
 		}
 	}
 
-	deviceMetricsByIP := map[string]domain.DeviceMetrics{}
-	linkMetricsByIP := map[string][]domain.LinkMetrics{}
-	alertStates := []domain.AlertState{}
-
-	if len(deviceIPs) > 0 {
-		if metrics, err := c.promClient.QueryDeviceMetrics(ctx, deviceIPs); err != nil {
-			log.Printf("Metrics collector: failed to query device metrics: %v", err)
-		} else {
-			deviceMetricsByIP = metrics
-		}
-
-		if metrics, err := c.promClient.QueryLinkMetrics(ctx, deviceIPs); err != nil {
-			log.Printf("Metrics collector: failed to query link metrics: %v", err)
-		} else {
-			linkMetricsByIP = metrics
-		}
-
+	// Alerts use the "instance" label (device IP) regardless of the configured label name.
+	if len(promGroups) > 0 {
 		if alerts, err := c.promClient.QueryAlerts(ctx); err != nil {
 			log.Printf("Metrics collector: failed to query alerts: %v", err)
 		} else {
@@ -159,24 +195,54 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 		}
 	}
 
-	deviceMetricsByID := attachDeviceMetrics(devices, deviceMetricsByIP)
+	// Helper: resolve the Prometheus label value for a device.
+	effectiveLabelValue := func(d domain.Device) string {
+		src := d.MetricsSource
+		if src == "" {
+			src = domain.MetricsSourcePrometheus
+		}
+		if src != domain.MetricsSourcePrometheus {
+			return ""
+		}
+		if d.PrometheusLabelValue != "" {
+			return d.PrometheusLabelValue
+		}
+		return d.IP
+	}
 
-	// For devices where Prometheus returned no metrics, fall back to direct SNMP polling.
+	deviceMetricsByID := attachDeviceMetrics(devices, metricsByLabelValue, effectiveLabelValue)
+
+	// SNMP-sourced devices are always polled directly; Prometheus-sourced devices fall back if needed.
 	if c.snmpPollFunc != nil {
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 		for _, dev := range devices {
-			existing := deviceMetricsByID[dev.ID.String()]
-			if existing.CPUPercent != nil || existing.MemPercent != nil || existing.UptimeSecs != nil {
-				continue // Prometheus already provided data
+			src := dev.MetricsSource
+			if src == "" {
+				src = domain.MetricsSourcePrometheus
 			}
+
+			shouldPoll := false
+			if src == domain.MetricsSourceSNMP {
+				shouldPoll = true // always poll SNMP-sourced devices directly
+			} else {
+				existing := deviceMetricsByID[dev.ID.String()]
+				if existing.CPUPercent == nil && existing.MemPercent == nil && existing.UptimeSecs == nil {
+					shouldPoll = true // Prometheus had no data; fall back
+				}
+			}
+
+			if !shouldPoll {
+				continue
+			}
+
 			dev := dev
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				m, err := c.snmpPollFunc(dev.IP, dev.SNMPCredentials)
 				if err != nil {
-					log.Printf("SNMP metrics fallback failed for %s: %v", dev.IP, err)
+					log.Printf("SNMP metrics poll failed for %s: %v", dev.IP, err)
 					return
 				}
 				m.DeviceID = dev.ID
@@ -189,6 +255,18 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 		wg.Wait()
 	}
 
+	// Translate link metrics from label-value keying back to device-IP keying for attachLinkMetrics.
+	linkMetricsByIP := make(map[string][]domain.LinkMetrics)
+	for _, device := range devices {
+		lv := effectiveLabelValue(device)
+		if lv == "" {
+			continue
+		}
+		if metrics, ok := linkMetricsByLabelValue[lv]; ok {
+			linkMetricsByIP[device.IP] = metrics
+		}
+	}
+
 	linkMetricsByID := attachLinkMetrics(devices, links, linkMetricsByIP)
 	alertsByDevice := attachAlerts(devices, alertStates)
 
@@ -199,13 +277,23 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 	return snapshot
 }
 
-func attachDeviceMetrics(devices []domain.Device, metricsByIP map[string]domain.DeviceMetrics) map[string]domain.DeviceMetrics {
+func attachDeviceMetrics(
+	devices []domain.Device,
+	metricsByLabel map[string]domain.DeviceMetrics,
+	labelFor func(domain.Device) string,
+) map[string]domain.DeviceMetrics {
 	collectedAt := time.Now().UTC()
 	metricsByID := make(map[string]domain.DeviceMetrics, len(devices))
 
 	for _, device := range devices {
-		metric, ok := metricsByIP[device.IP]
-		if !ok {
+		var metric domain.DeviceMetrics
+		if lv := labelFor(device); lv != "" {
+			var ok bool
+			metric, ok = metricsByLabel[lv]
+			if !ok {
+				metric = domain.DeviceMetrics{CollectedAt: collectedAt}
+			}
+		} else {
 			metric = domain.DeviceMetrics{CollectedAt: collectedAt}
 		}
 		if metric.CollectedAt.IsZero() {

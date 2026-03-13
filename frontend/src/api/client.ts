@@ -2,9 +2,12 @@ import {
   type Device,
   type InterfaceInfo,
   type Link,
+  type SNMPProfile,
   parseDevicesResponse,
   parseInterfacesResponse,
   parseLinksResponse,
+  parseSNMPProfilesResponse,
+  parseSNMPProfileResponse,
 } from '../types/api';
 
 type ErrorPayload = {
@@ -129,6 +132,9 @@ export interface CreateDevicePayload {
   ip: string;
   snmp: SNMPPayload;
   tags?: Record<string, string>;
+  metrics_source?: string;
+  prometheus_label_name?: string;
+  prometheus_label_value?: string;
 }
 
 export async function createDevice(payload: CreateDevicePayload): Promise<Device> {
@@ -147,7 +153,15 @@ export async function createDevice(payload: CreateDevicePayload): Promise<Device
 
 export async function updateDevice(
   id: string,
-  payload: Partial<{ hostname: string; ip: string; snmp: SNMPPayload; tags: Record<string, string> }>,
+  payload: Partial<{
+    hostname: string;
+    ip: string;
+    snmp: SNMPPayload;
+    tags: Record<string, string>;
+    metrics_source: string;
+    prometheus_label_name: string;
+    prometheus_label_value: string;
+  }>,
 ): Promise<Device> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(id)}`,
@@ -235,4 +249,30 @@ export async function updateLink(
 
 export async function deleteLink(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/links/${encodeURIComponent(id)}`, 'DELETE');
+}
+
+export interface SNMPProfilePayload {
+  name: string;
+  description?: string;
+  snmp: SNMPPayload;
+}
+
+export async function fetchSNMPProfiles(): Promise<SNMPProfile[]> {
+  return parseSNMPProfilesResponse(await requestJSON('/api/v1/snmp-profiles'));
+}
+
+export async function createSNMPProfile(payload: SNMPProfilePayload): Promise<SNMPProfile> {
+  return parseSNMPProfileResponse(
+    await requestJSONWithBody('/api/v1/snmp-profiles', 'POST', payload),
+  );
+}
+
+export async function updateSNMPProfile(id: string, payload: SNMPProfilePayload): Promise<SNMPProfile> {
+  return parseSNMPProfileResponse(
+    await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}`, 'PUT', payload),
+  );
+}
+
+export async function deleteSNMPProfile(id: string): Promise<void> {
+  await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}`, 'DELETE');
 }

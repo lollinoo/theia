@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/azmin/mikrotik-theia/internal/domain"
@@ -81,10 +82,31 @@ func RunMigrations(db *sql.DB) error {
 			updated_at DATETIME NOT NULL,
 			FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
 		)`,
+
+		// SNMP credential profiles for reuse across multiple devices
+		`CREATE TABLE IF NOT EXISTS snmp_profiles (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			credentials_json TEXT NOT NULL DEFAULT '{}',
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`,
+
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_snmp_profiles_name ON snmp_profiles(name)`,
+
+		// Per-device metric source configuration
+		`ALTER TABLE devices ADD COLUMN metrics_source TEXT NOT NULL DEFAULT 'prometheus'`,
+		`ALTER TABLE devices ADD COLUMN prometheus_label_name TEXT NOT NULL DEFAULT 'instance'`,
+		`ALTER TABLE devices ADD COLUMN prometheus_label_value TEXT NOT NULL DEFAULT ''`,
 	}
 
 	for i, m := range migrations {
 		if _, err := db.Exec(m); err != nil {
+			// ALTER TABLE ADD COLUMN is idempotent in this setup; ignore duplicate column errors.
+			if strings.Contains(m, "ADD COLUMN") && strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
 			return fmt.Errorf("migration %d failed: %w", i, err)
 		}
 	}
