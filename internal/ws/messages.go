@@ -35,10 +35,11 @@ type Message struct {
 
 // SnapshotPayload contains the complete live state sent to clients.
 type SnapshotPayload struct {
-	DeviceMetrics  map[string]DeviceMetricsDTO `json:"device_metrics"`
-	LinkMetrics    map[string][]LinkMetricsDTO `json:"link_metrics"`
-	Alerts         []AlertDTO                  `json:"alerts"`
-	DeviceStatuses map[string]string           `json:"device_statuses"`
+	DeviceMetrics   map[string]DeviceMetricsDTO `json:"device_metrics"`
+	LinkMetrics     map[string][]LinkMetricsDTO `json:"link_metrics"`
+	Alerts          []AlertDTO                  `json:"alerts"`
+	DeviceStatuses  map[string]string           `json:"device_statuses"`
+	DeviceHostnames map[string]string           `json:"device_hostnames"` // device ID → auto-discovered hostname
 }
 
 // DeviceMetricsDTO is the frontend JSON shape for device metrics.
@@ -73,10 +74,11 @@ type AlertDTO struct {
 // EmptySnapshot returns a fully initialized empty snapshot payload.
 func EmptySnapshot() *SnapshotPayload {
 	return &SnapshotPayload{
-		DeviceMetrics:  map[string]DeviceMetricsDTO{},
-		LinkMetrics:    map[string][]LinkMetricsDTO{},
-		Alerts:         []AlertDTO{},
-		DeviceStatuses: map[string]string{},
+		DeviceMetrics:   map[string]DeviceMetricsDTO{},
+		LinkMetrics:     map[string][]LinkMetricsDTO{},
+		Alerts:          []AlertDTO{},
+		DeviceStatuses:  map[string]string{},
+		DeviceHostnames: map[string]string{},
 	}
 }
 
@@ -87,14 +89,19 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	cloned := &SnapshotPayload{
-		DeviceMetrics:  make(map[string]DeviceMetricsDTO, len(snapshot.DeviceMetrics)),
-		LinkMetrics:    make(map[string][]LinkMetricsDTO, len(snapshot.LinkMetrics)),
-		Alerts:         append([]AlertDTO(nil), snapshot.Alerts...),
-		DeviceStatuses: make(map[string]string, len(snapshot.DeviceStatuses)),
+		DeviceMetrics:   make(map[string]DeviceMetricsDTO, len(snapshot.DeviceMetrics)),
+		LinkMetrics:     make(map[string][]LinkMetricsDTO, len(snapshot.LinkMetrics)),
+		Alerts:          append([]AlertDTO(nil), snapshot.Alerts...),
+		DeviceStatuses:  make(map[string]string, len(snapshot.DeviceStatuses)),
+		DeviceHostnames: make(map[string]string, len(snapshot.DeviceHostnames)),
 	}
 
 	for key, value := range snapshot.DeviceStatuses {
 		cloned.DeviceStatuses[key] = value
+	}
+
+	for key, value := range snapshot.DeviceHostnames {
+		cloned.DeviceHostnames[key] = value
 	}
 
 	for key, value := range snapshot.DeviceMetrics {

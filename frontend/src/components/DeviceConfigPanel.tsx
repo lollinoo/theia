@@ -287,11 +287,18 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           </span>
         </div>
 
+        {device.sys_name && (
+          <div className="rounded-lg border border-border-subtle bg-bg-elevated/40 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-widest text-text-secondary/60 mb-0.5">Auto-discovered Hostname</p>
+            <p className="text-sm font-mono text-text-primary">{device.sys_name}</p>
+          </div>
+        )}
+
         <input
           type="text"
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="Display Name (optional)"
+          placeholder={device.sys_name ? `Override "${device.sys_name}"` : 'Custom name (optional)'}
           className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
         />
 

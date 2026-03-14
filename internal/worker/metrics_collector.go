@@ -184,6 +184,7 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	// Track errors to determine Prometheus availability.
 	metricsByLabelValue := make(map[string]domain.DeviceMetrics)
 	linkMetricsByLabelValue := make(map[string][]domain.LinkMetrics)
+	hostnamesByLabelValue := make(map[string]string)
 	alertStates := []domain.AlertState{}
 
 	promQueryErrors := 0
@@ -209,6 +210,15 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 		} else {
 			for k, v := range m {
 				linkMetricsByLabelValue[k] = v
+			}
+		}
+
+		// Hostname query is best-effort: missing sysName metric is not an error.
+		if names, err := c.promClient.QueryHostnames(ctx, labelName, group.labelValues); err != nil {
+			log.Printf("Metrics collector: failed to query sysName (label=%s): %v", labelName, err)
+		} else {
+			for k, v := range names {
+				hostnamesByLabelValue[k] = v
 			}
 		}
 	}
@@ -307,6 +317,19 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	snapshot.DeviceMetrics = ws.DeviceMetricsToDTOs(deviceMetricsByID)
 	snapshot.LinkMetrics = ws.LinkMetricsToDTOs(linkMetricsByID)
 	snapshot.Alerts = ws.AlertsToDTOs(alertsByDevice)
+
+	// Map Prometheus label-value hostnames → device IDs.
+	hostnames := make(map[string]string, len(devices))
+	for _, dev := range devices {
+		lv := effectiveLabelValue(dev)
+		if lv == "" {
+			continue
+		}
+		if name, ok := hostnamesByLabelValue[lv]; ok {
+			hostnames[dev.ID.String()] = name
+		}
+	}
+	snapshot.DeviceHostnames = hostnames
 
 	statuses := make(map[string]string, len(devices))
 	for _, dev := range devices {

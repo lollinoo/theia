@@ -535,19 +535,25 @@ export default function Canvas() {
     lastSnapshotTimeRef.current = Date.now();
     staleAppliedRef.current = false;
 
-    // Apply alert status and device status immediately (not deferred) so clearing
-    // is instant and not interrupted by concurrent UI interactions.
+    // Apply alert status, device status, and discovered hostname immediately (not deferred)
+    // so clearing is instant and not interrupted by concurrent UI interactions.
     setNodes((currentNodes) =>
       currentNodes.map((node) => {
         const newStatus = snapshot.device_statuses[node.id];
+        const newHostname = snapshot.device_hostnames[node.id];
+        const updatedDevice = newStatus || newHostname
+          ? {
+              ...node.data.device,
+              ...(newStatus ? { status: newStatus as Device['status'] } : {}),
+              ...(newHostname ? { sys_name: newHostname } : {}),
+            }
+          : node.data.device;
         return {
           ...node,
           data: {
             ...node.data,
             alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
-            device: newStatus
-              ? { ...node.data.device, status: newStatus as Device['status'] }
-              : node.data.device,
+            device: updatedDevice,
           },
         };
       }),
@@ -714,12 +720,18 @@ export default function Canvas() {
     if (panelContent.type === 'link-details') return 'Link Details';
     if (panelContent.type === 'deviceConfig') {
       const data = panelContent.data as { device?: Device } | undefined;
-      return data?.device ? data.device.hostname : 'Configure Device';
+      if (data?.device) {
+        const d = data.device;
+        return d.tags?.display_name || d.sys_name || d.hostname || 'Configure Device';
+      }
+      return 'Configure Device';
     }
     if (panelContent.type === 'interfaceStats') {
       const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device } | undefined;
       if (data?.link && data.sourceDevice && data.targetDevice) {
-        return `${data.sourceDevice.hostname} — ${data.targetDevice.hostname}`;
+        const srcName = data.sourceDevice.tags?.display_name || data.sourceDevice.sys_name || data.sourceDevice.hostname;
+        const dstName = data.targetDevice.tags?.display_name || data.targetDevice.sys_name || data.targetDevice.hostname;
+        return `${srcName} — ${dstName}`;
       }
       return 'Interface Stats';
     }

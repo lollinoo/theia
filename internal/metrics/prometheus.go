@@ -235,6 +235,39 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, labelName string, lab
 	return results, nil
 }
 
+// QueryHostnames fetches the sysName label from Prometheus for the requested label values.
+// snmp_exporter exports sysName as a metric where the hostname is a label, e.g.:
+//
+//	sysName{instance="192.168.1.1", sysName="my-router"} 1
+//
+// Returns a map keyed by the matched label value → hostname string.
+// Entries are only present when a sysName label is found; absent means no data.
+func (c *PromClient) QueryHostnames(ctx context.Context, labelName string, labelValues []string) (map[string]string, error) {
+	if len(labelValues) == 0 {
+		return nil, nil
+	}
+
+	targets := buildTargetMatcher(labelValues)
+	promql := fmt.Sprintf(`sysName{%s=~"%s"}`, labelName, targets)
+
+	samples, err := c.queryVector(ctx, promql)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make(map[string]string, len(samples))
+	for _, sample := range samples {
+		labelValue := sample.Metric[labelName]
+		if labelValue == "" {
+			continue
+		}
+		if name := sample.Metric["sysName"]; name != "" {
+			results[labelValue] = name
+		}
+	}
+	return results, nil
+}
+
 // QueryProbeStatus fetches blackbox_exporter probe_success for the given device IPs.
 // Returns a map keyed by device IP (port stripped) → true (up) or false (down).
 // Only IPs with probe_success data are included; absent entries mean no data available.

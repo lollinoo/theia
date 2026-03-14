@@ -134,13 +134,13 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
       <div className="space-y-2">
         <label className={labelClass}>
-          Hostname / IP <span className="text-status-down">*</span>
+          IP Address <span className="text-status-down">*</span>
         </label>
         <input
           type="text"
           value={hostname}
           onChange={(e) => setHostname(e.target.value)}
-          placeholder="192.168.1.1 or router.local"
+          placeholder="192.168.1.1"
           required
           className={inputClass}
         />
@@ -337,13 +337,13 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
       <div className="space-y-2">
         <label className={labelClass}>
-          Display Name <span className="text-text-secondary/50">(optional)</span>
+          Custom Name <span className="text-text-secondary/50">(optional)</span>
         </label>
         <input
           type="text"
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="My Router"
+          placeholder="Auto-discovered from SNMP / Prometheus"
           className={inputClass}
         />
       </div>

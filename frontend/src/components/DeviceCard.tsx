@@ -23,22 +23,16 @@ const universalHandleClassName =
   '!h-2 !w-2 !rounded-full !border-2 !border-bg-canvas !bg-[#8899a6] shadow-none';
 
 function displayName(device: Device): string {
-  return device.tags?.display_name || device.hostname || device.sys_name || device.ip;
+  return device.tags?.display_name || device.sys_name || device.ip;
 }
 
 function secondaryText(device: Device, primaryLabel: string): string {
-  if (device.hostname && device.hostname !== primaryLabel) {
-    return device.hostname;
-  }
-
-  if (device.hardware_model && device.hardware_model !== 'Unknown') {
-    return device.hardware_model;
-  }
-
   if (device.sys_name && device.sys_name !== primaryLabel) {
     return device.sys_name;
   }
-
+  if (device.hardware_model && device.hardware_model !== 'Unknown') {
+    return device.hardware_model;
+  }
   return device.managed ? 'Managed device' : 'Discovered neighbor';
 }
 
@@ -224,6 +218,8 @@ const DeviceCard = memo(DeviceCardInner, (prev, next) => {
   return (
     pd.device.id === nd.device.id &&
     pd.device.status === nd.device.status &&
+    pd.device.sys_name === nd.device.sys_name &&
+    pd.device.tags?.display_name === nd.device.tags?.display_name &&
     pd.pinned === nd.pinned &&
     pd.highlighted === nd.highlighted &&
     pd.alertStatus === nd.alertStatus &&
