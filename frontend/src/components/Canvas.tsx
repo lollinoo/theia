@@ -280,6 +280,7 @@ export default function Canvas() {
   const [panelContent, setPanelContent] = useState<{ type: string, data?: unknown } | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [editMode, setEditMode] = useState(false);
 
   const highlightTimerRef = useRef<number | null>(null);
   const layoutInitializedRef = useRef(false);
@@ -330,6 +331,11 @@ export default function Canvas() {
       key: 'l',
       description: 'Create link',
       handler: () => setPanelContent({ type: 'create-link' }),
+    },
+    editMode: {
+      key: 'e',
+      description: 'Toggle edit mode',
+      handler: () => setEditMode(m => !m),
     },
     settings: {
       key: ',',
@@ -843,6 +849,8 @@ export default function Canvas() {
         onCreateLink={() => setPanelContent({ type: 'create-link' })}
         onAlerts={() => setPanelContent({ type: 'alerts' })}
         onSettings={() => setPanelContent({ type: 'settings' })}
+        onToggleEditMode={() => setEditMode(m => !m)}
+        editMode={editMode}
         alertCount={
           (snapshot?.alerts.filter((a) => a.state === 'firing').length ?? 0) +
           (prometheusStatus !== null && !prometheusStatus.available ? 1 : 0)
@@ -1071,6 +1079,15 @@ export default function Canvas() {
 
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
 
+      {editMode && (
+        <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex items-center gap-2.5 rounded-xl border border-accent/30 bg-bg-surface/95 px-4 py-2.5 shadow-canvas backdrop-blur-sm">
+          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" className="h-4 w-4 text-accent">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+          </svg>
+          <p className="text-sm text-accent">Edit Mode</p>
+          <span className="text-xs text-text-secondary">Press E to exit</span>
+        </div>
+      )}
       <ReconnectBanner visible={reconnecting} />
       {showRecoveryToast && (
         <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex items-center gap-2.5 rounded-xl border border-green-500/30 bg-bg-surface/95 px-4 py-2.5 shadow-canvas backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -1135,14 +1152,19 @@ export default function Canvas() {
         onPaneClick={() => {
           setEdgeMenu(null);
           setDeviceMenu(null);
+          setPanelContent(null);
+          setShowSearch(false);
+          setShowShortcuts(false);
         }}
         onNodeClick={(_event, node) => {
+          if (!editMode) return;
           const clickedDevice = devices.find((d) => d.id === node.id);
           if (clickedDevice) {
             setPanelContent({ type: 'deviceConfig', data: { device: clickedDevice } });
           }
         }}
         onEdgeClick={(_event, edge) => {
+          if (!editMode) return;
           // Only open details for backend-persisted links (edges with link data)
           const link = edge.data?.link;
           if (link) {
@@ -1182,7 +1204,7 @@ export default function Canvas() {
         minZoom={0.1}
         maxZoom={2}
         fitView
-        nodesDraggable
+        nodesDraggable={editMode}
         panOnDrag
         zoomOnScroll
         zoomOnDoubleClick={false}

@@ -33,7 +33,14 @@ export default function SearchOverlay({
         .filter((device) => {
           const hostname = device.hostname.toLowerCase();
           const ip = device.ip.toLowerCase();
-          return hostname.includes(normalizedQuery) || ip.includes(normalizedQuery);
+          const sysName = (device.sys_name || '').toLowerCase();
+          const displayName = (device.tags?.display_name || '').toLowerCase();
+          return (
+            hostname.includes(normalizedQuery) ||
+            ip.includes(normalizedQuery) ||
+            sysName.includes(normalizedQuery) ||
+            displayName.includes(normalizedQuery)
+          );
         })
         .slice(0, 8);
 
@@ -90,7 +97,9 @@ export default function SearchOverlay({
                     <DeviceIcon type={device.device_type} size={20} />
                   </div>
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-text-primary">{device.hostname}</p>
+                    <p className="truncate text-sm font-medium text-text-primary">
+                      {device.tags?.display_name || device.sys_name || device.hostname || device.ip}
+                    </p>
                     <p className="truncate text-xs text-text-secondary">{device.ip}</p>
                   </div>
                 </button>

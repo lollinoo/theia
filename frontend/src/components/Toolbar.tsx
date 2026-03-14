@@ -6,10 +6,12 @@ interface ToolbarProps {
     onCreateLink: () => void;
     onAlerts: () => void;
     onSettings: () => void;
+    onToggleEditMode: () => void;
+    editMode: boolean;
     alertCount?: number;
 }
 
-export function Toolbar({ onSearch, onAddDevice, onCreateLink, onAlerts, onSettings, alertCount = 0 }: ToolbarProps) {
+export function Toolbar({ onSearch, onAddDevice, onCreateLink, onAlerts, onSettings, onToggleEditMode, editMode, alertCount = 0 }: ToolbarProps) {
     const [isMac, setIsMac] = useState(false);
 
     useEffect(() => {
@@ -19,6 +21,16 @@ export function Toolbar({ onSearch, onAddDevice, onCreateLink, onAlerts, onSetti
     const modifier = isMac ? '⌘' : 'Ctrl';
 
     const buttons = [
+        {
+            label: 'Edit Mode (E)',
+            onClick: onToggleEditMode,
+            active: editMode,
+            icon: (
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" className="w-[18px] h-[18px]">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+            )
+        },
         {
             label: `Search (${modifier}+K)`,
             onClick: onSearch,
@@ -79,8 +91,7 @@ export function Toolbar({ onSearch, onAddDevice, onCreateLink, onAlerts, onSetti
             {buttons.map((btn, i) => (
                 <button
                     key={i}
-                    className={`flex h-[40px] w-[40px] items-center justify-center text-text-primary transition-colors hover:bg-bg-elevated ${i !== buttons.length - 1 ? 'border-b border-border-subtle' : ''
-                        }`}
+                    className={`flex h-[40px] w-[40px] items-center justify-center transition-colors hover:bg-bg-elevated ${i !== buttons.length - 1 ? 'border-b border-border-subtle' : ''} ${'active' in btn && btn.active ? 'bg-accent/15 text-accent' : 'text-text-primary'}`}
                     onClick={btn.onClick}
                     title={btn.label}
                 >
