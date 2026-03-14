@@ -425,6 +425,15 @@ func (c *PromClient) CheckHealth(ctx context.Context) error {
 	return err
 }
 
+// CheckHealthFast verifies Prometheus reachability with a short timeout (2s).
+// Used by the background health probe to detect outages quickly.
+func (c *PromClient) CheckHealthFast(ctx context.Context) error {
+	fastCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := c.queryVector(fastCtx, "vector(1)")
+	return err
+}
+
 // QueryAlerts fetches currently firing alerts from the Prometheus HTTP API.
 func (c *PromClient) QueryAlerts(ctx context.Context) ([]domain.AlertState, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/alerts", nil)

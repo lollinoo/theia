@@ -34,6 +34,7 @@ type MetricsCollector struct {
 	promAvailable   bool // last known Prometheus availability
 	cancel          context.CancelFunc
 	done            chan struct{}
+	healthDone      chan struct{} // closed when health check goroutine exits
 }
 
 // NewMetricsCollector creates a background collector for live Prometheus data.
@@ -65,6 +66,50 @@ func (c *MetricsCollector) Start(ctx context.Context) {
 	collectCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.done = make(chan struct{})
+	c.healthDone = make(chan struct{})
+
+	// Background health check: probe Prometheus every 5s with a fast timeout.
+	// Broadcasts prometheus_status immediately on transitions.
+	go func() {
+		defer close(c.healthDone)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-collectCtx.Done():
+				return
+			case <-ticker.C:
+				err := c.promClient.CheckHealthFast(collectCtx)
+				if collectCtx.Err() != nil {
+					return
+				}
+				nowAvailable := err == nil
+
+				c.mu.Lock()
+				changed := c.promAvailable != nowAvailable
+				c.promAvailable = nowAvailable
+				c.mu.Unlock()
+
+				if changed {
+					status := "available"
+					if !nowAvailable {
+						status = "unreachable"
+					}
+					log.Printf("Prometheus health check: %s", status)
+
+					payload := ws.PrometheusStatusPayload{Available: nowAvailable}
+					if !nowAvailable && err != nil {
+						payload.Error = err.Error()
+					}
+					c.hub.Broadcast(ws.Message{
+						Type:    ws.MessageTypePrometheusStatus,
+						Payload: payload,
+					})
+				}
+			}
+		}
+	}()
 
 	go func() {
 		defer close(c.done)
@@ -91,6 +136,7 @@ func (c *MetricsCollector) Stop() {
 	if c.cancel != nil {
 		c.cancel()
 		<-c.done
+		<-c.healthDone
 	}
 	log.Println("Metrics collector stopped")
 }
@@ -102,10 +148,17 @@ func (c *MetricsCollector) GetSnapshot() *ws.SnapshotPayload {
 	return ws.CloneSnapshot(c.lastSnapshot)
 }
 
+// isPromAvailable reads the last known Prometheus health status (set by the health check goroutine).
+func (c *MetricsCollector) isPromAvailable() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.promAvailable
+}
+
 func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 	// Apply a timeout to the entire collection cycle so that unreachable
 	// Prometheus doesn't block snapshot broadcasts indefinitely.
-	collectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	collectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	snapshot, promNowAvailable, promErr := c.buildSnapshot(collectCtx)
@@ -122,6 +175,8 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 	})
 
 	// Notify clients when Prometheus availability changes.
+	// The health check goroutine handles most transitions, but this catches
+	// cases where a query succeeds/fails within the collection cycle.
 	if prevAvailable != promNowAvailable {
 		payload := ws.PrometheusStatusPayload{Available: promNowAvailable}
 		if !promNowAvailable && promErr != "" {
@@ -196,13 +251,29 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	promQueryTotal := 0
 	var firstPromError string
 
+	// Skip all Prometheus queries when the health check already knows it's down.
+	// The health check goroutine will notify clients when it comes back.
+	promKnownDown := len(promGroups) > 0 && !c.isPromAvailable()
+	if promKnownDown {
+		promQueryTotal = 1
+		promQueryErrors = 1
+		firstPromError = "prometheus unreachable (health check)"
+		log.Printf("Metrics collector: skipping Prometheus queries (health check reports unreachable)")
+	}
+
 	for labelName, group := range promGroups {
-		// Bail out early if the collection context has expired.
-		if ctx.Err() != nil {
-			promQueryErrors++
-			promQueryTotal++
-			if firstPromError == "" {
-				firstPromError = ctx.Err().Error()
+		if promKnownDown {
+			break
+		}
+
+		// Bail out early if the collection context has expired or a previous query failed.
+		if ctx.Err() != nil || promQueryErrors > 0 {
+			if promQueryErrors == 0 {
+				promQueryErrors++
+				promQueryTotal++
+				if firstPromError == "" {
+					firstPromError = ctx.Err().Error()
+				}
 			}
 			break
 		}
@@ -214,6 +285,7 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 			if firstPromError == "" {
 				firstPromError = err.Error()
 			}
+			break // fail-fast: skip remaining groups
 		} else {
 			for k, v := range m {
 				metricsByLabelValue[k] = v
@@ -225,6 +297,11 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 		}
 		if m, err := c.promClient.QueryLinkMetrics(ctx, labelName, group.labelValues); err != nil {
 			log.Printf("Metrics collector: failed to query link metrics (label=%s): %v", labelName, err)
+			promQueryErrors++
+			if firstPromError == "" {
+				firstPromError = err.Error()
+			}
+			break // fail-fast: skip remaining groups
 		} else {
 			for k, v := range m {
 				linkMetricsByLabelValue[k] = v
