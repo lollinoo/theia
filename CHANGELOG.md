@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-14
+
+### Changed
+
+- Add version tracking, changelog, and release management workflow
+
 ## [0.1.0] - 2026-03-14
 
 Initial development release consolidating all work on the `dev-v1` branch.
@@ -83,5 +89,6 @@ Initial development release consolidating all work on the `dev-v1` branch.
 - Port matching regex uses explicit `[0-9]` digit range instead of `\d`
 - `onClose` prop renamed to `_onClose` in LinkDetailsPanel to avoid naming conflict
 
-[Unreleased]: https://github.com/lollinoo/mikrotik-theia/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/lollinoo/mikrotik-theia/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/lollinoo/mikrotik-theia/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lollinoo/mikrotik-theia/releases/tag/v0.1.0
