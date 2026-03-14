@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { fetchDeviceInterfaces, createLink } from '../api/client';
-import type { Device, InterfaceInfo } from '../types/api';
+import { useMemo, useState } from 'react';
+import { createLink } from '../api/client';
+import type { Device, InterfaceInfo, Link } from '../types/api';
 
 interface LinkCreatePanelProps {
   devices: Device[];
+  links: Link[];
   onCreated: () => void;
   onClose: () => void;
 }
@@ -16,19 +17,57 @@ function formatSpeed(bps: number): string {
   return `${bps}`;
 }
 
+function deviceLabel(d: Device): string {
+  const name = d.tags?.display_name || d.sys_name;
+  return name ? `${d.ip} — ${name}` : d.ip;
+}
+
+function getDeviceInterfaces(
+  device: Device | undefined,
+  deviceId: string,
+  links: Link[],
+): InterfaceInfo[] {
+  if (!device) return [];
+
+  const inUseIfaces = new Set<string>();
+  for (const link of links) {
+    if (link.source_device_id === deviceId) inUseIfaces.add(link.source_if_name);
+    if (link.target_device_id === deviceId) inUseIfaces.add(link.target_if_name);
+  }
+
+  return device.interfaces
+    .filter((i) => {
+      if (!i.if_name) return false;
+      const lower = i.if_name.toLowerCase();
+      return !lower.startsWith('lo') && lower !== 'null' && !lower.startsWith('null');
+    })
+    .sort((a, b) => {
+      const aUp = a.oper_status === 'up';
+      const bUp = b.oper_status === 'up';
+      if (aUp !== bUp) return aUp ? -1 : 1;
+      return a.if_name.localeCompare(b.if_name);
+    })
+    .map((i) => ({
+      if_name: i.if_name,
+      if_descr: i.if_descr,
+      speed: i.speed,
+      oper_status: i.oper_status,
+      admin_status: i.admin_status,
+      in_use: inUseIfaces.has(i.if_name),
+    }));
+}
+
 function InterfaceSelect({
   label,
   interfaces,
   value,
   onChange,
-  loading,
   placeholder,
 }: {
   label: string;
   interfaces: InterfaceInfo[];
   value: string;
   onChange: (v: string) => void;
-  loading: boolean;
   placeholder: string;
 }) {
   const upInterfaces = interfaces.filter((i) => i.oper_status === 'up');
@@ -42,10 +81,10 @@ function InterfaceSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        disabled={loading || interfaces.length === 0}
+        disabled={interfaces.length === 0}
         className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
       >
-        <option value="">{loading ? 'Loading...' : placeholder}</option>
+        <option value="">{placeholder}</option>
         {upInterfaces.map((iface) => (
           <option key={iface.if_name} value={iface.if_name}>
             {iface.if_name}
@@ -72,59 +111,36 @@ function InterfaceSelect({
   );
 }
 
-export function LinkCreatePanel({ devices, onCreated, onClose }: LinkCreatePanelProps) {
+export function LinkCreatePanel({ devices, links, onCreated, onClose }: LinkCreatePanelProps) {
   const [sourceDeviceId, setSourceDeviceId] = useState('');
   const [targetDeviceId, setTargetDeviceId] = useState('');
   const [sourceIfName, setSourceIfName] = useState('');
   const [targetIfName, setTargetIfName] = useState('');
-  const [sourceInterfaces, setSourceInterfaces] = useState<InterfaceInfo[]>([]);
-  const [targetInterfaces, setTargetInterfaces] = useState<InterfaceInfo[]>([]);
-  const [sourceLoading, setSourceLoading] = useState(false);
-  const [targetLoading, setTargetLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!sourceDeviceId) {
-      setSourceInterfaces([]);
-      setSourceIfName('');
-      return;
-    }
-    setSourceLoading(true);
-    setSourceIfName('');
-    fetchDeviceInterfaces(sourceDeviceId)
-      .then((ifaces) => {
-        setSourceInterfaces(ifaces);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Failed to fetch source interfaces');
-        setSourceInterfaces([]);
-      })
-      .finally(() => {
-        setSourceLoading(false);
-      });
-  }, [sourceDeviceId]);
+  const sourceDevice = devices.find((d) => d.id === sourceDeviceId);
+  const targetDevice = devices.find((d) => d.id === targetDeviceId);
 
-  useEffect(() => {
-    if (!targetDeviceId) {
-      setTargetInterfaces([]);
-      setTargetIfName('');
-      return;
-    }
-    setTargetLoading(true);
+  const sourceInterfaces = useMemo(
+    () => getDeviceInterfaces(sourceDevice, sourceDeviceId, links),
+    [sourceDevice, sourceDeviceId, links],
+  );
+
+  const targetInterfaces = useMemo(
+    () => getDeviceInterfaces(targetDevice, targetDeviceId, links),
+    [targetDevice, targetDeviceId, links],
+  );
+
+  function handleSourceDeviceChange(id: string) {
+    setSourceDeviceId(id);
+    setSourceIfName('');
+  }
+
+  function handleTargetDeviceChange(id: string) {
+    setTargetDeviceId(id);
     setTargetIfName('');
-    fetchDeviceInterfaces(targetDeviceId)
-      .then((ifaces) => {
-        setTargetInterfaces(ifaces);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Failed to fetch target interfaces');
-        setTargetInterfaces([]);
-      })
-      .finally(() => {
-        setTargetLoading(false);
-      });
-  }, [targetDeviceId]);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -171,13 +187,13 @@ export function LinkCreatePanel({ devices, onCreated, onClose }: LinkCreatePanel
           </label>
           <select
             value={sourceDeviceId}
-            onChange={(e) => setSourceDeviceId(e.target.value)}
+            onChange={(e) => handleSourceDeviceChange(e.target.value)}
             className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
           >
             <option value="">Select device...</option>
             {devices.map((d) => (
               <option key={d.id} value={d.id}>
-                {d.tags?.display_name || d.hostname}
+                {deviceLabel(d)}
               </option>
             ))}
           </select>
@@ -187,8 +203,7 @@ export function LinkCreatePanel({ devices, onCreated, onClose }: LinkCreatePanel
           interfaces={sourceInterfaces}
           value={sourceIfName}
           onChange={setSourceIfName}
-          loading={sourceLoading}
-          placeholder={sourceDeviceId ? 'Select port...' : 'Select a device first'}
+          placeholder={sourceDeviceId ? (sourceInterfaces.length === 0 ? 'No ports available yet' : 'Select port...') : 'Select a device first'}
         />
       </div>
 
@@ -205,13 +220,13 @@ export function LinkCreatePanel({ devices, onCreated, onClose }: LinkCreatePanel
           </label>
           <select
             value={targetDeviceId}
-            onChange={(e) => setTargetDeviceId(e.target.value)}
+            onChange={(e) => handleTargetDeviceChange(e.target.value)}
             className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
           >
             <option value="">Select device...</option>
             {devices.map((d) => (
               <option key={d.id} value={d.id}>
-                {d.tags?.display_name || d.hostname}
+                {deviceLabel(d)}
               </option>
             ))}
           </select>
@@ -221,8 +236,7 @@ export function LinkCreatePanel({ devices, onCreated, onClose }: LinkCreatePanel
           interfaces={targetInterfaces}
           value={targetIfName}
           onChange={setTargetIfName}
-          loading={targetLoading}
-          placeholder={targetDeviceId ? 'Select port...' : 'Select a device first'}
+          placeholder={targetDeviceId ? (targetInterfaces.length === 0 ? 'No ports available yet' : 'Select port...') : 'Select a device first'}
         />
       </div>
 

@@ -33,6 +33,10 @@ function secondaryText(device: Device, primaryLabel: string): string {
   if (device.hardware_model && device.hardware_model !== 'Unknown') {
     return device.hardware_model;
   }
+  if (device.sys_descr) {
+    const desc = device.sys_descr.trim();
+    return desc.length > 35 ? `${desc.slice(0, 34)}\u2026` : desc;
+  }
   return device.managed ? 'Managed device' : 'Discovered neighbor';
 }
 

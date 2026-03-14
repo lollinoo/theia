@@ -922,6 +922,7 @@ export default function Canvas() {
         {panelContent?.type === 'create-link' && (
           <LinkCreatePanel
             devices={devices}
+            links={topologyLinks}
             onCreated={() => {
               setPanelContent(null);
               void loadTopology(true);
