@@ -308,6 +308,12 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	snapshot.LinkMetrics = ws.LinkMetricsToDTOs(linkMetricsByID)
 	snapshot.Alerts = ws.AlertsToDTOs(alertsByDevice)
 
+	statuses := make(map[string]string, len(devices))
+	for _, dev := range devices {
+		statuses[dev.ID.String()] = string(dev.Status)
+	}
+	snapshot.DeviceStatuses = statuses
+
 	return snapshot, promNowAvailable, firstPromError
 }
 

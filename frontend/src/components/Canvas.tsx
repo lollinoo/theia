@@ -535,16 +535,22 @@ export default function Canvas() {
     lastSnapshotTimeRef.current = Date.now();
     staleAppliedRef.current = false;
 
-    // Apply alert status immediately (not deferred) so clearing is instant and not
-    // interrupted by concurrent UI interactions.
+    // Apply alert status and device status immediately (not deferred) so clearing
+    // is instant and not interrupted by concurrent UI interactions.
     setNodes((currentNodes) =>
-      currentNodes.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
-        },
-      })),
+      currentNodes.map((node) => {
+        const newStatus = snapshot.device_statuses[node.id];
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
+            device: newStatus
+              ? { ...node.data.device, status: newStatus as Device['status'] }
+              : node.data.device,
+          },
+        };
+      }),
     );
 
     setEdges((currentEdges) =>

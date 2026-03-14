@@ -33,6 +33,7 @@ export interface SnapshotPayload {
   device_metrics: Record<string, DeviceMetricsDTO>;
   link_metrics: Record<string, LinkMetricsDTO[]>;
   alerts: AlertDTO[];
+  device_statuses: Record<string, string>;
 }
 
 export interface PrometheusStatusPayload {
@@ -124,6 +125,7 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
   const deviceMetrics = isRecord(value.device_metrics) ? value.device_metrics : {};
   const linkMetrics = isRecord(value.link_metrics) ? value.link_metrics : {};
   const alerts = Array.isArray(value.alerts) ? value.alerts : [];
+  const deviceStatuses = isRecord(value.device_statuses) ? value.device_statuses : {};
 
   return {
     device_metrics: Object.fromEntries(
@@ -139,6 +141,11 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
       ]),
     ),
     alerts: alerts.map(parseAlert),
+    device_statuses: Object.fromEntries(
+      Object.entries(deviceStatuses)
+        .filter(([, v]) => typeof v === 'string')
+        .map(([k, v]) => [k, v as string]),
+    ),
   };
 }
 

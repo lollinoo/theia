@@ -57,28 +57,48 @@ func (c *PromClient) QueryDeviceMetrics(ctx context.Context, labelName string, l
 		apply  func(domain.DeviceMetrics, float64) domain.DeviceMetrics
 	}{
 		{
-			promql: fmt.Sprintf(`avg by (%[1]s) (hrProcessorLoad{%[1]s=~"%[2]s"})`, labelName, targets),
+			// MikroTik: mtxrHlCpuLoad (0–100 %)
+			// Standard: hrProcessorLoad (0–100 %)
+			promql: fmt.Sprintf(
+				`avg by (%[1]s) (mtxrHlCpuLoad{%[1]s=~"%[2]s"} or hrProcessorLoad{%[1]s=~"%[2]s"})`,
+				labelName, targets),
 			apply: func(metric domain.DeviceMetrics, value float64) domain.DeviceMetrics {
 				metric.CPUPercent = floatPtr(value)
 				return metric
 			},
 		},
 		{
-			promql: fmt.Sprintf(`100 * (hrStorageUsed{hrStorageDescr="Physical memory",%[1]s=~"%[2]s"} / hrStorageSize{hrStorageDescr="Physical memory",%[1]s=~"%[2]s"})`, labelName, targets),
+			// MikroTik: 100 * (1 - mtxrHlFreeMemory / mtxrHlTotalMemory)
+			// Standard: hrStorageUsed / hrStorageSize for physical/main memory entries
+			promql: fmt.Sprintf(
+				`(avg by (%[1]s) (100 * (1 - mtxrHlFreeMemory{%[1]s=~"%[2]s"} / on(%[1]s) mtxrHlTotalMemory{%[1]s=~"%[2]s"})))`+
+					` or `+
+					`(avg by (%[1]s) (100 * hrStorageUsed{hrStorageDescr=~"(?i)physical memory|main memory",%[1]s=~"%[2]s"} / hrStorageSize{hrStorageDescr=~"(?i)physical memory|main memory",%[1]s=~"%[2]s"}))`,
+				labelName, targets),
 			apply: func(metric domain.DeviceMetrics, value float64) domain.DeviceMetrics {
 				metric.MemPercent = floatPtr(value)
 				return metric
 			},
 		},
 		{
-			promql: fmt.Sprintf(`sysUpTime{%[1]s=~"%[2]s"} / 100`, labelName, targets),
+			// hrSystemUptime (HOST-RESOURCES-MIB) and sysUpTime (SNMPv2-MIB) are both
+			// in hundredths of a second; divide by 100 to get seconds.
+			promql: fmt.Sprintf(
+				`(hrSystemUptime{%[1]s=~"%[2]s"} or sysUpTime{%[1]s=~"%[2]s"}) / 100`,
+				labelName, targets),
 			apply: func(metric domain.DeviceMetrics, value float64) domain.DeviceMetrics {
 				metric.UptimeSecs = floatPtr(value)
 				return metric
 			},
 		},
 		{
-			promql: fmt.Sprintf(`max by (%[1]s) (entPhySensorValue{entPhySensorType="8",%[1]s=~"%[2]s"})`, labelName, targets),
+			// MikroTik: mtxrHlTemperature is in tenths of °C → divide by 10
+			// Standard: entPhySensorValue with sensor type 8 (celsius) is already in °C
+			promql: fmt.Sprintf(
+				`(mtxrHlTemperature{%[1]s=~"%[2]s"} / 10)`+
+					` or `+
+					`max by (%[1]s) (entPhySensorValue{entPhySensorType="8",%[1]s=~"%[2]s"})`,
+				labelName, targets),
 			apply: func(metric domain.DeviceMetrics, value float64) domain.DeviceMetrics {
 				metric.TempCelsius = floatPtr(value)
 				return metric
@@ -328,7 +348,9 @@ func interfaceName(metric map[string]string) string {
 func buildTargetMatcher(deviceIPs []string) string {
 	parts := uniqueSorted(deviceIPs)
 	for i, ip := range parts {
-		parts[i] = regexpQuote(ip)
+		// Allow optional :<port> suffix so that targets scraped as "192.168.1.1:161"
+		// are matched when the device is configured with just "192.168.1.1".
+		parts[i] = regexpQuote(ip) + `(?::\d+)?`
 	}
 	return "^(?:" + strings.Join(parts, "|") + ")$"
 }

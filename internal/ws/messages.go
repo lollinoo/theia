@@ -35,9 +35,10 @@ type Message struct {
 
 // SnapshotPayload contains the complete live state sent to clients.
 type SnapshotPayload struct {
-	DeviceMetrics map[string]DeviceMetricsDTO `json:"device_metrics"`
-	LinkMetrics   map[string][]LinkMetricsDTO `json:"link_metrics"`
-	Alerts        []AlertDTO                  `json:"alerts"`
+	DeviceMetrics  map[string]DeviceMetricsDTO `json:"device_metrics"`
+	LinkMetrics    map[string][]LinkMetricsDTO `json:"link_metrics"`
+	Alerts         []AlertDTO                  `json:"alerts"`
+	DeviceStatuses map[string]string           `json:"device_statuses"`
 }
 
 // DeviceMetricsDTO is the frontend JSON shape for device metrics.
@@ -72,9 +73,10 @@ type AlertDTO struct {
 // EmptySnapshot returns a fully initialized empty snapshot payload.
 func EmptySnapshot() *SnapshotPayload {
 	return &SnapshotPayload{
-		DeviceMetrics: map[string]DeviceMetricsDTO{},
-		LinkMetrics:   map[string][]LinkMetricsDTO{},
-		Alerts:        []AlertDTO{},
+		DeviceMetrics:  map[string]DeviceMetricsDTO{},
+		LinkMetrics:    map[string][]LinkMetricsDTO{},
+		Alerts:         []AlertDTO{},
+		DeviceStatuses: map[string]string{},
 	}
 }
 
@@ -85,9 +87,14 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	cloned := &SnapshotPayload{
-		DeviceMetrics: make(map[string]DeviceMetricsDTO, len(snapshot.DeviceMetrics)),
-		LinkMetrics:   make(map[string][]LinkMetricsDTO, len(snapshot.LinkMetrics)),
-		Alerts:        append([]AlertDTO(nil), snapshot.Alerts...),
+		DeviceMetrics:  make(map[string]DeviceMetricsDTO, len(snapshot.DeviceMetrics)),
+		LinkMetrics:    make(map[string][]LinkMetricsDTO, len(snapshot.LinkMetrics)),
+		Alerts:         append([]AlertDTO(nil), snapshot.Alerts...),
+		DeviceStatuses: make(map[string]string, len(snapshot.DeviceStatuses)),
+	}
+
+	for key, value := range snapshot.DeviceStatuses {
+		cloned.DeviceStatuses[key] = value
 	}
 
 	for key, value := range snapshot.DeviceMetrics {
