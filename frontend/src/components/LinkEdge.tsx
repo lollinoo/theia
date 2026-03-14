@@ -18,6 +18,8 @@ export interface LinkEdgeData {
   throughputLabel?: string;
   utilization?: number | null;
   alertStatus?: AlertStatus;
+  sourceIfStatus?: string;
+  targetIfStatus?: string;
 }
 
 export function formatBandwidth(speed: number): string {
@@ -70,8 +72,13 @@ function LinkEdgeInner({
   const labelOffsetY = sign * magnitude;
   const utilization = data?.utilization ?? data?.metrics?.utilization ?? null;
   const alertStatus = data?.alertStatus;
+  const sourceUp = data?.sourceIfStatus === 'up';
+  const targetUp = data?.targetIfStatus === 'up';
+  const bothUp = sourceUp && targetUp;
+  const oneDown = (sourceUp && !targetUp) || (!sourceUp && targetUp);
+  const bothDown = !sourceUp && !targetUp && data?.sourceIfStatus != null;
 
-  // Alert status takes priority over utilization coloring
+  // Alert status takes priority, then interface oper_status, then utilization
   let strokeColor: string;
   let strokeWidth: number;
   if (alertStatus === 'down') {
@@ -80,12 +87,28 @@ function LinkEdgeInner({
   } else if (alertStatus === 'degraded') {
     strokeColor = '#ffc107';
     strokeWidth = 2.5;
+  } else if (bothDown) {
+    strokeColor = '#ff1744';
+    strokeWidth = 2;
+  } else if (oneDown) {
+    strokeColor = '#ffc107';
+    strokeWidth = 2;
+  } else if (bothUp && utilization === null) {
+    strokeColor = '#00c853';
+    strokeWidth = 2;
   } else {
     strokeColor = utilization === null ? '#4a4a5e' : utilizationColor(utilization);
     strokeWidth = 2;
   }
 
-  const throughputColor = utilization === null ? '#8899a6' : utilizationColor(utilization);
+  // Throughput label color matches link color when interfaces are down
+  const throughputColor = (bothDown || alertStatus === 'down')
+    ? '#ff1744'
+    : (oneDown || alertStatus === 'degraded')
+      ? '#ffc107'
+      : utilization === null
+        ? '#8899a6'
+        : utilizationColor(utilization);
 
   const activeStrokeWidth = isActive ? strokeWidth + 1.5 : strokeWidth;
   const activeStrokeColor = isActive
@@ -162,6 +185,8 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.data?.throughputLabel === next.data?.throughputLabel &&
     prev.data?.alertStatus === next.data?.alertStatus &&
     prev.data?.bandwidthLabel === next.data?.bandwidthLabel &&
+    prev.data?.sourceIfStatus === next.data?.sourceIfStatus &&
+    prev.data?.targetIfStatus === next.data?.targetIfStatus &&
     prev.sourceX === next.sourceX &&
     prev.sourceY === next.sourceY &&
     prev.targetX === next.targetX &&

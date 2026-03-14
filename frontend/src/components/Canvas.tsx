@@ -27,7 +27,7 @@ import { SidePanel } from './SidePanel';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Toolbar } from './Toolbar';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { InterfaceStatsPanel } from './InterfaceStatsPanel';
+import { InterfaceStatsPanel, DeviceInterfaceStatsPanel } from './InterfaceStatsPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { AddDevicePanel } from './AddDevicePanel';
 import { DeviceConfigPanel } from './DeviceConfigPanel';
@@ -124,6 +124,9 @@ function buildEdgeData(
   const sourceInterface = sourceDevice?.interfaces.find(
     (iface) => iface.if_name === link.source_if_name,
   );
+  const targetInterface = targetDevice?.interfaces.find(
+    (iface) => iface.if_name === link.target_if_name,
+  );
 
   return {
     link,
@@ -135,6 +138,8 @@ function buildEdgeData(
     metrics: existingData?.metrics,
     throughputLabel: existingData?.throughputLabel,
     utilization: existingData?.utilization,
+    sourceIfStatus: sourceInterface?.oper_status,
+    targetIfStatus: targetInterface?.oper_status,
   };
 }
 
@@ -559,6 +564,22 @@ export default function Canvas() {
       }),
     );
 
+    // Sync devices state with hostnames/statuses so panels (e.g. LinkCreatePanel) see them
+    if (Object.keys(snapshot.device_hostnames).length > 0 || Object.keys(snapshot.device_statuses).length > 0) {
+      setDevices((prev) =>
+        prev.map((d) => {
+          const newHostname = snapshot.device_hostnames[d.id];
+          const newStatus = snapshot.device_statuses[d.id];
+          if (!newHostname && !newStatus) return d;
+          return {
+            ...d,
+            ...(newHostname ? { sys_name: newHostname } : {}),
+            ...(newStatus ? { status: newStatus as Device['status'] } : {}),
+          };
+        }),
+      );
+    }
+
     setEdges((currentEdges) =>
       currentEdges.map((edge) => {
         const link = edge.data?.link;
@@ -727,11 +748,14 @@ export default function Canvas() {
       return 'Configure Device';
     }
     if (panelContent.type === 'interfaceStats') {
-      const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device } | undefined;
+      const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device; device?: Device } | undefined;
       if (data?.link && data.sourceDevice && data.targetDevice) {
         const srcName = data.sourceDevice.tags?.display_name || data.sourceDevice.sys_name || data.sourceDevice.hostname;
         const dstName = data.targetDevice.tags?.display_name || data.targetDevice.sys_name || data.targetDevice.hostname;
         return `${srcName} — ${dstName}`;
+      }
+      if (data?.device) {
+        return data.device.tags?.display_name || data.device.sys_name || data.device.ip;
       }
       return 'Interface Stats';
     }
@@ -798,6 +822,15 @@ export default function Canvas() {
             onClose={() => setDeviceMenu(null)}
             items={[
               {
+                label: 'Open WebFig',
+                onClick: () => {
+                  if (menuDevice) {
+                    window.open(`http://${menuDevice.ip}/webfig/`, '_blank');
+                  }
+                  setDeviceMenu(null);
+                },
+              },
+              {
                 label: grafanaLabel,
                 onClick: () => {
                   if (effectiveGrafanaUrl) {
@@ -812,7 +845,7 @@ export default function Canvas() {
                   if (menuDevice) {
                     setPanelContent({
                       type: 'interfaceStats',
-                      data: { deviceId: menuDevice.id, device: menuDevice },
+                      data: { device: menuDevice },
                     });
                   }
                   setDeviceMenu(null);
@@ -897,7 +930,7 @@ export default function Canvas() {
         title={getPanelTitle()}
       >
         {panelContent?.type === 'interfaceStats' && (() => {
-          const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device } | undefined;
+          const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device; device?: Device } | undefined;
           if (data?.link && data.sourceDevice && data.targetDevice) {
             return (
               <InterfaceStatsPanel
@@ -908,7 +941,15 @@ export default function Canvas() {
               />
             );
           }
-          return <div className="text-text-secondary text-sm">No link data available.</div>;
+          if (data?.device) {
+            return (
+              <DeviceInterfaceStatsPanel
+                device={data.device}
+                snapshot={snapshot as SnapshotPayload | null}
+              />
+            );
+          }
+          return <div className="text-text-secondary text-sm">No data available.</div>;
         })()}
         {panelContent?.type === 'settings' && <SettingsPanel />}
         {panelContent?.type === 'addDevice' && (
@@ -928,6 +969,10 @@ export default function Canvas() {
               void loadTopology(true);
             }}
             onClose={() => setPanelContent(null)}
+            onRefreshDevices={async () => {
+              const refreshedDevices = await fetchDevices();
+              setDevices(refreshedDevices);
+            }}
           />
         )}
         {panelContent?.type === 'link-details' && (() => {
@@ -1016,6 +1061,12 @@ export default function Canvas() {
         onPaneClick={() => {
           setEdgeMenu(null);
           setDeviceMenu(null);
+        }}
+        onNodeClick={(_event, node) => {
+          const clickedDevice = devices.find((d) => d.id === node.id);
+          if (clickedDevice) {
+            setPanelContent({ type: 'deviceConfig', data: { device: clickedDevice } });
+          }
         }}
         onEdgeClick={(_event, edge) => {
           // Only open details for backend-persisted links (edges with link data)

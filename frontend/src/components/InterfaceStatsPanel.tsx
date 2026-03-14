@@ -31,7 +31,9 @@ function InterfaceStatsSection({ device, ifName, snapshot }: InterfaceStatsSecti
     <div className="rounded-xl border border-border-subtle bg-bg-elevated p-4 space-y-3">
       <div>
         <p className="text-xs uppercase tracking-widest text-text-secondary">Device</p>
-        <p className="mt-0.5 text-sm font-medium text-text-primary">{device.hostname}</p>
+        <p className="mt-0.5 text-sm font-medium text-text-primary">
+          {device.tags?.display_name || device.sys_name || device.ip}
+        </p>
       </div>
 
       <div>
@@ -117,6 +119,49 @@ export function InterfaceStatsPanel({
         ifName={link.target_if_name}
         snapshot={snapshot}
       />
+    </div>
+  );
+}
+
+interface DeviceInterfaceStatsPanelProps {
+  device: Device;
+  snapshot: SnapshotPayload | null;
+}
+
+export function DeviceInterfaceStatsPanel({
+  device,
+  snapshot,
+}: DeviceInterfaceStatsPanelProps) {
+  const interfaces = device.interfaces
+    .filter((i) => {
+      const lower = i.if_name.toLowerCase();
+      return !lower.startsWith('lo') && lower !== 'null' && !lower.startsWith('null');
+    })
+    .sort((a, b) => {
+      const aUp = a.oper_status === 'up';
+      const bUp = b.oper_status === 'up';
+      if (aUp !== bUp) return aUp ? -1 : 1;
+      return a.if_name.localeCompare(b.if_name);
+    });
+
+  if (interfaces.length === 0) {
+    return (
+      <div className="p-4 text-sm text-text-secondary">
+        No interfaces discovered for this device.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 p-4">
+      {interfaces.map((iface) => (
+        <InterfaceStatsSection
+          key={iface.if_name}
+          device={device}
+          ifName={iface.if_name}
+          snapshot={snapshot}
+        />
+      ))}
     </div>
   );
 }

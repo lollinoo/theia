@@ -30,7 +30,6 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const [customPolling, setCustomPolling] = useState('');
   const [grafanaUrl, setGrafanaUrl] = useState('');
 
-  const [hostname, setHostname] = useState(device.hostname);
   const [displayName, setDisplayName] = useState(device.tags?.display_name || '');
   const [ip, setIp] = useState(device.ip);
   const [snmpVersion, setSnmpVersion] = useState('2c');
@@ -95,7 +94,6 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
 
   // Sync inputs when the `device` prop updates from parent
   useEffect(() => {
-    setHostname(device.hostname || '');
     setDisplayName(device.tags?.display_name || '');
     setIp(device.ip || '');
     setCommunity(''); // We don't fetch credentials back from the API for security
@@ -169,7 +167,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
       const usesPrometheus = metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback';
       const effectiveLabelValue = prometheusLabelValue.trim() || ip.trim();
       const updated = await updateDevice(device.id, {
-        hostname: hostname.trim(),
+        hostname: device.hostname,
         ip: ip.trim(),
         ...(hasSnmpChanges
           ? {
@@ -302,13 +300,6 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
         />
 
-        <input
-          type="text"
-          value={hostname}
-          onChange={(e) => setHostname(e.target.value)}
-          placeholder="Hostname"
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
-        />
         <input
           type="text"
           value={ip}
