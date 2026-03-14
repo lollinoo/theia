@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   parseWSMessage,
   type PrometheusStatusPayload,
@@ -40,105 +40,108 @@ export function useWebSocket(url: string): UseWebSocketResult {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
-  const connectRef = useRef<() => void>(() => undefined);
-  const mountedRef = useRef(false);
-  const closedRef = useRef(false);
-
-  const clearReconnectTimer = useCallback(() => {
-    if (reconnectTimerRef.current !== null) {
-      window.clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-  }, []);
-
-  const handleMessage = useCallback((event: MessageEvent<string>) => {
-    try {
-      const raw = JSON.parse(event.data) as unknown;
-      const message = parseWSMessage(raw);
-
-      if (message.type === 'snapshot') {
-        setSnapshot((message as SnapshotWSMessage).payload);
-      } else if (message.type === 'prometheus_status') {
-        setPrometheusStatus(message.payload as PrometheusStatusPayload);
-      }
-    } catch (error) {
-      console.error('Failed to parse WebSocket message', error);
-    }
-  }, []);
-
-  const scheduleReconnect = useCallback(() => {
-    if (!mountedRef.current || closedRef.current || reconnectTimerRef.current !== null) {
-      return;
-    }
-
-    setReconnecting(true);
-    const delay = Math.min(1_000 * 2 ** reconnectAttemptRef.current, 30_000);
-
-    reconnectTimerRef.current = window.setTimeout(() => {
-      reconnectTimerRef.current = null;
-      reconnectAttemptRef.current += 1;
-      connectRef.current();
-    }, delay);
-  }, []);
-
-  const connect = useCallback(() => {
-    if (!mountedRef.current || closedRef.current) {
-      return;
-    }
-
-    clearReconnectTimer();
-
-    const nextSocket = new WebSocket(buildWebSocketURL(url));
-    socketRef.current = nextSocket;
-
-    nextSocket.onopen = () => {
-      if (!mountedRef.current) {
-        return;
-      }
-
-      reconnectAttemptRef.current = 0;
-      setConnected(true);
-      setReconnecting(false);
-    };
-
-    nextSocket.onmessage = handleMessage;
-
-    nextSocket.onerror = () => {
-      nextSocket.close();
-    };
-
-    nextSocket.onclose = () => {
-      socketRef.current = null;
-
-      if (!mountedRef.current) {
-        return;
-      }
-
-      setConnected(false);
-      scheduleReconnect();
-    };
-  }, [clearReconnectTimer, handleMessage, scheduleReconnect, url]);
-
-  connectRef.current = connect;
+  const disposed = useRef(false);
 
   useEffect(() => {
-    mountedRef.current = true;
-    closedRef.current = false;
+    disposed.current = false;
+    let reconnectTimer: number | null = null;
+
+    function clearReconnectTimer() {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
+
+    function scheduleReconnect() {
+      if (disposed.current || reconnectTimer !== null) return;
+
+      setReconnecting(true);
+      const delay = Math.min(1_000 * 2 ** reconnectAttemptRef.current, 30_000);
+
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        reconnectAttemptRef.current += 1;
+        connect();
+      }, delay);
+    }
+
+    function connect() {
+      if (disposed.current) return;
+
+      clearReconnectTimer();
+
+      // Close any existing socket before opening a new one
+      if (socketRef.current) {
+        socketRef.current.onopen = null;
+        socketRef.current.onmessage = null;
+        socketRef.current.onerror = null;
+        socketRef.current.onclose = null;
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+
+      const ws = new WebSocket(buildWebSocketURL(url));
+      socketRef.current = ws;
+
+      ws.onopen = () => {
+        if (disposed.current) {
+          ws.close();
+          return;
+        }
+        reconnectAttemptRef.current = 0;
+        setConnected(true);
+        setReconnecting(false);
+      };
+
+      ws.onmessage = (event: MessageEvent<string>) => {
+        try {
+          const raw = JSON.parse(event.data) as unknown;
+          const message = parseWSMessage(raw);
+
+          if (message.type === 'snapshot') {
+            setSnapshot((message as SnapshotWSMessage).payload);
+          } else if (message.type === 'prometheus_status') {
+            setPrometheusStatus(message.payload as PrometheusStatusPayload);
+          }
+        } catch (error) {
+          console.error('Failed to parse WebSocket message', error);
+        }
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      ws.onclose = () => {
+        if (socketRef.current === ws) {
+          socketRef.current = null;
+        }
+        if (disposed.current) return;
+        setConnected(false);
+        scheduleReconnect();
+      };
+    }
+
     connect();
 
     return () => {
-      mountedRef.current = false;
-      closedRef.current = true;
+      disposed.current = true;
       clearReconnectTimer();
       setConnected(false);
       setReconnecting(false);
 
       if (socketRef.current) {
+        // Detach handlers so no callbacks fire after cleanup
+        socketRef.current.onopen = null;
+        socketRef.current.onmessage = null;
+        socketRef.current.onerror = null;
+        socketRef.current.onclose = null;
         socketRef.current.close();
         socketRef.current = null;
       }
     };
-  }, [clearReconnectTimer, connect]);
+  }, [url]);
 
   return {
     snapshot,

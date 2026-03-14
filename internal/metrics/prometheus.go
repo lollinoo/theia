@@ -27,7 +27,7 @@ type PromClient struct {
 func NewPromClient(baseURL string, httpClient *http.Client) *PromClient {
 	client := httpClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = &http.Client{Timeout: 5 * time.Second}
 	}
 
 	return &PromClient{

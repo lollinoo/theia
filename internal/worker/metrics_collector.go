@@ -103,7 +103,12 @@ func (c *MetricsCollector) GetSnapshot() *ws.SnapshotPayload {
 }
 
 func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
-	snapshot, promNowAvailable, promErr := c.buildSnapshot(ctx)
+	// Apply a timeout to the entire collection cycle so that unreachable
+	// Prometheus doesn't block snapshot broadcasts indefinitely.
+	collectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	snapshot, promNowAvailable, promErr := c.buildSnapshot(collectCtx)
 
 	c.mu.Lock()
 	c.lastSnapshot = snapshot
@@ -192,6 +197,16 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	var firstPromError string
 
 	for labelName, group := range promGroups {
+		// Bail out early if the collection context has expired.
+		if ctx.Err() != nil {
+			promQueryErrors++
+			promQueryTotal++
+			if firstPromError == "" {
+				firstPromError = ctx.Err().Error()
+			}
+			break
+		}
+
 		promQueryTotal++
 		if m, err := c.promClient.QueryDeviceMetrics(ctx, labelName, group.labelValues); err != nil {
 			log.Printf("Metrics collector: failed to query device metrics (label=%s): %v", labelName, err)
@@ -205,6 +220,9 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 			}
 		}
 
+		if ctx.Err() != nil {
+			break
+		}
 		if m, err := c.promClient.QueryLinkMetrics(ctx, labelName, group.labelValues); err != nil {
 			log.Printf("Metrics collector: failed to query link metrics (label=%s): %v", labelName, err)
 		} else {
@@ -213,6 +231,9 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 			}
 		}
 
+		if ctx.Err() != nil {
+			break
+		}
 		// Hostname query is best-effort: missing sysName metric is not an error.
 		if names, err := c.promClient.QueryHostnames(ctx, labelName, group.labelValues); err != nil {
 			log.Printf("Metrics collector: failed to query sysName (label=%s): %v", labelName, err)
@@ -258,9 +279,12 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 		needsByLabel[labelName] = append(needsByLabel[labelName], lv)
 	}
 
-	if len(needsByLabel) > 0 {
+	if len(needsByLabel) > 0 && ctx.Err() == nil {
 		interfacesByLabelValue := make(map[string][]domain.Interface)
 		for labelName, labelValues := range needsByLabel {
+			if ctx.Err() != nil {
+				break
+			}
 			if ifMap, err := c.promClient.QueryInterfaces(ctx, labelName, labelValues); err != nil {
 				log.Printf("Metrics collector: failed to query interfaces from Prometheus (label=%s): %v", labelName, err)
 			} else {

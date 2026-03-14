@@ -4,10 +4,12 @@ interface ToolbarProps {
     onSearch: () => void;
     onAddDevice: () => void;
     onCreateLink: () => void;
+    onAlerts: () => void;
     onSettings: () => void;
+    alertCount?: number;
 }
 
-export function Toolbar({ onSearch, onAddDevice, onCreateLink, onSettings }: ToolbarProps) {
+export function Toolbar({ onSearch, onAddDevice, onCreateLink, onAlerts, onSettings, alertCount = 0 }: ToolbarProps) {
     const [isMac, setIsMac] = useState(false);
 
     useEffect(() => {
@@ -42,6 +44,22 @@ export function Toolbar({ onSearch, onAddDevice, onCreateLink, onSettings }: Too
                 <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" className="w-[18px] h-[18px]">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                 </svg>
+            )
+        },
+        {
+            label: 'Alerts',
+            onClick: onAlerts,
+            icon: (
+                <div className="relative">
+                    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" className="w-[18px] h-[18px]">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                    {alertCount > 0 && (
+                        <span className="absolute -top-1.5 -right-1.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-status-down px-0.5 text-[9px] font-bold text-white">
+                            {alertCount > 99 ? '99+' : alertCount}
+                        </span>
+                    )}
+                </div>
             )
         },
         {

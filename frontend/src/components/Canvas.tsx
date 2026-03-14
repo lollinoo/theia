@@ -28,6 +28,7 @@ import { ShortcutHelp } from './ShortcutHelp';
 import { Toolbar } from './Toolbar';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { InterfaceStatsPanel, DeviceInterfaceStatsPanel } from './InterfaceStatsPanel';
+import { AlertsPanel } from './AlertsPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { AddDevicePanel } from './AddDevicePanel';
 import { DeviceConfigPanel } from './DeviceConfigPanel';
@@ -735,6 +736,7 @@ export default function Canvas() {
   // Derive panel title from panelContent
   function getPanelTitle(): string {
     if (!panelContent) return '';
+    if (panelContent.type === 'alerts') return 'Alerts';
     if (panelContent.type === 'settings') return 'Settings';
     if (panelContent.type === 'addDevice') return 'Add Device';
     if (panelContent.type === 'create-link') return 'Create Link';
@@ -805,7 +807,12 @@ export default function Canvas() {
         onSearch={() => setShowSearch(s => !s)}
         onAddDevice={() => setPanelContent({ type: 'addDevice' })}
         onCreateLink={() => setPanelContent({ type: 'create-link' })}
+        onAlerts={() => setPanelContent({ type: 'alerts' })}
         onSettings={() => setPanelContent({ type: 'settings' })}
+        alertCount={
+          (snapshot?.alerts.filter((a) => a.state === 'firing').length ?? 0) +
+          (prometheusStatus !== null && !prometheusStatus.available ? 1 : 0)
+        }
       />
 
       {deviceMenu && (() => {
@@ -951,6 +958,13 @@ export default function Canvas() {
           }
           return <div className="text-text-secondary text-sm">No data available.</div>;
         })()}
+        {panelContent?.type === 'alerts' && (
+          <AlertsPanel
+            alerts={snapshot?.alerts ?? []}
+            devices={devices}
+            prometheusStatus={prometheusStatus}
+          />
+        )}
         {panelContent?.type === 'settings' && <SettingsPanel />}
         {panelContent?.type === 'addDevice' && (
           <AddDevicePanel
@@ -1025,18 +1039,28 @@ export default function Canvas() {
 
       <ReconnectBanner visible={reconnecting} />
       {prometheusStatus !== null && !prometheusStatus.available && !prometheusAlertDismissed && (
-        <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex items-center gap-3 rounded-xl border border-yellow-500/30 bg-bg-surface/95 px-4 py-3 shadow-canvas backdrop-blur-sm">
-          <span className="h-2 w-2 flex-none rounded-full bg-yellow-400" />
-          <p className="text-sm text-yellow-300">
-            Prometheus is unreachable — Prometheus metrics are paused.
-            {prometheusStatus.error ? ` (${prometheusStatus.error})` : ''}
-          </p>
+        <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex items-center gap-2.5 rounded-xl border border-yellow-500/30 bg-bg-surface/95 px-4 py-2.5 shadow-canvas backdrop-blur-sm">
+          <span className="h-2 w-2 flex-none rounded-full bg-yellow-400 animate-pulse" />
+          <p className="text-sm text-yellow-300">Prometheus unreachable</p>
+          <button
+            type="button"
+            onClick={() => {
+              setPanelContent({ type: 'alerts' });
+              setPrometheusAlertDismissed(true);
+            }}
+            className="text-xs font-medium text-yellow-400 hover:text-yellow-300"
+          >
+            Details
+          </button>
           <button
             type="button"
             onClick={() => setPrometheusAlertDismissed(true)}
-            className="ml-2 text-xs text-text-secondary hover:text-text-primary"
+            className="text-text-secondary hover:text-text-primary"
+            title="Dismiss"
           >
-            Dismiss
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
       )}
