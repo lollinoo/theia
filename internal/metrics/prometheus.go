@@ -350,7 +350,7 @@ func buildTargetMatcher(deviceIPs []string) string {
 	for i, ip := range parts {
 		// Allow optional :<port> suffix so that targets scraped as "192.168.1.1:161"
 		// are matched when the device is configured with just "192.168.1.1".
-		parts[i] = regexpQuote(ip) + `(?::\d+)?`
+		parts[i] = regexpQuote(ip) + `(?::[0-9]+)?`
 	}
 	return "^(?:" + strings.Join(parts, "|") + ")$"
 }
