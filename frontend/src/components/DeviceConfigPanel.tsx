@@ -18,7 +18,7 @@ const PRESET_VALUES = new Set(
 
 interface DeviceConfigPanelProps {
   device: Device;
-  onDeviceUpdated: () => void;
+  onDeviceUpdated: (updated: Device) => void;
   onDeviceDeleted: () => void;
 }
 
@@ -168,7 +168,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     try {
       const usesPrometheus = metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback';
       const effectiveLabelValue = prometheusLabelValue.trim() || ip.trim();
-      await updateDevice(device.id, {
+      const updated = await updateDevice(device.id, {
         hostname: hostname.trim(),
         ip: ip.trim(),
         ...(hasSnmpChanges
@@ -190,7 +190,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
       });
       showSaved(setEditSaved, editSavedTimerRef);
-      onDeviceUpdated();
+      onDeviceUpdated(updated);
     } catch (err) {
       setEditError(err instanceof Error ? err.message : 'Failed to update device.');
     } finally {

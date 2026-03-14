@@ -223,6 +223,72 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 		}
 	}
 
+	// Discover interfaces from Prometheus for devices that have no SNMP-discovered interfaces.
+	// Build a filtered set of label values for devices that need interface discovery.
+	type ifaceNeedKey struct {
+		labelName  string
+		labelValue string
+		deviceIdx  int
+	}
+	var ifaceNeeds []ifaceNeedKey
+	needsByLabel := make(map[string][]string)
+	for i, dev := range devices {
+		if len(dev.Interfaces) > 0 {
+			continue
+		}
+		src := dev.MetricsSource
+		if src == "" {
+			src = domain.MetricsSourcePrometheus
+		}
+		if src != domain.MetricsSourcePrometheus && src != domain.MetricsSourcePrometheusSNMPFallback {
+			continue
+		}
+		labelName := dev.PrometheusLabelName
+		if labelName == "" {
+			labelName = "instance"
+		}
+		lv := dev.PrometheusLabelValue
+		if lv == "" {
+			lv = dev.IP
+		}
+		if lv == "" {
+			continue
+		}
+		ifaceNeeds = append(ifaceNeeds, ifaceNeedKey{labelName: labelName, labelValue: lv, deviceIdx: i})
+		needsByLabel[labelName] = append(needsByLabel[labelName], lv)
+	}
+
+	if len(needsByLabel) > 0 {
+		interfacesByLabelValue := make(map[string][]domain.Interface)
+		for labelName, labelValues := range needsByLabel {
+			if ifMap, err := c.promClient.QueryInterfaces(ctx, labelName, labelValues); err != nil {
+				log.Printf("Metrics collector: failed to query interfaces from Prometheus (label=%s): %v", labelName, err)
+			} else {
+				for k, v := range ifMap {
+					interfacesByLabelValue[k] = v
+				}
+			}
+		}
+
+		for _, need := range ifaceNeeds {
+			promIfaces, ok := interfacesByLabelValue[need.labelValue]
+			if !ok || len(promIfaces) == 0 {
+				continue
+			}
+			dev := &devices[need.deviceIdx]
+			dev.Interfaces = promIfaces
+			for j := range dev.Interfaces {
+				dev.Interfaces[j].DeviceID = dev.ID
+				dev.Interfaces[j].ID = uuid.New()
+			}
+			if err := c.deviceRepo.Update(dev); err != nil {
+				log.Printf("Metrics collector: failed to save Prometheus-discovered interfaces for %s: %v", dev.IP, err)
+			} else {
+				log.Printf("Metrics collector: discovered %d interfaces from Prometheus for %s", len(promIfaces), dev.IP)
+			}
+		}
+	}
+
 	// Prometheus is considered available if all queries succeeded (or no devices use Prometheus).
 	promNowAvailable := promQueryTotal == 0 || promQueryErrors == 0
 

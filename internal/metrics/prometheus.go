@@ -235,6 +235,118 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, labelName string, lab
 	return results, nil
 }
 
+// QueryInterfaces discovers interfaces from Prometheus SNMP exporter metrics.
+// It queries ifDescr (or ifHCInOctets as fallback) to find all interfaces for a device,
+// extracting ifName, ifDescr, ifIndex, and ifSpeed from metric labels.
+// Returns a map keyed by the matched label value → slice of domain.Interface.
+func (c *PromClient) QueryInterfaces(ctx context.Context, labelName string, labelValues []string) (map[string][]domain.Interface, error) {
+	results := make(map[string][]domain.Interface, len(labelValues))
+	if len(labelValues) == 0 {
+		return results, nil
+	}
+
+	targets := buildTargetMatcher(labelValues)
+
+	// Use ifDescr metric as the primary source, fall back to ifHCInOctets
+	promql := fmt.Sprintf(`ifDescr{%s=~"%s"}`, labelName, targets)
+	samples, err := c.queryVector(ctx, promql)
+	if err != nil || len(samples) == 0 {
+		promql = fmt.Sprintf(`ifHCInOctets{%s=~"%s"}`, labelName, targets)
+		samples, err = c.queryVector(ctx, promql)
+		if err != nil {
+			return results, nil
+		}
+	}
+
+	// Group by label value, dedup by ifIndex or ifName
+	type ifaceKey struct {
+		labelValue string
+		ifKey      string
+	}
+	seen := make(map[ifaceKey]bool)
+
+	for _, sample := range samples {
+		labelValue := sample.Metric[labelName]
+		if labelValue == "" {
+			continue
+		}
+
+		ifName := interfaceName(sample.Metric)
+		key := ifaceKey{labelValue: labelValue, ifKey: ifName}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		iface := domain.Interface{
+			IfName:  ifName,
+			IfDescr: sample.Metric["ifDescr"],
+		}
+		if idx, err := strconv.Atoi(sample.Metric["ifIndex"]); err == nil {
+			iface.IfIndex = idx
+		}
+
+		// Determine speed from ifHighSpeed or ifSpeed labels
+		if hs, err := strconv.ParseInt(sample.Metric["ifHighSpeed"], 10, 64); err == nil && hs > 0 {
+			iface.Speed = hs * 1_000_000
+		} else if spd, err := strconv.ParseInt(sample.Metric["ifSpeed"], 10, 64); err == nil && spd > 0 {
+			iface.Speed = spd
+		}
+
+		// Assume operational if we see traffic data
+		iface.OperStatus = "up"
+		iface.AdminStatus = "up"
+
+		results[labelValue] = append(results[labelValue], iface)
+	}
+
+	// Also try to get operational status from ifOperStatus metric
+	statusQL := fmt.Sprintf(`ifOperStatus{%s=~"%s"}`, labelName, targets)
+	statusSamples, err := c.queryVector(ctx, statusQL)
+	if err == nil {
+		for _, sample := range statusSamples {
+			labelValue := sample.Metric[labelName]
+			ifName := interfaceName(sample.Metric)
+			val, err := sample.SampleValue()
+			if err != nil {
+				continue
+			}
+			status := "down"
+			if val == 1 {
+				status = "up"
+			}
+			for i := range results[labelValue] {
+				if results[labelValue][i].IfName == ifName {
+					results[labelValue][i].OperStatus = status
+					break
+				}
+			}
+		}
+	}
+
+	// Try to get ifSpeed from the separate metric if not from labels
+	speedQL := fmt.Sprintf(`ifHighSpeed{%s=~"%s"}`, labelName, targets)
+	speedSamples, err := c.queryVector(ctx, speedQL)
+	if err == nil {
+		for _, sample := range speedSamples {
+			labelValue := sample.Metric[labelName]
+			ifName := interfaceName(sample.Metric)
+			val, err := sample.SampleValue()
+			if err != nil || val <= 0 {
+				continue
+			}
+			for i := range results[labelValue] {
+				if results[labelValue][i].IfName == ifName && results[labelValue][i].Speed == 0 {
+					results[labelValue][i].Speed = int64(val) * 1_000_000
+					break
+				}
+			}
+		}
+	}
+
+	return results, nil
+}
+
 // QueryHostnames fetches the sysName label from Prometheus for the requested label values.
 // snmp_exporter exports sysName as a metric where the hostname is a label, e.g.:
 //

@@ -27,7 +27,7 @@ function getDeviceInterfaces(
   deviceId: string,
   links: Link[],
 ): InterfaceInfo[] {
-  if (!device) return [];
+  if (!device || !device.interfaces?.length) return [];
 
   const inUseIfaces = new Set<string>();
   for (const link of links) {

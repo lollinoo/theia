@@ -957,7 +957,14 @@ export default function Canvas() {
             return (
               <DeviceConfigPanel
                 device={data.device}
-                onDeviceUpdated={() => { void loadTopology(true); }}
+                onDeviceUpdated={(updated) => {
+                  setDevices((prev) => prev.map((d) => d.id === updated.id ? updated : d));
+                  setNodes((prev) => prev.map((n) => n.id === updated.id
+                    ? { ...n, data: { ...n.data, device: updated } }
+                    : n,
+                  ));
+                  setPanelContent({ type: 'deviceConfig', data: { device: updated } });
+                }}
                 onDeviceDeleted={() => {
                   setPanelContent(null);
                   void loadTopology(true);
