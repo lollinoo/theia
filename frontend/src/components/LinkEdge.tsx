@@ -20,6 +20,8 @@ export interface LinkEdgeData {
   alertStatus?: AlertStatus;
   sourceIfStatus?: string;
   targetIfStatus?: string;
+  sourceDeviceStatus?: string;
+  targetDeviceStatus?: string;
 }
 
 export function formatBandwidth(speed: number): string {
@@ -72,13 +74,21 @@ function LinkEdgeInner({
   const labelOffsetY = sign * magnitude;
   const utilization = data?.utilization ?? data?.metrics?.utilization ?? null;
   const alertStatus = data?.alertStatus;
+
+  // Device-level status (from probe_success / Prometheus-down override)
+  const srcDevDown = data?.sourceDeviceStatus === 'down';
+  const tgtDevDown = data?.targetDeviceStatus === 'down';
+  const bothDevDown = srcDevDown && tgtDevDown;
+  const oneDevDown = srcDevDown !== tgtDevDown && (srcDevDown || tgtDevDown);
+
+  // Interface-level oper_status
   const sourceUp = data?.sourceIfStatus === 'up';
   const targetUp = data?.targetIfStatus === 'up';
   const bothUp = sourceUp && targetUp;
-  const oneDown = (sourceUp && !targetUp) || (!sourceUp && targetUp);
-  const bothDown = !sourceUp && !targetUp && data?.sourceIfStatus != null;
+  const oneIfDown = (sourceUp && !targetUp) || (!sourceUp && targetUp);
+  const bothIfDown = !sourceUp && !targetUp && data?.sourceIfStatus != null;
 
-  // Alert status takes priority, then interface oper_status, then utilization
+  // Priority: alerts → device status → interface oper_status → utilization → default
   let strokeColor: string;
   let strokeWidth: number;
   if (alertStatus === 'down') {
@@ -87,10 +97,16 @@ function LinkEdgeInner({
   } else if (alertStatus === 'degraded') {
     strokeColor = '#ffc107';
     strokeWidth = 2.5;
-  } else if (bothDown) {
+  } else if (bothDevDown) {
     strokeColor = '#ff1744';
     strokeWidth = 2;
-  } else if (oneDown) {
+  } else if (oneDevDown) {
+    strokeColor = '#ffc107';
+    strokeWidth = 2;
+  } else if (bothIfDown) {
+    strokeColor = '#ff1744';
+    strokeWidth = 2;
+  } else if (oneIfDown) {
     strokeColor = '#ffc107';
     strokeWidth = 2;
   } else if (bothUp && utilization === null) {
@@ -101,10 +117,10 @@ function LinkEdgeInner({
     strokeWidth = 2;
   }
 
-  // Throughput label color matches link color when interfaces are down
-  const throughputColor = (bothDown || alertStatus === 'down')
+  // Throughput label color matches link color
+  const throughputColor = (bothDevDown || bothIfDown || alertStatus === 'down')
     ? '#ff1744'
-    : (oneDown || alertStatus === 'degraded')
+    : (oneDevDown || oneIfDown || alertStatus === 'degraded')
       ? '#ffc107'
       : utilization === null
         ? '#8899a6'
@@ -187,6 +203,8 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.data?.bandwidthLabel === next.data?.bandwidthLabel &&
     prev.data?.sourceIfStatus === next.data?.sourceIfStatus &&
     prev.data?.targetIfStatus === next.data?.targetIfStatus &&
+    prev.data?.sourceDeviceStatus === next.data?.sourceDeviceStatus &&
+    prev.data?.targetDeviceStatus === next.data?.targetDeviceStatus &&
     prev.sourceX === next.sourceX &&
     prev.sourceY === next.sourceY &&
     prev.targetX === next.targetX &&

@@ -526,11 +526,27 @@ export default function Canvas() {
       });
   }, []);
 
-  // Reset prometheus alert dismissed state when prometheus recovers.
+  // Track Prometheus recovery transition and auto-dismiss recovery toast.
+  const prevPromAvailableRef = useRef<boolean | null>(null);
+  const [showRecoveryToast, setShowRecoveryToast] = useState(false);
+
   useEffect(() => {
-    if (prometheusStatus?.available) {
+    if (prometheusStatus === null) return;
+
+    // Detect recovery: was unavailable, now available
+    if (prevPromAvailableRef.current === false && prometheusStatus.available) {
+      setShowRecoveryToast(true);
+      setPrometheusAlertDismissed(false);
+      const timer = window.setTimeout(() => setShowRecoveryToast(false), 8000);
+      prevPromAvailableRef.current = prometheusStatus.available;
+      return () => { window.clearTimeout(timer); };
+    }
+
+    if (prometheusStatus.available) {
       setPrometheusAlertDismissed(false);
     }
+
+    prevPromAvailableRef.current = prometheusStatus.available;
   }, [prometheusStatus?.available]);
 
   useEffect(() => {
@@ -541,11 +557,25 @@ export default function Canvas() {
     lastSnapshotTimeRef.current = Date.now();
     staleAppliedRef.current = false;
 
+    // Compute effective device statuses: override prometheus-only devices to 'down'
+    // when Prometheus is unreachable (no probe_success data available).
+    const promDown = prometheusStatus !== null && !prometheusStatus.available;
+    const effectiveStatuses = { ...snapshot.device_statuses };
+
+    if (promDown) {
+      for (const d of devices) {
+        const src = d.metrics_source || 'prometheus';
+        if (src === 'prometheus') {
+          effectiveStatuses[d.id] = 'down';
+        }
+      }
+    }
+
     // Apply alert status, device status, and discovered hostname immediately (not deferred)
     // so clearing is instant and not interrupted by concurrent UI interactions.
     setNodes((currentNodes) =>
       currentNodes.map((node) => {
-        const newStatus = snapshot.device_statuses[node.id];
+        const newStatus = effectiveStatuses[node.id];
         const newHostname = snapshot.device_hostnames[node.id];
         const updatedDevice = newStatus || newHostname
           ? {
@@ -566,11 +596,11 @@ export default function Canvas() {
     );
 
     // Sync devices state with hostnames/statuses so panels (e.g. LinkCreatePanel) see them
-    if (Object.keys(snapshot.device_hostnames).length > 0 || Object.keys(snapshot.device_statuses).length > 0) {
+    if (Object.keys(snapshot.device_hostnames).length > 0 || Object.keys(effectiveStatuses).length > 0) {
       setDevices((prev) =>
         prev.map((d) => {
           const newHostname = snapshot.device_hostnames[d.id];
-          const newStatus = snapshot.device_statuses[d.id];
+          const newStatus = effectiveStatuses[d.id];
           if (!newHostname && !newStatus) return d;
           return {
             ...d,
@@ -591,6 +621,8 @@ export default function Canvas() {
           data: {
             ...edge.data,
             alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
+            sourceDeviceStatus: effectiveStatuses[link.source_device_id],
+            targetDeviceStatus: effectiveStatuses[link.target_device_id],
           },
         };
       }),
@@ -641,7 +673,7 @@ export default function Canvas() {
         }),
       );
     });
-  }, [snapshot, devices.length, topologyLinks.length, setNodes]);
+  }, [snapshot, devices.length, topologyLinks.length, setNodes, prometheusStatus?.available]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -676,6 +708,8 @@ export default function Canvas() {
               throughputLabel: undefined,
               utilization: null,
               alertStatus: undefined,
+              sourceDeviceStatus: undefined,
+              targetDeviceStatus: undefined,
             },
           })),
         );
@@ -1038,6 +1072,22 @@ export default function Canvas() {
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
 
       <ReconnectBanner visible={reconnecting} />
+      {showRecoveryToast && (
+        <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex items-center gap-2.5 rounded-xl border border-green-500/30 bg-bg-surface/95 px-4 py-2.5 shadow-canvas backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <span className="h-2 w-2 flex-none rounded-full bg-green-400" />
+          <p className="text-sm text-green-300">Prometheus reconnected</p>
+          <button
+            type="button"
+            onClick={() => setShowRecoveryToast(false)}
+            className="text-text-secondary hover:text-text-primary"
+            title="Dismiss"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
       {prometheusStatus !== null && !prometheusStatus.available && !prometheusAlertDismissed && (
         <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex items-center gap-2.5 rounded-xl border border-yellow-500/30 bg-bg-surface/95 px-4 py-2.5 shadow-canvas backdrop-blur-sm">
           <span className="h-2 w-2 flex-none rounded-full bg-yellow-400 animate-pulse" />

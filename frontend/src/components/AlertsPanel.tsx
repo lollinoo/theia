@@ -53,18 +53,66 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
   const resolvedAlerts = alerts.filter((a) => a.state !== 'firing');
   const promDown = prometheusStatus !== null && !prometheusStatus.available;
 
+  // Categorize devices affected by Prometheus outage
+  const promOnlyDevices = promDown
+    ? devices.filter((d) => {
+        const src = d.metrics_source || 'prometheus';
+        return src === 'prometheus';
+      })
+    : [];
+  const snmpFallbackDevices = promDown
+    ? devices.filter((d) => d.metrics_source === 'prometheus_snmp_fallback')
+    : [];
+
   return (
     <div className="space-y-4">
       {/* Prometheus status */}
       {promDown && (
-        <div className="flex items-start gap-2.5 rounded-lg border border-yellow-500/25 bg-yellow-500/8 p-3">
-          <span className="mt-0.5 h-2 w-2 flex-none rounded-full bg-yellow-400 animate-pulse" />
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-yellow-300">Prometheus unreachable</p>
-            <p className="mt-0.5 text-xs text-yellow-300/70">
-              Metrics collection is paused. Device and link data may be stale.
-            </p>
+        <div className="space-y-2">
+          <div className="flex items-start gap-2.5 rounded-lg border border-red-500/25 bg-red-500/8 p-3">
+            <span className="mt-0.5 h-2 w-2 flex-none rounded-full bg-red-400 animate-pulse" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-red-300">Prometheus unreachable</p>
+              <p className="mt-0.5 text-xs text-red-300/70">
+                Metrics and probe status unavailable. Devices relying on Prometheus are marked offline.
+              </p>
+            </div>
           </div>
+
+          {promOnlyDevices.length > 0 && (
+            <div className="rounded-lg border border-red-500/15 bg-red-500/5 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-red-400/80 mb-1.5">
+                Offline — no fallback ({promOnlyDevices.length})
+              </p>
+              <div className="space-y-1">
+                {promOnlyDevices.map((d) => (
+                  <div key={d.id} className="flex items-center gap-2 text-xs text-red-300/80">
+                    <span className="h-1.5 w-1.5 flex-none rounded-full bg-red-400" />
+                    {d.tags?.display_name || d.sys_name || d.ip}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {snmpFallbackDevices.length > 0 && (
+            <div className="rounded-lg border border-yellow-500/15 bg-yellow-500/5 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-yellow-400/80 mb-1.5">
+                SNMP fallback active ({snmpFallbackDevices.length})
+              </p>
+              <p className="text-xs text-yellow-300/60 mb-1.5">
+                Metrics via SNMP. Probe status unavailable.
+              </p>
+              <div className="space-y-1">
+                {snmpFallbackDevices.map((d) => (
+                  <div key={d.id} className="flex items-center gap-2 text-xs text-yellow-300/80">
+                    <span className="h-1.5 w-1.5 flex-none rounded-full bg-yellow-400" />
+                    {d.tags?.display_name || d.sys_name || d.ip}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
