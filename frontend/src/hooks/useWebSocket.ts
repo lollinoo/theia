@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   parseWSMessage,
+  type PrometheusStatusPayload,
   type SnapshotPayload,
   type SnapshotWSMessage,
 } from '../types/metrics';
@@ -9,6 +10,7 @@ interface UseWebSocketResult {
   snapshot: SnapshotPayload | null;
   connected: boolean;
   reconnecting: boolean;
+  prometheusStatus: PrometheusStatusPayload | null;
 }
 
 function buildWebSocketURL(url: string): string {
@@ -33,6 +35,7 @@ export function useWebSocket(url: string): UseWebSocketResult {
   const [snapshot, setSnapshot] = useState<SnapshotPayload | null>(null);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [prometheusStatus, setPrometheusStatus] = useState<PrometheusStatusPayload | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -55,6 +58,8 @@ export function useWebSocket(url: string): UseWebSocketResult {
 
       if (message.type === 'snapshot') {
         setSnapshot((message as SnapshotWSMessage).payload);
+      } else if (message.type === 'prometheus_status') {
+        setPrometheusStatus(message.payload as PrometheusStatusPayload);
       }
     } catch (error) {
       console.error('Failed to parse WebSocket message', error);
@@ -139,5 +144,6 @@ export function useWebSocket(url: string): UseWebSocketResult {
     snapshot,
     connected,
     reconnecting,
+    prometheusStatus,
   };
 }

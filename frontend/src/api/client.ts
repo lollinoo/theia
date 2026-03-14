@@ -257,6 +257,30 @@ export interface SNMPProfilePayload {
   snmp: SNMPPayload;
 }
 
+export interface PrometheusHealthResult {
+  available: boolean;
+  url: string;
+  error?: string;
+}
+
+export async function checkPrometheusHealth(): Promise<PrometheusHealthResult> {
+  try {
+    const payload = await requestJSON('/api/v1/prometheus/health');
+    if (typeof payload === 'object' && payload !== null) {
+      const p = payload as Record<string, unknown>;
+      return {
+        available: p.available === true,
+        url: typeof p.url === 'string' ? p.url : '',
+        error: typeof p.error === 'string' ? p.error : undefined,
+      };
+    }
+    return { available: false, url: '', error: 'invalid response' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    return { available: false, url: '', error: message };
+  }
+}
+
 export async function fetchSNMPProfiles(): Promise<SNMPProfile[]> {
   return parseSNMPProfilesResponse(await requestJSON('/api/v1/snmp-profiles'));
 }

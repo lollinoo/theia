@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Device, SNMPProfile } from '../types/api';
-import { deleteDevice, fetchSettings, fetchSNMPProfiles, updateDevice, updateSetting } from '../api/client';
+import { checkPrometheusHealth, deleteDevice, fetchSettings, fetchSNMPProfiles, updateDevice, updateSetting } from '../api/client';
 
 const POLLING_PRESETS = [
   { label: 'Use Global', value: 'global' },
@@ -43,7 +43,9 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const [privProtocol, setPrivProtocol] = useState('AES');
   const [privPassword, setPrivPassword] = useState('');
   // Metrics source
-  const [metricsSource, setMetricsSource] = useState<'prometheus' | 'snmp'>(device.metrics_source || 'prometheus');
+  const [metricsSource, setMetricsSource] = useState<'prometheus' | 'snmp' | 'prometheus_snmp_fallback'>(
+    (device.metrics_source as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback') || 'snmp',
+  );
   const [prometheusLabelName, setPrometheusLabelName] = useState(device.prometheus_label_name || 'instance');
   const [prometheusLabelValue, setPrometheusLabelValue] = useState(device.prometheus_label_value || '');
   const [editLoading, setEditLoading] = useState(false);
@@ -54,6 +56,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
+  const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
   const [savedPolling, setSavedPolling] = useState(false);
   const [savedGrafana, setSavedGrafana] = useState(false);
@@ -66,6 +69,11 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
 
   useEffect(() => {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
+    checkPrometheusHealth().then((result) => {
+      setPrometheusAvailable(result.available);
+    }).catch(() => {
+      setPrometheusAvailable(false);
+    });
   }, []);
 
   useEffect(() => {
@@ -94,7 +102,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     setUsername('');
     setAuthPassword('');
     setPrivPassword('');
-    setMetricsSource(device.metrics_source || 'prometheus');
+    setMetricsSource((device.metrics_source as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback') || 'snmp');
     setPrometheusLabelName(device.prometheus_label_name || 'instance');
     setPrometheusLabelValue(device.prometheus_label_value || '');
   }, [device]);
@@ -158,6 +166,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     const needsPriv = securityLevel === 'authPriv';
     const hasSnmpChanges = isV3 ? username.trim() !== '' : community.trim() !== '';
     try {
+      const usesPrometheus = metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback';
       const effectiveLabelValue = prometheusLabelValue.trim() || ip.trim();
       await updateDevice(device.id, {
         hostname: hostname.trim(),
@@ -177,8 +186,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           : {}),
         tags: { ...device.tags, ...(displayName.trim() ? { display_name: displayName.trim() } : {}) },
         metrics_source: metricsSource,
-        prometheus_label_name: metricsSource === 'prometheus' ? prometheusLabelName : undefined,
-        prometheus_label_value: metricsSource === 'prometheus' ? effectiveLabelValue : undefined,
+        prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
+        prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
       });
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated();
@@ -396,19 +405,39 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           </div>
         )}
 
+        {prometheusAvailable === false && (
+          <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
+            Prometheus is not configured or unreachable. Only SNMP Direct is available.
+          </p>
+        )}
+
         <div className="space-y-1">
           <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">Metrics Source</label>
           <select
             value={metricsSource}
-            onChange={(e) => setMetricsSource(e.target.value as 'prometheus' | 'snmp')}
+            onChange={(e) => {
+              const val = e.target.value as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback';
+              if ((val === 'prometheus' || val === 'prometheus_snmp_fallback') && !prometheusAvailable) return;
+              setMetricsSource(val);
+            }}
             className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
           >
-            <option value="prometheus">Prometheus</option>
             <option value="snmp">SNMP Direct</option>
+            <option value="prometheus" disabled={!prometheusAvailable}>
+              Prometheus{!prometheusAvailable ? ' (unavailable)' : ''}
+            </option>
+            <option value="prometheus_snmp_fallback" disabled={!prometheusAvailable}>
+              Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
+            </option>
           </select>
+          {metricsSource === 'prometheus_snmp_fallback' && (
+            <p className="text-xs text-text-secondary/70">
+              Falls back to SNMP if Prometheus is unavailable or has no data for this device.
+            </p>
+          )}
         </div>
 
-        {metricsSource === 'prometheus' && (
+        {(metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback') && (
           <div className="space-y-2 rounded-lg border border-border-subtle p-3">
             <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">Prometheus Target</p>
             <div className="space-y-1">

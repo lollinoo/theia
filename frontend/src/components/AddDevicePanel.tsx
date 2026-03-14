@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { createDevice, fetchSNMPProfiles } from '../api/client';
+import { checkPrometheusHealth, createDevice, fetchSNMPProfiles } from '../api/client';
 import type { SNMPProfile } from '../types/api';
 
 interface AddDevicePanelProps {
   onDeviceAdded: () => void;
 }
+
+type MetricsMode = 'snmp' | 'prometheus' | 'prometheus_snmp_fallback';
 
 export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [hostname, setHostname] = useState('');
@@ -13,8 +15,12 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Metrics source
-  const [metricsSource, setMetricsSource] = useState<'prometheus' | 'snmp'>('prometheus');
+  // Prometheus availability
+  const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
+  const [prometheusCheckDone, setPrometheusCheckDone] = useState(false);
+
+  // Metrics mode (unified dropdown)
+  const [metricsMode, setMetricsMode] = useState<MetricsMode>('snmp');
   const [prometheusLabelName, setPrometheusLabelName] = useState('instance');
   const [prometheusLabelValue, setPrometheusLabelValue] = useState('');
 
@@ -34,6 +40,18 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
   useEffect(() => {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
+    checkPrometheusHealth().then((result) => {
+      setPrometheusAvailable(result.available);
+      setPrometheusCheckDone(true);
+      // If prometheus is unavailable, force SNMP mode
+      if (!result.available) {
+        setMetricsMode('snmp');
+      }
+    }).catch(() => {
+      setPrometheusAvailable(false);
+      setPrometheusCheckDone(true);
+      setMetricsMode('snmp');
+    });
   }, []);
 
   function applyProfile(profileId: string) {
@@ -49,9 +67,17 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     setPrivPassword(profile.snmp.priv_password ?? '');
   }
 
+  function handleMetricsModeChange(value: MetricsMode) {
+    if ((value === 'prometheus' || value === 'prometheus_snmp_fallback') && !prometheusAvailable) {
+      return; // guard against selecting unavailable option
+    }
+    setMetricsMode(value);
+  }
+
   const isV3 = version === '3';
   const needsAuth = securityLevel === 'authNoPriv' || securityLevel === 'authPriv';
   const needsPriv = securityLevel === 'authPriv';
+  const usesPrometheus = metricsMode === 'prometheus' || metricsMode === 'prometheus_snmp_fallback';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -79,9 +105,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               community: community.trim() || 'public',
             },
         tags: displayName.trim() ? { display_name: displayName.trim() } : undefined,
-        metrics_source: metricsSource,
-        prometheus_label_name: metricsSource === 'prometheus' ? prometheusLabelName : undefined,
-        prometheus_label_value: metricsSource === 'prometheus' ? effectiveLabelValue : undefined,
+        metrics_source: metricsMode,
+        prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
+        prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
       });
       onDeviceAdded();
     } catch (err) {
@@ -99,6 +125,13 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
   return (
     <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4 p-4">
+      {/* Prometheus unavailable warning */}
+      {prometheusCheckDone && !prometheusAvailable && (
+        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
+          Prometheus is not configured or unreachable. Only SNMP Direct is available.
+        </div>
+      )}
+
       <div className="space-y-2">
         <label className={labelClass}>
           Hostname / IP <span className="text-status-down">*</span>
@@ -113,159 +146,36 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         />
       </div>
 
-      {profiles.length > 0 && (
-        <div className="space-y-2">
-          <label className={labelClass}>Load from Profile</label>
-          <select
-            defaultValue=""
-            onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
-            className={selectClass}
-          >
-            <option value="" disabled>Select a credential profile...</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} (SNMP {p.snmp.version})
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      <div className="space-y-2">
-        <label className={labelClass}>SNMP Version</label>
-        <select
-          value={version}
-          onChange={(e) => setVersion(e.target.value)}
-          className={selectClass}
-        >
-          <option value="2c">v2c</option>
-          <option value="3">v3</option>
-        </select>
-      </div>
-
-      {!isV3 && (
-        <div className="space-y-2">
-          <label className={labelClass}>SNMP Community</label>
-          <input
-            type="text"
-            value={community}
-            onChange={(e) => setCommunity(e.target.value)}
-            placeholder="public"
-            className={inputClass}
-          />
-        </div>
-      )}
-
-      {isV3 && (
-        <div className="space-y-3 rounded-lg border border-border-subtle p-3">
-          <p className={labelClass}>SNMPv3 Credentials</p>
-
-          <div className="space-y-2">
-            <label className="text-xs text-text-secondary">Username</label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="snmpv3user"
-              className={inputClass}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-xs text-text-secondary">Security Level</label>
-            <select
-              value={securityLevel}
-              onChange={(e) => setSecurityLevel(e.target.value)}
-              className={selectClass}
-            >
-              <option value="noAuthNoPriv">No Auth, No Privacy</option>
-              <option value="authNoPriv">Auth, No Privacy</option>
-              <option value="authPriv">Auth + Privacy</option>
-            </select>
-          </div>
-
-          {needsAuth && (
-            <>
-              <div className="space-y-2">
-                <label className="text-xs text-text-secondary">Auth Protocol</label>
-                <select
-                  value={authProtocol}
-                  onChange={(e) => setAuthProtocol(e.target.value)}
-                  className={selectClass}
-                >
-                  <option value="SHA">SHA</option>
-                  <option value="MD5">MD5</option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs text-text-secondary">Auth Key</label>
-                <input
-                  type="password"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  placeholder="Authentication passphrase"
-                  autoComplete="new-password"
-                  className={inputClass}
-                />
-              </div>
-            </>
-          )}
-
-          {needsPriv && (
-            <>
-              <div className="space-y-2">
-                <label className="text-xs text-text-secondary">Encryption Protocol</label>
-                <select
-                  value={privProtocol}
-                  onChange={(e) => setPrivProtocol(e.target.value)}
-                  className={selectClass}
-                >
-                  <option value="AES">AES</option>
-                  <option value="DES">DES</option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs text-text-secondary">Encryption Key</label>
-                <input
-                  type="password"
-                  value={privPassword}
-                  onChange={(e) => setPrivPassword(e.target.value)}
-                  placeholder="Privacy passphrase"
-                  autoComplete="new-password"
-                  className={inputClass}
-                />
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      <div className="space-y-2">
-        <label className={labelClass}>
-          Display Name <span className="text-text-secondary/50">(optional)</span>
-        </label>
-        <input
-          type="text"
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="My Router"
-          className={inputClass}
-        />
-      </div>
-
+      {/* Metrics & Collection Mode */}
       <div className="space-y-2">
         <label className={labelClass}>Metrics Source</label>
         <select
-          value={metricsSource}
-          onChange={(e) => setMetricsSource(e.target.value as 'prometheus' | 'snmp')}
+          value={metricsMode}
+          onChange={(e) => handleMetricsModeChange(e.target.value as MetricsMode)}
           className={selectClass}
         >
-          <option value="prometheus">Prometheus</option>
           <option value="snmp">SNMP Direct</option>
+          <option value="prometheus" disabled={!prometheusAvailable}>
+            Prometheus{!prometheusAvailable ? ' (unavailable)' : ''}
+          </option>
+          <option value="prometheus_snmp_fallback" disabled={!prometheusAvailable}>
+            Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
+          </option>
         </select>
+        {metricsMode === 'prometheus' && (
+          <p className="text-xs text-text-secondary/70">
+            Metrics from Prometheus only. No fallback if Prometheus is unreachable.
+          </p>
+        )}
+        {metricsMode === 'prometheus_snmp_fallback' && (
+          <p className="text-xs text-text-secondary/70">
+            Metrics from Prometheus. Falls back to SNMP if Prometheus is unavailable or has no data.
+          </p>
+        )}
       </div>
 
-      {metricsSource === 'prometheus' && (
+      {/* Prometheus label config */}
+      {usesPrometheus && (
         <div className="space-y-2 rounded-lg border border-border-subtle p-3">
           <p className={labelClass}>Prometheus Target</p>
           <div className="space-y-1">
@@ -294,6 +204,149 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
           </div>
         </div>
       )}
+
+      {/* SNMP Credentials */}
+      <div className="space-y-3 rounded-lg border border-border-subtle p-3">
+        <p className={labelClass}>SNMP Credentials</p>
+
+        {profiles.length > 0 && (
+          <div className="space-y-1">
+            <label className="text-xs text-text-secondary">Load from Profile</label>
+            <select
+              defaultValue=""
+              onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
+              className={selectClass}
+            >
+              <option value="" disabled>Select a credential profile...</option>
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} (SNMP {p.snmp.version})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="space-y-1">
+          <label className="text-xs text-text-secondary">Version</label>
+          <select
+            value={version}
+            onChange={(e) => setVersion(e.target.value)}
+            className={selectClass}
+          >
+            <option value="2c">v2c</option>
+            <option value="3">v3</option>
+          </select>
+        </div>
+
+        {!isV3 && (
+          <div className="space-y-1">
+            <label className="text-xs text-text-secondary">Community</label>
+            <input
+              type="text"
+              value={community}
+              onChange={(e) => setCommunity(e.target.value)}
+              placeholder="public"
+              className={inputClass}
+            />
+          </div>
+        )}
+
+        {isV3 && (
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <label className="text-xs text-text-secondary">Username</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="snmpv3user"
+                className={inputClass}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-text-secondary">Security Level</label>
+              <select
+                value={securityLevel}
+                onChange={(e) => setSecurityLevel(e.target.value)}
+                className={selectClass}
+              >
+                <option value="noAuthNoPriv">No Auth, No Privacy</option>
+                <option value="authNoPriv">Auth, No Privacy</option>
+                <option value="authPriv">Auth + Privacy</option>
+              </select>
+            </div>
+
+            {needsAuth && (
+              <>
+                <div className="space-y-1">
+                  <label className="text-xs text-text-secondary">Auth Protocol</label>
+                  <select
+                    value={authProtocol}
+                    onChange={(e) => setAuthProtocol(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="SHA">SHA</option>
+                    <option value="MD5">MD5</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-text-secondary">Auth Key</label>
+                  <input
+                    type="password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="Authentication passphrase"
+                    autoComplete="new-password"
+                    className={inputClass}
+                  />
+                </div>
+              </>
+            )}
+
+            {needsPriv && (
+              <>
+                <div className="space-y-1">
+                  <label className="text-xs text-text-secondary">Encryption Protocol</label>
+                  <select
+                    value={privProtocol}
+                    onChange={(e) => setPrivProtocol(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="AES">AES</option>
+                    <option value="DES">DES</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-text-secondary">Encryption Key</label>
+                  <input
+                    type="password"
+                    value={privPassword}
+                    onChange={(e) => setPrivPassword(e.target.value)}
+                    placeholder="Privacy passphrase"
+                    autoComplete="new-password"
+                    className={inputClass}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <label className={labelClass}>
+          Display Name <span className="text-text-secondary/50">(optional)</span>
+        </label>
+        <input
+          type="text"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          placeholder="My Router"
+          className={inputClass}
+        />
+      </div>
 
       {error && (
         <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">

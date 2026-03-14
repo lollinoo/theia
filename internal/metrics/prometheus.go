@@ -215,6 +215,12 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, labelName string, lab
 	return results, nil
 }
 
+// CheckHealth verifies Prometheus is reachable by executing a trivial instant query.
+func (c *PromClient) CheckHealth(ctx context.Context) error {
+	_, err := c.queryVector(ctx, "vector(1)")
+	return err
+}
+
 // QueryAlerts fetches currently firing alerts from the Prometheus HTTP API.
 func (c *PromClient) QueryAlerts(ctx context.Context) ([]domain.AlertState, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/alerts", nil)

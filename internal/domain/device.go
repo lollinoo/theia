@@ -30,8 +30,9 @@ const (
 type MetricsSource string
 
 const (
-	MetricsSourcePrometheus MetricsSource = "prometheus"
-	MetricsSourceSNMP       MetricsSource = "snmp"
+	MetricsSourcePrometheus            MetricsSource = "prometheus"
+	MetricsSourceSNMP                  MetricsSource = "snmp"
+	MetricsSourcePrometheusSNMPFallback MetricsSource = "prometheus_snmp_fallback"
 )
 
 // SNMPVersion indicates which SNMP version is configured.

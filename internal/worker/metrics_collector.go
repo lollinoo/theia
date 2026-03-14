@@ -27,12 +27,13 @@ type MetricsCollector struct {
 	deviceRepo   domain.DeviceRepository
 	linkRepo     domain.LinkRepository
 	settingsRepo domain.SettingsRepository
-	snmpPollFunc SNMPPollFunc // optional; fills gaps when Prometheus has no data
+	snmpPollFunc SNMPPollFunc // optional; polls SNMP-sourced devices and fallback devices
 
-	mu           sync.RWMutex
-	lastSnapshot *ws.SnapshotPayload
-	cancel       context.CancelFunc
-	done         chan struct{}
+	mu              sync.RWMutex
+	lastSnapshot    *ws.SnapshotPayload
+	promAvailable   bool // last known Prometheus availability
+	cancel          context.CancelFunc
+	done            chan struct{}
 }
 
 // NewMetricsCollector creates a background collector for live Prometheus data.
@@ -47,14 +48,15 @@ func NewMetricsCollector(
 	snmpPollFunc SNMPPollFunc,
 ) *MetricsCollector {
 	return &MetricsCollector{
-		promClient:   promClient,
-		hub:          hub,
-		deviceRepo:   deviceRepo,
-		linkRepo:     linkRepo,
-		settingsRepo: settingsRepo,
-		snmpPollFunc: snmpPollFunc,
-		lastSnapshot: ws.EmptySnapshot(),
-		done:         make(chan struct{}),
+		promClient:    promClient,
+		hub:           hub,
+		deviceRepo:    deviceRepo,
+		linkRepo:      linkRepo,
+		settingsRepo:  settingsRepo,
+		snmpPollFunc:  snmpPollFunc,
+		lastSnapshot:  ws.EmptySnapshot(),
+		promAvailable: true, // assume available until proven otherwise
+		done:          make(chan struct{}),
 	}
 }
 
@@ -101,25 +103,39 @@ func (c *MetricsCollector) GetSnapshot() *ws.SnapshotPayload {
 }
 
 func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
-	snapshot := c.buildSnapshot(ctx)
+	snapshot, promNowAvailable, promErr := c.buildSnapshot(ctx)
 
 	c.mu.Lock()
 	c.lastSnapshot = snapshot
+	prevAvailable := c.promAvailable
+	c.promAvailable = promNowAvailable
 	c.mu.Unlock()
 
 	c.hub.Broadcast(ws.Message{
 		Type:    ws.MessageTypeSnapshot,
 		Payload: snapshot,
 	})
+
+	// Notify clients when Prometheus availability changes.
+	if prevAvailable != promNowAvailable {
+		payload := ws.PrometheusStatusPayload{Available: promNowAvailable}
+		if !promNowAvailable && promErr != "" {
+			payload.Error = promErr
+		}
+		c.hub.Broadcast(ws.Message{
+			Type:    ws.MessageTypePrometheusStatus,
+			Payload: payload,
+		})
+	}
 }
 
-func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayload {
+func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPayload, bool, string) {
 	snapshot := ws.EmptySnapshot()
 
 	devices, err := c.deviceRepo.GetAll()
 	if err != nil {
 		log.Printf("Metrics collector: failed to load devices: %v", err)
-		return snapshot
+		return snapshot, true, ""
 	}
 
 	links, err := c.linkRepo.GetAll()
@@ -129,8 +145,9 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 	}
 
 	// Group Prometheus-sourced devices by label name so we can batch queries per label type.
+	// Both MetricsSourcePrometheus and MetricsSourcePrometheusSNMPFallback are queried via Prometheus.
 	type promGroup struct {
-		labelValues   []string
+		labelValues    []string
 		ipByLabelValue map[string]string // label value → device IP (for link metrics translation)
 	}
 	promGroups := make(map[string]*promGroup) // keyed by labelName
@@ -140,7 +157,7 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 		if src == "" {
 			src = domain.MetricsSourcePrometheus
 		}
-		if src != domain.MetricsSourcePrometheus {
+		if src != domain.MetricsSourcePrometheus && src != domain.MetricsSourcePrometheusSNMPFallback {
 			continue
 		}
 
@@ -164,13 +181,23 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 	}
 
 	// Query Prometheus for each label group and merge results.
+	// Track errors to determine Prometheus availability.
 	metricsByLabelValue := make(map[string]domain.DeviceMetrics)
 	linkMetricsByLabelValue := make(map[string][]domain.LinkMetrics)
 	alertStates := []domain.AlertState{}
 
+	promQueryErrors := 0
+	promQueryTotal := 0
+	var firstPromError string
+
 	for labelName, group := range promGroups {
+		promQueryTotal++
 		if m, err := c.promClient.QueryDeviceMetrics(ctx, labelName, group.labelValues); err != nil {
 			log.Printf("Metrics collector: failed to query device metrics (label=%s): %v", labelName, err)
+			promQueryErrors++
+			if firstPromError == "" {
+				firstPromError = err.Error()
+			}
 		} else {
 			for k, v := range m {
 				metricsByLabelValue[k] = v
@@ -186,8 +213,11 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 		}
 	}
 
+	// Prometheus is considered available if all queries succeeded (or no devices use Prometheus).
+	promNowAvailable := promQueryTotal == 0 || promQueryErrors == 0
+
 	// Alerts use the "instance" label (device IP) regardless of the configured label name.
-	if len(promGroups) > 0 {
+	if len(promGroups) > 0 && promNowAvailable {
 		if alerts, err := c.promClient.QueryAlerts(ctx); err != nil {
 			log.Printf("Metrics collector: failed to query alerts: %v", err)
 		} else {
@@ -195,13 +225,13 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 		}
 	}
 
-	// Helper: resolve the Prometheus label value for a device.
+	// Helper: resolve the Prometheus label value for a device (covers both prometheus source modes).
 	effectiveLabelValue := func(d domain.Device) string {
 		src := d.MetricsSource
 		if src == "" {
 			src = domain.MetricsSourcePrometheus
 		}
-		if src != domain.MetricsSourcePrometheus {
+		if src != domain.MetricsSourcePrometheus && src != domain.MetricsSourcePrometheusSNMPFallback {
 			return ""
 		}
 		if d.PrometheusLabelValue != "" {
@@ -212,7 +242,10 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 
 	deviceMetricsByID := attachDeviceMetrics(devices, metricsByLabelValue, effectiveLabelValue)
 
-	// SNMP-sourced devices are always polled directly; Prometheus-sourced devices fall back if needed.
+	// Poll SNMP for:
+	//   - MetricsSourceSNMP devices: always
+	//   - MetricsSourcePrometheusSNMPFallback devices: when Prometheus is unavailable or returned no data
+	// MetricsSourcePrometheus devices do NOT fall back to SNMP automatically.
 	if c.snmpPollFunc != nil {
 		var wg sync.WaitGroup
 		var mu sync.Mutex
@@ -223,12 +256,13 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 			}
 
 			shouldPoll := false
-			if src == domain.MetricsSourceSNMP {
-				shouldPoll = true // always poll SNMP-sourced devices directly
-			} else {
+			switch src {
+			case domain.MetricsSourceSNMP:
+				shouldPoll = true
+			case domain.MetricsSourcePrometheusSNMPFallback:
 				existing := deviceMetricsByID[dev.ID.String()]
-				if existing.CPUPercent == nil && existing.MemPercent == nil && existing.UptimeSecs == nil {
-					shouldPoll = true // Prometheus had no data; fall back
+				if !promNowAvailable || (existing.CPUPercent == nil && existing.MemPercent == nil && existing.UptimeSecs == nil) {
+					shouldPoll = true
 				}
 			}
 
@@ -274,7 +308,7 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) *ws.SnapshotPayloa
 	snapshot.LinkMetrics = ws.LinkMetricsToDTOs(linkMetricsByID)
 	snapshot.Alerts = ws.AlertsToDTOs(alertsByDevice)
 
-	return snapshot
+	return snapshot, promNowAvailable, firstPromError
 }
 
 func attachDeviceMetrics(

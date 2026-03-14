@@ -283,7 +283,8 @@ export default function Canvas() {
   const staleAppliedRef = useRef(false);
   const reactFlow = useReactFlow<DeviceNodeData, LinkEdgeData>();
   const { fetchPositions, savePositions } = usePositions();
-  const { snapshot, reconnecting } = useWebSocket('/api/v1/ws');
+  const { snapshot, reconnecting, prometheusStatus } = useWebSocket('/api/v1/ws');
+  const [prometheusAlertDismissed, setPrometheusAlertDismissed] = useState(false);
 
   const openEdgeMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => {
@@ -518,6 +519,13 @@ export default function Canvas() {
         // Settings fetch failure is non-fatal; Grafana links will be disabled.
       });
   }, []);
+
+  // Reset prometheus alert dismissed state when prometheus recovers.
+  useEffect(() => {
+    if (prometheusStatus?.available) {
+      setPrometheusAlertDismissed(false);
+    }
+  }, [prometheusStatus?.available]);
 
   useEffect(() => {
     if (snapshot === null) {
@@ -945,6 +953,22 @@ export default function Canvas() {
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
 
       <ReconnectBanner visible={reconnecting} />
+      {prometheusStatus !== null && !prometheusStatus.available && !prometheusAlertDismissed && (
+        <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex items-center gap-3 rounded-xl border border-yellow-500/30 bg-bg-surface/95 px-4 py-3 shadow-canvas backdrop-blur-sm">
+          <span className="h-2 w-2 flex-none rounded-full bg-yellow-400" />
+          <p className="text-sm text-yellow-300">
+            Prometheus is unreachable — Prometheus metrics are paused.
+            {prometheusStatus.error ? ` (${prometheusStatus.error})` : ''}
+          </p>
+          <button
+            type="button"
+            onClick={() => setPrometheusAlertDismissed(true)}
+            className="ml-2 text-xs text-text-secondary hover:text-text-primary"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <ZoomControls
         onZoomIn={() => {
           void reactFlow.zoomIn({ duration: 200 });

@@ -1,4 +1,4 @@
-type WSMessageType = 'snapshot' | 'metrics' | 'link_metrics' | 'alert';
+type WSMessageType = 'snapshot' | 'metrics' | 'link_metrics' | 'alert' | 'prometheus_status';
 type APIRecord = Record<string, unknown>;
 
 export interface DeviceMetricsDTO {
@@ -35,6 +35,11 @@ export interface SnapshotPayload {
   alerts: AlertDTO[];
 }
 
+export interface PrometheusStatusPayload {
+  available: boolean;
+  error?: string;
+}
+
 export interface WSMessage {
   type: WSMessageType;
   payload: unknown;
@@ -43,6 +48,11 @@ export interface WSMessage {
 export interface SnapshotWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'snapshot';
   payload: SnapshotPayload;
+}
+
+export interface PrometheusStatusWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'prometheus_status';
+  payload: PrometheusStatusPayload;
 }
 
 function isRecord(value: unknown): value is APIRecord {
@@ -132,7 +142,7 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
   };
 }
 
-export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage {
+export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | PrometheusStatusWSMessage {
   if (!isRecord(value)) {
     throw new Error('invalid websocket message');
   }
@@ -142,7 +152,8 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage {
     type !== 'snapshot' &&
     type !== 'metrics' &&
     type !== 'link_metrics' &&
-    type !== 'alert'
+    type !== 'alert' &&
+    type !== 'prometheus_status'
   ) {
     throw new Error(`unsupported websocket message type: ${type}`);
   }
@@ -151,6 +162,17 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage {
     return {
       type,
       payload: parseSnapshotPayload(value.payload),
+    };
+  }
+
+  if (type === 'prometheus_status') {
+    const p = isRecord(value.payload) ? value.payload : {};
+    return {
+      type,
+      payload: {
+        available: p.available === true,
+        error: typeof p.error === 'string' ? p.error : undefined,
+      },
     };
   }
 

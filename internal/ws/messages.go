@@ -17,7 +17,15 @@ const (
 	MessageTypeLinkMetrics = "link_metrics"
 	// MessageTypeAlert carries alert-only payloads.
 	MessageTypeAlert = "alert"
+	// MessageTypePrometheusStatus notifies clients of Prometheus availability changes.
+	MessageTypePrometheusStatus = "prometheus_status"
 )
+
+// PrometheusStatusPayload is sent when Prometheus availability changes.
+type PrometheusStatusPayload struct {
+	Available bool   `json:"available"`
+	Error     string `json:"error,omitempty"`
+}
 
 // Message is the WebSocket envelope used for all server pushes.
 type Message struct {

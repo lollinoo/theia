@@ -31,6 +31,7 @@ func NewRouter(
 	settingsHandler := NewSettingsHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	healthHandler := NewHealthHandler(db, poller)
+	prometheusHandler := NewPrometheusHandler(settingsRepo)
 
 	// Device routes
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +163,15 @@ func NewRouter(
 	// Health endpoint
 	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		healthHandler.HandleHealth(w, r)
+	})
+
+	// Prometheus health endpoint
+	mux.HandleFunc("/api/v1/prometheus/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		prometheusHandler.HandleHealth(w, r)
 	})
 
 	if wsHandler != nil {
