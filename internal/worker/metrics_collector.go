@@ -312,6 +312,45 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	for _, dev := range devices {
 		statuses[dev.ID.String()] = string(dev.Status)
 	}
+
+	// Override device status with blackbox_exporter probe_success when Prometheus is
+	// the metrics source and probe data is available. This replaces the SNMP-based
+	// status for devices where probe_success{instance=~"<ip>"} exists in Prometheus.
+	if promNowAvailable && len(promGroups) > 0 {
+		promIPs := make([]string, 0, len(devices))
+		promDeviceByIP := make(map[string]domain.Device, len(devices))
+		for _, dev := range devices {
+			src := dev.MetricsSource
+			if src == "" {
+				src = domain.MetricsSourcePrometheus
+			}
+			if src != domain.MetricsSourcePrometheus && src != domain.MetricsSourcePrometheusSNMPFallback {
+				continue
+			}
+			if dev.IP == "" {
+				continue
+			}
+			promIPs = append(promIPs, dev.IP)
+			promDeviceByIP[dev.IP] = dev
+		}
+
+		if probeStatuses, err := c.promClient.QueryProbeStatus(ctx, promIPs); err != nil {
+			log.Printf("Metrics collector: failed to query probe_success: %v", err)
+		} else {
+			for ip, isUp := range probeStatuses {
+				dev, ok := promDeviceByIP[ip]
+				if !ok {
+					continue
+				}
+				if isUp {
+					statuses[dev.ID.String()] = string(domain.DeviceStatusUp)
+				} else {
+					statuses[dev.ID.String()] = string(domain.DeviceStatusDown)
+				}
+			}
+		}
+	}
+
 	snapshot.DeviceStatuses = statuses
 
 	return snapshot, promNowAvailable, firstPromError

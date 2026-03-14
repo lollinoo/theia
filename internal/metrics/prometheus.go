@@ -92,10 +92,10 @@ func (c *PromClient) QueryDeviceMetrics(ctx context.Context, labelName string, l
 			},
 		},
 		{
-			// MikroTik: mtxrHlTemperature is in tenths of °C → divide by 10
+			// MikroTik: mtxrHlTemperature — already in °C when snmp_exporter applies scale:0.1
 			// Standard: entPhySensorValue with sensor type 8 (celsius) is already in °C
 			promql: fmt.Sprintf(
-				`(mtxrHlTemperature{%[1]s=~"%[2]s"} / 10)`+
+				`mtxrHlTemperature{%[1]s=~"%[2]s"}`+
 					` or `+
 					`max by (%[1]s) (entPhySensorValue{entPhySensorType="8",%[1]s=~"%[2]s"})`,
 				labelName, targets),
@@ -230,6 +230,45 @@ func (c *PromClient) QueryLinkMetrics(ctx context.Context, labelName string, lab
 
 			results[v] = append(results[v], linkMetric)
 		}
+	}
+
+	return results, nil
+}
+
+// QueryProbeStatus fetches blackbox_exporter probe_success for the given device IPs.
+// Returns a map keyed by device IP (port stripped) → true (up) or false (down).
+// Only IPs with probe_success data are included; absent entries mean no data available.
+func (c *PromClient) QueryProbeStatus(ctx context.Context, deviceIPs []string) (map[string]bool, error) {
+	if len(deviceIPs) == 0 {
+		return nil, nil
+	}
+
+	targets := buildTargetMatcher(deviceIPs)
+	promql := fmt.Sprintf(`probe_success{instance=~"%s"}`, targets)
+
+	samples, err := c.queryVector(ctx, promql)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make(map[string]bool, len(samples))
+	for _, sample := range samples {
+		instance := sample.Metric["instance"]
+		if instance == "" {
+			continue
+		}
+		value, err := sample.SampleValue()
+		if err != nil {
+			continue
+		}
+		// Strip port suffix for IPv4 (e.g. "192.168.1.1:161" → "192.168.1.1").
+		ip := instance
+		if !strings.HasPrefix(instance, "[") {
+			if i := strings.Index(instance, ":"); i != -1 {
+				ip = instance[:i]
+			}
+		}
+		results[ip] = value == 1
 	}
 
 	return results, nil
