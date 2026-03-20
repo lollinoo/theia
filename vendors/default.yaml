@@ -1,0 +1,53 @@
+# Generic SNMP device — standard MIB baseline.
+# All devices that don't match a specific vendor config use these queries.
+
+vendor:
+  name: default
+  display_name: Generic SNMP
+
+detection:
+  sys_object_id_prefixes: []
+  sys_descr_patterns: []
+
+device_type_rules:
+  - match:
+      sys_descr_contains: "router"
+    type: router
+  - match:
+      sys_descr_contains: "switch"
+    type: switch
+  - match:
+      sys_descr_contains: "access point"
+    type: ap
+  - match:
+      sys_descr_contains: "wireless ap"
+    type: ap
+  - type: unknown
+
+model_extraction:
+  sys_descr_regex: ""
+  capture_group: 0
+
+metrics:
+  prometheus:
+    cpu: 'avg by (%[1]s) (hrProcessorLoad{%[1]s=~"%[2]s"})'
+    memory: 'avg by (%[1]s) (100 * hrStorageUsed{hrStorageDescr=~"(?i)physical memory|main memory",%[1]s=~"%[2]s"} / hrStorageSize{hrStorageDescr=~"(?i)physical memory|main memory",%[1]s=~"%[2]s"})'
+    temperature: 'max by (%[1]s) (entPhySensorValue{entPhySensorType="8",%[1]s=~"%[2]s"})'
+    uptime: '(hrSystemUptime{%[1]s=~"%[2]s"} or sysUpTime{%[1]s=~"%[2]s"}) / 100'
+
+snmp:
+  cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+  memory_used_oid: ".1.3.6.1.2.1.25.2.3.1.6"
+  memory_total_oid: ".1.3.6.1.2.1.25.2.3.1.5"
+  temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
+  temperature_scale: 1.0
+
+backup:
+  supported: true
+  methods: ["ssh"]
+  default_method: ssh
+  ssh_commands:
+    export_running: "show running-config"
+    export_compact: ""
+    export_verbose: ""
+    export_startup: "show startup-config"

@@ -1,0 +1,13 @@
+# Local development artifacts
+tmp/
+data/
+*.db
+.gemini/
+frontend/node_modules/
+docs/
+frontend/dist/
+frontend/dist/index.html
+# Build output
+/theia
+.env
+.env.local

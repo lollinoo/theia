@@ -1,0 +1,35 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  # SNMP targets — add your real device IPs here.
+  # Each IP is scraped via the snmp-exporter using the IF-MIB module.
+  # For SNMPv3 devices change "public_v2" to your configured auth name
+  # in docker/prometheus/snmp.yml.
+  - job_name: snmp
+    metrics_path: /snmp
+    static_configs:
+      - targets:
+          # - 192.168.1.1   # core-router
+          # - 192.168.1.2   # dist-switch
+          # - 192.168.1.10  # wifi-ap
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - target_label: __param_module
+        replacement: if_mib
+      - target_label: __param_auth
+        replacement: public_v2
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: localhost:9116

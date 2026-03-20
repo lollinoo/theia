@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS snmp_profiles;
+DROP TABLE IF EXISTS device_positions;
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS links;
+DROP TABLE IF EXISTS interfaces;
+DROP TABLE IF EXISTS devices;

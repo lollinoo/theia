@@ -1,0 +1,207 @@
+import { useState, useEffect, useCallback } from 'react';
+import { type BackupJob, type BackupFile } from '../../types/api';
+import { fetchLatestBackupJob, fetchBackupFileContent, backupFileDownloadUrl } from '../../api/client';
+
+interface ConfigViewerProps {
+  deviceId: string;
+}
+
+const FILE_TYPE_LABELS: Record<string, string> = {
+  running: 'Default',
+  verbose: 'Verbose',
+  compact: 'Compact',
+  binary: 'Binary',
+};
+
+const FILE_TYPE_ORDER = ['running', 'verbose', 'compact', 'binary'];
+
+export function ConfigViewer({ deviceId }: ConfigViewerProps) {
+  const [job, setJob] = useState<BackupJob | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('running');
+  const [content, setContent] = useState<string | null>(null);
+  const [contentLoading, setContentLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await fetchLatestBackupJob(deviceId);
+      setJob(data);
+      // Default to first available file type
+      if (data?.files?.length) {
+        const firstType = FILE_TYPE_ORDER.find(t => data.files.some(f => f.file_type === t));
+        if (firstType) setActiveTab(firstType);
+      }
+    } catch (err) {
+      console.error('Failed to fetch config:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [deviceId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const activeFile: BackupFile | undefined = job?.files?.find(f => f.file_type === activeTab);
+
+  // Load text content when tab changes
+  useEffect(() => {
+    if (!activeFile || activeTab === 'binary') {
+      setContent(null);
+      return;
+    }
+    setContentLoading(true);
+    fetchBackupFileContent(activeFile.id)
+      .then(setContent)
+      .catch(() => setContent(null))
+      .finally(() => setContentLoading(false));
+  }, [activeFile?.id, activeTab]);
+
+  const handleCopy = async () => {
+    if (!content) return;
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = content;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return 'N/A';
+    try {
+      return new Date(dateStr).toLocaleString();
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  if (loading) {
+    return <div className="text-xs text-text-secondary">Loading configuration...</div>;
+  }
+
+  if (!job || !job.files?.length) {
+    return <div className="text-xs text-text-secondary">No configuration backup available</div>;
+  }
+
+  const availableTypes = FILE_TYPE_ORDER.filter(t => job.files.some(f => f.file_type === t));
+
+  return (
+    <div className="space-y-3">
+      {/* Tab selector */}
+      <div className="flex gap-1 border-b border-border-subtle pb-2">
+        {availableTypes.map((type) => (
+          <button
+            key={type}
+            onClick={() => setActiveTab(type)}
+            className={`rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors ${
+              activeTab === type
+                ? 'bg-accent text-white'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated'
+            }`}
+          >
+            {FILE_TYPE_LABELS[type] || type}
+          </button>
+        ))}
+      </div>
+
+      {/* Partial success warning */}
+      {job.status === 'success' && job.error_message?.startsWith('partial:') && (
+        <div className="rounded-md border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-[10px] text-yellow-400">
+          <div>Some backup types failed to export. Completed files are shown below.</div>
+          {job.error_message.replace('partial: ', '').trim() && (
+            <div className="mt-1 text-yellow-400/70">
+              {job.error_message.replace('partial: ', '')}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Metadata */}
+      {activeFile && (
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-text-secondary">
+              {formatDate(activeFile.created_at)} / {formatSize(activeFile.size_bytes)}
+            </div>
+            {activeFile.file_hash && (
+              <div className="text-[10px] text-text-secondary font-mono">
+                SHA-256: {activeFile.file_hash.substring(0, 16)}...
+              </div>
+            )}
+          </div>
+          {activeTab === 'binary' ? (
+            <a
+              href={backupFileDownloadUrl(activeFile.id)}
+              className="rounded-md border border-border-subtle px-2.5 py-1 text-[10px] font-medium text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
+              download
+            >
+              Download .backup
+            </a>
+          ) : (
+            <button
+              onClick={handleCopy}
+              className="rounded-md border border-border-subtle px-2.5 py-1 text-[10px] font-medium text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
+            >
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Content area */}
+      {activeTab === 'binary' ? (
+        <div className="rounded-md border border-border-subtle bg-bg-canvas p-4 text-center">
+          <div className="text-xs text-text-secondary mb-2">Binary backup file</div>
+          <div className="text-[10px] text-text-secondary/70 mb-3">
+            {activeFile?.file_name}
+          </div>
+          {activeFile && (
+            <a
+              href={backupFileDownloadUrl(activeFile.id)}
+              className="inline-block rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 transition-colors"
+              download
+            >
+              Download {formatSize(activeFile.size_bytes)}
+            </a>
+          )}
+        </div>
+      ) : contentLoading ? (
+        <div className="text-xs text-text-secondary">Loading file content...</div>
+      ) : content ? (
+        <div className="rounded-md border border-border-subtle bg-bg-canvas overflow-auto max-h-[calc(100vh-220px)]">
+          <pre className="text-[11px] leading-[1.6] p-0 m-0">
+            <code>
+              {content.split('\n').map((line, i) => (
+                <div key={i} className="flex hover:bg-bg-elevated/30">
+                  <span className="select-none text-text-secondary/50 text-right pr-3 pl-2 min-w-[3rem] border-r border-border-subtle/30">
+                    {i + 1}
+                  </span>
+                  <span className="pl-3 pr-3 text-text-primary whitespace-pre">{line}</span>
+                </div>
+              ))}
+            </code>
+          </pre>
+        </div>
+      ) : (
+        <div className="text-xs text-text-secondary">No content available</div>
+      )}
+    </div>
+  );
+}

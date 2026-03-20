@@ -1,0 +1,15 @@
+# =============================================================================
+# SNMP Daemon Simulator
+# =============================================================================
+# Custom net-snmp container for simulating network devices.
+# Each device mounts its own snmpd.conf via volume.
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends snmpd snmp libsnmp-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /etc/snmp
+
+EXPOSE 161/udp
+
+CMD ["snmpd", "-f", "-Lo", "-C", "-c", "/etc/snmp/snmpd.conf"]
