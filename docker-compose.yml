@@ -39,6 +39,9 @@ services:
       - THEIA_LISTEN_ADDR=:8080
       - THEIA_ENCRYPTION_KEY=devkey1234567890
       - CGO_ENABLED=1
+      - THEIA_VERSION=${THEIA_VERSION:-dev}
+      - GIT_COMMIT=${GIT_COMMIT:-dev}
+      - BUILD_DATE=${BUILD_DATE:-dev}
     depends_on:
       snmp-router:
         condition: service_healthy

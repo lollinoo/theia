@@ -5,7 +5,7 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -buildvcs=false -o ./tmp/theia ./cmd/theia/"
+  cmd = "go build -buildvcs=false -ldflags \"-X github.com/lollinoo/theia/internal/version.Version=${THEIA_VERSION:-dev} -X github.com/lollinoo/theia/internal/version.GitCommit=${GIT_COMMIT:-dev} -X github.com/lollinoo/theia/internal/version.BuildDate=${BUILD_DATE:-dev}\" -o ./tmp/theia ./cmd/theia/"
   bin = "./tmp/theia"
   include_ext = ["go", "yaml"]
   exclude_dir = ["tmp", "data", "vendor", ".git", "docker", "scripts", "frontend"]

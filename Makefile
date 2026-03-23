@@ -16,7 +16,8 @@ help: ## Show this help
 
 dev: ## Start full dev stack (backend + frontend + Prometheus + SNMP sims)
 	@docker compose --profile dev --profile test down 2>/dev/null || true
-	docker compose --profile dev up --build -d
+	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
+		docker compose --profile dev up --build -d
 	@echo ""
 	@echo "MikroTik Theia dev stack is running:"
 	@echo "  Backend:  http://localhost:8080"

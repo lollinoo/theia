@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchSettings, updateSetting } from '../api/client';
+import { fetchSettings, updateSetting, fetchHealthVersion, type HealthVersion } from '../api/client';
 import { SNMPProfileManager } from './SNMPProfileManager';
 import { SSHProfileManager } from './SSHProfileManager';
 
@@ -81,6 +81,7 @@ export function SettingsPanel() {
   const [savedGrafana, setSavedGrafana] = useState(false);
   const [savedPrometheus, setSavedPrometheus] = useState(false);
   const [savedTimezone, setSavedTimezone] = useState(false);
+  const [versionInfo, setVersionInfo] = useState<HealthVersion | null>(null);
 
   const pollingTimerRef = useRef<number | null>(null);
   const grafanaTimerRef = useRef<number | null>(null);
@@ -105,6 +106,7 @@ export function SettingsPanel() {
         setTimezone(settings['timezone'] || 'UTC');
       })
       .catch(() => {/* non-fatal */});
+    fetchHealthVersion().then(setVersionInfo);
   }, []);
 
   function showSaved(
@@ -264,6 +266,32 @@ export function SettingsPanel() {
       <div className="border-t border-border-subtle pt-4">
         <SSHProfileManager />
       </div>
+
+      {versionInfo && (
+        <div className="border-t border-border-subtle pt-4 space-y-2">
+          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+            About
+          </label>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-text-primary font-medium">
+              Theia v{versionInfo.version}
+            </span>
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                import.meta.env.DEV
+                  ? 'bg-yellow-500/15 text-yellow-400'
+                  : 'bg-status-up/15 text-status-up'
+              }`}
+            >
+              {import.meta.env.DEV ? 'dev' : 'production'}
+            </span>
+          </div>
+          <div className="space-y-0.5 text-xs text-text-secondary/70">
+            <p>Commit: {versionInfo.git_commit}</p>
+            <p>Built: {versionInfo.build_date === 'unknown' ? 'unknown' : new Date(versionInfo.build_date).toLocaleString()}</p>
+          </div>
+        </div>
+      )}
 
     </div>
   );

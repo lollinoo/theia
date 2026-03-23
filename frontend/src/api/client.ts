@@ -43,6 +43,27 @@ async function requestJSON(path: string): Promise<unknown> {
   return payload;
 }
 
+export interface HealthVersion {
+  version: string;
+  git_commit: string;
+  build_date: string;
+}
+
+export async function fetchHealthVersion(): Promise<HealthVersion> {
+  try {
+    const payload = await requestJSON('/api/v1/health');
+    const p = payload as Record<string, unknown>;
+    const v = p.version as Record<string, unknown> | undefined;
+    return {
+      version: typeof v?.version === 'string' ? v.version : 'unknown',
+      git_commit: typeof v?.git_commit === 'string' ? v.git_commit : 'unknown',
+      build_date: typeof v?.build_date === 'string' ? v.build_date : 'unknown',
+    };
+  } catch {
+    return { version: 'unknown', git_commit: 'unknown', build_date: 'unknown' };
+  }
+}
+
 export async function fetchDevices(): Promise<Device[]> {
   try {
     return parseDevicesResponse(await requestJSON('/api/v1/devices'));
