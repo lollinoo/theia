@@ -35,7 +35,11 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
-    image: theia-backend:latest
+      args:
+        VERSION: ${THEIA_VERSION:-dev}
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    image: theia-backend:${THEIA_VERSION:-latest}
     container_name: theia-backend
     restart: unless-stopped
     networks:
@@ -62,7 +66,7 @@ services:
       context: ./frontend
       dockerfile: ../Dockerfile.frontend
       target: production
-    image: theia-frontend:latest
+    image: theia-frontend:${THEIA_VERSION:-latest}
     container_name: theia-frontend
     restart: unless-stopped
     ports:

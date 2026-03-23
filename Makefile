@@ -1,6 +1,14 @@
 .PHONY: dev test test-integration build clean seed verify stop logs help \
        prod prod-metrics prod-down prod-build prod-logs prod-clean \
-       snmpwalk-router snmpwalk-switch snmpwalk-ap
+       snmpwalk-router snmpwalk-switch snmpwalk-ap \
+       version bump tag release
+
+# ---------------------------------------------------------------------------
+# Version management
+# ---------------------------------------------------------------------------
+VERSION    := $(shell cat VERSION)
+GIT_COMMIT := $(shell git rev-parse --short HEAD)
+BUILD_DATE := $(shell date -u +%FT%TZ)
 
 # Default target
 help: ## Show this help
@@ -33,12 +41,14 @@ test-integration: ## Run integration tests against SNMP simulators
 	docker compose --profile test down
 
 build: ## Build production Docker images (backend + frontend)
-	docker compose -f docker-compose.prod.yml build
+	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
+		docker compose -f docker-compose.prod.yml build
 
 prod: ## Start production stack (backend + nginx frontend)
-	docker compose -f docker-compose.prod.yml up --build -d
+	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
+		docker compose -f docker-compose.prod.yml up --build -d
 	@echo ""
-	@echo "MikroTik Theia production stack is running:"
+	@echo "MikroTik Theia $(VERSION) production stack is running:"
 	@echo "  Frontend: http://localhost:80"
 	@echo "  Backend:  http://localhost:8080"
 	@echo ""
@@ -46,7 +56,8 @@ prod: ## Start production stack (backend + nginx frontend)
 	@echo "Run 'make prod-logs' to follow backend logs."
 
 prod-metrics: ## Start production stack with Prometheus + SNMP exporter
-	docker compose -f docker-compose.prod.yml --profile metrics up --build -d
+	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
+		docker compose -f docker-compose.prod.yml --profile metrics up --build -d
 	@echo ""
 	@echo "MikroTik Theia production stack (with metrics) is running:"
 	@echo "  Frontend:      http://localhost:80"
@@ -60,7 +71,8 @@ prod-down: ## Stop production stack
 	docker compose -f docker-compose.prod.yml --profile metrics down
 
 prod-build: ## Build production images without starting
-	docker compose -f docker-compose.prod.yml build
+	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
+		docker compose -f docker-compose.prod.yml build
 
 prod-logs: ## Follow production backend logs
 	docker compose -f docker-compose.prod.yml logs -f backend
@@ -92,3 +104,34 @@ snmpwalk-switch: ## Run snmpwalk against switch simulator (debug)
 
 snmpwalk-ap: ## Run snmpwalk against AP simulator (debug)
 	snmpwalk -v2c -c public localhost:10163 1.3.6.1.2.1.1
+
+# ---------------------------------------------------------------------------
+# Release workflow
+# ---------------------------------------------------------------------------
+version: ## Show current version
+	@echo "Version:    $(VERSION)"
+	@echo "Git commit: $(GIT_COMMIT)"
+	@echo "Build date: $(BUILD_DATE)"
+
+bump: ## Bump version (Usage: make bump v=1.1.0)
+	@if [ -z "$(v)" ]; then echo "Usage: make bump v=1.1.0"; exit 1; fi
+	@echo "$(v)" > VERSION
+	@cd frontend && npm version "$(v)" --no-git-tag-version --allow-same-version
+	@echo "Bumped version to $(v)"
+
+tag: ## Create a git tag from VERSION file
+	@git add VERSION frontend/package.json
+	@git commit -m "release: v$(VERSION)"
+	@git tag "v$(VERSION)"
+	@echo "Tagged v$(VERSION)"
+
+release: bump tag ## Bump + tag + build production images (Usage: make release v=1.1.0)
+	THEIA_VERSION=$(v) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
+		docker compose -f docker-compose.prod.yml build
+	@echo ""
+	@echo "Release v$(v) built. Docker images:"
+	@echo "  theia-backend:$(v)"
+	@echo "  theia-frontend:$(v)"
+	@echo ""
+	@echo "To deploy: THEIA_VERSION=$(v) docker compose -f docker-compose.prod.yml up -d"
+	@echo "To push tag: git push origin v$(v)"

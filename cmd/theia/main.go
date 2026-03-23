@@ -25,6 +25,7 @@ import (
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/vendor"
+	"github.com/lollinoo/theia/internal/version"
 	"github.com/lollinoo/theia/internal/worker"
 	"github.com/lollinoo/theia/internal/ws"
 
@@ -197,7 +198,8 @@ func main() {
 		}
 	}()
 
-	log.Printf("Theia starting on %s", cfg.ListenAddr)
+	log.Printf("Theia %s (commit=%s built=%s) starting on %s",
+		version.Version, version.GitCommit, version.BuildDate, cfg.ListenAddr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
 	}

@@ -32,6 +32,7 @@ func TestHealthHandlerHealth(t *testing.T) {
 
 	var resp struct {
 		Status     string            `json:"status"`
+		Version    map[string]string `json:"version"`
 		Components map[string]string `json:"components"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -40,6 +41,9 @@ func TestHealthHandlerHealth(t *testing.T) {
 
 	if resp.Status != "ok" {
 		t.Fatalf("expected status=ok, got %s", resp.Status)
+	}
+	if resp.Version["version"] == "" {
+		t.Fatal("expected version field in health response")
 	}
 	if resp.Components["db"] != "ok" {
 		t.Fatalf("expected db=ok, got %s", resp.Components["db"])
@@ -71,6 +75,7 @@ func TestHealthHandlerHealth_DBDown(t *testing.T) {
 
 	var resp struct {
 		Status     string            `json:"status"`
+		Version    map[string]string `json:"version"`
 		Components map[string]string `json:"components"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -105,6 +110,7 @@ func TestHealthHandlerHealth_NilPoller(t *testing.T) {
 
 	var resp struct {
 		Status     string            `json:"status"`
+		Version    map[string]string `json:"version"`
 		Components map[string]string `json:"components"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {

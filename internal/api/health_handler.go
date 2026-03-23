@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/lollinoo/theia/internal/version"
 	"github.com/lollinoo/theia/internal/worker"
 )
 
@@ -38,6 +39,11 @@ func (h *HealthHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": overallStatus,
+		"version": map[string]string{
+			"version":    version.Version,
+			"git_commit": version.GitCommit,
+			"build_date": version.BuildDate,
+		},
 		"components": map[string]string{
 			"db":          dbStatus,
 			"snmp_poller": pollerStatus,
