@@ -122,27 +122,40 @@ func (s *DeviceService) AddDevice(
 // probeDevice performs SNMP discovery and updates the device in the repository.
 // It re-fetches the device from the repo to avoid racing on the pointer
 // that was returned to the caller of AddDevice.
+func (s *DeviceService) markDeviceStatus(deviceID uuid.UUID, deviceIP string, status domain.DeviceStatus) {
+	fresh, err := s.deviceRepo.GetByID(deviceID)
+	if err != nil {
+		log.Printf("Failed to re-fetch device %s for status update: %v", deviceIP, err)
+		return
+	}
+	fresh.Status = status
+	if err := s.deviceRepo.Update(fresh); err != nil {
+		log.Printf("Failed to update device %s status to %s: %v", deviceIP, string(status), err)
+	}
+}
+
 func (s *DeviceService) probeDevice(device *domain.Device) {
-	// Capture immutable values needed for probe
 	deviceID := device.ID
 	deviceIP := device.IP
-	creds := device.SNMPCredentials
 
-	result, err := s.discoverFunc(deviceIP, creds)
+	// Prometheus-only devices never touch gosnmp — mark up and return.
+	if device.MetricsSource == domain.MetricsSourcePrometheus {
+		s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusUp)
+		log.Printf("Skipped SNMP probe for %s (metrics_source=prometheus); marked up", deviceIP)
+		return
+	}
+
+	result, err := s.discoverFunc(deviceIP, device.SNMPCredentials)
+	if err != nil {
+		log.Printf("SNMP discovery failed for %s: %v", deviceIP, err)
+		s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusDown)
+		return
+	}
 
 	// Re-fetch from repo to get a fresh copy (avoids data race with caller)
 	fresh, fetchErr := s.deviceRepo.GetByID(deviceID)
 	if fetchErr != nil {
 		log.Printf("Failed to re-fetch device %s for probe update: %v", deviceIP, fetchErr)
-		return
-	}
-
-	if err != nil {
-		log.Printf("SNMP discovery failed for %s: %v", deviceIP, err)
-		fresh.Status = domain.DeviceStatusDown
-		if updateErr := s.deviceRepo.Update(fresh); updateErr != nil {
-			log.Printf("Failed to update device %s status to down: %v", deviceIP, updateErr)
-		}
 		return
 	}
 
