@@ -301,7 +301,7 @@ func TestProbeCompletes_DeviceStatusUp(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", "", "", "", nil)
+		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestProbeFails_DeviceStatusDown(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", "", "", "", nil)
+		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -604,6 +604,96 @@ func TestProbeDevice_ReprobeUpdatesFields(t *testing.T) {
 	}
 	if len(updated.Interfaces) != 2 {
 		t.Errorf("expected 2 interfaces, got %d", len(updated.Interfaces))
+	}
+}
+
+// TestPrometheusDevice_SkipsSNMPProbe verifies that adding a device with
+// MetricsSourcePrometheus does NOT call the gosnmp discovery function and
+// immediately sets status to "up" without requiring SNMP credentials.
+func TestPrometheusDevice_SkipsSNMPProbe(t *testing.T) {
+	snmpCalled := false
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		snmpCalled = true
+		return nil, fmt.Errorf("should not be called")
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+
+	device, err := svc.AddDevice(context.Background(), "10.0.9.254", "",
+		// No meaningful SNMP credentials — user only wants Prometheus
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	svc.WaitForProbes()
+
+	if snmpCalled {
+		t.Error("discoverFunc (gosnmp) was called for a Prometheus-sourced device — it should have been skipped")
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.Status != domain.DeviceStatusUp {
+		t.Errorf("expected status up for Prometheus device, got %s", updated.Status)
+	}
+}
+
+// TestPrometheusDevice_SNMPv3WithPrivProtocol verifies the specific bug scenario:
+// a device with MetricsSourcePrometheus and SNMPv3 authPriv credentials (including
+// priv_protocol but no priv_password) does not cause a gosnmp connection error.
+func TestPrometheusDevice_SNMPv3WithPrivProtocol(t *testing.T) {
+	snmpCalled := false
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		snmpCalled = true
+		return nil, fmt.Errorf("securityParameters.PrivacyPassphrase is required when a privacy protocol is specified")
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+
+	// Simulate what happens when user picks "Prometheus without Fallback" but
+	// previously had v3 credentials in the form with authPriv + empty priv_password.
+	device, err := svc.AddDevice(context.Background(), "10.0.9.254", "",
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV3,
+			V3: &domain.SNMPv3Credentials{
+				Username:      "monitorUser",
+				AuthProtocol:  "SHA",
+				AuthPassword:  "authpass123",
+				PrivProtocol:  "AES",
+				PrivPassword:  "", // empty — bug trigger
+				SecurityLevel: "authPriv",
+			},
+		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	svc.WaitForProbes()
+
+	if snmpCalled {
+		t.Error("discoverFunc (gosnmp) was called — should have been skipped for MetricsSourcePrometheus")
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.Status != domain.DeviceStatusUp {
+		t.Errorf("expected status up, got %s", updated.Status)
 	}
 }
 
