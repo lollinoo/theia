@@ -1,6 +1,7 @@
 # Local development artifacts
 tmp/
-data/
+/data/
+!internal/vendor/data/
 *.db
 .gemini/
 frontend/node_modules/

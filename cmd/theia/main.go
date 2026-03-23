@@ -77,16 +77,23 @@ func main() {
 	}
 	log.Println("Database migrations completed")
 
-	// Load vendor registry from YAML (used for seeding)
-	vendorsDir := filepath.Join(filepath.Dir(cfgPath), "vendors")
+	// Load vendor registry for seeding.
+	// By default the built-in configs are loaded from the binary (go:embed).
+	// Set THEIA_VENDORS_DIR to override with a custom directory on disk.
+	var yamlRegistry *vendor.Registry
 	if envVendors := os.Getenv("THEIA_VENDORS_DIR"); envVendors != "" {
-		vendorsDir = envVendors
+		yamlRegistry, err = vendor.LoadRegistryFromYAML(envVendors)
+		if err != nil {
+			log.Fatalf("Failed to load vendor registry from %s: %v", envVendors, err)
+		}
+		log.Printf("Vendor YAML loaded: %d vendors from %s", yamlRegistry.VendorCount(), envVendors)
+	} else {
+		yamlRegistry, err = vendor.LoadRegistryFromEmbedded()
+		if err != nil {
+			log.Fatalf("Failed to load embedded vendor registry: %v", err)
+		}
+		log.Printf("Vendor registry loaded: %d vendors (embedded)", yamlRegistry.VendorCount())
 	}
-	yamlRegistry, err := vendor.LoadRegistryFromYAML(vendorsDir)
-	if err != nil {
-		log.Fatalf("Failed to load vendor registry from %s: %v", vendorsDir, err)
-	}
-	log.Printf("Vendor YAML loaded: %d vendors from %s", yamlRegistry.VendorCount(), vendorsDir)
 
 	// Create vendor config repo and seed DB from YAML
 	vendorConfigRepo := sqlite.NewVendorConfigRepo(db)

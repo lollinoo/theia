@@ -285,14 +285,9 @@ snmp:
 }
 
 func TestLoadRealVendors(t *testing.T) {
-	vendorDir := filepath.Join("..", "..", "vendors")
-	if _, err := os.Stat(vendorDir); os.IsNotExist(err) {
-		t.Skip("vendors/ directory not found")
-	}
-
-	reg, err := LoadRegistry(vendorDir)
+	reg, err := LoadRegistryFromEmbedded()
 	if err != nil {
-		t.Fatalf("LoadRegistry failed on real vendors: %v", err)
+		t.Fatalf("LoadRegistryFromEmbedded failed: %v", err)
 	}
 
 	v := reg.Match("1.3.6.1.4.1.14988.1.1.2", "RouterOS RB5009")

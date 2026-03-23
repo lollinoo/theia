@@ -1,0 +1,50 @@
+# MikroTik RouterOS and SwOS devices.
+
+vendor:
+  name: mikrotik
+  display_name: MikroTik
+
+detection:
+  sys_object_id_prefixes:
+    - "1.3.6.1.4.1.14988"
+  sys_descr_patterns:
+    - "RouterOS"
+    - "SwOS"
+
+device_type_rules:
+  - match:
+      sys_descr_contains: "RouterOS"
+    type: router
+  - match:
+      sys_descr_contains: "SwOS"
+    type: switch
+  - type: unknown
+
+model_extraction:
+  sys_descr_regex: "RouterOS\\s+(\\S+)"
+  capture_group: 1
+
+metrics:
+  prometheus:
+    cpu: 'avg by (%[1]s) (mtxrHlCpuLoad{%[1]s=~"%[2]s"} or hrProcessorLoad{%[1]s=~"%[2]s"})'
+    memory: '(avg by (%[1]s) (100 * (1 - mtxrHlFreeMemory{%[1]s=~"%[2]s"} / on(%[1]s) mtxrHlTotalMemory{%[1]s=~"%[2]s"}))) or (avg by (%[1]s) (100 * hrStorageUsed{hrStorageDescr=~"(?i)physical memory|main memory",%[1]s=~"%[2]s"} / hrStorageSize{hrStorageDescr=~"(?i)physical memory|main memory",%[1]s=~"%[2]s"}))'
+    temperature: 'mtxrHlTemperature{%[1]s=~"%[2]s"} or max by (%[1]s) (entPhySensorValue{entPhySensorType="8",%[1]s=~"%[2]s"})'
+    uptime: '(hrSystemUptime{%[1]s=~"%[2]s"} or sysUpTime{%[1]s=~"%[2]s"}) / 100'
+
+snmp:
+  temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
+  temperature_scale: 0.1
+
+backup:
+  supported: true
+  methods: ["ssh"]
+  default_method: ssh
+  ssh_commands:
+    export_running: "/export"
+    export_compact: "/export compact"
+    export_verbose: "/export verbose"
+    export_startup: "/export"
+    binary_backup:
+      save_command: "/system backup save dont-encrypt=yes name=theia-backup"
+      remote_file_path: "theia-backup.backup"
+      cleanup_command: "/file remove theia-backup.backup"
