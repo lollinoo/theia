@@ -102,9 +102,6 @@ describe('createDevice', () => {
   };
 
   it('sends POST with correct body', async () => {
-    const responseData = {
-      data: deviceResource('uuid-2', 'new-router', '10.0.0.2'),
-    };
     // createDevice uses requestJSONWithBody which calls fetch with method+body
     // The response has { data: { id, attributes, ... } } (single resource, not array)
     const fetchMock = vi.fn().mockResolvedValue(

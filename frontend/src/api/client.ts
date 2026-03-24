@@ -505,7 +505,7 @@ export async function fetchBackupFileContent(fileId: string): Promise<string> {
 
 // --- Bulk Backup ---
 
-export function bulkDownloadUrl(deviceIds: string[]): string {
+export function bulkDownloadUrl(_deviceIds: string[]): string {
   // We use a form POST for the download, so return the endpoint URL
   return '/api/v1/backups/bulk-download';
 }

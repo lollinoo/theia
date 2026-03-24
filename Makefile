@@ -6,7 +6,7 @@
 # ---------------------------------------------------------------------------
 # Version management
 # ---------------------------------------------------------------------------
-VERSION    := $(shell cat VERSION)
+VERSION    := $(shell git show HEAD:VERSION 2>/dev/null || cat VERSION)
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_DATE := $(shell date -u +%FT%TZ)
 
@@ -121,10 +121,10 @@ bump: ## Bump version (Usage: make bump v=1.1.0)
 	@echo "Bumped version to $(v)"
 
 tag: ## Create a git tag from VERSION file
-	@git add VERSION frontend/package.json
-	@git commit -m "release: v$(VERSION)"
-	@git tag "v$(VERSION)"
-	@echo "Tagged v$(VERSION)"
+	@git add VERSION frontend/package.json frontend/package-lock.json
+	@git commit -m "release: v$$(cat VERSION)"
+	@git tag "v$$(cat VERSION)"
+	@echo "Tagged v$$(cat VERSION)"
 
 release: bump tag ## Bump + tag + build production images (Usage: make release v=1.1.0)
 	THEIA_VERSION=$(v) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
