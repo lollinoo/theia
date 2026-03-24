@@ -130,29 +130,16 @@ function DeviceCardInner({
       />
 
       {/* HEADER SECTION */}
-      <div className="flex items-center justify-between rounded-t-[12px] border-t-[3px] border-accent-purple bg-[#1a1a24] px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center text-accent-purple">
+      <div className="flex items-center justify-between gap-2 rounded-t-[12px] border-t-[3px] border-accent-purple bg-[#1a1a24] px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex shrink-0 items-center justify-center text-accent-purple">
             <DeviceIcon type={data.device.device_type} size={20} />
           </div>
-          <span className="flex items-center text-[15px] font-bold tracking-wide text-text-primary">
+          <span className="truncate text-[15px] font-bold tracking-wide text-text-primary">
             {label}
           </span>
         </div>
-        <div className="flex items-center justify-center">
-          {data.pinned && (
-            <span
-              title="Pinned position"
-              className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-accent/10 text-accent"
-            >
-              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none">
-                <path
-                  d="M9 4H15L14 9L17.5 12.5V14H12.75L12 20L11.25 14H6.5V12.5L10 9L9 4Z"
-                  fill="currentColor"
-                />
-              </svg>
-            </span>
-          )}
+        <div className="flex shrink-0 items-center justify-center">
           <StatusDot status={statusForDot} />
         </div>
       </div>
@@ -246,7 +233,6 @@ const DeviceCard = memo(DeviceCardInner, (prev, next) => {
     pd.device.vendor === nd.device.vendor &&
     pd.device.sys_name === nd.device.sys_name &&
     pd.device.tags?.display_name === nd.device.tags?.display_name &&
-    pd.pinned === nd.pinned &&
     pd.highlighted === nd.highlighted &&
     pd.alertStatus === nd.alertStatus &&
     pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&

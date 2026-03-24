@@ -396,7 +396,7 @@ export default function Canvas({ onDevicesChange }: CanvasProps = {}) {
 
   useKeyboardShortcuts(shortcuts);
 
-  async function loadTopology(isSilentRefresh = false) {
+  async function loadTopology(isSilentRefresh = false, defaultPosition?: { x: number; y: number }) {
     if (!isSilentRefresh) {
       setLoading(true);
     }
@@ -438,7 +438,7 @@ export default function Canvas({ onDevicesChange }: CanvasProps = {}) {
 
       const nextNodes: Node<DeviceNodeData>[] = fetchedDevices.map((device) => {
         const saved = savedPositions.get(device.id);
-        const position = saved ?? computedPositions.get(device.id) ?? { x: 0, y: 0 };
+        const position = saved ?? defaultPosition ?? computedPositions.get(device.id) ?? { x: 0, y: 0 };
 
         // Merge snapshot status/hostname into device if available
         let deviceData = device;
@@ -1051,8 +1051,13 @@ export default function Canvas({ onDevicesChange }: CanvasProps = {}) {
         {panelContent?.type === 'addDevice' && (
           <AddDevicePanel
             onDeviceAdded={() => {
+              const { width, height } = viewportSize();
+              const center = reactFlow.screenToFlowPosition({
+                x: width / 2,
+                y: height / 2,
+              });
               setPanelContent(null);
-              void loadTopology(true);
+              void loadTopology(true, center);
             }}
           />
         )}
