@@ -11,7 +11,7 @@ const statusColors: Record<string, string> = {
   success: 'text-status-up',
   failed: 'text-status-down',
   running: 'text-status-probing',
-  pending: 'text-text-secondary',
+  pending: 'text-on-bg-secondary',
 };
 
 export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTableProps) {
@@ -82,15 +82,15 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
   };
 
   if (loading) {
-    return <div className="text-xs text-text-secondary">Loading...</div>;
+    return <div className="text-xs text-on-bg-secondary">Loading...</div>;
   }
 
   if (jobs.length === 0) {
-    return <div className="text-xs text-text-secondary">No backups found</div>;
+    return <div className="text-xs text-on-bg-secondary">No backups found</div>;
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 transition-colors duration-200">
       {jobs.map((job) => {
         const fileCount = job.files?.length ?? 0;
         const totalSize = job.files?.reduce((sum, f) => sum + f.size_bytes, 0) ?? 0;
@@ -99,22 +99,22 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
         return (
           <div
             key={job.id}
-            className="rounded-md border border-border-subtle"
+            className="rounded-lg bg-surface-high overflow-hidden"
           >
             {/* Job summary row */}
             <div
-              className="p-3 cursor-pointer hover:bg-bg-elevated/30 transition-colors"
+              className="p-3 cursor-pointer hover:bg-elevated/30 transition-colors"
               onClick={() => setExpandedJob(isExpanded ? null : job.id)}
             >
               <div className="flex items-center justify-between mb-1.5">
                 <span className={`text-xs font-medium capitalize ${statusColors[job.status] ?? ''}`}>
                   {job.status}
                 </span>
-                <span className="text-[10px] text-text-secondary">{formatDate(job.created_at)}</span>
+                <span className="text-[10px] text-on-bg-secondary font-mono">{formatDate(job.created_at)}</span>
               </div>
-              <div className="flex items-center justify-between text-[10px] text-text-secondary">
-                <span>{fileCount} file{fileCount !== 1 ? 's' : ''} / {formatSize(totalSize)}</span>
-                <span className="text-text-secondary/50">{isExpanded ? '▲' : '▼'}</span>
+              <div className="flex items-center justify-between text-[10px] text-on-bg-secondary">
+                <span className="font-mono">{fileCount} file{fileCount !== 1 ? 's' : ''} / {formatSize(totalSize)}</span>
+                <span className="text-on-bg-secondary/50">{isExpanded ? '▲' : '▼'}</span>
               </div>
               {job.error_message && (
                 <div className="text-[10px] text-status-down mt-1 break-words">{job.error_message}</div>
@@ -123,13 +123,13 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
 
             {/* Expanded file list */}
             {isExpanded && (
-              <div className="border-t border-border-subtle p-3 space-y-2">
+              <div className="mt-3 p-3 space-y-2">
                 {job.files && job.files.length > 0 ? (
                   job.files.map((file) => (
                     <div key={file.id} className="flex items-center justify-between text-[10px]">
                       <div className="flex-1 min-w-0">
-                        <div className="text-text-primary font-mono truncate">{file.file_name}</div>
-                        <div className="text-text-secondary">
+                        <div className="text-on-bg font-mono truncate">{file.file_name}</div>
+                        <div className="text-on-bg-secondary">
                           {file.file_type} / {formatSize(file.size_bytes)}
                           {file.file_hash && (
                             <span className="ml-2 font-mono">{file.file_hash.substring(0, 12)}</span>
@@ -138,7 +138,7 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
                       </div>
                       <a
                         href={backupFileDownloadUrl(file.id)}
-                        className="ml-2 shrink-0 rounded px-2 py-1 font-medium text-accent border border-accent/30 hover:bg-accent/10 transition-colors"
+                        className="ml-2 shrink-0 rounded px-2 py-1 font-medium text-primary border border-primary/30 hover:bg-primary/10 transition-colors"
                         download
                       >
                         Download
@@ -146,14 +146,14 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
                     </div>
                   ))
                 ) : (
-                  <div className="text-[10px] text-text-secondary">No files</div>
+                  <div className="text-[10px] text-on-bg-secondary">No files</div>
                 )}
 
                 <div className="flex gap-1.5 pt-1">
                   {job.status === 'success' && (
                     <button
                       onClick={onViewConfig}
-                      className="rounded px-2 py-1 text-[10px] font-medium text-accent border border-accent/30 hover:bg-accent/10 transition-colors"
+                      className="rounded px-2 py-1 text-[10px] font-medium text-primary border border-primary/30 hover:bg-primary/10 transition-colors"
                     >
                       View Config
                     </button>

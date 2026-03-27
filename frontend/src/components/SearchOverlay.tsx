@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useState } from 'react';
 import type { Device } from '../types/api';
-import { DeviceIcon } from './icons/DeviceIcon';
+import { VendorIcon } from './icons/VendorIcon';
+import { MaterialIcon } from './MaterialIcon';
 
 interface SearchOverlayProps {
   devices: Device[];
@@ -54,16 +55,9 @@ export default function SearchOverlay({
 
   return (
     <div className="pointer-events-none fixed left-5 top-14 z-20 w-[min(420px,calc(100vw-2.5rem))]">
-      <div className="pointer-events-auto rounded-2xl border border-border-subtle bg-bg-surface/80 p-3 shadow-canvas backdrop-blur-xl">
-        <label className="flex items-center gap-3 rounded-xl border border-white/5 bg-bg-canvas/85 px-4 py-3">
-          <svg viewBox="0 0 24 24" className="h-4 w-4 text-text-secondary" fill="none">
-            <path
-              d="M10.5 4.5C7.19 4.5 4.5 7.19 4.5 10.5C4.5 13.81 7.19 16.5 10.5 16.5C12.11 16.5 13.57 15.87 14.65 14.84L18.75 18.94"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-            />
-          </svg>
+      <div className="pointer-events-auto rounded-2xl border border-glass-border bg-glass-bg p-3 shadow-canvas dark:backdrop-blur-[16px] transition-colors duration-200">
+        <label className="flex items-center gap-3 rounded-xl bg-elevated px-4 py-3">
+          <MaterialIcon name="search" size={16} className="text-on-bg-secondary" />
           <input
             autoFocus
             value={query}
@@ -80,32 +74,32 @@ export default function SearchOverlay({
               }
             }}
             placeholder="Search devices..."
-            className="w-full border-0 bg-transparent text-sm text-text-primary outline-none placeholder:text-text-secondary"
+            className="w-full border-0 bg-transparent text-sm text-on-bg outline-none placeholder:text-on-bg-secondary"
           />
         </label>
         {showDropdown ? (
-          <div className="mt-3 overflow-hidden rounded-xl border border-border-subtle bg-bg-canvas/90">
+          <div className="mt-3 overflow-hidden rounded-xl bg-surface-high">
             {results.length > 0 ? (
               results.map((device) => (
                 <button
                   key={device.id}
                   type="button"
                   onClick={() => handleSelect(device.id)}
-                  className="flex w-full items-center gap-3 border-b border-white/5 px-4 py-3 text-left transition-colors duration-150 last:border-b-0 hover:bg-bg-elevated"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-elevated"
                 >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-bg-surface">
-                    <DeviceIcon type={device.device_type} size={20} />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface">
+                    <VendorIcon vendor={device.vendor || ''} size={20} />
                   </div>
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-text-primary">
+                    <p className="truncate text-sm font-medium text-on-bg">
                       {device.tags?.display_name || device.sys_name || device.hostname || device.ip}
                     </p>
-                    <p className="truncate text-xs text-text-secondary">{device.ip}</p>
+                    <p className="truncate text-xs text-on-bg-secondary">{device.ip}</p>
                   </div>
                 </button>
               ))
             ) : (
-              <p className="px-4 py-3 text-sm text-text-secondary">No devices found</p>
+              <p className="px-4 py-3 text-sm text-on-bg-secondary">No devices found</p>
             )}
           </div>
         ) : null}

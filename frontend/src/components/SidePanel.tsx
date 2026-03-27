@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { MaterialIcon } from './MaterialIcon';
 
 interface SidePanelProps {
     open: boolean;
@@ -21,22 +22,20 @@ export function SidePanel({ open, onClose, title, children }: SidePanelProps) {
 
     return (
         <div
-            className={`fixed top-0 right-0 h-full w-[320px] z-40 transform transition-transform duration-200 ease-in-out bg-bg-surface border-l border-border-subtle flex flex-col shadow-2xl ${open ? 'translate-x-0' : 'translate-x-full'
+            className={`fixed top-0 right-0 h-full w-[320px] z-40 transform transition-transform duration-200 ease-in-out bg-surface flex flex-col shadow-panel ${open ? 'translate-x-0' : 'translate-x-full'
                 }`}
         >
-            <div className="flex items-center justify-between px-4 py-4 border-b border-border-subtle">
-                <h2 className="text-lg font-semibold text-text-primary">{title}</h2>
+            <div className="flex items-center justify-between px-4 py-3 bg-surface-high/80 transition-colors duration-200">
+                <h2 className="text-sm font-semibold text-on-bg tracking-wide">{title}</h2>
                 <button
                     onClick={onClose}
-                    className="p-1 text-text-secondary hover:text-text-primary hover:bg-bg-elevated rounded-md transition-colors"
+                    className="p-1 text-on-bg-secondary hover:text-on-bg hover:bg-elevated rounded-md transition-colors"
                     title="Close"
                 >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                    <MaterialIcon name="close" size={18} />
                 </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 transition-colors duration-200">
                 {children}
             </div>
         </div>

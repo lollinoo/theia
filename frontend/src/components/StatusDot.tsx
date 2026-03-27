@@ -7,13 +7,13 @@ interface StatusDotProps {
 }
 
 const statusClassNames: Record<StatusDotStatus, string> = {
-  up: 'bg-status-up shadow-[0_0_14px_rgba(0,200,83,0.55)]',
-  down: 'bg-status-down shadow-[0_0_14px_rgba(255,23,68,0.45)]',
-  degraded: 'bg-yellow-500 animate-pulse shadow-[0_0_14px_rgba(255,193,7,0.45)]',
-  probing: 'bg-status-probing animate-pulse shadow-[0_0_14px_rgba(255,193,7,0.45)]',
-  unknown: 'bg-status-unknown shadow-[0_0_12px_rgba(101,119,134,0.35)]',
+  up: 'bg-status-up shadow-[0_0_8px_rgba(0,230,118,var(--nt-glow-shadow-opacity))]',
+  down: 'bg-status-down shadow-[0_0_16px_rgba(255,23,68,var(--nt-glow-shadow-opacity))] animate-pulse',
+  degraded: 'bg-yellow-500 shadow-[0_0_14px_rgba(255,193,7,var(--nt-glow-shadow-opacity))] animate-pulse',
+  probing: 'bg-status-probing shadow-[0_0_12px_rgba(255,234,0,var(--nt-glow-shadow-opacity))] animate-pulse',
+  unknown: 'bg-status-unknown shadow-[0_0_6px_rgba(158,158,158,var(--nt-glow-shadow-opacity))]',
 };
 
 export function StatusDot({ status }: StatusDotProps) {
-  return <span className={`inline-flex h-2.5 w-2.5 rounded-full ${statusClassNames[status]}`} />;
+  return <span className={`motion-reduce:animate-none inline-flex h-2.5 w-2.5 rounded-full transition-[box-shadow] duration-200 ${statusClassNames[status]}`} />;
 }

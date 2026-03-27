@@ -1,3 +1,4 @@
+import { MaterialIcon } from './MaterialIcon';
 import type { Device } from '../types/api';
 import type { AlertDTO, PrometheusStatusPayload } from '../types/metrics';
 
@@ -23,7 +24,7 @@ function severityBadge(severity: string) {
     );
   }
   return (
-    <span className="inline-flex items-center rounded-full bg-text-secondary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
+    <span className="inline-flex items-center rounded-full bg-text-secondary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-on-bg-secondary">
       {severity}
     </span>
   );
@@ -32,11 +33,11 @@ function severityBadge(severity: string) {
 function stateBadge(state: string) {
   if (state === 'firing') {
     return (
-      <span className="h-2 w-2 flex-none rounded-full bg-status-down animate-pulse" />
+      <span className="h-2 w-2 flex-none rounded-full bg-status-down animate-pulse shadow-[0_0_10px_rgba(255,23,68,var(--nt-glow-shadow-opacity))] motion-reduce:animate-none" />
     );
   }
   return (
-    <span className="h-2 w-2 flex-none rounded-full bg-status-up" />
+    <span className="h-2 w-2 flex-none rounded-full bg-status-up shadow-[0_0_6px_rgba(0,230,118,var(--nt-glow-shadow-opacity))]" />
   );
 }
 
@@ -70,7 +71,7 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
       {promDown && (
         <div className="space-y-2">
           <div className="flex items-start gap-2.5 rounded-lg border border-red-500/25 bg-red-500/8 p-3">
-            <span className="mt-0.5 h-2 w-2 flex-none rounded-full bg-red-400 animate-pulse" />
+            <span className="mt-0.5 h-2 w-2 flex-none rounded-full bg-red-400 animate-pulse motion-reduce:animate-none" />
             <div className="min-w-0">
               <p className="text-sm font-medium text-red-300">Prometheus unreachable</p>
               <p className="mt-0.5 text-xs text-red-300/70">
@@ -119,23 +120,23 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
       {/* Firing alerts */}
       {firingAlerts.length > 0 ? (
         <div className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Active ({firingAlerts.length})
           </p>
           {firingAlerts.map((alert, i) => (
             <div
               key={`${alert.device_id}-${alert.alert_name}-${i}`}
-              className="rounded-lg border border-border-subtle bg-bg-elevated p-3 space-y-1.5"
+              className="rounded-lg bg-elevated shadow-panel p-3 space-y-1.5 transition-colors duration-200"
             >
               <div className="flex items-center gap-2">
                 {stateBadge(alert.state)}
-                <span className="text-sm font-medium text-text-primary truncate">
+                <span className="text-sm font-medium text-on-bg truncate">
                   {alert.alert_name}
                 </span>
                 {severityBadge(alert.severity)}
               </div>
-              <p className="text-xs text-text-secondary">{alert.summary}</p>
-              <p className="text-[11px] text-text-secondary/70">
+              <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
+              <p className="text-[11px] text-on-bg-secondary/70">
                 {deviceLabel(alert.device_id)}
               </p>
             </div>
@@ -143,34 +144,32 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
         </div>
       ) : !promDown ? (
         <div className="flex flex-col items-center justify-center py-8 text-center">
-          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" className="h-8 w-8 text-status-up/50 mb-2">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <p className="text-sm text-text-secondary">No active alerts</p>
-          <p className="text-xs text-text-secondary/60 mt-0.5">All systems operational</p>
+          <MaterialIcon name="check_circle" className="text-status-up/50 mb-2" size={32} />
+          <p className="text-sm text-on-bg-secondary">No active alerts</p>
+          <p className="text-xs text-on-bg-secondary/60 mt-0.5">All systems operational</p>
         </div>
       ) : null}
 
       {/* Resolved alerts */}
       {resolvedAlerts.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Resolved ({resolvedAlerts.length})
           </p>
           {resolvedAlerts.map((alert, i) => (
             <div
               key={`${alert.device_id}-${alert.alert_name}-resolved-${i}`}
-              className="rounded-lg border border-border-subtle/50 bg-bg-elevated/50 p-3 space-y-1.5 opacity-60"
+              className="rounded-lg bg-surface-high p-3 space-y-1.5 opacity-60 transition-colors duration-200"
             >
               <div className="flex items-center gap-2">
                 {stateBadge(alert.state)}
-                <span className="text-sm font-medium text-text-primary truncate">
+                <span className="text-sm font-medium text-on-bg truncate">
                   {alert.alert_name}
                 </span>
                 {severityBadge(alert.severity)}
               </div>
-              <p className="text-xs text-text-secondary">{alert.summary}</p>
-              <p className="text-[11px] text-text-secondary/70">
+              <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
+              <p className="text-[11px] text-on-bg-secondary/70">
                 {deviceLabel(alert.device_id)}
               </p>
             </div>

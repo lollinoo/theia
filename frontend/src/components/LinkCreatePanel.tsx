@@ -71,23 +71,23 @@ function SearchableDeviceSelect({
           setSearch('');
           setTimeout(() => inputRef.current?.focus(), 0);
         }}
-        className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-left text-sm text-text-primary focus:border-accent focus:outline-none"
+        className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-left text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
       >
         {selectedDevice ? (
           <span>
             <span className="font-mono">{selectedDevice.ip}</span>
             {(selectedDevice.tags?.display_name || selectedDevice.sys_name) && (
-              <span className="ml-2 text-text-secondary">
+              <span className="ml-2 text-on-bg-secondary">
                 — {selectedDevice.tags?.display_name || selectedDevice.sys_name}
               </span>
             )}
           </span>
         ) : (
-          <span className="text-text-secondary/40">{placeholder}</span>
+          <span className="text-on-bg-secondary/40">{placeholder}</span>
         )}
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 w-full rounded-lg border border-border-subtle bg-bg-elevated shadow-lg">
+        <div className="absolute z-50 mt-1 w-full rounded-lg border border-outline-subtle bg-elevated shadow-lg">
           <div className="p-2">
             <input
               ref={inputRef}
@@ -95,12 +95,12 @@ function SearchableDeviceSelect({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search by IP or name..."
-              className="w-full rounded-md border border-border-subtle bg-bg-canvas px-2.5 py-1.5 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+              className="w-full rounded-md border border-outline-subtle bg-bg px-2.5 py-1.5 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
             />
           </div>
           <div className="max-h-48 overflow-y-auto">
             {filtered.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-text-secondary">No devices found</div>
+              <div className="px-3 py-2 text-xs text-on-bg-secondary">No devices found</div>
             ) : (
               filtered.map((d) => (
                 <button
@@ -111,11 +111,11 @@ function SearchableDeviceSelect({
                     setOpen(false);
                     setSearch('');
                   }}
-                  className={`w-full px-3 py-2 text-left text-sm hover:bg-bg-surface ${d.id === value ? 'bg-accent/10 text-accent' : 'text-text-primary'}`}
+                  className={`w-full px-3 py-2 text-left text-sm hover:bg-surface ${d.id === value ? 'bg-primary/10 text-primary' : 'text-on-bg'}`}
                 >
                   <span className="font-mono">{d.ip}</span>
                   {(d.tags?.display_name || d.sys_name) && (
-                    <span className="ml-2 text-text-secondary">
+                    <span className="ml-2 text-on-bg-secondary">
                       — {d.tags?.display_name || d.sys_name}
                     </span>
                   )}
@@ -182,14 +182,14 @@ function InterfaceSelect({
 
   return (
     <div className="space-y-1.5">
-      <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+      <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
         {label}
       </label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={interfaces.length === 0}
-        className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
       >
         <option value="">{placeholder}</option>
         {upInterfaces.map((iface) => (
@@ -206,7 +206,7 @@ function InterfaceSelect({
           </option>
         )}
         {downInterfaces.map((iface) => (
-          <option key={iface.if_name} value={iface.if_name} style={{ color: '#666' }}>
+          <option key={iface.if_name} value={iface.if_name} style={{ color: 'var(--nt-on-bg-muted)' }}>
             {iface.if_name}
             {formatSpeed(iface.speed) ? `  ${formatSpeed(iface.speed)}` : ''}
             {'  '}down
@@ -292,7 +292,7 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
       onSubmit={(e) => {
         void handleSubmit(e);
       }}
-      className="space-y-5 p-4"
+      className="space-y-5 p-4 transition-colors duration-200"
     >
       {/* Refresh button */}
       {onRefreshDevices && (
@@ -301,7 +301,7 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
             type="button"
             onClick={() => { void handleRefresh(); }}
             disabled={refreshing}
-            className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-bg-elevated px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-bg-surface hover:text-text-primary disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg bg-surface-high px-2.5 py-1.5 text-xs text-on-bg-secondary transition-colors hover:bg-elevated hover:text-on-bg disabled:opacity-50"
             title="Refresh devices & interfaces"
           >
             <svg
@@ -321,11 +321,11 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
 
       {/* Source device */}
       <div className="space-y-3">
-        <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+        <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
           Source
         </p>
         <div className="space-y-1.5">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Device
           </label>
           <SearchableDeviceSelect
@@ -344,15 +344,15 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
         />
       </div>
 
-      <div className="border-t border-border-subtle" />
+      <div className="my-4" />
 
       {/* Target device */}
       <div className="space-y-3">
-        <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+        <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
           Target
         </p>
         <div className="space-y-1.5">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Device
           </label>
           <SearchableDeviceSelect
@@ -381,14 +381,14 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
         <button
           type="button"
           onClick={onClose}
-          className="flex-1 rounded-lg border border-border-subtle bg-bg-elevated px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-surface"
+          className="flex-1 rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated"
         >
           Cancel
         </button>
         <button
           type="submit"
           disabled={submitting || !sourceDeviceId || !targetDeviceId || !sourceIfName || !targetIfName}
-          className="flex-1 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Creating...' : 'Create Link'}
         </button>

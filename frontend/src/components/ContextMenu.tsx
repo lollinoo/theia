@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
+import { MaterialIcon } from './MaterialIcon';
 
 export interface ContextMenuItem {
     label: string;
     onClick: () => void;
     variant?: 'danger' | 'default';
     disabled?: boolean;
+    icon?: string;
+    separator?: boolean;
 }
 
 interface ContextMenuProps {
@@ -61,30 +64,57 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
     return (
         <div
             ref={menuRef}
-            className={`fixed z-30 rounded-xl border border-border-subtle bg-bg-surface/95 p-1 shadow-lg backdrop-blur-xl ${isMeasuring ? 'opacity-0' : 'opacity-100'
+            className={`fixed z-30 dark:rounded-[6px] rounded-[10px] border border-glass-border bg-glass-bg py-2 shadow-pill dark:backdrop-blur-[16px] transition-colors duration-200 ${isMeasuring ? 'opacity-0' : 'opacity-100'
                 }`}
             style={{
                 left: renderPos.x,
                 top: renderPos.y,
-                minWidth: 160,
+                minWidth: 200,
             }}
         >
             {items.map((item, index) => (
-                <button
-                    key={index}
-                    disabled={item.disabled}
-                    className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors ${item.disabled ? 'cursor-not-allowed opacity-40' : 'hover:bg-bg-elevated'} ${item.variant === 'danger' ? 'text-status-down' : 'text-text-primary'
+                <div key={index}>
+                    {item.separator && (
+                        <div className="mx-2 my-1 h-[1px] bg-outline" />
+                    )}
+                    <button
+                        disabled={item.disabled}
+                        className={`group flex w-full items-center gap-3 px-3 text-left text-sm transition-colors dark:h-[36px] h-[40px] ${
+                            item.disabled
+                                ? 'cursor-not-allowed opacity-40'
+                                : item.variant === 'danger'
+                                    ? 'hover:bg-[rgba(255,23,68,0.08)]'
+                                    : 'hover:bg-outline-subtle'
                         }`}
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        if (!item.disabled) {
-                            item.onClick();
-                            onClose();
-                        }
-                    }}
-                >
-                    {item.label}
-                </button>
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (!item.disabled) {
+                                item.onClick();
+                                onClose();
+                            }
+                        }}
+                    >
+                        {item.icon && (
+                            <MaterialIcon
+                                name={item.icon}
+                                className={
+                                    item.variant === 'danger'
+                                        ? 'text-critical'
+                                        : 'text-on-bg-muted group-hover:text-on-bg transition-colors'
+                                }
+                            />
+                        )}
+                        <span
+                            className={
+                                item.variant === 'danger'
+                                    ? 'text-critical font-semibold'
+                                    : 'text-on-bg'
+                            }
+                        >
+                            {item.label}
+                        </span>
+                    </button>
+                </div>
             ))}
         </div>
     );

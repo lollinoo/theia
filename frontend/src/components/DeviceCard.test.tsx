@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { ReactFlowProvider } from 'reactflow';
+import { ReactFlowProvider } from '@xyflow/react';
 import DeviceCard from './DeviceCard';
 import type { Device } from '../types/api';
 import type { DeviceNodeData } from './DeviceCard';
-import type { NodeProps } from 'reactflow';
+import type { NodeProps } from '@xyflow/react';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -72,10 +72,12 @@ describe('DeviceCard', () => {
     expect(screen.getByText('IP:')).toBeInTheDocument();
   });
 
-  it('shows vendor badge for non-default vendors', () => {
-    renderDeviceCard({ device: mockDevice({ vendor: 'mikrotik' }) });
+  it('shows vendor icon for non-default vendors', () => {
+    const { container } = renderDeviceCard({ device: mockDevice({ vendor: 'mikrotik' }) });
 
-    expect(screen.getByText('Mikrotik')).toBeInTheDocument();
+    // Vendor icon renders as a single SVG in the header
+    const svgs = container.querySelectorAll('svg[aria-hidden="true"]');
+    expect(svgs.length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders metrics section with placeholder values when no metrics', () => {
@@ -123,5 +125,89 @@ describe('DeviceCard', () => {
   it('renders without crashing', () => {
     const { container } = renderDeviceCard();
     expect(container.firstChild).toBeTruthy();
+  });
+
+  it('uses default ring when no areaColor', () => {
+    const { container } = renderDeviceCard();
+    const html = container.innerHTML;
+    expect(html).toContain('ring-1');
+    expect(html).toContain('ring-outline');
+  });
+
+  it('renders area color as ring when areaColor set', () => {
+    const { container } = renderDeviceCard({ areaColor: '#ff6600' });
+    const html = container.innerHTML;
+    expect(html).toContain('--tw-ring-color');
+    expect(html).toContain('#ff6600');
+  });
+
+  it('does not render decorative bottom ports', () => {
+    const { container } = renderDeviceCard();
+    // The old card had 6 decorative dot divs in a bottom row
+    const portDots = container.querySelectorAll('.absolute.-bottom-1 .rounded-full');
+    expect(portDots.length).toBe(0);
+  });
+
+  it('shows generic icon for default vendor', () => {
+    const { container } = renderDeviceCard({ device: mockDevice({ vendor: 'default' }) });
+
+    // Generic vendor icon still renders as SVG
+    const svgs = container.querySelectorAll('svg[aria-hidden="true"]');
+    expect(svgs.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders metrics section with bg-surface-high surface tier', () => {
+    const { container } = renderDeviceCard();
+    // The metrics area should use bg-surface-high instead of border-t
+    const metricsArea = container.querySelector('.bg-surface-high');
+    expect(metricsArea).not.toBeNull();
+    // Should NOT have a border-t separator
+    const html = container.innerHTML;
+    expect(html).not.toContain('border-t border-outline');
+  });
+
+  it('renders ghost node with hostname only and no metrics', () => {
+    renderDeviceCard({
+      device: mockDevice({ sys_name: 'Ghost-Router' }),
+      isGhost: true,
+    });
+
+    expect(screen.getByText('Ghost-Router')).toBeInTheDocument();
+    // Ghost nodes should NOT show metric labels
+    expect(screen.queryByText('CPU')).toBeNull();
+    expect(screen.queryByText('MEM')).toBeNull();
+    expect(screen.queryByText('TEMP')).toBeNull();
+    expect(screen.queryByText('UP')).toBeNull();
+  });
+
+  it('ghost node has dashed border', () => {
+    const { container } = renderDeviceCard({
+      device: mockDevice({ sys_name: 'Ghost-Switch' }),
+      isGhost: true,
+    });
+
+    const html = container.innerHTML;
+    expect(html).toContain('border-dashed');
+  });
+
+  it('metric value cells have font-mono class (JetBrains Mono — COMP-01)', () => {
+    const { container } = renderDeviceCard();
+    // All 4 metric value cells (CPU, MEM, TEMP, UP) should have font-mono
+    const fontMonoEls = container.querySelectorAll('.font-mono');
+    // At least 4 font-mono elements for metric cells plus the IP address
+    expect(fontMonoEls.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('card outer div has ring-primary class when highlighted (cardRingClass glow ring)', () => {
+    const { container } = renderDeviceCard({ highlighted: true });
+    const html = container.innerHTML;
+    expect(html).toContain('ring-primary');
+  });
+
+  it('card outer div has ring-1 ring-outline default state when not highlighted or selected', () => {
+    const { container } = renderDeviceCard();
+    const html = container.innerHTML;
+    expect(html).toContain('ring-1');
+    expect(html).toContain('ring-outline');
   });
 });

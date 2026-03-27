@@ -124,13 +124,13 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   }
 
   const inputClass =
-    'w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none';
+    'w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
   const selectClass =
-    'w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none';
-  const labelClass = 'text-xs font-medium uppercase tracking-widest text-text-secondary';
+    'w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
+  const labelClass = 'text-xs font-medium uppercase tracking-widest text-on-bg-secondary';
 
   return (
-    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4 p-4">
+    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4 p-4 transition-colors duration-200">
       {/* Prometheus unavailable warning */}
       {prometheusCheckDone && !prometheusAvailable && (
         <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
@@ -169,12 +169,12 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
           </option>
         </select>
         {metricsMode === 'prometheus' && (
-          <p className="text-xs text-text-secondary/70">
+          <p className="text-xs text-on-bg-secondary/70">
             Metrics from Prometheus only. No fallback if Prometheus is unreachable.
           </p>
         )}
         {metricsMode === 'prometheus_snmp_fallback' && (
-          <p className="text-xs text-text-secondary/70">
+          <p className="text-xs text-on-bg-secondary/70">
             Metrics from Prometheus. Falls back to SNMP if Prometheus is unavailable or has no data.
           </p>
         )}
@@ -182,10 +182,10 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
       {/* Prometheus label config */}
       {usesPrometheus && (
-        <div className="space-y-2 rounded-lg border border-border-subtle p-3">
+        <div className="space-y-2 bg-surface-high rounded-lg p-3">
           <p className={labelClass}>Prometheus Target</p>
           <div className="space-y-1">
-            <label className="text-xs text-text-secondary">Label</label>
+            <label className="text-xs text-on-bg-secondary">Label</label>
             <select
               value={prometheusLabelName}
               onChange={(e) => setPrometheusLabelName(e.target.value)}
@@ -197,7 +197,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             </select>
           </div>
           <div className="space-y-1">
-            <label className="text-xs text-text-secondary">
+            <label className="text-xs text-on-bg-secondary">
               Value{prometheusLabelName === 'instance' ? ' (defaults to IP if blank)' : ''}
             </label>
             <input
@@ -212,12 +212,12 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       )}
 
       {/* SNMP Credentials */}
-      <div className="space-y-3 rounded-lg border border-border-subtle p-3">
+      <div className="space-y-3 bg-surface-high rounded-lg p-3">
         <p className={labelClass}>SNMP Credentials</p>
 
         {profiles.length > 0 && (
           <div className="space-y-1">
-            <label className="text-xs text-text-secondary">Load from Profile</label>
+            <label className="text-xs text-on-bg-secondary">Load from Profile</label>
             <select
               defaultValue=""
               onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
@@ -234,7 +234,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         )}
 
         <div className="space-y-1">
-          <label className="text-xs text-text-secondary">Version</label>
+          <label className="text-xs text-on-bg-secondary">Version</label>
           <select
             value={version}
             onChange={(e) => setVersion(e.target.value)}
@@ -247,7 +247,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
         {!isV3 && (
           <div className="space-y-1">
-            <label className="text-xs text-text-secondary">Community</label>
+            <label className="text-xs text-on-bg-secondary">Community</label>
             <input
               type="text"
               value={community}
@@ -261,7 +261,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         {isV3 && (
           <div className="space-y-2">
             <div className="space-y-1">
-              <label className="text-xs text-text-secondary">Username</label>
+              <label className="text-xs text-on-bg-secondary">Username</label>
               <input
                 type="text"
                 value={username}
@@ -272,7 +272,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs text-text-secondary">Security Level</label>
+              <label className="text-xs text-on-bg-secondary">Security Level</label>
               <select
                 value={securityLevel}
                 onChange={(e) => setSecurityLevel(e.target.value)}
@@ -287,7 +287,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             {needsAuth && (
               <>
                 <div className="space-y-1">
-                  <label className="text-xs text-text-secondary">Auth Protocol</label>
+                  <label className="text-xs text-on-bg-secondary">Auth Protocol</label>
                   <select
                     value={authProtocol}
                     onChange={(e) => setAuthProtocol(e.target.value)}
@@ -298,7 +298,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs text-text-secondary">Auth Key</label>
+                  <label className="text-xs text-on-bg-secondary">Auth Key</label>
                   <input
                     type="password"
                     value={authPassword}
@@ -314,7 +314,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             {needsPriv && (
               <>
                 <div className="space-y-1">
-                  <label className="text-xs text-text-secondary">Encryption Protocol</label>
+                  <label className="text-xs text-on-bg-secondary">Encryption Protocol</label>
                   <select
                     value={privProtocol}
                     onChange={(e) => setPrivProtocol(e.target.value)}
@@ -325,7 +325,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs text-text-secondary">Encryption Key</label>
+                  <label className="text-xs text-on-bg-secondary">Encryption Key</label>
                   <input
                     type="password"
                     value={privPassword}
@@ -343,7 +343,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
       <div className="space-y-2">
         <label className={labelClass}>
-          Custom Name <span className="text-text-secondary/50">(optional)</span>
+          Custom Name <span className="text-on-bg-secondary/50">(optional)</span>
         </label>
         <input
           type="text"
@@ -356,7 +356,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
       <div className="space-y-2">
         <label className={labelClass}>
-          Vendor <span className="text-text-secondary/50">(optional)</span>
+          Vendor <span className="text-on-bg-secondary/50">(optional)</span>
         </label>
         <select
           value={vendorOverride}
@@ -366,7 +366,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
           <option value="">— Select vendor —</option>
           <option value="mikrotik">MikroTik</option>
         </select>
-        <p className="text-xs text-text-secondary/70">
+        <p className="text-xs text-on-bg-secondary/70">
           Vendor tag determines backup commands and metric queries.
         </p>
       </div>
@@ -374,7 +374,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       {sshProfiles.length > 0 && (
         <div className="space-y-2">
           <label className={labelClass}>
-            SSH Profile <span className="text-text-secondary/50">(optional)</span>
+            SSH Profile <span className="text-on-bg-secondary/50">(optional)</span>
           </label>
           <select
             value={sshProfileId}
@@ -388,7 +388,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               </option>
             ))}
           </select>
-          <p className="text-xs text-text-secondary/70">
+          <p className="text-xs text-on-bg-secondary/70">
             SSH profile is used for config backups.
           </p>
         </div>
@@ -403,7 +403,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       <button
         type="submit"
         disabled={loading}
-        className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {loading ? 'Adding...' : 'Add Device'}
       </button>

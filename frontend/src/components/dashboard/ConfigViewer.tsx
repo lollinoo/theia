@@ -93,27 +93,27 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   };
 
   if (loading) {
-    return <div className="text-xs text-text-secondary">Loading configuration...</div>;
+    return <div className="text-xs text-on-bg-secondary">Loading configuration...</div>;
   }
 
   if (!job || !job.files?.length) {
-    return <div className="text-xs text-text-secondary">No configuration backup available</div>;
+    return <div className="text-xs text-on-bg-secondary">No configuration backup available</div>;
   }
 
   const availableTypes = FILE_TYPE_ORDER.filter(t => job.files.some(f => f.file_type === t));
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 transition-colors duration-200">
       {/* Tab selector */}
-      <div className="flex gap-1 border-b border-border-subtle pb-2">
+      <div className="flex gap-1 pb-2">
         {availableTypes.map((type) => (
           <button
             key={type}
             onClick={() => setActiveTab(type)}
             className={`rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors ${
               activeTab === type
-                ? 'bg-accent text-white'
-                : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated'
+                ? 'bg-primary text-white'
+                : 'text-on-bg-secondary hover:text-on-bg hover:bg-elevated'
             }`}
           >
             {FILE_TYPE_LABELS[type] || type}
@@ -137,11 +137,11 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
       {activeFile && (
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
-            <div className="text-[10px] text-text-secondary">
+            <div className="text-[10px] text-on-bg-secondary font-mono">
               {formatDate(activeFile.created_at)} / {formatSize(activeFile.size_bytes)}
             </div>
             {activeFile.file_hash && (
-              <div className="text-[10px] text-text-secondary font-mono">
+              <div className="text-[10px] text-on-bg-secondary font-mono">
                 SHA-256: {activeFile.file_hash.substring(0, 16)}...
               </div>
             )}
@@ -149,7 +149,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
           {activeTab === 'binary' ? (
             <a
               href={backupFileDownloadUrl(activeFile.id)}
-              className="rounded-md border border-border-subtle px-2.5 py-1 text-[10px] font-medium text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
+              className="rounded-md bg-surface-high px-2.5 py-1 text-[10px] font-medium text-on-bg-secondary hover:text-on-bg hover:bg-elevated transition-colors"
               download
             >
               Download .backup
@@ -157,7 +157,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
           ) : (
             <button
               onClick={handleCopy}
-              className="rounded-md border border-border-subtle px-2.5 py-1 text-[10px] font-medium text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
+              className="rounded-md bg-surface-high px-2.5 py-1 text-[10px] font-medium text-on-bg-secondary hover:text-on-bg hover:bg-elevated transition-colors"
             >
               {copied ? 'Copied!' : 'Copy'}
             </button>
@@ -167,15 +167,15 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
 
       {/* Content area */}
       {activeTab === 'binary' ? (
-        <div className="rounded-md border border-border-subtle bg-bg-canvas p-4 text-center">
-          <div className="text-xs text-text-secondary mb-2">Binary backup file</div>
-          <div className="text-[10px] text-text-secondary/70 mb-3">
+        <div className="rounded-lg bg-surface-high p-4 text-center">
+          <div className="text-xs text-on-bg-secondary mb-2">Binary backup file</div>
+          <div className="text-[10px] text-on-bg-secondary/70 font-mono mb-3">
             {activeFile?.file_name}
           </div>
           {activeFile && (
             <a
               href={backupFileDownloadUrl(activeFile.id)}
-              className="inline-block rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 transition-colors"
+              className="inline-block rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 transition-colors"
               download
             >
               Download {formatSize(activeFile.size_bytes)}
@@ -183,24 +183,24 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
           )}
         </div>
       ) : contentLoading ? (
-        <div className="text-xs text-text-secondary">Loading file content...</div>
+        <div className="text-xs text-on-bg-secondary">Loading file content...</div>
       ) : content ? (
-        <div className="rounded-md border border-border-subtle bg-bg-canvas overflow-auto max-h-[calc(100vh-220px)]">
-          <pre className="text-[11px] leading-[1.6] p-0 m-0">
+        <div className="rounded-lg bg-surface-high overflow-auto max-h-[calc(100vh-220px)]">
+          <pre className="font-mono text-[11px] leading-[1.6] p-0 m-0">
             <code>
               {content.split('\n').map((line, i) => (
-                <div key={i} className="flex hover:bg-bg-elevated/30">
-                  <span className="select-none text-text-secondary/50 text-right pr-3 pl-2 min-w-[3rem] border-r border-border-subtle/30">
+                <div key={i} className="flex hover:bg-elevated/30">
+                  <span className="select-none text-on-bg-secondary/50 text-right pr-3 pl-2 min-w-[3rem]">
                     {i + 1}
                   </span>
-                  <span className="pl-3 pr-3 text-text-primary whitespace-pre">{line}</span>
+                  <span className="pl-3 pr-3 text-on-bg whitespace-pre">{line}</span>
                 </div>
               ))}
             </code>
           </pre>
         </div>
       ) : (
-        <div className="text-xs text-text-secondary">No content available</div>
+        <div className="text-xs text-on-bg-secondary">No content available</div>
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { DeviceConfigPanel } from './DeviceConfigPanel';
 import type { Device } from '../types/api';
 
@@ -7,6 +7,7 @@ import type { Device } from '../types/api';
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
   fetchSSHProfiles: vi.fn().mockResolvedValue([]),
+  fetchAreas: vi.fn().mockResolvedValue([]),
   fetchSettings: vi.fn().mockResolvedValue({}),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   updateSetting: vi.fn().mockResolvedValue(undefined),
@@ -129,5 +130,35 @@ describe('DeviceConfigPanel', () => {
       />,
     );
     expect(container.firstChild).toBeTruthy();
+  });
+
+  it('renders Area dropdown with Unassigned option', async () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    // Area label should be present
+    await waitFor(() => {
+      expect(screen.getByText('Area')).toBeInTheDocument();
+    });
+    // Unassigned option should be the default
+    expect(screen.getByText('Unassigned')).toBeInTheDocument();
+  });
+
+  it('renders area dropdown between IP and Vendor fields', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    const areaLabel = screen.getByText('Area');
+    expect(areaLabel).toBeInTheDocument();
   });
 });

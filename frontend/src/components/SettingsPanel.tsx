@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchSettings, updateSetting, fetchHealthVersion, type HealthVersion } from '../api/client';
+import { AreaManager } from './AreaManager';
 import { SNMPProfileManager } from './SNMPProfileManager';
 import { SSHProfileManager } from './SSHProfileManager';
 
@@ -155,10 +156,10 @@ export function SettingsPanel() {
   }
 
   return (
-    <div className="space-y-6 p-4">
+    <div className="space-y-6 p-4 transition-colors duration-200">
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Polling Interval
           </label>
           <SavedIndicator visible={savedPolling} />
@@ -166,7 +167,7 @@ export function SettingsPanel() {
         <select
           value={pollingValue}
           onChange={(e) => handlePollingPresetChange(e.target.value)}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         >
           {POLLING_PRESETS.map((preset) => (
             <option key={preset.value} value={preset.value}>
@@ -186,16 +187,16 @@ export function SettingsPanel() {
                 setCustomPolling(e.target.value);
                 schedulePollingUpdate(e.target.value);
               }}
-              className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
             />
-            <span className="text-xs text-text-secondary">sec</span>
+            <span className="text-xs text-on-bg-secondary">sec</span>
           </div>
         )}
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Grafana URL
           </label>
           <SavedIndicator visible={savedGrafana} />
@@ -208,13 +209,13 @@ export function SettingsPanel() {
             setGrafanaUrl(e.target.value);
             scheduleGrafanaUpdate(e.target.value);
           }}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         />
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Prometheus URL
           </label>
           <SavedIndicator visible={savedPrometheus} />
@@ -227,13 +228,13 @@ export function SettingsPanel() {
             setPrometheusUrl(e.target.value);
             schedulePrometheusUpdate(e.target.value);
           }}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         />
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Timezone
           </label>
           <SavedIndicator visible={savedTimezone} />
@@ -246,7 +247,7 @@ export function SettingsPanel() {
               showSaved(setSavedTimezone, savedTimezoneTimerRef),
             );
           }}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         >
           {TIMEZONES.map((tz) => (
             <option key={tz.value} value={tz.value}>
@@ -254,39 +255,43 @@ export function SettingsPanel() {
             </option>
           ))}
         </select>
-        <p className="text-xs text-text-secondary/70">
+        <p className="text-xs text-on-bg-secondary/70">
           Affects backup filenames and zip timestamps.
         </p>
       </div>
 
-      <div className="border-t border-border-subtle pt-4">
+      <div className="mt-6">
+        <AreaManager />
+      </div>
+
+      <div className="mt-6">
         <SNMPProfileManager />
       </div>
 
-      <div className="border-t border-border-subtle pt-4">
+      <div className="mt-6">
         <SSHProfileManager />
       </div>
 
       {versionInfo && (
-        <div className="border-t border-border-subtle pt-4 space-y-2">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+        <div className="mt-6 space-y-2">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             About
           </label>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-text-primary font-medium">
+            <span className="text-sm text-on-bg font-medium">
               Theia v{versionInfo.version}
             </span>
             <span
               className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
                 import.meta.env.DEV
-                  ? 'bg-yellow-500/15 text-yellow-400'
+                  ? 'bg-warning/15 text-warning'
                   : 'bg-status-up/15 text-status-up'
               }`}
             >
               {import.meta.env.DEV ? 'dev' : 'production'}
             </span>
           </div>
-          <div className="space-y-0.5 text-xs text-text-secondary/70">
+          <div className="space-y-0.5 text-xs text-on-bg-secondary/70">
             <p>Commit: {versionInfo.git_commit}</p>
             <p>Built: {versionInfo.build_date === 'unknown' ? 'unknown' : new Date(versionInfo.build_date).toLocaleString()}</p>
           </div>

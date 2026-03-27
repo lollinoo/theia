@@ -1,0 +1,28 @@
+# Milestones
+
+## v1.3.0 Frontend Redesign (Shipped: 2026-03-27)
+
+**Phases completed:** 7 phases, 21 plans, 53 tasks
+
+**Key accomplishments:**
+
+- Tailwind v4 + @theme inline token system with dark/light Neon Topography palettes, ReactFlow v12, Fontsource fonts, and FOWT prevention script
+- ThemeProvider context with localStorage persistence and OS preference detection, all ReactFlow imports migrated to @xyflow/react v12 with colorMode integration, and sun/moon toggle in NavBar
+- All 45+ hardcoded hex color values replaced with CSS variable token references across 32 source files, with full Tailwind class name migration to new design token system
+- Self-hosted Material Symbols Rounded subset woff2 (25KB, 19 icons) with shared MaterialIcon React component and 6 passing unit tests
+- Restyled DeviceCard with severity-scaled glow nodes, surface tier metrics area, monospace vendor tag; upgraded StatusDot and LinkEdge label pills to Neon Topography aesthetics
+- ContextMenu with glassmorphism/icons/separators, NavBar Material Symbols theme toggle, SearchOverlay theme-split glass overlay -- all using dark-only backdrop-blur per D-05/D-06
+- Toolbar, SidePanel, ZoomControls restyled with Material Symbols icons and no-line rule; AlertsPanel with glow status dots and surface tier cards; ShortcutHelp and ReconnectBanner visually aligned
+- Complete area CRUD REST API with SQLite persistence, device-to-area FK assignment, ON DELETE SET NULL cascade, and 14 passing behavioral tests
+- AreaManager component with inline list CRUD (7-color swatch picker, device count badges, bidirectional device assignment), DeviceConfigPanel area dropdown with color preview, and 7 new passing Vitest tests
+- Canvas.tsx decomposed from 1283 to 204 lines across 7 focused modules, with three-view App.tsx architecture and WebSocket lift for cross-view metric sharing
+- Floating NavigationPill with glassmorphism surface, area buttons with color dots, and atmospheric Watermark replacing NavBar as sole navigation element
+- AreaHub view with four aggregate stat cards (uptime/health/devices/links), per-area cards with accent color bloom effects, and health computation wired into App.tsx
+- Area-filtered canvas with useAreaFilteredTopology hook, ghost node rendering, NavigationPill routing fixes, and visual verification
+- Material Symbols font expanded with 4 action icons, FilterSelect dropdown component with TDD tests, and areas/snapshot props threaded from App to Dashboard
+- SidePanel chrome tightened with font-mono metric rendering across all 6 dashboard sub-panels and consistent Neon Topography form tokens
+- Canvas token audit test created; 4 files migrated from stale/hardcoded values to valid Tailwind v4 theme tokens
+- Canvas.tsx and CanvasOverlays.tsx fully migrated from stale tokens and hardcoded hex to valid Tailwind v4 theme tokens
+- SettingsPanel dev badge migrated from stale yellow-500/yellow-400 to semantic warning tokens, with Phase 2 VERIFICATION.md documenting all 13 requirements as satisfied
+
+---

@@ -96,6 +96,7 @@ type Device struct {
 	Tags                 map[string]string `json:"tags"`
 	Interfaces           []Interface       `json:"interfaces"`
 	SSHProfileID         *uuid.UUID        `json:"ssh_profile_id,omitempty"`
+	AreaID               *uuid.UUID        `json:"area_id,omitempty"`
 	MetricsSource        MetricsSource     `json:"metrics_source"`
 	PrometheusLabelName  string            `json:"prometheus_label_name"`
 	PrometheusLabelValue string            `json:"prometheus_label_value"`

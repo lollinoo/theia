@@ -119,6 +119,7 @@ func main() {
 	settingsRepo := sqlite.NewSettingsRepo(db)
 	snmpProfileRepo := sqlite.NewSNMPProfileRepo(db, encryptionKey)
 	sshProfileRepo := sqlite.NewSSHProfileRepo(db)
+	areaRepo := sqlite.NewAreaRepo(db)
 	backupJobRepo := sqlite.NewBackupJobRepo(db)
 	backupFileRepo := sqlite.NewBackupFileRepo(db)
 
@@ -170,7 +171,7 @@ func main() {
 	wsHandler := ws.NewHandler(hub, collector.GetSnapshot, collector.IsPromAvailable)
 
 	// Create HTTP router with all /api/v1/ routes
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, sshProfileRepo, backupService, vendorRegistry, vendorConfigRepo, poller, wsHandler)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, sshProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, poller, wsHandler)
 
 	// Create HTTP server
 	server := &http.Server{

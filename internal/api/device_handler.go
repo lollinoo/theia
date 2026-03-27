@@ -77,6 +77,7 @@ type updateDeviceRequest struct {
 	PrometheusLabelName  *string            `json:"prometheus_label_name,omitempty"`
 	PrometheusLabelValue *string            `json:"prometheus_label_value,omitempty"`
 	SSHProfileID         *string            `json:"ssh_profile_id,omitempty"`
+	AreaID               *string            `json:"area_id,omitempty"`
 }
 
 type batchAddRequest struct {
@@ -231,6 +232,21 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			*update.SSHProfileID = &parsed
 		}
 	}
+	if req.AreaID != nil {
+		if *req.AreaID == "" {
+			// Explicitly unassign
+			update.AreaID = new(*uuid.UUID)
+			*update.AreaID = nil
+		} else {
+			parsed, err := uuid.Parse(*req.AreaID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid area_id")
+				return
+			}
+			update.AreaID = new(*uuid.UUID)
+			*update.AreaID = &parsed
+		}
+	}
 
 	if err := h.svc.UpdateDevice(r.Context(), id, update); err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -383,6 +399,9 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 
 	if d.SSHProfileID != nil {
 		attrs["ssh_profile_id"] = d.SSHProfileID.String()
+	}
+	if d.AreaID != nil {
+		attrs["area_id"] = d.AreaID.String()
 	}
 
 	attrs["backup_supported"] = h.vendorRegistry.ResolveBackupConfig(d.Vendor).Supported

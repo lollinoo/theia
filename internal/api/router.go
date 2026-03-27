@@ -23,6 +23,7 @@ func NewRouter(
 	settingsRepo domain.SettingsRepository,
 	snmpProfileRepo domain.SNMPProfileRepository,
 	sshProfileRepo *sqlite.SSHProfileRepo,
+	areaRepo domain.AreaRepository,
 	backupService *service.BackupService,
 	vendorRegistry *vendor.Registry,
 	vendorConfigRepo domain.VendorConfigRepository,
@@ -36,6 +37,7 @@ func NewRouter(
 	positionHandler := NewPositionHandler(positionRepo)
 	settingsHandler := NewSettingsHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
+	areaHandler := NewAreaHandler(areaRepo)
 	backupHandler := NewBackupHandler(backupService, settingsRepo)
 	sshProfileHandler := NewSSHProfileHandler(backupService, sshProfileRepo)
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
@@ -193,6 +195,31 @@ func NewRouter(
 			snmpProfileHandler.HandleUpdate(w, r)
 		case http.MethodDelete:
 			snmpProfileHandler.HandleDelete(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	// Area routes
+	mux.HandleFunc("/api/v1/areas", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			areaHandler.HandleList(w, r)
+		case http.MethodPost:
+			areaHandler.HandleCreate(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	mux.HandleFunc("/api/v1/areas/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			areaHandler.HandleGet(w, r)
+		case http.MethodPut:
+			areaHandler.HandleUpdate(w, r)
+		case http.MethodDelete:
+			areaHandler.HandleDelete(w, r)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}

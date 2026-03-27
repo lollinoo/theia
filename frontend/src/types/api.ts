@@ -46,6 +46,7 @@ export interface Device {
   tags?: Record<string, string>;
   interfaces: DeviceInterface[];
   ssh_profile_id?: string;
+  area_id?: string;
   backup_supported: boolean;
   metrics_source: MetricsSource;
   prometheus_label_name: string;
@@ -180,6 +181,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       tags,
       interfaces: interfacesData.map(parseDeviceInterface),
       ssh_profile_id: typeof attributes.ssh_profile_id === 'string' ? attributes.ssh_profile_id : undefined,
+      area_id: typeof attributes.area_id === 'string' ? attributes.area_id : undefined,
       backup_supported: readBoolean(attributes, 'backup_supported', false),
       metrics_source: metricsSource,
       prometheus_label_name: readString(attributes, 'prometheus_label_name', 'instance'),
@@ -304,6 +306,17 @@ export interface SSHProfile {
   updated_at: string;
 }
 
+// Area represents a grouping of devices.
+export interface Area {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  device_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // Backup system types
 export type BackupStatus = 'pending' | 'running' | 'success' | 'failed';
 
@@ -392,6 +405,38 @@ export function parseSSHProfilesResponse(payload: unknown): SSHProfile[] {
       updated_at: readString(item, 'updated_at'),
     };
   });
+}
+
+export function parseAreasResponse(payload: unknown): Area[] {
+  if (!isRecord(payload)) return [];
+  const data = payload.data;
+  if (!Array.isArray(data)) return [];
+  return data.map((item: unknown) => {
+    if (!isRecord(item)) return null;
+    return {
+      id: readString(item, 'id', ''),
+      name: readString(item, 'name', ''),
+      description: readString(item, 'description', ''),
+      color: readString(item, 'color', '#00E676'),
+      device_count: typeof item.device_count === 'number' ? item.device_count : 0,
+      created_at: readString(item, 'created_at', ''),
+      updated_at: readString(item, 'updated_at', ''),
+    };
+  }).filter((a): a is Area => a !== null && a.id !== '');
+}
+
+export function parseAreaResponse(payload: unknown): Area {
+  if (!isRecord(payload)) throw new Error('Invalid area response');
+  const data = isRecord(payload.data) ? payload.data : payload;
+  return {
+    id: readString(data, 'id', ''),
+    name: readString(data, 'name', ''),
+    description: readString(data, 'description', ''),
+    color: readString(data, 'color', '#00E676'),
+    device_count: typeof data.device_count === 'number' ? data.device_count : 0,
+    created_at: readString(data, 'created_at', ''),
+    updated_at: readString(data, 'updated_at', ''),
+  };
 }
 
 export function parsePositionsResponse(payload: unknown): DevicePosition[] {

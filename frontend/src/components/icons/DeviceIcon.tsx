@@ -10,9 +10,9 @@ function RouterIcon({ size }: { size: number }) {
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" aria-hidden="true">
       <rect x="3" y="9" width="18" height="8" rx="3" fill="currentColor" />
       <path d="M8 7L10 4M16 7L14 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="9" cy="13" r="1.2" fill="#2d2d3d" />
-      <circle cx="12" cy="13" r="1.2" fill="#2d2d3d" />
-      <circle cx="15" cy="13" r="1.2" fill="#2d2d3d" />
+      <circle cx="9" cy="13" r="1.2" fill="var(--nt-bg)" />
+      <circle cx="12" cy="13" r="1.2" fill="var(--nt-bg)" />
+      <circle cx="15" cy="13" r="1.2" fill="var(--nt-bg)" />
     </svg>
   );
 }
@@ -21,10 +21,10 @@ function SwitchIcon({ size }: { size: number }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" aria-hidden="true">
       <rect x="2.5" y="6" width="19" height="12" rx="3" fill="currentColor" />
-      <rect x="5" y="9" width="3" height="2.2" rx="0.7" fill="#2d2d3d" />
-      <rect x="9.5" y="9" width="3" height="2.2" rx="0.7" fill="#2d2d3d" />
-      <rect x="14" y="9" width="3" height="2.2" rx="0.7" fill="#2d2d3d" />
-      <path d="M5 14H19" stroke="#2d2d3d" strokeWidth="1.6" strokeLinecap="round" />
+      <rect x="5" y="9" width="3" height="2.2" rx="0.7" fill="var(--nt-bg)" />
+      <rect x="9.5" y="9" width="3" height="2.2" rx="0.7" fill="var(--nt-bg)" />
+      <rect x="14" y="9" width="3" height="2.2" rx="0.7" fill="var(--nt-bg)" />
+      <path d="M5 14H19" stroke="var(--nt-bg)" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -57,7 +57,7 @@ function UnknownIcon({ size }: { size: number }) {
 
 export function DeviceIcon({ type, size = 24 }: DeviceIconProps) {
   return (
-    <span className="inline-flex items-center justify-center text-accent">
+    <span className="inline-flex items-center justify-center text-tertiary">
       {type === 'router' && <RouterIcon size={size} />}
       {type === 'switch' && <SwitchIcon size={size} />}
       {type === 'ap' && <ApIcon size={size} />}

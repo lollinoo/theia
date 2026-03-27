@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { MaterialIcon } from './MaterialIcon';
 
 interface ShortcutHelpProps {
     open: boolean;
@@ -41,26 +42,24 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
             onClick={onClose}
         >
             <div
-                className="w-full max-w-md rounded-xl border border-border-subtle bg-bg-surface p-6 shadow-2xl"
+                className="w-full max-w-md rounded-xl bg-surface p-6 shadow-panel transition-colors duration-200"
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-xl font-bold text-text-primary">Keyboard Shortcuts</h2>
+                    <h2 className="text-xl font-bold text-on-bg">Keyboard Shortcuts</h2>
                     <button
                         onClick={onClose}
-                        className="p-1 text-text-secondary hover:text-text-primary hover:bg-bg-elevated rounded-md transition-colors"
+                        className="p-1 text-on-bg-secondary hover:text-on-bg hover:bg-elevated rounded-md transition-colors"
                     >
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
+                        <MaterialIcon name="close" size={20} />
                     </button>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3">
+                <div className="grid grid-cols-1 gap-1">
                     {shortcuts.map((s, i) => (
-                        <div key={i} className="flex justify-between items-center py-2 border-b border-border-subtle last:border-0 hover:bg-bg-elevated/50 px-2 rounded-lg transition-colors">
-                            <span className="text-text-secondary">{s.action}</span>
-                            <kbd className="px-2 py-1 bg-bg-elevated border border-border-subtle rounded text-sm font-mono text-text-primary tracking-wider shadow-sm">
+                        <div key={i} className="flex justify-between items-center py-2 hover:bg-elevated/50 px-2 rounded-lg transition-colors">
+                            <span className="text-on-bg-secondary">{s.action}</span>
+                            <kbd className="px-2 py-1 bg-surface-high rounded text-sm font-mono text-on-bg tracking-wider">
                                 {s.key}
                             </kbd>
                         </div>

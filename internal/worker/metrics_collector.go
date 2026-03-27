@@ -118,12 +118,16 @@ func (c *MetricsCollector) Start(ctx context.Context) {
 		}
 	}()
 
-	// Run first collection synchronously so lastSnapshot is populated
-	// before the HTTP server starts accepting WebSocket clients.
-	c.collectAndBroadcast(collectCtx)
-
+	// Run first collection asynchronously. The lastSnapshot is initialized to
+	// EmptySnapshot() in the constructor, so WebSocket clients connecting before
+	// the first collection completes will receive an empty (but valid) snapshot.
+	// Previously this ran synchronously, which blocked the HTTP server from
+	// starting for minutes when SNMP devices were unreachable.
 	go func() {
 		defer close(c.done)
+
+		// Collect immediately on startup, then on the configured interval.
+		c.collectAndBroadcast(collectCtx)
 
 		for {
 			interval := GetPollingInterval(c.settingsRepo)

@@ -1,4 +1,5 @@
 import {
+  type Area,
   type Device,
   type InterfaceInfo,
   type Link,
@@ -8,6 +9,8 @@ import {
   type BackupFile,
   type BackupStatus,
   type VendorConfig,
+  parseAreaResponse,
+  parseAreasResponse,
   parseDevicesResponse,
   parseInterfacesResponse,
   parseLinksResponse,
@@ -192,6 +195,7 @@ export async function updateDevice(
     prometheus_label_name: string;
     prometheus_label_value: string;
     ssh_profile_id: string;
+    area_id: string;
   }>,
 ): Promise<Device> {
   const response = await requestJSONWithBody(
@@ -426,6 +430,28 @@ export async function testSSHConnection(deviceId: string): Promise<{ success: bo
     success: data.success === true,
     error: typeof data.error === 'string' ? data.error : undefined,
   };
+}
+
+// --- Areas ---
+
+export async function fetchAreas(): Promise<Area[]> {
+  return parseAreasResponse(await requestJSON('/api/v1/areas'));
+}
+
+export async function createArea(payload: { name: string; description: string; color: string }): Promise<Area> {
+  return parseAreaResponse(
+    await requestJSONWithBody('/api/v1/areas', 'POST', payload),
+  );
+}
+
+export async function updateArea(id: string, payload: { name: string; description: string; color: string }): Promise<Area> {
+  return parseAreaResponse(
+    await requestJSONWithBody(`/api/v1/areas/${encodeURIComponent(id)}`, 'PUT', payload),
+  );
+}
+
+export async function deleteArea(id: string): Promise<void> {
+  await requestJSONWithBody(`/api/v1/areas/${encodeURIComponent(id)}`, 'DELETE');
 }
 
 // --- Backup Jobs ---

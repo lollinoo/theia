@@ -36,14 +36,14 @@ function InterfaceSelect({
 
   return (
     <div className="space-y-1.5">
-      <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+      <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
         {label}
       </label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={loading}
-        className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
       >
         <option value="">{loading ? 'Loading...' : 'Select port...'}</option>
         {upInterfaces.map((iface) => (
@@ -60,7 +60,7 @@ function InterfaceSelect({
           </option>
         )}
         {downInterfaces.map((iface) => (
-          <option key={iface.if_name} value={iface.if_name} style={{ color: '#666' }}>
+          <option key={iface.if_name} value={iface.if_name} style={{ color: 'var(--nt-on-bg-muted)' }}>
             {iface.if_name}
             {formatSpeed(iface.speed) ? `  ${formatSpeed(iface.speed)}` : ''}
             {'  '}down
@@ -155,24 +155,24 @@ export function LinkDetailsPanel({
 
   const protocolBadgeColor =
     link.discovery_protocol === 'lldp'
-      ? 'bg-accent/20 text-accent border-accent/30'
+      ? 'bg-primary/20 text-primary border-primary/30'
       : link.discovery_protocol === 'cdp'
         ? 'bg-status-up/20 text-status-up border-status-up/30'
-        : 'bg-bg-elevated text-text-secondary border-border-subtle';
+        : 'bg-elevated text-on-bg-secondary border-outline-subtle';
 
   return (
-    <div className="space-y-5 p-4">
+    <div className="space-y-5 p-4 transition-colors duration-200">
       {/* Link summary */}
-      <div className="rounded-lg border border-border-subtle bg-bg-elevated p-3 space-y-2">
+      <div className="rounded-lg bg-surface-high p-3 space-y-2">
         <div className="space-y-0.5">
-          <p className="text-sm font-medium text-text-primary truncate">
+          <p className="text-sm font-medium text-on-bg truncate">
             {sourceDevice?.tags?.display_name || sourceDevice?.hostname || link.source_device_id}
-            <span className="text-text-secondary font-normal">:{link.source_if_name || '—'}</span>
+            <span className="text-on-bg-secondary font-normal">:{link.source_if_name || '—'}</span>
           </p>
-          <p className="text-xs text-text-secondary px-1">↕</p>
-          <p className="text-sm font-medium text-text-primary truncate">
+          <p className="text-xs text-on-bg-secondary px-1">↕</p>
+          <p className="text-sm font-medium text-on-bg truncate">
             {targetDevice?.tags?.display_name || targetDevice?.hostname || link.target_device_id}
-            <span className="text-text-secondary font-normal">:{link.target_if_name || '—'}</span>
+            <span className="text-on-bg-secondary font-normal">:{link.target_if_name || '—'}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -189,7 +189,7 @@ export function LinkDetailsPanel({
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-surface"
+          className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated"
         >
           Edit Ports
         </button>
@@ -201,12 +201,12 @@ export function LinkDetailsPanel({
           }}
           className="space-y-4"
         >
-          <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Edit Port Assignments
           </p>
 
           <div className="space-y-1">
-            <p className="text-xs text-text-secondary">
+            <p className="text-xs text-on-bg-secondary">
               Source: {sourceDevice?.tags?.display_name || sourceDevice?.hostname || link.source_device_id}
             </p>
             <InterfaceSelect
@@ -219,7 +219,7 @@ export function LinkDetailsPanel({
           </div>
 
           <div className="space-y-1">
-            <p className="text-xs text-text-secondary">
+            <p className="text-xs text-on-bg-secondary">
               Target: {targetDevice?.tags?.display_name || targetDevice?.hostname || link.target_device_id}
             </p>
             <InterfaceSelect
@@ -246,14 +246,14 @@ export function LinkDetailsPanel({
                 setTargetIfName(link.target_if_name);
                 setSaveError(null);
               }}
-              className="flex-1 rounded-lg border border-border-subtle bg-bg-elevated px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-surface"
+              className="flex-1 rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving || !sourceIfName || !targetIfName}
-              className="flex-1 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save'}
             </button>
@@ -262,7 +262,7 @@ export function LinkDetailsPanel({
       )}
 
       {/* Delete section */}
-      <div className="border-t border-border-subtle pt-4 space-y-3">
+      <div className="mt-6 space-y-3">
         {!confirmDelete ? (
           <button
             type="button"
@@ -278,7 +278,7 @@ export function LinkDetailsPanel({
               <button
                 type="button"
                 onClick={() => setConfirmDelete(false)}
-                className="flex-1 rounded-lg border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-surface"
+                className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated"
               >
                 Cancel
               </button>

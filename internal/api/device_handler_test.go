@@ -503,5 +503,39 @@ func TestDeviceHandlerDelete_NotFound(t *testing.T) {
 	}
 }
 
+func TestDeviceHandlerUpdate_AreaID(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+	d := seedDevice(t, deviceRepo)
+
+	areaID := uuid.New().String()
+	body := fmt.Sprintf(`{"area_id":"%s"}`, areaID)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+d.ID.String(), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Verify area_id is in response
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected data object in response")
+	}
+	attrs, ok := data["attributes"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected attributes in data")
+	}
+	gotAreaID, ok := attrs["area_id"].(string)
+	if !ok || gotAreaID != areaID {
+		t.Errorf("area_id = %q, want %q", gotAreaID, areaID)
+	}
+}
+
 // Silence the unused import for context -- it is needed for domain import indirectly.
 var _ = context.Background

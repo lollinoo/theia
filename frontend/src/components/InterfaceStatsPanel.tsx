@@ -25,35 +25,35 @@ function InterfaceStatsSection({ device, ifName, snapshot }: InterfaceStatsSecti
   const utilPct =
     metrics?.utilization != null ? Math.round(metrics.utilization * 100) : null;
   const utilColor =
-    metrics?.utilization != null ? utilizationColor(metrics.utilization) : '#657786';
+    metrics?.utilization != null ? utilizationColor(metrics.utilization) : 'var(--color-status-unknown)';
 
   return (
-    <div className="rounded-xl border border-border-subtle bg-bg-elevated p-4 space-y-3">
+    <div className="rounded-xl bg-surface-high p-4 space-y-3 transition-colors duration-200">
       <div>
-        <p className="text-xs uppercase tracking-widest text-text-secondary">Device</p>
-        <p className="mt-0.5 text-sm font-medium text-text-primary">
+        <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Device</p>
+        <p className="mt-0.5 text-sm font-medium text-on-bg">
           {device.tags?.display_name || device.sys_name || device.ip}
         </p>
       </div>
 
       <div>
-        <p className="text-xs uppercase tracking-widest text-text-secondary">Interface</p>
-        <p className="mt-0.5 text-sm font-mono text-text-primary">{ifName}</p>
+        <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Interface</p>
+        <p className="mt-0.5 text-sm font-mono text-on-bg">{ifName}</p>
         {iface?.if_descr && (
-          <p className="text-xs text-text-secondary">{iface.if_descr}</p>
+          <p className="text-xs text-on-bg-secondary">{iface.if_descr}</p>
         )}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         {speedLabel && (
           <div>
-            <p className="text-xs uppercase tracking-widest text-text-secondary">Speed</p>
-            <p className="mt-0.5 text-sm text-text-primary">{speedLabel}</p>
+            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Speed</p>
+            <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{speedLabel}</p>
           </div>
         )}
         {iface && (
           <div>
-            <p className="text-xs uppercase tracking-widest text-text-secondary">Status</p>
+            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Status</p>
             <p
               className={`mt-0.5 text-sm ${iface.oper_status === 'up' ? 'text-status-up' : 'text-status-down'}`}
             >
@@ -63,26 +63,26 @@ function InterfaceStatsSection({ device, ifName, snapshot }: InterfaceStatsSecti
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 border-t border-border-subtle pt-3">
+      <div className="grid grid-cols-2 gap-3 mt-3 pt-3">
         <div>
-          <p className="text-xs uppercase tracking-widest text-text-secondary">TX</p>
-          <p className="mt-0.5 text-sm font-mono text-text-primary">{txLabel}</p>
+          <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">TX</p>
+          <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{txLabel}</p>
         </div>
         <div>
-          <p className="text-xs uppercase tracking-widest text-text-secondary">RX</p>
-          <p className="mt-0.5 text-sm font-mono text-text-primary">{rxLabel}</p>
+          <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">RX</p>
+          <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{rxLabel}</p>
         </div>
       </div>
 
       {utilPct !== null && (
         <div>
           <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-widest text-text-secondary">Utilization</p>
+            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Utilization</p>
             <p className="text-xs font-mono" style={{ color: utilColor }}>
               {utilPct}%
             </p>
           </div>
-          <div className="mt-1 h-1.5 w-full rounded-full bg-bg-surface">
+          <div className="mt-1 h-1.5 w-full rounded-full bg-surface">
             <div
               className="h-1.5 rounded-full transition-all duration-500"
               style={{ width: `${Math.min(utilPct, 100)}%`, backgroundColor: utilColor }}
@@ -146,7 +146,7 @@ export function DeviceInterfaceStatsPanel({
 
   if (interfaces.length === 0) {
     return (
-      <div className="p-4 text-sm text-text-secondary">
+      <div className="p-4 text-sm text-on-bg-secondary">
         No interfaces discovered for this device.
       </div>
     );

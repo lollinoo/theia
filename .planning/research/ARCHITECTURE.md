@@ -1,524 +1,555 @@
-# Architecture Research
+# Architecture Patterns
 
-**Domain:** Real-time network topology visualization (React + Go)
-**Researched:** 2026-03-05
+**Domain:** Frontend redesign of a network topology visualizer -- design system, theming, and area-based navigation
+**Researched:** 2026-03-25
+
+## Recommended Architecture
+
+The redesign introduces three architectural layers on top of the existing frontend: a **design token system** driven by CSS custom properties, a **theme provider** that swaps token values for dark/light modes, and an **area-aware navigation layer** that filters topology data without duplicating it. The existing react-flow canvas, WebSocket data pipeline, and REST client remain intact -- the redesign wraps them, it does not replace them.
+
+### High-Level Component Tree (Target)
+
+```
+<ThemeProvider>                          -- CSS variable injection + class toggle
+  <AreaProvider>                         -- area CRUD state, selected area, device-area map
+    <App>
+      <NavigationPill />                 -- floating area switcher (replaces NavBar)
+      <AreaHubView />                    -- area cards, aggregate stats, watermark
+        <AggregateStatsBar />
+        <AreaCard /> x N
+      <ReactFlowProvider>
+        <TopologyView />                 -- existing Canvas, filtered by selected area
+          <DeviceNode />                 -- restyled DeviceCard
+          <LinkEdge />                   -- existing, receives theme tokens
+          <Toolbar />
+          <ContextMenu />               -- restyled per mockup
+          <SidePanel />
+          <ZoomControls />
+        </TopologyView>
+      </ReactFlowProvider>
+      <DashboardView />                 -- existing Dashboard, filtered by area
+    </App>
+  </AreaProvider>
+</ThemeProvider>
+```
+
+### Component Boundaries
+
+| Component | Responsibility | Communicates With | New/Modified |
+|-----------|---------------|-------------------|--------------|
+| **ThemeProvider** | Reads preference from localStorage, applies `dark`/`light` class to `<html>`, injects CSS variable sets | All components (via CSS inheritance) | **New** |
+| **AreaProvider** | Holds area list, selected area ID, device-to-area assignments; fetches from `/api/v1/areas` | NavigationPill, AreaHubView, TopologyView, DashboardView | **New** |
+| **NavigationPill** | Floating pill with area tabs (Global, Area 0, Area 1...); fires area selection and view switching | AreaProvider (via context), App (view state) | **New** (replaces NavBar) |
+| **AreaHubView** | Grid of AreaCards with aggregate stats; shown when areas view active | AreaProvider, WebSocket snapshot data | **New** |
+| **AreaCard** | Single area summary: health badge, device count, active links, glow status node | AreaHubView (props) | **New** |
+| **AggregateStatsBar** | Network Uptime, Total Devices, Aggregate Health panels | WebSocket snapshot, AreaProvider filter | **New** |
+| **TopologyView** | Existing Canvas component, refactored to accept filtered device/link lists | AreaProvider (filtered data), WebSocket snapshot | **Modified** (was Canvas.tsx) |
+| **DeviceNode** | Restyled device card with glow status indicators, Outfit + JetBrains Mono typography | TopologyView (via react-flow nodeTypes) | **Modified** (was DeviceCard.tsx) |
+| **ContextMenu** | Restyled with glassmorphism, icon-labeled items per mockup | TopologyView (positioned via event coordinates) | **Modified** |
+| **DashboardView** | Existing Dashboard, receives area-filtered device list | AreaProvider filter | **Modified** (was Dashboard.tsx) |
+| **SettingsPanel** | Extended with area management (CRUD areas, assign devices) | AreaProvider, REST client | **Modified** |
+
+### Data Flow
+
+**1. Theme Data Flow (CSS-only, no React re-renders)**
+
+```
+User toggles theme
+  -> ThemeProvider sets document.documentElement.classList to 'dark' or 'light'
+  -> ThemeProvider writes preference to localStorage
+  -> CSS custom properties cascade to all elements
+  -> No component re-renders needed (CSS handles color swap)
+```
+
+**2. Area Data Flow**
+
+```
+App mounts
+  -> AreaProvider fetches GET /api/v1/areas (list of areas + device assignments)
+  -> AreaProvider stores in React context:
+       { areas, selectedAreaId, deviceAreaMap, filteredDeviceIds }
+
+User clicks area in NavigationPill
+  -> AreaProvider.setSelectedArea(areaId)
+  -> TopologyView reads context, filters devices/links to those in selected area
+  -> AreaHubView shows aggregate stats for selected area (or all areas if "Global")
+  -> DashboardView filters device list by area
+
+User creates/edits/deletes area in SettingsPanel
+  -> REST call to POST/PUT/DELETE /api/v1/areas
+  -> AreaProvider refetches or optimistically updates context
+  -> All consumers re-render with updated area list
+```
+
+**3. Real-time Metrics Data Flow (unchanged, but area-filtered)**
+
+```
+WebSocket snapshot arrives (existing flow)
+  -> useWebSocket hook updates snapshot state
+  -> TopologyView applies metrics to nodes/edges (existing logic in Canvas.tsx)
+  -> AreaHubView computes aggregate stats from snapshot
+     by filtering device IDs per area
+
+Key: snapshot data is NOT duplicated per area. A single snapshot is filtered
+at the component level using the deviceAreaMap from AreaProvider.
+```
+
+**4. Device Node Rendering (react-flow integration)**
+
+```
+react-flow renders nodes via nodeTypes registry
+  -> 'device' type maps to DeviceNode component
+  -> DeviceNode receives device data + metrics via NodeProps<DeviceNodeData>
+  -> DeviceNode uses CSS variables for all colors (theme-aware automatically)
+  -> Glow effects use CSS box-shadow with variable-driven colors
+  -> Status dot color derived from CSS variables (--color-status-up, etc.)
+```
+
+## Patterns to Follow
+
+### Pattern 1: CSS Custom Property Design Tokens
+
+**What:** Define all Neon Topography colors, typography, spacing, and shadows as CSS custom properties on `:root` (light) and `.dark` (dark), referenced by Tailwind via `theme.extend.colors`.
+
+**When:** Every visual property that changes between themes.
+
+**Why:** CSS custom properties cascade without React re-renders. Tailwind v3's `darkMode: 'class'` strategy already supports this. The existing codebase already uses Tailwind's `extend.colors` -- the change is moving from static hex values to CSS variable references.
+
+**Example:**
+
+```css
+/* index.css - Design tokens */
+@layer base {
+  :root {
+    /* Light theme */
+    --color-bg-canvas: #F5F5F7;
+    --color-bg-surface: #FFFFFF;
+    --color-bg-surface-container: #F0F0F2;
+    --color-bg-surface-container-high: #E8E8EA;
+    --color-text-primary: #1A1A1E;
+    --color-text-secondary: #6B6B73;
+    --color-text-muted: #8A8A93;
+    --color-primary: #00E676;
+    --color-area-1: #2979FF;
+    --color-area-2: #E040FB;
+    --color-warning: #FFEA00;
+    --color-critical: #FF1744;
+    --color-border: #E0E0E4;
+    --color-outline: #D0D0D4;
+    --color-status-up: #00c853;
+    --color-status-down: #FF1744;
+    --color-status-probing: #ffc107;
+    --color-status-unknown: #657786;
+    --color-glassmorphism: rgba(255, 255, 255, 0.85);
+
+    --shadow-panel: 0 24px 48px rgba(0, 0, 0, 0.08);
+    --shadow-pill: 0 24px 48px rgba(0, 0, 0, 0.15);
+    --shadow-canvas: 0 24px 60px rgba(0, 0, 0, 0.12);
+
+    --font-ui: 'Outfit', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  .dark {
+    --color-bg-canvas: #161618;
+    --color-bg-surface: #222225;
+    --color-bg-surface-container: #2A2A2D;
+    --color-bg-surface-container-high: #333338;
+    --color-text-primary: #F5F5F7;
+    --color-text-secondary: #8A8A93;
+    --color-text-muted: #6B6B73;
+    --color-primary: #00E676;
+    --color-area-1: #2979FF;
+    --color-area-2: #E040FB;
+    --color-warning: #FFEA00;
+    --color-critical: #FF1744;
+    --color-border: #333338;
+    --color-outline: #444448;
+    --color-status-up: #00c853;
+    --color-status-down: #FF1744;
+    --color-status-probing: #ffc107;
+    --color-status-unknown: #657786;
+    --color-glassmorphism: rgba(255, 255, 255, 0.02);
+
+    --shadow-panel: 0 24px 48px rgba(0, 0, 0, 0.2);
+    --shadow-pill: 0 24px 48px rgba(0, 0, 0, 0.5);
+    --shadow-canvas: 0 24px 60px rgba(0, 0, 0, 0.28);
+  }
+}
+```
+
+```js
+// tailwind.config.js - Points to CSS variables
+export default {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        'bg-canvas': 'var(--color-bg-canvas)',
+        'bg-surface': 'var(--color-bg-surface)',
+        'bg-surface-container': 'var(--color-bg-surface-container)',
+        'bg-surface-container-high': 'var(--color-bg-surface-container-high)',
+        'text-primary': 'var(--color-text-primary)',
+        'text-secondary': 'var(--color-text-secondary)',
+        'text-muted': 'var(--color-text-muted)',
+        primary: 'var(--color-primary)',
+        'area-1': 'var(--color-area-1)',
+        'area-2': 'var(--color-area-2)',
+        warning: 'var(--color-warning)',
+        critical: 'var(--color-critical)',
+        border: 'var(--color-border)',
+        outline: 'var(--color-outline)',
+        'status-up': 'var(--color-status-up)',
+        'status-down': 'var(--color-status-down)',
+        'status-probing': 'var(--color-status-probing)',
+        'status-unknown': 'var(--color-status-unknown)',
+      },
+      fontFamily: {
+        ui: ['var(--font-ui)', 'sans-serif'],
+        mono: ['var(--font-mono)', 'monospace'],
+      },
+      boxShadow: {
+        panel: 'var(--shadow-panel)',
+        pill: 'var(--shadow-pill)',
+        canvas: 'var(--shadow-canvas)',
+      },
+    },
+  },
+};
+```
+
+**Migration path:** Every existing Tailwind color reference (`bg-bg-canvas`, `text-text-primary`, etc.) keeps the same class name but now resolves through CSS variables instead of static hex values. Existing component JSX does not change.
+
+### Pattern 2: ThemeProvider as Thin Class Toggle
+
+**What:** A minimal React context that manages the dark/light preference and applies a CSS class to the document root. No theme object passed through React context -- all styling goes through CSS variables.
+
+**When:** Always. This is the theme switching mechanism.
+
+**Why:** Avoids the "fat context" anti-pattern where changing a theme value re-renders the entire tree. CSS variable changes are handled by the browser's style engine, not React's reconciler. For 100+ device nodes on a react-flow canvas, this is a performance requirement.
+
+**Example:**
+
+```tsx
+// contexts/ThemeContext.tsx
+type Theme = 'dark' | 'light' | 'system';
+
+interface ThemeContextValue {
+  theme: Theme;
+  resolvedTheme: 'dark' | 'light';
+  setTheme: (theme: Theme) => void;
+}
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState<Theme>(() => {
+    return (localStorage.getItem('theia-theme') as Theme) || 'dark';
+  });
+
+  const resolvedTheme = useMemo(() => {
+    if (theme === 'system') {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark' : 'light';
+    }
+    return theme;
+  }, [theme]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove('dark', 'light');
+    root.classList.add(resolvedTheme);
+    localStorage.setItem('theia-theme', theme);
+  }, [resolvedTheme, theme]);
+
+  return (
+    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+}
+```
+
+### Pattern 3: AreaProvider with Derived Filtering
+
+**What:** A React context that holds area data and exposes a `filteredDeviceIds` Set derived from `selectedAreaId` + `deviceAreaMap`. Consumer components use this Set to filter their own data -- they do not receive pre-filtered arrays.
+
+**When:** Any component that needs to show area-specific data.
+
+**Why:** Avoids duplicating device/link arrays per area. The WebSocket snapshot and REST data stay in their existing locations (Canvas state, useWebSocket hook). Filtering is a cheap `Set.has()` check at the consumer level.
+
+**Example:**
+
+```tsx
+// contexts/AreaContext.tsx
+interface Area {
+  id: string;
+  name: string;
+  description: string;
+  color?: string;
+}
+
+interface AreaContextValue {
+  areas: Area[];
+  selectedAreaId: string | null;     // null = "Global" (all areas)
+  setSelectedAreaId: (id: string | null) => void;
+  deviceAreaMap: Map<string, string>; // deviceId -> areaId
+  filteredDeviceIds: Set<string> | null; // null = show all (Global)
+  createArea: (area: Omit<Area, 'id'>) => Promise<void>;
+  updateArea: (area: Area) => Promise<void>;
+  deleteArea: (id: string) => Promise<void>;
+  assignDevice: (deviceId: string, areaId: string) => Promise<void>;
+  unassignDevice: (deviceId: string) => Promise<void>;
+}
+```
+
+### Pattern 4: View Router via State (Not React Router)
+
+**What:** Extend the existing `activeView` state in App.tsx from two views (`canvas` | `dashboard`) to three (`areas` | `canvas` | `dashboard`). The NavigationPill controls both the view and the area selection.
+
+**When:** User navigates between Area Hub, Topology, and Devices views.
+
+**Why:** The app currently uses a simple state-based view toggle (no React Router). Adding a client-side router for three views is over-engineering. The NavigationPill already provides the navigation UX. Keep the pattern consistent.
+
+**Example flow:**
+- User on Area Hub (Global) -> clicks "Area 0" in pill -> Area Hub filters to Area 0
+- User on Area Hub (Area 0) -> clicks area card -> switches to Topology view filtered to Area 0
+- User in Topology -> clicks "Areas" tab in pill -> back to Area Hub
+- User clicks "Devices" -> Dashboard view (area filter persists)
+
+### Pattern 5: React-Flow Theme Integration Without v12 Upgrade
+
+**What:** Stay on `reactflow@^11.11.4` for this milestone. Override react-flow's default styles using CSS class overrides (`.react-flow__node`, `.react-flow__edge`, `.react-flow__background`, `.react-flow__minimap`) with CSS variable references.
+
+**When:** For all react-flow visual customization in this milestone.
+
+**Why:** Upgrading to `@xyflow/react` v12 would be a significant refactor: new package name (`reactflow` -> `@xyflow/react`), renamed APIs (`parentNode` -> `parentId`, `onEdgeUpdate` -> `onReconnect`, `xPos`/`yPos` -> `positionAbsoluteX`/`positionAbsoluteY`), immutable update requirements, and new node dimension handling (`node.measured.width`). This is a separate migration that should not be bundled with a design system overhaul. v11's CSS classes are stable and fully overridable.
+
+**How react-flow inherits the theme:**
+```css
+/* react-flow overrides in index.css */
+.react-flow__background {
+  background-color: var(--color-bg-canvas);
+}
+
+.react-flow__minimap {
+  background-color: var(--color-bg-surface);
+}
+
+.react-flow__controls button {
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+}
+
+.react-flow__attribution {
+  display: none; /* or style to match */
+}
+```
+
+Custom nodes (DeviceNode) and custom edges (LinkEdge) already use Tailwind classes -- they inherit the theme automatically once the Tailwind config points to CSS variables.
+
+### Pattern 6: Glow Effects via CSS, Not Canvas/SVG Filters
+
+**What:** Implement the Neon Topography "glow node" status indicators and bloom effects using CSS `box-shadow` with multiple spread values, not SVG filters or canvas rendering.
+
+**When:** Device status indicators, active area card highlights, NavigationPill active state.
+
+**Why:** CSS box-shadow is GPU-composited and performant. SVG filters (feGaussianBlur) are expensive to re-render on 100+ nodes. The mockups already use this approach.
+
+**Example:**
+
+```css
+/* Status glow: 3x3 dot with matching shadow */
+.glow-node-up {
+  background-color: var(--color-status-up);
+  box-shadow: 0 0 8px var(--color-status-up),
+              0 0 16px rgba(0, 200, 83, 0.3);
+}
+
+.glow-node-down {
+  background-color: var(--color-status-down);
+  box-shadow: 0 0 8px var(--color-status-down),
+              0 0 16px rgba(255, 23, 68, 0.3);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Bloom effect behind area cards */
+.bloom-primary {
+  background: radial-gradient(
+    ellipse 200px 200px at center,
+    rgba(0, 230, 118, 0.08),
+    transparent
+  );
+}
+```
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern 1: Theme Object in React Context
+
+**What:** Passing a full theme object (`{ colors: { primary: '#00E676', ... }, fonts: { ... } }`) through React context and reading it in every component.
+
+**Why bad:** Every theme change triggers re-render of the entire component tree. With 100+ react-flow nodes, this causes visible frame drops. It also creates tight coupling between components and the theme shape.
+
+**Instead:** CSS custom properties on `:root`/`.dark` + Tailwind utility classes. Components never import or read theme values -- they use `bg-primary`, `text-text-primary`, etc. and the CSS cascade handles the rest.
+
+### Anti-Pattern 2: Duplicating Data Per Area
+
+**What:** Maintaining separate device arrays, link arrays, or snapshot data per area.
+
+**Why bad:** The WebSocket pushes a single snapshot with all devices. Splitting it into per-area copies creates synchronization problems (stale data in inactive areas) and doubles memory usage.
+
+**Instead:** Single source of truth for all data. Areas are a UI filter layer using `Set.has(deviceId)`.
+
+### Anti-Pattern 3: react-flow v12 Upgrade Bundled With Redesign
+
+**What:** Upgrading from `reactflow@11` to `@xyflow/react@12` as part of the design system work.
+
+**Why bad:** The v12 migration has its own breaking changes (package rename, API renames, immutability requirements, node dimension changes). Combining it with a visual redesign creates two failure modes in one milestone -- if the design looks wrong, is it a theme bug or a v12 API mismatch?
+
+**Instead:** Complete the design system on v11. Plan a separate v12 migration milestone afterwards, which will be simpler because the CSS variable infrastructure will already be in place.
+
+### Anti-Pattern 4: Canvas State Mega-Component
+
+**What:** The current Canvas.tsx is ~750 lines with 15+ useState calls, multiple useEffect chains, and all business logic inline. Adding area filtering here would push it past maintainable limits.
+
+**Why bad:** Difficult to test, impossible to reuse logic, hard to reason about data flow.
+
+**Instead:** Extract into focused modules during or before the redesign:
+- `useTopologyData` hook: device/link fetching + position merging
+- `useSnapshotApplication` hook: applying WebSocket snapshots to nodes/edges
+- `useCanvasInteractions` hook: context menus, edit mode, keyboard shortcuts
+- Area filtering stays in AreaProvider, consumed via context
+
+### Anti-Pattern 5: Inline Hardcoded Colors
+
+**What:** Using hex values directly in component JSX (e.g., `bg-[#1a1a24]`, `text-[#8899a6]`, `border-bg-canvas`).
+
+**Why bad:** The current codebase has several hardcoded hex values in DeviceCard.tsx (`bg-[#1a1a24]`, `bg-[#12121a]`), Canvas.tsx, and StatusDot.tsx that bypass the Tailwind theme. These will not respond to theme changes.
+
+**Instead:** Every color must go through the token system. Audit all `bg-[#...]`, `text-[#...]`, `border-[#...]` arbitrary Tailwind classes and replace with semantic token references. Discovered hardcoded values so far:
+- `DeviceCard.tsx` line 133: `bg-[#1a1a24]` (header background)
+- `DeviceCard.tsx` line 149: `bg-[#12121a]` (body background)
+- `DeviceCard.tsx` line 24: `!bg-[#8899a6]` (handle color)
+- `index.css` line 18: `background-color: #2d2d3d` (body)
+- Various `shadow-[0_0_28px_rgba(...)]` in DeviceCard.tsx
+
+## Scalability Considerations
+
+| Concern | At 50 devices | At 100+ devices | At 500+ devices |
+|---------|--------------|-----------------|-----------------|
+| **Theme switching** | Instant (CSS variables) | Instant (CSS variables) | Instant (CSS variables) |
+| **Area filtering** | Set.has() trivial | Set.has() trivial | Set.has() trivial |
+| **Snapshot application** | ~50 node updates | ~100 node maps, use startTransition (already done) | Virtualize or batch; may need react-flow viewport culling |
+| **Area Hub aggregation** | Iterate snapshot once | Iterate snapshot once per area card | Memoize per-area aggregates with useMemo keyed on snapshot + area |
+| **Glow/bloom CSS effects** | No impact | Watch for composite layer count | Reduce effects at zoom-out levels via CSS `will-change` or conditional classes |
+
+## Suggested Build Order
+
+The architecture has clear dependency chains that dictate build order:
+
+```
+Phase 1: Design Token Foundation
+  |-- CSS custom properties in index.css (dark + light token sets)
+  |-- tailwind.config.js updated to use CSS variable references
+  |-- ThemeProvider context (class toggle + localStorage persistence)
+  |-- Theme toggle control in settings or nav
+  |-- Google Fonts loaded: Outfit + JetBrains Mono
+  |-- Audit and replace all hardcoded hex values in existing components
+  |
+  Dependency: Nothing else can be themed until tokens exist.
+  Risk: Low. Mechanical find-and-replace. Existing Tailwind class names stay the same.
+
+Phase 2: Component Restyling
+  |-- DeviceCard -> DeviceNode (Neon Topography: Outfit/JetBrains Mono, glow indicators,
+  |   surface hierarchy, no-line rule)
+  |-- ContextMenu restyled (glassmorphism, icon-labeled items per mockup)
+  |-- NavigationPill (replaces NavBar, floating pill geometry, shadow-pill)
+  |-- SidePanel, Toolbar, ZoomControls restyled to Neon Topography
+  |-- Atmospheric watermark CSS class
+  |
+  Dependency: Requires Phase 1 tokens. Can be done component-by-component.
+  Risk: Medium. DeviceNode restyle must preserve react-flow Handle positions and
+  the custom memo equality check.
+
+Phase 3: Area Backend + Provider
+  |-- Backend: Area domain model, DB migration, CRUD API endpoints
+  |   (area table, device_area_assignments table)
+  |-- AreaProvider context (fetch areas, device-area map, selection state)
+  |-- Area management UI in SettingsPanel (create/edit/delete areas, assign devices)
+  |-- NavigationPill wired to AreaProvider for area tab rendering
+  |
+  Dependency: Backend must exist before frontend can fetch areas.
+  Can run in parallel with Phase 2 (different people/tracks).
+  Risk: Medium. New domain entity end-to-end (Go + SQL + React).
+
+Phase 4: Area Hub View + Filtered Topology
+  |-- AreaHubView with AreaCards grid and AggregateStatsBar
+  |-- Aggregate stat computation from WebSocket snapshot + area filter
+  |-- Atmospheric watermark per area (area name as large background text)
+  |-- Area-filtered TopologyView (Canvas filters nodes/edges by area)
+  |-- Area-filtered DashboardView
+  |-- View routing in App.tsx extended to three views (areas | canvas | dashboard)
+  |
+  Dependency: Requires Phase 3 (areas exist) AND Phase 2 (components styled).
+  Risk: Medium-High. New view with live data aggregation.
+
+Phase 5 (Recommended, Not Blocking): Canvas Decomposition
+  |-- Extract useTopologyData, useSnapshotApplication, useCanvasInteractions hooks
+  |-- Canvas.tsx becomes a thin orchestrator (~150 lines)
+  |
+  Dependency: Can happen during any phase but yields most value before Phase 4.
+  Risk: Low-medium. Pure refactor, no behavior change.
+```
+
+**Critical path:** Phase 1 -> Phase 2 + Phase 3 (parallel) -> Phase 4
+
+**Phase 5 is optional for v1.3.0** but strongly recommended if Canvas.tsx area filtering proves unwieldy.
+
+## Key Technical Decisions
+
+### Stay on reactflow v11, Do Not Upgrade to v12
+
+**Confidence:** HIGH (verified via official migration docs at reactflow.dev/learn/troubleshooting/migrate-to-v12)
+
+React Flow v12 (`@xyflow/react`) introduces native `colorMode` prop and `--xy-*` CSS variables for theming. However, it also renames the package and breaks multiple APIs. The current `reactflow@^11.11.4` CSS class overrides (`.react-flow__*`) are sufficient for theming, and custom nodes (DeviceCard) use Tailwind which will inherit CSS variables automatically. Upgrade to v12 in a separate future milestone.
+
+### CSS Variables Over Tailwind dark: Variant
+
 **Confidence:** HIGH
 
-## Standard Architecture
+Tailwind's `dark:` variant would require adding `dark:` prefixes to every color class in every component (e.g., `bg-surface dark:bg-surface-dark`). With 20+ components and hundreds of color references, this is error-prone and noisy. Instead, using CSS variables means each Tailwind class (e.g., `bg-bg-surface`) resolves to the correct color based on the `.dark`/`.light` class on `<html>`. Zero component JSX changes needed for theme switching.
 
-### System Overview
+### No Zustand -- Keep React Context + useState
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (React)                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
-│  │  Topology     │  │  Device      │  │  Sidebar /   │              │
-│  │  Canvas       │  │  Cards       │  │  Inspector   │              │
-│  │  (React Flow) │  │  (Custom     │  │  Panel       │              │
-│  │              │  │   Nodes)     │  │              │              │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘              │
-│         │                 │                 │                       │
-│  ┌──────┴─────────────────┴─────────────────┴───────┐              │
-│  │              Zustand State Store                  │              │
-│  │  (topology, metrics, selection, layout)           │              │
-│  └──────────────────────┬────────────────────────────┘              │
-│                         │                                          │
-│  ┌──────────────────────┴────────────────────────────┐              │
-│  │           WebSocket Client + REST Client           │              │
-│  └──────────────────────┬────────────────────────────┘              │
-├─────────────────────────┼───────────────────────────────────────────┤
-│                         │ WS: metrics stream                       │
-│                         │ HTTP: CRUD, topology, config              │
-├─────────────────────────┼───────────────────────────────────────────┤
-│                     BACKEND (Go)                                    │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
-│  │  REST API     │  │  WebSocket   │  │  SNMP        │              │
-│  │  Server       │  │  Hub         │  │  Poller      │              │
-│  │  (chi router) │  │  (gorilla/ws)│  │  (gosnmp)    │              │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘              │
-│         │                 │                 │                       │
-│  ┌──────┴─────────────────┴─────────────────┴───────┐              │
-│  │              Core Domain Layer                    │              │
-│  │  (device registry, topology graph, metric cache)  │              │
-│  └──────┬───────────────────────────────┬────────────┘              │
-│         │                               │                          │
-│  ┌──────┴──────────┐           ┌────────┴─────────┐                │
-│  │  SQLite Store    │           │  Prometheus       │                │
-│  │  (device config, │           │  Client           │                │
-│  │   positions,     │           │  (PromQL queries) │                │
-│  │   layout)        │           │                   │                │
-│  └─────────────────┘           └────────┬─────────┘                │
-├─────────────────────────────────────────┼───────────────────────────┤
-│                    EXTERNAL             │                           │
-│  ┌──────────────┐  ┌──────────────┐  ┌──┴───────────┐              │
-│  │  Network      │  │  Grafana     │  │  Prometheus  │              │
-│  │  Devices      │  │  (link-out)  │  │  Server      │              │
-│  │  (SNMP)       │  │              │  │              │              │
-│  └──────────────┘  └──────────────┘  └──────────────┘              │
-└─────────────────────────────────────────────────────────────────────┘
-```
+**Confidence:** MEDIUM
 
-### Component Responsibilities
+The current codebase uses zero Zustand -- all state is React useState/useRef inside Canvas.tsx and local component state. Adding Zustand for area/theme state while keeping Canvas on useState creates an inconsistent split. Use React Context for ThemeProvider and AreaProvider. Area state is low-frequency (user manages areas occasionally, not every frame). If Canvas.tsx state management becomes a bottleneck during the redesign, evaluate Zustand in a separate refactoring effort.
 
-| Component | Responsibility | Typical Implementation |
-|-----------|----------------|------------------------|
-| **Topology Canvas** | Renders interactive node-link graph with pan/zoom/drag | React Flow (xyflow) with custom nodes |
-| **Device Cards** | Custom React Flow nodes showing hostname, IP, status, live metrics | React.memo-wrapped custom node components |
-| **Sidebar/Inspector** | Detailed device info, interface stats, routing info on selection | Standard React panel, reads from Zustand selection state |
-| **Zustand Store** | All client-side state: nodes, edges, metrics, selection, UI | Zustand with sliced stores (topology, metrics, ui) |
-| **WebSocket Client** | Receives real-time metric updates, connection status | Native WebSocket or reconnecting-websocket library |
-| **REST Client** | CRUD for devices, topology layout save/load, configuration | fetch/axios with typed API client |
-| **REST API Server** | HTTP endpoints for device CRUD, topology, configuration | go-chi/chi v5 router with middleware stack |
-| **WebSocket Hub** | Broadcasts metric updates to all connected frontends | gorilla/websocket with hub pattern (connection registry) |
-| **SNMP Poller** | Polls network devices for topology data (neighbors, interfaces) | gosnmp with worker pool goroutines |
-| **Core Domain** | Device registry, topology graph model, metric cache | Pure Go domain types, no framework dependency |
-| **SQLite Store** | Persists device configs, canvas positions, user preferences | mattn/go-sqlite3 or glebarez/go-sqlite |
-| **Prometheus Client** | Queries Prometheus HTTP API for device metrics via PromQL | prometheus/client_golang api/v1 package |
+### Self-Host Fonts, Not Google Fonts CDN
 
-## Recommended Project Structure
+**Confidence:** MEDIUM
 
-```
-mikrotik-theia/
-├── cmd/
-│   └── theia/
-│       └── main.go              # Entry point, wires everything together
-├── internal/
-│   ├── api/
-│   │   ├── router.go            # chi router setup, middleware
-│   │   ├── device_handler.go    # Device CRUD endpoints
-│   │   ├── topology_handler.go  # Topology/layout endpoints
-│   │   └── ws_handler.go        # WebSocket upgrade handler
-│   ├── ws/
-│   │   ├── hub.go               # Connection registry, broadcast
-│   │   └── client.go            # Per-connection read/write goroutines
-│   ├── poller/
-│   │   ├── manager.go           # Manages poll schedules, worker pool
-│   │   ├── worker.go            # Individual device poll logic
-│   │   └── snmp.go              # SNMP get/walk wrappers (gosnmp)
-│   ├── prom/
-│   │   ├── client.go            # Prometheus HTTP API client
-│   │   └── queries.go           # PromQL query templates for metrics
-│   ├── domain/
-│   │   ├── device.go            # Device model
-│   │   ├── topology.go          # Topology graph model (nodes + edges)
-│   │   ├── metrics.go           # Metric types and cache
-│   │   └── interface.go         # Network interface model
-│   ├── store/
-│   │   ├── sqlite.go            # SQLite connection, migrations
-│   │   ├── device_repo.go       # Device persistence
-│   │   └── layout_repo.go       # Canvas layout persistence
-│   └── config/
-│       └── config.go            # App configuration (env/file)
-├── web/                          # React frontend (Vite)
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── tsconfig.json
-│   ├── index.html
-│   └── src/
-│       ├── main.tsx
-│       ├── App.tsx
-│       ├── api/
-│       │   ├── client.ts        # REST API client (typed)
-│       │   └── ws.ts            # WebSocket connection manager
-│       ├── stores/
-│       │   ├── topologyStore.ts  # Nodes, edges, layout state
-│       │   ├── metricsStore.ts   # Live metric values by device
-│       │   └── uiStore.ts       # Selection, sidebar, theme
-│       ├── components/
-│       │   ├── Canvas/
-│       │   │   ├── TopologyCanvas.tsx   # React Flow wrapper
-│       │   │   ├── DeviceNode.tsx       # Custom node (memoized)
-│       │   │   ├── LinkEdge.tsx         # Custom edge with throughput
-│       │   │   └── CanvasControls.tsx   # Zoom, fit, layout buttons
-│       │   ├── Sidebar/
-│       │   │   ├── DeviceInspector.tsx  # Selected device details
-│       │   │   ├── InterfaceList.tsx    # Interface stats table
-│       │   │   └── RoutingInfo.tsx      # BGP/OSPF display
-│       │   ├── Toolbar/
-│       │   │   ├── AddDeviceDialog.tsx  # Manual device add form
-│       │   │   └── SettingsPanel.tsx    # Global settings
-│       │   └── common/
-│       │       ├── StatusIndicator.tsx  # Green/yellow/red dot
-│       │       └── MetricBadge.tsx      # CPU/mem/temp display
-│       ├── hooks/
-│       │   ├── useWebSocket.ts         # WS connection hook
-│       │   ├── useDeviceMetrics.ts     # Subscribe to device metrics
-│       │   └── useAutoLayout.ts        # Dagre layout trigger
-│       ├── types/
-│       │   └── index.ts               # Shared TypeScript types
-│       └── utils/
-│           ├── formatters.ts          # Bandwidth, uptime formatting
-│           └── grafanaLinks.ts        # Grafana URL construction
-├── Makefile                     # Build targets for both Go + React
-├── Dockerfile                   # Multi-stage: build React, embed in Go
-├── go.mod
-├── go.sum
-└── .planning/
-```
+The mockups reference Outfit and JetBrains Mono from Google Fonts. For a network monitoring tool deployed on internal networks that may lack internet access, bundle the WOFF2 files in `frontend/public/fonts/` and declare `@font-face` rules in `index.css`. This eliminates the external CDN dependency.
 
-### Structure Rationale
+### NavigationPill Replaces NavBar, Does Not Coexist
 
-- **`cmd/theia/`:** Single binary entry point. Go convention for executable packages. Wires dependencies together (dependency injection via constructors, no DI framework).
-- **`internal/`:** Go's built-in encapsulation. Nothing in `internal/` is importable by external packages. Keeps API surface clean.
-- **`internal/api/`:** HTTP layer only. Handlers parse requests, call domain/services, return JSON. No business logic here.
-- **`internal/ws/`:** Separated from REST because WebSocket lifecycle (long-lived connections, broadcast) is fundamentally different from request/response.
-- **`internal/poller/`:** Isolated polling subsystem. Runs independently on its own goroutine pool. Communicates results via channels to the hub for broadcast.
-- **`internal/prom/`:** Prometheus integration isolated behind a clean interface. Easy to mock in tests, easy to swap if metrics source changes.
-- **`internal/domain/`:** Pure Go types with no external dependencies. The topology graph model, device model, and metric types live here. Everything else depends on domain; domain depends on nothing.
-- **`internal/store/`:** Repository pattern over SQLite. Accepts and returns domain types. Database is an implementation detail.
-- **`web/`:** Complete React app with its own package.json. Developed independently with `npm run dev` (Vite dev server with proxy to Go backend). Built output is embedded into the Go binary for single-binary deployment.
-- **Zustand stores split by concern:** `topologyStore` owns React Flow nodes/edges. `metricsStore` owns live metric values (updated via WebSocket). `uiStore` owns selection, sidebar visibility, theme. This prevents metric updates from triggering topology re-renders.
+**Confidence:** HIGH (based on mockup analysis)
 
-## Architectural Patterns
-
-### Pattern 1: Hub-and-Spoke WebSocket Broadcasting
-
-**What:** A central Hub goroutine manages a registry of connected WebSocket clients. When new metric data arrives (from Prometheus queries or SNMP polls), the Hub broadcasts to all registered clients. Each client has dedicated read and write goroutines.
-
-**When to use:** Always, for this system. Multiple browser tabs or operators may view the topology simultaneously.
-
-**Trade-offs:** Simple to implement and reason about. Single Hub is not a bottleneck at this scale (tens of clients, not thousands). If needed later, can shard by topology/room.
-
-**Example:**
-```go
-type Hub struct {
-    clients    map[*Client]bool
-    broadcast  chan []byte
-    register   chan *Client
-    unregister chan *Client
-    mu         sync.RWMutex
-}
-
-func (h *Hub) Run() {
-    for {
-        select {
-        case client := <-h.register:
-            h.clients[client] = true
-        case client := <-h.unregister:
-            delete(h.clients, client)
-            close(client.send)
-        case message := <-h.broadcast:
-            for client := range h.clients {
-                select {
-                case client.send <- message:
-                default:
-                    // Client buffer full, disconnect slow client
-                    close(client.send)
-                    delete(h.clients, client)
-                }
-            }
-        }
-    }
-}
-```
-
-### Pattern 2: Worker Pool SNMP Poller
-
-**What:** A fixed-size goroutine pool processes SNMP poll jobs from a channel. A scheduler goroutine enqueues poll jobs based on per-device intervals. Workers execute SNMP operations and push results to a results channel consumed by the domain layer.
-
-**When to use:** For polling 100+ devices without spawning unbounded goroutines. SNMP is I/O-bound (network timeout-limited), so a pool of 20-50 workers handles 100+ devices comfortably.
-
-**Trade-offs:** Fixed pool size prevents resource exhaustion. Trade-off is that with very aggressive polling intervals on many devices, jobs queue up. Mitigated by monitoring queue depth and adjusting pool size or intervals.
-
-**Example:**
-```go
-type PollManager struct {
-    devices   []Device
-    jobCh     chan PollJob
-    resultCh  chan PollResult
-    workers   int
-    ticker    map[string]*time.Ticker // per-device tickers
-}
-
-func (pm *PollManager) Start(ctx context.Context) {
-    // Spawn worker pool
-    for i := 0; i < pm.workers; i++ {
-        go pm.worker(ctx)
-    }
-    // Schedule jobs based on device poll intervals
-    for _, dev := range pm.devices {
-        go pm.scheduleDevice(ctx, dev)
-    }
-}
-
-func (pm *PollManager) worker(ctx context.Context) {
-    for {
-        select {
-        case <-ctx.Done():
-            return
-        case job := <-pm.jobCh:
-            result := pm.pollDevice(job)
-            pm.resultCh <- result
-        }
-    }
-}
-```
-
-### Pattern 3: Sliced Zustand Stores with Selective Subscriptions
-
-**What:** Separate Zustand stores for topology (nodes/edges), metrics (live values), and UI (selection/panels). Components subscribe to only the slice they need. Metric updates (frequent, every few seconds) never cause topology or UI re-renders.
-
-**When to use:** Always for real-time dashboards. The alternative (single store) causes cascading re-renders when metrics update at high frequency.
-
-**Trade-offs:** Slightly more boilerplate (3 stores instead of 1). Trivial cost for significant performance gain. Cross-store reads are simple (import both stores where needed).
-
-**Example:**
-```typescript
-// metricsStore.ts - updated by WebSocket, subscribed by DeviceNode
-import { create } from 'zustand';
-
-interface MetricsState {
-  deviceMetrics: Record<string, DeviceMetrics>;
-  updateMetrics: (deviceId: string, metrics: DeviceMetrics) => void;
-}
-
-export const useMetricsStore = create<MetricsState>((set) => ({
-  deviceMetrics: {},
-  updateMetrics: (deviceId, metrics) =>
-    set((state) => ({
-      deviceMetrics: { ...state.deviceMetrics, [deviceId]: metrics },
-    })),
-}));
-
-// DeviceNode.tsx - only re-renders when THIS device's metrics change
-const DeviceNode = React.memo(({ id, data }: NodeProps) => {
-  const metrics = useMetricsStore(
-    (state) => state.deviceMetrics[id],
-    shallow
-  );
-  // render device card with metrics
-});
-```
-
-## Data Flow
-
-### Metric Data Flow (Real-Time)
-
-```
-Prometheus Server
-    │ (HTTP API, PromQL queries every N seconds)
-    v
-Go Prometheus Client (internal/prom/)
-    │ (query results: CPU, memory, throughput per device)
-    v
-Domain Layer (internal/domain/)
-    │ (transforms to MetricUpdate messages, updates cache)
-    v
-WebSocket Hub (internal/ws/)
-    │ (JSON broadcast to all connected clients)
-    v
-WebSocket Client (web/src/api/ws.ts)
-    │ (parses message, dispatches to store)
-    v
-Zustand metricsStore
-    │ (selective subscription via deviceId)
-    v
-DeviceNode Component (re-renders only changed devices)
-```
-
-### Topology Discovery Flow (On-Demand / Periodic)
-
-```
-Network Device (SNMP agent)
-    │ (SNMP GetBulk: sysDescr, ifTable, lldpRemTable, ospfNbrTable)
-    v
-SNMP Poller Worker (internal/poller/)
-    │ (parsed into domain types: interfaces, neighbors, routes)
-    v
-Domain Layer (internal/domain/)
-    │ (updates device registry, rebuilds topology graph edges)
-    v
-SQLite Store (internal/store/)
-    │ (persists device info, interface data)
-    v
-REST API / WebSocket
-    │ (full topology on REST GET, incremental updates on WS)
-    v
-Frontend topologyStore
-    │ (React Flow nodes and edges updated)
-    v
-TopologyCanvas (re-renders graph)
-```
-
-### User Interaction Flow
-
-```
-User clicks device on canvas
-    │
-    v
-React Flow onNodeClick → uiStore.setSelectedDevice(id)
-    │
-    v
-DeviceInspector subscribes to uiStore.selectedDevice
-    │ (reads device data from topologyStore)
-    │ (reads metrics from metricsStore)
-    v
-Sidebar renders full device details
-    │
-    v
-User clicks "Open in Grafana" → window.open(grafanaUrl)
-```
-
-### Key Data Flows
-
-1. **Metrics pipeline:** Prometheus -> Go backend (periodic PromQL queries) -> WebSocket broadcast -> Zustand metricsStore -> DeviceNode components. This is the hot path, running every 5-30 seconds per device. The Go backend queries Prometheus (not the other way around), keeping the frontend thin.
-
-2. **Topology pipeline:** SNMP devices -> Go SNMP poller (on device add or periodic refresh) -> domain layer -> SQLite (persist) + WebSocket (notify) -> frontend topologyStore -> React Flow canvas. This runs less frequently (minutes, not seconds) and results in structural graph changes.
-
-3. **Configuration pipeline:** Frontend form -> REST API -> Go handler -> SQLite store -> acknowledgment. Used for adding devices, saving positions, changing poll intervals. Standard request/response, no WebSocket involvement.
-
-### State Management
-
-```
-┌─────────────────────────────────────────────────┐
-│                  Zustand Stores                  │
-│                                                 │
-│  topologyStore          metricsStore   uiStore   │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────┐ │
-│  │ nodes[]     │  │ deviceMetrics│  │selected│ │
-│  │ edges[]     │  │ {id: {cpu,   │  │sidebar │ │
-│  │ onNodesChg  │  │  mem, temp,  │  │theme   │ │
-│  │ onEdgesChg  │  │  uptime}}    │  │addModal│ │
-│  └──────┬──────┘  └──────┬───────┘  └───┬────┘ │
-│         │                │              │       │
-│  Canvas components  DeviceNode     Sidebar/UI   │
-│  (structure changes) (metric updates) (clicks)  │
-└─────────────────────────────────────────────────┘
-
-Update sources:
-  topologyStore ← REST API (initial load, device add/remove)
-                ← WebSocket (topology change events)
-                ← User drag (position updates, saved to backend)
-  metricsStore  ← WebSocket only (continuous metric stream)
-  uiStore       ← User interaction only (clicks, panel toggles)
-```
-
-## Scaling Considerations
-
-| Scale | Architecture Adjustments |
-|-------|--------------------------|
-| 1-50 devices | Single Go binary, single SQLite file, one Prometheus query batch. Poll all devices in one pass. WebSocket broadcasts full metric snapshots. No optimization needed. |
-| 50-200 devices | Batch PromQL queries (query per metric type, not per device). SNMP worker pool of 20-30. WebSocket sends delta updates (only changed metrics). Memoize all React Flow custom nodes. |
-| 200-500 devices | Shard SNMP polling by device groups. Consider viewport-based rendering in React Flow (only render visible nodes). Add metric aggregation/downsampling for overview mode. Consider moving from SQLite to PostgreSQL if concurrent write pressure increases. |
-| 500+ devices | Multiple topology maps/views (filter by site/region). Backend metric cache with TTL to reduce Prometheus query load. Consider server-side topology rendering for very large graphs. This is beyond v1 scope. |
-
-### Scaling Priorities
-
-1. **First bottleneck: SNMP polling throughput.** SNMP is slow (100-500ms per device roundtrip). With 100 devices at 30-second intervals, a pool of 10 workers handles this easily (100 * 0.5s / 10 workers = 5 seconds per cycle). Monitor: poll cycle completion time vs configured interval.
-
-2. **Second bottleneck: React Flow rendering with many nodes.** At 100+ custom nodes with live-updating metrics, un-memoized components will cause frame drops. Fix: `React.memo` on all custom nodes, shallow equality on Zustand selectors, avoid complex CSS (shadows, gradients) on nodes.
-
-3. **Third bottleneck: Prometheus query volume.** Querying per-device metrics individually does not scale. Fix: Use PromQL label matchers to batch queries (e.g., `node_cpu_seconds_total{instance=~"device1|device2|..."}`) and parse results server-side.
-
-## Anti-Patterns
-
-### Anti-Pattern 1: Frontend Queries Prometheus Directly
-
-**What people do:** Have the React app call the Prometheus HTTP API directly from the browser.
-
-**Why it's wrong:** Exposes Prometheus to the internet/users. PromQL queries are complex and device-specific -- the frontend should not need to know PromQL. CORS issues. No caching layer. Every browser tab independently hammers Prometheus.
-
-**Do this instead:** Backend queries Prometheus on a schedule, caches results, broadcasts via WebSocket. Frontend receives pre-processed, display-ready metric objects.
-
-### Anti-Pattern 2: One WebSocket Message Per Metric Per Device
-
-**What people do:** Send individual WebSocket messages for each metric of each device (e.g., one message for device1.cpu, another for device1.memory).
-
-**Why it's wrong:** At 100 devices with 5 metrics each, that is 500 messages per poll cycle. Message framing overhead dominates. Frontend processes 500 state updates instead of 1 batched update.
-
-**Do this instead:** Batch all metric updates into a single JSON message per broadcast cycle: `{ "type": "metrics_update", "devices": { "dev1": {...}, "dev2": {...} } }`. Frontend applies the entire batch in one `setState` call.
-
-### Anti-Pattern 3: Storing React Flow State in the Backend
-
-**What people do:** Persist every node drag event to the backend in real-time, or store React Flow's internal state format in the database.
-
-**Why it's wrong:** Massive write amplification during drag operations. Couples backend schema to React Flow's internal types. Database becomes bottleneck for UI interactions.
-
-**Do this instead:** Store positions only on explicit "save layout" action (or debounced auto-save after drag ends). Store as simple `{deviceId, x, y}` records, not React Flow node objects. Reconstruct React Flow nodes from domain data + saved positions on load.
-
-### Anti-Pattern 4: Unbounded Goroutines for SNMP Polling
-
-**What people do:** Spawn a new goroutine per device per poll cycle without limits.
-
-**Why it's wrong:** With 100+ devices, you get goroutine storms. SNMP connections consume file descriptors. If devices are unreachable, goroutines block on timeouts and pile up.
-
-**Do this instead:** Fixed-size worker pool with a job channel. Workers reuse SNMP connections where possible. Context-based timeouts prevent goroutine leaks. Monitor active goroutine count.
-
-## Integration Points
-
-### External Services
-
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| Prometheus | Go HTTP client querying `/api/v1/query` and `/api/v1/query_range` | Use `prometheus/client_golang/api/v1` package. Batch queries with label matchers. Query interval should match or be slower than scrape interval. |
-| Grafana | URL construction only (link-out) | No API integration needed. Construct dashboard URLs with device-specific variables: `/d/dashboard-id?var-instance=device_ip`. Store dashboard URL templates per device type. |
-| Network Devices | SNMP v2c/v3 via gosnmp | Each device needs: IP, community string (v2c) or credentials (v3), poll interval. Use GetBulk for interface tables, Walk for neighbor discovery. Timeout: 5s per request, 2 retries. |
-| SNMP Exporter | Prometheus scrapes it; Theia reads from Prometheus | Theia does NOT replace snmp_exporter. snmp_exporter handles metric collection for Prometheus. Theia uses SNMP directly only for topology discovery (LLDP/CDP neighbors, interface details) that snmp_exporter does not expose. |
-
-### Internal Boundaries
-
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| REST API <-> Domain | Direct function calls | Handlers call domain service methods. Domain returns typed results. Handler serializes to JSON. |
-| SNMP Poller <-> Domain | Go channels (`chan PollResult`) | Poller is async. Results flow through a channel. Domain layer processes results and updates device registry. |
-| Domain <-> WebSocket Hub | Go channel (`hub.broadcast <- message`) | Domain pushes serialized metric updates to the hub's broadcast channel. Hub fans out to clients. |
-| Domain <-> SQLite Store | Repository interface | Domain defines `DeviceRepository` interface. Store implements it. Dependency points inward (store depends on domain, not reverse). |
-| Domain <-> Prometheus Client | Direct function calls behind interface | `MetricsSource` interface with `QueryDeviceMetrics(ctx, deviceIDs)` method. Prometheus client implements it. Testable with mock. |
-| Frontend REST <-> Backend API | HTTP JSON (OpenAPI-shaped) | Standard REST: `GET /api/devices`, `POST /api/devices`, `PUT /api/devices/:id/position`, `GET /api/topology`. |
-| Frontend WS <-> Backend Hub | JSON over WebSocket | Message types: `metrics_update`, `topology_change`, `device_status`. Frontend dispatches to appropriate Zustand store based on type. |
-
-## Build Order (Dependency Chain)
-
-The components have clear dependency relationships that dictate build order:
-
-```
-Phase 1: Foundation
-  domain/ (types, models) ← everything depends on this
-  store/ (SQLite, device persistence) ← API needs this
-  config/ ← everything reads config
-
-Phase 2: Backend Services
-  api/ (REST handlers) ← needs domain + store
-  prom/ (Prometheus client) ← needs domain types
-  poller/ (SNMP) ← needs domain + store
-  ws/ (WebSocket hub) ← needs domain
-
-Phase 3: Frontend Foundation
-  Zustand stores ← mirrors domain types
-  REST client ← needs backend API running
-  Canvas with static nodes ← needs topology data
-
-Phase 4: Real-Time Integration
-  WebSocket client ← needs ws hub
-  Metrics pipeline (Prom -> Hub -> Store -> Node) ← needs all layers
-  SNMP poller integration ← needs poller + domain
-
-Phase 5: Polish
-  Auto-layout (Dagre) ← needs topology working
-  Grafana link-out ← needs device metadata
-  Visual alerts ← needs metrics + status logic
-  Save/load layout ← needs positions API
-```
-
-This ordering ensures each phase produces a testable, demonstrable increment. Phase 1 and 2 can be tested with curl. Phase 3 shows a visible UI. Phase 4 brings it to life with real data. Phase 5 is polish that builds on a working system.
+The OSPF Area Hub mockups show a floating pill at the top center as the sole navigation element. The existing NavBar (fixed top bar with "Topology" and "Devices" tabs) should be replaced entirely. The pill handles both view switching (Areas/Topology/Devices) and area selection (Global/Area 0/Area 1/...). Having both would be confusing and waste vertical space.
 
 ## Sources
 
-- [gosnmp/gosnmp - Go SNMP library](https://github.com/gosnmp/gosnmp) - HIGH confidence
-- [React Flow (xyflow) - Node-based UI library](https://reactflow.dev/) - HIGH confidence
-- [React Flow Performance Guide](https://reactflow.dev/learn/advanced-use/performance) - HIGH confidence
-- [go-chi/chi - Lightweight Go HTTP router](https://github.com/go-chi/chi) - HIGH confidence
-- [gorilla/websocket - Go WebSocket library](https://github.com/gorilla/mux) - HIGH confidence
-- [Zustand - React state management](https://github.com/pmndrs/zustand) - HIGH confidence
-- [Prometheus HTTP API documentation](https://prometheus.io/docs/prometheus/latest/querying/api/) - HIGH confidence
-- [prometheus/client_golang API package](https://pkg.go.dev/github.com/prometheus/client_golang/api/prometheus/v1) - HIGH confidence
-- [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) - HIGH confidence
-- [High-Concurrency IoT Data Collection with Golang SNMP Poller](https://www.ksolves.com/case-studies/big-data/high-concurrency-iot-data-collection) - MEDIUM confidence
-- [Real-Time Systems: Go + React App](https://www.freecodecamp.org/news/real-time-systems-for-web-developers-from-theory-to-a-live-go-react-app/) - MEDIUM confidence
-- [Go WebSocket Hub pattern](https://dev.to/jones_charles_ad50858dbc0/go-websocket-programming-build-real-time-apps-with-ease-1o57) - MEDIUM confidence
-- [Zustand WebSocket integration discussion](https://github.com/pmndrs/zustand/discussions/1651) - MEDIUM confidence
-- [Monorepo structure for React + Go backend](https://dev.to/ynwd/how-to-setup-golang-backend-and-react-frontend-in-a-monorepo-3api) - MEDIUM confidence
+- [Tailwind CSS v3 Dark Mode docs](https://v3.tailwindcss.com/docs/dark-mode) -- HIGH confidence
+- [React Flow Theming](https://reactflow.dev/learn/customization/theming) -- HIGH confidence
+- [React Flow v12 Migration Guide](https://reactflow.dev/learn/troubleshooting/migrate-to-v12) -- HIGH confidence
+- [React Flow Custom Nodes](https://reactflow.dev/learn/customization/custom-nodes) -- HIGH confidence
+- [React Flow Dark Mode Example](https://reactflow.dev/examples/styling/dark-mode) -- HIGH confidence
+- [Building a Themed Design System with Tailwind and CSS Variables](https://medium.com/@andriy.vl/building-a-themed-design-system-with-tailwind-and-css-variables-for-react-and-next-js-apps-2df0ff783440) -- MEDIUM confidence
+- [Dark Mode in React: A Scalable Theme System with Tailwind](https://medium.com/@roman_fedyskyi/dark-mode-in-react-a-scalable-theme-system-with-tailwind-d14e9c1afd1a) -- MEDIUM confidence
+- [Zustand Slice Pattern](https://github.com/pmndrs/zustand/blob/main/docs/learn/guides/slices-pattern.md) -- HIGH confidence (considered and decided against for this milestone)
+- [Creating Custom Themes with Tailwind CSS](https://blog.logrocket.com/creating-custom-themes-tailwind-css/) -- MEDIUM confidence
 
 ---
-*Architecture research for: MikroTik Theia - Network Topology Visualizer*
-*Researched: 2026-03-05*
+
+*Architecture analysis: 2026-03-25*
+*Domain: Frontend redesign -- design system, theming, and area-based navigation for Theia network topology visualizer*

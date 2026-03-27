@@ -1,71 +1,113 @@
-import { type Device } from '../../types/api';
+import type { Device, Area } from '../../types/api';
+import type { ResolvedTheme } from '../../contexts/ThemeContext';
+import { adaptAreaColor } from '../../contexts/ThemeContext';
+import type { DeviceMetricsDTO } from '../../types/metrics';
+import { formatUptime } from '../../types/metrics';
+import { StatusDot } from '../StatusDot';
+import { MaterialIcon } from '../MaterialIcon';
+
 
 interface DeviceRowProps {
   device: Device;
+  areaMap: Map<string, Area>;
+  resolvedTheme: ResolvedTheme;
+  deviceMetrics: DeviceMetricsDTO | null;
   onSSHCredentials: () => void;
   onBackup: () => void;
   onBackupHistory: () => void;
   onViewConfig: () => void;
 }
 
-const statusColors: Record<string, string> = {
-  up: 'bg-status-up',
-  down: 'bg-status-down',
-  probing: 'bg-status-probing',
-  unknown: 'bg-status-unknown',
-};
+function parseOsVersion(sysDescr: string): string {
+  if (!sysDescr) return '';
+  // Match patterns like "RouterOS 7.14.3", "Version 6.49.10", "IOS-XE 17.3.4"
+  const match = sysDescr.match(/(?:RouterOS|Version|IOS(?:-XE)?|JunOS|EOS)\s*([\d.]+\S*)/i);
+  return match ? match[0] : '';
+}
 
 export function DeviceRow({
-  device,
-  onSSHCredentials,
-  onBackup,
-  onBackupHistory,
-  onViewConfig,
+  device, areaMap, resolvedTheme, deviceMetrics,
+  onSSHCredentials, onBackup, onBackupHistory, onViewConfig,
 }: DeviceRowProps) {
   const displayName = device.tags?.display_name || device.sys_name || device.hostname || device.ip;
+  const area = device.area_id ? areaMap.get(device.area_id) : undefined;
+  const uptimeSecs = deviceMetrics?.uptime_secs ?? null;
+  const osVersion = parseOsVersion(device.sys_descr);
 
   return (
-    <tr className="border-b border-border-subtle/50 hover:bg-bg-elevated/50 transition-colors">
-      <td className="px-3 py-2.5">
-        <div className="font-medium text-text-primary">{displayName}</div>
+    <tr className="[&:nth-child(even)]:bg-surface-high/30 hover:bg-elevated/50 transition-colors duration-150">
+      {/* Name -- sticky first column per D-20 */}
+      <td className="px-3 py-2.5 sticky left-0 z-[4] bg-inherit">
+        <div className="font-medium text-on-bg">{displayName}</div>
         {device.sys_name && device.sys_name !== displayName && (
-          <div className="text-text-secondary mt-0.5">{device.sys_name}</div>
+          <div className="text-on-bg-secondary text-[11px] mt-0.5">{device.sys_name}</div>
         )}
       </td>
-      <td className="px-3 py-2.5 text-text-secondary font-mono">{device.ip}</td>
+      {/* IP Address -- monospace per design spec */}
+      <td className="px-3 py-2.5 font-mono text-[11px] font-semibold text-on-bg-secondary whitespace-nowrap">{device.ip}</td>
+      {/* Status -- StatusDot component per D-02 */}
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-1.5">
-          <span className={`h-2 w-2 rounded-full ${statusColors[device.status] ?? statusColors.unknown}`} />
-          <span className="text-text-secondary capitalize">{device.status}</span>
+          <StatusDot status={device.status} />
+          <span className="text-on-bg-secondary capitalize text-[11px]">{device.status}</span>
         </div>
       </td>
-      <td className="px-3 py-2.5 text-text-secondary">
+      {/* Area -- color dot + name per D-02/D-11 */}
+      <td className="px-3 py-2.5">
+        {area ? (
+          <div className="flex items-center gap-1.5">
+            <span
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{ backgroundColor: adaptAreaColor(area.color, resolvedTheme) }}
+            />
+            <span className="text-on-bg-secondary text-[11px]">{area.name}</span>
+          </div>
+        ) : (
+          <span className="text-on-bg-muted text-[11px]">{'\u2014'}</span>
+        )}
+      </td>
+      {/* Vendor */}
+      <td className="px-3 py-2.5 text-on-bg-secondary text-[11px] capitalize">
+        {device.vendor || '\u2014'}
+      </td>
+      {/* Model */}
+      <td className="px-3 py-2.5 text-on-bg-secondary text-[11px] font-mono">
         {device.hardware_model && device.hardware_model !== 'Unknown'
           ? device.hardware_model
           : device.sys_descr
             ? device.sys_descr.length > 30 ? `${device.sys_descr.slice(0, 29)}\u2026` : device.sys_descr
             : '\u2014'}
       </td>
+      {/* OS Version -- parsed from sys_descr, font-mono per D-02 */}
+      <td className="px-3 py-2.5 font-mono text-[11px] text-on-bg-secondary whitespace-nowrap">
+        {osVersion || '\u2014'}
+      </td>
+      {/* Uptime -- live from WebSocket snapshot, font-mono per D-02 */}
+      <td className="px-3 py-2.5 font-mono text-[11px] text-on-bg-secondary whitespace-nowrap">
+        {uptimeSecs !== null ? formatUptime(uptimeSecs) : '\u2014'}
+      </td>
+      {/* Actions -- icon buttons per D-08 */}
       <td className="px-3 py-2.5">
-        <div className="flex items-center justify-end gap-1">
-          <ActionButton label="SSH" onClick={onSSHCredentials} title="SSH Credentials" />
-          <ActionButton label="Backup" onClick={onBackup} title="Backup Now" />
-          <ActionButton label="History" onClick={onBackupHistory} title="Backup History" />
-          <ActionButton label="Config" onClick={onViewConfig} title="View Config" />
+        <div className="flex items-center justify-end gap-0.5">
+          <IconAction icon="terminal" title="SSH Credentials" onClick={onSSHCredentials} />
+          <IconAction icon="backup" title="Backup Now" onClick={onBackup} />
+          <IconAction icon="history" title="Backup History" onClick={onBackupHistory} />
+          <IconAction icon="description" title="View Config" onClick={onViewConfig} />
         </div>
       </td>
     </tr>
   );
 }
 
-function ActionButton({ label, onClick, title }: { label: string; onClick: () => void; title: string }) {
+function IconAction({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
   return (
     <button
-      onClick={onClick}
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
       title={title}
-      className="rounded px-2 py-1 text-[10px] font-medium text-text-secondary border border-border-subtle hover:bg-bg-elevated hover:text-text-primary transition-colors"
+      className="p-1.5 rounded-md text-on-bg-secondary hover:text-on-bg hover:bg-surface-high transition-colors"
     >
-      {label}
+      <MaterialIcon name={icon} size={16} />
     </button>
   );
 }

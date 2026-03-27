@@ -4,13 +4,14 @@ import {
   EdgeLabelRenderer,
   getBezierPath,
   type EdgeProps,
-} from 'reactflow';
+} from '@xyflow/react';
 import type { Link } from '../types/api';
 import { utilizationColor, type AlertStatus, type LinkMetricsDTO } from '../types/metrics';
 
 export interface LinkEdgeData {
   link?: Link;
   bandwidthLabel?: string;
+  speedMismatch?: boolean;
   manual?: boolean;
   parallelIndex?: number;
   onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
@@ -22,6 +23,7 @@ export interface LinkEdgeData {
   targetIfStatus?: string;
   sourceDeviceStatus?: string;
   targetDeviceStatus?: string;
+  areaColor?: string;
 }
 
 export function formatBandwidth(speed: number): string {
@@ -97,53 +99,58 @@ function LinkEdgeInner({
   let strokeColor: string;
   let strokeWidth: number;
   if (alertStatus === 'down') {
-    strokeColor = '#ff1744';
+    strokeColor = 'var(--color-status-down)';
     strokeWidth = 3;
   } else if (alertStatus === 'degraded') {
-    strokeColor = '#ffc107';
+    strokeColor = 'var(--color-status-probing)';
     strokeWidth = 2.5;
   } else if (bothDevDown) {
-    strokeColor = '#ff1744';
+    strokeColor = 'var(--color-status-down)';
     strokeWidth = 2;
   } else if (oneDevDown) {
-    strokeColor = '#ffc107';
+    strokeColor = 'var(--color-status-probing)';
     strokeWidth = 2;
   } else if (bothDevInactive) {
     // Both devices probing (or mix of probing+down not caught above)
-    strokeColor = '#ffc107';
+    strokeColor = 'var(--color-status-probing)';
     strokeWidth = 2;
   } else if (oneDevInactive) {
     // One device probing, other is up
-    strokeColor = '#ffc107';
+    strokeColor = 'var(--color-status-probing)';
     strokeWidth = 2;
   } else if (bothIfDown) {
-    strokeColor = '#ff1744';
+    strokeColor = 'var(--color-status-down)';
     strokeWidth = 2;
   } else if (oneIfDown) {
-    strokeColor = '#ffc107';
+    strokeColor = 'var(--color-status-probing)';
+    strokeWidth = 2;
+  } else if (data?.areaColor) {
+    strokeColor = data.areaColor;
     strokeWidth = 2;
   } else if (bothUp && utilization === null) {
-    strokeColor = '#00c853';
+    strokeColor = 'var(--color-status-up)';
     strokeWidth = 2;
   } else {
-    strokeColor = utilization === null ? '#4a4a5e' : utilizationColor(utilization);
+    strokeColor = utilization === null ? 'var(--color-outline)' : utilizationColor(utilization);
     strokeWidth = 2;
   }
 
   // Throughput label color matches link color
   const throughputColor = (bothDevDown || bothIfDown || alertStatus === 'down')
-    ? '#ff1744'
+    ? 'var(--color-status-down)'
     : (oneDevDown || oneDevInactive || bothDevInactive || oneIfDown || alertStatus === 'degraded')
-      ? '#ffc107'
+      ? 'var(--color-status-probing)'
       : utilization === null
-        ? '#8899a6'
+        ? 'var(--nt-on-bg-secondary)'
         : utilizationColor(utilization);
 
   const activeStrokeWidth = isActive ? strokeWidth + 1.5 : strokeWidth;
   const activeStrokeColor = isActive
-    ? strokeColor === '#4a4a5e'
-      ? '#7a7a9e'
-      : strokeColor
+    ? data?.areaColor
+      ? data.areaColor
+      : strokeColor === 'var(--color-outline)'
+        ? 'var(--nt-on-bg-muted)'
+        : strokeColor
     : strokeColor;
 
   return (
@@ -180,10 +187,18 @@ function LinkEdgeInner({
       {data?.bandwidthLabel ? (
         <EdgeLabelRenderer>
           <div
-            className="pointer-events-none absolute rounded-md border border-border-subtle bg-bg-canvas/95 px-2 py-1 text-[11px] font-medium text-text-secondary shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+            className={`pointer-events-none absolute rounded-md border bg-surface px-2 py-1 text-[11px] font-medium shadow-pill transition-colors duration-200 ${
+              data.speedMismatch
+                ? 'border-status-probing/40 text-status-probing'
+                : data.areaColor
+                  ? ''
+                  : 'border-outline-subtle text-on-bg-secondary'
+            }`}
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,
+              ...(data.areaColor && !data.speedMismatch ? { borderColor: data.areaColor, color: data.areaColor } : {}),
             }}
+            title={data.speedMismatch ? 'Speed negotiation mismatch between interfaces' : undefined}
           >
             {data.bandwidthLabel}
           </div>
@@ -192,9 +207,10 @@ function LinkEdgeInner({
       {data?.throughputLabel ? (
         <EdgeLabelRenderer>
           <div
-            className="pointer-events-none absolute rounded-md border border-border-subtle bg-bg-canvas/95 px-2 py-1 text-[10px] font-medium shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+            className={`pointer-events-none absolute rounded-md border bg-surface px-2 py-1 text-[10px] font-medium shadow-pill transition-colors duration-200 ${data.areaColor ? '' : 'border-outline-subtle'}`}
             style={{
-              color: throughputColor,
+              color: data.areaColor ?? throughputColor,
+              ...(data.areaColor ? { borderColor: data.areaColor } : {}),
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY + 20}px)`,
             }}
           >
@@ -214,10 +230,12 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.data?.throughputLabel === next.data?.throughputLabel &&
     prev.data?.alertStatus === next.data?.alertStatus &&
     prev.data?.bandwidthLabel === next.data?.bandwidthLabel &&
+    prev.data?.speedMismatch === next.data?.speedMismatch &&
     prev.data?.sourceIfStatus === next.data?.sourceIfStatus &&
     prev.data?.targetIfStatus === next.data?.targetIfStatus &&
     prev.data?.sourceDeviceStatus === next.data?.sourceDeviceStatus &&
     prev.data?.targetDeviceStatus === next.data?.targetDeviceStatus &&
+    prev.data?.areaColor === next.data?.areaColor &&
     prev.sourceX === next.sourceX &&
     prev.sourceY === next.sourceY &&
     prev.targetX === next.targetX &&

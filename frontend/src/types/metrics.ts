@@ -222,19 +222,19 @@ export function metricColor(value: number): string {
     return 'text-status-down';
   }
   if (value >= 60) {
-    return 'text-yellow-400';
+    return 'text-warning';
   }
   return 'text-status-up';
 }
 
 export function utilizationColor(value: number): string {
   if (value > 0.8) {
-    return '#ff1744';
+    return 'var(--color-status-down)';
   }
   if (value >= 0.5) {
-    return '#ffc107';
+    return 'var(--color-status-probing)';
   }
-  return '#00c853';
+  return 'var(--color-status-up)';
 }
 
 export function alertStatusForDevice(deviceId: string, alerts: AlertDTO[]): AlertStatus {

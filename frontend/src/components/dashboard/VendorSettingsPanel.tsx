@@ -84,31 +84,31 @@ export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsP
   };
 
   const inputClass =
-    'w-full rounded-md border border-border-subtle bg-bg-elevated px-2 py-1.5 text-xs text-text-primary font-mono placeholder-text-secondary/40 focus:border-accent focus:outline-none';
+    'w-full rounded-md border border-outline-subtle bg-elevated px-2 py-1.5 text-xs text-on-bg font-mono placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-colors';
   const textareaClass = inputClass + ' min-h-[60px] resize-y';
-  const labelClass = 'text-[10px] text-text-secondary font-medium';
+  const labelClass = 'text-[10px] text-on-bg-secondary font-medium';
 
   if (loading) {
-    return <div className="text-xs text-text-secondary p-4">Loading vendor settings...</div>;
+    return <div className="text-xs text-on-bg-secondary p-4">Loading vendor settings...</div>;
   }
 
   if (!vendor) {
-    return <div className="text-xs text-text-secondary p-4">Vendor not found</div>;
+    return <div className="text-xs text-on-bg-secondary p-4">Vendor not found</div>;
   }
 
   return (
-    <div className="space-y-5 p-4">
-      <div className="text-sm font-medium text-text-primary">
+    <div className="space-y-5 p-4 transition-colors duration-200">
+      <div className="text-sm font-medium text-on-bg">
         {vendor.display_name} Settings
       </div>
 
       {/* Prometheus Queries */}
       <div className="space-y-3">
-        <div className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+        <div className="text-xs font-medium text-on-bg-secondary uppercase tracking-[0.12em]">
           Prometheus Queries
         </div>
-        <p className="text-[10px] text-text-secondary/70">
-          Use <code className="bg-bg-elevated px-1 rounded">%[1]s</code> for label name and <code className="bg-bg-elevated px-1 rounded">%[2]s</code> for label value.
+        <p className="text-[10px] text-on-bg-secondary/70">
+          Use <code className="bg-elevated px-1 rounded">%[1]s</code> for label name and <code className="bg-elevated px-1 rounded">%[2]s</code> for label value.
         </p>
         <div className="space-y-2">
           <div>
@@ -132,7 +132,7 @@ export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsP
 
       {/* SNMP OIDs */}
       <div className="space-y-3">
-        <div className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+        <div className="text-xs font-medium text-on-bg-secondary uppercase tracking-[0.12em]">
           SNMP OIDs
         </div>
         <div className="space-y-2">
@@ -161,10 +161,10 @@ export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsP
 
       {/* Detection (read-only) */}
       <div className="space-y-2">
-        <div className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+        <div className="text-xs font-medium text-on-bg-secondary uppercase tracking-[0.12em]">
           Detection (read-only)
         </div>
-        <div className="rounded-md border border-border-subtle bg-bg-elevated/30 p-3 text-[10px] text-text-secondary space-y-1">
+        <div className="rounded-lg bg-surface-high p-3 text-[10px] text-on-bg-secondary space-y-1">
           <div>
             <span className="font-medium">SysObjectID Prefixes:</span>{' '}
             {vendor.config.detection.sys_object_id_prefixes?.join(', ') || 'none'}
@@ -187,7 +187,7 @@ export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsP
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex-1 rounded-md bg-accent px-3 py-2 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
+          className="flex-1 rounded-md bg-primary px-3 py-2 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
         >
           {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Changes'}
         </button>

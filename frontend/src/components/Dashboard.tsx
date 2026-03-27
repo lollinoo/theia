@@ -1,6 +1,10 @@
-import { useCallback, useState } from 'react';
-import { type Device } from '../types/api';
+import { useCallback, useMemo, useState } from 'react';
+import type { Device, Area } from '../types/api';
+import type { SnapshotPayload } from '../types/metrics';
 import { DeviceTable } from './dashboard/DeviceTable';
+import { FilterSelect, type FilterOption } from './dashboard/FilterSelect';
+import { MaterialIcon } from './MaterialIcon';
+import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
 import { SSHCredentialForm } from './dashboard/SSHCredentialForm';
 import { BackupPanel } from './dashboard/BackupPanel';
 import { BackupHistoryTable } from './dashboard/BackupHistoryTable';
@@ -19,9 +23,12 @@ type PanelType =
 
 interface DashboardProps {
   devices: Device[];
+  areas: Area[];
+  snapshot: SnapshotPayload | null;
 }
 
-export function Dashboard({ devices }: DashboardProps) {
+export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
+  const { resolvedTheme } = useTheme();
   const [panel, setPanel] = useState<PanelType | null>(null);
 
   // Local overrides for ssh_profile_id (survives panel close/reopen until devices prop refreshes)
@@ -37,11 +44,25 @@ export function Dashboard({ devices }: DashboardProps) {
   // Filters
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [areaFilter, setAreaFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+
+  const areaMap = useMemo(() => {
+    const map = new Map<string, Area>();
+    for (const a of areas) map.set(a.id, a);
+    return map;
+  }, [areas]);
 
   const filteredDevices = devices.filter((d) => {
     if (statusFilter !== 'all' && d.status !== statusFilter) return false;
     if (typeFilter !== 'all' && d.device_type !== typeFilter) return false;
+    if (areaFilter !== 'all') {
+      if (areaFilter === 'unassigned') {
+        if (d.area_id) return false;
+      } else {
+        if (d.area_id !== areaFilter) return false;
+      }
+    }
     if (search) {
       const s = search.toLowerCase();
       const display = d.tags?.display_name || '';
@@ -58,6 +79,29 @@ export function Dashboard({ devices }: DashboardProps) {
 
   const types = [...new Set(devices.map((d) => d.device_type))].sort();
 
+  const statusOptions: FilterOption[] = [
+    { value: 'all', label: 'All' },
+    { value: 'up', label: 'Up' },
+    { value: 'down', label: 'Down' },
+    { value: 'probing', label: 'Probing' },
+    { value: 'unknown', label: 'Unknown' },
+  ];
+
+  const typeOptions: FilterOption[] = [
+    { value: 'all', label: 'All' },
+    ...types.map(t => ({ value: t, label: t })),
+  ];
+
+  const areaOptions: FilterOption[] = [
+    { value: 'all', label: 'All' },
+    ...areas.map(a => ({
+      value: a.id,
+      label: a.name,
+      color: adaptAreaColor(a.color, resolvedTheme),
+    })),
+    { value: 'unassigned', label: 'Unassigned' },
+  ];
+
   const panelTitle = panel
     ? panel.kind === 'ssh-credentials'
       ? 'SSH Credentials'
@@ -73,68 +117,78 @@ export function Dashboard({ devices }: DashboardProps) {
     : '';
 
   return (
-    <div className="h-full pt-10 flex flex-col">
+    <div className="h-full pt-10 flex flex-col transition-colors duration-200">
       {/* Filter bar */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle bg-bg-surface/50">
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-md border border-border-subtle bg-bg-elevated px-2 py-1.5 text-xs text-text-primary outline-none focus:border-accent"
-        >
-          <option value="all">All Status</option>
-          <option value="up">Up</option>
-          <option value="down">Down</option>
-          <option value="probing">Probing</option>
-          <option value="unknown">Unknown</option>
-        </select>
+      <div className="flex items-center gap-3 px-4 py-3 bg-surface/50 transition-colors duration-200">
+        <FilterSelect value={statusFilter} onChange={setStatusFilter} options={statusOptions} label="Status" />
+        <FilterSelect value={typeFilter} onChange={setTypeFilter} options={typeOptions} label="Type" />
+        <FilterSelect value={areaFilter} onChange={setAreaFilter} options={areaOptions} label="Area" />
 
-        <select
-          value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
-          className="rounded-md border border-border-subtle bg-bg-elevated px-2 py-1.5 text-xs text-text-primary outline-none focus:border-accent"
-        >
-          <option value="all">All Types</option>
-          {types.map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-
-        <input
-          type="text"
-          placeholder="Search devices..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 rounded-md border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary placeholder-text-secondary outline-none focus:border-accent"
-        />
+        <div className="relative flex-1">
+          <MaterialIcon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-on-bg-muted" />
+          <input
+            type="text"
+            placeholder="Search devices..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-md bg-surface-high pl-8 pr-3 py-1.5 text-xs text-on-bg placeholder-on-bg-muted outline-none focus:ring-1 focus:ring-primary/30 transition-colors"
+          />
+        </div>
 
         <button
           onClick={() => setPanel({ kind: 'bulk-backup' })}
-          className="rounded-md border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs text-accent hover:bg-accent/20 transition-colors"
+          className="flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs text-primary hover:bg-primary/20 transition-colors"
         >
+          <MaterialIcon name="backup" size={14} />
           Backup All
         </button>
 
         <button
           onClick={() => setPanel({ kind: 'vendor-settings' })}
-          className="rounded-md border border-border-subtle bg-bg-elevated px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-bg-surface transition-colors"
+          className="rounded-md bg-surface-high px-2.5 py-1.5 text-xs text-on-bg-secondary hover:text-on-bg hover:bg-elevated transition-colors"
         >
           Vendor Settings
         </button>
 
-        <span className="text-xs text-text-secondary">
-          {filteredDevices.length} / {devices.length} devices
+        <span className="font-mono text-xs text-on-bg-secondary bg-surface-high rounded-full px-2.5 py-1">
+          {filteredDevices.length} / {devices.length}
         </span>
       </div>
 
       {/* Table */}
       <div className="flex-1 overflow-auto px-4 py-2">
         {devices.length === 0 ? (
-          <div className="flex items-center justify-center h-40 text-text-secondary text-sm">
-            Loading devices...
-          </div>
+          /* D-16: Skeleton loading rows */
+          <SkeletonTable />
+        ) : filteredDevices.length === 0 ? (
+          /* D-17 (no filter matches) or D-15 (no devices at all after load) */
+          search || statusFilter !== 'all' || typeFilter !== 'all' || areaFilter !== 'all' ? (
+            <div className="flex flex-col items-center justify-center h-40 gap-2">
+              <p className="text-on-bg-secondary text-sm">No devices match your filters</p>
+              <button
+                type="button"
+                onClick={() => { setStatusFilter('all'); setTypeFilter('all'); setAreaFilter('all'); setSearch(''); }}
+                className="text-primary hover:text-primary/80 text-xs font-medium transition-colors"
+              >
+                Clear filters
+              </button>
+            </div>
+          ) : (
+            /* D-15: True empty state -- devices loaded but none exist */
+            <div className="bg-surface border border-dashed border-outline rounded-xl p-6 flex flex-col items-center justify-center text-center min-h-[180px] transition-colors duration-200 mt-8">
+              <MaterialIcon name="devices" size={40} className="text-on-bg-secondary/50 mb-3" />
+              <p className="text-on-bg font-semibold text-lg">No devices yet</p>
+              <p className="text-on-bg-secondary text-sm mt-1">
+                Add your first device from the topology canvas
+              </p>
+            </div>
+          )
         ) : (
           <DeviceTable
             devices={filteredDevices}
+            areaMap={areaMap}
+            resolvedTheme={resolvedTheme}
+            snapshot={snapshot}
             onSSHCredentials={(device) => setPanel({ kind: 'ssh-credentials', device: applyOverrides(device) })}
             onBackup={(device) => setPanel({ kind: 'backup', device })}
             onBackupHistory={(device) => setPanel({ kind: 'backup-history', device })}
@@ -179,5 +233,34 @@ export function Dashboard({ devices }: DashboardProps) {
         )}
       </SidePanel>
     </div>
+  );
+}
+
+function SkeletonTable() {
+  return (
+    <table className="w-full text-xs">
+      <thead className="sticky top-0 z-10 bg-bg">
+        <tr className="text-left text-on-bg-secondary">
+          {['Name', 'IP Address', 'Status', 'Area', 'Model', 'Vendor', 'Uptime', 'OS Version', 'Actions'].map(h => (
+            <th key={h} className="px-3 py-2 text-[12px] font-normal uppercase tracking-[0.16em]">{h}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <tr key={i} className={i % 2 === 0 ? '' : 'bg-surface-high/30'}>
+            <td className="px-3 py-2.5"><div className="h-4 w-28 bg-surface-high rounded animate-pulse" /></td>
+            <td className="px-3 py-2.5"><div className="h-4 w-24 bg-surface-high rounded animate-pulse" /></td>
+            <td className="px-3 py-2.5"><div className="h-4 w-14 bg-surface-high rounded animate-pulse" /></td>
+            <td className="px-3 py-2.5"><div className="h-4 w-20 bg-surface-high rounded animate-pulse" /></td>
+            <td className="px-3 py-2.5"><div className="h-4 w-20 bg-surface-high rounded animate-pulse" /></td>
+            <td className="px-3 py-2.5"><div className="h-4 w-8 bg-surface-high rounded animate-pulse" /></td>
+            <td className="px-3 py-2.5"><div className="h-4 w-14 bg-surface-high rounded animate-pulse" /></td>
+            <td className="px-3 py-2.5"><div className="h-4 w-20 bg-surface-high rounded animate-pulse" /></td>
+            <td className="px-3 py-2.5"><div className="h-4 w-24 bg-surface-high rounded animate-pulse" /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

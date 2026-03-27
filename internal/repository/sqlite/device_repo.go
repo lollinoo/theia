@@ -73,19 +73,24 @@ func (r *DeviceRepo) Create(device *domain.Device) error {
 		s := device.SSHProfileID.String()
 		sshProfileID = &s
 	}
+	var areaIDStr *string
+	if device.AreaID != nil {
+		s := device.AreaID.String()
+		areaIDStr = &s
+	}
 
 	_, err = tx.Exec(
 		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status,
 			sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-			ssh_profile_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ssh_profile_id, area_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		device.ID.String(), device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
 		device.SysName, device.SysDescr, device.SysObjectID, device.HardwareModel,
 		device.Vendor, device.Managed, string(tagsJSON), device.CreatedAt, device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
-		sshProfileID,
+		sshProfileID, areaIDStr,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting device: %w", err)
@@ -128,7 +133,7 @@ func (r *DeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				ssh_profile_id
+				ssh_profile_id, area_id
 			FROM devices WHERE id = ?`, id.String(),
 		),
 	)
@@ -155,7 +160,7 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				ssh_profile_id
+				ssh_profile_id, area_id
 			FROM devices WHERE ip = ?`, ip,
 		),
 	)
@@ -182,7 +187,7 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				ssh_profile_id
+				ssh_profile_id, area_id
 			FROM devices WHERE sys_name = ? LIMIT 1`, sysName,
 		),
 	)
@@ -209,7 +214,7 @@ func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 		`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 			sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-			ssh_profile_id
+			ssh_profile_id, area_id
 		FROM devices ORDER BY hostname`,
 	)
 	if err != nil {
@@ -285,20 +290,25 @@ func (r *DeviceRepo) Update(device *domain.Device) error {
 		s := device.SSHProfileID.String()
 		updateSSHProfileID = &s
 	}
+	var updateAreaID *string
+	if device.AreaID != nil {
+		s := device.AreaID.String()
+		updateAreaID = &s
+	}
 
 	result, err := tx.Exec(
 		`UPDATE devices SET hostname=?, ip=?, snmp_credentials_json=?, device_type=?,
 			status=?, sys_name=?, sys_descr=?, sys_object_id=?, hardware_model=?,
 			vendor=?, managed=?, tags_json=?, updated_at=?,
 			metrics_source=?, prometheus_label_name=?, prometheus_label_value=?,
-			ssh_profile_id=?
+			ssh_profile_id=?, area_id=?
 		WHERE id = ?`,
 		device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
 		device.SysName, device.SysDescr, device.SysObjectID, device.HardwareModel,
 		device.Vendor, device.Managed, string(tagsJSON), device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
-		updateSSHProfileID,
+		updateSSHProfileID, updateAreaID,
 		device.ID.String(),
 	)
 	if err != nil {
@@ -367,13 +377,14 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	var managed int
 	var metricsSource, prometheusLabelName, prometheusLabelValue string
 	var sshProfileID *string
+	var areaID *string
 
 	err := row.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
 		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel,
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
-		&sshProfileID,
+		&sshProfileID, &areaID,
 	)
 	if err != nil {
 		return nil, err
@@ -392,6 +403,10 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 		if err == nil {
 			d.SSHProfileID = &parsed
 		}
+	}
+	if areaID != nil {
+		parsed := uuid.MustParse(*areaID)
+		d.AreaID = &parsed
 	}
 
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
@@ -412,13 +427,14 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	var managed int
 	var metricsSource, prometheusLabelName, prometheusLabelValue string
 	var sshProfileID *string
+	var areaID *string
 
 	err := rows.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
 		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel,
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
-		&sshProfileID,
+		&sshProfileID, &areaID,
 	)
 	if err != nil {
 		return nil, err
@@ -437,6 +453,10 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 		if err == nil {
 			d.SSHProfileID = &parsed
 		}
+	}
+	if areaID != nil {
+		parsed := uuid.MustParse(*areaID)
+		d.AreaID = &parsed
 	}
 
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {

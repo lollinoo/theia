@@ -8,8 +8,8 @@ import {
 } from '../api/client';
 
 const inputClass =
-  'w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none';
-const labelClass = 'text-xs font-medium uppercase tracking-widest text-text-secondary';
+  'w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
+const labelClass = 'text-xs font-medium uppercase tracking-widest text-on-bg-secondary';
 
 type FormState = {
   name: string;
@@ -127,8 +127,8 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
             onClick={() => set('authMethod', 'password')}
             className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
               form.authMethod === 'password'
-                ? 'border-accent bg-accent/15 text-accent'
-                : 'border-border-subtle text-text-secondary hover:text-text-primary'
+                ? 'border-primary bg-primary/15 text-primary'
+                : 'border-outline-subtle text-on-bg-secondary hover:text-on-bg'
             }`}
           >
             Password
@@ -138,8 +138,8 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
             onClick={() => set('authMethod', 'key')}
             className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
               form.authMethod === 'key'
-                ? 'border-accent bg-accent/15 text-accent'
-                : 'border-border-subtle text-text-secondary hover:text-text-primary'
+                ? 'border-primary bg-primary/15 text-primary'
+                : 'border-outline-subtle text-on-bg-secondary hover:text-on-bg'
             }`}
           >
             Private Key
@@ -181,14 +181,14 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
         <button
           type="button"
           onClick={onCancel}
-          className="flex-1 rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary hover:bg-bg-surface"
+          className="flex-1 rounded-lg bg-surface-high px-3 py-2 text-sm text-on-bg hover:bg-elevated"
         >
           Cancel
         </button>
         <button
           type="submit"
           disabled={loading}
-          className="flex-1 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex-1 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? 'Saving...' : saveLabel}
         </button>
@@ -260,12 +260,12 @@ export function SSHProfileManager() {
 
   if (mode === 'create') {
     return (
-      <div className="space-y-3">
+      <div className="space-y-3 transition-colors duration-200">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setMode('list')}
-            className="text-text-secondary hover:text-text-primary"
+            className="text-on-bg-secondary hover:text-on-bg"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -285,12 +285,12 @@ export function SSHProfileManager() {
 
   if (mode === 'edit' && editing) {
     return (
-      <div className="space-y-3">
+      <div className="space-y-3 transition-colors duration-200">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => { setMode('list'); setEditing(null); }}
-            className="text-text-secondary hover:text-text-primary"
+            className="text-on-bg-secondary hover:text-on-bg"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -310,13 +310,13 @@ export function SSHProfileManager() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 transition-colors duration-200">
       <div className="flex items-center justify-between">
         <p className={labelClass}>SSH Profiles</p>
         <button
           type="button"
           onClick={() => setMode('create')}
-          className="flex items-center gap-1 rounded-lg border border-border-subtle bg-bg-elevated px-2 py-1 text-xs text-text-primary hover:bg-bg-surface"
+          className="flex items-center gap-1 rounded-lg bg-surface-high px-2 py-1 text-xs text-on-bg hover:bg-elevated"
         >
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -326,11 +326,11 @@ export function SSHProfileManager() {
       </div>
 
       {loading && (
-        <p className="text-xs text-text-secondary">Loading profiles...</p>
+        <p className="text-xs text-on-bg-secondary">Loading profiles...</p>
       )}
 
       {!loading && profiles.length === 0 && (
-        <p className="text-xs text-text-secondary">
+        <p className="text-xs text-on-bg-secondary">
           No SSH profiles yet. Create one to reuse credentials across devices.
         </p>
       )}
@@ -338,15 +338,15 @@ export function SSHProfileManager() {
       {!loading && profiles.map((profile) => (
         <div
           key={profile.id}
-          className="rounded-lg border border-border-subtle bg-bg-elevated p-3 space-y-1"
+          className="rounded-lg bg-surface-high p-3 space-y-1"
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-text-primary truncate">{profile.name}</p>
+              <p className="text-sm font-medium text-on-bg truncate">{profile.name}</p>
               {profile.description && (
-                <p className="text-xs text-text-secondary truncate">{profile.description}</p>
+                <p className="text-xs text-on-bg-secondary truncate">{profile.description}</p>
               )}
-              <p className="text-xs text-text-secondary/60 mt-1">
+              <p className="text-xs text-on-bg-secondary/60 mt-1">
                 {profile.username}:{profile.port} ({profile.auth_method})
               </p>
             </div>
@@ -354,7 +354,7 @@ export function SSHProfileManager() {
               <button
                 type="button"
                 onClick={() => { setEditing(profile); setMode('edit'); }}
-                className="p-1 text-text-secondary hover:text-text-primary rounded"
+                className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
                 title="Edit profile"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -364,7 +364,7 @@ export function SSHProfileManager() {
               <button
                 type="button"
                 onClick={() => { setConfirmDeleteId(profile.id); setDeleteError(null); }}
-                className="p-1 text-text-secondary hover:text-status-down rounded"
+                className="p-1 text-on-bg-secondary hover:text-status-down rounded"
                 title="Delete profile"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -384,7 +384,7 @@ export function SSHProfileManager() {
                 <button
                   type="button"
                   onClick={() => { setConfirmDeleteId(null); setDeleteError(null); }}
-                  className="flex-1 rounded border border-border-subtle bg-bg-elevated px-2 py-1 text-xs text-text-primary hover:bg-bg-surface"
+                  className="flex-1 rounded bg-surface-high px-2 py-1 text-xs text-on-bg hover:bg-elevated"
                 >
                   Cancel
                 </button>

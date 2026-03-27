@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Device, SNMPProfile, SSHProfile } from '../types/api';
-import { checkPrometheusHealth, deleteDevice, fetchSettings, fetchSNMPProfiles, fetchSSHProfiles, testSNMPConnection, updateDevice, updateSetting } from '../api/client';
+import type { Area, Device, SNMPProfile, SSHProfile } from '../types/api';
+import { checkPrometheusHealth, deleteDevice, fetchAreas, fetchSettings, fetchSNMPProfiles, fetchSSHProfiles, testSNMPConnection, updateDevice, updateSetting } from '../api/client';
 
 const POLLING_PRESETS = [
   { label: 'Use Global', value: 'global' },
@@ -58,6 +58,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
   const [sshProfiles, setSSHProfiles] = useState<SSHProfile[]>([]);
   const [sshProfileId, setSSHProfileId] = useState(device.ssh_profile_id || '');
+  const [areas, setAreas] = useState<Area[]>([]);
+  const [areaId, setAreaId] = useState(device.area_id || '');
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
   const [savedPolling, setSavedPolling] = useState(false);
@@ -72,6 +74,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   useEffect(() => {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
     fetchSSHProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
+    fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
     checkPrometheusHealth().then((result) => {
       setPrometheusAvailable(result.available);
     }).catch(() => {
@@ -106,6 +109,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     setPrivPassword('');
     setVendorOverride(device.vendor || '');
     setSSHProfileId(device.ssh_profile_id || '');
+    setAreaId(device.area_id || '');
     setMetricsSource((device.metrics_source as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback') || 'snmp');
     setPrometheusLabelName(device.prometheus_label_name || 'instance');
     setPrometheusLabelValue(device.prometheus_label_value || '');
@@ -191,6 +195,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         tags: { ...device.tags, ...(displayName.trim() ? { display_name: displayName.trim() } : {}) },
         vendor: vendorOverride || undefined,
         ssh_profile_id: sshProfileId || '',
+        area_id: areaId || '',
         metrics_source: metricsSource,
         prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
         prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
@@ -216,11 +221,11 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   }
 
   return (
-    <div className="space-y-6 p-4">
+    <div className="space-y-6 p-4 transition-colors duration-200">
       {/* Polling Override */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Polling Override
           </p>
           <span
@@ -232,7 +237,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         <select
           value={pollingValue}
           onChange={(e) => handlePollingChange(e.target.value)}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         >
           {POLLING_PRESETS.map((p) => (
             <option key={p.value} value={p.value}>
@@ -251,7 +256,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
               setCustomPolling(e.target.value);
               schedulePollingUpdate(e.target.value);
             }}
-            className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
           />
         )}
       </div>
@@ -259,7 +264,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
       {/* Custom Grafana URL */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Custom Grafana Dashboard URL
           </p>
           <span
@@ -276,14 +281,14 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
             setGrafanaUrl(e.target.value);
             scheduleGrafanaUpdate(e.target.value);
           }}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         />
       </div>
 
       {/* Edit Device */}
       <form onSubmit={(e) => { void handleEditSave(e); }} className="space-y-3">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Edit Device
           </p>
           <span
@@ -294,9 +299,9 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         </div>
 
         {device.sys_name && (
-          <div className="rounded-lg border border-border-subtle bg-bg-elevated/40 px-3 py-2">
-            <p className="text-[10px] uppercase tracking-widest text-text-secondary/60 mb-0.5">Auto-discovered Hostname</p>
-            <p className="text-sm font-mono text-text-primary">{device.sys_name}</p>
+          <div className="bg-surface-high rounded-lg px-3 py-2">
+            <p className="text-[10px] uppercase tracking-widest text-on-bg-secondary/60 mb-0.5">Auto-discovered Hostname</p>
+            <p className="text-sm font-mono text-on-bg">{device.sys_name}</p>
           </div>
         )}
 
@@ -305,7 +310,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           placeholder={device.sys_name ? `Override "${device.sys_name}"` : 'Custom name (optional)'}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         />
 
         <input
@@ -313,31 +318,59 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           value={ip}
           onChange={(e) => setIp(e.target.value)}
           placeholder="IP Address"
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         />
 
         <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">Vendor</label>
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Area</label>
+          <div className="flex items-center gap-2">
+            {areaId && areas.find((a) => a.id === areaId) && (
+              <span
+                className="inline-block h-4 w-4 rounded-full shrink-0 ring-2 ring-outline-subtle"
+                style={{ backgroundColor: areas.find((a) => a.id === areaId)?.color }}
+              />
+            )}
+            <select
+              value={areaId}
+              onChange={(e) => setAreaId(e.target.value)}
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              style={areaId && areas.find((a) => a.id === areaId) ? {
+                borderLeftColor: areas.find((a) => a.id === areaId)?.color,
+                borderLeftWidth: '3px',
+              } : undefined}
+            >
+              <option value="">Unassigned</option>
+              {areas.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Vendor</label>
           <select
             value={vendorOverride}
             onChange={(e) => setVendorOverride(e.target.value)}
-            className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
           >
             <option value="">— Select vendor —</option>
             <option value="mikrotik">MikroTik</option>
           </select>
-          <p className="text-xs text-text-secondary/70">
+          <p className="text-xs text-on-bg-secondary/70">
             Vendor tag determines backup commands and metric queries.
           </p>
         </div>
 
         {sshProfiles.length > 0 && (
           <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">SSH Profile</label>
+            <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">SSH Profile</label>
             <select
               value={sshProfileId}
               onChange={(e) => setSSHProfileId(e.target.value)}
-              className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
             >
               <option value="">-- No SSH Profile --</option>
               {sshProfiles.map((p) => (
@@ -346,7 +379,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
                 </option>
               ))}
             </select>
-            <p className="text-xs text-text-secondary/70">
+            <p className="text-xs text-on-bg-secondary/70">
               SSH profile is used for config backups.
             </p>
           </div>
@@ -356,7 +389,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           <select
             defaultValue=""
             onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
-            className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
           >
             <option value="" disabled>Load credentials from profile...</option>
             {profiles.map((p) => (
@@ -370,7 +403,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         <select
           value={snmpVersion}
           onChange={(e) => setSnmpVersion(e.target.value)}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         >
           <option value="2c">SNMP v2c</option>
           <option value="3">SNMP v3</option>
@@ -382,24 +415,24 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
             value={community}
             onChange={(e) => setCommunity(e.target.value)}
             placeholder="SNMP Community (leave blank to keep current)"
-            className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
           />
         )}
 
         {snmpVersion === '3' && (
-          <div className="space-y-2 rounded-lg border border-border-subtle p-3">
-            <p className="text-xs text-text-secondary">SNMPv3 Credentials (leave blank to keep current)</p>
+          <div className="space-y-2 bg-surface-high rounded-lg p-3">
+            <p className="text-xs text-on-bg-secondary">SNMPv3 Credentials (leave blank to keep current)</p>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="Username"
-              className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
             />
             <select
               value={securityLevel}
               onChange={(e) => setSecurityLevel(e.target.value)}
-              className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
             >
               <option value="noAuthNoPriv">No Auth, No Privacy</option>
               <option value="authNoPriv">Auth, No Privacy</option>
@@ -410,7 +443,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
                 <select
                   value={authProtocol}
                   onChange={(e) => setAuthProtocol(e.target.value)}
-                  className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                 >
                   <option value="SHA">SHA</option>
                   <option value="MD5">MD5</option>
@@ -421,7 +454,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
                   onChange={(e) => setAuthPassword(e.target.value)}
                   placeholder="Auth Key"
                   autoComplete="new-password"
-                  className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                 />
               </>
             )}
@@ -430,7 +463,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
                 <select
                   value={privProtocol}
                   onChange={(e) => setPrivProtocol(e.target.value)}
-                  className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                 >
                   <option value="AES">AES</option>
                   <option value="DES">DES</option>
@@ -441,7 +474,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
                   onChange={(e) => setPrivPassword(e.target.value)}
                   placeholder="Encryption Key"
                   autoComplete="new-password"
-                  className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                 />
               </>
             )}
@@ -455,7 +488,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         )}
 
         <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-widest text-text-secondary">Metrics Source</label>
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Metrics Source</label>
           <select
             value={metricsSource}
             onChange={(e) => {
@@ -463,7 +496,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
               if ((val === 'prometheus' || val === 'prometheus_snmp_fallback') && !prometheusAvailable) return;
               setMetricsSource(val);
             }}
-            className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
           >
             <option value="snmp">SNMP Direct</option>
             <option value="prometheus" disabled={!prometheusAvailable}>
@@ -474,21 +507,21 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
             </option>
           </select>
           {metricsSource === 'prometheus_snmp_fallback' && (
-            <p className="text-xs text-text-secondary/70">
+            <p className="text-xs text-on-bg-secondary/70">
               Falls back to SNMP if Prometheus is unavailable or has no data for this device.
             </p>
           )}
         </div>
 
         {(metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback') && (
-          <div className="space-y-2 rounded-lg border border-border-subtle p-3">
-            <p className="text-xs font-medium uppercase tracking-widest text-text-secondary">Prometheus Target</p>
+          <div className="space-y-2 bg-surface-high rounded-lg p-3">
+            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Prometheus Target</p>
             <div className="space-y-1">
-              <label className="text-xs text-text-secondary">Label</label>
+              <label className="text-xs text-on-bg-secondary">Label</label>
               <select
                 value={prometheusLabelName}
                 onChange={(e) => setPrometheusLabelName(e.target.value)}
-                className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
               >
                 <option value="instance">instance (IP address)</option>
                 <option value="identity">identity</option>
@@ -496,7 +529,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-text-secondary">
+              <label className="text-xs text-on-bg-secondary">
                 Value{prometheusLabelName === 'instance' ? ' (defaults to IP if blank)' : ''}
               </label>
               <input
@@ -504,7 +537,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
                 value={prometheusLabelValue}
                 onChange={(e) => setPrometheusLabelValue(e.target.value)}
                 placeholder={prometheusLabelName === 'instance' ? ip || device.ip : 'e.g. my-router'}
-                className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder-text-secondary/40 focus:border-accent focus:outline-none"
+                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
               />
             </div>
           </div>
@@ -519,7 +552,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         <button
           type="submit"
           disabled={editLoading}
-          className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
         >
           {editLoading ? 'Saving...' : 'Save Changes'}
         </button>
@@ -529,7 +562,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
       <SNMPTestButton deviceId={device.id} />
 
       {/* Delete Device */}
-      <div className="border-t border-border-subtle pt-4 space-y-3">
+      <div className="mt-6 space-y-3">
         {!confirmDelete ? (
           <button
             type="button"
@@ -545,7 +578,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
               <button
                 type="button"
                 onClick={() => setConfirmDelete(false)}
-                className="flex-1 rounded-lg border border-border-subtle bg-bg-elevated px-3 py-1.5 text-xs text-text-primary hover:bg-bg-surface"
+                className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated"
               >
                 Cancel
               </button>
@@ -595,7 +628,7 @@ function SNMPTestButton({ deviceId }: { deviceId: string }) {
         type="button"
         onClick={() => { void handleTest(); }}
         disabled={testing}
-        className="w-full rounded-lg border border-border-subtle bg-bg-elevated px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
       >
         {testing ? 'Testing SNMP...' : 'Test SNMP Connectivity'}
       </button>
@@ -617,9 +650,9 @@ function SNMPTestButton({ deviceId }: { deviceId: string }) {
             <div className="space-y-1">
               <div className="font-medium">SNMP Failed</div>
               <div className="break-words">{result.error}</div>
-              {result.target_ip && <div className="text-text-secondary">Target: {result.target_ip}:161 (UDP)</div>}
-              {result.snmp_version && <div className="text-text-secondary">Version: {result.snmp_version}</div>}
-              <div className="text-text-secondary mt-1">
+              {result.target_ip && <div className="text-on-bg-secondary">Target: {result.target_ip}:161 (UDP)</div>}
+              {result.snmp_version && <div className="text-on-bg-secondary">Version: {result.snmp_version}</div>}
+              <div className="text-on-bg-secondary mt-1">
                 Check: SNMP enabled on device, community/credentials correct, UDP/161 reachable from container
               </div>
             </div>
