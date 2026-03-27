@@ -1,9 +1,7 @@
-import type { Node } from '@xyflow/react';
-
 import type { Device, Link } from '../../types/api';
 import type { LinkMetricsDTO } from '../../types/metrics';
 import { formatThroughput } from '../../types/metrics';
-import type { DeviceNodeData } from '../DeviceCard';
+import type { DeviceNode } from '../DeviceCard';
 import type { PositionPayload } from '../../hooks/usePositions';
 import { formatBandwidth } from '../LinkEdge';
 
@@ -14,7 +12,7 @@ export const manualEdgeStorageKey = 'theia-manual-edges';
 export const defaultPollingIntervalMs = 60_000;
 export const staleThresholdMs = defaultPollingIntervalMs * 2;
 
-export function buildPositionPayload(nodes: Node<DeviceNodeData>[]): PositionPayload[] {
+export function buildPositionPayload(nodes: DeviceNode[]): PositionPayload[] {
   return nodes.map((node) => ({
     device_id: node.id,
     x: node.position.x,

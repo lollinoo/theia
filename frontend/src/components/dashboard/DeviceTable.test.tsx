@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { DeviceTable } from './DeviceTable';
 import type { Device, Area } from '../../types/api';
-import type { SnapshotPayload } from '../../types/metrics';
 
 // Mock DeviceRow as a simple <tr> stub
 vi.mock('./DeviceRow', () => ({

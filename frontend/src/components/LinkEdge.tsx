@@ -3,6 +3,7 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
+  type Edge,
   type EdgeProps,
 } from '@xyflow/react';
 import type { Link } from '../types/api';
@@ -24,7 +25,10 @@ export interface LinkEdgeData {
   sourceDeviceStatus?: string;
   targetDeviceStatus?: string;
   areaColor?: string;
+  [key: string]: unknown;
 }
+
+export type LinkEdgeType = Edge<LinkEdgeData>;
 
 export function formatBandwidth(speed: number): string {
   if (!speed || speed <= 0) {
@@ -56,7 +60,7 @@ function LinkEdgeInner({
   targetPosition,
   selected,
   data,
-}: EdgeProps<LinkEdgeData>) {
+}: EdgeProps<LinkEdgeType>) {
   const [hovered, setHovered] = useState(false);
   const isActive = selected || hovered;
   const [edgePath, labelX, labelY] = getBezierPath({

@@ -154,7 +154,7 @@ describe('Dashboard', () => {
   it('shows no-filter-matches message when filters exclude all devices', () => {
     const devices = [mockDevice({ status: 'up' })];
 
-    const { container } = render(<Dashboard devices={devices} areas={[]} snapshot={null} />);
+    render(<Dashboard devices={devices} areas={[]} snapshot={null} />);
 
     // Type in search to filter out all devices
     const searchInput = screen.getByPlaceholderText('Search devices...');

@@ -40,15 +40,11 @@ describe('THEME-05 Component smoke tests', () => {
         <AlertsPanel
           alerts={[
             {
-              id: 'a1',
               device_id: 'dev-1',
               alert_name: 'HighCPU',
               severity: 'critical',
               state: 'firing',
               summary: 'CPU high',
-              description: '',
-              starts_at: '2026-01-01T00:00:00Z',
-              ends_at: null,
             },
           ]}
           devices={[]}

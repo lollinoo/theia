@@ -1,9 +1,7 @@
-import type { Edge, Node } from '@xyflow/react';
-
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, AlertStatus } from '../../types/metrics';
-import type { DeviceNodeData } from '../DeviceCard';
-import type { LinkEdgeData } from '../LinkEdge';
+import type { DeviceNode } from '../DeviceCard';
+import { type LinkEdgeData, type LinkEdgeType } from '../LinkEdge';
 import { formatBandwidth } from '../LinkEdge';
 import { inferSpeedLabel, type HandleSide } from './canvasHelpers';
 
@@ -82,10 +80,10 @@ export function getHandleSide(
 export function buildTopologyEdges(
   links: Link[],
   devicesByID: Map<string, Device>,
-  nodes: Node<DeviceNodeData>[],
+  nodes: DeviceNode[],
   existingEdgeDataByID?: Map<string, LinkEdgeData>,
   onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void,
-): Edge<LinkEdgeData>[] {
+): LinkEdgeType[] {
   const nodesByID = new Map(nodes.map((node) => [node.id, node]));
   const pairCounts = new Map<string, number>();
   const seenPairs = new Set<string>();

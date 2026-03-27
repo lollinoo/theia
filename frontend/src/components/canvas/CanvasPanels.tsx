@@ -3,8 +3,8 @@ import type { ReactFlowInstance } from '@xyflow/react';
 import { fetchDevices } from '../../api/client';
 import type { Device, Link } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
-import type { DeviceNodeData } from '../DeviceCard';
-import type { LinkEdgeData } from '../LinkEdge';
+import type { DeviceNode } from '../DeviceCard';
+import type { LinkEdgeType } from '../LinkEdge';
 import { InterfaceStatsPanel, DeviceInterfaceStatsPanel } from '../InterfaceStatsPanel';
 import { AlertsPanel } from '../AlertsPanel';
 import { SettingsPanel } from '../SettingsPanel';
@@ -22,8 +22,8 @@ interface CanvasPanelsProps {
   topologyLinks: Link[];
   loadTopology: (silent?: boolean, pos?: { x: number; y: number }) => Promise<void>;
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
-  setNodes: React.Dispatch<React.SetStateAction<import('@xyflow/react').Node<DeviceNodeData>[]>>;
-  reactFlow: ReactFlowInstance<DeviceNodeData, LinkEdgeData>;
+  setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
+  reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   prometheusStatus: PrometheusStatusPayload | null;
 }
 

@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
 
-import type { DeviceNodeData } from '../DeviceCard';
-import type { LinkEdgeData } from '../LinkEdge';
+import type { DeviceNode } from '../DeviceCard';
+import type { LinkEdgeType } from '../LinkEdge';
 import type { Device, Link } from '../../types/api';
 
 interface UseCanvasMenusParams {
-  reactFlow: ReactFlowInstance<DeviceNodeData, LinkEdgeData>;
+  reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
 }
 
 interface UseCanvasMenusReturn {

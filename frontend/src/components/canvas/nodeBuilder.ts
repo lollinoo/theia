@@ -1,9 +1,7 @@
-import type { Node } from '@xyflow/react';
-
 import type { Device } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 import { alertStatusForDevice } from '../../types/metrics';
-import type { DeviceNodeData } from '../DeviceCard';
+import type { DeviceNode } from '../DeviceCard';
 
 export function buildTopologyNodes(
   devices: Device[],
@@ -13,7 +11,7 @@ export function buildTopologyNodes(
   editMode: boolean,
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void,
   pendingSnapshot: SnapshotPayload | null,
-): Node<DeviceNodeData>[] {
+): DeviceNode[] {
   return devices.map((device) => {
     const saved = savedPositions.get(device.id);
     const position = saved ?? defaultPosition ?? computedPositions.get(device.id) ?? { x: 0, y: 0 };

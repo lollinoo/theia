@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import DeviceCard from './DeviceCard';
 import type { Device } from '../types/api';
-import type { DeviceNodeData } from './DeviceCard';
+import type { DeviceNodeData, DeviceNode } from './DeviceCard';
 import type { NodeProps } from '@xyflow/react';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -27,17 +27,20 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
   };
 }
 
-function makeNodeProps(data: DeviceNodeData): NodeProps<DeviceNodeData> {
+function makeNodeProps(data: DeviceNodeData): NodeProps<DeviceNode> {
   return {
     id: 'node-1',
     data,
     type: 'device',
     selected: false,
     isConnectable: true,
-    xPos: 0,
-    yPos: 0,
     zIndex: 0,
     dragging: false,
+    draggable: true,
+    selectable: true,
+    deletable: false,
+    positionAbsoluteX: 0,
+    positionAbsoluteY: 0,
   };
 }
 

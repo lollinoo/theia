@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import type { Device } from '../types/api';
 import {
   formatUptime,
@@ -21,7 +21,10 @@ export interface DeviceNodeData {
   onContextMenu?: (event: React.MouseEvent, deviceId: string) => void;
   isGhost?: boolean;
   onGhostClick?: (deviceId: string) => void;
+  [key: string]: unknown;
 }
+
+export type DeviceNode = Node<DeviceNodeData>;
 
 const universalHandleClassName =
   '!h-2 !w-2 !rounded-full !border-2 !border-bg !bg-on-bg-secondary shadow-none';
@@ -55,7 +58,7 @@ function formatTemperature(value: number | null): string {
 function DeviceCardInner({
   data,
   selected,
-}: NodeProps<DeviceNodeData>) {
+}: NodeProps<DeviceNode>) {
   // Ghost node: small muted card with hostname only, dashed border
   if (data.isGhost) {
     return (
@@ -250,7 +253,7 @@ function DeviceCardInner({
   );
 }
 
-const DeviceCard = memo(DeviceCardInner, (prev, next) => {
+const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: NodeProps<DeviceNode>) => {
   const pd = prev.data;
   const nd = next.data;
   return (

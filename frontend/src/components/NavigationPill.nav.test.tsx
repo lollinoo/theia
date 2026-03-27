@@ -41,7 +41,6 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
   it('theme toggle renders light_mode icon when resolvedTheme is dark', () => {
     const { container } = render(<NavigationPill {...defaultProps} />);
     // When dark, shows light_mode icon to switch to light
-    const lightModeIcon = container.querySelector('.material-symbols-rounded');
     // Find icon with text content "light_mode"
     const allIcons = Array.from(container.querySelectorAll('.material-symbols-rounded'));
     const lightModeIcons = allIcons.filter((el) => el.textContent === 'light_mode');

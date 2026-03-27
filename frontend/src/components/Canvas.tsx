@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ConnectionMode, Background, MiniMap, ReactFlow,
   applyEdgeChanges, useNodesState, useReactFlow,
-  type Connection, type Edge, type EdgeChange, type Node,
+  type Connection, type EdgeChange,
 } from '@xyflow/react';
 import type { Area, Device, Link } from '../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
-import DeviceCard, { type DeviceNodeData } from './DeviceCard';
-import LinkEdge, { type LinkEdgeData } from './LinkEdge';
+import DeviceCard, { type DeviceNode } from './DeviceCard';
+import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import SearchOverlay from './SearchOverlay';
 import ZoomControls from './ZoomControls';
 import { ContextMenu } from './ContextMenu';
@@ -40,10 +40,10 @@ interface CanvasProps {
 }
 
 export default function Canvas({ snapshot, reconnecting, prometheusStatus, selectedAreaId, areas, onDevicesChange, onLinksChange, onAreaSelect }: CanvasProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNodeData>([]);
-  const [edges, setEdges] = useState<Edge<LinkEdgeData>[]>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
+  const [edges, setEdges] = useState<LinkEdgeType[]>([]);
   const highlightTimerRef = useRef<number | null>(null);
-  const reactFlow = useReactFlow<DeviceNodeData, LinkEdgeData>();
+  const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
 
@@ -126,13 +126,11 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     }
 
     const filteredDeviceIds = new Set(filteredDevices.map((d) => d.id));
-    const ghostDeviceIds = new Set(ghostDevices.map((d) => d.id));
-
     // Keep existing nodes that are in the filtered area
     const areaNodes = nodesWithAreaColor.filter((n) => filteredDeviceIds.has(n.id));
 
     // Create ghost nodes for cross-area link endpoints
-    const ghostNodes: Node<DeviceNodeData>[] = ghostDevices.map((device) => {
+    const ghostNodes: DeviceNode[] = ghostDevices.map((device) => {
       const existingNode = nodesWithAreaColor.find((n) => n.id === device.id);
 
       // Position ghost near its connected real node (offset by 200px per RESEARCH recommendation)
@@ -339,7 +337,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         connectionLineStyle={{ stroke: 'var(--nt-outline)', strokeWidth: 2 }} proOptions={{ hideAttribution: false }} className="bg-bg">
         <Background color="var(--nt-outline)" gap={28} size={1.2} />
         <MiniMap pannable zoomable
-          nodeColor={(n) => { if (n.data.isGhost) return 'var(--nt-on-bg-muted)'; const a = n.data.alertStatus as string | undefined; if (a === 'down') return 'var(--color-status-down)'; if (a === 'degraded') return 'var(--color-status-probing)'; return statusColor(n.data.device.status); }}
+          nodeColor={(n) => { const d = (n as DeviceNode).data; if (d.isGhost) return 'var(--nt-on-bg-muted)'; const a = d.alertStatus as string | undefined; if (a === 'down') return 'var(--color-status-down)'; if (a === 'degraded') return 'var(--color-status-probing)'; return statusColor(d.device.status); }}
           style={{ backgroundColor: 'var(--nt-surface)', border: '1px solid var(--nt-outline)' }} maskColor="var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))" />
       </ReactFlow>
     </div>

@@ -1,5 +1,5 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
-import type { Edge, Node, ReactFlowInstance } from '@xyflow/react';
+import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices, fetchLinks, fetchSettings, createLink } from '../../api/client';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
@@ -7,12 +7,11 @@ import { usePositions } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import {
   alertStatusForDevice,
-  type AlertStatus,
   type PrometheusStatusPayload,
   type SnapshotPayload,
 } from '../../types/metrics';
-import type { DeviceNodeData } from '../DeviceCard';
-import type { LinkEdgeData } from '../LinkEdge';
+import type { DeviceNode } from '../DeviceCard';
+import type { LinkEdgeType } from '../LinkEdge';
 import {
   buildPositionPayload,
   buildThroughputLabel,
@@ -31,10 +30,10 @@ interface UseCanvasDataParams {
   editMode: boolean;
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void;
   openEdgeMenu: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
-  reactFlow: ReactFlowInstance<DeviceNodeData, LinkEdgeData>;
-  nodes: Node<DeviceNodeData>[];
-  setNodes: React.Dispatch<React.SetStateAction<Node<DeviceNodeData>[]>>;
-  setEdges: React.Dispatch<React.SetStateAction<Edge<LinkEdgeData>[]>>;
+  reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
+  nodes: DeviceNode[];
+  setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
+  setEdges: React.Dispatch<React.SetStateAction<LinkEdgeType[]>>;
   onDevicesChange?: (devices: Device[]) => void;
   onLinksChange?: (links: Link[]) => void;
 }
@@ -61,7 +60,7 @@ export function useCanvasData({
   openDeviceMenu,
   openEdgeMenu,
   reactFlow,
-  nodes,
+  nodes: _nodes,
   setNodes,
   setEdges,
   onDevicesChange,
