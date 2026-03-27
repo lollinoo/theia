@@ -205,10 +205,9 @@ func profileToResponse(p *domain.SNMPProfile) snmpProfileResponse {
 		v3 := p.Credentials.V3
 		resp.SNMP.Username = v3.Username
 		resp.SNMP.AuthProtocol = v3.AuthProtocol
-		// Redact passwords in GET responses (Phase 2 security hardening).
-		// AuthPassword and PrivPassword have omitempty tags, so empty strings
-		// are omitted from JSON output entirely.
+		resp.SNMP.AuthPassword = v3.AuthPassword
 		resp.SNMP.PrivProtocol = v3.PrivProtocol
+		resp.SNMP.PrivPassword = v3.PrivPassword
 		resp.SNMP.SecurityLevel = v3.SecurityLevel
 	}
 	return resp

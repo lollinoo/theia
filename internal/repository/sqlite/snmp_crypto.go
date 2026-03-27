@@ -8,6 +8,22 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// deepCopySNMPCredentials returns a fully independent copy of SNMPCredentials,
+// including the V2c and V3 pointer targets. This ensures that in-place encryption
+// does not mutate the caller's original struct.
+func deepCopySNMPCredentials(src domain.SNMPCredentials) domain.SNMPCredentials {
+	dst := src
+	if src.V2c != nil {
+		v2c := *src.V2c
+		dst.V2c = &v2c
+	}
+	if src.V3 != nil {
+		v3 := *src.V3
+		dst.V3 = &v3
+	}
+	return dst
+}
+
 // encryptSNMPCredentials encrypts sensitive fields in SNMP credentials before storage.
 // Modifies the struct in place. Encrypts: v2c community, v3 auth_password, v3 priv_password.
 func encryptSNMPCredentials(creds *domain.SNMPCredentials, key []byte) error {

@@ -113,7 +113,6 @@ func (s *DeviceService) AddDevice(
 	s.probeWg.Add(1)
 	go func() {
 		defer s.probeWg.Done()
-		log.Printf("DEBUG: probeDevice launched with SNMP Config - Version: %s, V2c: %+v, V3: %+v", device.SNMPCredentials.Version, device.SNMPCredentials.V2c, device.SNMPCredentials.V3)
 		s.probeDevice(device)
 	}()
 

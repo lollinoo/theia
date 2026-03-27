@@ -315,9 +315,11 @@ func TestSNMPProfileHandlerDelete_NotFound(t *testing.T) {
 	}
 }
 
-// --- Phase 2 security hardening: v3 password redaction tests ---
+// --- v3 profile credential tests ---
+// Profiles exist specifically to share credentials across devices.
+// The API must return passwords so the frontend can apply them to devices.
 
-func TestSNMPProfileHandlerGet_V3PasswordRedaction(t *testing.T) {
+func TestSNMPProfileHandlerGet_V3CredentialsIncluded(t *testing.T) {
 	repo := newMockSNMPProfileRepo()
 	id := seedV3Profile(t, repo)
 	h := NewSNMPProfileHandler(repo)
@@ -331,32 +333,35 @@ func TestSNMPProfileHandlerGet_V3PasswordRedaction(t *testing.T) {
 		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
 	}
 
-	body := rec.Body.String()
-
-	// Passwords must NOT appear in GET response
-	if strings.Contains(body, "super-secret-auth-pass") {
-		t.Fatal("GET response contains plaintext auth_password -- v3 passwords must be redacted")
+	var resp struct {
+		Data snmpProfileResponse `json:"data"`
 	}
-	if strings.Contains(body, "super-secret-priv-pass") {
-		t.Fatal("GET response contains plaintext priv_password -- v3 passwords must be redacted")
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	// Non-secret fields must still be present
-	if !strings.Contains(body, "admin") {
-		t.Fatal("GET response missing username -- non-secret fields should be present")
+	// All v3 fields must be present so frontend can apply them to devices
+	if resp.Data.SNMP.Username != "admin" {
+		t.Fatalf("expected username=admin, got %s", resp.Data.SNMP.Username)
 	}
-	if !strings.Contains(body, "SHA") {
-		t.Fatal("GET response missing auth_protocol -- non-secret fields should be present")
+	if resp.Data.SNMP.AuthProtocol != "SHA" {
+		t.Fatalf("expected auth_protocol=SHA, got %s", resp.Data.SNMP.AuthProtocol)
 	}
-	if !strings.Contains(body, "AES") {
-		t.Fatal("GET response missing priv_protocol -- non-secret fields should be present")
+	if resp.Data.SNMP.AuthPassword != "super-secret-auth-pass" {
+		t.Fatalf("expected auth_password to be returned, got %q", resp.Data.SNMP.AuthPassword)
 	}
-	if !strings.Contains(body, "authPriv") {
-		t.Fatal("GET response missing security_level -- non-secret fields should be present")
+	if resp.Data.SNMP.PrivProtocol != "AES" {
+		t.Fatalf("expected priv_protocol=AES, got %s", resp.Data.SNMP.PrivProtocol)
+	}
+	if resp.Data.SNMP.PrivPassword != "super-secret-priv-pass" {
+		t.Fatalf("expected priv_password to be returned, got %q", resp.Data.SNMP.PrivPassword)
+	}
+	if resp.Data.SNMP.SecurityLevel != "authPriv" {
+		t.Fatalf("expected security_level=authPriv, got %s", resp.Data.SNMP.SecurityLevel)
 	}
 }
 
-func TestSNMPProfileHandlerList_V3PasswordRedaction(t *testing.T) {
+func TestSNMPProfileHandlerList_V3CredentialsIncluded(t *testing.T) {
 	repo := newMockSNMPProfileRepo()
 	seedV3Profile(t, repo)
 	h := NewSNMPProfileHandler(repo)
@@ -370,18 +375,24 @@ func TestSNMPProfileHandlerList_V3PasswordRedaction(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 
-	body := rec.Body.String()
-
-	// Passwords must NOT appear in list response
-	if strings.Contains(body, "super-secret-auth-pass") {
-		t.Fatal("list response contains plaintext auth_password -- v3 passwords must be redacted")
+	var resp struct {
+		Data []snmpProfileResponse `json:"data"`
 	}
-	if strings.Contains(body, "super-secret-priv-pass") {
-		t.Fatal("list response contains plaintext priv_password -- v3 passwords must be redacted")
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 profile, got %d", len(resp.Data))
 	}
 
-	// Non-secret fields must still be present
-	if !strings.Contains(body, "admin") {
-		t.Fatal("list response missing username")
+	// Passwords must be included so frontend can apply profile credentials to devices
+	if resp.Data[0].SNMP.AuthPassword != "super-secret-auth-pass" {
+		t.Fatalf("expected auth_password in list response, got %q", resp.Data[0].SNMP.AuthPassword)
+	}
+	if resp.Data[0].SNMP.PrivPassword != "super-secret-priv-pass" {
+		t.Fatalf("expected priv_password in list response, got %q", resp.Data[0].SNMP.PrivPassword)
+	}
+	if resp.Data[0].SNMP.Username != "admin" {
+		t.Fatalf("expected username=admin, got %s", resp.Data[0].SNMP.Username)
 	}
 }

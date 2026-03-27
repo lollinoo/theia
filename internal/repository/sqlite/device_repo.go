@@ -49,7 +49,7 @@ func (r *DeviceRepo) Create(device *domain.Device) error {
 	}
 
 	// Deep copy credentials for encryption (don't modify the original)
-	credsCopy := device.SNMPCredentials
+	credsCopy := deepCopySNMPCredentials(device.SNMPCredentials)
 	if err := encryptSNMPCredentials(&credsCopy, r.encryptionKey); err != nil {
 		return fmt.Errorf("encrypting snmp credentials: %w", err)
 	}
@@ -266,7 +266,7 @@ func (r *DeviceRepo) Update(device *domain.Device) error {
 	}
 
 	// Deep copy credentials for encryption (don't modify the original)
-	credsCopy := device.SNMPCredentials
+	credsCopy := deepCopySNMPCredentials(device.SNMPCredentials)
 	if err := encryptSNMPCredentials(&credsCopy, r.encryptionKey); err != nil {
 		return fmt.Errorf("encrypting snmp credentials: %w", err)
 	}

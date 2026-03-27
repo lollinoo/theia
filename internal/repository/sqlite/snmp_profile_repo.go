@@ -31,7 +31,7 @@ func (r *SNMPProfileRepo) Create(profile *domain.SNMPProfile) error {
 	profile.UpdatedAt = now
 
 	// Deep copy credentials for encryption (don't modify the original)
-	credsCopy := profile.Credentials
+	credsCopy := deepCopySNMPCredentials(profile.Credentials)
 	if err := encryptSNMPCredentials(&credsCopy, r.encryptionKey); err != nil {
 		return fmt.Errorf("encrypting snmp credentials: %w", err)
 	}
@@ -90,7 +90,7 @@ func (r *SNMPProfileRepo) Update(profile *domain.SNMPProfile) error {
 	profile.UpdatedAt = time.Now().UTC()
 
 	// Deep copy credentials for encryption (don't modify the original)
-	credsCopy := profile.Credentials
+	credsCopy := deepCopySNMPCredentials(profile.Credentials)
 	if err := encryptSNMPCredentials(&credsCopy, r.encryptionKey); err != nil {
 		return fmt.Errorf("encrypting snmp credentials: %w", err)
 	}
