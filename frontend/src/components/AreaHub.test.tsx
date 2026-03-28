@@ -38,6 +38,7 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     metrics_source: 'prometheus',
     prometheus_label_name: 'instance',
     prometheus_label_value: '10.0.0.1:9100',
+    area_ids: [],
     ...overrides,
   };
 }
@@ -136,8 +137,8 @@ describe('AreaHub', () => {
     ];
 
     const devices = [
-      mockDevice({ id: 'dev-1', area_id: 'a1', status: 'up' }),
-      mockDevice({ id: 'dev-2', area_id: 'a2', status: 'up' }),
+      mockDevice({ id: 'dev-1', area_ids: ['a1'], status: 'up' }),
+      mockDevice({ id: 'dev-2', area_ids: ['a2'], status: 'up' }),
     ];
 
     render(
@@ -158,7 +159,7 @@ describe('AreaHub', () => {
   it('computes health correctly: all up = Optimal, 80% = Degraded, 70% = Critical', () => {
     // 10 devices, all up => 100% Optimal
     const allUpDevices = Array.from({ length: 10 }, (_, i) =>
-      mockDevice({ id: `dev-${i}`, area_id: 'a1', status: 'up' }),
+      mockDevice({ id: `dev-${i}`, area_ids: ['a1'], status: 'up' }),
     );
 
     const { rerender } = render(
@@ -179,7 +180,7 @@ describe('AreaHub', () => {
 
     // 10 devices, 8 up, 2 down => 80% Degraded
     const mixedDevices = Array.from({ length: 10 }, (_, i) =>
-      mockDevice({ id: `dev-${i}`, area_id: 'a1', status: i < 8 ? 'up' : 'down' }),
+      mockDevice({ id: `dev-${i}`, area_ids: ['a1'], status: i < 8 ? 'up' : 'down' }),
     );
 
     rerender(
@@ -201,7 +202,7 @@ describe('AreaHub', () => {
 
     // 10 devices, 7 up, 3 down => 70% Critical
     const criticalDevices = Array.from({ length: 10 }, (_, i) =>
-      mockDevice({ id: `dev-${i}`, area_id: 'a1', status: i < 7 ? 'up' : 'down' }),
+      mockDevice({ id: `dev-${i}`, area_ids: ['a1'], status: i < 7 ? 'up' : 'down' }),
     );
 
     rerender(

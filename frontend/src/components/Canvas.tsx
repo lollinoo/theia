@@ -99,27 +99,32 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     return map;
   }, [areas, resolvedTheme]);
 
-  // Inject areaColor into node data based on device.area_id
+  // Inject areaColors into node data based on device.area_ids
   const nodesWithAreaColor = useMemo(() => {
     if (areaColorMap.size === 0) return nodes;
     return nodes.map((n) => {
-      const color = n.data.device.area_id ? areaColorMap.get(n.data.device.area_id) : undefined;
-      if (color === n.data.areaColor) return n;
-      return { ...n, data: { ...n.data, areaColor: color } };
+      const colors = (n.data.device.area_ids ?? [])
+        .map((id) => areaColorMap.get(id))
+        .filter((c): c is string => !!c);
+      const newColors = colors.length > 0 ? colors : undefined;
+      const prev = n.data.areaColors;
+      if (prev?.length === newColors?.length && (prev ?? []).every((c, i) => c === newColors?.[i])) return n;
+      return { ...n, data: { ...n.data, areaColors: newColors } };
     });
   }, [nodes, areaColorMap]);
 
-  // Inject areaColor into edge data when both endpoints share an area
+  // Inject areaColor into edge data when both endpoints share at least one area
   const edgesWithAreaColor = useMemo(() => {
     if (areaColorMap.size === 0) return edges;
-    const deviceAreaMap = new Map<string, string | undefined>();
+    const deviceAreaMap = new Map<string, string[]>();
     for (const n of nodesWithAreaColor) {
-      deviceAreaMap.set(n.id, n.data.device.area_id);
+      deviceAreaMap.set(n.id, n.data.device.area_ids ?? []);
     }
     return edges.map((e) => {
-      const srcArea = deviceAreaMap.get(e.source);
-      const tgtArea = deviceAreaMap.get(e.target);
-      const color = srcArea && srcArea === tgtArea ? areaColorMap.get(srcArea) : undefined;
+      const srcAreas = new Set(deviceAreaMap.get(e.source) ?? []);
+      const tgtAreas = deviceAreaMap.get(e.target) ?? [];
+      const sharedArea = tgtAreas.find((a) => srcAreas.has(a));
+      const color = sharedArea ? areaColorMap.get(sharedArea) : undefined;
       if (color === e.data?.areaColor) return e;
       return { ...e, data: { ...e.data!, areaColor: color } };
     });
@@ -168,8 +173,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
           isGhost: true,
           onGhostClick: (deviceId: string) => {
             const clickedDevice = devices.find((d) => d.id === deviceId);
-            if (clickedDevice?.area_id && onAreaSelect) {
-              onAreaSelect(clickedDevice.area_id);
+            if (clickedDevice?.area_ids?.[0] && onAreaSelect) {
+              onAreaSelect(clickedDevice.area_ids[0]);
             }
           },
         },
@@ -213,9 +218,9 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   function focusOnDevice(deviceID: string) {
     // If the target device is not in the current area view, switch to its area first
     const device = devices.find((d) => d.id === deviceID);
-    if (device && selectedAreaId && device.area_id !== selectedAreaId) {
+    if (device && selectedAreaId && !device.area_ids?.includes(selectedAreaId)) {
       // Switch to the device's area (or global if unassigned)
-      onAreaSelect?.(device.area_id ?? null);
+      onAreaSelect?.(device.area_ids?.[0] ?? null);
       // Defer the focus/highlight until after the area switch triggers a re-render
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {

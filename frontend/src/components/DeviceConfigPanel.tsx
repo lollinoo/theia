@@ -59,7 +59,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   const [sshProfiles, setSSHProfiles] = useState<SSHProfile[]>([]);
   const [sshProfileId, setSSHProfileId] = useState(device.ssh_profile_id || '');
   const [areas, setAreas] = useState<Area[]>([]);
-  const [areaId, setAreaId] = useState(device.area_id || '');
+  const [areaIds, setAreaIds] = useState<string[]>(device.area_ids ?? []);
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
   const [savedPolling, setSavedPolling] = useState(false);
@@ -109,7 +109,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     setPrivPassword('');
     setVendorOverride(device.vendor || '');
     setSSHProfileId(device.ssh_profile_id || '');
-    setAreaId(device.area_id || '');
+    setAreaIds(device.area_ids ?? []);
     setMetricsSource((device.metrics_source as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback') || 'snmp');
     setPrometheusLabelName(device.prometheus_label_name || 'instance');
     setPrometheusLabelValue(device.prometheus_label_value || '');
@@ -195,7 +195,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         tags: { ...device.tags, ...(displayName.trim() ? { display_name: displayName.trim() } : {}) },
         vendor: vendorOverride || undefined,
         ssh_profile_id: sshProfileId || '',
-        area_id: areaId || '',
+        area_ids: areaIds,
         metrics_source: metricsSource,
         prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
         prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
@@ -324,31 +324,52 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         />
 
         <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Area</label>
-          <div className="flex items-center gap-2">
-            {areaId && areas.find((a) => a.id === areaId) && (
-              <span
-                className="inline-block h-4 w-4 rounded-full shrink-0 ring-2 ring-outline-subtle"
-                style={{ backgroundColor: areas.find((a) => a.id === areaId)?.color }}
-              />
-            )}
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Areas</label>
+          {areaIds.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {areaIds.map((id) => {
+                const area = areas.find((a) => a.id === id);
+                if (!area) return null;
+                return (
+                  <span
+                    key={id}
+                    className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-on-bg"
+                    style={{ backgroundColor: `${area.color}25`, border: `1px solid ${area.color}60` }}
+                  >
+                    <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: area.color }} />
+                    {area.name}
+                    <button
+                      type="button"
+                      onClick={() => setAreaIds((prev) => prev.filter((a) => a !== id))}
+                      className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {areas.filter((a) => !areaIds.includes(a.id)).length > 0 && (
             <select
-              value={areaId}
-              onChange={(e) => setAreaId(e.target.value)}
+              value=""
+              onChange={(e) => {
+                if (e.target.value) {
+                  setAreaIds((prev) => [...prev, e.target.value]);
+                }
+              }}
               className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-              style={areaId && areas.find((a) => a.id === areaId) ? {
-                borderLeftColor: areas.find((a) => a.id === areaId)?.color,
-                borderLeftWidth: '3px',
-              } : undefined}
             >
-              <option value="">Unassigned</option>
-              {areas.map((a) => (
+              <option value="">{areaIds.length === 0 ? 'Unassigned - select area...' : 'Add another area...'}</option>
+              {areas.filter((a) => !areaIds.includes(a.id)).map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name}
                 </option>
               ))}
             </select>
-          </div>
+          )}
         </div>
 
         <div className="space-y-1">

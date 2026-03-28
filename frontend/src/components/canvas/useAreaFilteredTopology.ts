@@ -30,7 +30,7 @@ export function useAreaFilteredTopology(
     // Devices in the selected area (per D-14: unassigned devices excluded)
     const areaDeviceIds = new Set(
       devices
-        .filter((d) => d.area_id === selectedAreaId)
+        .filter((d) => d.area_ids?.includes(selectedAreaId))
         .map((d) => d.id),
     );
     const filteredDevices = devices.filter((d) => areaDeviceIds.has(d.id));

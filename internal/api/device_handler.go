@@ -77,7 +77,7 @@ type updateDeviceRequest struct {
 	PrometheusLabelName  *string            `json:"prometheus_label_name,omitempty"`
 	PrometheusLabelValue *string            `json:"prometheus_label_value,omitempty"`
 	SSHProfileID         *string            `json:"ssh_profile_id,omitempty"`
-	AreaID               *string            `json:"area_id,omitempty"`
+	AreaIDs              *[]string          `json:"area_ids,omitempty"`
 }
 
 type batchAddRequest struct {
@@ -232,20 +232,20 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			*update.SSHProfileID = &parsed
 		}
 	}
-	if req.AreaID != nil {
-		if *req.AreaID == "" {
-			// Explicitly unassign
-			update.AreaID = new(*uuid.UUID)
-			*update.AreaID = nil
-		} else {
-			parsed, err := uuid.Parse(*req.AreaID)
+	if req.AreaIDs != nil {
+		var parsedIDs []uuid.UUID
+		for _, idStr := range *req.AreaIDs {
+			if idStr == "" {
+				continue
+			}
+			parsed, err := uuid.Parse(idStr)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid area_id")
+				writeError(w, http.StatusBadRequest, "invalid area_id: "+idStr)
 				return
 			}
-			update.AreaID = new(*uuid.UUID)
-			*update.AreaID = &parsed
+			parsedIDs = append(parsedIDs, parsed)
 		}
+		update.AreaIDs = &parsedIDs
 	}
 
 	if err := h.svc.UpdateDevice(r.Context(), id, update); err != nil {
@@ -400,9 +400,11 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 	if d.SSHProfileID != nil {
 		attrs["ssh_profile_id"] = d.SSHProfileID.String()
 	}
-	if d.AreaID != nil {
-		attrs["area_id"] = d.AreaID.String()
+	areaIDStrs := make([]string, 0, len(d.AreaIDs))
+	for _, aid := range d.AreaIDs {
+		areaIDStrs = append(areaIDStrs, aid.String())
 	}
+	attrs["area_ids"] = areaIDStrs
 
 	attrs["backup_supported"] = h.vendorRegistry.ResolveBackupConfig(d.Vendor).Supported
 

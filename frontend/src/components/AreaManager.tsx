@@ -174,13 +174,17 @@ export function AreaManager() {
   }
 
   async function handleRemoveDevice(deviceId: string) {
-    await updateDevice(deviceId, { area_id: '' });
+    const device = allDevices.find(d => d.id === deviceId);
+    const newIds = (device?.area_ids ?? []).filter(id => id !== editing!.id);
+    await updateDevice(deviceId, { area_ids: newIds });
     void load();
   }
 
   async function handleAssignDevice(deviceId: string) {
     if (!editing) return;
-    await updateDevice(deviceId, { area_id: editing.id });
+    const device = allDevices.find(d => d.id === deviceId);
+    const newIds = [...(device?.area_ids ?? []), editing.id];
+    await updateDevice(deviceId, { area_ids: newIds });
     void load();
   }
 
@@ -212,8 +216,8 @@ export function AreaManager() {
 
   // --- Edit mode ---
   if (mode === 'edit' && editing) {
-    const assignedDevices = allDevices.filter((d) => d.area_id === editing.id);
-    const unassignedDevices = allDevices.filter((d) => !d.area_id || d.area_id !== editing.id);
+    const assignedDevices = allDevices.filter((d) => d.area_ids?.includes(editing.id));
+    const unassignedDevices = allDevices.filter((d) => !d.area_ids?.includes(editing.id));
 
     return (
       <div className="space-y-3">

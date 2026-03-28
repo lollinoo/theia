@@ -51,8 +51,8 @@ export function DeviceTable({
     let aVal: string | number;
     let bVal: string | number;
     if (sortKey === 'area') {
-      aVal = (a.area_id ? areaMap.get(a.area_id)?.name : '') ?? '';
-      bVal = (b.area_id ? areaMap.get(b.area_id)?.name : '') ?? '';
+      aVal = (a.area_ids?.[0] ? areaMap.get(a.area_ids[0])?.name : '') ?? '';
+      bVal = (b.area_ids?.[0] ? areaMap.get(b.area_ids[0])?.name : '') ?? '';
     } else if (sortKey === 'uptime') {
       // Numeric sort by uptime seconds (null = -1 so they sort last)
       aVal = snapshot?.device_metrics[a.id]?.uptime_secs ?? -1;

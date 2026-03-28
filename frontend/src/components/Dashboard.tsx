@@ -58,9 +58,9 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
     if (typeFilter !== 'all' && d.device_type !== typeFilter) return false;
     if (areaFilter !== 'all') {
       if (areaFilter === 'unassigned') {
-        if (d.area_id) return false;
+        if (d.area_ids?.length) return false;
       } else {
-        if (d.area_id !== areaFilter) return false;
+        if (!d.area_ids?.includes(areaFilter)) return false;
       }
     }
     if (search) {

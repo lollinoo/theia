@@ -46,7 +46,7 @@ export interface Device {
   tags?: Record<string, string>;
   interfaces: DeviceInterface[];
   ssh_profile_id?: string;
-  area_id?: string;
+  area_ids: string[];
   backup_supported: boolean;
   metrics_source: MetricsSource;
   prometheus_label_name: string;
@@ -181,7 +181,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       tags,
       interfaces: interfacesData.map(parseDeviceInterface),
       ssh_profile_id: typeof attributes.ssh_profile_id === 'string' ? attributes.ssh_profile_id : undefined,
-      area_id: typeof attributes.area_id === 'string' ? attributes.area_id : undefined,
+      area_ids: Array.isArray(attributes.area_ids) ? (attributes.area_ids as string[]) : [],
       backup_supported: readBoolean(attributes, 'backup_supported', false),
       metrics_source: metricsSource,
       prometheus_label_name: readString(attributes, 'prometheus_label_name', 'instance'),

@@ -30,8 +30,8 @@ type DeviceUpdate struct {
 	MetricsSource        *domain.MetricsSource
 	PrometheusLabelName  *string
 	PrometheusLabelValue *string
-	SSHProfileID         **uuid.UUID // double pointer: nil=not set, *nil=unassign, **=set
-	AreaID               **uuid.UUID // double pointer: nil=not set, *nil=unassign, **=set
+	SSHProfileID         **uuid.UUID   // double pointer: nil=not set, *nil=unassign, **=set
+	AreaIDs              *[]uuid.UUID // nil=not set, non-nil=replace all area assignments
 }
 
 // DeviceService orchestrates device management, combining SNMP discovery
@@ -246,8 +246,8 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 	if update.SSHProfileID != nil {
 		device.SSHProfileID = *update.SSHProfileID
 	}
-	if update.AreaID != nil {
-		device.AreaID = *update.AreaID
+	if update.AreaIDs != nil {
+		device.AreaIDs = *update.AreaIDs
 	}
 
 	return s.deviceRepo.Update(device)

@@ -44,19 +44,23 @@ export function CanvasPanels({
       {panelContent?.type === 'interfaceStats' && (() => {
         const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device; device?: Device } | undefined;
         if (data?.link && data.sourceDevice && data.targetDevice) {
+          // Look up live device state so promDown overrides are reflected
+          const currentSource = devices.find((d) => d.id === data.sourceDevice!.id) ?? data.sourceDevice;
+          const currentTarget = devices.find((d) => d.id === data.targetDevice!.id) ?? data.targetDevice;
           return (
             <InterfaceStatsPanel
               link={data.link}
-              sourceDevice={data.sourceDevice}
-              targetDevice={data.targetDevice}
+              sourceDevice={currentSource}
+              targetDevice={currentTarget}
               snapshot={snapshot as SnapshotPayload | null}
             />
           );
         }
         if (data?.device) {
+          const currentDevice = devices.find((d) => d.id === data.device!.id) ?? data.device;
           return (
             <DeviceInterfaceStatsPanel
-              device={data.device}
+              device={currentDevice}
               snapshot={snapshot as SnapshotPayload | null}
             />
           );

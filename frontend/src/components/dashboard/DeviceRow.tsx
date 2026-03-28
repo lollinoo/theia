@@ -30,7 +30,7 @@ export function DeviceRow({
   onSSHCredentials, onBackup, onBackupHistory, onViewConfig,
 }: DeviceRowProps) {
   const displayName = device.tags?.display_name || device.sys_name || device.hostname || device.ip;
-  const area = device.area_id ? areaMap.get(device.area_id) : undefined;
+  const deviceAreas = (device.area_ids ?? []).map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
   const uptimeSecs = deviceMetrics?.uptime_secs ?? null;
   const osVersion = parseOsVersion(device.sys_descr);
 
@@ -52,15 +52,19 @@ export function DeviceRow({
           <span className="text-on-bg-secondary capitalize text-[11px]">{device.status}</span>
         </div>
       </td>
-      {/* Area -- color dot + name per D-02/D-11 */}
+      {/* Area -- color dot(s) + name per D-02/D-11 */}
       <td className="px-3 py-2.5">
-        {area ? (
-          <div className="flex items-center gap-1.5">
-            <span
-              className="w-2 h-2 rounded-full flex-shrink-0"
-              style={{ backgroundColor: adaptAreaColor(area.color, resolvedTheme) }}
-            />
-            <span className="text-on-bg-secondary text-[11px]">{area.name}</span>
+        {deviceAreas.length > 0 ? (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {deviceAreas.map((area) => (
+              <span key={area.id} className="inline-flex items-center gap-1">
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: adaptAreaColor(area.color, resolvedTheme) }}
+                />
+                <span className="text-on-bg-secondary text-[11px]">{area.name}</span>
+              </span>
+            ))}
           </div>
         ) : (
           <span className="text-on-bg-muted text-[11px]">{'\u2014'}</span>

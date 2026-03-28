@@ -17,7 +17,7 @@ export interface DeviceNodeData {
   editMode?: boolean;
   metrics?: DeviceMetricsDTO | null;
   alertStatus?: AlertStatus;
-  areaColor?: string;
+  areaColors?: string[];
   onContextMenu?: (event: React.MouseEvent, deviceId: string) => void;
   isGhost?: boolean;
   onGhostClick?: (deviceId: string) => void;
@@ -105,33 +105,43 @@ function DeviceCardInner({
   const isDeviceDown = data.device.status === 'down';
   const isDeviceProbing = data.device.status === 'probing';
 
-  const cardRingClass =
-    data.alertStatus === 'down' || isDeviceDown
-      ? 'ring-2 ring-status-down shadow-[0_0_28px_rgba(255,23,68,0.45)] animate-pulse'
-      : data.alertStatus === 'degraded' || isDeviceProbing
-        ? 'ring-2 ring-yellow-500 shadow-[0_0_28px_rgba(255,193,7,0.35)]'
-        : data.highlighted
-          ? 'ring-2 ring-primary shadow-[0_0_28px_rgba(0,230,118,0.35)]'
-          : selected
-            ? 'ring-2 ring-primary shadow-[0_0_22px_rgba(0,230,118,0.18)]'
-            : data.areaColor
-              ? 'ring-[1.5px]'
-              : 'ring-1 ring-outline';
+  const colors = data.areaColors ?? [];
+  const hasArea = colors.length > 0;
+  const firstColor = colors[0];
 
-  const cardStyle: React.CSSProperties | undefined = data.areaColor
-    ? { '--tw-ring-color': data.areaColor } as React.CSSProperties
+  // Unified wrapper border: background determines border color(s)
+  const isDown = data.alertStatus === 'down' || isDeviceDown;
+  const isDegraded = data.alertStatus === 'degraded' || isDeviceProbing;
+
+  const conicGradient = colors.length >= 2
+    ? `conic-gradient(${colors.map((c, i, arr) =>
+        `${c} ${(i * 360) / arr.length}deg ${((i + 1) * 360) / arr.length}deg`
+      ).join(', ')})`
     : undefined;
 
-  return (
+  const wrapperBg: string =
+    data.highlighted || selected
+      ? 'var(--color-primary)'
+      : conicGradient ?? (hasArea ? firstColor : 'var(--color-outline)');
+
+  const wrapperPadding = data.highlighted || selected || isDown || isDegraded ? '2px' : '1.5px';
+
+  const wrapperStatusClass =
+    isDown
+      ? 'shadow-[0_0_28px_rgba(255,23,68,0.45)] animate-pulse'
+      : isDegraded
+        ? 'shadow-[0_0_28px_rgba(255,193,7,0.35)]'
+        : data.highlighted
+          ? 'shadow-[0_0_28px_rgba(0,230,118,0.35)]'
+          : selected
+            ? 'shadow-[0_0_22px_rgba(0,230,118,0.18)]'
+            : '';
+
+  const hoverGlowColor = hasArea ? `${firstColor}50` : undefined;
+
+  const cardElement = (
     <div
-      className={`group relative flex w-[260px] flex-col overflow-visible rounded-[12px] bg-surface text-left shadow-canvas transition-[box-shadow,ring,opacity,background-color,color,border-color] duration-200 motion-reduce:animate-none ${cardRingClass} hover:ring-[2.5px] ${data.areaColor ? '' : 'hover:ring-primary/60 hover:shadow-[0_0_20px_rgba(0,230,118,0.15)]'}`}
-      style={cardStyle}
-      onMouseEnter={(e) => {
-        if (data.areaColor) e.currentTarget.style.boxShadow = `0 0 22px ${data.areaColor}50`;
-      }}
-      onMouseLeave={(e) => {
-        if (data.areaColor) e.currentTarget.style.boxShadow = '';
-      }}
+      className="group relative flex w-[260px] flex-col overflow-visible rounded-[12px] bg-surface text-left shadow-canvas transition-[box-shadow,opacity,background-color,color,border-color] duration-200 motion-reduce:animate-none"
       onContextMenu={(e) => {
         if (data.onContextMenu) {
           e.preventDefault();
@@ -190,8 +200,7 @@ function DeviceCardInner({
 
       {/* BODY SECTION */}
       <div
-        className={`flex flex-col rounded-b-[12px] bg-bg px-4 pt-3 pb-6 ${data.alertStatus === 'down' || isDeviceDown ? 'opacity-70' : ''
-          }`}
+        className={`flex flex-col rounded-b-[12px] bg-bg px-4 pt-3 pb-6 ${data.alertStatus === 'down' || isDeviceDown ? 'opacity-70' : ''}`}
       >
         {detail && (
           <div className="flex items-center gap-2">
@@ -215,8 +224,7 @@ function DeviceCardInner({
                 CPU
               </div>
               <div
-                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : cpuPercent === null ? 'text-on-bg-secondary' : metricColor(cpuPercent)
-                  }`}
+                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : cpuPercent === null ? 'text-on-bg-secondary' : metricColor(cpuPercent)}`}
               >
                 {formatPercent(cpuPercent)}
               </div>
@@ -226,8 +234,7 @@ function DeviceCardInner({
                 MEM
               </div>
               <div
-                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : memPercent === null ? 'text-on-bg-secondary' : metricColor(memPercent)
-                  }`}
+                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : memPercent === null ? 'text-on-bg-secondary' : metricColor(memPercent)}`}
               >
                 {formatPercent(memPercent)}
               </div>
@@ -254,6 +261,21 @@ function DeviceCardInner({
 
     </div>
   );
+
+  return (
+    <div
+      className={`rounded-[13.5px] transition-[box-shadow,padding] duration-200 ${wrapperStatusClass} ${hasArea ? '' : 'hover:shadow-[0_0_20px_rgba(0,230,118,0.15)]'}`}
+      style={{ background: wrapperBg, padding: wrapperPadding }}
+      onMouseEnter={(e) => {
+        if (hoverGlowColor) e.currentTarget.style.boxShadow = `0 0 22px ${hoverGlowColor}`;
+      }}
+      onMouseLeave={(e) => {
+        if (hoverGlowColor) e.currentTarget.style.boxShadow = '';
+      }}
+    >
+      {cardElement}
+    </div>
+  );
 }
 
 const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: NodeProps<DeviceNode>) => {
@@ -267,7 +289,7 @@ const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: Nod
     pd.device.tags?.display_name === nd.device.tags?.display_name &&
     pd.highlighted === nd.highlighted &&
     pd.alertStatus === nd.alertStatus &&
-    pd.areaColor === nd.areaColor &&
+    pd.areaColors?.length === nd.areaColors?.length && (pd.areaColors ?? []).every((c, i) => c === nd.areaColors?.[i]) &&
     pd.isGhost === nd.isGhost &&
     pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
     pd.metrics?.mem_percent === nd.metrics?.mem_percent &&

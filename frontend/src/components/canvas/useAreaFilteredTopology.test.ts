@@ -20,14 +20,15 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     metrics_source: 'prometheus',
     prometheus_label_name: 'instance',
     prometheus_label_value: '10.0.0.1:9100',
+    area_ids: [],
     ...overrides,
   };
 }
 
-const deviceA = mockDevice({ id: 'a', area_id: 'area-1', sys_name: 'Router-A', ip: '10.0.0.1' });
-const deviceB = mockDevice({ id: 'b', area_id: 'area-1', sys_name: 'Router-B', ip: '10.0.0.2' });
-const deviceC = mockDevice({ id: 'c', area_id: 'area-2', sys_name: 'Router-C', ip: '10.0.0.3' });
-const deviceD = mockDevice({ id: 'd', sys_name: 'Unassigned', ip: '10.0.0.4' }); // no area_id
+const deviceA = mockDevice({ id: 'a', area_ids: ['area-1'], sys_name: 'Router-A', ip: '10.0.0.1' });
+const deviceB = mockDevice({ id: 'b', area_ids: ['area-1'], sys_name: 'Router-B', ip: '10.0.0.2' });
+const deviceC = mockDevice({ id: 'c', area_ids: ['area-2'], sys_name: 'Router-C', ip: '10.0.0.3' });
+const deviceD = mockDevice({ id: 'd', area_ids: [], sys_name: 'Unassigned', ip: '10.0.0.4' }); // no areas
 
 const linkAB: Link = { id: 'l1', source_device_id: 'a', target_device_id: 'b', source_if_name: 'ether1', target_if_name: 'ether1', discovery_protocol: 'lldp' };
 const linkAC: Link = { id: 'l2', source_device_id: 'a', target_device_id: 'c', source_if_name: 'ether2', target_if_name: 'ether1', discovery_protocol: 'lldp' };

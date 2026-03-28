@@ -102,7 +102,7 @@ export default function AreaHub({
       {areas.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {areas.map((area) => {
-            const areaDevices = devices.filter((d) => d.area_id === area.id);
+            const areaDevices = devices.filter((d) => d.area_ids?.includes(area.id));
             const areaHealth = computeHealth(areaDevices, snapshot);
             // Count links where at least one endpoint is in this area
             const areaDeviceIds = new Set(areaDevices.map((d) => d.id));

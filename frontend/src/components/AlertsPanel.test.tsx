@@ -28,6 +28,7 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     metrics_source: 'prometheus',
     prometheus_label_name: 'instance',
     prometheus_label_value: '10.0.0.1:9100',
+    area_ids: [],
     ...overrides,
   };
 }

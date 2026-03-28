@@ -77,9 +77,9 @@ func (r *AreaRepo) GetAll() ([]domain.Area, error) {
 func (r *AreaRepo) GetAllWithDeviceCount() ([]domain.AreaWithCount, error) {
 	rows, err := r.db.Query(
 		`SELECT a.id, a.name, a.description, a.color, a.created_at, a.updated_at,
-		        COUNT(d.id) as device_count
+		        COUNT(da.device_id) as device_count
 		 FROM areas a
-		 LEFT JOIN devices d ON d.area_id = a.id
+		 LEFT JOIN device_areas da ON da.area_id = a.id
 		 GROUP BY a.id
 		 ORDER BY a.name ASC`,
 	)

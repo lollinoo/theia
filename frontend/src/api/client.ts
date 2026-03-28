@@ -195,7 +195,7 @@ export async function updateDevice(
     prometheus_label_name: string;
     prometheus_label_value: string;
     ssh_profile_id: string;
-    area_id: string;
+    area_ids: string[];
   }>,
 ): Promise<Device> {
   const response = await requestJSONWithBody(

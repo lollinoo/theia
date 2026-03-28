@@ -48,6 +48,7 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     metrics_source: 'prometheus',
     prometheus_label_name: 'instance',
     prometheus_label_value: '10.0.0.1:9100',
+    area_ids: [],
     ...overrides,
   };
 }
@@ -106,7 +107,7 @@ describe('DeviceRow', () => {
     expect(dot.getAttribute('data-status')).toBe('up');
   });
 
-  it('renders area color dot when device has area_id and area is in areaMap', () => {
+  it('renders area color dot when device has area_ids and area is in areaMap', () => {
     const area: Area = {
       id: 'area-1',
       name: 'Core',
@@ -117,13 +118,13 @@ describe('DeviceRow', () => {
       updated_at: '2024-01-01T00:00:00Z',
     };
 
-    renderRow({ area_id: 'area-1' }, null, [['area-1', area]]);
+    renderRow({ area_ids: ['area-1'] }, null, [['area-1', area]]);
 
     expect(screen.getByText('Core')).toBeInTheDocument();
   });
 
   it('renders em dash when device has no area', () => {
-    renderRow({ area_id: undefined });
+    renderRow({ area_ids: [] });
 
     // Multiple em dashes may be present (area, uptime, etc.) -- just verify at least one exists
     const emDashes = screen.getAllByText('\u2014');

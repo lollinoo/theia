@@ -14,7 +14,8 @@ function InterfaceStatsSection({ device, ifName, snapshot }: InterfaceStatsSecti
     (i) => i.if_name.trim().toLowerCase() === ifName.trim().toLowerCase(),
   );
 
-  const linkMetrics = snapshot?.link_metrics[device.id];
+  const isDown = device.status === 'down';
+  const linkMetrics = isDown ? null : snapshot?.link_metrics[device.id];
   const metrics = linkMetrics?.find(
     (m) => m.if_name.trim().toLowerCase() === ifName.trim().toLowerCase(),
   ) ?? null;
@@ -28,12 +29,15 @@ function InterfaceStatsSection({ device, ifName, snapshot }: InterfaceStatsSecti
     metrics?.utilization != null ? utilizationColor(metrics.utilization) : 'var(--color-status-unknown)';
 
   return (
-    <div className="rounded-xl bg-surface-high p-4 space-y-3 transition-colors duration-200">
+    <div className={`rounded-xl p-4 space-y-3 transition-colors duration-200 ${isDown ? 'bg-status-down/10' : 'bg-surface-high'}`}>
       <div>
         <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Device</p>
         <p className="mt-0.5 text-sm font-medium text-on-bg">
           {device.tags?.display_name || device.sys_name || device.ip}
         </p>
+        {isDown && (
+          <p className="mt-1 text-xs font-medium text-status-down">Device unreachable</p>
+        )}
       </div>
 
       <div>
@@ -55,9 +59,9 @@ function InterfaceStatsSection({ device, ifName, snapshot }: InterfaceStatsSecti
           <div>
             <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Status</p>
             <p
-              className={`mt-0.5 text-sm ${iface.oper_status === 'up' ? 'text-status-up' : 'text-status-down'}`}
+              className={`mt-0.5 text-sm ${isDown ? 'text-status-down' : iface.oper_status === 'up' ? 'text-status-up' : 'text-status-down'}`}
             >
-              {iface.oper_status}
+              {isDown ? 'down' : iface.oper_status}
             </p>
           </div>
         )}
@@ -66,11 +70,11 @@ function InterfaceStatsSection({ device, ifName, snapshot }: InterfaceStatsSecti
       <div className="grid grid-cols-2 gap-3 mt-3 pt-3">
         <div>
           <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">TX</p>
-          <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{txLabel}</p>
+          <p className={`mt-0.5 font-mono text-[11px] font-semibold ${isDown ? 'text-status-down/70' : 'text-on-bg'}`}>{txLabel}</p>
         </div>
         <div>
           <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">RX</p>
-          <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{rxLabel}</p>
+          <p className={`mt-0.5 font-mono text-[11px] font-semibold ${isDown ? 'text-status-down/70' : 'text-on-bg'}`}>{rxLabel}</p>
         </div>
       </div>
 
