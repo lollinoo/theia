@@ -220,6 +220,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
     }
   }
 
+  const usesSNMP = metricsSource === 'snmp' || metricsSource === 'prometheus_snmp_fallback';
+
   return (
     <div className="space-y-6 p-4 transition-colors duration-200">
       {/* Polling Override */}
@@ -385,102 +387,6 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           </div>
         )}
 
-        {profiles.length > 0 && (
-          <select
-            defaultValue=""
-            onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-          >
-            <option value="" disabled>Load credentials from profile...</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} (SNMP {p.snmp.version})
-              </option>
-            ))}
-          </select>
-        )}
-
-        <select
-          value={snmpVersion}
-          onChange={(e) => setSnmpVersion(e.target.value)}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-        >
-          <option value="2c">SNMP v2c</option>
-          <option value="3">SNMP v3</option>
-        </select>
-
-        {snmpVersion !== '3' && (
-          <input
-            type="text"
-            value={community}
-            onChange={(e) => setCommunity(e.target.value)}
-            placeholder="SNMP Community (leave blank to keep current)"
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-          />
-        )}
-
-        {snmpVersion === '3' && (
-          <div className="space-y-2 bg-surface-high rounded-lg p-3">
-            <p className="text-xs text-on-bg-secondary">SNMPv3 Credentials (leave blank to keep current)</p>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Username"
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-            />
-            <select
-              value={securityLevel}
-              onChange={(e) => setSecurityLevel(e.target.value)}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-            >
-              <option value="noAuthNoPriv">No Auth, No Privacy</option>
-              <option value="authNoPriv">Auth, No Privacy</option>
-              <option value="authPriv">Auth + Privacy</option>
-            </select>
-            {(securityLevel === 'authNoPriv' || securityLevel === 'authPriv') && (
-              <>
-                <select
-                  value={authProtocol}
-                  onChange={(e) => setAuthProtocol(e.target.value)}
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                >
-                  <option value="SHA">SHA</option>
-                  <option value="MD5">MD5</option>
-                </select>
-                <input
-                  type="password"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  placeholder="Auth Key"
-                  autoComplete="new-password"
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                />
-              </>
-            )}
-            {securityLevel === 'authPriv' && (
-              <>
-                <select
-                  value={privProtocol}
-                  onChange={(e) => setPrivProtocol(e.target.value)}
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                >
-                  <option value="AES">AES</option>
-                  <option value="DES">DES</option>
-                </select>
-                <input
-                  type="password"
-                  value={privPassword}
-                  onChange={(e) => setPrivPassword(e.target.value)}
-                  placeholder="Encryption Key"
-                  autoComplete="new-password"
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                />
-              </>
-            )}
-          </div>
-        )}
-
         {prometheusAvailable === false && (
           <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
             Prometheus is not configured or unreachable. Only SNMP Direct is available.
@@ -506,6 +412,11 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
               Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
             </option>
           </select>
+          {metricsSource === 'prometheus' && (
+            <p className="text-xs text-on-bg-secondary/70">
+              Metrics from Prometheus only. No fallback if Prometheus is unreachable.
+            </p>
+          )}
           {metricsSource === 'prometheus_snmp_fallback' && (
             <p className="text-xs text-on-bg-secondary/70">
               Falls back to SNMP if Prometheus is unavailable or has no data for this device.
@@ -513,6 +424,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           )}
         </div>
 
+        {/* Prometheus Target — visible when metrics source uses Prometheus */}
         {(metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback') && (
           <div className="space-y-2 bg-surface-high rounded-lg p-3">
             <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Prometheus Target</p>
@@ -543,6 +455,107 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           </div>
         )}
 
+        {/* SNMP Credentials — visible when metrics source uses SNMP */}
+        {usesSNMP && (
+          <>
+            {profiles.length > 0 && (
+              <select
+                defaultValue=""
+                onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
+                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              >
+                <option value="" disabled>Load credentials from profile...</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} (SNMP {p.snmp.version})
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <select
+              value={snmpVersion}
+              onChange={(e) => setSnmpVersion(e.target.value)}
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+            >
+              <option value="2c">SNMP v2c</option>
+              <option value="3">SNMP v3</option>
+            </select>
+
+            {snmpVersion !== '3' && (
+              <input
+                type="text"
+                value={community}
+                onChange={(e) => setCommunity(e.target.value)}
+                placeholder="SNMP Community (leave blank to keep current)"
+                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              />
+            )}
+
+            {snmpVersion === '3' && (
+              <div className="space-y-2 bg-surface-high rounded-lg p-3">
+                <p className="text-xs text-on-bg-secondary">SNMPv3 Credentials (leave blank to keep current)</p>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Username"
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                />
+                <select
+                  value={securityLevel}
+                  onChange={(e) => setSecurityLevel(e.target.value)}
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                >
+                  <option value="noAuthNoPriv">No Auth, No Privacy</option>
+                  <option value="authNoPriv">Auth, No Privacy</option>
+                  <option value="authPriv">Auth + Privacy</option>
+                </select>
+                {(securityLevel === 'authNoPriv' || securityLevel === 'authPriv') && (
+                  <>
+                    <select
+                      value={authProtocol}
+                      onChange={(e) => setAuthProtocol(e.target.value)}
+                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                    >
+                      <option value="SHA">SHA</option>
+                      <option value="MD5">MD5</option>
+                    </select>
+                    <input
+                      type="password"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder="Auth Key"
+                      autoComplete="new-password"
+                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                    />
+                  </>
+                )}
+                {securityLevel === 'authPriv' && (
+                  <>
+                    <select
+                      value={privProtocol}
+                      onChange={(e) => setPrivProtocol(e.target.value)}
+                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                    >
+                      <option value="AES">AES</option>
+                      <option value="DES">DES</option>
+                    </select>
+                    <input
+                      type="password"
+                      value={privPassword}
+                      onChange={(e) => setPrivPassword(e.target.value)}
+                      placeholder="Encryption Key"
+                      autoComplete="new-password"
+                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                    />
+                  </>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
         {editError && (
           <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">
             {editError}
@@ -558,8 +571,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         </button>
       </form>
 
-      {/* SNMP Test */}
-      <SNMPTestButton deviceId={device.id} />
+      {/* SNMP Test — visible when metrics source uses SNMP */}
+      {usesSNMP && <SNMPTestButton deviceId={device.id} />}
 
       {/* Delete Device */}
       <div className="mt-6 space-y-3">

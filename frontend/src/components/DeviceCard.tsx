@@ -102,10 +102,13 @@ function DeviceCardInner({
         ? 'degraded'
         : data.device.status;
 
+  const isDeviceDown = data.device.status === 'down';
+  const isDeviceProbing = data.device.status === 'probing';
+
   const cardRingClass =
-    data.alertStatus === 'down'
+    data.alertStatus === 'down' || isDeviceDown
       ? 'ring-2 ring-status-down shadow-[0_0_28px_rgba(255,23,68,0.45)] animate-pulse'
-      : data.alertStatus === 'degraded'
+      : data.alertStatus === 'degraded' || isDeviceProbing
         ? 'ring-2 ring-yellow-500 shadow-[0_0_28px_rgba(255,193,7,0.35)]'
         : data.highlighted
           ? 'ring-2 ring-primary shadow-[0_0_28px_rgba(0,230,118,0.35)]'
@@ -187,7 +190,7 @@ function DeviceCardInner({
 
       {/* BODY SECTION */}
       <div
-        className={`flex flex-col rounded-b-[12px] bg-bg px-4 pt-3 pb-6 ${data.alertStatus === 'down' ? 'opacity-70' : ''
+        className={`flex flex-col rounded-b-[12px] bg-bg px-4 pt-3 pb-6 ${data.alertStatus === 'down' || isDeviceDown ? 'opacity-70' : ''
           }`}
       >
         {detail && (
@@ -205,14 +208,14 @@ function DeviceCardInner({
             {data.device.ip}
           </span>
         </div>
-        <div className="mt-3 rounded-lg bg-surface-high px-3 py-2">
+        <div className={`mt-3 rounded-lg px-3 py-2 ${isDeviceDown ? 'bg-status-down/10' : 'bg-surface-high'}`}>
           <div className="grid grid-cols-4 gap-2">
             <div className="text-center">
               <div className="text-[10px] uppercase tracking-[0.16em] text-on-bg-secondary/70">
                 CPU
               </div>
               <div
-                className={`mt-1 font-mono text-[11px] font-semibold ${cpuPercent === null ? 'text-on-bg-secondary' : metricColor(cpuPercent)
+                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : cpuPercent === null ? 'text-on-bg-secondary' : metricColor(cpuPercent)
                   }`}
               >
                 {formatPercent(cpuPercent)}
@@ -223,7 +226,7 @@ function DeviceCardInner({
                 MEM
               </div>
               <div
-                className={`mt-1 font-mono text-[11px] font-semibold ${memPercent === null ? 'text-on-bg-secondary' : metricColor(memPercent)
+                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : memPercent === null ? 'text-on-bg-secondary' : metricColor(memPercent)
                   }`}
               >
                 {formatPercent(memPercent)}
@@ -233,7 +236,7 @@ function DeviceCardInner({
               <div className="text-[10px] uppercase tracking-[0.16em] text-on-bg-secondary/70">
                 TEMP
               </div>
-              <div className="mt-1 font-mono text-[11px] font-semibold text-on-bg">
+              <div className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : 'text-on-bg'}`}>
                 {formatTemperature(tempCelsius)}
               </div>
             </div>
@@ -241,7 +244,7 @@ function DeviceCardInner({
               <div className="text-[10px] uppercase tracking-[0.16em] text-on-bg-secondary/70">
                 UP
               </div>
-              <div className="mt-1 font-mono text-[11px] font-semibold text-on-bg whitespace-nowrap">
+              <div className={`mt-1 font-mono text-[11px] font-semibold whitespace-nowrap ${isDeviceDown ? 'text-status-down/70' : 'text-on-bg'}`}>
                 {uptimeSecs === null ? '--' : formatUptime(uptimeSecs)}
               </div>
             </div>

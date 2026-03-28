@@ -72,6 +72,7 @@ export function useCanvasData({
   const [error, setError] = useState<string | null>(null);
 
   const snapshotRef = useRef<SnapshotPayload | null>(null);
+  const prometheusStatusRef = useRef<PrometheusStatusPayload | null>(null);
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
   const layoutInitializedRef = useRef(false);
@@ -85,10 +86,13 @@ export function useCanvasData({
   const prevPromAvailableRef = useRef<boolean | null>(null);
   const [showRecoveryToast, setShowRecoveryToast] = useState(false);
 
-  // Keep ref in sync so async loadTopology can read the latest snapshot
+  // Keep refs in sync so async loadTopology can read the latest state
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
+  useEffect(() => {
+    prometheusStatusRef.current = prometheusStatus;
+  }, [prometheusStatus]);
 
   // Propagate device state changes to parent (for Dashboard view)
   useEffect(() => {
@@ -145,6 +149,22 @@ export function useCanvasData({
         // an empty node array.
         const pendingSnapshot = snapshotRef.current;
 
+        // When Prometheus is down, override prometheus-sourced devices to 'down'
+        // so the initial render shows error styling immediately (without waiting
+        // for the snapshot effect to re-apply the override).
+        let effectiveSnapshot = pendingSnapshot;
+        const promStatus = prometheusStatusRef.current;
+        if (pendingSnapshot && promStatus !== null && !promStatus.available) {
+          const effectiveStatuses = { ...pendingSnapshot.device_statuses };
+          for (const d of fetchedDevices) {
+            const src = d.metrics_source || 'prometheus';
+            if (src === 'prometheus') {
+              effectiveStatuses[d.id] = 'down';
+            }
+          }
+          effectiveSnapshot = { ...pendingSnapshot, device_statuses: effectiveStatuses };
+        }
+
         const nextNodes = buildTopologyNodes(
           fetchedDevices,
           savedPositions,
@@ -152,7 +172,7 @@ export function useCanvasData({
           defaultPosition,
           editMode,
           openDeviceMenu,
-          pendingSnapshot,
+          effectiveSnapshot,
         );
 
         // Migrate localStorage manual edges to backend on first load (best-effort)
@@ -187,20 +207,23 @@ export function useCanvasData({
 
         // Merge pending snapshot link metrics into edges and mark snapshot time
         // so the stale-data timer doesn't immediately clear the metrics.
-        if (pendingSnapshot) {
+        if (effectiveSnapshot) {
           lastSnapshotTimeRef.current = Date.now();
           nextEdges = nextEdges.map((edge) => {
             const link = edge.data?.link;
             if (!link) return edge;
-            const linkAlertStatus = alertStatusForLink(link, pendingSnapshot.alerts);
-            const metrics = findLinkMetrics(pendingSnapshot.link_metrics, link);
+            const linkAlertStatus = alertStatusForLink(link, effectiveSnapshot.alerts);
+            const srcStatus = effectiveSnapshot.device_statuses[link.source_device_id];
+            const tgtStatus = effectiveSnapshot.device_statuses[link.target_device_id];
+            const bothDown = srcStatus === 'down' && tgtStatus === 'down';
+            const metrics = bothDown ? null : findLinkMetrics(effectiveSnapshot.link_metrics, link);
             return {
               ...edge,
               data: {
                 ...edge.data!,
                 alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
-                sourceDeviceStatus: pendingSnapshot.device_statuses[link.source_device_id],
-                targetDeviceStatus: pendingSnapshot.device_statuses[link.target_device_id],
+                sourceDeviceStatus: srcStatus,
+                targetDeviceStatus: tgtStatus,
                 metrics: metrics,
                 throughputLabel: metrics ? buildThroughputLabel(metrics) : undefined,
                 utilization: metrics?.utilization ?? null,
@@ -334,13 +357,19 @@ export function useCanvasData({
               ...(newHostname ? { sys_name: newHostname } : {}),
             }
           : node.data.device;
+
+        // When a device is confirmed down, null out metrics so the card shows
+        // error styling rather than potentially stale last-known values.
+        const isDown = newStatus === 'down' || (!newStatus && node.data.device.status === 'down');
+        const nodeMetrics = isDown ? null : (snapshot.device_metrics[node.id] ?? null);
+
         return {
           ...node,
           data: {
             ...node.data,
             alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
             device: updatedDevice,
-            metrics: snapshot.device_metrics[node.id] ?? null,
+            metrics: nodeMetrics,
           },
         };
       }),
@@ -367,14 +396,21 @@ export function useCanvasData({
         const link = edge.data?.link;
         if (!link) return edge;
         const linkAlertStatus = alertStatusForLink(link, snapshot.alerts);
-        const metrics = findLinkMetrics(snapshot.link_metrics, link);
+        const srcStatus = effectiveStatuses[link.source_device_id];
+        const tgtStatus = effectiveStatuses[link.target_device_id];
+
+        // When both link endpoints are down, null out link metrics so throughput
+        // labels don't show stale last-known values.
+        const bothDown = srcStatus === 'down' && tgtStatus === 'down';
+        const metrics = bothDown ? null : findLinkMetrics(snapshot.link_metrics, link);
+
         return {
           ...edge,
           data: {
             ...edge.data,
             alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
-            sourceDeviceStatus: effectiveStatuses[link.source_device_id],
-            targetDeviceStatus: effectiveStatuses[link.target_device_id],
+            sourceDeviceStatus: srcStatus,
+            targetDeviceStatus: tgtStatus,
             metrics: metrics,
             throughputLabel: metrics ? buildThroughputLabel(metrics) : undefined,
             utilization: metrics?.utilization ?? null,

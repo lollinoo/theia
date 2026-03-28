@@ -31,6 +31,7 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
         { key: `${modifier}+K`, action: 'Search' },
         { key: 'A', action: 'Add device' },
         { key: '+ / - / 0', action: 'Zoom In/Out/Fit' },
+        { key: 'Shift + Drag (Edit)', action: 'Select nodes (rubber band)' },
         { key: `${modifier}+,`, action: 'Settings' },
         { key: '?', action: 'Shortcuts help' },
         { key: 'Esc', action: 'Close panel/menu' },

@@ -192,15 +192,21 @@ function LinkEdgeInner({
         <EdgeLabelRenderer>
           <div
             className={`pointer-events-none absolute rounded-md border bg-surface px-2 py-1 text-[11px] font-medium shadow-pill transition-colors duration-200 ${
-              data.speedMismatch
-                ? 'border-status-probing/40 text-status-probing'
-                : data.areaColor
-                  ? ''
-                  : 'border-outline-subtle text-on-bg-secondary'
+              (bothDevDown || bothIfDown || alertStatus === 'down')
+                ? 'border-status-down/40 text-status-down'
+                : (oneDevDown || oneDevInactive || bothDevInactive || oneIfDown || alertStatus === 'degraded')
+                  ? 'border-status-probing/40 text-status-probing'
+                  : data.speedMismatch
+                    ? 'border-status-probing/40 text-status-probing'
+                    : data.areaColor
+                      ? ''
+                      : 'border-outline-subtle text-on-bg-secondary'
             }`}
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,
-              ...(data.areaColor && !data.speedMismatch ? { borderColor: data.areaColor, color: data.areaColor } : {}),
+              ...(data.areaColor && !data.speedMismatch && !bothDevDown && !oneDevDown && !bothDevInactive && !oneDevInactive && !bothIfDown && !oneIfDown && alertStatus !== 'down' && alertStatus !== 'degraded'
+                ? { borderColor: data.areaColor, color: data.areaColor }
+                : {}),
             }}
             title={data.speedMismatch ? 'Speed negotiation mismatch between interfaces' : undefined}
           >

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ConnectionMode, Background, MiniMap, ReactFlow,
+  ConnectionMode, Background, MiniMap, ReactFlow, SelectionMode,
   applyEdgeChanges, useNodesState, useReactFlow,
   type Connection, type EdgeChange,
 } from '@xyflow/react';
@@ -42,10 +42,16 @@ interface CanvasProps {
 export default function Canvas({ snapshot, reconnecting, prometheusStatus, selectedAreaId, areas, onDevicesChange, onLinksChange, onAreaSelect }: CanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
+  const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const highlightTimerRef = useRef<number | null>(null);
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
+
+  const handleSelectionChange = useCallback(
+    ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => { setSelectedNodeCount(selectedNodes.length); },
+    [],
+  );
 
   const {
     deviceMenu, setDeviceMenu, edgeMenu, setEdgeMenu,
@@ -190,7 +196,10 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     }
   }, [selectedAreaId, displayNodes.length, reactFlow]);
 
-  useEffect(() => { setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, editMode } }))); }, [editMode, setNodes]);
+  useEffect(() => {
+    setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, editMode } })));
+    if (!editMode) setSelectedNodeCount(0);
+  }, [editMode, setNodes]);
   useEffect(() => () => { if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current); }, []);
 
   const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
@@ -314,13 +323,15 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
       <CanvasOverlays editMode={editMode} reconnecting={reconnecting}
         showRecoveryToast={showRecoveryToast} setShowRecoveryToast={setShowRecoveryToast}
         prometheusStatus={prometheusStatus} prometheusAlertDismissed={prometheusAlertDismissed}
-        setPrometheusAlertDismissed={setPrometheusAlertDismissed} setPanelContent={setPanelContent} />
+        setPrometheusAlertDismissed={setPrometheusAlertDismissed} setPanelContent={setPanelContent}
+        selectedNodeCount={selectedNodeCount} />
       <ZoomControls onZoomIn={() => { void reactFlow.zoomIn({ duration: 200 }); }}
         onZoomOut={() => { void reactFlow.zoomOut({ duration: 200 }); }}
         onFitView={() => { void reactFlow.fitView({ padding: 0.18, duration: 280 }); }} />
 
       <ReactFlow nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
         onNodesChange={onNodesChange} onEdgesChange={handleEdgesChange} onConnect={handleConnect}
+        onSelectionChange={handleSelectionChange}
         onPaneClick={() => { setEdgeMenu(null); setDeviceMenu(null); setPanelContent(null); setShowSearch(false); setShowShortcuts(false); }}
         onNodeClick={(_ev, node) => { if (node.data.isGhost || !editMode) return; const cd = devices.find((d) => d.id === node.id); if (cd) setPanelContent({ type: 'deviceConfig', data: { device: cd } }); }}
         onEdgeClick={(_ev, edge) => { if (!editMode) return; const lk = edge.data?.link; if (lk) setPanelContent({ type: 'link-details', data: { link: lk } }); }}
@@ -332,6 +343,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
           setNodes(updated); setEdges(buildTopologyEdges(topologyLinks, dMap, updated, eMap, openEdgeMenu));
           void savePositions(buildPositionPayload(updated));
         }}
+        selectionOnDrag={editMode} selectionMode={SelectionMode.Partial} selectionKeyCode="Shift"
         connectionMode={ConnectionMode.Loose} minZoom={0.1} maxZoom={2} fitView
         nodesDraggable={editMode} panOnDrag zoomOnScroll zoomOnDoubleClick={false}
         connectionLineStyle={{ stroke: 'var(--nt-outline)', strokeWidth: 2 }} proOptions={{ hideAttribution: false }} className="bg-bg">

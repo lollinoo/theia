@@ -82,6 +82,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const needsAuth = securityLevel === 'authNoPriv' || securityLevel === 'authPriv';
   const needsPriv = securityLevel === 'authPriv';
   const usesPrometheus = metricsMode === 'prometheus' || metricsMode === 'prometheus_snmp_fallback';
+  const usesSNMP = metricsMode === 'snmp' || metricsMode === 'prometheus_snmp_fallback';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -211,135 +212,137 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         </div>
       )}
 
-      {/* SNMP Credentials */}
-      <div className="space-y-3 bg-surface-high rounded-lg p-3">
-        <p className={labelClass}>SNMP Credentials</p>
+      {/* SNMP Credentials — visible when metrics source uses SNMP */}
+      {usesSNMP && (
+        <div className="space-y-3 bg-surface-high rounded-lg p-3">
+          <p className={labelClass}>SNMP Credentials</p>
 
-        {profiles.length > 0 && (
+          {profiles.length > 0 && (
+            <div className="space-y-1">
+              <label className="text-xs text-on-bg-secondary">Load from Profile</label>
+              <select
+                defaultValue=""
+                onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
+                className={selectClass}
+              >
+                <option value="" disabled>Select a credential profile...</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} (SNMP {p.snmp.version})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="space-y-1">
-            <label className="text-xs text-on-bg-secondary">Load from Profile</label>
+            <label className="text-xs text-on-bg-secondary">Version</label>
             <select
-              defaultValue=""
-              onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
               className={selectClass}
             >
-              <option value="" disabled>Select a credential profile...</option>
-              {profiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} (SNMP {p.snmp.version})
-                </option>
-              ))}
+              <option value="2c">v2c</option>
+              <option value="3">v3</option>
             </select>
           </div>
-        )}
 
-        <div className="space-y-1">
-          <label className="text-xs text-on-bg-secondary">Version</label>
-          <select
-            value={version}
-            onChange={(e) => setVersion(e.target.value)}
-            className={selectClass}
-          >
-            <option value="2c">v2c</option>
-            <option value="3">v3</option>
-          </select>
-        </div>
-
-        {!isV3 && (
-          <div className="space-y-1">
-            <label className="text-xs text-on-bg-secondary">Community</label>
-            <input
-              type="text"
-              value={community}
-              onChange={(e) => setCommunity(e.target.value)}
-              placeholder="public"
-              className={inputClass}
-            />
-          </div>
-        )}
-
-        {isV3 && (
-          <div className="space-y-2">
+          {!isV3 && (
             <div className="space-y-1">
-              <label className="text-xs text-on-bg-secondary">Username</label>
+              <label className="text-xs text-on-bg-secondary">Community</label>
               <input
                 type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="snmpv3user"
+                value={community}
+                onChange={(e) => setCommunity(e.target.value)}
+                placeholder="public"
                 className={inputClass}
               />
             </div>
+          )}
 
-            <div className="space-y-1">
-              <label className="text-xs text-on-bg-secondary">Security Level</label>
-              <select
-                value={securityLevel}
-                onChange={(e) => setSecurityLevel(e.target.value)}
-                className={selectClass}
-              >
-                <option value="noAuthNoPriv">No Auth, No Privacy</option>
-                <option value="authNoPriv">Auth, No Privacy</option>
-                <option value="authPriv">Auth + Privacy</option>
-              </select>
+          {isV3 && (
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <label className="text-xs text-on-bg-secondary">Username</label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="snmpv3user"
+                  className={inputClass}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs text-on-bg-secondary">Security Level</label>
+                <select
+                  value={securityLevel}
+                  onChange={(e) => setSecurityLevel(e.target.value)}
+                  className={selectClass}
+                >
+                  <option value="noAuthNoPriv">No Auth, No Privacy</option>
+                  <option value="authNoPriv">Auth, No Privacy</option>
+                  <option value="authPriv">Auth + Privacy</option>
+                </select>
+              </div>
+
+              {needsAuth && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-xs text-on-bg-secondary">Auth Protocol</label>
+                    <select
+                      value={authProtocol}
+                      onChange={(e) => setAuthProtocol(e.target.value)}
+                      className={selectClass}
+                    >
+                      <option value="SHA">SHA</option>
+                      <option value="MD5">MD5</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-on-bg-secondary">Auth Key</label>
+                    <input
+                      type="password"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder="Authentication passphrase"
+                      autoComplete="new-password"
+                      className={inputClass}
+                    />
+                  </div>
+                </>
+              )}
+
+              {needsPriv && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-xs text-on-bg-secondary">Encryption Protocol</label>
+                    <select
+                      value={privProtocol}
+                      onChange={(e) => setPrivProtocol(e.target.value)}
+                      className={selectClass}
+                    >
+                      <option value="AES">AES</option>
+                      <option value="DES">DES</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-on-bg-secondary">Encryption Key</label>
+                    <input
+                      type="password"
+                      value={privPassword}
+                      onChange={(e) => setPrivPassword(e.target.value)}
+                      placeholder="Privacy passphrase"
+                      autoComplete="new-password"
+                      className={inputClass}
+                    />
+                  </div>
+                </>
+              )}
             </div>
-
-            {needsAuth && (
-              <>
-                <div className="space-y-1">
-                  <label className="text-xs text-on-bg-secondary">Auth Protocol</label>
-                  <select
-                    value={authProtocol}
-                    onChange={(e) => setAuthProtocol(e.target.value)}
-                    className={selectClass}
-                  >
-                    <option value="SHA">SHA</option>
-                    <option value="MD5">MD5</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-on-bg-secondary">Auth Key</label>
-                  <input
-                    type="password"
-                    value={authPassword}
-                    onChange={(e) => setAuthPassword(e.target.value)}
-                    placeholder="Authentication passphrase"
-                    autoComplete="new-password"
-                    className={inputClass}
-                  />
-                </div>
-              </>
-            )}
-
-            {needsPriv && (
-              <>
-                <div className="space-y-1">
-                  <label className="text-xs text-on-bg-secondary">Encryption Protocol</label>
-                  <select
-                    value={privProtocol}
-                    onChange={(e) => setPrivProtocol(e.target.value)}
-                    className={selectClass}
-                  >
-                    <option value="AES">AES</option>
-                    <option value="DES">DES</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-on-bg-secondary">Encryption Key</label>
-                  <input
-                    type="password"
-                    value={privPassword}
-                    onChange={(e) => setPrivPassword(e.target.value)}
-                    placeholder="Privacy passphrase"
-                    autoComplete="new-password"
-                    className={inputClass}
-                  />
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2">
         <label className={labelClass}>

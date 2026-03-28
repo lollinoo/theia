@@ -30,6 +30,11 @@ export function buildTopologyNodes(
       }
     }
 
+    // When a device is effectively down, null out metrics so the card shows
+    // error styling rather than stale or empty values.
+    const isDown = deviceData.status === 'down';
+    const nodeMetrics = isDown ? null : (pendingSnapshot?.device_metrics[device.id] ?? null);
+
     return {
       id: device.id,
       type: 'device',
@@ -43,7 +48,7 @@ export function buildTopologyNodes(
         highlighted: false,
         editMode,
         onContextMenu: openDeviceMenu,
-        metrics: pendingSnapshot?.device_metrics[device.id] ?? null,
+        metrics: nodeMetrics,
         alertStatus: pendingSnapshot
           ? alertStatusForDevice(device.id, pendingSnapshot.alerts)
           : undefined,
