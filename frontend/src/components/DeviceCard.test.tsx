@@ -131,18 +131,17 @@ describe('DeviceCard', () => {
     expect(container.firstChild).toBeTruthy();
   });
 
-  it('uses default ring when no areaColor', () => {
+  it('uses default outline border when no areaColors', () => {
     const { container } = renderDeviceCard();
     const html = container.innerHTML;
-    expect(html).toContain('ring-1');
-    expect(html).toContain('ring-outline');
+    expect(html).toContain('var(--color-outline)');
   });
 
-  it('renders area color as ring when areaColor set', () => {
-    const { container } = renderDeviceCard({ areaColor: '#ff6600' });
+  it('renders area color as wrapper border when areaColors set', () => {
+    const { container } = renderDeviceCard({ areaColors: ['#ff6600'] });
     const html = container.innerHTML;
-    expect(html).toContain('--tw-ring-color');
-    expect(html).toContain('#ff6600');
+    // jsdom converts hex to rgb in inline styles
+    expect(html).toContain('rgb(255, 102, 0)');
   });
 
   it('does not render decorative bottom ports', () => {
@@ -202,16 +201,15 @@ describe('DeviceCard', () => {
     expect(fontMonoEls.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('card outer div has ring-primary class when highlighted (cardRingClass glow ring)', () => {
+  it('card wrapper uses primary color when highlighted', () => {
     const { container } = renderDeviceCard({ highlighted: true });
     const html = container.innerHTML;
-    expect(html).toContain('ring-primary');
+    expect(html).toContain('var(--color-primary)');
   });
 
-  it('card outer div has ring-1 ring-outline default state when not highlighted or selected', () => {
+  it('card wrapper uses outline color in default state when not highlighted or selected', () => {
     const { container } = renderDeviceCard();
     const html = container.innerHTML;
-    expect(html).toContain('ring-1');
-    expect(html).toContain('ring-outline');
+    expect(html).toContain('var(--color-outline)');
   });
 });

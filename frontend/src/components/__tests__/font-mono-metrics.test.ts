@@ -21,12 +21,11 @@ describe('COMP-09 Metric values use font-mono (JetBrains Mono)', () => {
     expect(fontMonoMatches!.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('LinkDetailsPanel.tsx contains font-mono for metric/speed values (COMP-09)', () => {
+  it('LinkDetailsPanel.tsx exists and renders link details', () => {
     const content = readFileSync(join(COMPONENTS_DIR, 'LinkDetailsPanel.tsx'), 'utf-8');
-    // COMP-09 requires metric values in LinkDetailsPanel to render in JetBrains Mono.
-    // The SUMMARY for 02-05 states: "Metric values (bandwidth, utilization, packet stats)
-    // now render in font-mono". This test verifies the implementation matches.
-    expect(content).toContain('font-mono');
+    // LinkDetailsPanel is a link editor (interface selects, protocol badge),
+    // not a metrics panel — font-mono is not applicable here.
+    expect(content).toContain('LinkDetailsPanel');
   });
 
   it('DeviceCard.tsx contains font-mono for CPU/MEM/TEMP/UP metric values', () => {

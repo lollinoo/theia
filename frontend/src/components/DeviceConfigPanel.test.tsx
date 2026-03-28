@@ -133,7 +133,13 @@ describe('DeviceConfigPanel', () => {
     expect(container.firstChild).toBeTruthy();
   });
 
-  it('renders Area dropdown with Unassigned option', async () => {
+  it('renders Areas section with select dropdown', async () => {
+    // Mock fetchAreas to return at least one area so the dropdown renders
+    const { fetchAreas } = await import('../api/client');
+    (fetchAreas as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { id: 'area-1', name: 'Backbone', description: '', color: '#00E676', device_count: 0 },
+    ]);
+
     render(
       <DeviceConfigPanel
         device={mockDevice()}
@@ -142,15 +148,17 @@ describe('DeviceConfigPanel', () => {
       />,
     );
 
-    // Area label should be present
+    // Areas label should be present
     await waitFor(() => {
-      expect(screen.getByText('Area')).toBeInTheDocument();
+      expect(screen.getByText('Areas')).toBeInTheDocument();
     });
-    // Unassigned option should be the default
-    expect(screen.getByText('Unassigned')).toBeInTheDocument();
+    // Unassigned select option should be available when device has no areas
+    await waitFor(() => {
+      expect(screen.getByText('Unassigned - select area...')).toBeInTheDocument();
+    });
   });
 
-  it('renders area dropdown between IP and Vendor fields', () => {
+  it('renders areas section between IP and Vendor fields', () => {
     render(
       <DeviceConfigPanel
         device={mockDevice()}
@@ -159,7 +167,7 @@ describe('DeviceConfigPanel', () => {
       />,
     );
 
-    const areaLabel = screen.getByText('Area');
+    const areaLabel = screen.getByText('Areas');
     expect(areaLabel).toBeInTheDocument();
   });
 });
