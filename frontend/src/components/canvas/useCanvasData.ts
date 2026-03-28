@@ -454,8 +454,6 @@ export function useCanvasData({
               throughputLabel: undefined,
               utilization: null,
               alertStatus: undefined,
-              sourceDeviceStatus: undefined,
-              targetDeviceStatus: undefined,
             },
           })),
         );
