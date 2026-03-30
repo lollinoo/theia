@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { Area, Device, SNMPProfile, SSHProfile } from '../types/api';
-import { deleteDevice, fetchAreas, fetchSNMPProfiles, fetchSSHProfiles, updateDevice } from '../api/client';
+import type { Area, Device, SSHProfile } from '../types/api';
+import { deleteDevice, fetchAreas, fetchSSHProfiles, updateDevice } from '../api/client';
 
 interface BulkEditPanelProps {
   devices: Device[];
@@ -21,7 +21,6 @@ function commonValue<T>(devices: Device[], extract: (d: Device) => T): T | 'mixe
 
 export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: BulkEditPanelProps) {
   const [areas, setAreas] = useState<Area[]>([]);
-  const [snmpProfiles, setSnmpProfiles] = useState<SNMPProfile[]>([]);
   const [sshProfiles, setSSHProfiles] = useState<SSHProfile[]>([]);
 
   // Bulk field state -- undefined means "no change"
@@ -41,7 +40,6 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
   // Load reference data
   useEffect(() => {
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
-    fetchSNMPProfiles().then(setSnmpProfiles).catch(() => {/* non-fatal */});
     fetchSSHProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
   }, []);
 
