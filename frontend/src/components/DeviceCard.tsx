@@ -189,7 +189,7 @@ function DeviceCardInner({
           <div className="flex shrink-0 items-center justify-center text-on-bg-secondary">
             <VendorIcon vendor={data.device.vendor} size={20} />
           </div>
-          <span className="break-words text-[15px] font-bold tracking-wide text-on-bg">
+          <span className="min-w-0 line-clamp-2 break-words text-[15px] font-bold tracking-wide text-on-bg">
             {label}
           </span>
         </div>

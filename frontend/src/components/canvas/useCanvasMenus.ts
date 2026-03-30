@@ -110,6 +110,11 @@ export function useCanvasMenus({ reactFlow }: UseCanvasMenusParams): UseCanvasMe
       }
       return 'Configure Device';
     }
+    if (panelContent.type === 'bulkEdit') {
+      const data = panelContent.data as { deviceIds?: string[] } | undefined;
+      const count = data?.deviceIds?.length ?? 0;
+      return `Bulk Edit (${count})`;
+    }
     if (panelContent.type === 'interfaceStats') {
       const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device; device?: Device } | undefined;
       if (data?.link && data.sourceDevice && data.targetDevice) {

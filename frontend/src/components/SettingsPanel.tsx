@@ -72,7 +72,11 @@ function SavedIndicator({ visible }: SavedIndicatorProps) {
   );
 }
 
-export function SettingsPanel() {
+interface SettingsPanelProps {
+  onAreasChange?: () => void;
+}
+
+export function SettingsPanel({ onAreasChange }: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
   const [grafanaUrl, setGrafanaUrl] = useState('');
@@ -261,7 +265,7 @@ export function SettingsPanel() {
       </div>
 
       <div className="mt-6">
-        <AreaManager />
+        <AreaManager onAreasChange={onAreasChange} />
       </div>
 
       <div className="mt-6">

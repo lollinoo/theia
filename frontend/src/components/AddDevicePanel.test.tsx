@@ -6,6 +6,7 @@ import { AddDevicePanel } from './AddDevicePanel';
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
   fetchSSHProfiles: vi.fn().mockResolvedValue([]),
+  fetchAreas: vi.fn().mockResolvedValue([]),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   createDevice: vi.fn().mockResolvedValue({
     id: 'new-dev',

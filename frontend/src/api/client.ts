@@ -167,6 +167,7 @@ export interface CreateDevicePayload {
   prometheus_label_name?: string;
   prometheus_label_value?: string;
   ssh_profile_id?: string;
+  area_ids?: string[];
 }
 
 export async function createDevice(payload: CreateDevicePayload): Promise<Device> {

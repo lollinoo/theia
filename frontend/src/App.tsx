@@ -56,6 +56,12 @@ function App() {
     setActiveView('canvas');
   }, []);
 
+  const handleAreasChange = useCallback(() => {
+    fetchAreas()
+      .then(setAreas)
+      .catch(() => {});
+  }, []);
+
   return (
     <ThemeProvider>
     <div className="h-screen w-screen overflow-hidden bg-bg text-on-bg">
@@ -91,6 +97,7 @@ function App() {
             onDevicesChange={handleCanvasDevicesChange}
             onLinksChange={handleCanvasLinksChange}
             onAreaSelect={handleAreaSelect}
+            onAreasChange={handleAreasChange}
           />
         </ReactFlowProvider>
       </div>

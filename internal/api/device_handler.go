@@ -53,6 +53,7 @@ type createDeviceRequest struct {
 	PrometheusLabelName  string            `json:"prometheus_label_name,omitempty"`
 	PrometheusLabelValue string            `json:"prometheus_label_value,omitempty"`
 	SSHProfileID         string            `json:"ssh_profile_id,omitempty"`
+	AreaIDs              []string          `json:"area_ids,omitempty"`
 }
 
 type snmpCredsRequest struct {
@@ -126,7 +127,20 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		sshProfileID = &parsed
 	}
 
-	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname, creds, req.Tags, req.Vendor, metricsSource, prometheusLabelName, prometheusLabelValue, sshProfileID)
+	var areaIDs []uuid.UUID
+	for _, idStr := range req.AreaIDs {
+		if idStr == "" {
+			continue
+		}
+		parsed, err := uuid.Parse(idStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid area_id: "+idStr)
+			return
+		}
+		areaIDs = append(areaIDs, parsed)
+	}
+
+	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname, creds, req.Tags, req.Vendor, metricsSource, prometheusLabelName, prometheusLabelValue, sshProfileID, areaIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -364,7 +378,7 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 			}
 			batchSSHProfileID = &parsed
 		}
-		_, _ = h.svc.AddDevice(r.Context(), d.IP, d.Hostname, creds, d.Tags, d.Vendor, ms, d.PrometheusLabelName, d.PrometheusLabelValue, batchSSHProfileID)
+		_, _ = h.svc.AddDevice(r.Context(), d.IP, d.Hostname, creds, d.Tags, d.Vendor, ms, d.PrometheusLabelName, d.PrometheusLabelValue, batchSSHProfileID, nil)
 	}
 
 	w.WriteHeader(http.StatusAccepted)

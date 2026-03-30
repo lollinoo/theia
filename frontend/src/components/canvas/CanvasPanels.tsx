@@ -10,6 +10,7 @@ import { AlertsPanel } from '../AlertsPanel';
 import { SettingsPanel } from '../SettingsPanel';
 import { AddDevicePanel } from '../AddDevicePanel';
 import { DeviceConfigPanel } from '../DeviceConfigPanel';
+import { BulkEditPanel } from '../BulkEditPanel';
 import { LinkCreatePanel } from '../LinkCreatePanel';
 import { LinkDetailsPanel } from '../LinkDetailsPanel';
 import { viewportSize } from './canvasHelpers';
@@ -25,6 +26,7 @@ interface CanvasPanelsProps {
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   prometheusStatus: PrometheusStatusPayload | null;
+  onAreasChange?: () => void;
 }
 
 export function CanvasPanels({
@@ -38,6 +40,7 @@ export function CanvasPanels({
   setNodes,
   reactFlow,
   prometheusStatus,
+  onAreasChange,
 }: CanvasPanelsProps) {
   return (
     <>
@@ -53,6 +56,7 @@ export function CanvasPanels({
               sourceDevice={currentSource}
               targetDevice={currentTarget}
               snapshot={snapshot as SnapshotPayload | null}
+              prometheusStatus={prometheusStatus}
             />
           );
         }
@@ -62,6 +66,7 @@ export function CanvasPanels({
             <DeviceInterfaceStatsPanel
               device={currentDevice}
               snapshot={snapshot as SnapshotPayload | null}
+              prometheusStatus={prometheusStatus}
             />
           );
         }
@@ -74,7 +79,7 @@ export function CanvasPanels({
           prometheusStatus={prometheusStatus}
         />
       )}
-      {panelContent?.type === 'settings' && <SettingsPanel />}
+      {panelContent?.type === 'settings' && <SettingsPanel onAreasChange={onAreasChange} />}
       {panelContent?.type === 'addDevice' && (
         <AddDevicePanel
           onDeviceAdded={() => {
@@ -141,6 +146,40 @@ export function CanvasPanels({
                 setPanelContent({ type: 'deviceConfig', data: { device: updated } });
               }}
               onDeviceDeleted={() => {
+                setPanelContent(null);
+                void loadTopology(true);
+              }}
+            />
+          );
+        }
+        return null;
+      })()}
+      {panelContent?.type === 'bulkEdit' && (() => {
+        const data = panelContent.data as { deviceIds?: string[] } | undefined;
+        if (data?.deviceIds && data.deviceIds.length > 1) {
+          const selectedDevices = data.deviceIds
+            .map((id) => devices.find((d) => d.id === id))
+            .filter((d): d is Device => d !== undefined);
+          if (selectedDevices.length < 2) return null;
+          return (
+            <BulkEditPanel
+              devices={selectedDevices}
+              onDevicesUpdated={(updatedDevices) => {
+                setDevices((prev) => {
+                  const updatedMap = new Map(updatedDevices.map((d) => [d.id, d]));
+                  return prev.map((d) => updatedMap.get(d.id) ?? d);
+                });
+                setNodes((prev) => {
+                  const updatedMap = new Map(updatedDevices.map((d) => [d.id, d]));
+                  return prev.map((n) => {
+                    const updated = updatedMap.get(n.id);
+                    return updated ? { ...n, data: { ...n.data, device: updated } } : n;
+                  });
+                });
+                // Re-open bulk panel with fresh device data
+                setPanelContent({ type: 'bulkEdit', data: { deviceIds: data.deviceIds } });
+              }}
+              onDevicesDeleted={() => {
                 setPanelContent(null);
                 void loadTopology(true);
               }}

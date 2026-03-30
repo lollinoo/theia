@@ -3,6 +3,7 @@ package sqlite
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
@@ -46,7 +47,7 @@ func TestAreaRepo_GetAllWithDeviceCount(t *testing.T) {
 	dev := &domain.Device{
 		Hostname: "edge-sw-01",
 		IP:       "10.0.0.1",
-		AreaID:   &area.ID,
+		AreaIDs:  []uuid.UUID{area.ID},
 		SNMPCredentials: domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -101,7 +102,7 @@ func TestAreaRepo_DeleteSetsDeviceAreaIDToNull(t *testing.T) {
 	dev := &domain.Device{
 		Hostname: "orphan-sw-01",
 		IP:       "10.0.1.1",
-		AreaID:   &area.ID,
+		AreaIDs:  []uuid.UUID{area.ID},
 		SNMPCredentials: domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -119,13 +120,13 @@ func TestAreaRepo_DeleteSetsDeviceAreaIDToNull(t *testing.T) {
 		t.Fatalf("Delete area: %v", err)
 	}
 
-	// Verify device's area_id is now nil
+	// Verify device's area_ids no longer contains the deleted area
 	got, err := deviceRepo.GetByID(dev.ID)
 	if err != nil {
 		t.Fatalf("GetByID device: %v", err)
 	}
-	if got.AreaID != nil {
-		t.Errorf("expected AreaID to be nil after area deletion, got %v", got.AreaID)
+	if len(got.AreaIDs) != 0 {
+		t.Errorf("expected AreaIDs to be empty after area deletion, got %v", got.AreaIDs)
 	}
 }
 

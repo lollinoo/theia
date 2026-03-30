@@ -11,6 +11,7 @@ interface CanvasOverlaysProps {
   setPrometheusAlertDismissed: (v: boolean) => void;
   setPanelContent: (content: { type: string; data?: unknown } | null) => void;
   selectedNodeCount: number;
+  onBulkEditClick?: () => void;
 }
 
 export function CanvasOverlays({
@@ -23,6 +24,7 @@ export function CanvasOverlays({
   setPrometheusAlertDismissed,
   setPanelContent,
   selectedNodeCount,
+  onBulkEditClick,
 }: CanvasOverlaysProps) {
   const showPrometheusAlert = prometheusStatus !== null && !prometheusStatus.available && !prometheusAlertDismissed;
 
@@ -31,12 +33,19 @@ export function CanvasOverlays({
       {/* Bottom-center stacking container for all status pills */}
       <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-none">
         {selectedNodeCount > 1 && (
-          <div className="pointer-events-auto flex items-center gap-2.5 rounded-xl border border-primary/30 bg-surface/95 px-4 py-2 shadow-canvas backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={onBulkEditClick}
+            className="pointer-events-auto flex items-center gap-2.5 rounded-xl border border-primary/30 bg-surface/95 px-4 py-2 shadow-canvas backdrop-blur-sm transition-colors hover:bg-surface-high/95"
+          >
             <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary/20 px-1.5 text-[11px] font-bold text-primary">
               {selectedNodeCount}
             </span>
             <span className="text-sm text-on-bg-secondary">nodes selected</span>
-          </div>
+            {editMode && (
+              <span className="text-xs text-primary font-medium">Edit</span>
+            )}
+          </button>
         )}
         {showPrometheusAlert && (
           <div className="pointer-events-auto flex items-center gap-2.5 rounded-xl border border-warning/30 bg-surface/95 px-4 py-2.5 shadow-canvas backdrop-blur-sm">

@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices, fetchLinks, fetchSettings, createLink } from '../../api/client';
@@ -158,7 +158,7 @@ export function useCanvasData({
           const effectiveStatuses = { ...pendingSnapshot.device_statuses };
           for (const d of fetchedDevices) {
             const src = d.metrics_source || 'prometheus';
-            if (src === 'prometheus') {
+            if (src === 'prometheus' || src === 'prometheus_snmp_fallback') {
               effectiveStatuses[d.id] = 'down';
             }
           }
@@ -232,27 +232,30 @@ export function useCanvasData({
           });
         }
 
-        startTransition(() => {
-          setDevices(fetchedDevices);
-          setTopologyLinks(fetchedLinks);
-          if (isSilentRefresh) {
-            // Preserve alertStatus so a topology refresh doesn't momentarily clear
-            // alert rings while the next snapshot hasn't yet re-applied them.
-            setNodes((currentNodes) => {
-              const prevDataByID = new Map(currentNodes.map((n) => [n.id, n.data]));
-              return nextNodes.map((n) => ({
-                ...n,
-                data: {
-                  ...n.data,
-                  alertStatus: prevDataByID.get(n.id)?.alertStatus,
-                },
-              }));
-            });
-          } else {
-            setNodes(nextNodes);
-          }
-          setEdges(nextEdges);
-        });
+        // Apply all state updates together as urgent (not in startTransition).
+        // Previously these were wrapped in startTransition which made them
+        // low-priority, allowing WebSocket snapshot effects (which depend on
+        // devices.length) to interrupt and race with the transition's setNodes,
+        // sometimes causing all canvas nodes to vanish after a device delete.
+        setDevices(fetchedDevices);
+        setTopologyLinks(fetchedLinks);
+        if (isSilentRefresh) {
+          // Preserve alertStatus so a topology refresh doesn't momentarily clear
+          // alert rings while the next snapshot hasn't yet re-applied them.
+          setNodes((currentNodes) => {
+            const prevDataByID = new Map(currentNodes.map((n) => [n.id, n.data]));
+            return nextNodes.map((n) => ({
+              ...n,
+              data: {
+                ...n.data,
+                alertStatus: prevDataByID.get(n.id)?.alertStatus,
+              },
+            }));
+          });
+        } else {
+          setNodes(nextNodes);
+        }
+        setEdges(nextEdges);
 
         if (!layoutInitializedRef.current || fetchedDevices.length !== devicesLengthRef.current) {
           layoutInitializedRef.current = true;
@@ -337,7 +340,7 @@ export function useCanvasData({
     if (promDown) {
       for (const d of devices) {
         const src = d.metrics_source || 'prometheus';
-        if (src === 'prometheus') {
+        if (src === 'prometheus' || src === 'prometheus_snmp_fallback') {
           effectiveStatuses[d.id] = 'down';
         }
       }
@@ -433,31 +436,29 @@ export function useCanvasData({
 
       staleAppliedRef.current = true;
 
-      startTransition(() => {
-        setNodes((currentNodes) =>
-          currentNodes.map((node) => ({
-            ...node,
-            data: {
-              ...node.data,
-              metrics: null,
-              alertStatus: undefined,
-            },
-          })),
-        );
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            metrics: null,
+            alertStatus: undefined,
+          },
+        })),
+      );
 
-        setEdges((currentEdges) =>
-          currentEdges.map((edge) => ({
-            ...edge,
-            data: {
-              ...edge.data,
-              metrics: null,
-              throughputLabel: undefined,
-              utilization: null,
-              alertStatus: undefined,
-            },
-          })),
-        );
-      });
+      setEdges((currentEdges) =>
+        currentEdges.map((edge) => ({
+          ...edge,
+          data: {
+            ...edge.data,
+            metrics: null,
+            throughputLabel: undefined,
+            utilization: null,
+            alertStatus: undefined,
+          },
+        })),
+      );
     }, 10_000);
 
     return () => {

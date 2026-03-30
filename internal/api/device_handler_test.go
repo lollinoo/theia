@@ -508,7 +508,7 @@ func TestDeviceHandlerUpdate_AreaID(t *testing.T) {
 	d := seedDevice(t, deviceRepo)
 
 	areaID := uuid.New().String()
-	body := fmt.Sprintf(`{"area_id":"%s"}`, areaID)
+	body := fmt.Sprintf(`{"area_ids":["%s"]}`, areaID)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+d.ID.String(), strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
@@ -518,7 +518,7 @@ func TestDeviceHandlerUpdate_AreaID(t *testing.T) {
 		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Verify area_id is in response
+	// Verify area_ids is in response
 	var resp map[string]interface{}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode: %v", err)
@@ -531,9 +531,15 @@ func TestDeviceHandlerUpdate_AreaID(t *testing.T) {
 	if !ok {
 		t.Fatal("expected attributes in data")
 	}
-	gotAreaID, ok := attrs["area_id"].(string)
-	if !ok || gotAreaID != areaID {
-		t.Errorf("area_id = %q, want %q", gotAreaID, areaID)
+	gotAreaIDs, ok := attrs["area_ids"].([]interface{})
+	if !ok {
+		t.Fatal("expected area_ids array in attributes")
+	}
+	if len(gotAreaIDs) != 1 {
+		t.Fatalf("expected 1 area_id, got %d", len(gotAreaIDs))
+	}
+	if gotAreaIDs[0] != areaID {
+		t.Errorf("area_ids[0] = %q, want %q", gotAreaIDs[0], areaID)
 	}
 }
 

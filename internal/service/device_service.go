@@ -72,6 +72,7 @@ func (s *DeviceService) AddDevice(
 	prometheusLabelName string,
 	prometheusLabelValue string,
 	sshProfileID *uuid.UUID,
+	areaIDs []uuid.UUID,
 ) (*domain.Device, error) {
 	if ip == "" {
 		return nil, fmt.Errorf("IP address is required")
@@ -103,6 +104,7 @@ func (s *DeviceService) AddDevice(
 		MetricsSource:        metricsSource,
 		PrometheusLabelName:  prometheusLabelName,
 		PrometheusLabelValue: prometheusLabelValue,
+		AreaIDs:              areaIDs,
 	}
 
 	if err := s.deviceRepo.Create(device); err != nil {

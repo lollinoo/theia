@@ -37,9 +37,10 @@ interface CanvasProps {
   onDevicesChange?: (devices: Device[]) => void;
   onLinksChange?: (links: Link[]) => void;
   onAreaSelect?: (areaId: string | null) => void;
+  onAreasChange?: () => void;
 }
 
-export default function Canvas({ snapshot, reconnecting, prometheusStatus, selectedAreaId, areas, onDevicesChange, onLinksChange, onAreaSelect }: CanvasProps) {
+export default function Canvas({ snapshot, reconnecting, prometheusStatus, selectedAreaId, areas, onDevicesChange, onLinksChange, onAreaSelect, onAreasChange }: CanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
@@ -48,17 +49,22 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
 
-  const handleSelectionChange = useCallback(
-    ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => { setSelectedNodeCount(selectedNodes.length); },
-    [],
-  );
-
   const {
     deviceMenu, setDeviceMenu, edgeMenu, setEdgeMenu,
     panelContent, setPanelContent, showShortcuts, setShowShortcuts,
     showSearch, setShowSearch, editMode, setEditMode,
     shortcuts, getPanelTitle,
   } = useCanvasMenus({ reactFlow });
+
+  const handleSelectionChange = useCallback(
+    ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => {
+      setSelectedNodeCount(selectedNodes.length);
+      if (selectedNodes.length > 1 && editMode) {
+        setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
+      }
+    },
+    [editMode, setPanelContent],
+  );
 
   useKeyboardShortcuts(shortcuts);
 
@@ -321,7 +327,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
       <SidePanel open={!!panelContent} onClose={() => setPanelContent(null)} title={getPanelTitle()}>
         <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} snapshot={snapshot}
           devices={devices} topologyLinks={topologyLinks} loadTopology={loadTopology}
-          setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus} />
+          setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus}
+          onAreasChange={onAreasChange} />
       </SidePanel>
 
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
@@ -329,7 +336,13 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         showRecoveryToast={showRecoveryToast} setShowRecoveryToast={setShowRecoveryToast}
         prometheusStatus={prometheusStatus} prometheusAlertDismissed={prometheusAlertDismissed}
         setPrometheusAlertDismissed={setPrometheusAlertDismissed} setPanelContent={setPanelContent}
-        selectedNodeCount={selectedNodeCount} />
+        selectedNodeCount={selectedNodeCount}
+        onBulkEditClick={() => {
+          const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
+          if (selectedNodes.length > 1) {
+            setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
+          }
+        }} />
       <ZoomControls onZoomIn={() => { void reactFlow.zoomIn({ duration: 200 }); }}
         onZoomOut={() => { void reactFlow.zoomOut({ duration: 200 }); }}
         onFitView={() => { void reactFlow.fitView({ padding: 0.18, duration: 280 }); }} />
@@ -338,7 +351,17 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         onNodesChange={onNodesChange} onEdgesChange={handleEdgesChange} onConnect={handleConnect}
         onSelectionChange={handleSelectionChange}
         onPaneClick={() => { setEdgeMenu(null); setDeviceMenu(null); setPanelContent(null); setShowSearch(false); setShowShortcuts(false); }}
-        onNodeClick={(_ev, node) => { if (node.data.isGhost || !editMode) return; const cd = devices.find((d) => d.id === node.id); if (cd) setPanelContent({ type: 'deviceConfig', data: { device: cd } }); }}
+        onNodeClick={(_ev, node) => {
+          if (node.data.isGhost || !editMode) return;
+          // Check if multiple nodes are selected (including the just-clicked one)
+          const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
+          if (selectedNodes.length > 1) {
+            setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
+          } else {
+            const cd = devices.find((d) => d.id === node.id);
+            if (cd) setPanelContent({ type: 'deviceConfig', data: { device: cd } });
+          }
+        }}
         onEdgeClick={(_ev, edge) => { if (!editMode) return; const lk = edge.data?.link; if (lk) setPanelContent({ type: 'link-details', data: { link: lk } }); }}
         onNodeDragStop={(_ev, node) => {
           if (node.data.isGhost) return;

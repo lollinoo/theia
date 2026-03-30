@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { checkPrometheusHealth, createDevice, fetchSNMPProfiles, fetchSSHProfiles } from '../api/client';
-import type { SNMPProfile, SSHProfile } from '../types/api';
+import { checkPrometheusHealth, createDevice, fetchAreas, fetchSNMPProfiles, fetchSSHProfiles } from '../api/client';
+import type { Area, SNMPProfile, SSHProfile } from '../types/api';
 
 interface AddDevicePanelProps {
   onDeviceAdded: () => void;
@@ -41,9 +41,14 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [sshProfiles, setSSHProfiles] = useState<SSHProfile[]>([]);
   const [sshProfileId, setSSHProfileId] = useState('');
 
+  // areas
+  const [areas, setAreas] = useState<Area[]>([]);
+  const [areaIds, setAreaIds] = useState<string[]>([]);
+
   useEffect(() => {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
     fetchSSHProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
+    fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
     checkPrometheusHealth().then((result) => {
       setPrometheusAvailable(result.available);
       setPrometheusCheckDone(true);
@@ -115,6 +120,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
         prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
         ssh_profile_id: sshProfileId || undefined,
+        area_ids: areaIds.length > 0 ? areaIds : undefined,
       });
       onDeviceAdded();
     } catch (err) {
@@ -373,6 +379,59 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
           Vendor tag determines backup commands and metric queries.
         </p>
       </div>
+
+      {areas.length > 0 && (
+        <div className="space-y-2">
+          <label className={labelClass}>
+            Area <span className="text-on-bg-secondary/50">(optional)</span>
+          </label>
+          {areaIds.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {areaIds.map((id) => {
+                const area = areas.find((a) => a.id === id);
+                if (!area) return null;
+                return (
+                  <span
+                    key={id}
+                    className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-on-bg"
+                    style={{ backgroundColor: `${area.color}25`, border: `1px solid ${area.color}60` }}
+                  >
+                    <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: area.color }} />
+                    {area.name}
+                    <button
+                      type="button"
+                      onClick={() => setAreaIds((prev) => prev.filter((a) => a !== id))}
+                      className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {areas.filter((a) => !areaIds.includes(a.id)).length > 0 && (
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) {
+                  setAreaIds((prev) => [...prev, e.target.value]);
+                }
+              }}
+              className={selectClass}
+            >
+              <option value="">{areaIds.length === 0 ? 'Unassigned - select area...' : 'Add another area...'}</option>
+              {areas.filter((a) => !areaIds.includes(a.id)).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
 
       {sshProfiles.length > 0 && (
         <div className="space-y-2">

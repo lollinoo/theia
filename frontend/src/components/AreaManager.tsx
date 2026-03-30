@@ -123,7 +123,11 @@ function AreaForm({ initial, onSave, onCancel, saveLabel }: AreaFormProps) {
 
 // --- AreaManager main component ---
 
-export function AreaManager() {
+interface AreaManagerProps {
+  onAreasChange?: () => void;
+}
+
+export function AreaManager({ onAreasChange }: AreaManagerProps) {
   const { resolvedTheme } = useTheme();
   const [areas, setAreas] = useState<Area[]>([]);
   const [allDevices, setAllDevices] = useState<Device[]>([]);
@@ -152,6 +156,7 @@ export function AreaManager() {
     await createArea({ name: form.name.trim(), description: form.description.trim(), color: form.color });
     setMode('list');
     void load();
+    onAreasChange?.();
   }
 
   async function handleUpdate(form: { name: string; description: string; color: string }) {
@@ -160,6 +165,7 @@ export function AreaManager() {
     setMode('list');
     setEditing(null);
     void load();
+    onAreasChange?.();
   }
 
   async function handleDelete(id: string) {
@@ -168,6 +174,7 @@ export function AreaManager() {
       await deleteArea(id);
       setConfirmDeleteId(null);
       void load();
+      onAreasChange?.();
     } finally {
       setDeleteLoading(false);
     }
