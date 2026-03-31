@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.4.0
 milestone_name: Virtual Device Support
 status: in-progress
-stopped_at: "Completed 08-01-PLAN.md"
-last_updated: "2026-03-31T19:49:00.000Z"
+stopped_at: "Completed 08-02-PLAN.md"
+last_updated: "2026-03-31T19:58:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 23
-  completed_plans: 22
+  completed_plans: 23
 ---
 
 # Project State
@@ -19,20 +19,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-27)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link
-**Current focus:** Phase 8 — Virtual Device Backend
+**Current focus:** Phase 8 — Virtual Device Backend complete
 
 ## Current Position
 
-Phase 8: Virtual Device Backend — Plan 1 of 2 complete.
-Current Plan: 2 of 2 in Phase 8.
+Phase 8: Virtual Device Backend — Plan 2 of 2 complete.
+Current Plan: 2 of 2 in Phase 8 (complete).
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 21
-- Total execution time: ~135 min
-- Average per plan: ~6.4 min
+- Total plans completed: 23
+- Total execution time: ~144 min
+- Average per plan: ~6.3 min
 
 **By Phase:**
 
@@ -45,6 +45,7 @@ Current Plan: 2 of 2 in Phase 8.
 | Phase 05 | 3 | 25min | 8.3min |
 | Phase 06 | 2 | 10min | 5.0min |
 | Phase 07 | 1 | 4min | 4.0min |
+| Phase 08 | 2 | 9min | 4.5min |
 
 ## Accumulated Context
 
@@ -52,6 +53,9 @@ Current Plan: 2 of 2 in Phase 8.
 
 - (08-01) Removed IP-required validation from service AddDevice; handler validates conditionally per device type
 - (08-01) Virtual devices start with status "unknown"; MetricsCollector resolves via probe_success for IP-bearing virtuals
+- (08-02) Virtual device creation uses early-return branch before regular IP/SNMP validation
+- (08-02) Link handler fetches both devices upfront for virtual-aware if_name validation
+- (08-02) Poller virtual skip is defense-in-depth alongside probeDevice guard
 
 ### Roadmap Evolution
 
@@ -63,10 +67,10 @@ None.
 
 ### Blockers/Concerns
 
-- API callers (device_handler.go) still use old 11-arg AddDevice signature; Plan 02 will fix
+None -- Phase 8 complete.
 
 ## Session Continuity
 
 Last session: 2026-03-31
-Stopped at: Completed 08-01-PLAN.md
+Stopped at: Completed 08-02-PLAN.md (Phase 8 complete)
 Resume file: None
