@@ -78,22 +78,33 @@ func (h *LinkHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid target_device_id")
 		return
 	}
-	if req.SourceIfName == "" {
-		writeError(w, http.StatusBadRequest, "source_if_name is required")
-		return
-	}
-	if req.TargetIfName == "" {
-		writeError(w, http.StatusBadRequest, "target_if_name is required")
-		return
-	}
-
-	// Validate both devices exist
-	if _, err := h.deviceService.GetDevice(r.Context(), srcID); err != nil {
+	// Fetch both devices (validates existence and gets DeviceType)
+	srcDevice, err := h.deviceService.GetDevice(r.Context(), srcID)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "source device not found")
 		return
 	}
-	if _, err := h.deviceService.GetDevice(r.Context(), tgtID); err != nil {
+	tgtDevice, err := h.deviceService.GetDevice(r.Context(), tgtID)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "target device not found")
+		return
+	}
+
+	// Per D-13: Reject both-virtual links
+	srcIsVirtual := srcDevice.DeviceType == domain.DeviceTypeVirtual
+	tgtIsVirtual := tgtDevice.DeviceType == domain.DeviceTypeVirtual
+	if srcIsVirtual && tgtIsVirtual {
+		writeError(w, http.StatusBadRequest, "at least one device must be non-virtual")
+		return
+	}
+
+	// Per D-12: Allow empty if_name for the virtual side only
+	if req.SourceIfName == "" && !srcIsVirtual {
+		writeError(w, http.StatusBadRequest, "source_if_name is required")
+		return
+	}
+	if req.TargetIfName == "" && !tgtIsVirtual {
+		writeError(w, http.StatusBadRequest, "target_if_name is required")
 		return
 	}
 
