@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3.0
-milestone_name: Frontend Redesign
-status: shipped
-stopped_at: Milestone complete
-last_updated: "2026-03-27T14:15:00.000Z"
+milestone: v1.4.0
+milestone_name: Virtual Device Support
+status: in-progress
+stopped_at: "Completed 08-01-PLAN.md"
+last_updated: "2026-03-31T19:49:00.000Z"
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 7
-  total_plans: 21
-  completed_plans: 21
+  total_plans: 23
+  completed_plans: 22
 ---
 
 # Project State
@@ -19,11 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-27)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link
-**Current focus:** v1.3.0 shipped — planning next milestone
+**Current focus:** Phase 8 — Virtual Device Backend
 
 ## Current Position
 
-Milestone v1.3.0 shipped. No active phase.
+Phase 8: Virtual Device Backend — Plan 1 of 2 complete.
+Current Plan: 2 of 2 in Phase 8.
 
 ## Performance Metrics
 
@@ -49,7 +50,8 @@ Milestone v1.3.0 shipped. No active phase.
 
 ### Decisions
 
-Decisions archived in PROJECT.md Key Decisions table.
+- (08-01) Removed IP-required validation from service AddDevice; handler validates conditionally per device type
+- (08-01) Virtual devices start with status "unknown"; MetricsCollector resolves via probe_success for IP-bearing virtuals
 
 ### Roadmap Evolution
 
@@ -61,10 +63,10 @@ None.
 
 ### Blockers/Concerns
 
-None — milestone shipped.
+- API callers (device_handler.go) still use old 11-arg AddDevice signature; Plan 02 will fix
 
 ## Session Continuity
 
-Last session: 2026-03-27
-Stopped at: v1.3.0 milestone complete
+Last session: 2026-03-31
+Stopped at: Completed 08-01-PLAN.md
 Resume file: None
