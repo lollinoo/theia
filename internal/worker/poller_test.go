@@ -2,11 +2,14 @@ package worker
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/snmp"
 )
 
 // ---------------------------------------------------------------------------
@@ -163,4 +166,49 @@ func TestPollAllDevices_OnlyManagedDevicesAreProbed(t *testing.T) {
 		}()
 		p.pollAllDevices(context.Background())
 	}()
+}
+
+// ---------------------------------------------------------------------------
+// TestPollAllDevices_SkipsVirtualDevices (VIRT-05)
+// ---------------------------------------------------------------------------
+// Verifies that pollAllDevices does not call ReprobeDevice for virtual devices.
+// Only managed, non-virtual devices should trigger a discover call.
+
+func TestPollAllDevices_SkipsVirtualDevices(t *testing.T) {
+	physicalID := uuid.New()
+	virtualID := uuid.New()
+	unmanagedID := uuid.New()
+
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{
+			{ID: physicalID, IP: "10.0.0.1", DeviceType: domain.DeviceTypeRouter, Managed: true,
+				SNMPCredentials: domain.SNMPCredentials{Version: domain.SNMPVersionV2c, V2c: &domain.SNMPv2cCredentials{Community: "public"}}},
+			{ID: virtualID, IP: "", DeviceType: domain.DeviceTypeVirtual, Managed: true},
+			{ID: unmanagedID, IP: "10.0.0.3", DeviceType: domain.DeviceTypeSwitch, Managed: false},
+		},
+	}
+	linkRepo := &mockWorkerLinkRepo{}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+
+	var discoverCalls int32
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		atomic.AddInt32(&discoverCalls, 1)
+		return &snmp.DiscoveryResult{}, nil
+	}
+
+	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+
+	p := NewPoller(svc, settingsRepo, dlCache)
+	p.pollAllDevices(context.Background())
+
+	// Wait for async probes to complete
+	svc.WaitForProbes()
+
+	// Only the physical managed device should have triggered a discover call
+	got := atomic.LoadInt32(&discoverCalls)
+	if got != 1 {
+		t.Errorf("expected 1 discover call (physical device only), got %d", got)
+	}
 }

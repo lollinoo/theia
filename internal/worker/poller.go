@@ -96,6 +96,10 @@ func (p *Poller) pollAllDevices(ctx context.Context) {
 		if !devices[i].Managed {
 			continue
 		}
+		// Per VIRT-05: Virtual devices are never SNMP re-probed.
+		if devices[i].DeviceType == domain.DeviceTypeVirtual {
+			continue
+		}
 
 		deviceID := devices[i].ID
 
