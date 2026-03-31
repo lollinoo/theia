@@ -13,6 +13,7 @@ const (
 	DeviceTypeRouter  DeviceType = "router"
 	DeviceTypeSwitch  DeviceType = "switch"
 	DeviceTypeAP      DeviceType = "ap"
+	DeviceTypeVirtual DeviceType = "virtual"
 	DeviceTypeUnknown DeviceType = "unknown"
 )
 

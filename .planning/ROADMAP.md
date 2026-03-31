@@ -6,6 +6,10 @@
 
 ## Phases
 
+### Active
+
+- [ ] Phase 8: Virtual Device Backend (1/2 plans) — in progress
+
 <details>
 <summary>✅ v1.3.0 Frontend Redesign (Phases 1-7) — SHIPPED 2026-03-27</summary>
 
@@ -30,3 +34,4 @@
 | 5. Redesign the Devices Page | v1.3.0 | 3/3 | Complete | 2026-03-26 |
 | 6. Canvas Token Migration | v1.3.0 | 2/2 | Complete | 2026-03-27 |
 | 7. SettingsPanel Verification | v1.3.0 | 1/1 | Complete | 2026-03-27 |
+| 8. Virtual Device Backend | v1.4.0 | 1/2 | In Progress | — |
