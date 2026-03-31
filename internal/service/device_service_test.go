@@ -259,6 +259,7 @@ func TestAddDevice_CreatesWithStatusProbing(t *testing.T) {
 	}, nil)
 
 	device, err := svc.AddDevice(context.Background(), "192.168.1.1", "router1",
+		domain.DeviceTypeUnknown,
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -298,6 +299,7 @@ func TestProbeCompletes_DeviceStatusUp(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(result, nil)
 
 	device, err := svc.AddDevice(context.Background(), "10.0.0.1", "core-router",
+		domain.DeviceTypeUnknown,
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -328,6 +330,7 @@ func TestProbeFails_DeviceStatusDown(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(nil, fmt.Errorf("SNMP timeout"))
 
 	device, err := svc.AddDevice(context.Background(), "10.0.0.2", "",
+		domain.DeviceTypeUnknown,
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -369,6 +372,7 @@ func TestProbeDiscoversNeighbors_CreatesUnmanagedPlaceholders(t *testing.T) {
 	svc, deviceRepo, linkRepo := newTestService(result, nil)
 
 	_, err := svc.AddDevice(context.Background(), "10.0.0.1", "switch1",
+		domain.DeviceTypeUnknown,
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -430,6 +434,7 @@ func TestProbeDiscoversNeighbor_ExistingIP_NoDuplicate(t *testing.T) {
 	deviceRepo.Create(existingDevice)
 
 	_, err := svc.AddDevice(context.Background(), "10.0.0.1", "router1",
+		domain.DeviceTypeUnknown,
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -624,6 +629,7 @@ func TestPrometheusDevice_SkipsSNMPProbe(t *testing.T) {
 	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
 
 	device, err := svc.AddDevice(context.Background(), "10.0.9.254", "",
+		domain.DeviceTypeUnknown,
 		// No meaningful SNMP credentials — user only wants Prometheus
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
@@ -667,6 +673,7 @@ func TestPrometheusDevice_SNMPv3WithPrivProtocol(t *testing.T) {
 	// Simulate what happens when user picks "Prometheus without Fallback" but
 	// previously had v3 credentials in the form with authPriv + empty priv_password.
 	device, err := svc.AddDevice(context.Background(), "10.0.9.254", "",
+		domain.DeviceTypeUnknown,
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV3,
 			V3: &domain.SNMPv3Credentials{
@@ -694,6 +701,120 @@ func TestPrometheusDevice_SNMPv3WithPrivProtocol(t *testing.T) {
 	}
 	if updated.Status != domain.DeviceStatusUp {
 		t.Errorf("expected status up, got %s", updated.Status)
+	}
+}
+
+// TestAddDevice_VirtualNoIP verifies that adding a virtual device with no IP
+// creates a device with DeviceType=virtual, Status=unknown, and does NOT call
+// the SNMP discovery function.
+func TestAddDevice_VirtualNoIP(t *testing.T) {
+	snmpCalled := false
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		snmpCalled = true
+		return nil, fmt.Errorf("should not be called")
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+
+	device, err := svc.AddDevice(context.Background(), "", "",
+		domain.DeviceTypeVirtual,
+		domain.SNMPCredentials{}, nil, "", "", "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	svc.WaitForProbes()
+
+	if device.DeviceType != domain.DeviceTypeVirtual {
+		t.Errorf("expected device_type virtual, got %s", device.DeviceType)
+	}
+	if device.Status != domain.DeviceStatusUnknown {
+		t.Errorf("expected status unknown, got %s", device.Status)
+	}
+	if device.IP != "" {
+		t.Errorf("expected empty IP, got %s", device.IP)
+	}
+	if snmpCalled {
+		t.Error("discoverFunc was called for virtual device — should have been skipped")
+	}
+}
+
+// TestAddDevice_VirtualWithIP verifies that a virtual device with an IP address
+// is created with Status=unknown (MetricsCollector will resolve via probe_success)
+// and does NOT call the SNMP discovery function.
+func TestAddDevice_VirtualWithIP(t *testing.T) {
+	snmpCalled := false
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		snmpCalled = true
+		return nil, fmt.Errorf("should not be called")
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+
+	device, err := svc.AddDevice(context.Background(), "10.0.0.99", "",
+		domain.DeviceTypeVirtual,
+		domain.SNMPCredentials{}, nil, "", "", "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	svc.WaitForProbes()
+
+	if device.DeviceType != domain.DeviceTypeVirtual {
+		t.Errorf("expected device_type virtual, got %s", device.DeviceType)
+	}
+	if device.Status != domain.DeviceStatusUnknown {
+		t.Errorf("expected status unknown, got %s", device.Status)
+	}
+	if device.IP != "10.0.0.99" {
+		t.Errorf("expected IP 10.0.0.99, got %s", device.IP)
+	}
+	if snmpCalled {
+		t.Error("discoverFunc was called for virtual device — should have been skipped")
+	}
+}
+
+// TestAddDevice_RegularStillRequiresProbe verifies that non-virtual devices
+// still go through the normal SNMP probe flow.
+func TestAddDevice_RegularStillRequiresProbe(t *testing.T) {
+	snmpCalled := false
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		snmpCalled = true
+		return &snmp.DiscoveryResult{SysName: "test-router"}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+
+	device, err := svc.AddDevice(context.Background(), "10.0.0.1", "",
+		domain.DeviceTypeUnknown,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourceSNMP, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	if device.Status != domain.DeviceStatusProbing {
+		t.Errorf("expected status probing, got %s", device.Status)
+	}
+
+	svc.WaitForProbes()
+
+	if !snmpCalled {
+		t.Error("discoverFunc was NOT called — regular devices should trigger SNMP probe")
 	}
 }
 
