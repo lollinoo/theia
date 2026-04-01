@@ -73,7 +73,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     setMetricsMode('snmp');
     setPrometheusLabelName('instance');
     setPrometheusLabelValue('');
-    setSshProfileId('');
+    setSSHProfileId('');
     setAreaIds([]);
     // Reset virtual fields
     setVirtualSubtype('internet');
