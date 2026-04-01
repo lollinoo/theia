@@ -20,6 +20,32 @@ export function buildEdgeData(
     (iface) => iface.if_name === link.target_if_name,
   );
 
+  // Detect virtual link: one side is a virtual device
+  const sourceIsVirtual = sourceDevice?.device_type === 'virtual';
+  const targetIsVirtual = targetDevice?.device_type === 'virtual';
+  const isVirtualLink = sourceIsVirtual || targetIsVirtual;
+
+  // For virtual links, use only the real device's interface speed (D-10)
+  // Virtual devices have no interfaces, so their speed is always 0
+  if (isVirtualLink) {
+    const realInterface = sourceIsVirtual ? targetInterface : sourceInterface;
+    const realSpeed = realInterface?.speed && realInterface.speed > 0 ? realInterface.speed : 0;
+
+    return {
+      link,
+      bandwidthLabel: realSpeed > 0 ? formatBandwidth(realSpeed) : undefined,
+      speedMismatch: false, // Never show mismatch for virtual links (D-10)
+      onContextMenu,
+      metrics: existingData?.metrics,
+      throughputLabel: existingData?.throughputLabel,
+      utilization: existingData?.utilization,
+      sourceIfStatus: sourceIsVirtual ? undefined : sourceInterface?.oper_status,
+      targetIfStatus: targetIsVirtual ? undefined : targetInterface?.oper_status,
+      sourceDeviceStatus: existingData?.sourceDeviceStatus ?? sourceDevice?.status,
+      targetDeviceStatus: existingData?.targetDeviceStatus ?? targetDevice?.status,
+    };
+  }
+
   // Compare negotiation speeds from both sides; show minimum with warning on mismatch
   const sourceSpeed = sourceInterface?.speed && sourceInterface.speed > 0 ? sourceInterface.speed : 0;
   const targetSpeed = targetInterface?.speed && targetInterface.speed > 0 ? targetInterface.speed : 0;
