@@ -1,15 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.3.0
-milestone_name: Frontend Redesign
-status: shipped
-stopped_at: Milestone complete
-last_updated: "2026-03-27T14:15:00.000Z"
+milestone_name: milestone
+current_plan: 2
+status: Phase 09 Complete
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-04-01T19:55:40Z"
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 21
-  completed_plans: 21
+  total_phases: 2
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
 ---
 
 # Project State
@@ -19,19 +20,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-27)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link
-**Current focus:** v1.3.0 shipped — planning next milestone
+**Current focus:** Phase 09 — virtual-node-rendering (complete)
 
 ## Current Position
 
-Milestone v1.3.0 shipped. No active phase.
+Phase: 09 (virtual-node-rendering) — COMPLETE
+Plan: 2 of 2 (all complete)
+Phase 8: Virtual Device Backend -- Plan 2 of 2 complete.
+Phase 9: Virtual Node Rendering -- Plan 2 of 2 complete.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 21
-- Total execution time: ~135 min
-- Average per plan: ~6.4 min
+- Total plans completed: 24
+- Total execution time: ~147 min
+- Average per plan: ~6.1 min
 
 **By Phase:**
 
@@ -44,12 +48,24 @@ Milestone v1.3.0 shipped. No active phase.
 | Phase 05 | 3 | 25min | 8.3min |
 | Phase 06 | 2 | 10min | 5.0min |
 | Phase 07 | 1 | 4min | 4.0min |
+| Phase 08 | 2 | 9min | 4.5min |
+| Phase 09 | 2 | 7min | 3.5min |
 
 ## Accumulated Context
 
 ### Decisions
 
-Decisions archived in PROJECT.md Key Decisions table.
+- (08-01) Removed IP-required validation from service AddDevice; handler validates conditionally per device type
+- (08-01) Virtual devices start with status "unknown"; MetricsCollector resolves via probe_success for IP-bearing virtuals
+- (08-02) Virtual device creation uses early-return branch before regular IP/SNMP validation
+- (08-02) Link handler fetches both devices upfront for virtual-aware if_name validation
+- (08-02) Poller virtual skip is defense-in-depth alongside probeDevice guard
+- (09-01) Virtual card uses early-return branch in DeviceCardInner matching ghost node pattern
+- (09-01) Font subset regenerated via pyftsubset with 24 icons (added language, cloud, dns)
+- (09-01) Metrics set to null for virtual devices in nodeBuilder (no SNMP metrics)
+- (09-02) Virtual link detection uses explicit isVirtualLink guard rather than relying on accidental zero-speed behavior
+- (09-02) findLinkMetrics falls back to target device lookup for virtual-source links (backward-compatible)
+- (09-02) Virtual side ifStatus forced undefined in buildEdgeData return (no interface to check)
 
 ### Roadmap Evolution
 
@@ -61,10 +77,10 @@ None.
 
 ### Blockers/Concerns
 
-None — milestone shipped.
+None -- Phase 9 complete.
 
 ## Session Continuity
 
-Last session: 2026-03-27
-Stopped at: v1.3.0 milestone complete
-Resume file: None
+Last session: 2026-04-01T19:55:40Z
+Stopped at: Completed 09-02-PLAN.md
+Resume file: Phase 10 (virtual node forms)
