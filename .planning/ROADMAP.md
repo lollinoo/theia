@@ -19,6 +19,18 @@
 
 </details>
 
+### Phase 10: Virtual Node Forms and Context Menu
+
+**Goal:** Users can create virtual nodes and link them to physical devices through adapted frontend forms, with context menus showing only relevant actions for virtual nodes.
+
+**Requirements:** [VIRT-10, VIRT-11, VIRT-12, VIRT-13, VIRT-16]
+
+**Plans:** 2 plans
+
+Plans:
+- [ ] 10-01-PLAN.md — AddDevicePanel virtual mode toggle, subtype icon cards, and payload extension
+- [ ] 10-02-PLAN.md — LinkCreatePanel virtual adaptation and Canvas context menu filtering
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -32,3 +44,4 @@
 | 7. SettingsPanel Verification | v1.3.0 | 1/1 | Complete | 2026-03-27 |
 | 8. Virtual Device Backend | v1.3.7 | 2/2 | Complete | 2026-04-01 |
 | 9. Virtual Node Rendering | v1.3.7 | 2/2 | Complete | 2026-04-01 |
+| 10. Virtual Node Forms | v1.3.7 | 0/2 | Planning | — |
