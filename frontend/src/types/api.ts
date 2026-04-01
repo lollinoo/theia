@@ -1,4 +1,4 @@
-export type DeviceType = 'router' | 'switch' | 'ap' | 'unknown';
+export type DeviceType = 'router' | 'switch' | 'ap' | 'virtual' | 'unknown';
 
 // SNMPProfile represents a reusable set of SNMP credentials.
 export interface SNMPProfile {
@@ -106,6 +106,7 @@ function parseDeviceType(value: unknown): DeviceType {
     case 'router':
     case 'switch':
     case 'ap':
+    case 'virtual':
       return value;
     default:
       return 'unknown';
