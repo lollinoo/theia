@@ -10,7 +10,7 @@ import DeviceCard, { type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import SearchOverlay from './SearchOverlay';
 import ZoomControls from './ZoomControls';
-import { ContextMenu } from './ContextMenu';
+import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { SidePanel } from './SidePanel';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Toolbar } from './Toolbar';
@@ -298,13 +298,20 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
       {deviceMenu && (() => {
         const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
         const gUrl = grafanaUrl(d?.id);
+        const isVirtual = d?.device_type === 'virtual';
+        const allItems: (ContextMenuItem & { id: string })[] = [
+          { id: 'webfig', label: 'Open WebFig', icon: 'link', onClick: () => { if (d) window.open(`http://${d.ip}/webfig/`, '_blank'); setDeviceMenu(null); } },
+          { id: 'grafana', label: gUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)', icon: 'hub', onClick: () => { if (gUrl) window.open(gUrl, '_blank'); setDeviceMenu(null); } },
+          { id: 'interface-stats', label: 'Per-Interface Stats', icon: 'devices', onClick: () => { if (d) setPanelContent({ type: 'interfaceStats', data: { device: d } }); setDeviceMenu(null); } },
+          { id: 'configure', label: 'Configure', icon: 'settings', onClick: () => { if (d) setPanelContent({ type: 'deviceConfig', data: { device: d } }); setDeviceMenu(null); } },
+        ];
+        // VIRT-16: Virtual nodes only get Grafana + Configure
+        const virtualItemIds = new Set(['grafana', 'configure']);
+        const items = isVirtual
+          ? allItems.filter((item) => virtualItemIds.has(item.id))
+          : allItems;
         return (
-          <ContextMenu position={{ x: deviceMenu.x, y: deviceMenu.y }} onClose={() => setDeviceMenu(null)} items={[
-            { label: 'Open WebFig', icon: 'link', onClick: () => { if (d) window.open(`http://${d.ip}/webfig/`, '_blank'); setDeviceMenu(null); } },
-            { label: gUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)', icon: 'hub', onClick: () => { if (gUrl) window.open(gUrl, '_blank'); setDeviceMenu(null); } },
-            { label: 'Per-Interface Stats', icon: 'devices', onClick: () => { if (d) setPanelContent({ type: 'interfaceStats', data: { device: d } }); setDeviceMenu(null); } },
-            { label: 'Configure', icon: 'settings', onClick: () => { if (d) setPanelContent({ type: 'deviceConfig', data: { device: d } }); setDeviceMenu(null); } },
-          ]} />
+          <ContextMenu position={{ x: deviceMenu.x, y: deviceMenu.y }} onClose={() => setDeviceMenu(null)} items={items} />
         );
       })()}
 
