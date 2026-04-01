@@ -11,7 +11,7 @@ Network operators can see their entire topology at a glance with live stats on e
 ## Current State
 
 **Shipped:** v1.3.0 Frontend Redesign (2026-03-27)
-**In Progress:** v1.3.7 Virtual/Representative Nodes — Phase 8 complete (backend), Phases 9-10 remaining (rendering, forms)
+**In Progress:** v1.3.7 Virtual/Representative Nodes — Phases 8-9 complete (backend, rendering), Phase 10 remaining (forms)
 
 The frontend has been fully redesigned with the Neon Topography design system featuring:
 - Dual dark/light theme support with CSS variable tokens, FOWT prevention, and localStorage persistence
@@ -59,7 +59,7 @@ The frontend has been fully redesigned with the Neon Topography design system fe
 - Virtual device creation via API with subtype tags (internet/cloud/server/generic) — VIRT-03 (Phase 8 validated)
 - Virtual device probe behavior: no-IP stays "unknown", with-IP gets status from MetricsCollector — VIRT-04 (Phase 8 validated)
 - SNMP poller skips virtual devices entirely — VIRT-05 (Phase 8 validated)
-- Virtual node compact card rendering with subtype icons — VIRT-06 through VIRT-09 (Phase 9)
+- Virtual node compact card rendering with subtype icons — VIRT-06 through VIRT-09 (Phase 9 validated)
 - Virtual node forms and context menu adaptation — VIRT-10 through VIRT-16 (Phase 10)
 
 ### Out of Scope
@@ -81,7 +81,7 @@ The frontend has been fully redesigned with the Neon Topography design system fe
 - Existing monitoring stack: Prometheus, Grafana, SNMP-Exporter, Blackbox-Exporter
 - Network is multi-vendor (MikroTik, Cisco, Ubiquiti, and others)
 - Scale: 100+ routers in production
-- Frontend: 14.1k LOC TypeScript, 193 tests, React 18 + Tailwind CSS 4 + ReactFlow 12
+- Frontend: 14.1k LOC TypeScript, 209 tests, React 18 + Tailwind CSS 4 + ReactFlow 12
 - Backend: Go 1.24, SQLite, SNMP polling, WebSocket metrics push
 - The tool needs to work as both web and eventually desktop (Electron possible) — web-first for v1
 
@@ -116,7 +116,7 @@ The frontend has been fully redesigned with the Neon Topography design system fe
 | Tailwind v4 with @theme inline tokens | Native CSS variable integration, eliminates JS-side token mapping | ✓ Good — 34 semantic tokens |
 | ReactFlow v12 with native colorMode | Built-in theme support, no custom CSS overrides needed | ✓ Good |
 | Canvas decomposition (7 modules) | 1283-line monolith → 7 focused files, easier to maintain and test | ✓ Good — unlocked three-view architecture |
-| Material Symbols woff2 subset | Custom subset keeps bundle at 29KB vs 4MB full icon font | ✓ Good — 21 icons |
+| Material Symbols woff2 subset | Custom subset keeps bundle at 29KB vs 4MB full icon font | ✓ Good — 24 icons |
 | font-mono for all technical values | Consistent monospace rendering for metrics, timestamps, OIDs, code | ✓ Good |
 
 ## Evolution
@@ -137,4 +137,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-31 after Phase 8 (Virtual Device Backend) completion*
+*Last updated: 2026-04-01 after Phase 9 (Virtual Node Rendering) completion*
