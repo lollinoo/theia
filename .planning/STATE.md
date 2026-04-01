@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3.0
 milestone_name: milestone
 current_plan: 2
-status: Executing Phase 09
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-04-01T19:48:00Z"
+status: Phase 09 Complete
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-04-01T19:55:40Z"
 progress:
   total_phases: 2
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -20,22 +20,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-27)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link
-**Current focus:** Phase 09 — virtual-node-rendering
+**Current focus:** Phase 09 — virtual-node-rendering (complete)
 
 ## Current Position
 
-Phase: 09 (virtual-node-rendering) — EXECUTING
-Plan: 2 of 2
+Phase: 09 (virtual-node-rendering) — COMPLETE
+Plan: 2 of 2 (all complete)
 Phase 8: Virtual Device Backend -- Plan 2 of 2 complete.
-Phase 9: Virtual Node Rendering -- Plan 1 of 2 complete.
+Phase 9: Virtual Node Rendering -- Plan 2 of 2 complete.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 23
-- Total execution time: ~144 min
-- Average per plan: ~6.3 min
+- Total plans completed: 24
+- Total execution time: ~147 min
+- Average per plan: ~6.1 min
 
 **By Phase:**
 
@@ -49,7 +49,7 @@ Phase 9: Virtual Node Rendering -- Plan 1 of 2 complete.
 | Phase 06 | 2 | 10min | 5.0min |
 | Phase 07 | 1 | 4min | 4.0min |
 | Phase 08 | 2 | 9min | 4.5min |
-| Phase 09 | 1/2 | 4min | 4.0min |
+| Phase 09 | 2 | 7min | 3.5min |
 
 ## Accumulated Context
 
@@ -63,6 +63,9 @@ Phase 9: Virtual Node Rendering -- Plan 1 of 2 complete.
 - (09-01) Virtual card uses early-return branch in DeviceCardInner matching ghost node pattern
 - (09-01) Font subset regenerated via pyftsubset with 24 icons (added language, cloud, dns)
 - (09-01) Metrics set to null for virtual devices in nodeBuilder (no SNMP metrics)
+- (09-02) Virtual link detection uses explicit isVirtualLink guard rather than relying on accidental zero-speed behavior
+- (09-02) findLinkMetrics falls back to target device lookup for virtual-source links (backward-compatible)
+- (09-02) Virtual side ifStatus forced undefined in buildEdgeData return (no interface to check)
 
 ### Roadmap Evolution
 
@@ -74,10 +77,10 @@ None.
 
 ### Blockers/Concerns
 
-None -- Phase 8 complete.
+None -- Phase 9 complete.
 
 ## Session Continuity
 
-Last session: 2026-04-01T19:48:00Z
-Stopped at: Completed 09-01-PLAN.md
-Resume file: .planning/phases/09-virtual-node-rendering/09-02-PLAN.md
+Last session: 2026-04-01T19:55:40Z
+Stopped at: Completed 09-02-PLAN.md
+Resume file: Phase 10 (virtual node forms)
