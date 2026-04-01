@@ -40,4 +40,25 @@ describe('MaterialIcon', () => {
     const icon = screen.getByText('delete');
     expect(icon.style.fontSize).toBe('');
   });
+
+  it('renders "language" icon name for internet subtype (VIRT-09)', () => {
+    render(<MaterialIcon name="language" />);
+    const icon = screen.getByText('language');
+    expect(icon).toBeDefined();
+    expect(icon.classList.contains('material-symbols-rounded')).toBe(true);
+  });
+
+  it('renders "cloud" icon name for cloud subtype (VIRT-09)', () => {
+    render(<MaterialIcon name="cloud" />);
+    const icon = screen.getByText('cloud');
+    expect(icon).toBeDefined();
+    expect(icon.classList.contains('material-symbols-rounded')).toBe(true);
+  });
+
+  it('renders "dns" icon name for server subtype (VIRT-09)', () => {
+    render(<MaterialIcon name="dns" />);
+    const icon = screen.getByText('dns');
+    expect(icon).toBeDefined();
+    expect(icon.classList.contains('material-symbols-rounded')).toBe(true);
+  });
 });
