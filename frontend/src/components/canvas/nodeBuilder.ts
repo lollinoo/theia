@@ -35,6 +35,9 @@ export function buildTopologyNodes(
     const isDown = deviceData.status === 'down';
     const nodeMetrics = isDown ? null : (pendingSnapshot?.device_metrics[device.id] ?? null);
 
+    // Virtual devices have no SNMP metrics; detect and propagate flags
+    const isVirtual = device.device_type === 'virtual';
+
     return {
       id: device.id,
       type: 'device',
@@ -48,10 +51,12 @@ export function buildTopologyNodes(
         highlighted: false,
         editMode,
         onContextMenu: openDeviceMenu,
-        metrics: nodeMetrics,
+        metrics: isVirtual ? null : nodeMetrics,
         alertStatus: pendingSnapshot
           ? alertStatusForDevice(device.id, pendingSnapshot.alerts)
           : undefined,
+        isVirtual,
+        subtype: isVirtual ? (deviceData.tags?.virtual_subtype ?? 'generic') : undefined,
       },
     };
   });

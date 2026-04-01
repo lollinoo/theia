@@ -21,6 +21,8 @@ export interface DeviceNodeData {
   onContextMenu?: (event: React.MouseEvent, deviceId: string) => void;
   isGhost?: boolean;
   onGhostClick?: (deviceId: string) => void;
+  isVirtual?: boolean;
+  subtype?: string;
   [key: string]: unknown;
 }
 
@@ -287,10 +289,13 @@ const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: Nod
     pd.device.vendor === nd.device.vendor &&
     pd.device.sys_name === nd.device.sys_name &&
     pd.device.tags?.display_name === nd.device.tags?.display_name &&
+    pd.device.ip === nd.device.ip &&
     pd.highlighted === nd.highlighted &&
     pd.alertStatus === nd.alertStatus &&
     pd.areaColors?.length === nd.areaColors?.length && (pd.areaColors ?? []).every((c, i) => c === nd.areaColors?.[i]) &&
     pd.isGhost === nd.isGhost &&
+    pd.isVirtual === nd.isVirtual &&
+    pd.subtype === nd.subtype &&
     pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
     pd.metrics?.mem_percent === nd.metrics?.mem_percent &&
     pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
