@@ -11,7 +11,7 @@ Network operators can see their entire topology at a glance with live stats on e
 ## Current State
 
 **Shipped:** v1.3.0 Frontend Redesign (2026-03-27)
-**In Progress:** v1.3.7 Virtual/Representative Nodes — Phases 8-9 complete (backend, rendering), Phase 10 remaining (forms)
+**In Progress:** v1.3.7 Virtual/Representative Nodes — Phases 8-10 complete (backend, rendering, forms)
 
 The frontend has been fully redesigned with the Neon Topography design system featuring:
 - Dual dark/light theme support with CSS variable tokens, FOWT prevention, and localStorage persistence
@@ -60,7 +60,7 @@ The frontend has been fully redesigned with the Neon Topography design system fe
 - Virtual device probe behavior: no-IP stays "unknown", with-IP gets status from MetricsCollector — VIRT-04 (Phase 8 validated)
 - SNMP poller skips virtual devices entirely — VIRT-05 (Phase 8 validated)
 - Virtual node compact card rendering with subtype icons — VIRT-06 through VIRT-09 (Phase 9 validated)
-- Virtual node forms and context menu adaptation — VIRT-10 through VIRT-16 (Phase 10)
+- Virtual node forms and context menu adaptation — VIRT-10 through VIRT-16 (Phase 10 validated)
 
 ### Out of Scope
 
@@ -137,4 +137,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-01 after Phase 9 (Virtual Node Rendering) completion*
+*Last updated: 2026-04-01 after Phase 10 (Virtual Node Forms) completion*
