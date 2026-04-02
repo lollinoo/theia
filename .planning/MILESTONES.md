@@ -1,5 +1,23 @@
 # Milestones
 
+## v1.3.7 Virtual/Representative Nodes (Shipped: 2026-04-02)
+
+**Phases completed:** 3 phases, 6 plans, 13 tasks
+**Files changed:** 48 (+5,575 / -286)
+**Timeline:** 2 days (2026-03-31 → 2026-04-01)
+**Requirements:** 16/16 satisfied
+
+**Key accomplishments:**
+
+- Virtual device type as first-class domain entity with partial unique IP index for empty-IP coexistence
+- Full API for virtual device CRUD with subtype tags, SNMP/poller exclusion, and virtual-side link validation
+- Compact virtual cards with subtype-specific Material Symbol icons (160px/200px variants) and dashed borders
+- Virtual link edge labels with single-side bandwidth, mismatch suppression, and findLinkMetrics fallback
+- Dual-mode AddDevicePanel with Physical/Virtual toggle and 2x2 subtype icon cards
+- Virtual-aware LinkCreatePanel, both-virtual rejection, and id-based Canvas context menu filtering
+
+---
+
 ## v1.3.0 Frontend Redesign (Shipped: 2026-03-27)
 
 **Phases completed:** 7 phases, 21 plans, 53 tasks

@@ -160,3 +160,113 @@ func TestLinkHandlerDelete_NotFound(t *testing.T) {
 		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
+
+// --- Virtual link validation tests (D-12, D-13) ---
+
+// seedVirtualDevice inserts a virtual device into the mock repo.
+func seedVirtualDevice(t *testing.T, repo *mockDeviceRepo, name string) *domain.Device {
+	t.Helper()
+	d := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "",
+		Hostname:   "",
+		DeviceType: domain.DeviceTypeVirtual,
+		Managed:    true,
+		Status:     domain.DeviceStatusUnknown,
+		Tags:       map[string]string{"display_name": name, "virtual_subtype": "internet"},
+	}
+	if err := repo.Create(d); err != nil {
+		t.Fatalf("seedVirtualDevice: %v", err)
+	}
+	return d
+}
+
+func TestLinkHandlerCreate_VirtualSourceEmptyIfName(t *testing.T) {
+	handler, _, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedVirtualDevice(t, deviceRepo, "Internet")
+	tgtDevice := seedDevice(t, deviceRepo)
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"ether1"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLinkHandlerCreate_VirtualTargetEmptyIfName(t *testing.T) {
+	handler, _, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := seedVirtualDevice(t, deviceRepo, "Cloud")
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"ether1",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":""
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLinkHandlerCreate_BothVirtualRejected(t *testing.T) {
+	handler, _, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedVirtualDevice(t, deviceRepo, "Internet")
+	tgtDevice := seedVirtualDevice(t, deviceRepo, "Cloud")
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":""
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "at least one device must be non-virtual") {
+		t.Errorf("expected 'at least one device must be non-virtual' error, got: %s", rec.Body.String())
+	}
+}
+
+func TestLinkHandlerCreate_BothPhysicalRequiresBothIfNames(t *testing.T) {
+	handler, _, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	deviceRepo.Create(tgtDevice)
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"ether1"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "source_if_name is required") {
+		t.Errorf("expected 'source_if_name is required' error, got: %s", rec.Body.String())
+	}
+}

@@ -22,6 +22,7 @@ function formatSpeed(bps: number): string {
 
 function deviceLabel(d: Device): string {
   const name = d.tags?.display_name || d.sys_name;
+  if (!d.ip) return name || '(unnamed)';
   return name ? `${d.ip} — ${name}` : d.ip;
 }
 
@@ -75,11 +76,17 @@ function SearchableDeviceSelect({
       >
         {selectedDevice ? (
           <span>
-            <span className="font-mono">{selectedDevice.ip}</span>
-            {(selectedDevice.tags?.display_name || selectedDevice.sys_name) && (
-              <span className="ml-2 text-on-bg-secondary">
-                — {selectedDevice.tags?.display_name || selectedDevice.sys_name}
-              </span>
+            {selectedDevice.ip ? (
+              <>
+                <span className="font-mono">{selectedDevice.ip}</span>
+                {(selectedDevice.tags?.display_name || selectedDevice.sys_name) && (
+                  <span className="ml-2 text-on-bg-secondary">
+                    — {selectedDevice.tags?.display_name || selectedDevice.sys_name}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span>{selectedDevice.tags?.display_name || selectedDevice.sys_name || '(unnamed)'}</span>
             )}
           </span>
         ) : (
@@ -113,11 +120,17 @@ function SearchableDeviceSelect({
                   }}
                   className={`w-full px-3 py-2 text-left text-sm hover:bg-surface ${d.id === value ? 'bg-primary/10 text-primary' : 'text-on-bg'}`}
                 >
-                  <span className="font-mono">{d.ip}</span>
-                  {(d.tags?.display_name || d.sys_name) && (
-                    <span className="ml-2 text-on-bg-secondary">
-                      — {d.tags?.display_name || d.sys_name}
-                    </span>
+                  {d.ip ? (
+                    <>
+                      <span className="font-mono">{d.ip}</span>
+                      {(d.tags?.display_name || d.sys_name) && (
+                        <span className="ml-2 text-on-bg-secondary">
+                          — {d.tags?.display_name || d.sys_name}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span>{d.tags?.display_name || d.sys_name || '(unnamed)'}</span>
                   )}
                 </button>
               ))
@@ -230,6 +243,10 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
   const sourceDevice = devices.find((d) => d.id === sourceDeviceId);
   const targetDevice = devices.find((d) => d.id === targetDeviceId);
 
+  const sourceIsVirtual = sourceDevice?.device_type === 'virtual';
+  const targetIsVirtual = targetDevice?.device_type === 'virtual';
+  const bothVirtual = sourceIsVirtual && targetIsVirtual;
+
   const sourceInterfaces = useMemo(
     () => getDeviceInterfaces(sourceDevice, sourceDeviceId, links),
     [sourceDevice, sourceDeviceId, links],
@@ -262,11 +279,26 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!sourceDeviceId || !targetDeviceId || !sourceIfName || !targetIfName) {
-      setError('Please select source and target device and port.');
+    const effectiveSourceIfName = sourceIsVirtual ? '' : sourceIfName;
+    const effectiveTargetIfName = targetIsVirtual ? '' : targetIfName;
+
+    if (!sourceDeviceId || !targetDeviceId) {
+      setError('Please select source and target device.');
       return;
     }
-    if (sourceDeviceId === targetDeviceId && sourceIfName === targetIfName) {
+    if (bothVirtual) {
+      setError('At least one device must be physical.');
+      return;
+    }
+    if (!sourceIsVirtual && !effectiveSourceIfName) {
+      setError('Please select a port for the source device.');
+      return;
+    }
+    if (!targetIsVirtual && !effectiveTargetIfName) {
+      setError('Please select a port for the target device.');
+      return;
+    }
+    if (!sourceIsVirtual && !targetIsVirtual && sourceDeviceId === targetDeviceId && sourceIfName === targetIfName) {
       setError('Source and target port cannot be the same.');
       return;
     }
@@ -275,9 +307,9 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
     try {
       await createLink({
         source_device_id: sourceDeviceId,
-        source_if_name: sourceIfName,
+        source_if_name: effectiveSourceIfName,
         target_device_id: targetDeviceId,
-        target_if_name: targetIfName,
+        target_if_name: effectiveTargetIfName,
       });
       onCreated();
     } catch (err) {
@@ -335,13 +367,19 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
             placeholder="Select device..."
           />
         </div>
-        <InterfaceSelect
-          label="Port"
-          interfaces={sourceInterfaces}
-          value={sourceIfName}
-          onChange={setSourceIfName}
-          placeholder={sourceDeviceId ? (sourceInterfaces.length === 0 ? 'No ports available yet' : 'Select port...') : 'Select a device first'}
-        />
+        {sourceIsVirtual ? (
+          <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs italic text-on-bg-secondary">
+            (virtual node — no interface)
+          </p>
+        ) : (
+          <InterfaceSelect
+            label="Port"
+            interfaces={sourceInterfaces}
+            value={sourceIfName}
+            onChange={setSourceIfName}
+            placeholder={sourceDeviceId ? (sourceInterfaces.length === 0 ? 'No ports available yet' : 'Select port...') : 'Select a device first'}
+          />
+        )}
       </div>
 
       <div className="my-4" />
@@ -362,14 +400,26 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
             placeholder="Select device..."
           />
         </div>
-        <InterfaceSelect
-          label="Port"
-          interfaces={targetInterfaces}
-          value={targetIfName}
-          onChange={setTargetIfName}
-          placeholder={targetDeviceId ? (targetInterfaces.length === 0 ? 'No ports available yet' : 'Select port...') : 'Select a device first'}
-        />
+        {targetIsVirtual ? (
+          <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs italic text-on-bg-secondary">
+            (virtual node — no interface)
+          </p>
+        ) : (
+          <InterfaceSelect
+            label="Port"
+            interfaces={targetInterfaces}
+            value={targetIfName}
+            onChange={setTargetIfName}
+            placeholder={targetDeviceId ? (targetInterfaces.length === 0 ? 'No ports available yet' : 'Select port...') : 'Select a device first'}
+          />
+        )}
       </div>
+
+      {bothVirtual && (
+        <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">
+          At least one device must be physical
+        </p>
+      )}
 
       {error && (
         <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">
@@ -387,7 +437,7 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
         </button>
         <button
           type="submit"
-          disabled={submitting || !sourceDeviceId || !targetDeviceId || !sourceIfName || !targetIfName}
+          disabled={submitting || !sourceDeviceId || !targetDeviceId || bothVirtual || (!sourceIsVirtual && !sourceIfName) || (!targetIsVirtual && !targetIfName)}
           className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Creating...' : 'Create Link'}

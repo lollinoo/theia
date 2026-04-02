@@ -159,8 +159,9 @@ export interface SNMPPayload {
 
 export interface CreateDevicePayload {
   hostname: string;
-  ip: string;
-  snmp: SNMPPayload;
+  ip?: string;
+  device_type?: string;
+  snmp?: SNMPPayload;
   tags?: Record<string, string>;
   vendor?: string;
   metrics_source?: string;

@@ -60,11 +60,13 @@ func NewDeviceService(
 	}
 }
 
-// AddDevice creates a new device with status "probing" and triggers an async
-// SNMP probe. The device is returned immediately before the probe completes.
+// AddDevice creates a new device and triggers an async SNMP probe for
+// non-virtual devices. Virtual devices skip probing and start with status
+// "unknown". The device is returned immediately before any probe completes.
 func (s *DeviceService) AddDevice(
 	ctx context.Context,
 	ip, hostname string,
+	deviceType domain.DeviceType,
 	creds domain.SNMPCredentials,
 	tags map[string]string,
 	vendor string,
@@ -74,11 +76,11 @@ func (s *DeviceService) AddDevice(
 	sshProfileID *uuid.UUID,
 	areaIDs []uuid.UUID,
 ) (*domain.Device, error) {
-	if ip == "" {
-		return nil, fmt.Errorf("IP address is required")
-	}
 	if tags == nil {
 		tags = map[string]string{}
+	}
+	if deviceType == "" {
+		deviceType = domain.DeviceTypeUnknown
 	}
 	if metricsSource == "" {
 		metricsSource = domain.MetricsSourcePrometheus
@@ -90,13 +92,18 @@ func (s *DeviceService) AddDevice(
 		prometheusLabelValue = ip
 	}
 
+	initialStatus := domain.DeviceStatusProbing
+	if deviceType == domain.DeviceTypeVirtual {
+		initialStatus = domain.DeviceStatusUnknown
+	}
+
 	device := &domain.Device{
 		ID:                   uuid.New(),
 		Hostname:             hostname,
 		IP:                   ip,
 		SNMPCredentials:      creds,
-		DeviceType:           domain.DeviceTypeUnknown,
-		Status:               domain.DeviceStatusProbing,
+		DeviceType:           deviceType,
+		Status:               initialStatus,
 		Vendor:               vendor,
 		Managed:              true,
 		Tags:                 tags,
@@ -111,7 +118,15 @@ func (s *DeviceService) AddDevice(
 		return nil, fmt.Errorf("creating device: %w", err)
 	}
 
-	// Launch async probe
+	if deviceType == domain.DeviceTypeVirtual {
+		// Virtual devices are not SNMP-probed. Status starts as "unknown".
+		// For virtual devices WITH an IP, the MetricsCollector will update
+		// status via probe_success on its next cycle (per D-05/D-07).
+		// For virtual devices WITHOUT an IP, status stays "unknown" permanently (per D-06).
+		return device, nil
+	}
+
+	// Launch async probe for non-virtual devices
 	s.probeWg.Add(1)
 	go func() {
 		defer s.probeWg.Done()
@@ -139,6 +154,18 @@ func (s *DeviceService) markDeviceStatus(deviceID uuid.UUID, deviceIP string, st
 func (s *DeviceService) probeDevice(device *domain.Device) {
 	deviceID := device.ID
 	deviceIP := device.IP
+
+	// Virtual devices are never SNMP-probed.
+	if device.DeviceType == domain.DeviceTypeVirtual {
+		if device.IP != "" {
+			s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusUp)
+			log.Printf("Virtual device %s has IP; marked up (probe_success will refine)", deviceIP)
+		} else {
+			s.markDeviceStatus(deviceID, "(virtual-no-ip)", domain.DeviceStatusUnknown)
+			log.Printf("Virtual device %s has no IP; status remains unknown", deviceID)
+		}
+		return
+	}
 
 	// Prometheus-only devices never touch gosnmp — mark up and return.
 	if device.MetricsSource == domain.MetricsSourcePrometheus {

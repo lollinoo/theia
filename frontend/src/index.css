@@ -194,7 +194,7 @@
   }
 }
 
-/* --- Material Symbols Rounded (subset: 21 icons, self-hosted per D-04) --- */
+/* --- Material Symbols Rounded (subset: 24 icons, self-hosted per D-04) --- */
 @font-face {
   font-family: 'Material Symbols Rounded';
   font-style: normal;
@@ -217,6 +217,6 @@
     word-wrap: normal;
     direction: ltr;
     -webkit-font-smoothing: antialiased;
-    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 18;
+    font-feature-settings: 'rlig' 1, 'liga' 1;
   }
 }

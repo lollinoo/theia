@@ -46,6 +46,7 @@ type jsonAPIList struct {
 type createDeviceRequest struct {
 	IP                   string            `json:"ip"`
 	Hostname             string            `json:"hostname"`
+	DeviceType           string            `json:"device_type,omitempty"`
 	SNMP                 snmpCredsRequest  `json:"snmp"`
 	Tags                 map[string]string `json:"tags"`
 	Vendor               string            `json:"vendor,omitempty"`
@@ -98,6 +99,55 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine device type
+	deviceType := domain.DeviceType(req.DeviceType)
+
+	if deviceType == domain.DeviceTypeVirtual {
+		// Per D-08: Virtual devices allow empty IP, skip SNMP validation
+		// Per D-09: Require display_name and valid virtual_subtype
+		if req.Tags == nil {
+			req.Tags = make(map[string]string)
+		}
+		displayName := strings.TrimSpace(req.Tags["display_name"])
+		if displayName == "" {
+			writeError(w, http.StatusBadRequest, "tags.display_name is required for virtual devices")
+			return
+		}
+		subtype := strings.TrimSpace(req.Tags["virtual_subtype"])
+		validSubtypes := map[string]bool{"internet": true, "cloud": true, "server": true, "generic": true}
+		if !validSubtypes[subtype] {
+			writeError(w, http.StatusBadRequest, "tags.virtual_subtype must be one of: internet, cloud, server, generic")
+			return
+		}
+
+		// Parse optional area IDs (same logic as regular devices)
+		var areaIDs []uuid.UUID
+		for _, idStr := range req.AreaIDs {
+			if idStr == "" {
+				continue
+			}
+			parsed, err := uuid.Parse(idStr)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid area_id: "+idStr)
+				return
+			}
+			areaIDs = append(areaIDs, parsed)
+		}
+
+		device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
+			domain.DeviceTypeVirtual,
+			domain.SNMPCredentials{}, req.Tags, "", "", "", "", nil, areaIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(jsonAPISingle{Data: h.deviceToResource(device)})
+		return
+	}
+
+	// Per D-10: Regular device creation retains "ip is required" validation
 	if req.IP == "" {
 		writeError(w, http.StatusBadRequest, "ip is required")
 		return
@@ -140,7 +190,13 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		areaIDs = append(areaIDs, parsed)
 	}
 
-	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname, creds, req.Tags, req.Vendor, metricsSource, prometheusLabelName, prometheusLabelValue, sshProfileID, areaIDs)
+	if deviceType == "" {
+		deviceType = domain.DeviceTypeUnknown
+	}
+	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
+		deviceType,
+		creds, req.Tags, req.Vendor, metricsSource,
+		prometheusLabelName, prometheusLabelValue, sshProfileID, areaIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -378,7 +434,14 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 			}
 			batchSSHProfileID = &parsed
 		}
-		_, _ = h.svc.AddDevice(r.Context(), d.IP, d.Hostname, creds, d.Tags, d.Vendor, ms, d.PrometheusLabelName, d.PrometheusLabelValue, batchSSHProfileID, nil)
+		batchDeviceType := domain.DeviceType(d.DeviceType)
+		if batchDeviceType == "" {
+			batchDeviceType = domain.DeviceTypeUnknown
+		}
+		_, _ = h.svc.AddDevice(r.Context(), d.IP, d.Hostname,
+			batchDeviceType,
+			creds, d.Tags, d.Vendor, ms,
+			d.PrometheusLabelName, d.PrometheusLabelValue, batchSSHProfileID, nil)
 	}
 
 	w.WriteHeader(http.StatusAccepted)

@@ -543,5 +543,133 @@ func TestDeviceHandlerUpdate_AreaID(t *testing.T) {
 	}
 }
 
+// --- Virtual device tests (D-08, D-09, D-10 regression protection) ---
+
+func TestDeviceHandlerCreate_VirtualHappyPath(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"device_type":"virtual","tags":{"display_name":"Internet","virtual_subtype":"internet"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data.Attributes["device_type"]; got != "virtual" {
+		t.Errorf("expected device_type 'virtual', got %q", got)
+	}
+}
+
+func TestDeviceHandlerCreate_VirtualWithIP(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"device_type":"virtual","ip":"10.0.0.99","tags":{"display_name":"Cloud GW","virtual_subtype":"cloud"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data.Attributes["ip"]; got != "10.0.0.99" {
+		t.Errorf("expected ip '10.0.0.99', got %q", got)
+	}
+	if got := resp.Data.Attributes["device_type"]; got != "virtual" {
+		t.Errorf("expected device_type 'virtual', got %q", got)
+	}
+}
+
+func TestDeviceHandlerCreate_VirtualMissingDisplayName(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"device_type":"virtual","tags":{"virtual_subtype":"internet"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "display_name is required") {
+		t.Errorf("expected error about display_name, got: %s", rec.Body.String())
+	}
+}
+
+func TestDeviceHandlerCreate_VirtualInvalidSubtype(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"device_type":"virtual","tags":{"display_name":"Test","virtual_subtype":"invalid"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "virtual_subtype must be one of") {
+		t.Errorf("expected error about virtual_subtype, got: %s", rec.Body.String())
+	}
+}
+
+func TestDeviceHandlerCreate_VirtualMissingSubtype(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"device_type":"virtual","tags":{"display_name":"Test"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "virtual_subtype must be one of") {
+		t.Errorf("expected error about virtual_subtype, got: %s", rec.Body.String())
+	}
+}
+
+func TestDeviceHandlerCreate_VirtualNoTags(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"device_type":"virtual"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "display_name is required") {
+		t.Errorf("expected error about display_name, got: %s", rec.Body.String())
+	}
+}
+
+// TestDeviceHandlerCreate_RegularStillRequiresIP confirms D-10: no regression for regular devices.
+func TestDeviceHandlerCreate_RegularStillRequiresIP(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"hostname":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "ip is required") {
+		t.Errorf("expected error about ip, got: %s", rec.Body.String())
+	}
+}
+
 // Silence the unused import for context -- it is needed for domain import indirectly.
 var _ = context.Background

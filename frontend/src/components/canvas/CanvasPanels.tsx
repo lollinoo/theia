@@ -27,6 +27,7 @@ interface CanvasPanelsProps {
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   prometheusStatus: PrometheusStatusPayload | null;
   onAreasChange?: () => void;
+  onSettingsChange?: () => void;
 }
 
 export function CanvasPanels({
@@ -41,6 +42,7 @@ export function CanvasPanels({
   reactFlow,
   prometheusStatus,
   onAreasChange,
+  onSettingsChange,
 }: CanvasPanelsProps) {
   return (
     <>
@@ -79,7 +81,7 @@ export function CanvasPanels({
           prometheusStatus={prometheusStatus}
         />
       )}
-      {panelContent?.type === 'settings' && <SettingsPanel onAreasChange={onAreasChange} />}
+      {panelContent?.type === 'settings' && <SettingsPanel onAreasChange={onAreasChange} onSettingsChange={onSettingsChange} />}
       {panelContent?.type === 'addDevice' && (
         <AddDevicePanel
           onDeviceAdded={() => {
@@ -137,6 +139,7 @@ export function CanvasPanels({
           return (
             <DeviceConfigPanel
               device={data.device}
+              isVirtual={data.device.device_type === 'virtual'}
               onDeviceUpdated={(updated) => {
                 setDevices((prev) => prev.map((d) => d.id === updated.id ? updated : d));
                 setNodes((prev) => prev.map((n) => n.id === updated.id
@@ -149,6 +152,7 @@ export function CanvasPanels({
                 setPanelContent(null);
                 void loadTopology(true);
               }}
+              onSettingsChange={onSettingsChange}
             />
           );
         }

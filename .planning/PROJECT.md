@@ -10,15 +10,17 @@ Network operators can see their entire topology at a glance with live stats on e
 
 ## Current State
 
-**Shipped:** v1.3.0 Frontend Redesign (2026-03-27)
+**Shipped:** v1.3.7 Virtual/Representative Nodes (2026-04-02)
+**Previous:** v1.3.0 Frontend Redesign (2026-03-27)
 
-The frontend has been fully redesigned with the Neon Topography design system featuring:
-- Dual dark/light theme support with CSS variable tokens, FOWT prevention, and localStorage persistence
-- OSPF Area Hub view with floating navigation pill, area cards with bloom effects, and area-filtered topology
-- Material Symbols icon system with custom woff2 subsets
-- Redesigned devices page with custom filter dropdowns, expanded sortable columns, and icon actions
-- Canvas decomposed from monolithic 1283-line file into 7 focused modules
-- 193 frontend tests across 30 test files, 14.1k LOC TypeScript
+The application now supports virtual/representative nodes as first-class entities:
+- Virtual device type with subtypes (Internet, Cloud, Server, Generic) and partial unique IP index
+- Compact virtual cards with subtype-specific Material Symbol icons (160px/200px variants)
+- Dual-mode AddDevicePanel with Physical/Virtual toggle and 2x2 subtype icon cards
+- Virtual link edge labels with single-side bandwidth and mismatch suppression
+- Virtual-aware LinkCreatePanel with both-virtual rejection and context menu filtering
+- 224 frontend tests across 33 test files, ~15k LOC TypeScript
+- Backend: 53+ Go tests covering virtual device CRUD, link validation, and poller skip
 
 **Tech stack:** React 18 + Tailwind CSS 4 + ReactFlow 12, Go 1.24 backend, SQLite, Prometheus integration
 
@@ -50,10 +52,19 @@ The frontend has been fully redesigned with the Neon Topography design system fe
 - ✓ Redesigned devices page with custom dropdowns and icon actions — v1.3.0
 - ✓ SidePanel and sub-panel form/metric restyling — v1.3.0
 - ✓ Canvas theme compliance (no stale tokens or hardcoded hex) — v1.3.0
+- ✓ Virtual device type with subtypes and partial unique IP index — v1.3.7
+- ✓ Virtual device probe behavior (unknown for no-IP, ping-probed for IP) — v1.3.7
+- ✓ SNMP poller skips virtual devices — v1.3.7
+- ✓ Virtual card rendering with subtype icons and IP-conditional sizing — v1.3.7
+- ✓ Material Symbols font subset expanded to 24 icons — v1.3.7
+- ✓ Virtual link edge labels with single-side bandwidth — v1.3.7
+- ✓ Dual-mode AddDevicePanel with Physical/Virtual toggle — v1.3.7
+- ✓ Virtual-aware LinkCreatePanel with both-virtual rejection — v1.3.7
+- ✓ Context menu filtering for virtual nodes — v1.3.7
 
 ### Active
 
-(None — define next milestone with `/gsd:new-milestone`)
+(None — planning next milestone)
 
 ### Out of Scope
 
@@ -74,8 +85,9 @@ The frontend has been fully redesigned with the Neon Topography design system fe
 - Existing monitoring stack: Prometheus, Grafana, SNMP-Exporter, Blackbox-Exporter
 - Network is multi-vendor (MikroTik, Cisco, Ubiquiti, and others)
 - Scale: 100+ routers in production
-- Frontend: 14.1k LOC TypeScript, 193 tests, React 18 + Tailwind CSS 4 + ReactFlow 12
-- Backend: Go 1.24, SQLite, SNMP polling, WebSocket metrics push
+- Frontend: ~15k LOC TypeScript, 224 tests across 33 files, React 18 + Tailwind CSS 4 + ReactFlow 12
+- Backend: Go 1.24, SQLite, SNMP polling, WebSocket metrics push, 53+ Go tests
+- Virtual device support: 4 subtypes (internet, cloud, server, generic), compact cards, virtual-aware link creation
 - The tool needs to work as both web and eventually desktop (Electron possible) — web-first for v1
 
 ## Known Tech Debt (from v1.3.0)
@@ -109,8 +121,14 @@ The frontend has been fully redesigned with the Neon Topography design system fe
 | Tailwind v4 with @theme inline tokens | Native CSS variable integration, eliminates JS-side token mapping | ✓ Good — 34 semantic tokens |
 | ReactFlow v12 with native colorMode | Built-in theme support, no custom CSS overrides needed | ✓ Good |
 | Canvas decomposition (7 modules) | 1283-line monolith → 7 focused files, easier to maintain and test | ✓ Good — unlocked three-view architecture |
-| Material Symbols woff2 subset | Custom subset keeps bundle at 29KB vs 4MB full icon font | ✓ Good — 21 icons |
+| Material Symbols woff2 subset | Custom subset keeps bundle at 29KB vs 4MB full icon font | ✓ Good — 24 icons |
 | font-mono for all technical values | Consistent monospace rendering for metrics, timestamps, OIDs, code | ✓ Good |
+| Partial unique IP index for virtual devices | Allows multiple virtual devices with empty IP while keeping uniqueness for physical | ✓ Good — migration 000009 |
+| Virtual probe via MetricsCollector probe_success | Leverages existing blackbox exporter rather than custom ICMP implementation | ✓ Good — zero new dependencies |
+| Virtual card early-return branch pattern | Matches ghost node pattern in DeviceCardInner; keeps virtual rendering isolated | ✓ Good |
+| Explicit isVirtualLink guard in edgeBuilder | Clear intent vs relying on accidental zero-speed behavior | ✓ Good |
+| Stable id-based context menu filtering | Robust against label text changes; Set.has() lookup | ✓ Good |
+| Dual-mode AddDevicePanel with segmented toggle | Clean separation of physical/virtual forms with shared area multi-select | ✓ Good |
 
 ## Evolution
 
@@ -130,4 +148,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-27 after v1.3.0 milestone completion*
+*Last updated: 2026-04-02 after v1.3.7 milestone*

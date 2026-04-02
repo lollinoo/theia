@@ -7,6 +7,7 @@ import {
   type AlertStatus,
   type DeviceMetricsDTO,
 } from '../types/metrics';
+import { MaterialIcon } from './MaterialIcon';
 import { StatusDot } from './StatusDot';
 import { VendorIcon } from './icons/VendorIcon';
 
@@ -21,6 +22,8 @@ export interface DeviceNodeData {
   onContextMenu?: (event: React.MouseEvent, deviceId: string) => void;
   isGhost?: boolean;
   onGhostClick?: (deviceId: string) => void;
+  isVirtual?: boolean;
+  subtype?: string;
   [key: string]: unknown;
 }
 
@@ -28,6 +31,13 @@ export type DeviceNode = Node<DeviceNodeData>;
 
 const universalHandleClassName =
   '!h-2 !w-2 !rounded-full !border-2 !border-bg !bg-on-bg-secondary shadow-none';
+
+const subtypeIconMap: Record<string, string> = {
+  internet: 'language',
+  cloud: 'cloud',
+  server: 'dns',
+  generic: 'hub',
+};
 
 function displayName(device: Device): string {
   return device.tags?.display_name || device.sys_name || device.ip;
@@ -83,6 +93,115 @@ function DeviceCardInner({
         </div>
         <Handle type="source" position={Position.Bottom} className={universalHandleClassName} />
       </>
+    );
+  }
+
+  // Virtual node: compact card with subtype icon, dashed border, centered layout
+  if (data.isVirtual) {
+    const hasIP = !!data.device.ip;
+    const subtypeIcon = subtypeIconMap[data.subtype ?? ''] ?? 'hub';
+    const virtualLabel = data.device.tags?.display_name || data.device.sys_name || data.device.ip || 'Virtual';
+    const statusForDot =
+      data.alertStatus === 'down' ? 'down'
+        : data.alertStatus === 'degraded' ? 'degraded'
+          : data.device.status;
+
+    const colors = data.areaColors ?? [];
+    const hasArea = colors.length > 0;
+    const firstColor = colors[0];
+    // Virtual nodes without IP are not monitored — never show down/degraded glow
+    const isDown = hasIP && (data.alertStatus === 'down' || data.device.status === 'down');
+    const isDegraded = hasIP && (data.alertStatus === 'degraded' || data.device.status === 'probing');
+
+    const conicGradient = colors.length >= 2
+      ? `conic-gradient(${colors.map((c, i, arr) =>
+          `${c} ${(i * 360) / arr.length}deg ${((i + 1) * 360) / arr.length}deg`
+        ).join(', ')})`
+      : undefined;
+
+    const wrapperBg: string =
+      data.highlighted || selected
+        ? 'var(--color-primary)'
+        : conicGradient ?? (hasArea ? firstColor : 'var(--color-outline)');
+
+    const wrapperPadding = data.highlighted || selected || isDown || isDegraded ? '2px' : '1.5px';
+
+    const wrapperStatusClass =
+      isDown ? 'shadow-[0_0_28px_rgba(255,23,68,0.45)] animate-pulse'
+        : isDegraded ? 'shadow-[0_0_28px_rgba(255,193,7,0.35)]'
+          : data.highlighted ? 'shadow-[0_0_28px_rgba(0,230,118,0.35)]'
+            : selected ? 'shadow-[0_0_22px_rgba(0,230,118,0.18)]' : '';
+
+    const hoverGlowColor = hasArea ? `${firstColor}50` : undefined;
+
+    const virtualCard = (
+      <div
+        className={`group relative flex ${hasIP ? 'w-[200px]' : 'w-[160px]'} flex-col overflow-visible rounded-[12px] border border-dashed border-outline-subtle bg-surface text-center shadow-canvas transition-[box-shadow,opacity,background-color,color,border-color] duration-200 motion-reduce:animate-none`}
+        onContextMenu={(e) => {
+          if (data.onContextMenu) {
+            e.preventDefault();
+            e.stopPropagation();
+            data.onContextMenu(e, data.device.id);
+          }
+        }}
+      >
+        <Handle id="top" type="source" position={Position.Top}
+          isConnectable={!!data.editMode}
+          style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
+          className={`${universalHandleClassName} !-top-1 !left-1/2 !-translate-x-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
+        />
+        <Handle id="right" type="source" position={Position.Right}
+          isConnectable={!!data.editMode}
+          style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
+          className={`${universalHandleClassName} !-right-1 !top-1/2 !-translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
+        />
+        <Handle id="bottom" type="source" position={Position.Bottom}
+          isConnectable={!!data.editMode}
+          style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
+          className={`${universalHandleClassName} !-bottom-1 !left-1/2 !-translate-x-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
+        />
+        <Handle id="left" type="source" position={Position.Left}
+          isConnectable={!!data.editMode}
+          style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
+          className={`${universalHandleClassName} !-left-1 !top-1/2 !-translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
+        />
+
+        {/* HEADER SECTION -- centered vertical layout per D-04 */}
+        <div className="flex flex-col items-center px-3 py-2">
+          <MaterialIcon name={subtypeIcon} size={24} className="text-on-bg-secondary" />
+          <div className="mt-1 flex items-center gap-1.5 max-w-full">
+            <span className="font-mono text-[13px] font-semibold text-on-bg truncate">
+              {virtualLabel}
+            </span>
+            {hasIP && <StatusDot status={statusForDot} />}
+          </div>
+        </div>
+
+        {/* BODY SECTION -- IP-bearing only per D-07 */}
+        {hasIP && (
+          <div className="rounded-b-[12px] bg-bg px-3 py-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-on-bg-secondary/70">IP:</span>
+              <span className="font-mono text-[14px] font-bold text-on-bg">{data.device.ip}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+
+    return (
+      <div
+        className={`rounded-[13.5px] transition-[box-shadow,padding] duration-200 ${wrapperStatusClass} ${hasArea ? '' : 'hover:shadow-[0_0_20px_rgba(0,230,118,0.15)]'}`}
+        style={{ background: wrapperBg, padding: wrapperPadding }}
+        onMouseEnter={(e) => {
+          if (hoverGlowColor) e.currentTarget.style.boxShadow = `0 0 22px ${hoverGlowColor}`;
+        }}
+        onMouseLeave={(e) => {
+          if (hoverGlowColor) e.currentTarget.style.boxShadow = '';
+        }}
+      >
+        {virtualCard}
+      </div>
     );
   }
 
@@ -287,10 +406,13 @@ const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: Nod
     pd.device.vendor === nd.device.vendor &&
     pd.device.sys_name === nd.device.sys_name &&
     pd.device.tags?.display_name === nd.device.tags?.display_name &&
+    pd.device.ip === nd.device.ip &&
     pd.highlighted === nd.highlighted &&
     pd.alertStatus === nd.alertStatus &&
     pd.areaColors?.length === nd.areaColors?.length && (pd.areaColors ?? []).every((c, i) => c === nd.areaColors?.[i]) &&
     pd.isGhost === nd.isGhost &&
+    pd.isVirtual === nd.isVirtual &&
+    pd.subtype === nd.subtype &&
     pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
     pd.metrics?.mem_percent === nd.metrics?.mem_percent &&
     pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&

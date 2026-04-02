@@ -212,4 +212,145 @@ describe('DeviceCard', () => {
     const html = container.innerHTML;
     expect(html).toContain('var(--color-outline)');
   });
+
+  it('renders virtual node with subtype icon and display name (VIRT-06)', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        sys_name: '',
+        tags: { display_name: 'ISP Gateway', virtual_subtype: 'internet' },
+      }),
+      isVirtual: true,
+      subtype: 'internet',
+    });
+
+    expect(screen.getByText('ISP Gateway')).toBeInTheDocument();
+    expect(screen.getByText('language')).toBeInTheDocument(); // Material Symbol ligature
+    // Should NOT show physical card metrics
+    expect(screen.queryByText('CPU')).toBeNull();
+    expect(screen.queryByText('MEM')).toBeNull();
+  });
+
+  it('renders virtual node with IP at 200px width with StatusDot (VIRT-07)', () => {
+    const { container } = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '192.168.1.1',
+        sys_name: '',
+        tags: { display_name: 'Cloud VPN', virtual_subtype: 'cloud' },
+      }),
+      isVirtual: true,
+      subtype: 'cloud',
+    });
+
+    expect(screen.getByText('Cloud VPN')).toBeInTheDocument();
+    expect(screen.getByText('192.168.1.1')).toBeInTheDocument();
+    expect(screen.getByText('IP:')).toBeInTheDocument();
+    // 200px width class
+    const html = container.innerHTML;
+    expect(html).toContain('w-[200px]');
+  });
+
+  it('renders virtual node without IP at 160px width with no body (VIRT-08)', () => {
+    const { container } = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        sys_name: '',
+        tags: { display_name: 'AWS Cloud', virtual_subtype: 'cloud' },
+      }),
+      isVirtual: true,
+      subtype: 'cloud',
+    });
+
+    expect(screen.getByText('AWS Cloud')).toBeInTheDocument();
+    expect(screen.queryByText('IP:')).toBeNull();
+    const html = container.innerHTML;
+    expect(html).toContain('w-[160px]');
+  });
+
+  it('virtual node has dashed border and opaque bg-surface (D-01, D-02)', () => {
+    const { container } = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        tags: { display_name: 'Test', virtual_subtype: 'generic' },
+      }),
+      isVirtual: true,
+      subtype: 'generic',
+    });
+
+    const html = container.innerHTML;
+    expect(html).toContain('border-dashed');
+    expect(html).toContain('bg-surface');
+    // Must NOT use semi-transparent bg-surface/80 — area color would bleed through
+    expect(html).not.toContain('bg-surface/80');
+  });
+
+  it('virtual node uses hub icon for generic subtype fallback (D-12)', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        tags: { display_name: 'Generic Node' },
+      }),
+      isVirtual: true,
+      subtype: 'generic',
+    });
+
+    expect(screen.getByText('hub')).toBeInTheDocument();
+  });
+
+  it('virtual node shows area color wrapper when areaColors set (D-11)', () => {
+    const { container } = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        tags: { display_name: 'Area Node', virtual_subtype: 'server' },
+      }),
+      isVirtual: true,
+      subtype: 'server',
+      areaColors: ['#ff6600'],
+    });
+
+    const html = container.innerHTML;
+    expect(html).toContain('rgb(255, 102, 0)');
+  });
+
+  it('virtual node without IP and with area does not show animate-pulse glow', () => {
+    const { container } = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        status: 'unknown',
+        tags: { display_name: 'Area Node', virtual_subtype: 'internet' },
+      }),
+      isVirtual: true,
+      subtype: 'internet',
+      areaColors: ['#2979FF'],
+    });
+
+    const html = container.innerHTML;
+    // Virtual nodes without IP should never pulse — they are not "offline"
+    expect(html).not.toContain('animate-pulse');
+  });
+
+  it('virtual node with area has opaque interior so area color only shows as border', () => {
+    const { container } = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        tags: { display_name: 'Border Test', virtual_subtype: 'cloud' },
+      }),
+      isVirtual: true,
+      subtype: 'cloud',
+      areaColors: ['#ff6600'],
+    });
+
+    const html = container.innerHTML;
+    // Inner card must use fully opaque bg-surface (not bg-surface/80)
+    // so the wrapper area color only shows through the 1.5px padding as a border
+    expect(html).not.toContain('bg-surface/80');
+  });
 });

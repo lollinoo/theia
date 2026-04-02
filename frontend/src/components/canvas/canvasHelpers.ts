@@ -63,17 +63,27 @@ export function findLinkMetrics(
   snapshotMetrics: Record<string, LinkMetricsDTO[]>,
   link: Link,
 ): LinkMetricsDTO | null {
-  const deviceMetrics = snapshotMetrics[link.source_device_id];
-  if (!deviceMetrics) {
-    return null;
+  // Try source device first (standard case: source has the physical interface)
+  const sourceDeviceMetrics = snapshotMetrics[link.source_device_id];
+  if (sourceDeviceMetrics) {
+    const sourceIfName = normalizeInterfaceName(link.source_if_name);
+    const found = sourceDeviceMetrics.find(
+      (metric) => normalizeInterfaceName(metric.if_name) === sourceIfName,
+    );
+    if (found) return found;
   }
 
-  const sourceIfName = normalizeInterfaceName(link.source_if_name);
-  return (
-    deviceMetrics.find(
-      (metric) => normalizeInterfaceName(metric.if_name) === sourceIfName,
-    ) ?? null
-  );
+  // Fallback: try target device (virtual-source links where metrics are keyed by real device)
+  const targetDeviceMetrics = snapshotMetrics[link.target_device_id];
+  if (targetDeviceMetrics) {
+    const targetIfName = normalizeInterfaceName(link.target_if_name);
+    const found = targetDeviceMetrics.find(
+      (metric) => normalizeInterfaceName(metric.if_name) === targetIfName,
+    );
+    if (found) return found;
+  }
+
+  return null;
 }
 
 export function statusColor(status: Device['status']): string {
