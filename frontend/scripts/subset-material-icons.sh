@@ -46,7 +46,8 @@ pyftsubset "$FULL_FONT" \
   --output-file="$FONT_DIR/material-symbols-rounded-subset.woff2" \
   --flavor=woff2 \
   --unicodes="$UNICODES" \
-  --layout-features='liga,clig' \
+  --layout-features='rlig' \
+  --no-layout-closure \
   --no-hinting \
   --desubroutinize
 

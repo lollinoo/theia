@@ -157,7 +157,7 @@ describe('buildEdgeData', () => {
 
     const existingData = {
       throughputLabel: 'TX: 500M / RX: 300M',
-      metrics: { device_id: 'dev-2', if_name: 'ether2', tx_bps: 500_000_000, rx_bps: 300_000_000, utilization: 50 },
+      metrics: { device_id: 'dev-2', if_name: 'ether2', tx_bps: 500_000_000, rx_bps: 300_000_000, utilization: 50, collected_at: '' },
       utilization: 50,
     };
 

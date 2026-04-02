@@ -106,13 +106,12 @@ function DeviceCardInner({
         : data.alertStatus === 'degraded' ? 'degraded'
           : data.device.status;
 
-    const isDeviceDown = data.device.status === 'down';
-    const isDeviceProbing = data.device.status === 'probing';
     const colors = data.areaColors ?? [];
     const hasArea = colors.length > 0;
     const firstColor = colors[0];
-    const isDown = data.alertStatus === 'down' || isDeviceDown;
-    const isDegraded = data.alertStatus === 'degraded' || isDeviceProbing;
+    // Virtual nodes without IP are not monitored — never show down/degraded glow
+    const isDown = hasIP && (data.alertStatus === 'down' || data.device.status === 'down');
+    const isDegraded = hasIP && (data.alertStatus === 'degraded' || data.device.status === 'probing');
 
     const conicGradient = colors.length >= 2
       ? `conic-gradient(${colors.map((c, i, arr) =>
@@ -137,7 +136,7 @@ function DeviceCardInner({
 
     const virtualCard = (
       <div
-        className={`group relative flex ${hasIP ? 'w-[200px]' : 'w-[160px]'} flex-col overflow-visible rounded-[12px] border border-dashed border-outline-subtle bg-surface/80 text-center shadow-canvas transition-[box-shadow,opacity,background-color,color,border-color] duration-200 motion-reduce:animate-none`}
+        className={`group relative flex ${hasIP ? 'w-[200px]' : 'w-[160px]'} flex-col overflow-visible rounded-[12px] border border-dashed border-outline-subtle bg-surface text-center shadow-canvas transition-[box-shadow,opacity,background-color,color,border-color] duration-200 motion-reduce:animate-none`}
         onContextMenu={(e) => {
           if (data.onContextMenu) {
             e.preventDefault();

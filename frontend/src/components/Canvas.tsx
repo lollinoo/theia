@@ -81,7 +81,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
 
   const {
     devices, setDevices, topologyLinks, loading, error, loadTopology,
-    grafanaUrlRef, deviceGrafanaUrlsRef,
+    grafanaUrlRef, deviceGrafanaUrlsRef, refreshSettings,
     prometheusAlertDismissed, setPrometheusAlertDismissed,
     showRecoveryToast, setShowRecoveryToast,
   } = useCanvasData({
@@ -306,7 +306,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
           { id: 'configure', label: 'Configure', icon: 'settings', onClick: () => { if (d) setPanelContent({ type: 'deviceConfig', data: { device: d } }); setDeviceMenu(null); } },
         ];
         // VIRT-16: Virtual nodes only get Grafana + Configure
-        const virtualItemIds = new Set(['grafana', 'configure']);
+        // Hide Grafana for virtual nodes without an IP address
+        const virtualItemIds = new Set(d?.ip ? ['grafana', 'configure'] : ['configure']);
         const items = isVirtual
           ? allItems.filter((item) => virtualItemIds.has(item.id))
           : allItems;
@@ -335,7 +336,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} snapshot={snapshot}
           devices={devices} topologyLinks={topologyLinks} loadTopology={loadTopology}
           setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus}
-          onAreasChange={onAreasChange} />
+          onAreasChange={onAreasChange} onSettingsChange={refreshSettings} />
       </SidePanel>
 
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />

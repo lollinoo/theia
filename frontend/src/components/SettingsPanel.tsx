@@ -74,9 +74,10 @@ function SavedIndicator({ visible }: SavedIndicatorProps) {
 
 interface SettingsPanelProps {
   onAreasChange?: () => void;
+  onSettingsChange?: () => void;
 }
 
-export function SettingsPanel({ onAreasChange }: SettingsPanelProps) {
+export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
   const [grafanaUrl, setGrafanaUrl] = useState('');
@@ -137,9 +138,10 @@ export function SettingsPanel({ onAreasChange }: SettingsPanelProps) {
   function scheduleGrafanaUpdate(value: string) {
     if (grafanaTimerRef.current !== null) window.clearTimeout(grafanaTimerRef.current);
     grafanaTimerRef.current = window.setTimeout(() => {
-      void updateSetting('grafana_url', value).then(() =>
-        showSaved(setSavedGrafana, savedGrafanaTimerRef),
-      );
+      void updateSetting('grafana_url', value).then(() => {
+        showSaved(setSavedGrafana, savedGrafanaTimerRef);
+        onSettingsChange?.();
+      });
     }, 500);
   }
 

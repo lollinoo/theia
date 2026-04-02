@@ -47,6 +47,7 @@ interface UseCanvasDataReturn {
   loadTopology: (isSilentRefresh?: boolean, defaultPosition?: { x: number; y: number }) => Promise<void>;
   grafanaUrlRef: React.MutableRefObject<string>;
   deviceGrafanaUrlsRef: React.MutableRefObject<Map<string, string>>;
+  refreshSettings: () => void;
   prometheusAlertDismissed: boolean;
   setPrometheusAlertDismissed: React.Dispatch<React.SetStateAction<boolean>>;
   showRecoveryToast: boolean;
@@ -73,6 +74,7 @@ export function useCanvasData({
 
   const snapshotRef = useRef<SnapshotPayload | null>(null);
   const prometheusStatusRef = useRef<PrometheusStatusPayload | null>(null);
+  const devicesRef = useRef<Device[]>([]);
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
   const layoutInitializedRef = useRef(false);
@@ -86,13 +88,14 @@ export function useCanvasData({
   const prevPromAvailableRef = useRef<boolean | null>(null);
   const [showRecoveryToast, setShowRecoveryToast] = useState(false);
 
-  // Keep refs in sync so async loadTopology can read the latest state
+  // Keep refs in sync so async loadTopology and snapshot effect can read the latest state
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
   useEffect(() => {
     prometheusStatusRef.current = prometheusStatus;
   }, [prometheusStatus]);
+  devicesRef.current = devices;
 
   // Propagate device state changes to parent (for Dashboard view)
   useEffect(() => {
@@ -283,8 +286,9 @@ export function useCanvasData({
     void loadTopology();
   }, []);
 
-  // Fetch settings (Grafana URLs)
-  useEffect(() => {
+  // Re-fetch settings (Grafana URLs) on demand; called on mount and after
+  // any settings panel or device config panel saves Grafana URL changes.
+  const refreshSettings = useCallback(() => {
     fetchSettings()
       .then((settings) => {
         grafanaUrlRef.current = settings['grafana_url'] ?? '';
@@ -302,6 +306,11 @@ export function useCanvasData({
         // Settings fetch failure is non-fatal; Grafana links will be disabled.
       });
   }, []);
+
+  // Fetch settings on mount
+  useEffect(() => {
+    refreshSettings();
+  }, [refreshSettings]);
 
   // Prometheus recovery toast effect
   useEffect(() => {
@@ -323,7 +332,21 @@ export function useCanvasData({
     prevPromAvailableRef.current = prometheusStatus.available;
   }, [prometheusStatus?.available]);
 
-  // Apply snapshot data to nodes and edges
+  // Apply snapshot data to nodes and edges.
+  //
+  // IMPORTANT: This effect intentionally does NOT depend on devices.length or
+  // topologyLinks.length. Previously those were included to re-apply snapshot
+  // data after topology changes (add/delete device or link), but loadTopology
+  // already bakes snapshot data into the nodes/edges it builds (via
+  // snapshotRef.current). The redundant re-trigger caused a cascade of
+  // competing setNodes/setEdges calls that produced rendering glitches:
+  //   loadTopology setNodes -> devices.length changes -> snapshot effect
+  //   setNodes again -> displayNodes new refs -> StoreUpdater replace cycle.
+  // By only reacting to actual snapshot or Prometheus status changes, we
+  // eliminate the double-update after add/delete operations.
+  //
+  // The promDown override uses devicesRef (always current) instead of the
+  // devices state variable so it doesn't need devices.length as a dependency.
   useEffect(() => {
     if (snapshot === null) {
       return;
@@ -338,7 +361,10 @@ export function useCanvasData({
     const effectiveStatuses = { ...snapshot.device_statuses };
 
     if (promDown) {
-      for (const d of devices) {
+      // Use ref to always read the latest devices without adding devices.length
+      // to the dependency array (which would cause redundant re-triggers after
+      // loadTopology).
+      for (const d of devicesRef.current) {
         const src = d.metrics_source || 'prometheus';
         if (src === 'prometheus' || src === 'prometheus_snmp_fallback') {
           effectiveStatuses[d.id] = 'down';
@@ -421,7 +447,7 @@ export function useCanvasData({
         };
       }),
     );
-  }, [snapshot, devices.length, topologyLinks.length, setNodes, prometheusStatus?.available]);
+  }, [snapshot, setNodes, prometheusStatus?.available]);
 
   // Stale data timer
   useEffect(() => {
@@ -475,6 +501,7 @@ export function useCanvasData({
     loadTopology,
     grafanaUrlRef,
     deviceGrafanaUrlsRef,
+    refreshSettings,
     prometheusAlertDismissed,
     setPrometheusAlertDismissed,
     showRecoveryToast,

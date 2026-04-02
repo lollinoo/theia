@@ -20,9 +20,11 @@ interface DeviceConfigPanelProps {
   device: Device;
   onDeviceUpdated: (updated: Device) => void;
   onDeviceDeleted: () => void;
+  onSettingsChange?: () => void;
+  isVirtual?: boolean;
 }
 
-export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: DeviceConfigPanelProps) {
+export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, onSettingsChange, isVirtual }: DeviceConfigPanelProps) {
   const pollingKey = `polling_interval_seconds:${device.id}`;
   const grafanaKey = `grafana_dashboard_url:${device.id}`;
 
@@ -159,9 +161,10 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
   function scheduleGrafanaUpdate(value: string) {
     if (grafanaTimerRef.current !== null) window.clearTimeout(grafanaTimerRef.current);
     grafanaTimerRef.current = window.setTimeout(() => {
-      void updateSetting(grafanaKey, value).then(() =>
-        showSaved(setSavedGrafana, savedGrafanaTimerRef),
-      );
+      void updateSetting(grafanaKey, value).then(() => {
+        showSaved(setSavedGrafana, savedGrafanaTimerRef);
+        onSettingsChange?.();
+      });
     }, 500);
   }
 
@@ -224,68 +227,72 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
 
   return (
     <div className="space-y-6 p-4 transition-colors duration-200">
-      {/* Polling Override */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Polling Override
-          </p>
-          <span
-            className={`text-xs text-status-up transition-opacity duration-500 ${savedPolling ? 'opacity-100' : 'opacity-0'}`}
-          >
-            Saved
-          </span>
-        </div>
-        <select
-          value={pollingValue}
-          onChange={(e) => handlePollingChange(e.target.value)}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-        >
-          {POLLING_PRESETS.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        {pollingValue === 'custom' && (
-          <input
-            type="number"
-            min={5}
-            max={3600}
-            value={customPolling}
-            placeholder="Seconds (5–3600)"
-            onChange={(e) => {
-              setCustomPolling(e.target.value);
-              schedulePollingUpdate(e.target.value);
-            }}
+      {/* Polling Override — physical devices only */}
+      {!isVirtual && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+              Polling Override
+            </p>
+            <span
+              className={`text-xs text-status-up transition-opacity duration-500 ${savedPolling ? 'opacity-100' : 'opacity-0'}`}
+            >
+              Saved
+            </span>
+          </div>
+          <select
+            value={pollingValue}
+            onChange={(e) => handlePollingChange(e.target.value)}
             className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-          />
-        )}
-      </div>
-
-      {/* Custom Grafana URL */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Custom Grafana Dashboard URL
-          </p>
-          <span
-            className={`text-xs text-status-up transition-opacity duration-500 ${savedGrafana ? 'opacity-100' : 'opacity-0'}`}
           >
-            Saved
-          </span>
+            {POLLING_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          {pollingValue === 'custom' && (
+            <input
+              type="number"
+              min={5}
+              max={3600}
+              value={customPolling}
+              placeholder="Seconds (5–3600)"
+              onChange={(e) => {
+                setCustomPolling(e.target.value);
+                schedulePollingUpdate(e.target.value);
+              }}
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+            />
+          )}
         </div>
-        <input
-          type="url"
-          value={grafanaUrl}
-          placeholder="Leave blank to use default"
-          onChange={(e) => {
-            setGrafanaUrl(e.target.value);
-            scheduleGrafanaUpdate(e.target.value);
-          }}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-        />
-      </div>
+      )}
+
+      {/* Custom Grafana URL — only for devices with IP */}
+      {(!isVirtual || device.ip) && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+              Custom Grafana Dashboard URL
+            </p>
+            <span
+              className={`text-xs text-status-up transition-opacity duration-500 ${savedGrafana ? 'opacity-100' : 'opacity-0'}`}
+            >
+              Saved
+            </span>
+          </div>
+          <input
+            type="url"
+            value={grafanaUrl}
+            placeholder="Leave blank to use default"
+            onChange={(e) => {
+              setGrafanaUrl(e.target.value);
+              scheduleGrafanaUpdate(e.target.value);
+            }}
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+          />
+        </div>
+      )}
 
       {/* Edit Device */}
       <form onSubmit={(e) => { void handleEditSave(e); }} className="space-y-3">
@@ -372,112 +379,115 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
           )}
         </div>
 
-        <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Vendor</label>
-          <select
-            value={vendorOverride}
-            onChange={(e) => setVendorOverride(e.target.value)}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-          >
-            <option value="">— Select vendor —</option>
-            <option value="mikrotik">MikroTik</option>
-          </select>
-          <p className="text-xs text-on-bg-secondary/70">
-            Vendor tag determines backup commands and metric queries.
-          </p>
-        </div>
-
-        {sshProfiles.length > 0 && (
-          <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">SSH Profile</label>
-            <select
-              value={sshProfileId}
-              onChange={(e) => setSSHProfileId(e.target.value)}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-            >
-              <option value="">-- No SSH Profile --</option>
-              {sshProfiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.username}:{p.port})
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-on-bg-secondary/70">
-              SSH profile is used for config backups.
-            </p>
-          </div>
-        )}
-
-        {prometheusAvailable === false && (
-          <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
-            Prometheus is not configured or unreachable. Only SNMP Direct is available.
-          </p>
-        )}
-
-        <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Metrics Source</label>
-          <select
-            value={metricsSource}
-            onChange={(e) => {
-              const val = e.target.value as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback';
-              if ((val === 'prometheus' || val === 'prometheus_snmp_fallback') && !prometheusAvailable) return;
-              setMetricsSource(val);
-            }}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-          >
-            <option value="snmp">SNMP Direct</option>
-            <option value="prometheus" disabled={!prometheusAvailable}>
-              Prometheus{!prometheusAvailable ? ' (unavailable)' : ''}
-            </option>
-            <option value="prometheus_snmp_fallback" disabled={!prometheusAvailable}>
-              Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
-            </option>
-          </select>
-          {metricsSource === 'prometheus' && (
-            <p className="text-xs text-on-bg-secondary/70">
-              Metrics from Prometheus only. No fallback if Prometheus is unreachable.
-            </p>
-          )}
-          {metricsSource === 'prometheus_snmp_fallback' && (
-            <p className="text-xs text-on-bg-secondary/70">
-              Falls back to SNMP if Prometheus is unavailable or has no data for this device.
-            </p>
-          )}
-        </div>
-
-        {/* Prometheus Target — visible when metrics source uses Prometheus */}
-        {(metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback') && (
-          <div className="space-y-2 bg-surface-high rounded-lg p-3">
-            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Prometheus Target</p>
+        {/* Vendor, SSH, Metrics Source, Prometheus, SNMP — physical devices only */}
+        {!isVirtual && (
+          <>
             <div className="space-y-1">
-              <label className="text-xs text-on-bg-secondary">Label</label>
+              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Vendor</label>
               <select
-                value={prometheusLabelName}
-                onChange={(e) => setPrometheusLabelName(e.target.value)}
+                value={vendorOverride}
+                onChange={(e) => setVendorOverride(e.target.value)}
                 className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
               >
-                <option value="instance">instance (IP address)</option>
-                <option value="identity">identity</option>
-                <option value="vendor">vendor</option>
+                <option value="">— Select vendor —</option>
+                <option value="mikrotik">MikroTik</option>
               </select>
+              <p className="text-xs text-on-bg-secondary/70">
+                Vendor tag determines backup commands and metric queries.
+              </p>
             </div>
-            <div className="space-y-1">
-              <label className="text-xs text-on-bg-secondary">
-                Value{prometheusLabelName === 'instance' ? ' (defaults to IP if blank)' : ''}
-              </label>
-              <input
-                type="text"
-                value={prometheusLabelValue}
-                onChange={(e) => setPrometheusLabelValue(e.target.value)}
-                placeholder={prometheusLabelName === 'instance' ? ip || device.ip : 'e.g. my-router'}
-                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-              />
-            </div>
-          </div>
-        )}
 
-        {/* SNMP Credentials — visible when metrics source uses SNMP */}
-        {usesSNMP && (
+            {sshProfiles.length > 0 && (
+              <div className="space-y-1">
+                <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">SSH Profile</label>
+                <select
+                  value={sshProfileId}
+                  onChange={(e) => setSSHProfileId(e.target.value)}
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                >
+                  <option value="">-- No SSH Profile --</option>
+                  {sshProfiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.username}:{p.port})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-on-bg-secondary/70">
+                  SSH profile is used for config backups.
+                </p>
+              </div>
+            )}
+
+            {prometheusAvailable === false && (
+              <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
+                Prometheus is not configured or unreachable. Only SNMP Direct is available.
+              </p>
+            )}
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Metrics Source</label>
+              <select
+                value={metricsSource}
+                onChange={(e) => {
+                  const val = e.target.value as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback';
+                  if ((val === 'prometheus' || val === 'prometheus_snmp_fallback') && !prometheusAvailable) return;
+                  setMetricsSource(val);
+                }}
+                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              >
+                <option value="snmp">SNMP Direct</option>
+                <option value="prometheus" disabled={!prometheusAvailable}>
+                  Prometheus{!prometheusAvailable ? ' (unavailable)' : ''}
+                </option>
+                <option value="prometheus_snmp_fallback" disabled={!prometheusAvailable}>
+                  Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
+                </option>
+              </select>
+              {metricsSource === 'prometheus' && (
+                <p className="text-xs text-on-bg-secondary/70">
+                  Metrics from Prometheus only. No fallback if Prometheus is unreachable.
+                </p>
+              )}
+              {metricsSource === 'prometheus_snmp_fallback' && (
+                <p className="text-xs text-on-bg-secondary/70">
+                  Falls back to SNMP if Prometheus is unavailable or has no data for this device.
+                </p>
+              )}
+            </div>
+
+            {/* Prometheus Target — visible when metrics source uses Prometheus */}
+            {(metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback') && (
+              <div className="space-y-2 bg-surface-high rounded-lg p-3">
+                <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Prometheus Target</p>
+                <div className="space-y-1">
+                  <label className="text-xs text-on-bg-secondary">Label</label>
+                  <select
+                    value={prometheusLabelName}
+                    onChange={(e) => setPrometheusLabelName(e.target.value)}
+                    className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                  >
+                    <option value="instance">instance (IP address)</option>
+                    <option value="identity">identity</option>
+                    <option value="vendor">vendor</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-on-bg-secondary">
+                    Value{prometheusLabelName === 'instance' ? ' (defaults to IP if blank)' : ''}
+                  </label>
+                  <input
+                    type="text"
+                    value={prometheusLabelValue}
+                    onChange={(e) => setPrometheusLabelValue(e.target.value)}
+                    placeholder={prometheusLabelName === 'instance' ? ip || device.ip : 'e.g. my-router'}
+                    className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* SNMP Credentials — visible when metrics source uses SNMP */}
+            {usesSNMP && (
           <>
             {profiles.length > 0 && (
               <select
@@ -576,6 +586,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
             )}
           </>
         )}
+          </>
+        )}
 
         {editError && (
           <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">
@@ -592,8 +604,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted }: 
         </button>
       </form>
 
-      {/* SNMP Test — visible when metrics source uses SNMP */}
-      {usesSNMP && <SNMPTestButton deviceId={device.id} />}
+      {/* SNMP Test — visible when metrics source uses SNMP (physical only) */}
+      {!isVirtual && usesSNMP && <SNMPTestButton deviceId={device.id} />}
 
       {/* Delete Device */}
       <div className="mt-6 space-y-3">
