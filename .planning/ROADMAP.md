@@ -3,6 +3,7 @@
 ## Milestones
 
 - ✅ **v1.3.0 Frontend Redesign** — Phases 1-7 (shipped 2026-03-27) — [archive](milestones/v1.3.0-ROADMAP.md)
+- ✅ **v1.3.7 Virtual/Representative Nodes** — Phases 8-10 (shipped 2026-04-02) — [archive](milestones/v1.3.7-ROADMAP.md)
 
 ## Phases
 
@@ -19,17 +20,14 @@
 
 </details>
 
-### Phase 10: Virtual Node Forms and Context Menu
+<details>
+<summary>✅ v1.3.7 Virtual/Representative Nodes (Phases 8-10) — SHIPPED 2026-04-02</summary>
 
-**Goal:** Users can create virtual nodes and link them to physical devices through adapted frontend forms, with context menus showing only relevant actions for virtual nodes.
+- [x] Phase 8: Virtual Device Backend (2/2 plans) — completed 2026-04-01
+- [x] Phase 9: Virtual Node Rendering (2/2 plans) — completed 2026-04-01
+- [x] Phase 10: Virtual Node Forms (2/2 plans) — completed 2026-04-01
 
-**Requirements:** [VIRT-10, VIRT-11, VIRT-12, VIRT-13, VIRT-16]
-
-**Plans:** 2/2 plans executed
-
-Plans:
-- [x] 10-01-PLAN.md — AddDevicePanel virtual mode toggle, subtype icon cards, and payload extension
-- [x] 10-02-PLAN.md — LinkCreatePanel virtual adaptation and Canvas context menu filtering
+</details>
 
 ## Progress
 
