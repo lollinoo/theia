@@ -1,0 +1,86 @@
+# =============================================================================
+# Theia - Staging Docker Compose (GHCR Pull)
+# =============================================================================
+# Auto-updates via Watchtower: new :staging images are pulled every 30 seconds.
+#
+# Usage:
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+#
+# First-time setup:
+#   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
+#   2. Copy env file:           cp .env.staging.example .env.staging
+#   3. Set THEIA_ENCRYPTION_KEY in .env.staging
+#   4. Start the stack:         docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+# =============================================================================
+
+name: theia-staging
+
+networks:
+  theia-staging-net:
+    driver: bridge
+
+volumes:
+  theia-staging-data:
+    name: theia-staging-data
+
+services:
+  # ---------------------------------------------------------------------------
+  # Backend — Pre-built Go binary from GHCR
+  # ---------------------------------------------------------------------------
+  backend:
+    image: ghcr.io/lollinoo/theia-backend:staging
+    container_name: theia-staging-backend
+    restart: unless-stopped
+    networks:
+      - theia-staging-net
+    volumes:
+      - theia-staging-data:/data
+    environment:
+      - THEIA_DB_PATH=/data/theia.db
+      - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8081}
+      - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
+      - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${BACKEND_PORT:-8081}/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ---------------------------------------------------------------------------
+  # Frontend — Pre-built nginx + React SPA from GHCR
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: ghcr.io/lollinoo/theia-frontend:staging
+    container_name: theia-staging-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3001}:80"
+    environment:
+      - BACKEND_PORT=${BACKEND_PORT:-8081}
+    networks:
+      - theia-staging-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ---------------------------------------------------------------------------
+  # Watchtower — Auto-pulls new :staging images every 30 seconds
+  # ---------------------------------------------------------------------------
+  watchtower:
+    image: ghcr.io/nicholas-fedor/watchtower:latest
+    container_name: theia-staging-watchtower
+    restart: unless-stopped
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_POLL_INTERVAL=30
+      - WATCHTOWER_CLEANUP=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_CONFIG_PATH:-/root/.docker/config.json}:/config.json:ro
+    networks:
+      - theia-staging-net

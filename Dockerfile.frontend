@@ -35,6 +35,9 @@ RUN npm ci
 
 COPY . .
 
+ARG VERSION=dev
+ENV VERSION=${VERSION}
+
 RUN npm run build
 
 # ---------------------------------------------------------------------------

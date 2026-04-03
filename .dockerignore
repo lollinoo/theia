@@ -1,9 +1,46 @@
+# Version control
 .git
+
+# Development artifacts
 tmp/
 data/
 *.db
+/theia
+
+# Planning and AI tooling
 .planning/
 .claude/
 .agents/
 .gemini/
+
+# CI/CD
+.github/
+
+# Documentation and media
+*.md
+docs/
 frontend_example.jpg
+
+# Configuration files not needed in image
+.gitignore
+.env
+.env.*
+!.env.prod.example
+Makefile
+docker-compose*.yml
+VERSION
+
+# Development config
+.air.toml
+config.yaml
+config.example.yaml
+
+# Frontend (backend image doesn't need it)
+frontend/
+
+# Vendor overrides (embedded in binary from internal/vendor/data/)
+vendors/
+
+# Test artifacts
+test_gosnmp.go
+scripts/

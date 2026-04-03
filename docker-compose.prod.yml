@@ -1,20 +1,25 @@
 # =============================================================================
-# Theia - Production Docker Compose
+# Theia - Production Docker Compose (GHCR Pull)
 # =============================================================================
+# Images pulled from ghcr.io/lollinoo/theia-{backend,frontend}
+# Set THEIA_VERSION in .env.prod to the semver tag (e.g., 1.3.8)
+#
 # Profiles:
-#   (default) — Backend + nginx frontend only
-#   metrics   — Also starts Prometheus + SNMP exporter
+#   (default) -- Backend + nginx frontend only
+#   metrics   -- Also starts Prometheus + SNMP exporter
 #
 # Usage:
-#   docker compose -f docker-compose.prod.yml up -d
-#   docker compose -f docker-compose.prod.yml --profile metrics up -d
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics up -d
 #
 # First-time setup:
-#   1. Copy and edit the env file:  cp .env.prod.example .env.prod
-#   2. Edit SNMP targets:           docker/prometheus/prometheus.prod.yml
-#   3. Start the stack:             docker compose -f docker-compose.prod.yml up -d
-#   4. Add devices via the UI or:   curl -X POST http://localhost:8080/api/v1/devices ...
+#   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
+#   2. Copy env file:           cp .env.prod.example .env.prod
+#   3. Set THEIA_VERSION and THEIA_ENCRYPTION_KEY in .env.prod
+#   4. Start the stack:         docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 # =============================================================================
+
+name: theia
 
 networks:
   theia-net:
@@ -28,18 +33,10 @@ volumes:
 
 services:
   # ---------------------------------------------------------------------------
-  # Backend — Compiled Go binary (production stage)
+  # Backend -- Go API server (pulled from GHCR)
   # ---------------------------------------------------------------------------
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: production
-      args:
-        VERSION: ${THEIA_VERSION:-dev}
-        GIT_COMMIT: ${GIT_COMMIT:-unknown}
-        BUILD_DATE: ${BUILD_DATE:-unknown}
-    image: theia-backend:${THEIA_VERSION:-latest}
+    image: ghcr.io/lollinoo/theia-backend:${THEIA_VERSION:?THEIA_VERSION must be set}
     container_name: theia-backend
     restart: unless-stopped
     networks:
@@ -59,14 +56,10 @@ services:
       start_period: 10s
 
   # ---------------------------------------------------------------------------
-  # Frontend — nginx serving compiled React SPA + API proxy
+  # Frontend -- nginx serving compiled React SPA + API proxy (pulled from GHCR)
   # ---------------------------------------------------------------------------
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: ../Dockerfile.frontend
-      target: production
-    image: theia-frontend:${THEIA_VERSION:-latest}
+    image: ghcr.io/lollinoo/theia-frontend:${THEIA_VERSION:?THEIA_VERSION must be set}
     container_name: theia-frontend
     restart: unless-stopped
     ports:
@@ -80,7 +73,7 @@ services:
         condition: service_healthy
 
   # ---------------------------------------------------------------------------
-  # Metrics stack — enable with: --profile metrics
+  # Metrics stack -- enable with: --profile metrics
   # Edit docker/prometheus/prometheus.prod.yml to add your SNMP device IPs.
   # ---------------------------------------------------------------------------
   snmp-exporter:

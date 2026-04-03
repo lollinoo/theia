@@ -1,12 +1,13 @@
 .PHONY: dev test test-integration build clean seed verify stop logs help \
        prod prod-metrics prod-down prod-build prod-logs prod-clean \
+       staging staging-down staging-logs \
        snmpwalk-router snmpwalk-switch snmpwalk-ap \
-       version bump tag release
+       version release
 
 # ---------------------------------------------------------------------------
 # Version management
 # ---------------------------------------------------------------------------
-VERSION    := $(shell git show HEAD:VERSION 2>/dev/null || cat VERSION)
+VERSION    := $(shell git describe --tags --always 2>/dev/null || echo dev)
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_DATE := $(shell date -u +%FT%TZ)
 
@@ -19,7 +20,7 @@ dev: ## Start full dev stack (backend + frontend + Prometheus + SNMP sims)
 	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
 		docker compose --profile dev up --build -d
 	@echo ""
-	@echo "MikroTik Theia dev stack is running:"
+	@echo "Theia dev stack is running:"
 	@echo "  Backend:  http://localhost:8080"
 	@echo "  Frontend: http://localhost:3000"
 	@echo "  Prometheus: http://localhost:9090"
@@ -41,47 +42,53 @@ test-integration: ## Run integration tests against SNMP simulators
 	docker compose --profile test run --rm backend go test ./... -tags=integration -count=1 -v
 	docker compose --profile test down
 
-build: ## Build production Docker images (backend + frontend)
-	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
-		docker compose -f docker-compose.prod.yml build
-
-prod: ## Start production stack (backend + nginx frontend)
-	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
-		docker compose -f docker-compose.prod.yml up --build -d
+# ---------------------------------------------------------------------------
+# Production stack (GHCR pull -- no local builds)
+# ---------------------------------------------------------------------------
+prod: ## Start production stack (pulls from GHCR)
+	docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 	@echo ""
-	@echo "MikroTik Theia $(VERSION) production stack is running:"
-	@echo "  Frontend: http://localhost:80"
-	@echo "  Backend:  http://localhost:8080"
+	@echo "MikroTik Theia production stack is running:"
+	@echo "  Frontend: http://localhost:$$(grep FRONTEND_PORT .env.prod 2>/dev/null | cut -d= -f2 || echo 80)"
+	@echo "  Backend:  http://localhost:$$(grep BACKEND_PORT .env.prod 2>/dev/null | cut -d= -f2 || echo 8080)"
 	@echo ""
-	@echo "Add devices via the API or the UI Settings panel."
 	@echo "Run 'make prod-logs' to follow backend logs."
 
 prod-metrics: ## Start production stack with Prometheus + SNMP exporter
-	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
-		docker compose -f docker-compose.prod.yml --profile metrics up --build -d
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics up -d
 	@echo ""
-	@echo "MikroTik Theia production stack (with metrics) is running:"
-	@echo "  Frontend:      http://localhost:80"
-	@echo "  Backend:       http://localhost:8080"
-	@echo "  Prometheus:    http://localhost:9090"
-	@echo "  SNMP exporter: http://localhost:9116"
-	@echo ""
+	@echo "MikroTik Theia production stack (with metrics) is running."
 	@echo "Edit docker/prometheus/prometheus.prod.yml to add your SNMP device IPs."
 
 prod-down: ## Stop production stack
-	docker compose -f docker-compose.prod.yml --profile metrics down
-
-prod-build: ## Build production images without starting
-	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
-		docker compose -f docker-compose.prod.yml build
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics down
 
 prod-logs: ## Follow production backend logs
-	docker compose -f docker-compose.prod.yml logs -f backend
+	docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f backend
 
 prod-clean: ## Stop production stack and remove volumes (resets database)
-	docker compose -f docker-compose.prod.yml --profile metrics down -v
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics down -v
 	docker volume rm -f theia-data theia-prometheus-data 2>/dev/null || true
 	@echo "Cleaned all production containers and volumes"
+
+# ---------------------------------------------------------------------------
+# Staging stack (GHCR pull + Watchtower auto-update)
+# ---------------------------------------------------------------------------
+staging: ## Start staging stack (auto-updates via Watchtower)
+	docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+	@echo ""
+	@echo "MikroTik Theia staging stack is running:"
+	@echo "  Frontend: http://localhost:3001"
+	@echo "  Backend:  http://localhost:8081"
+	@echo "  Watchtower polls for new :staging images every 30s"
+	@echo ""
+	@echo "Run 'make staging-logs' to follow backend logs."
+
+staging-down: ## Stop staging stack
+	docker compose -f docker-compose.staging.yml --env-file .env.staging down
+
+staging-logs: ## Follow staging backend logs
+	docker compose -f docker-compose.staging.yml --env-file .env.staging logs -f backend
 
 clean: ## Stop containers, remove volumes, and prune build cache
 	docker compose --profile dev --profile test down -v
@@ -114,25 +121,19 @@ version: ## Show current version
 	@echo "Git commit: $(GIT_COMMIT)"
 	@echo "Build date: $(BUILD_DATE)"
 
-bump: ## Bump version (Usage: make bump v=1.1.0)
-	@if [ -z "$(v)" ]; then echo "Usage: make bump v=1.1.0"; exit 1; fi
-	@echo "$(v)" > VERSION
-	@cd frontend && npm version "$(v)" --no-git-tag-version --allow-same-version
-	@echo "Bumped version to $(v)"
-
-tag: ## Create a git tag from VERSION file
-	@git add VERSION frontend/package.json frontend/package-lock.json
-	@git commit -m "release: v$$(cat VERSION)"
-	@git tag "v$$(cat VERSION)"
-	@echo "Tagged v$$(cat VERSION)"
-
-release: bump tag ## Bump + tag + build production images (Usage: make release v=1.1.0)
-	THEIA_VERSION=$(v) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
-		docker compose -f docker-compose.prod.yml build
+release: ## Create release tag and push (Usage: make release VERSION=1.3.8)
+	@if [ -z "$(VERSION)" ] || [ "$(VERSION)" = "$$(git describe --tags --always 2>/dev/null || echo dev)" ]; then \
+		echo "Usage: make release VERSION=1.3.8"; exit 1; fi
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: working tree is not clean"; exit 1; fi
+	@if [ "$$(git rev-parse --abbrev-ref HEAD)" != "master" ]; then \
+		echo "Error: must be on master branch"; exit 1; fi
+	@if git rev-parse "v$(VERSION)" >/dev/null 2>&1; then \
+		echo "Error: tag v$(VERSION) already exists"; exit 1; fi
+	@if ! echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+		echo "Error: VERSION must be valid semver (e.g., 1.3.8)"; exit 1; fi
+	@git tag -a "v$(VERSION)" -m "release: v$(VERSION)"
+	@git push origin "v$(VERSION)"
 	@echo ""
-	@echo "Release v$(v) built. Docker images:"
-	@echo "  theia-backend:$(v)"
-	@echo "  theia-frontend:$(v)"
-	@echo ""
-	@echo "To deploy: THEIA_VERSION=$(v) docker compose -f docker-compose.prod.yml up -d"
-	@echo "To push tag: git push origin v$(v)"
+	@echo "Release v$(VERSION) tagged and pushed."
+	@echo "CI will build and push Docker images to GHCR."
