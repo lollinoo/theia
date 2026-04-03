@@ -92,16 +92,36 @@ func (p *Poller) pollAllDevices(ctx context.Context) {
 	sem := make(chan struct{}, poolSize)
 	var wg sync.WaitGroup
 
+	pingTimeout := p.getPingTimeout()
+
 	for i := range devices {
 		if !devices[i].Managed {
 			continue
 		}
+
+		dev := devices[i]
+
 		// Per VIRT-05: Virtual devices are never SNMP re-probed.
-		if devices[i].DeviceType == domain.DeviceTypeVirtual {
+		// Instead, virtual devices with an IP get a lightweight TCP
+		// reachability check so their status updates to up/down.
+		if dev.DeviceType == domain.DeviceTypeVirtual {
+			if dev.IP == "" {
+				continue // no IP — nothing to ping
+			}
+			deviceID := dev.ID
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				if err := p.deviceService.PingVirtualDevice(ctx, deviceID, pingTimeout); err != nil {
+					log.Printf("Poller: failed to ping virtual device %s: %v", deviceID, err)
+				}
+			}()
 			continue
 		}
 
-		deviceID := devices[i].ID
+		deviceID := dev.ID
 
 		wg.Add(1)
 		sem <- struct{}{} // Acquire semaphore slot
@@ -132,4 +152,19 @@ func (p *Poller) getWorkerPoolSize() int {
 		return 5
 	}
 	return size
+}
+
+// getPingTimeout returns the timeout for TCP reachability checks on virtual
+// devices. It reuses the SNMP timeout setting (default 10s) since both are
+// network-level reachability probes.
+func (p *Poller) getPingTimeout() time.Duration {
+	val, err := p.settingsRepo.Get(domain.SettingSNMPTimeout)
+	if err != nil {
+		return 5 * time.Second // default: 5s for TCP ping
+	}
+	secs, err := strconv.Atoi(val)
+	if err != nil || secs <= 0 {
+		return 5 * time.Second
+	}
+	return time.Duration(secs) * time.Second
 }

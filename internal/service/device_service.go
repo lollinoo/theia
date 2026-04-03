@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"sync"
+	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -349,6 +351,52 @@ func (s *DeviceService) ReprobeDevice(ctx context.Context, id uuid.UUID) error {
 		defer s.probeWg.Done()
 		s.probeDevice(device)
 	}()
+
+	return nil
+}
+
+// virtualPingPorts is the set of TCP ports attempted when ping-probing a
+// virtual device. The probe succeeds if ANY port accepts a connection.
+var virtualPingPorts = []string{"80", "443", "22"}
+
+// PingVirtualDevice performs a lightweight TCP reachability check for a
+// virtual device that has an IP address. It tries common TCP ports and
+// marks the device as "up" if any port is reachable, or "down" if all
+// fail. Virtual devices without an IP are left at "unknown".
+func (s *DeviceService) PingVirtualDevice(ctx context.Context, id uuid.UUID, timeout time.Duration) error {
+	device, err := s.deviceRepo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("getting device: %w", err)
+	}
+
+	if device.IP == "" {
+		// No IP — nothing to ping; keep status as-is (unknown).
+		return nil
+	}
+
+	reachable := false
+	for _, port := range virtualPingPorts {
+		if ctx.Err() != nil {
+			break
+		}
+		addr := net.JoinHostPort(device.IP, port)
+		conn, dialErr := net.DialTimeout("tcp", addr, timeout)
+		if dialErr == nil {
+			conn.Close()
+			reachable = true
+			break
+		}
+	}
+
+	newStatus := domain.DeviceStatusDown
+	if reachable {
+		newStatus = domain.DeviceStatusUp
+	}
+
+	// Only update if status actually changed, to avoid unnecessary DB writes.
+	if device.Status != newStatus {
+		s.markDeviceStatus(device.ID, device.IP, newStatus)
+	}
 
 	return nil
 }
