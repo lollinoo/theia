@@ -10,8 +10,9 @@ Network operators can see their entire topology at a glance with live stats on e
 
 ## Current State
 
-**Shipped:** v1.3.7 Virtual/Representative Nodes (2026-04-02)
-**Previous:** v1.3.0 Frontend Redesign (2026-03-27)
+**Shipped:** v1.3.8 CI/CD (2026-04-03)
+**Previous:** v1.3.7 Virtual/Representative Nodes (2026-04-02)
+**In progress:** Planning next milestone
 
 The application now supports virtual/representative nodes as first-class entities:
 - Virtual device type with subtypes (Internet, Cloud, Server, Generic) and partial unique IP index
@@ -61,10 +62,18 @@ The application now supports virtual/representative nodes as first-class entitie
 - ✓ Dual-mode AddDevicePanel with Physical/Virtual toggle — v1.3.7
 - ✓ Virtual-aware LinkCreatePanel with both-virtual rejection — v1.3.7
 - ✓ Context menu filtering for virtual nodes — v1.3.7
+- ✓ GitHub Actions CI pipeline with parallel Go/frontend test jobs — v1.3.8
+- ✓ Tag-based versioning replacing VERSION file — v1.3.8
+- ✓ Updated Makefile for tag-based workflow — v1.3.8
+- ✓ GHCR Docker image publishing on tag push — v1.3.8
+- ✓ Frontend version injection via Docker build chain — v1.3.8
+- ✓ Staging Docker Compose stack with GHCR pull and Watchtower auto-updates — v1.3.8
+- ✓ Production stack rewritten for GHCR pull with version pinning — v1.3.8
+- ✓ Makefile updated for GHCR-pull workflow with staging targets — v1.3.8
 
 ### Active
 
-(None — planning next milestone)
+(None — all requirements shipped with v1.3.8)
 
 ### Out of Scope
 
@@ -88,6 +97,7 @@ The application now supports virtual/representative nodes as first-class entitie
 - Frontend: ~15k LOC TypeScript, 224 tests across 33 files, React 18 + Tailwind CSS 4 + ReactFlow 12
 - Backend: Go 1.24, SQLite, SNMP polling, WebSocket metrics push, 53+ Go tests
 - Virtual device support: 4 subtypes (internet, cloud, server, generic), compact cards, virtual-aware link creation
+- CI/CD: GitHub Actions (parallel test jobs + tag-triggered GHCR release), Docker Compose staging/production stacks
 - The tool needs to work as both web and eventually desktop (Electron possible) — web-first for v1
 
 ## Known Tech Debt (from v1.3.0)
@@ -129,6 +139,12 @@ The application now supports virtual/representative nodes as first-class entitie
 | Explicit isVirtualLink guard in edgeBuilder | Clear intent vs relying on accidental zero-speed behavior | ✓ Good |
 | Stable id-based context menu filtering | Robust against label text changes; Set.has() lookup | ✓ Good |
 | Dual-mode AddDevicePanel with segmented toggle | Clean separation of physical/virtual forms with shared area multi-select | ✓ Good |
+| git describe --tags --always for versioning | No VERSION file to maintain; tags are source of truth | ✓ Good — shipped v1.3.8 |
+| GitHub Actions parallel test jobs | Backend (CGO) and frontend (Vitest) run independently; faster CI | ✓ Good — shipped v1.3.8 |
+| GHCR for Docker image registry | Private registry with GitHub integration; PAT-based auth | ✓ Good — shipped v1.3.8 |
+| Watchtower for staging auto-updates | nicholas-fedor fork with label scoping; 30s polling interval | ✓ Good — shipped v1.3.8 |
+| Fail-fast version enforcement in prod compose | `${THEIA_VERSION:?}` syntax prevents accidental latest deployment | ✓ Good — shipped v1.3.8 |
+| Single `make release` target with 5 pre-flight checks | Prevents partial/invalid releases; includes semver validation, clean worktree, master branch | ✓ Good — shipped v1.3.8 |
 
 ## Evolution
 
@@ -148,4 +164,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after v1.3.7 milestone*
+*Last updated: 2026-04-03 after v1.3.8 CI/CD milestone completion*

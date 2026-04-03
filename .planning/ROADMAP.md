@@ -4,6 +4,7 @@
 
 - ✅ **v1.3.0 Frontend Redesign** — Phases 1-7 (shipped 2026-03-27) — [archive](milestones/v1.3.0-ROADMAP.md)
 - ✅ **v1.3.7 Virtual/Representative Nodes** — Phases 8-10 (shipped 2026-04-02) — [archive](milestones/v1.3.7-ROADMAP.md)
+- ✅ **v1.3.8 CI/CD** — Phases 11-14 (shipped 2026-04-03) — [archive](milestones/v1.3.8-ROADMAP.md)
 
 ## Phases
 
@@ -29,6 +30,16 @@
 
 </details>
 
+<details>
+<summary>✅ v1.3.8 CI/CD (Phases 11-14) — SHIPPED 2026-04-03</summary>
+
+- [x] Phase 11: CI Pipeline (1/1 plan) — completed 2026-04-03
+- [x] Phase 12: Release Pipeline (2/2 plans) — completed 2026-04-03
+- [x] Phase 13: Deployment Stacks (2/2 plans) — completed 2026-04-03
+- [x] Phase 14: Fix Makefile Release Regression (1/1 plan) — completed 2026-04-03
+
+</details>
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -43,3 +54,7 @@
 | 8. Virtual Device Backend | v1.3.7 | 2/2 | Complete | 2026-04-01 |
 | 9. Virtual Node Rendering | v1.3.7 | 2/2 | Complete | 2026-04-01 |
 | 10. Virtual Node Forms | v1.3.7 | 2/2 | Complete | 2026-04-01 |
+| 11. CI Pipeline | v1.3.8 | 1/1 | Complete | 2026-04-03 |
+| 12. Release Pipeline | v1.3.8 | 2/2 | Complete | 2026-04-03 |
+| 13. Deployment Stacks | v1.3.8 | 2/2 | Complete | 2026-04-03 |
+| 14. Fix Makefile Release Regression | v1.3.8 | 1/1 | Complete | 2026-04-03 |

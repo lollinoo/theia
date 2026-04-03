@@ -1,5 +1,19 @@
 # Milestones
 
+## v1.3.8 CI/CD (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 5 plans, 10 tasks
+
+**Key accomplishments:**
+
+- Tag-based Makefile release workflow with git describe versioning and frontend version injection via Dockerfile ARG -> Vite define -> TypeScript constant
+- Tag-triggered GitHub Actions release job building and pushing backend/frontend Docker images to GHCR with semver and :staging tags
+- Staging Docker Compose stack pulling GHCR images with Watchtower auto-update on ports 3001/8081
+- Production compose rewritten to pull from GHCR with version enforcement, Makefile updated with GHCR-pull prod targets and staging targets, .env.prod.example documents THEIA_VERSION and GHCR auth setup
+- Gap closure: restored Makefile to Phase 12-01 state after parallel worktree regression
+
+---
+
 ## v1.3.7 Virtual/Representative Nodes (Shipped: 2026-04-02)
 
 **Phases completed:** 3 phases, 6 plans, 13 tasks
