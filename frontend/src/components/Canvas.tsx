@@ -305,9 +305,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
           { id: 'interface-stats', label: 'Per-Interface Stats', icon: 'devices', onClick: () => { if (d) setPanelContent({ type: 'interfaceStats', data: { device: d } }); setDeviceMenu(null); } },
           { id: 'configure', label: 'Configure', icon: 'settings', onClick: () => { if (d) setPanelContent({ type: 'deviceConfig', data: { device: d } }); setDeviceMenu(null); } },
         ];
-        // VIRT-16: Virtual nodes only get Grafana + Configure
-        // Hide Grafana for virtual nodes without an IP address
-        const virtualItemIds = new Set(d?.ip ? ['grafana', 'configure'] : ['configure']);
+        // Virtual nodes only get Configure (no real monitoring)
+        const virtualItemIds = new Set(['configure']);
         const items = isVirtual
           ? allItems.filter((item) => virtualItemIds.has(item.id))
           : allItems;

@@ -359,24 +359,31 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
               })}
             </div>
           )}
-          {areas.filter((a) => !areaIds.includes(a.id)).length > 0 && (
-            <select
-              value=""
-              onChange={(e) => {
-                if (e.target.value) {
-                  setAreaIds((prev) => [...prev, e.target.value]);
-                }
-              }}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-            >
-              <option value="">{areaIds.length === 0 ? 'Unassigned - select area...' : 'Add another area...'}</option>
-              {areas.filter((a) => !areaIds.includes(a.id)).map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          )}
+          <select
+            value=""
+            disabled={areas.filter((a) => !areaIds.includes(a.id)).length === 0}
+            onChange={(e) => {
+              if (e.target.value) {
+                setAreaIds((prev) => [...prev, e.target.value]);
+              }
+            }}
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:opacity-50"
+          >
+            <option value="">
+              {areas.length === 0
+                ? 'No areas created'
+                : areas.filter((a) => !areaIds.includes(a.id)).length === 0
+                  ? 'All areas assigned'
+                  : areaIds.length === 0
+                    ? 'Unassigned - select area...'
+                    : 'Add another area...'}
+            </option>
+            {areas.filter((a) => !areaIds.includes(a.id)).map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Vendor, SSH, Metrics Source, Prometheus, SNMP — physical devices only */}
