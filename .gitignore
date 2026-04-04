@@ -12,5 +12,6 @@ frontend/dist/index.html
 /theia
 .env
 .env.local
-.claude/worktrees/
+.claude/
+CHANGELOG.md
 .planning/
