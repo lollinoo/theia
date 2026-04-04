@@ -30,7 +30,7 @@ export interface DeviceInterface {
   oper_status: string;
 }
 
-export type MetricsSource = 'prometheus' | 'snmp' | 'prometheus_snmp_fallback';
+export type MetricsSource = 'prometheus' | 'snmp' | 'prometheus_snmp_fallback' | 'none';
 
 export interface Device {
   id: string;
@@ -166,6 +166,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
     const metricsSource: MetricsSource =
       rawMetricsSource === 'snmp' ? 'snmp'
       : rawMetricsSource === 'prometheus_snmp_fallback' ? 'prometheus_snmp_fallback'
+      : rawMetricsSource === 'none' ? 'none'
       : 'prometheus';
 
     return {

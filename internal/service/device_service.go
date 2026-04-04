@@ -94,6 +94,13 @@ func (s *DeviceService) AddDevice(
 		prometheusLabelValue = ip
 	}
 
+	// Virtual devices without an IP don't use any metrics source — they are
+	// status-inert nodes on the canvas whose state is never overridden by
+	// Prometheus or SNMP polling.
+	if deviceType == domain.DeviceTypeVirtual && ip == "" {
+		metricsSource = domain.MetricsSourceNone
+	}
+
 	initialStatus := domain.DeviceStatusProbing
 	if deviceType == domain.DeviceTypeVirtual {
 		initialStatus = domain.DeviceStatusUnknown

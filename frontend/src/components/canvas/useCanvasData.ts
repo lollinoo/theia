@@ -369,6 +369,7 @@ export function useCanvasData({
         if (src === 'prometheus' || src === 'prometheus_snmp_fallback') {
           effectiveStatuses[d.id] = 'down';
         }
+        // 'none' and 'snmp' sources are unaffected by Prometheus availability
       }
     }
 
