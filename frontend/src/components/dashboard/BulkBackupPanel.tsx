@@ -22,7 +22,8 @@ function getDeviceName(d: Device): string {
   return d.tags?.display_name || d.sys_name || d.ip;
 }
 
-export function BulkBackupPanel({ devices }: BulkBackupPanelProps) {
+export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
+  const devices = allDevices.filter((d) => d.device_type !== 'virtual');
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
   const [entries, setEntries] = useState<DeviceEntry[]>([]);
   const [error, setError] = useState('');

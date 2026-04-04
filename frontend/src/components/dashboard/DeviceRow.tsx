@@ -90,14 +90,16 @@ export function DeviceRow({
       <td className="px-3 py-2.5 font-mono text-[11px] text-on-bg-secondary whitespace-nowrap">
         {uptimeSecs !== null ? formatUptime(uptimeSecs) : '\u2014'}
       </td>
-      {/* Actions -- icon buttons per D-08 */}
+      {/* Actions -- icon buttons per D-08; virtual nodes have no SSH/backup */}
       <td className="px-3 py-2.5">
-        <div className="flex items-center justify-end gap-0.5">
-          <IconAction icon="terminal" title="SSH Credentials" onClick={onSSHCredentials} />
-          <IconAction icon="backup" title="Backup Now" onClick={onBackup} />
-          <IconAction icon="history" title="Backup History" onClick={onBackupHistory} />
-          <IconAction icon="description" title="View Config" onClick={onViewConfig} />
-        </div>
+        {device.device_type !== 'virtual' && (
+          <div className="flex items-center justify-end gap-0.5">
+            <IconAction icon="terminal" title="SSH Credentials" onClick={onSSHCredentials} />
+            <IconAction icon="backup" title="Backup Now" onClick={onBackup} />
+            <IconAction icon="history" title="Backup History" onClick={onBackupHistory} />
+            <IconAction icon="description" title="View Config" onClick={onViewConfig} />
+          </div>
+        )}
       </td>
     </tr>
   );
