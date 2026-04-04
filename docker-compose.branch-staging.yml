@@ -1,0 +1,72 @@
+# =============================================================================
+# Theia - Branch Staging Docker Compose
+# =============================================================================
+# Deploys a branch-specific staging stack. All resource names are scoped
+# by BRANCH_TAG so multiple branches can run simultaneously.
+#
+# Usage:
+#   make branch-staging BRANCH=fix/login-timeout
+#   make branch-staging-down BRANCH=fix/login-timeout
+# =============================================================================
+
+networks:
+  branch-net:
+    name: theia-branch-${BRANCH_TAG}-net
+    driver: bridge
+
+volumes:
+  branch-data:
+    name: theia-branch-${BRANCH_TAG}-data
+
+services:
+  backend:
+    image: ghcr.io/lollinoo/theia-backend:${BRANCH_TAG:?BRANCH_TAG must be set}
+    container_name: theia-branch-${BRANCH_TAG}-backend
+    restart: unless-stopped
+    networks:
+      - branch-net
+    volumes:
+      - branch-data:/data
+    environment:
+      - THEIA_DB_PATH=/data/theia.db
+      - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8082}
+      - THEIA_LOG_LEVEL=${LOG_LEVEL:-debug}
+      - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${BACKEND_PORT:-8082}/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  frontend:
+    image: ghcr.io/lollinoo/theia-frontend:${BRANCH_TAG}
+    container_name: theia-branch-${BRANCH_TAG}-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3002}:80"
+    environment:
+      - BACKEND_PORT=${BACKEND_PORT:-8082}
+    networks:
+      - branch-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  watchtower:
+    image: ghcr.io/nicholas-fedor/watchtower:latest
+    container_name: theia-branch-${BRANCH_TAG}-watchtower
+    restart: unless-stopped
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_POLL_INTERVAL=30
+      - WATCHTOWER_CLEANUP=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_CONFIG_PATH:-/root/.docker/config.json}:/config.json:ro
+    networks:
+      - branch-net

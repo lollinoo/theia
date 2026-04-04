@@ -1,6 +1,7 @@
 .PHONY: dev test test-integration build clean seed verify stop logs help \
        prod prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
+       branch-staging branch-staging-down branch-staging-logs branch-staging-pull branch-staging-clean branch-staging-prune \
        snmpwalk-router snmpwalk-switch snmpwalk-ap \
        version release
 
@@ -90,6 +91,53 @@ staging-down: ## Stop staging stack
 staging-logs: ## Follow staging backend logs
 	docker compose -f docker-compose.staging.yml --env-file .env.staging logs -f backend
 
+# ---------------------------------------------------------------------------
+# Branch staging (GHCR pull, branch-specific images)
+# ---------------------------------------------------------------------------
+
+# Sanitize branch name: feature/foo → feature-foo
+BRANCH_TAG = $(shell echo "$(BRANCH)" | sed 's|/|-|g' | sed 's|^-||' | tr '[:upper:]' '[:lower:]')
+
+branch-staging: ## Start branch staging stack (Usage: make branch-staging BRANCH=fix/foo)
+	@if [ -z "$(BRANCH)" ]; then \
+		echo "Usage: make branch-staging BRANCH=fix/login-timeout"; \
+		exit 1; fi
+	BRANCH_TAG=$(BRANCH_TAG) docker compose -f docker-compose.branch-staging.yml up -d
+	@echo ""
+	@echo "Branch staging stack for '$(BRANCH)' is running:"
+	@echo "  Frontend: http://localhost:$${FRONTEND_PORT:-3002}"
+	@echo "  Backend:  http://localhost:$${BACKEND_PORT:-8082}"
+	@echo "  Image tag: $(BRANCH_TAG)"
+	@echo "  Watchtower polls for new images every 30s"
+	@echo ""
+	@echo "Run 'make branch-staging-logs BRANCH=$(BRANCH)' to follow logs."
+
+branch-staging-down: ## Stop branch staging stack
+	@if [ -z "$(BRANCH)" ]; then echo "Usage: make branch-staging-down BRANCH=fix/foo"; exit 1; fi
+	BRANCH_TAG=$(BRANCH_TAG) docker compose -f docker-compose.branch-staging.yml down
+
+branch-staging-logs: ## Follow branch staging backend logs
+	@if [ -z "$(BRANCH)" ]; then echo "Usage: make branch-staging-logs BRANCH=fix/foo"; exit 1; fi
+	BRANCH_TAG=$(BRANCH_TAG) docker compose -f docker-compose.branch-staging.yml logs -f backend
+
+branch-staging-pull: ## Pull latest branch images manually
+	@if [ -z "$(BRANCH)" ]; then echo "Usage: make branch-staging-pull BRANCH=fix/foo"; exit 1; fi
+	docker pull ghcr.io/lollinoo/theia-backend:$(BRANCH_TAG)
+	docker pull ghcr.io/lollinoo/theia-frontend:$(BRANCH_TAG)
+
+branch-staging-clean: ## Stop branch stack and remove its volume
+	@if [ -z "$(BRANCH)" ]; then echo "Usage: make branch-staging-clean BRANCH=fix/foo"; exit 1; fi
+	BRANCH_TAG=$(BRANCH_TAG) docker compose -f docker-compose.branch-staging.yml down -v
+	@echo "Cleaned branch staging stack for '$(BRANCH)'"
+
+branch-staging-prune: ## Remove all branch-tagged images (keeps :staging and semver)
+	@echo "Removing branch-tagged images..."
+	@docker image ls --format '{{.Repository}}:{{.Tag}}' | grep 'lollinoo/theia-' | grep -vE ':(staging|[0-9]+\.[0-9]+\.[0-9]+)$$' | xargs -r docker rmi
+	@echo "Done. Run 'docker image prune -f' to reclaim space."
+
+# ---------------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------------
 clean: ## Stop containers, remove volumes, and prune build cache
 	docker compose --profile dev --profile test down -v
 	docker volume rm -f theia-data 2>/dev/null || true
