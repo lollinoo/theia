@@ -5,6 +5,7 @@
 #
 # Usage:
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+#   IMAGE_TAG=fix-links docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 #
 # First-time setup:
 #   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
@@ -28,7 +29,7 @@ services:
   # Backend — Pre-built Go binary from GHCR
   # ---------------------------------------------------------------------------
   backend:
-    image: ghcr.io/lollinoo/theia-backend:staging
+    image: ghcr.io/lollinoo/theia-backend:${IMAGE_TAG:-staging}
     container_name: theia-staging-backend
     restart: unless-stopped
     networks:
@@ -53,7 +54,7 @@ services:
   # Frontend — Pre-built nginx + React SPA from GHCR
   # ---------------------------------------------------------------------------
   frontend:
-    image: ghcr.io/lollinoo/theia-frontend:staging
+    image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-staging}
     container_name: theia-staging-frontend
     restart: unless-stopped
     ports:
@@ -69,7 +70,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   # ---------------------------------------------------------------------------
-  # Watchtower — Auto-pulls new :staging images every 30 seconds
+  # Watchtower — Auto-pulls new images for the configured IMAGE_TAG every 30s
   # ---------------------------------------------------------------------------
   watchtower:
     image: ghcr.io/nicholas-fedor/watchtower:latest
