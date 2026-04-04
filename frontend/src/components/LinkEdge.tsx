@@ -93,11 +93,15 @@ function LinkEdgeInner({
   const oneDevInactive = srcDevInactive !== tgtDevInactive;
 
   // Interface-level oper_status
-  const sourceUp = data?.sourceIfStatus === 'up';
-  const targetUp = data?.targetIfStatus === 'up';
+  // Treat null/undefined (e.g. virtual device side with no interface) as neutral —
+  // only known oper_status values participate in link color decisions.
+  const sourceIfKnown = data?.sourceIfStatus != null;
+  const targetIfKnown = data?.targetIfStatus != null;
+  const sourceUp = data?.sourceIfStatus === 'up' || !sourceIfKnown;
+  const targetUp = data?.targetIfStatus === 'up' || !targetIfKnown;
   const bothUp = sourceUp && targetUp;
-  const oneIfDown = (sourceUp && !targetUp) || (!sourceUp && targetUp);
-  const bothIfDown = !sourceUp && !targetUp && data?.sourceIfStatus != null;
+  const oneIfDown = (sourceIfKnown || targetIfKnown) && ((sourceUp && !targetUp) || (!sourceUp && targetUp));
+  const bothIfDown = sourceIfKnown && targetIfKnown && !sourceUp && !targetUp;
 
   // Priority: alerts → device status → interface oper_status → utilization → default
   let strokeColor: string;

@@ -407,6 +407,7 @@ func TestBuildSnapshot_WithMockPrometheus(t *testing.T) {
 		settingsRepo,
 		registry,
 		nil, // no SNMP poll func
+		nil, // no SNMP link poll func
 	)
 
 	snapshot, promAvailable, promErr := mc.buildSnapshot(context.Background())
@@ -480,6 +481,7 @@ func TestCollectAndBroadcast_BroadcastsOnCollect(t *testing.T) {
 		settingsRepo,
 		registry,
 		nil,
+		nil,
 	)
 
 	// collectAndBroadcast should:
@@ -546,6 +548,7 @@ func TestBuildSnapshot_PromUnavailable(t *testing.T) {
 		deviceRepo,
 		settingsRepo,
 		registry,
+		nil,
 		nil,
 	)
 
@@ -635,6 +638,7 @@ func TestBuildSnapshot_SNMPPollPath(t *testing.T) {
 		settingsRepo,
 		registry,
 		snmpPollFunc,
+		nil,
 	)
 
 	snapshot, _, _ := mc.buildSnapshot(context.Background())

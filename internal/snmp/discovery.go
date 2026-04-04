@@ -24,9 +24,11 @@ const (
 	OidIfAdminStatus = ".1.3.6.1.2.1.2.2.1.7"
 	OidIfOperStatus  = ".1.3.6.1.2.1.2.2.1.8"
 
-	OidIfXTable    = ".1.3.6.1.2.1.31.1.1"
-	OidIfName      = ".1.3.6.1.2.1.31.1.1.1.1"
-	OidIfHighSpeed = ".1.3.6.1.2.1.31.1.1.1.15"
+	OidIfXTable      = ".1.3.6.1.2.1.31.1.1"
+	OidIfName        = ".1.3.6.1.2.1.31.1.1.1.1"
+	OidIfHCInOctets  = ".1.3.6.1.2.1.31.1.1.1.6"
+	OidIfHCOutOctets = ".1.3.6.1.2.1.31.1.1.1.10"
+	OidIfHighSpeed   = ".1.3.6.1.2.1.31.1.1.1.15"
 
 	OidLLDPRemChassisId = ".1.0.8802.1.1.2.1.4.1.1.5"
 	OidLLDPRemPortId    = ".1.0.8802.1.1.2.1.4.1.1.7"
@@ -46,6 +48,59 @@ const (
 	OidEntPhySensorType    = ".1.3.6.1.2.1.99.1.1.1.1"
 	OidEntPhySensorValue   = ".1.3.6.1.2.1.99.1.1.1.4"
 )
+
+// InterfaceCounter holds raw 64-bit octet counters for a single interface.
+type InterfaceCounter struct {
+	IfIndex    int
+	IfName     string
+	InOctets   uint64
+	OutOctets  uint64
+}
+
+// PollInterfaceCounters walks ifHCInOctets and ifHCOutOctets (64-bit counters)
+// and returns raw counter values per interface. The caller is responsible for
+// computing rates by comparing two successive polls.
+func PollInterfaceCounters(client ClientInterface) []InterfaceCounter {
+	// Build ifIndex→ifName map from ifXTable (or ifDescr as fallback)
+	ifNames := make(map[int]string)
+	for _, pdu := range bulkWalkSafe(client, OidIfName) {
+		if idx := lastOIDIndex(pdu.Name, OidIfName); idx >= 0 {
+			ifNames[idx] = stringFromPDU(pdu)
+		}
+	}
+	if len(ifNames) == 0 {
+		for _, pdu := range bulkWalkSafe(client, OidIfDescr) {
+			if idx := lastOIDIndex(pdu.Name, OidIfDescr); idx >= 0 {
+				ifNames[idx] = stringFromPDU(pdu)
+			}
+		}
+	}
+
+	inOctets := make(map[int]uint64)
+	for _, pdu := range bulkWalkSafe(client, OidIfHCInOctets) {
+		if idx := lastOIDIndex(pdu.Name, OidIfHCInOctets); idx >= 0 {
+			inOctets[idx] = uint64FromPDU(pdu)
+		}
+	}
+
+	outOctets := make(map[int]uint64)
+	for _, pdu := range bulkWalkSafe(client, OidIfHCOutOctets) {
+		if idx := lastOIDIndex(pdu.Name, OidIfHCOutOctets); idx >= 0 {
+			outOctets[idx] = uint64FromPDU(pdu)
+		}
+	}
+
+	var counters []InterfaceCounter
+	for idx, name := range ifNames {
+		counters = append(counters, InterfaceCounter{
+			IfIndex:   idx,
+			IfName:    name,
+			InOctets:  inOctets[idx],
+			OutOctets: outOctets[idx],
+		})
+	}
+	return counters
+}
 
 // DiscoveryResult holds the aggregated data from an SNMP discovery walk.
 type DiscoveryResult struct {
@@ -533,6 +588,26 @@ func int64FromPDU(pdu gosnmp.SnmpPDU) int64 {
 		return int64(v)
 	case uint64:
 		return int64(v)
+	}
+	return 0
+}
+
+func uint64FromPDU(pdu gosnmp.SnmpPDU) uint64 {
+	switch v := pdu.Value.(type) {
+	case uint64:
+		return v
+	case uint:
+		return uint64(v)
+	case uint32:
+		return uint64(v)
+	case int:
+		if v >= 0 {
+			return uint64(v)
+		}
+	case int64:
+		if v >= 0 {
+			return uint64(v)
+		}
 	}
 	return 0
 }

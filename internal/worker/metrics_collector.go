@@ -22,15 +22,35 @@ import (
 // vendorName is used to resolve vendor-specific SNMP OIDs.
 type SNMPPollFunc func(target string, creds domain.SNMPCredentials, vendorName string) (domain.DeviceMetrics, error)
 
+// SNMPLinkPollFunc polls a single device via SNMP for interface octet counters
+// (ifHCInOctets / ifHCOutOctets). Returns raw counter snapshots that the
+// MetricsCollector converts to rates by comparing successive polls.
+type SNMPLinkPollFunc func(target string, creds domain.SNMPCredentials) ([]SNMPIfCounter, error)
+
+// SNMPIfCounter holds a single poll's raw 64-bit counter values for one interface.
+type SNMPIfCounter struct {
+	IfName    string
+	InOctets  uint64
+	OutOctets uint64
+}
+
+// snmpCounterSample stores a previous counter reading for rate computation.
+type snmpCounterSample struct {
+	InOctets  uint64
+	OutOctets uint64
+	Time      time.Time
+}
+
 // MetricsCollector queries Prometheus on a cadence and pushes full-state snapshots over WebSockets.
 type MetricsCollector struct {
-	promClient      *metrics.PromClient
-	hub             *ws.Hub
-	cache           *cache.DeviceLinkCache
-	deviceRepo      domain.DeviceRepository // kept for Update() writes
-	settingsRepo    domain.SettingsRepository
-	vendorRegistry  *vendor.Registry
-	snmpPollFunc    SNMPPollFunc // optional; polls SNMP-sourced devices and fallback devices
+	promClient       *metrics.PromClient
+	hub              *ws.Hub
+	cache            *cache.DeviceLinkCache
+	deviceRepo       domain.DeviceRepository // kept for Update() writes
+	settingsRepo     domain.SettingsRepository
+	vendorRegistry   *vendor.Registry
+	snmpPollFunc     SNMPPollFunc     // optional; polls SNMP-sourced devices and fallback devices
+	snmpLinkPollFunc SNMPLinkPollFunc // optional; polls interface counters for SNMP link metrics
 
 	mu              sync.RWMutex
 	lastSnapshot    *ws.SnapshotPayload
@@ -38,11 +58,18 @@ type MetricsCollector struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	healthDone      chan struct{} // closed when health check goroutine exits
+
+	// prevCounters stores the previous SNMP counter sample per device IP + interface name,
+	// used to compute byte rates between successive polls.
+	prevCountersMu sync.Mutex
+	prevCounters   map[string]map[string]snmpCounterSample // deviceIP → ifName → sample
 }
 
 // NewMetricsCollector creates a background collector for live Prometheus data.
 // snmpPollFunc may be nil; when provided it is used as a fallback for devices
 // that Prometheus has no metrics for.
+// snmpLinkPollFunc may be nil; when provided it polls interface counters for
+// SNMP-sourced devices to produce link throughput metrics.
 func NewMetricsCollector(
 	promClient *metrics.PromClient,
 	hub *ws.Hub,
@@ -51,17 +78,20 @@ func NewMetricsCollector(
 	settingsRepo domain.SettingsRepository,
 	vendorRegistry *vendor.Registry,
 	snmpPollFunc SNMPPollFunc,
+	snmpLinkPollFunc SNMPLinkPollFunc,
 ) *MetricsCollector {
 	return &MetricsCollector{
-		promClient:     promClient,
-		hub:            hub,
-		cache:          cache,
-		deviceRepo:     deviceRepo,
-		settingsRepo:   settingsRepo,
-		vendorRegistry: vendorRegistry,
-		snmpPollFunc:   snmpPollFunc,
-		lastSnapshot:   ws.EmptySnapshot(),
-		promAvailable:  true, // assume available until proven otherwise
+		promClient:       promClient,
+		hub:              hub,
+		cache:            cache,
+		deviceRepo:       deviceRepo,
+		settingsRepo:     settingsRepo,
+		vendorRegistry:   vendorRegistry,
+		snmpPollFunc:     snmpPollFunc,
+		snmpLinkPollFunc: snmpLinkPollFunc,
+		lastSnapshot:     ws.EmptySnapshot(),
+		promAvailable:    true, // assume available until proven otherwise
+		prevCounters:     make(map[string]map[string]snmpCounterSample),
 		done:           make(chan struct{}),
 	}
 }
@@ -551,6 +581,77 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 		wg.Wait()
 	}
 
+	// Poll SNMP interface counters for link throughput on SNMP-sourced devices.
+	// Converts raw counter deltas to bit rates and injects them as LinkMetrics.
+	snmpLinkMetricsByIP := make(map[string][]domain.LinkMetrics)
+	if c.snmpLinkPollFunc != nil {
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		for _, dev := range devices {
+			src := dev.MetricsSource
+			if src == "" {
+				src = domain.MetricsSourcePrometheus
+			}
+			if src != domain.MetricsSourceSNMP {
+				continue
+			}
+			if dev.IP == "" {
+				continue
+			}
+
+			dev := dev
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				counters, err := c.snmpLinkPollFunc(dev.IP, dev.SNMPCredentials)
+				if err != nil {
+					log.Printf("SNMP link poll failed for %s: %v", dev.IP, err)
+					return
+				}
+				now := time.Now()
+				var linkMetrics []domain.LinkMetrics
+
+				c.prevCountersMu.Lock()
+				prev := c.prevCounters[dev.IP]
+				if prev == nil {
+					prev = make(map[string]snmpCounterSample)
+					c.prevCounters[dev.IP] = prev
+				}
+				for _, counter := range counters {
+					if old, ok := prev[counter.IfName]; ok {
+						dt := now.Sub(old.Time).Seconds()
+						if dt > 0 {
+							// Handle 64-bit counter wraps gracefully
+							inDelta := counter.InOctets - old.InOctets
+							outDelta := counter.OutOctets - old.OutOctets
+							rxBps := float64(inDelta) * 8.0 / dt
+							txBps := float64(outDelta) * 8.0 / dt
+							linkMetrics = append(linkMetrics, domain.LinkMetrics{
+								IfName:      counter.IfName,
+								TxBps:       &txBps,
+								RxBps:       &rxBps,
+								CollectedAt: now.UTC(),
+							})
+						}
+					}
+					prev[counter.IfName] = snmpCounterSample{
+						InOctets:  counter.InOctets,
+						OutOctets: counter.OutOctets,
+						Time:      now,
+					}
+				}
+				c.prevCountersMu.Unlock()
+
+				if len(linkMetrics) > 0 {
+					mu.Lock()
+					snmpLinkMetricsByIP[dev.IP] = linkMetrics
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+	}
+
 	// Translate link metrics from label-value keying back to device-IP keying for attachLinkMetrics.
 	linkMetricsByIP := make(map[string][]domain.LinkMetrics)
 	for _, device := range devices {
@@ -561,6 +662,10 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 		if metrics, ok := linkMetricsByLabelValue[lv]; ok {
 			linkMetricsByIP[device.IP] = metrics
 		}
+	}
+	// Merge SNMP link metrics (does not overwrite Prometheus data — only SNMP-sourced devices reach here)
+	for ip, metrics := range snmpLinkMetricsByIP {
+		linkMetricsByIP[ip] = append(linkMetricsByIP[ip], metrics...)
 	}
 
 	linkMetricsByID := attachLinkMetrics(devices, links, linkMetricsByIP)

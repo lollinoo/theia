@@ -165,7 +165,8 @@ func main() {
 	go hub.Run()
 
 	snmpPollFunc := newSNMPMetricsPollFunc(settingsRepo, vendorRegistry)
-	collector := worker.NewMetricsCollector(promClient, hub, deviceLinkCache, deviceRepo, settingsRepo, vendorRegistry, snmpPollFunc)
+	snmpLinkPollFunc := newSNMPLinkPollFunc(settingsRepo)
+	collector := worker.NewMetricsCollector(promClient, hub, deviceLinkCache, deviceRepo, settingsRepo, vendorRegistry, snmpPollFunc, snmpLinkPollFunc)
 	collector.Start(ctx)
 
 	wsHandler := ws.NewHandler(hub, collector.GetSnapshot, collector.IsPromAvailable)
@@ -315,6 +316,41 @@ func newSNMPMetricsPollFunc(settingsRepo domain.SettingsRepository, vendorRegist
 			UptimeSecs:  uptime,
 			TempCelsius: temp,
 		}, nil
+	}
+}
+
+// newSNMPLinkPollFunc creates an SNMPLinkPollFunc that polls ifHCInOctets and
+// ifHCOutOctets for interface throughput data on SNMP-sourced devices.
+func newSNMPLinkPollFunc(settingsRepo domain.SettingsRepository) worker.SNMPLinkPollFunc {
+	return func(target string, creds domain.SNMPCredentials) ([]worker.SNMPIfCounter, error) {
+		timeout := 5 * time.Second
+		retries := 1
+
+		if val, err := settingsRepo.Get(domain.SettingSNMPTimeout); err == nil {
+			if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+				timeout = time.Duration(secs) * time.Second
+			}
+		}
+
+		client, err := snmp.NewClient(target, creds, timeout, retries)
+		if err != nil {
+			return nil, err
+		}
+		if err := client.Connect(); err != nil {
+			return nil, err
+		}
+		defer client.Close()
+
+		raw := snmp.PollInterfaceCounters(client)
+		result := make([]worker.SNMPIfCounter, len(raw))
+		for i, c := range raw {
+			result[i] = worker.SNMPIfCounter{
+				IfName:    c.IfName,
+				InOctets:  c.InOctets,
+				OutOctets: c.OutOctets,
+			}
+		}
+		return result, nil
 	}
 }
 
