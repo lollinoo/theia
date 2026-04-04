@@ -13,3 +13,4 @@ frontend/dist/index.html
 .env
 .env.local
 .claude/worktrees/
+.planning/
