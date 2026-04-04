@@ -6,6 +6,3 @@ dist
 *.test.tsx
 src/test-setup.ts
 vitest.config.ts
-
-# TypeScript build config (only tsconfig.app.json is needed for tsc -b)
-tsconfig.node.json
