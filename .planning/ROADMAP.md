@@ -55,11 +55,11 @@
 
 </details>
 
-### 🚧 v1.5.0 WinBox Integration (In Progress)
+### v1.5.0 WinBox Integration (In Progress)
 
 **Milestone Goal:** One-click WinBox launch from the topology map, backed by a role-aware multi-profile credential system.
 
-- [ ] **Phase 23: Credential Profile Schema + Domain** - Join table, role column, BackupService update, data migration preserving encrypted credentials
+- [x] **Phase 23: Credential Profile Schema + Domain** - Join table, role column, BackupService update, data migration preserving encrypted credentials (completed 2026-04-07)
 - [ ] **Phase 24: Backend API — Profiles, Assignments, WinBox Credentials** - 7 new routes, per-device assignment management, WinBox credential endpoint, bridge download delivery
 - [ ] **Phase 25: Frontend — Credential Profile Manager + WinBox Actions** - Profile manager UI, per-device assignment, role field, WinBox actions in canvas and table, bridge health check
 - [ ] **Phase 26: WinBox Bridge Binary** - CGO-free Go binary for 6 targets, CORS+Host dual-validation, hardcoded WinBox-only execution
@@ -77,10 +77,10 @@
   3. On upgrade, every existing SSH profile gains a `role` of "Admin" automatically — zero data loss, `encrypted_secret` preserved
   4. `BackupService` resolves credential profiles via the new join table and continues to perform successful backups without regression
   5. The `json:"-"` annotation on `encrypted_secret` ensures credentials are never exposed in API responses
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 23-01-PLAN.md — Migration 000012 + CredentialProfile domain type
-- [ ] 23-02-PLAN.md — Repository, service, handler, router rename + test updates
+- [x] 23-01-PLAN.md — Migration 000012 + CredentialProfile domain type
+- [x] 23-02-PLAN.md — Repository, service, handler, router rename + test updates
 
 ### Phase 24: Backend API — Profiles, Assignments, WinBox Credentials
 **Goal**: The backend exposes full CRUD for credential profiles and per-device assignments, plus a WinBox credential endpoint and bridge binary download
@@ -92,7 +92,11 @@ Plans:
   3. User can designate exactly one profile per device as the WinBox profile via API
   4. A dedicated endpoint returns the WinBox credential (IP + decrypted username/password) for a device — only when a WinBox profile is designated
   5. Bridge binaries for all 6 targets (Windows/Linux/macOS × amd64/arm64) are downloadable from Theia Settings via the API
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 24-01-PLAN.md — Migration 000013 + repo methods + route rename + config field
+- [ ] 24-02-PLAN.md — Device assignment handler + WinBox endpoints + router wiring
+- [ ] 24-03-PLAN.md — Bridge binary download handler
 
 ### Phase 25: Frontend — Credential Profile Manager + WinBox Actions
 **Goal**: Users can manage credential profiles and launch WinBox from the topology map and device table
@@ -155,8 +159,8 @@ Plans:
 | 20. Server-Side Validation & Threat Hardening | v1.4.0 | 2/2 | Complete | 2026-04-07 |
 | 21. Frontend Validation Parity | v1.4.0 | 2/2 | Complete | 2026-04-07 |
 | 22. Validation Integration & Closure | v1.4.0 | 1/1 | Complete | 2026-04-07 |
-| 23. Credential Profile Schema + Domain | v1.5.0 | 0/2 | Not started | — |
-| 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 0/? | Not started | — |
+| 23. Credential Profile Schema + Domain | v1.5.0 | 2/2 | Complete   | 2026-04-07 |
+| 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 0/3 | Not started | — |
 | 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 0/? | Not started | — |
 | 26. WinBox Bridge Binary | v1.5.0 | 0/? | Not started | — |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 0/? | Not started | — |
