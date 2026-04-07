@@ -230,8 +230,8 @@ func NewRouter(
 		}
 	})
 
-	// SSH profile routes (paths preserved for frontend compatibility — type renamed to CredentialProfile)
-	mux.HandleFunc("/api/v1/ssh-profiles", func(w http.ResponseWriter, r *http.Request) {
+	// Credential profile routes
+	mux.HandleFunc("/api/v1/credential-profiles", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			credentialProfileHandler.HandleList(w, r)
@@ -242,7 +242,7 @@ func NewRouter(
 		}
 	})
 
-	mux.HandleFunc("/api/v1/ssh-profiles/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/credential-profiles/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/test") && r.Method == http.MethodPost {
 			credentialProfileHandler.HandleTest(w, r)
 			return
@@ -406,6 +406,12 @@ func NewRouter(
 
 		// Instance backup restore bypasses body size and JSON content-type middleware (multipart upload)
 		if r.URL.Path == "/api/v1/instance-backups/restore" && r.Method == http.MethodPost {
+			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			return
+		}
+
+		// Bridge binary download bypasses JSON content-type and body size middleware
+		if strings.HasPrefix(r.URL.Path, "/api/v1/bridge/download/") && r.Method == http.MethodGet {
 			CORS(RequestLogger(mux)).ServeHTTP(w, r)
 			return
 		}

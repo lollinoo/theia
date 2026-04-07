@@ -59,7 +59,7 @@ func credentialProfileToResponse(p *domain.CredentialProfile) credentialProfileR
 	}
 }
 
-// HandleList handles GET /api/v1/ssh-profiles
+// HandleList handles GET /api/v1/credential-profiles
 func (h *CredentialProfileHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	profiles, err := h.svc.GetAllCredentialProfiles(r.Context())
 	if err != nil {
@@ -74,7 +74,7 @@ func (h *CredentialProfileHandler) HandleList(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": resp})
 }
 
-// HandleCreate handles POST /api/v1/ssh-profiles
+// HandleCreate handles POST /api/v1/credential-profiles
 func (h *CredentialProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req credentialProfileRequest
 	if !decodeJSON(w, r, &req) {
@@ -134,9 +134,9 @@ func (h *CredentialProfileHandler) HandleCreate(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": credentialProfileToResponse(profile)})
 }
 
-// HandleGet handles GET /api/v1/ssh-profiles/{id}
+// HandleGet handles GET /api/v1/credential-profiles/{id}
 func (h *CredentialProfileHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
-	id, err := extractIDFromPath(r.URL.Path, "/api/v1/ssh-profiles/")
+	id, err := extractIDFromPath(r.URL.Path, "/api/v1/credential-profiles/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile ID")
 		return
@@ -155,9 +155,9 @@ func (h *CredentialProfileHandler) HandleGet(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": credentialProfileToResponse(profile)})
 }
 
-// HandleUpdate handles PUT /api/v1/ssh-profiles/{id}
+// HandleUpdate handles PUT /api/v1/credential-profiles/{id}
 func (h *CredentialProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
-	id, err := extractIDFromPath(r.URL.Path, "/api/v1/ssh-profiles/")
+	id, err := extractIDFromPath(r.URL.Path, "/api/v1/credential-profiles/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile ID")
 		return
@@ -224,9 +224,9 @@ func (h *CredentialProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": credentialProfileToResponse(profile)})
 }
 
-// HandleDelete handles DELETE /api/v1/ssh-profiles/{id}
+// HandleDelete handles DELETE /api/v1/credential-profiles/{id}
 func (h *CredentialProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	id, err := extractIDFromPath(r.URL.Path, "/api/v1/ssh-profiles/")
+	id, err := extractIDFromPath(r.URL.Path, "/api/v1/credential-profiles/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile ID")
 		return
@@ -239,7 +239,7 @@ func (h *CredentialProfileHandler) HandleDelete(w http.ResponseWriter, r *http.R
 		return
 	}
 	if inUse {
-		writeError(w, http.StatusConflict, "cannot delete SSH profile: it is still assigned to one or more devices")
+		writeError(w, http.StatusConflict, "cannot delete credential profile: it is still assigned to one or more devices")
 		return
 	}
 
@@ -255,10 +255,10 @@ func (h *CredentialProfileHandler) HandleDelete(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// HandleTest handles POST /api/v1/ssh-profiles/{id}/test
+// HandleTest handles POST /api/v1/credential-profiles/{id}/test
 func (h *CredentialProfileHandler) HandleTest(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/test")
-	id, err := extractIDFromPath(path, "/api/v1/ssh-profiles/")
+	id, err := extractIDFromPath(path, "/api/v1/credential-profiles/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile ID")
 		return
