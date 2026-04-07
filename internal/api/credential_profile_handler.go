@@ -10,68 +10,73 @@ import (
 	"github.com/lollinoo/theia/internal/service"
 )
 
-// SSHProfileHandler provides HTTP handlers for SSH profile CRUD.
-type SSHProfileHandler struct {
-	svc             *service.BackupService
-	sshProfileRepo  *sqlite.SSHProfileRepo
+// CredentialProfileHandler provides HTTP handlers for credential profile CRUD.
+type CredentialProfileHandler struct {
+	svc                  *service.BackupService
+	credentialProfileRepo *sqlite.CredentialProfileRepo
 }
 
-// NewSSHProfileHandler creates a new SSHProfileHandler.
-func NewSSHProfileHandler(svc *service.BackupService, sshProfileRepo *sqlite.SSHProfileRepo) *SSHProfileHandler {
-	return &SSHProfileHandler{svc: svc, sshProfileRepo: sshProfileRepo}
+// NewCredentialProfileHandler creates a new CredentialProfileHandler.
+func NewCredentialProfileHandler(svc *service.BackupService, credentialProfileRepo *sqlite.CredentialProfileRepo) *CredentialProfileHandler {
+	return &CredentialProfileHandler{svc: svc, credentialProfileRepo: credentialProfileRepo}
 }
 
-type sshProfileRequest struct {
+type credentialProfileRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Username    string `json:"username"`
 	Port        int    `json:"port"`
 	AuthMethod  string `json:"auth_method"`
 	Secret      string `json:"secret"`
+	Role        string `json:"role"`
 }
 
-type sshProfileResponse struct {
+// credentialProfileResponse is the API response for a credential profile.
+// EncryptedSecret is intentionally excluded (T-23-04 mitigation).
+type credentialProfileResponse struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Username    string `json:"username"`
 	Port        int    `json:"port"`
 	AuthMethod  string `json:"auth_method"`
+	Role        string `json:"role"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }
 
-func sshProfileToResponse(p *domain.SSHProfile) sshProfileResponse {
-	return sshProfileResponse{
+func credentialProfileToResponse(p *domain.CredentialProfile) credentialProfileResponse {
+	return credentialProfileResponse{
 		ID:          p.ID.String(),
 		Name:        p.Name,
 		Description: p.Description,
 		Username:    p.Username,
 		Port:        p.Port,
 		AuthMethod:  string(p.AuthMethod),
+		Role:        p.Role,
 		CreatedAt:   p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:   p.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 
 // HandleList handles GET /api/v1/ssh-profiles
-func (h *SSHProfileHandler) HandleList(w http.ResponseWriter, r *http.Request) {
-	profiles, err := h.svc.GetAllSSHProfiles(r.Context())
+func (h *CredentialProfileHandler) HandleList(w http.ResponseWriter, r *http.Request) {
+	profiles, err := h.svc.GetAllCredentialProfiles(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
-	resp := make([]sshProfileResponse, 0, len(profiles))
+	resp := make([]credentialProfileResponse, 0, len(profiles))
 	for i := range profiles {
-		resp = append(resp, sshProfileToResponse(&profiles[i]))
+		resp = append(resp, credentialProfileToResponse(&profiles[i]))
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": resp})
 }
 
 // HandleCreate handles POST /api/v1/ssh-profiles
-func (h *SSHProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
-	var req sshProfileRequest
+func (h *CredentialProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
+	var req credentialProfileRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -111,7 +116,11 @@ func (h *SSHProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	profile, err := h.svc.CreateSSHProfile(r.Context(), strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.Username, req.Port, authMethod, req.Secret)
+	if req.Role == "" {
+		req.Role = "Admin"
+	}
+
+	profile, err := h.svc.CreateCredentialProfile(r.Context(), strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.Username, req.Port, authMethod, req.Secret, req.Role)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			writeError(w, http.StatusConflict, "a profile with that name already exists")
@@ -122,18 +131,18 @@ func (h *SSHProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": sshProfileToResponse(profile)})
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": credentialProfileToResponse(profile)})
 }
 
 // HandleGet handles GET /api/v1/ssh-profiles/{id}
-func (h *SSHProfileHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
+func (h *CredentialProfileHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	id, err := extractIDFromPath(r.URL.Path, "/api/v1/ssh-profiles/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile ID")
 		return
 	}
 
-	profile, err := h.svc.GetSSHProfile(r.Context(), id)
+	profile, err := h.svc.GetCredentialProfile(r.Context(), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -143,18 +152,18 @@ func (h *SSHProfileHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": sshProfileToResponse(profile)})
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": credentialProfileToResponse(profile)})
 }
 
 // HandleUpdate handles PUT /api/v1/ssh-profiles/{id}
-func (h *SSHProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
+func (h *CredentialProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	id, err := extractIDFromPath(r.URL.Path, "/api/v1/ssh-profiles/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile ID")
 		return
 	}
 
-	var req sshProfileRequest
+	var req credentialProfileRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -194,7 +203,11 @@ func (h *SSHProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	profile, err := h.svc.UpdateSSHProfile(r.Context(), id, strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.Username, req.Port, authMethod, req.Secret)
+	if req.Role == "" {
+		req.Role = "Admin"
+	}
+
+	profile, err := h.svc.UpdateCredentialProfile(r.Context(), id, strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.Username, req.Port, authMethod, req.Secret, req.Role)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -208,11 +221,11 @@ func (h *SSHProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": sshProfileToResponse(profile)})
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": credentialProfileToResponse(profile)})
 }
 
 // HandleDelete handles DELETE /api/v1/ssh-profiles/{id}
-func (h *SSHProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
+func (h *CredentialProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	id, err := extractIDFromPath(r.URL.Path, "/api/v1/ssh-profiles/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile ID")
@@ -220,7 +233,7 @@ func (h *SSHProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Check if any device references this profile
-	inUse, err := h.sshProfileRepo.IsInUse(id)
+	inUse, err := h.credentialProfileRepo.IsInUse(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
@@ -230,7 +243,7 @@ func (h *SSHProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := h.svc.DeleteSSHProfile(r.Context(), id); err != nil {
+	if err := h.svc.DeleteCredentialProfile(r.Context(), id); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -243,7 +256,7 @@ func (h *SSHProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request)
 }
 
 // HandleTest handles POST /api/v1/ssh-profiles/{id}/test
-func (h *SSHProfileHandler) HandleTest(w http.ResponseWriter, r *http.Request) {
+func (h *CredentialProfileHandler) HandleTest(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/test")
 	id, err := extractIDFromPath(path, "/api/v1/ssh-profiles/")
 	if err != nil {
@@ -262,7 +275,7 @@ func (h *SSHProfileHandler) HandleTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.TestSSHProfile(r.Context(), id, body.TargetIP); err != nil {
+	if err := h.svc.TestCredentialProfile(r.Context(), id, body.TargetIP); err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
