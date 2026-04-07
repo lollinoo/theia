@@ -60,7 +60,7 @@
 **Milestone Goal:** One-click WinBox launch from the topology map, backed by a role-aware multi-profile credential system.
 
 - [x] **Phase 23: Credential Profile Schema + Domain** - Join table, role column, BackupService update, data migration preserving encrypted credentials (completed 2026-04-07)
-- [ ] **Phase 24: Backend API — Profiles, Assignments, WinBox Credentials** - 7 new routes, per-device assignment management, WinBox credential endpoint, bridge download delivery
+- [x] **Phase 24: Backend API — Profiles, Assignments, WinBox Credentials** - 7 new routes, per-device assignment management, WinBox credential endpoint, bridge download delivery (completed 2026-04-07)
 - [ ] **Phase 25: Frontend — Credential Profile Manager + WinBox Actions** - Profile manager UI, per-device assignment, role field, WinBox actions in canvas and table, bridge health check
 - [ ] **Phase 26: WinBox Bridge Binary** - CGO-free Go binary for 6 targets, CORS+Host dual-validation, hardcoded WinBox-only execution
 - [ ] **Phase 27: Schema Cleanup — Drop Legacy FK** - SQLite 12-step table-recreation migration dropping legacy ssh_profile_id FK column
@@ -92,11 +92,11 @@ Plans:
   3. User can designate exactly one profile per device as the WinBox profile via API
   4. A dedicated endpoint returns the WinBox credential (IP + decrypted username/password) for a device — only when a WinBox profile is designated
   5. Bridge binaries for all 6 targets (Windows/Linux/macOS × amd64/arm64) are downloadable from Theia Settings via the API
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 Plans:
-- [ ] 24-01-PLAN.md — Migration 000013 + repo methods + route rename + config field
-- [ ] 24-02-PLAN.md — Device assignment handler + WinBox endpoints + router wiring
-- [ ] 24-03-PLAN.md — Bridge binary download handler
+- [x] 24-01-PLAN.md — Migration 000013 + repo methods + route rename + config field
+- [x] 24-02-PLAN.md — Device assignment handler + WinBox endpoints + router wiring
+- [x] 24-03-PLAN.md — Bridge binary download handler
 
 ### Phase 25: Frontend — Credential Profile Manager + WinBox Actions
 **Goal**: Users can manage credential profiles and launch WinBox from the topology map and device table
@@ -108,7 +108,11 @@ Plans:
   3. WinBox action is visually disabled with an explanatory tooltip when no WinBox profile is designated for the device
   4. Frontend detects whether the bridge is running via a health check endpoint and reflects bridge status to the user
   5. User can view, create, edit, delete, and assign credential profiles to a device from within Theia UI
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 25-01-PLAN.md — Type rename (SSHProfile to CredentialProfile), API client update, CredentialProfileManager + role field
+- [ ] 25-02-PLAN.md — DeviceConfigPanel Credentials section (assignment list, add/remove, WinBox designation toggle)
+- [ ] 25-03-PLAN.md — WinBox actions (Canvas context menu + DeviceRow) + useBridgeHealth hook + 3-state disabled logic
 **UI hint**: yes
 
 ### Phase 26: WinBox Bridge Binary
@@ -160,7 +164,7 @@ Plans:
 | 21. Frontend Validation Parity | v1.4.0 | 2/2 | Complete | 2026-04-07 |
 | 22. Validation Integration & Closure | v1.4.0 | 1/1 | Complete | 2026-04-07 |
 | 23. Credential Profile Schema + Domain | v1.5.0 | 2/2 | Complete   | 2026-04-07 |
-| 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 0/3 | Not started | — |
-| 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 0/? | Not started | — |
+| 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete   | 2026-04-07 |
+| 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 0/3 | Not started | — |
 | 26. WinBox Bridge Binary | v1.5.0 | 0/? | Not started | — |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 0/? | Not started | — |
