@@ -9,6 +9,25 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// DeviceCredentialProfileRow is the join-table row returned by ListAssignedProfiles.
+type DeviceCredentialProfileRow struct {
+	ProfileID  uuid.UUID
+	Name       string
+	Username   string
+	Port       int
+	AuthMethod domain.SSHAuthMethod
+	Role       string
+	IsWinbox   bool
+	CreatedAt  time.Time
+}
+
+// WinboxAssignmentRow holds the minimal data needed to launch WinBox for a device.
+type WinboxAssignmentRow struct {
+	ProfileID       uuid.UUID
+	Username        string
+	EncryptedSecret string
+}
+
 // CredentialProfileRepo implements domain.CredentialProfileRepository using SQLite.
 type CredentialProfileRepo struct {
 	db *sql.DB
@@ -117,14 +136,151 @@ func (r *CredentialProfileRepo) Delete(id uuid.UUID) error {
 }
 
 // IsInUse checks whether any device references this credential profile.
-// Uses the legacy ssh_profile_id FK column (preserved per D-06 until Phase 27).
+// Checks the device_credential_profiles join table (D-14).
 func (r *CredentialProfileRepo) IsInUse(id uuid.UUID) (bool, error) {
 	var count int
-	err := r.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE ssh_profile_id = ?`, id.String()).Scan(&count)
+	err := r.db.QueryRow(`SELECT COUNT(*) FROM device_credential_profiles WHERE profile_id = ?`, id.String()).Scan(&count)
 	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// ListAssignedProfiles returns all credential profiles assigned to the given device,
+// ordered by profile name.
+func (r *CredentialProfileRepo) ListAssignedProfiles(deviceID uuid.UUID) ([]DeviceCredentialProfileRow, error) {
+	rows, err := r.db.Query(
+		`SELECT cp.id, cp.name, cp.username, cp.port, cp.auth_method, cp.role, dcp.is_winbox, dcp.created_at
+		 FROM device_credential_profiles dcp
+		 JOIN credential_profiles cp ON cp.id = dcp.profile_id
+		 WHERE dcp.device_id = ?
+		 ORDER BY cp.name ASC`,
+		deviceID.String(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []DeviceCredentialProfileRow
+	for rows.Next() {
+		var row DeviceCredentialProfileRow
+		var idStr, authMethod string
+		if err := rows.Scan(&idStr, &row.Name, &row.Username, &row.Port, &authMethod, &row.Role, &row.IsWinbox, &row.CreatedAt); err != nil {
+			return nil, err
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid profile id in join row: %w", err)
+		}
+		row.ProfileID = id
+		row.AuthMethod = domain.SSHAuthMethod(authMethod)
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []DeviceCredentialProfileRow{}
+	}
+	return result, nil
+}
+
+// AssignProfile inserts a row into device_credential_profiles linking a device to a profile.
+// Returns an error if the pair already exists (UNIQUE constraint).
+func (r *CredentialProfileRepo) AssignProfile(deviceID, profileID uuid.UUID) error {
+	_, err := r.db.Exec(
+		`INSERT INTO device_credential_profiles (device_id, profile_id, is_winbox, created_at) VALUES (?, ?, 0, ?)`,
+		deviceID.String(), profileID.String(), time.Now().UTC(),
+	)
+	return err
+}
+
+// UnassignProfile removes a device-profile assignment.
+// Returns an error if the profile was not assigned to the device.
+func (r *CredentialProfileRepo) UnassignProfile(deviceID, profileID uuid.UUID) error {
+	res, err := r.db.Exec(
+		`DELETE FROM device_credential_profiles WHERE device_id = ? AND profile_id = ?`,
+		deviceID.String(), profileID.String(),
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("profile not assigned to device")
+	}
+	return nil
+}
+
+// SetWinboxProfile designates one profile as the WinBox profile for a device (D-04, D-08).
+// Clears is_winbox on all other assignments first, then sets the target to 1.
+// Returns an error if the profile is not assigned to the device.
+func (r *CredentialProfileRepo) SetWinboxProfile(deviceID, profileID uuid.UUID) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Clear all winbox flags for this device
+	if _, err := tx.Exec(
+		`UPDATE device_credential_profiles SET is_winbox = 0 WHERE device_id = ?`,
+		deviceID.String(),
+	); err != nil {
+		return err
+	}
+
+	// Set the target profile as winbox
+	res, err := tx.Exec(
+		`UPDATE device_credential_profiles SET is_winbox = 1 WHERE device_id = ? AND profile_id = ?`,
+		deviceID.String(), profileID.String(),
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("profile not assigned to device")
+	}
+
+	return tx.Commit()
+}
+
+// ClearWinboxProfile sets is_winbox=0 for all profiles assigned to the device (D-09).
+// Idempotent — no error if no winbox profile is currently set.
+func (r *CredentialProfileRepo) ClearWinboxProfile(deviceID uuid.UUID) error {
+	_, err := r.db.Exec(
+		`UPDATE device_credential_profiles SET is_winbox = 0 WHERE device_id = ?`,
+		deviceID.String(),
+	)
+	return err
+}
+
+// GetWinboxAssignment returns the profile designated as the WinBox profile for a device.
+// Returns an error containing "no WinBox profile designated" if none is set.
+func (r *CredentialProfileRepo) GetWinboxAssignment(deviceID uuid.UUID) (*WinboxAssignmentRow, error) {
+	var row WinboxAssignmentRow
+	var idStr string
+	err := r.db.QueryRow(
+		`SELECT cp.id, cp.username, cp.encrypted_secret
+		 FROM device_credential_profiles dcp
+		 JOIN credential_profiles cp ON cp.id = dcp.profile_id
+		 WHERE dcp.device_id = ? AND dcp.is_winbox = 1`,
+		deviceID.String(),
+	).Scan(&idStr, &row.Username, &row.EncryptedSecret)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("no WinBox profile designated")
+		}
+		return nil, err
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid profile id in winbox row: %w", err)
+	}
+	row.ProfileID = id
+	return &row, nil
 }
 
 // --- helpers ---
