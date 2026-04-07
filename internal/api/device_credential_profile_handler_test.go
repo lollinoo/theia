@@ -64,10 +64,10 @@ func setupDeviceCredentialProfileTest(t *testing.T) (
 		`INSERT INTO devices (id, hostname, ip, device_type, status, sys_name, sys_descr,
 		 sys_object_id, hardware_model, vendor, managed, snmp_credentials_json,
 		 metrics_source, prometheus_label_name, prometheus_label_value, tags_json,
-		 area_ids_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		deviceID.String(), "test-device", "192.168.1.1", "router", "up", "",
-		"", "", "", "default", 1, `{}`, "none", "", "", `{}`, `[]`, now, now,
+		"", "", "", "default", 1, `{}`, "none", "", "", `{}`, now, now,
 	)
 	if err != nil {
 		t.Fatalf("seeding device: %v", err)

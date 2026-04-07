@@ -509,6 +509,25 @@ func (s *BackupService) EncryptSecret(plaintext string) (string, error) {
 	return string(encrypted), nil
 }
 
+// GetWinboxCredentials retrieves the decrypted WinBox password for a device.
+// It fetches the device IP from the device repository and decrypts the
+// credential profile's secret in the service layer (T-24-05 mitigation).
+// Returns ip, decryptedPassword, and an error. username is returned separately.
+func (s *BackupService) GetWinboxCredentials(deviceID uuid.UUID, encryptedSecret, username string) (ip, password string, err error) {
+	device, err := s.deviceRepo.GetByID(deviceID)
+	if err != nil {
+		return "", "", fmt.Errorf("device not found: %w", err)
+	}
+	pwd, err := s.decryptSecret(encryptedSecret)
+	if err != nil {
+		return "", "", fmt.Errorf("decrypting credentials: %w", err)
+	}
+	if pwd == "" {
+		return "", "", fmt.Errorf("WinBox profile has no password configured")
+	}
+	return device.IP, pwd, nil
+}
+
 // GetBackupJobs returns all backup jobs for a device.
 func (s *BackupService) GetBackupJobs(ctx context.Context, deviceID uuid.UUID) ([]domain.BackupJob, error) {
 	jobs, err := s.jobRepo.GetByDeviceID(deviceID)
