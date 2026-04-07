@@ -242,18 +242,18 @@ func (r *mockSettingsRepo) GetAll() (map[string]string, error) {
 	return cp, nil
 }
 
-// --- Mock SSHProfileRepo ---
+// --- Mock CredentialProfileRepo ---
 
-type mockSSHProfileRepo struct {
+type mockCredentialProfileRepo struct {
 	mu       sync.Mutex
-	profiles map[uuid.UUID]*domain.SSHProfile
+	profiles map[uuid.UUID]*domain.CredentialProfile
 }
 
-func newMockSSHProfileRepo() *mockSSHProfileRepo {
-	return &mockSSHProfileRepo{profiles: make(map[uuid.UUID]*domain.SSHProfile)}
+func newMockCredentialProfileRepo() *mockCredentialProfileRepo {
+	return &mockCredentialProfileRepo{profiles: make(map[uuid.UUID]*domain.CredentialProfile)}
 }
 
-func (r *mockSSHProfileRepo) Create(profile *domain.SSHProfile) error {
+func (r *mockCredentialProfileRepo) Create(profile *domain.CredentialProfile) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if profile.ID == uuid.Nil {
@@ -266,43 +266,43 @@ func (r *mockSSHProfileRepo) Create(profile *domain.SSHProfile) error {
 	return nil
 }
 
-func (r *mockSSHProfileRepo) GetByID(id uuid.UUID) (*domain.SSHProfile, error) {
+func (r *mockCredentialProfileRepo) GetByID(id uuid.UUID) (*domain.CredentialProfile, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p, ok := r.profiles[id]
 	if !ok {
-		return nil, fmt.Errorf("ssh profile not found: %s", id)
+		return nil, fmt.Errorf("credential profile not found: %s", id)
 	}
 	cp := *p
 	return &cp, nil
 }
 
-func (r *mockSSHProfileRepo) GetAll() ([]domain.SSHProfile, error) {
+func (r *mockCredentialProfileRepo) GetAll() ([]domain.CredentialProfile, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.SSHProfile
+	var result []domain.CredentialProfile
 	for _, p := range r.profiles {
 		result = append(result, *p)
 	}
 	return result, nil
 }
 
-func (r *mockSSHProfileRepo) Update(profile *domain.SSHProfile) error {
+func (r *mockCredentialProfileRepo) Update(profile *domain.CredentialProfile) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.profiles[profile.ID]; !ok {
-		return fmt.Errorf("ssh profile not found: %s", profile.ID)
+		return fmt.Errorf("credential profile not found: %s", profile.ID)
 	}
 	profile.UpdatedAt = time.Now().UTC()
 	r.profiles[profile.ID] = profile
 	return nil
 }
 
-func (r *mockSSHProfileRepo) Delete(id uuid.UUID) error {
+func (r *mockCredentialProfileRepo) Delete(id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.profiles[id]; !ok {
-		return fmt.Errorf("ssh profile not found: %s", id)
+		return fmt.Errorf("credential profile not found: %s", id)
 	}
 	delete(r.profiles, id)
 	return nil
@@ -333,7 +333,7 @@ func newTestDeviceHandler(t *testing.T) (*DeviceHandler, *mockDeviceRepo, *mockL
 	deviceRepo := newMockDeviceRepo()
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
-	sshProfileRepo := newMockSSHProfileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
 
 	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
 		return &snmp.DiscoveryResult{}, nil
@@ -341,7 +341,7 @@ func newTestDeviceHandler(t *testing.T) (*DeviceHandler, *mockDeviceRepo, *mockL
 
 	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
 	registry := buildTestVendorRegistry()
-	handler := NewDeviceHandler(svc, sshProfileRepo, registry)
+	handler := NewDeviceHandler(svc, credentialProfileRepo, registry)
 
 	return handler, deviceRepo, linkRepo
 }

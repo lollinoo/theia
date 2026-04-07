@@ -34,9 +34,9 @@ func TestOversizedBody_AllMutationHandlers(t *testing.T) {
 		// SettingsHandler mutations
 		{"SettingsHandler.HandleUpdate", http.MethodPut, "/api/v1/settings/poll_interval", (&SettingsHandler{}).HandleUpdate},
 		// SSHProfileHandler mutations
-		{"SSHProfileHandler.HandleCreate", http.MethodPost, "/api/v1/ssh-profiles", (&SSHProfileHandler{}).HandleCreate},
-		{"SSHProfileHandler.HandleUpdate", http.MethodPut, "/api/v1/ssh-profiles/00000000-0000-0000-0000-000000000001", (&SSHProfileHandler{}).HandleUpdate},
-		{"SSHProfileHandler.HandleTest", http.MethodPost, "/api/v1/ssh-profiles/00000000-0000-0000-0000-000000000001/test", (&SSHProfileHandler{}).HandleTest},
+		{"CredentialProfileHandler.HandleCreate", http.MethodPost, "/api/v1/ssh-profiles", (&CredentialProfileHandler{}).HandleCreate},
+		{"CredentialProfileHandler.HandleUpdate", http.MethodPut, "/api/v1/ssh-profiles/00000000-0000-0000-0000-000000000001", (&CredentialProfileHandler{}).HandleUpdate},
+		{"CredentialProfileHandler.HandleTest", http.MethodPost, "/api/v1/ssh-profiles/00000000-0000-0000-0000-000000000001/test", (&CredentialProfileHandler{}).HandleTest},
 		// SNMPProfileHandler mutations
 		{"SNMPProfileHandler.HandleCreate", http.MethodPost, "/api/v1/snmp-profiles", (&SNMPProfileHandler{}).HandleCreate},
 		{"SNMPProfileHandler.HandleUpdate", http.MethodPut, "/api/v1/snmp-profiles/00000000-0000-0000-0000-000000000001", (&SNMPProfileHandler{}).HandleUpdate},
