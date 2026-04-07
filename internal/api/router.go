@@ -47,7 +47,7 @@ func NewRouter(
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandler(instanceBackupService)
-	_ = bridgeBinariesDir // used by bridge handler (Plan 03)
+	bridgeHandler := NewBridgeHandler(bridgeBinariesDir)
 
 	// Device routes
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
@@ -399,6 +399,15 @@ func NewRouter(
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	})
+
+	// Bridge binary download
+	mux.HandleFunc("/api/v1/bridge/download/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		bridgeHandler.HandleDownload(w, r)
 	})
 
 	// Health endpoint
