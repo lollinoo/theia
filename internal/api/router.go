@@ -22,7 +22,7 @@ func NewRouter(
 	positionRepo domain.PositionRepository,
 	settingsRepo domain.SettingsRepository,
 	snmpProfileRepo domain.SNMPProfileRepository,
-	sshProfileRepo *sqlite.SSHProfileRepo,
+	credentialProfileRepo *sqlite.CredentialProfileRepo,
 	areaRepo domain.AreaRepository,
 	backupService *service.BackupService,
 	vendorRegistry *vendor.Registry,
@@ -33,14 +33,14 @@ func NewRouter(
 ) http.Handler {
 	mux := http.NewServeMux()
 
-	deviceHandler := NewDeviceHandler(deviceService, sshProfileRepo, vendorRegistry)
+	deviceHandler := NewDeviceHandler(deviceService, credentialProfileRepo, vendorRegistry)
 	linkHandler := NewLinkHandler(linkRepo, deviceService)
 	positionHandler := NewPositionHandler(positionRepo)
 	settingsHandler := NewSettingsHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	areaHandler := NewAreaHandler(areaRepo)
 	backupHandler := NewBackupHandler(backupService, settingsRepo)
-	sshProfileHandler := NewSSHProfileHandler(backupService, sshProfileRepo)
+	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
@@ -230,13 +230,13 @@ func NewRouter(
 		}
 	})
 
-	// SSH profile routes
+	// SSH profile routes (paths preserved for frontend compatibility — type renamed to CredentialProfile)
 	mux.HandleFunc("/api/v1/ssh-profiles", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			sshProfileHandler.HandleList(w, r)
+			credentialProfileHandler.HandleList(w, r)
 		case http.MethodPost:
-			sshProfileHandler.HandleCreate(w, r)
+			credentialProfileHandler.HandleCreate(w, r)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
@@ -244,16 +244,16 @@ func NewRouter(
 
 	mux.HandleFunc("/api/v1/ssh-profiles/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/test") && r.Method == http.MethodPost {
-			sshProfileHandler.HandleTest(w, r)
+			credentialProfileHandler.HandleTest(w, r)
 			return
 		}
 		switch r.Method {
 		case http.MethodGet:
-			sshProfileHandler.HandleGet(w, r)
+			credentialProfileHandler.HandleGet(w, r)
 		case http.MethodPut:
-			sshProfileHandler.HandleUpdate(w, r)
+			credentialProfileHandler.HandleUpdate(w, r)
 		case http.MethodDelete:
-			sshProfileHandler.HandleDelete(w, r)
+			credentialProfileHandler.HandleDelete(w, r)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}

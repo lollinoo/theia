@@ -271,7 +271,7 @@ func main() {
 	positionRepo := sqlite.NewPositionRepo(db)
 	settingsRepo := sqlite.NewSettingsRepo(db)
 	snmpProfileRepo := sqlite.NewSNMPProfileRepo(db, encryptionKey)
-	sshProfileRepo := sqlite.NewSSHProfileRepo(db)
+	credentialProfileRepo := sqlite.NewCredentialProfileRepo(db)
 	areaRepo := sqlite.NewAreaRepo(db)
 	backupJobRepo := sqlite.NewBackupJobRepo(db)
 	backupFileRepo := sqlite.NewBackupFileRepo(db)
@@ -300,7 +300,7 @@ func main() {
 	}
 	log.Printf("SSH known hosts store: %s", knownHostsPath)
 
-	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, sshProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, backupDir, knownHostsStore.HostKeyCallback())
+	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, backupDir, knownHostsStore.HostKeyCallback())
 
 	// Create instance backup service
 	instanceBackupRepo := sqlite.NewInstanceBackupRepo(db)
@@ -355,7 +355,7 @@ func main() {
 	wsHandler := ws.NewHandler(hub, collector.GetSnapshot, collector.IsPromAvailable)
 
 	// Create HTTP router with all /api/v1/ routes
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, sshProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, poller, instanceBackupService, wsHandler)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, poller, instanceBackupService, wsHandler)
 
 	// Create HTTP server
 	server := &http.Server{

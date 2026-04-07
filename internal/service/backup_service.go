@@ -26,26 +26,26 @@ import (
 
 var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
-// BackupService orchestrates SSH profile management and config backups.
+// BackupService orchestrates credential profile management and config backups.
 type BackupService struct {
-	jobRepo        domain.BackupJobRepository
-	fileRepo       domain.BackupFileRepository
-	sshProfileRepo domain.SSHProfileRepository
-	deviceRepo     domain.DeviceRepository
-	settingsRepo   domain.SettingsRepository
-	vendorRegistry *vendor.Registry
-	sshDialer       ssh.Dialer
-	encryptionKey   []byte
-	backupDir       string
-	hostKeyCallback gossh.HostKeyCallback
-	deviceLocks     sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
+	jobRepo               domain.BackupJobRepository
+	fileRepo              domain.BackupFileRepository
+	credentialProfileRepo domain.CredentialProfileRepository
+	deviceRepo            domain.DeviceRepository
+	settingsRepo          domain.SettingsRepository
+	vendorRegistry        *vendor.Registry
+	sshDialer             ssh.Dialer
+	encryptionKey         []byte
+	backupDir             string
+	hostKeyCallback       gossh.HostKeyCallback
+	deviceLocks           sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
 }
 
 // NewBackupService creates a new BackupService.
 func NewBackupService(
 	jobRepo domain.BackupJobRepository,
 	fileRepo domain.BackupFileRepository,
-	sshProfileRepo domain.SSHProfileRepository,
+	credentialProfileRepo domain.CredentialProfileRepository,
 	deviceRepo domain.DeviceRepository,
 	settingsRepo domain.SettingsRepository,
 	vendorRegistry *vendor.Registry,
@@ -55,16 +55,16 @@ func NewBackupService(
 	hostKeyCallback gossh.HostKeyCallback,
 ) *BackupService {
 	return &BackupService{
-		jobRepo:         jobRepo,
-		fileRepo:        fileRepo,
-		sshProfileRepo:  sshProfileRepo,
-		deviceRepo:      deviceRepo,
-		settingsRepo:    settingsRepo,
-		vendorRegistry:  vendorRegistry,
-		sshDialer:       sshDialer,
-		encryptionKey:   encryptionKey,
-		backupDir:       backupDir,
-		hostKeyCallback: hostKeyCallback,
+		jobRepo:               jobRepo,
+		fileRepo:              fileRepo,
+		credentialProfileRepo: credentialProfileRepo,
+		deviceRepo:            deviceRepo,
+		settingsRepo:          settingsRepo,
+		vendorRegistry:        vendorRegistry,
+		sshDialer:             sshDialer,
+		encryptionKey:         encryptionKey,
+		backupDir:             backupDir,
+		hostKeyCallback:       hostKeyCallback,
 	}
 }
 
@@ -123,7 +123,7 @@ func (s *BackupService) TriggerBulkBackup(ctx context.Context) ([]BulkBackupResu
 			continue
 		}
 
-		profile, err := s.sshProfileRepo.GetByID(*d.SSHProfileID)
+		profile, err := s.credentialProfileRepo.GetByID(*d.SSHProfileID)
 		if err != nil {
 			results = append(results, BulkBackupResult{
 				DeviceID: d.ID, DeviceName: name,
@@ -227,7 +227,7 @@ func (s *BackupService) TriggerBackup(ctx context.Context, deviceID uuid.UUID) (
 		return nil, fmt.Errorf("no SSH profile assigned to device %s", deviceID)
 	}
 
-	profile, err := s.sshProfileRepo.GetByID(*device.SSHProfileID)
+	profile, err := s.credentialProfileRepo.GetByID(*device.SSHProfileID)
 	if err != nil {
 		return nil, fmt.Errorf("getting SSH profile: %w", err)
 	}
@@ -256,7 +256,7 @@ func (s *BackupService) TriggerBackup(ctx context.Context, deviceID uuid.UUID) (
 	return job, nil
 }
 
-func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.SSHProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
+func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.CredentialProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
 	lock := s.getDeviceLock(device.ID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -610,7 +610,7 @@ func (s *BackupService) TestSSHConnection(ctx context.Context, deviceID uuid.UUI
 		return fmt.Errorf("no SSH profile assigned to device %s", deviceID)
 	}
 
-	profile, err := s.sshProfileRepo.GetByID(*device.SSHProfileID)
+	profile, err := s.credentialProfileRepo.GetByID(*device.SSHProfileID)
 	if err != nil {
 		return fmt.Errorf("getting SSH profile: %w", err)
 	}
@@ -636,11 +636,11 @@ func (s *BackupService) TestSSHConnection(ctx context.Context, deviceID uuid.UUI
 	return nil
 }
 
-// TestSSHProfile tests SSH connectivity using a profile against a target IP.
-func (s *BackupService) TestSSHProfile(ctx context.Context, profileID uuid.UUID, targetIP string) error {
-	profile, err := s.sshProfileRepo.GetByID(profileID)
+// TestCredentialProfile tests SSH connectivity using a credential profile against a target IP.
+func (s *BackupService) TestCredentialProfile(ctx context.Context, profileID uuid.UUID, targetIP string) error {
+	profile, err := s.credentialProfileRepo.GetByID(profileID)
 	if err != nil {
-		return fmt.Errorf("getting SSH profile: %w", err)
+		return fmt.Errorf("getting credential profile: %w", err)
 	}
 
 	secret, err := s.decryptSecret(profile.EncryptedSecret)
@@ -664,42 +664,49 @@ func (s *BackupService) TestSSHProfile(ctx context.Context, profileID uuid.UUID,
 	return nil
 }
 
-// CreateSSHProfile creates a new SSH profile.
-func (s *BackupService) CreateSSHProfile(ctx context.Context, name, description, username string, port int, authMethod domain.SSHAuthMethod, secret string) (*domain.SSHProfile, error) {
+// CreateCredentialProfile creates a new credential profile.
+// If role is empty, it defaults to "Admin".
+func (s *BackupService) CreateCredentialProfile(ctx context.Context, name, description, username string, port int, authMethod domain.SSHAuthMethod, secret string, role string) (*domain.CredentialProfile, error) {
 	encryptedSecret, err := s.EncryptSecret(secret)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting secret: %w", err)
 	}
 
-	profile := &domain.SSHProfile{
+	if role == "" {
+		role = "Admin"
+	}
+
+	profile := &domain.CredentialProfile{
 		Name:            name,
 		Description:     description,
 		Username:        username,
 		Port:            port,
 		AuthMethod:      authMethod,
 		EncryptedSecret: encryptedSecret,
+		Role:            role,
 	}
-	if err := s.sshProfileRepo.Create(profile); err != nil {
-		return nil, fmt.Errorf("creating SSH profile: %w", err)
+	if err := s.credentialProfileRepo.Create(profile); err != nil {
+		return nil, fmt.Errorf("creating credential profile: %w", err)
 	}
 	return profile, nil
 }
 
-// GetSSHProfile returns an SSH profile by ID.
-func (s *BackupService) GetSSHProfile(ctx context.Context, id uuid.UUID) (*domain.SSHProfile, error) {
-	return s.sshProfileRepo.GetByID(id)
+// GetCredentialProfile returns a credential profile by ID.
+func (s *BackupService) GetCredentialProfile(ctx context.Context, id uuid.UUID) (*domain.CredentialProfile, error) {
+	return s.credentialProfileRepo.GetByID(id)
 }
 
-// GetAllSSHProfiles returns all SSH profiles.
-func (s *BackupService) GetAllSSHProfiles(ctx context.Context) ([]domain.SSHProfile, error) {
-	return s.sshProfileRepo.GetAll()
+// GetAllCredentialProfiles returns all credential profiles.
+func (s *BackupService) GetAllCredentialProfiles(ctx context.Context) ([]domain.CredentialProfile, error) {
+	return s.credentialProfileRepo.GetAll()
 }
 
-// UpdateSSHProfile updates an existing SSH profile. If secret is empty, the existing secret is kept.
-func (s *BackupService) UpdateSSHProfile(ctx context.Context, id uuid.UUID, name, description, username string, port int, authMethod domain.SSHAuthMethod, secret string) (*domain.SSHProfile, error) {
-	profile, err := s.sshProfileRepo.GetByID(id)
+// UpdateCredentialProfile updates an existing credential profile. If secret is empty, the existing secret is kept.
+// If role is empty, it defaults to "Admin".
+func (s *BackupService) UpdateCredentialProfile(ctx context.Context, id uuid.UUID, name, description, username string, port int, authMethod domain.SSHAuthMethod, secret string, role string) (*domain.CredentialProfile, error) {
+	profile, err := s.credentialProfileRepo.GetByID(id)
 	if err != nil {
-		return nil, fmt.Errorf("getting SSH profile: %w", err)
+		return nil, fmt.Errorf("getting credential profile: %w", err)
 	}
 
 	profile.Name = name
@@ -707,6 +714,11 @@ func (s *BackupService) UpdateSSHProfile(ctx context.Context, id uuid.UUID, name
 	profile.Username = username
 	profile.Port = port
 	profile.AuthMethod = authMethod
+
+	if role == "" {
+		role = "Admin"
+	}
+	profile.Role = role
 
 	if secret != "" {
 		encryptedSecret, err := s.EncryptSecret(secret)
@@ -716,13 +728,13 @@ func (s *BackupService) UpdateSSHProfile(ctx context.Context, id uuid.UUID, name
 		profile.EncryptedSecret = encryptedSecret
 	}
 
-	if err := s.sshProfileRepo.Update(profile); err != nil {
-		return nil, fmt.Errorf("updating SSH profile: %w", err)
+	if err := s.credentialProfileRepo.Update(profile); err != nil {
+		return nil, fmt.Errorf("updating credential profile: %w", err)
 	}
 	return profile, nil
 }
 
-// DeleteSSHProfile removes an SSH profile. Returns an error if any device references it.
-func (s *BackupService) DeleteSSHProfile(ctx context.Context, id uuid.UUID) error {
-	return s.sshProfileRepo.Delete(id)
+// DeleteCredentialProfile removes a credential profile. Returns an error if any device references it.
+func (s *BackupService) DeleteCredentialProfile(ctx context.Context, id uuid.UUID) error {
+	return s.credentialProfileRepo.Delete(id)
 }

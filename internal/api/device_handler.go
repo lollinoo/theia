@@ -17,14 +17,14 @@ import (
 
 // DeviceHandler provides HTTP handlers for device CRUD operations.
 type DeviceHandler struct {
-	svc            *service.DeviceService
-	sshProfileRepo domain.SSHProfileRepository
-	vendorRegistry *vendor.Registry
+	svc                   *service.DeviceService
+	credentialProfileRepo domain.CredentialProfileRepository
+	vendorRegistry        *vendor.Registry
 }
 
 // NewDeviceHandler creates a new DeviceHandler.
-func NewDeviceHandler(svc *service.DeviceService, sshProfileRepo domain.SSHProfileRepository, vendorRegistry *vendor.Registry) *DeviceHandler {
-	return &DeviceHandler{svc: svc, sshProfileRepo: sshProfileRepo, vendorRegistry: vendorRegistry}
+func NewDeviceHandler(svc *service.DeviceService, credentialProfileRepo domain.CredentialProfileRepository, vendorRegistry *vendor.Registry) *DeviceHandler {
+	return &DeviceHandler{svc: svc, credentialProfileRepo: credentialProfileRepo, vendorRegistry: vendorRegistry}
 }
 
 // --- JSON:API response types ---
@@ -238,8 +238,8 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid ssh_profile_id")
 			return
 		}
-		if _, err := h.sshProfileRepo.GetByID(parsed); err != nil {
-			writeError(w, http.StatusBadRequest, "ssh profile not found")
+		if _, err := h.credentialProfileRepo.GetByID(parsed); err != nil {
+			writeError(w, http.StatusBadRequest, "credential profile not found")
 			return
 		}
 		sshProfileID = &parsed
@@ -404,8 +404,8 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "invalid ssh_profile_id")
 				return
 			}
-			if _, err := h.sshProfileRepo.GetByID(parsed); err != nil {
-				writeError(w, http.StatusBadRequest, "ssh profile not found")
+			if _, err := h.credentialProfileRepo.GetByID(parsed); err != nil {
+				writeError(w, http.StatusBadRequest, "credential profile not found")
 				return
 			}
 			update.SSHProfileID = new(*uuid.UUID)
@@ -550,8 +550,8 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 				failures = append(failures, batchAddFailure{IP: d.IP, Reason: "invalid ssh_profile_id"})
 				continue
 			}
-			if _, lookupErr := h.sshProfileRepo.GetByID(parsed); lookupErr != nil {
-				failures = append(failures, batchAddFailure{IP: d.IP, Reason: "ssh profile not found"})
+			if _, lookupErr := h.credentialProfileRepo.GetByID(parsed); lookupErr != nil {
+				failures = append(failures, batchAddFailure{IP: d.IP, Reason: "credential profile not found"})
 				continue
 			}
 			batchSSHProfileID = &parsed
