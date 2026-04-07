@@ -396,3 +396,61 @@ func TestSNMPProfileHandlerList_V3CredentialsIncluded(t *testing.T) {
 		t.Fatalf("expected username=admin, got %s", resp.Data[0].SNMP.Username)
 	}
 }
+
+// =============================================================================
+// D-03: SNMP profile name and description length validation
+// =============================================================================
+
+func TestSNMPProfile_NameTooLong_400(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	h := NewSNMPProfileHandler(repo)
+
+	longName := strings.Repeat("n", 256)
+	body := fmt.Sprintf(`{"name":"%s","snmp":{"version":"2c","community":"public"}}`, longName)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for name > 255 chars, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "name too long") {
+		t.Errorf("expected error about name length, got: %s", rec.Body.String())
+	}
+}
+
+func TestSNMPProfile_DescriptionTooLong_400(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	h := NewSNMPProfileHandler(repo)
+
+	longDesc := strings.Repeat("d", 256)
+	body := fmt.Sprintf(`{"name":"valid-name","description":"%s","snmp":{"version":"2c","community":"public"}}`, longDesc)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for description > 255 chars, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "description too long") {
+		t.Errorf("expected error about description length, got: %s", rec.Body.String())
+	}
+}
+
+func TestSNMPProfile_NameExactly255_201(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	h := NewSNMPProfileHandler(repo)
+
+	exactName := strings.Repeat("n", 255)
+	body := fmt.Sprintf(`{"name":"%s","snmp":{"version":"2c","community":"public"}}`, exactName)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for name exactly 255 chars, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+}

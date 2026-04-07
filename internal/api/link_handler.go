@@ -52,7 +52,7 @@ type interfaceResponse struct {
 func (h *LinkHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	links, err := h.linkRepo.GetAll()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	if links == nil {
@@ -108,6 +108,15 @@ func (h *LinkHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.SourceIfName) > 255 {
+		writeError(w, http.StatusBadRequest, "source_if_name too long (max 255 characters)")
+		return
+	}
+	if len(req.TargetIfName) > 255 {
+		writeError(w, http.StatusBadRequest, "target_if_name too long (max 255 characters)")
+		return
+	}
+
 	link := &domain.Link{
 		ID:                uuid.New(),
 		SourceDeviceID:    srcID,
@@ -118,7 +127,7 @@ func (h *LinkHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.linkRepo.Create(link); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -145,14 +154,22 @@ func (h *LinkHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
 	if req.SourceIfName != "" {
+		if len(req.SourceIfName) > 255 {
+			writeError(w, http.StatusBadRequest, "source_if_name too long (max 255 characters)")
+			return
+		}
 		link.SourceIfName = req.SourceIfName
 	}
 	if req.TargetIfName != "" {
+		if len(req.TargetIfName) > 255 {
+			writeError(w, http.StatusBadRequest, "target_if_name too long (max 255 characters)")
+			return
+		}
 		link.TargetIfName = req.TargetIfName
 	}
 
@@ -161,7 +178,7 @@ func (h *LinkHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -181,7 +198,7 @@ func (h *LinkHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -205,7 +222,7 @@ func (h *LinkHandler) HandleGetInterfaces(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 

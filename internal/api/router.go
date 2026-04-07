@@ -28,6 +28,7 @@ func NewRouter(
 	vendorRegistry *vendor.Registry,
 	vendorConfigRepo domain.VendorConfigRepository,
 	poller *worker.Poller,
+	instanceBackupService *service.InstanceBackupService,
 	wsHandler *ws.Handler,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -43,6 +44,7 @@ func NewRouter(
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
+	instanceBackupHandler := NewInstanceBackupHandler(instanceBackupService)
 
 	// Device routes
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
@@ -168,11 +170,14 @@ func NewRouter(
 	})
 
 	mux.HandleFunc("/api/v1/settings/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut {
+		switch r.Method {
+		case http.MethodGet:
+			settingsHandler.HandleGet(w, r)
+		case http.MethodPut:
+			settingsHandler.HandleUpdate(w, r)
+		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
 		}
-		settingsHandler.HandleUpdate(w, r)
 	})
 
 	// SNMP credential profile routes
@@ -318,6 +323,42 @@ func NewRouter(
 		}
 	})
 
+	// Instance backup routes
+	mux.HandleFunc("/api/v1/instance-backups", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			instanceBackupHandler.HandleCreate(w, r)
+		case http.MethodGet:
+			instanceBackupHandler.HandleList(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	// Instance backup restore (multipart upload, bypass middleware)
+	mux.HandleFunc("/api/v1/instance-backups/restore", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		instanceBackupHandler.HandleRestore(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/instance-backups/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/download") && r.Method == http.MethodGet {
+			instanceBackupHandler.HandleDownload(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			instanceBackupHandler.HandleGet(w, r)
+		case http.MethodDelete:
+			instanceBackupHandler.HandleDelete(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
 	// Health endpoint
 	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		healthHandler.HandleHealth(w, r)
@@ -353,6 +394,18 @@ func NewRouter(
 
 		// File download bypasses JSON content-type middleware
 		if strings.HasSuffix(r.URL.Path, "/download") && strings.HasPrefix(r.URL.Path, "/api/v1/backup-files/") {
+			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			return
+		}
+
+		// Instance backup download bypasses JSON content-type and body size middleware
+		if strings.HasSuffix(r.URL.Path, "/download") && strings.HasPrefix(r.URL.Path, "/api/v1/instance-backups/") {
+			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			return
+		}
+
+		// Instance backup restore bypasses body size and JSON content-type middleware (multipart upload)
+		if r.URL.Path == "/api/v1/instance-backups/restore" && r.Method == http.MethodPost {
 			CORS(RequestLogger(mux)).ServeHTTP(w, r)
 			return
 		}

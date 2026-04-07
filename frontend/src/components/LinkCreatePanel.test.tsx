@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { LinkCreatePanel } from './LinkCreatePanel';
 import type { Device, Link } from '../types/api';
+import { ValidationError, ServerError } from '../api/errors';
 
 // Mock API calls
 vi.mock('../api/client', () => ({
@@ -140,6 +141,101 @@ describe('LinkCreatePanel', () => {
       );
       // The selected device display should show the display_name
       expect(screen.getByText('ISP Gateway')).toBeInTheDocument();
+    });
+  });
+});
+
+// --- Gap 10: LinkCreatePanel typed errors ---
+
+describe('LinkCreatePanel — handleSubmit catch handles typed errors', () => {
+  const physical1 = {
+    id: 'dev-p1',
+    hostname: '10.0.0.1',
+    ip: '10.0.0.1',
+    device_type: 'router' as const,
+    status: 'up' as const,
+    sys_name: 'Router1',
+    sys_descr: '',
+    hardware_model: '',
+    vendor: 'default',
+    managed: true,
+    interfaces: [
+      { id: 'if-1', if_index: 1, if_name: 'ether1', if_descr: 'Eth1', speed: 1000000000, admin_status: 'up' as const, oper_status: 'up' as const },
+    ],
+    area_ids: [],
+    backup_supported: false,
+    metrics_source: 'snmp' as const,
+    prometheus_label_name: 'instance',
+    prometheus_label_value: '',
+  };
+
+  const physical2 = {
+    ...physical1,
+    id: 'dev-p2',
+    ip: '10.0.0.2',
+    hostname: '10.0.0.2',
+    sys_name: 'Router2',
+    interfaces: [
+      { id: 'if-2', if_index: 1, if_name: 'ether1', if_descr: 'Eth1', speed: 1000000000, admin_status: 'up' as const, oper_status: 'up' as const },
+    ],
+  };
+
+  it('shows ServerError ref message when createLink throws ServerError', async () => {
+    const { createLink } = await import('../api/client');
+    (createLink as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ServerError('internal error, ref: lnk001', 'lnk001'),
+    );
+
+    render(
+      <LinkCreatePanel
+        devices={[physical1, physical2]}
+        links={[]}
+        onCreated={vi.fn()}
+        onClose={vi.fn()}
+        initialSourceDeviceId="dev-p1"
+        initialTargetDeviceId="dev-p2"
+      />,
+    );
+
+    // Select source interface
+    const selects = screen.getAllByRole('combobox');
+    // First combobox is source interface selector (physical device with ether1)
+    fireEvent.change(selects[0], { target: { value: 'ether1' } });
+    // Second is target interface selector
+    fireEvent.change(selects[1], { target: { value: 'ether1' } });
+
+    fireEvent.click(screen.getByText('Create Link'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Something went wrong (ref: lnk001)')).toBeInTheDocument();
+    });
+  });
+
+  it('shows ValidationError message when createLink throws ValidationError', async () => {
+    const { createLink } = await import('../api/client');
+    (createLink as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ValidationError('link already exists between these ports'),
+    );
+
+    render(
+      <LinkCreatePanel
+        devices={[physical1, physical2]}
+        links={[]}
+        onCreated={vi.fn()}
+        onClose={vi.fn()}
+        initialSourceDeviceId="dev-p1"
+        initialTargetDeviceId="dev-p2"
+      />,
+    );
+
+    const selects = screen.getAllByRole('combobox');
+    fireEvent.change(selects[0], { target: { value: 'ether1' } });
+    fireEvent.change(selects[1], { target: { value: 'ether1' } });
+
+    fireEvent.click(screen.getByText('Create Link'));
+
+    await waitFor(() => {
+      expect(screen.getByText('link already exists between these ports')).toBeInTheDocument();
     });
   });
 });

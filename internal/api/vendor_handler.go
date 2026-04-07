@@ -28,7 +28,7 @@ func NewVendorHandler(registry *vendor.Registry, vendorConfigRepo domain.VendorC
 func (h *VendorHandler) HandleListVendors(w http.ResponseWriter, r *http.Request) {
 	configs, err := h.registry.ExportAllConfigs()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to list vendors", err)
 		return
 	}
 
@@ -104,7 +104,7 @@ func (h *VendorHandler) HandleUpdateVendor(w http.ResponseWriter, r *http.Reques
 		UpdatedAt:   now,
 	}
 	if err := h.vendorConfigRepo.Upsert(record); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to persist config: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to persist vendor config", err)
 		return
 	}
 

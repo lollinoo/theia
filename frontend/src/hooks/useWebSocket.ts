@@ -89,9 +89,13 @@ export function useWebSocket(url: string): UseWebSocketResult {
           ws.close();
           return;
         }
+        const wasReconnect = reconnectAttemptRef.current > 0;
         reconnectAttemptRef.current = 0;
         setConnected(true);
         setReconnecting(false);
+        if (wasReconnect) {
+          window.dispatchEvent(new Event('backend-reconnected'));
+        }
       };
 
       ws.onmessage = (event: MessageEvent<string>) => {

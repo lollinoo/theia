@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AddDevicePanel } from './AddDevicePanel';
 import { createDevice } from '../api/client';
+import { ValidationError, ServerError } from '../api/errors';
 
 // Mock API calls that fire in useEffect
 vi.mock('../api/client', () => ({
@@ -159,6 +160,143 @@ describe('virtual mode', () => {
     await waitFor(() => {
       const callArg = (createDevice as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(callArg).not.toHaveProperty('snmp');
+    });
+  });
+});
+
+// --- Gap 1: AddDevicePanel blur+submit validation ---
+
+describe('AddDevicePanel — onBlur hostname validation', () => {
+  it('shows error text when IP/hostname input is blurred with an empty value', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const ipInput = screen.getByPlaceholderText('192.168.1.1');
+    fireEvent.blur(ipInput);
+
+    await waitFor(() => {
+      expect(screen.getByText('IP address or hostname is required')).toBeInTheDocument();
+    });
+  });
+
+  it('shows error text when IP/hostname input is blurred with an invalid value', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const ipInput = screen.getByPlaceholderText('192.168.1.1');
+    fireEvent.change(ipInput, { target: { value: 'not valid!!' } });
+    fireEvent.blur(ipInput);
+
+    await waitFor(() => {
+      expect(screen.getByText('Invalid IP address or hostname')).toBeInTheDocument();
+    });
+  });
+
+  it('applies border-status-down class to IP field on invalid blur', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const ipInput = screen.getByPlaceholderText('192.168.1.1');
+    fireEvent.blur(ipInput);
+
+    await waitFor(() => {
+      expect(ipInput.className).toContain('border-status-down');
+    });
+  });
+
+  it('clears hostname error when user types in the field', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const ipInput = screen.getByPlaceholderText('192.168.1.1');
+    fireEvent.blur(ipInput);
+
+    await waitFor(() => {
+      expect(screen.getByText('IP address or hostname is required')).toBeInTheDocument();
+    });
+
+    fireEvent.change(ipInput, { target: { value: '10.0.0.1' } });
+
+    await waitFor(() => {
+      expect(screen.queryByText('IP address or hostname is required')).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('AddDevicePanel — submit validates all fields before API call', () => {
+  it('does not call createDevice when IP is empty on submit', async () => {
+    const { container } = render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    // Use fireEvent.submit on the form to bypass HTML5 required constraint in jsdom
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByText('IP address or hostname is required')).toBeInTheDocument();
+    });
+    expect(createDevice).not.toHaveBeenCalled();
+  });
+
+  it('does not call createDevice when IP is invalid on submit', async () => {
+    const { container } = render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const ipInput = screen.getByPlaceholderText('192.168.1.1');
+    fireEvent.change(ipInput, { target: { value: '999' } });
+
+    const form = container.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByText('Invalid IP address or hostname')).toBeInTheDocument();
+    });
+    expect(createDevice).not.toHaveBeenCalled();
+  });
+});
+
+// --- Gap 6: Backend typed error display ---
+
+describe('AddDevicePanel — backend typed error display', () => {
+  it('shows ServerError ref message when createDevice throws ServerError', async () => {
+    (createDevice as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ServerError('internal error, ref: srv001', 'srv001'),
+    );
+
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const ipInput = screen.getByPlaceholderText('192.168.1.1');
+    fireEvent.change(ipInput, { target: { value: '10.0.0.1' } });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Something went wrong (ref: srv001)')).toBeInTheDocument();
+    });
+  });
+
+  it('shows ValidationError message when createDevice throws ValidationError', async () => {
+    (createDevice as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ValidationError('IP already exists'),
+    );
+
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const ipInput = screen.getByPlaceholderText('192.168.1.1');
+    fireEvent.change(ipInput, { target: { value: '10.0.0.1' } });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(screen.getByText('IP already exists')).toBeInTheDocument();
+    });
+  });
+
+  it('shows plain Error message when createDevice throws plain Error', async () => {
+    (createDevice as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('network failure'),
+    );
+
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const ipInput = screen.getByPlaceholderText('192.168.1.1');
+    fireEvent.change(ipInput, { target: { value: '10.0.0.1' } });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(screen.getByText('network failure')).toBeInTheDocument();
     });
   });
 });

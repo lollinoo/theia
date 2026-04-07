@@ -55,6 +55,18 @@ type BackupJobRepository interface {
 	Update(job *BackupJob) error
 	Delete(id uuid.UUID) error
 	DeleteByDeviceID(deviceID uuid.UUID) error
+
+	// ListSuccessfulByDeviceOldest returns all successful backup jobs for a device,
+	// ordered oldest first (ascending by created_at). Used for retention sweep.
+	ListSuccessfulByDeviceOldest(deviceID uuid.UUID) ([]BackupJob, error)
+
+	// ListAllDeviceIDs returns distinct device IDs that have at least one backup job.
+	// Used by retention sweep to iterate over all devices.
+	ListAllDeviceIDs() ([]uuid.UUID, error)
+
+	// DeleteFailedOlderThan removes failed backup job records older than the given time.
+	// Returns the count of deleted records.
+	DeleteFailedOlderThan(cutoff time.Time) (int, error)
 }
 
 // BackupFileRepository defines persistence operations for backup files.

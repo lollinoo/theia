@@ -3,6 +3,9 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -39,6 +42,30 @@ type jsonAPISingle struct {
 
 type jsonAPIList struct {
 	Data []jsonAPIResource `json:"data"`
+}
+
+// --- Validation allowlists ---
+
+var validDeviceTypes = map[string]bool{
+	"router": true, "switch": true, "access_point": true,
+	"firewall": true, "unknown": true, "virtual": true, "": true,
+}
+
+var validMetricsSources = map[string]bool{
+	"prometheus": true, "snmp": true, "": true,
+}
+
+var validSNMPv3AuthProtocols = map[string]bool{
+	"MD5": true, "SHA": true, "SHA-224": true,
+	"SHA-256": true, "SHA-384": true, "SHA-512": true,
+}
+
+var validSNMPv3PrivProtocols = map[string]bool{
+	"DES": true, "AES": true,
+}
+
+var validSNMPv3SecurityLevels = map[string]bool{
+	"noAuthNoPriv": true, "authNoPriv": true, "authPriv": true,
 }
 
 // --- Request types ---
@@ -138,7 +165,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 			domain.DeviceTypeVirtual,
 			domain.SNMPCredentials{}, req.Tags, "", "", "", "", nil, areaIDs)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, "failed to create virtual device", err)
 			return
 		}
 
@@ -151,6 +178,47 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	if req.IP == "" {
 		writeError(w, http.StatusBadRequest, "ip is required")
 		return
+	}
+	if !isValidIPOrHostname(req.IP) {
+		writeError(w, http.StatusBadRequest, "ip must be a valid IP address or hostname")
+		return
+	}
+	if req.Hostname != "" {
+		req.Hostname = strings.TrimSpace(req.Hostname)
+		if len(req.Hostname) > 253 {
+			writeError(w, http.StatusBadRequest, "hostname too long (max 253 characters)")
+			return
+		}
+	}
+	if !validDeviceTypes[req.DeviceType] {
+		writeError(w, http.StatusBadRequest, "invalid device_type")
+		return
+	}
+	if !validMetricsSources[req.MetricsSource] {
+		writeError(w, http.StatusBadRequest, "invalid metrics_source")
+		return
+	}
+	if len(req.Vendor) > 255 {
+		writeError(w, http.StatusBadRequest, "vendor too long (max 255 characters)")
+		return
+	}
+	if len(req.PrometheusLabelName) > 255 {
+		writeError(w, http.StatusBadRequest, "prometheus_label_name too long (max 255 characters)")
+		return
+	}
+	if len(req.PrometheusLabelValue) > 255 {
+		writeError(w, http.StatusBadRequest, "prometheus_label_value too long (max 255 characters)")
+		return
+	}
+	for k, v := range req.Tags {
+		if len(k) > 255 {
+			writeError(w, http.StatusBadRequest, "tag key too long (max 255 characters)")
+			return
+		}
+		if len(v) > 255 {
+			writeError(w, http.StatusBadRequest, "tag value too long (max 255 characters)")
+			return
+		}
 	}
 
 	creds, err := parseSNMPCreds(req.SNMP)
@@ -198,7 +266,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		creds, req.Tags, req.Vendor, metricsSource,
 		prometheusLabelName, prometheusLabelValue, sshProfileID, areaIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to create device", err)
 		return
 	}
 
@@ -210,7 +278,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 func (h *DeviceHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	devices, err := h.svc.GetAllDevices(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
 		return
 	}
 
@@ -236,7 +304,7 @@ func (h *DeviceHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to get device", err)
 		return
 	}
 
@@ -254,6 +322,48 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	var req updateDeviceRequest
 	if !decodeJSON(w, r, &req) {
 		return
+	}
+
+	// Validate optional update fields
+	if req.IP != nil && *req.IP != "" && !isValidIPOrHostname(*req.IP) {
+		writeError(w, http.StatusBadRequest, "ip must be a valid IP address or hostname")
+		return
+	}
+	if req.Hostname != nil {
+		h := strings.TrimSpace(*req.Hostname)
+		if len(h) > 253 {
+			writeError(w, http.StatusBadRequest, "hostname too long (max 253 characters)")
+			return
+		}
+		req.Hostname = &h
+	}
+	if req.MetricsSource != nil && !validMetricsSources[*req.MetricsSource] {
+		writeError(w, http.StatusBadRequest, "invalid metrics_source")
+		return
+	}
+	if req.Vendor != nil && len(*req.Vendor) > 255 {
+		writeError(w, http.StatusBadRequest, "vendor too long (max 255 characters)")
+		return
+	}
+	if req.PrometheusLabelName != nil && len(*req.PrometheusLabelName) > 255 {
+		writeError(w, http.StatusBadRequest, "prometheus_label_name too long (max 255 characters)")
+		return
+	}
+	if req.PrometheusLabelValue != nil && len(*req.PrometheusLabelValue) > 255 {
+		writeError(w, http.StatusBadRequest, "prometheus_label_value too long (max 255 characters)")
+		return
+	}
+	if req.Tags != nil {
+		for k, v := range *req.Tags {
+			if len(k) > 255 {
+				writeError(w, http.StatusBadRequest, "tag key too long (max 255 characters)")
+				return
+			}
+			if len(v) > 255 {
+				writeError(w, http.StatusBadRequest, "tag value too long (max 255 characters)")
+				return
+			}
+		}
 	}
 
 	update := service.DeviceUpdate{
@@ -323,14 +433,14 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to update device", err)
 		return
 	}
 
 	// Return updated device
 	device, err := h.svc.GetDevice(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to get device", err)
 		return
 	}
 
@@ -350,7 +460,7 @@ func (h *DeviceHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to delete device", err)
 		return
 	}
 
@@ -372,7 +482,7 @@ func (h *DeviceHandler) HandleProbe(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to probe device", err)
 		return
 	}
 
@@ -394,7 +504,7 @@ func (h *DeviceHandler) HandleTestSNMP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to test SNMP", err)
 		return
 	}
 
@@ -415,11 +525,21 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 
 	batchID := uuid.New().String()
 
-	// Add each device asynchronously
+	type batchAddFailure struct {
+		IP     string `json:"ip"`
+		Reason string `json:"reason"`
+	}
+	var failures []batchAddFailure
+
+	// Add each device
 	for _, d := range req.Devices {
+		if d.IP != "" && !isValidIPOrHostname(d.IP) {
+			failures = append(failures, batchAddFailure{IP: d.IP, Reason: "invalid IP address or hostname"})
+			continue
+		}
 		creds, err := parseSNMPCreds(d.SNMP)
 		if err != nil {
-			// Skip devices with bad credentials, continue with others
+			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 			continue
 		}
 		ms := domain.MetricsSource(d.MetricsSource)
@@ -427,9 +547,11 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 		if d.SSHProfileID != "" {
 			parsed, parseErr := uuid.Parse(d.SSHProfileID)
 			if parseErr != nil {
+				failures = append(failures, batchAddFailure{IP: d.IP, Reason: "invalid ssh_profile_id"})
 				continue
 			}
 			if _, lookupErr := h.sshProfileRepo.GetByID(parsed); lookupErr != nil {
+				failures = append(failures, batchAddFailure{IP: d.IP, Reason: "ssh profile not found"})
 				continue
 			}
 			batchSSHProfileID = &parsed
@@ -438,17 +560,24 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 		if batchDeviceType == "" {
 			batchDeviceType = domain.DeviceTypeUnknown
 		}
-		_, _ = h.svc.AddDevice(r.Context(), d.IP, d.Hostname,
+		if _, err := h.svc.AddDevice(r.Context(), d.IP, d.Hostname,
 			batchDeviceType,
 			creds, d.Tags, d.Vendor, ms,
-			d.PrometheusLabelName, d.PrometheusLabelValue, batchSSHProfileID, nil)
+			d.PrometheusLabelName, d.PrometheusLabelValue, batchSSHProfileID, nil); err != nil {
+			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
+		}
+	}
+
+	if failures == nil {
+		failures = []batchAddFailure{}
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(batchAddResponse{
-		BatchID: batchID,
-		Status:  "processing",
-		Count:   len(req.Devices),
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"batch_id": batchID,
+		"status":   "processing",
+		"count":    len(req.Devices),
+		"failures": failures,
 	})
 }
 
@@ -527,6 +656,15 @@ func parseSNMPCreds(req snmpCredsRequest) (domain.SNMPCredentials, error) {
 		}
 		creds.V2c = &domain.SNMPv2cCredentials{Community: req.Community}
 	case "3":
+		if req.AuthProtocol != "" && !validSNMPv3AuthProtocols[req.AuthProtocol] {
+			return domain.SNMPCredentials{}, fmt.Errorf("invalid auth_protocol: must be one of MD5, SHA, SHA-224, SHA-256, SHA-384, SHA-512")
+		}
+		if req.PrivProtocol != "" && !validSNMPv3PrivProtocols[req.PrivProtocol] {
+			return domain.SNMPCredentials{}, fmt.Errorf("invalid priv_protocol: must be one of DES, AES")
+		}
+		if req.SecurityLevel != "" && !validSNMPv3SecurityLevels[req.SecurityLevel] {
+			return domain.SNMPCredentials{}, fmt.Errorf("invalid security_level: must be one of noAuthNoPriv, authNoPriv, authPriv")
+		}
 		creds.Version = domain.SNMPVersionV3
 		creds.V3 = &domain.SNMPv3Credentials{
 			Username:      req.Username,
@@ -561,9 +699,68 @@ func extractIDFromPath(path, prefix string) (uuid.UUID, error) {
 	return uuid.Parse(idStr)
 }
 
-func writeError(w http.ResponseWriter, code int, message string) {
+func writeError(w http.ResponseWriter, code int, message string, internalErr ...error) {
+	if code == http.StatusInternalServerError {
+		ref := uuid.New().String()[:8]
+		if len(internalErr) > 0 && internalErr[0] != nil {
+			log.Printf("internal error ref=%s: %v", ref, internalErr[0])
+		}
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("internal error, ref: %s", ref),
+		})
+		return
+	}
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// isValidIPOrHostname returns true if s is a valid IPv4/IPv6 address or RFC 1123 hostname.
+func isValidIPOrHostname(s string) bool {
+	if net.ParseIP(s) != nil {
+		return true
+	}
+	return isValidHostname(s)
+}
+
+// isValidHostname validates s as a hostname (labels 1-63 chars, total <= 253).
+// Each label must contain at least one letter and may only contain alphanumeric
+// characters and hyphens (hyphens not at start or end of a label). This rejects
+// purely numeric labels (e.g. "12345") which are not valid hostnames.
+func isValidHostname(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		hasLetter := false
+		for i, c := range label {
+			switch {
+			case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+				hasLetter = true
+			case c >= '0' && c <= '9':
+				// digits allowed but not exclusively
+			case c == '-' && i > 0 && i < len(label)-1:
+				// hyphen allowed in the middle only
+			default:
+				return false
+			}
+		}
+		if !hasLetter {
+			return false
+		}
+	}
+	return true
+}
+
+// sanitizeFilename strips characters that could enable HTTP response splitting.
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer(
+		"\r", "", "\n", "", "\"", "", ";", "", "\t", "",
+	)
+	return replacer.Replace(name)
 }
 
 // decodeJSON reads and unmarshals JSON from the request body.

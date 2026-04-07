@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { triggerBackup, triggerBulkDownload, fetchBackupJob } from '../../api/client';
+import { ValidationError, ServerError } from '../../api/errors';
 import type { Device } from '../../types/api';
 
 interface BulkBackupPanelProps {
@@ -119,11 +120,18 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
           startPolling();
         })
         .catch((err) => {
-          const msg = err instanceof Error ? err.message : 'backup failed';
-          let reason = msg;
-          if (msg.includes('unreachable')) reason = 'device unreachable';
-          else if (msg.includes('no SSH')) reason = 'no SSH profile assigned';
-          else if (msg.includes('not supported')) reason = 'backup not supported for this vendor';
+          let reason: string;
+          if (err instanceof ServerError) {
+            reason = err.correlationId ? `server error (ref: ${err.correlationId})` : 'server error';
+          } else if (err instanceof ValidationError) {
+            reason = err.message;
+          } else {
+            const msg = err instanceof Error ? err.message : 'backup failed';
+            reason = msg.includes('unreachable') ? 'device unreachable'
+              : msg.includes('no SSH') ? 'no SSH profile assigned'
+              : msg.includes('not supported') ? 'backup not supported for this vendor'
+              : msg;
+          }
           patchEntry(entry.deviceId, { phase: 'skipped', reason });
         });
     }

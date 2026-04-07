@@ -258,6 +258,45 @@ func (r *backupJobRepoForHandler) Delete(id uuid.UUID) error {
 
 func (r *backupJobRepoForHandler) DeleteByDeviceID(uuid.UUID) error { return nil }
 
+func (r *backupJobRepoForHandler) ListSuccessfulByDeviceOldest(deviceID uuid.UUID) ([]domain.BackupJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result []domain.BackupJob
+	for _, j := range r.jobs {
+		if j.DeviceID == deviceID && j.Status == domain.BackupStatusSuccess {
+			result = append(result, *j)
+		}
+	}
+	return result, nil
+}
+
+func (r *backupJobRepoForHandler) ListAllDeviceIDs() ([]uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	seen := make(map[uuid.UUID]bool)
+	var ids []uuid.UUID
+	for _, j := range r.jobs {
+		if !seen[j.DeviceID] {
+			seen[j.DeviceID] = true
+			ids = append(ids, j.DeviceID)
+		}
+	}
+	return ids, nil
+}
+
+func (r *backupJobRepoForHandler) DeleteFailedOlderThan(cutoff time.Time) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 0
+	for id, j := range r.jobs {
+		if j.Status == domain.BackupStatusFailed && j.CreatedAt.Before(cutoff) {
+			delete(r.jobs, id)
+			count++
+		}
+	}
+	return count, nil
+}
+
 type backupFileRepoForHandler struct {
 	mu    sync.Mutex
 	files map[uuid.UUID]*domain.BackupFile
@@ -447,5 +486,94 @@ func TestBackupHandlerTriggerBackup_InvalidID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+// =============================================================================
+// D-09: Content-Disposition filename sanitization in HandleDownloadBackupFile
+// =============================================================================
+
+// TestBackupDownload_SanitizedFilename verifies that HandleDownloadBackupFile
+// sets a Content-Disposition header that does not contain CRLF characters even
+// when the backup file's FileName field contains them.
+// We seed a backup file record with a malicious filename into the mock file repo
+// and verify the header is sanitized before it reaches the HTTP response.
+func TestBackupDownload_SanitizedFilename(t *testing.T) {
+	_, _, fileRepo := setupBackupHandler(t)
+
+	// Create a real temp file on disk so http.ServeFile does not error
+	dir := t.TempDir()
+	tmpFile := dir + "/backup.rsc"
+	if err := os.WriteFile(tmpFile, []byte("# MikroTik backup"), 0644); err != nil {
+		t.Fatalf("creating temp backup file: %v", err)
+	}
+
+	// Seed a backup file with a malicious filename containing CRLF
+	fileID := uuid.New()
+	maliciousName := "backup\r\nEvil-Header: injected"
+	fileRepo.files[fileID] = &domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileName: maliciousName,
+		FilePath: tmpFile,
+		FileType: "rsc",
+	}
+
+	// Rebuild handler with this file repo populated
+	jobRepo := newBackupJobRepoForHandler()
+	sshProfileRepo := newMockSSHProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	encKey := crypto.DeriveKey("test-backup-sanitize-key")
+
+	defaultCfg := vendor.DBVendorRecord{
+		Name: "default",
+		ConfigJSON: `{
+			"vendor": {"name": "default", "display_name": "Generic"},
+			"detection": {},
+			"backup": {"supported": false}
+		}`,
+	}
+	reg, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{defaultCfg})
+	if err != nil {
+		t.Fatalf("building vendor registry: %v", err)
+	}
+
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, sshProfileRepo, deviceRepo, settingsRepo,
+		reg, &mockSSHDialerForBackup{}, encKey, t.TempDir(),
+		gossh.InsecureIgnoreHostKey(),
+	)
+	handler := NewBackupHandler(backupSvc, settingsRepo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-files/"+fileID.String()+"/download", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleDownloadBackupFile(rec, req)
+
+	// Must not be 404/500 — the file exists on disk
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("got 404 — backup file not found in mock repo")
+	}
+	if rec.Code == http.StatusInternalServerError {
+		t.Fatalf("got 500 — body: %s", rec.Body.String())
+	}
+
+	cd := rec.Header().Get("Content-Disposition")
+	if cd == "" {
+		t.Fatal("expected Content-Disposition header to be set")
+	}
+	// sanitizeFilename strips \r and \n — this defeats HTTP response splitting.
+	// The remaining text from after the CRLF is collapsed into the filename but
+	// cannot be interpreted as a separate HTTP header line.
+	if strings.Contains(cd, "\r") {
+		t.Errorf("Content-Disposition must not contain CR; got: %q", cd)
+	}
+	if strings.Contains(cd, "\n") {
+		t.Errorf("Content-Disposition must not contain LF; got: %q", cd)
+	}
+	// The header must still start with attachment; filename= (not be split into
+	// a new header line) — verify the whole value is on a single logical line.
+	if !strings.HasPrefix(cd, "attachment; filename=") {
+		t.Errorf("Content-Disposition must start with 'attachment; filename='; got: %q", cd)
 	}
 }

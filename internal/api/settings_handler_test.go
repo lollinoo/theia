@@ -118,3 +118,181 @@ func TestSettingsHandlerUpdate_InvalidTimezone(t *testing.T) {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
+
+func TestSettingsHandler_UnknownKey_PUT_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"anything"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/unknown_key", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "unknown setting key") {
+		t.Errorf("expected error about unknown setting key, got: %s", rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_NumericSetting_InvalidValue_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"abc"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPollingInterval, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "must be a valid integer") {
+		t.Errorf("expected error about invalid integer, got: %s", rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_URLSetting_InvalidScheme_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"ftp://example.com"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPrometheusURL, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "must be a valid http/https URL") {
+		t.Errorf("expected error about http/https URL, got: %s", rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_URLSetting_EmptyClears_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":""}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPrometheusURL, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_IntervalSetting_InvalidValue_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"7"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingInstanceBackupIntervalHours, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "must be one of: 0, 6, 12, 24, 48, 168") {
+		t.Errorf("expected error about allowed intervals, got: %s", rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_IntervalSetting_ValidValue_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"24"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingInstanceBackupIntervalHours, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_DeviceInterval_InvalidValue_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"3"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingDeviceBackupIntervalHours, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_Timezone_Invalid_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"Invalid/Zone"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingTimezone, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestSettingsHandler_Timezone_Valid_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"America/New_York"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingTimezone, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_GET_KnownKey_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/"+domain.SettingPollingInterval, nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleGet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_GET_UnknownKey_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/unknown_key", nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleGet(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "unknown setting key") {
+		t.Errorf("expected error about unknown setting key, got: %s", rec.Body.String())
+	}
+}

@@ -6,6 +6,13 @@ import {
   fetchSSHProfiles,
   updateSSHProfile,
 } from '../api/client';
+import { ValidationError, ServerError } from '../api/errors';
+import {
+  validateRequired,
+  validateMaxLength,
+  validatePort,
+  MAX_STRING_LENGTH,
+} from '../utils/validation';
 
 const inputClass =
   'w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
@@ -54,19 +61,65 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
   const [form, setForm] = useState<FormState>(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  function setFieldError(field: string, err: string | null) {
+    setFieldErrors((prev) => {
+      if (err) return { ...prev, [field]: err };
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }
+
+  function handleBlur(field: string, validator: () => string | null) {
+    return () => {
+      const err = validator();
+      setFieldError(field, err);
+    };
+  }
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+    setFieldError(key, null);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // Validate all fields before calling onSave
+    const errors: Record<string, string> = {};
+    const nameErr = validateRequired(form.name, 'Profile name') ?? validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name');
+    if (nameErr) errors['name'] = nameErr;
+    const descErr = validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description');
+    if (descErr) errors['description'] = descErr;
+    const usernameErr = validateRequired(form.username, 'Username') ?? validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username');
+    if (usernameErr) errors['username'] = usernameErr;
+    const portErr = validatePort(form.port, 'Port');
+    if (portErr) errors['port'] = portErr;
+    if (!isEdit) {
+      const secretErr = validateRequired(form.secret, form.authMethod === 'password' ? 'Password' : 'Private key');
+      if (secretErr) errors['secret'] = secretErr;
+    }
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      return;
+    }
+
     setError(null);
     setLoading(true);
     try {
       await onSave(form);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save profile.');
+      if (err instanceof ServerError) {
+        setError(err.correlationId
+          ? `Something went wrong (ref: ${err.correlationId})`
+          : 'Something went wrong');
+      } else if (err instanceof ValidationError) {
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to save profile.');
+      }
     } finally {
       setLoading(false);
     }
@@ -80,10 +133,14 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
           type="text"
           value={form.name}
           onChange={(e) => set('name', e.target.value)}
+          onBlur={handleBlur('name', () => validateRequired(form.name, 'Profile name') ?? validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name'))}
           placeholder="e.g. MikroTik Admin"
           required
-          className={inputClass}
+          className={`${inputClass}${fieldErrors['name'] ? ' border-status-down' : ''}`}
         />
+        {fieldErrors['name'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['name']}</p>
+        )}
       </div>
 
       <div className="space-y-1">
@@ -92,9 +149,13 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
           type="text"
           value={form.description}
           onChange={(e) => set('description', e.target.value)}
+          onBlur={handleBlur('description', () => validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description'))}
           placeholder="Optional description"
-          className={inputClass}
+          className={`${inputClass}${fieldErrors['description'] ? ' border-status-down' : ''}`}
         />
+        {fieldErrors['description'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['description']}</p>
+        )}
       </div>
 
       <div className="space-y-1">
@@ -103,9 +164,13 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
           type="text"
           value={form.username}
           onChange={(e) => set('username', e.target.value)}
+          onBlur={handleBlur('username', () => validateRequired(form.username, 'Username') ?? validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username'))}
           placeholder="admin"
-          className={inputClass}
+          className={`${inputClass}${fieldErrors['username'] ? ' border-status-down' : ''}`}
         />
+        {fieldErrors['username'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
+        )}
       </div>
 
       <div className="space-y-1">
@@ -114,9 +179,13 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
           type="number"
           value={form.port}
           onChange={(e) => set('port', e.target.value)}
+          onBlur={handleBlur('port', () => validatePort(form.port, 'Port'))}
           placeholder="22"
-          className={inputClass}
+          className={`${inputClass}${fieldErrors['port'] ? ' border-status-down' : ''}`}
         />
+        {fieldErrors['port'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['port']}</p>
+        )}
       </div>
 
       <div className="space-y-1">
@@ -150,24 +219,30 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
       <div className="space-y-1">
         <label className={labelClass}>
           {form.authMethod === 'password' ? 'Password' : 'Private Key'}
+          {!isEdit && <span className="text-status-down"> *</span>}
         </label>
         {form.authMethod === 'password' ? (
           <input
             type="password"
             value={form.secret}
             onChange={(e) => set('secret', e.target.value)}
+            onBlur={!isEdit ? handleBlur('secret', () => validateRequired(form.secret, 'Password')) : undefined}
             placeholder={isEdit ? '(unchanged if blank)' : 'Enter password'}
             autoComplete="new-password"
-            className={inputClass}
+            className={`${inputClass}${fieldErrors['secret'] ? ' border-status-down' : ''}`}
           />
         ) : (
           <textarea
             value={form.secret}
             onChange={(e) => set('secret', e.target.value)}
+            onBlur={!isEdit ? handleBlur('secret', () => validateRequired(form.secret, 'Private key')) : undefined}
             placeholder={isEdit ? '(unchanged if blank)' : 'Paste private key'}
             rows={4}
-            className={`${inputClass} font-mono text-xs`}
+            className={`${inputClass} font-mono text-xs${fieldErrors['secret'] ? ' border-status-down' : ''}`}
           />
+        )}
+        {fieldErrors['secret'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['secret']}</p>
         )}
       </div>
 

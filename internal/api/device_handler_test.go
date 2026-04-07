@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -673,3 +674,475 @@ func TestDeviceHandlerCreate_RegularStillRequiresIP(t *testing.T) {
 
 // Silence the unused import for context -- it is needed for domain import indirectly.
 var _ = context.Background
+
+// --- writeError tests ---
+
+func TestWriteError_500_ReturnsGenericWithRef(t *testing.T) {
+	rec := httptest.NewRecorder()
+	realErr := errors.New("database connection failed: secret details")
+	writeError(rec, http.StatusInternalServerError, "unused message", realErr)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "internal error, ref:") {
+		t.Errorf("expected body to contain 'internal error, ref:', got: %s", body)
+	}
+	if strings.Contains(body, "database connection failed") {
+		t.Errorf("expected body NOT to contain real error message, got: %s", body)
+	}
+	if strings.Contains(body, "secret details") {
+		t.Errorf("expected body NOT to contain sensitive details, got: %s", body)
+	}
+}
+
+func TestWriteError_400_ReturnsExactMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeError(rec, http.StatusBadRequest, "ip is required")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "ip is required" {
+		t.Errorf("expected error 'ip is required', got %q", resp["error"])
+	}
+}
+
+func TestWriteError_500_NoInternalErr(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeError(rec, http.StatusInternalServerError, "unused message")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "internal error, ref:") {
+		t.Errorf("expected body to contain 'internal error, ref:', got: %s", body)
+	}
+}
+
+// --- isValidIPOrHostname tests ---
+
+func TestIsValidIPOrHostname(t *testing.T) {
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		{"192.168.1.1", true},
+		{"::1", true},
+		{"2001:db8::1", true},
+		{"router1.example.com", true},
+		{"a-b.c-d.example.com", true},
+		{"localhost", true},
+		{"", false},
+		{"invalid hostname!", false},
+		{strings.Repeat("a", 254), false},
+		{"-invalid.com", false},
+		{"invalid-.com", false},
+		// purely numeric labels must be rejected (not valid hostnames)
+		{"12345", false},
+		{"999", false},
+		{"0", false},
+		{"123.456", false},
+		// mixed alphanumeric single-label with letter must be accepted
+		{"router1", true},
+		{"1e100", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got := isValidIPOrHostname(tc.input)
+			if got != tc.want {
+				t.Errorf("isValidIPOrHostname(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- sanitizeFilename tests ---
+
+func TestSanitizeFilename(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"normal.tar.gz", "normal.tar.gz"},
+		{"file\r\nname.tar.gz", "filename.tar.gz"},
+		{"file\"name\";secret.tar.gz", "filenamesecret.tar.gz"},
+		{"file\tname.tar.gz", "filename.tar.gz"},
+		{"backup-2024-01-01.tar.gz", "backup-2024-01-01.tar.gz"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got := sanitizeFilename(tc.input)
+			if got != tc.want {
+				t.Errorf("sanitizeFilename(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// D-01 / D-04: IP validation in HandleCreate
+// =============================================================================
+
+func TestHandleCreate_InvalidIP_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"not-valid!","snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid IP, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "valid IP address or hostname") {
+		t.Errorf("expected error about valid IP/hostname, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleCreate_HostnameTooLong_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	longHostname := strings.Repeat("a", 254)
+	body := fmt.Sprintf(`{"ip":"10.0.0.1","hostname":"%s","snmp":{"version":"2c","community":"public"}}`, longHostname)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for hostname > 253 chars, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "hostname too long") {
+		t.Errorf("expected error about hostname length, got: %s", rec.Body.String())
+	}
+}
+
+// =============================================================================
+// D-02: device_type and metrics_source allowlist validation
+// =============================================================================
+
+func TestHandleCreate_InvalidDeviceType_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.0.0.1","device_type":"refrigerator","snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid device_type, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid device_type") {
+		t.Errorf("expected error about device_type, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleCreate_InvalidMetricsSource_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.0.0.1","metrics_source":"magic","snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid metrics_source, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid metrics_source") {
+		t.Errorf("expected error about metrics_source, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleCreate_ValidDeviceTypes_Accept(t *testing.T) {
+	validTypes := []string{"router", "switch", "access_point", "firewall", "unknown"}
+	for _, dt := range validTypes {
+		t.Run(dt, func(t *testing.T) {
+			handler, _, _ := newTestDeviceHandler(t)
+			body := fmt.Sprintf(`{"ip":"10.0.0.1","device_type":"%s","snmp":{"version":"2c","community":"public"}}`, dt)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			handler.HandleCreate(rec, req)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("expected 201 for device_type=%q, got %d; body: %s", dt, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// =============================================================================
+// D-01 / D-03: String length validation in HandleCreate
+// =============================================================================
+
+func TestHandleCreate_VendorTooLong_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	vendor := strings.Repeat("v", 256)
+	body := fmt.Sprintf(`{"ip":"10.0.0.1","vendor":"%s","snmp":{"version":"2c","community":"public"}}`, vendor)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for vendor > 255 chars, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "vendor too long") {
+		t.Errorf("expected error about vendor length, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleCreate_PrometheusLabelNameTooLong_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	label := strings.Repeat("l", 256)
+	body := fmt.Sprintf(`{"ip":"10.0.0.1","prometheus_label_name":"%s","snmp":{"version":"2c","community":"public"}}`, label)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for prometheus_label_name > 255 chars, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "prometheus_label_name too long") {
+		t.Errorf("expected error about prometheus_label_name length, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleCreate_PrometheusLabelValueTooLong_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	val := strings.Repeat("v", 256)
+	body := fmt.Sprintf(`{"ip":"10.0.0.1","prometheus_label_value":"%s","snmp":{"version":"2c","community":"public"}}`, val)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for prometheus_label_value > 255 chars, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "prometheus_label_value too long") {
+		t.Errorf("expected error about prometheus_label_value length, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleCreate_TagValueTooLong_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	val := strings.Repeat("x", 256)
+	body := fmt.Sprintf(`{"ip":"10.0.0.1","snmp":{"version":"2c","community":"public"},"tags":{"env":"%s"}}`, val)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for tag value > 255 chars, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "tag value too long") {
+		t.Errorf("expected error about tag value length, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleCreate_TagKeyTooLong_400(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	key := strings.Repeat("k", 256)
+	body := fmt.Sprintf(`{"ip":"10.0.0.1","snmp":{"version":"2c","community":"public"},"tags":{"%s":"value"}}`, key)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for tag key > 255 chars, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "tag key too long") {
+		t.Errorf("expected error about tag key length, got: %s", rec.Body.String())
+	}
+}
+
+// =============================================================================
+// D-06: SNMP v3 allowlist validation via parseSNMPCreds
+// =============================================================================
+
+func TestParseSNMPCreds_V3_InvalidAuthProtocol(t *testing.T) {
+	req := snmpCredsRequest{
+		Version:       "3",
+		Username:      "admin",
+		AuthProtocol:  "MD4",
+		SecurityLevel: "authPriv",
+	}
+	_, err := parseSNMPCreds(req)
+	if err == nil {
+		t.Fatal("expected error for invalid auth_protocol MD4, got nil")
+	}
+	if !strings.Contains(err.Error(), "auth_protocol") {
+		t.Errorf("expected error message to mention auth_protocol, got: %s", err.Error())
+	}
+}
+
+func TestParseSNMPCreds_V3_ValidAuthProtocol(t *testing.T) {
+	validProtos := []string{"MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
+	for _, proto := range validProtos {
+		t.Run(proto, func(t *testing.T) {
+			req := snmpCredsRequest{
+				Version:      "3",
+				Username:     "admin",
+				AuthProtocol: proto,
+			}
+			_, err := parseSNMPCreds(req)
+			if err != nil {
+				t.Fatalf("expected no error for auth_protocol=%q, got: %v", proto, err)
+			}
+		})
+	}
+}
+
+func TestParseSNMPCreds_V3_InvalidPrivProtocol(t *testing.T) {
+	req := snmpCredsRequest{
+		Version:      "3",
+		Username:     "admin",
+		PrivProtocol: "3DES",
+	}
+	_, err := parseSNMPCreds(req)
+	if err == nil {
+		t.Fatal("expected error for invalid priv_protocol 3DES, got nil")
+	}
+	if !strings.Contains(err.Error(), "priv_protocol") {
+		t.Errorf("expected error message to mention priv_protocol, got: %s", err.Error())
+	}
+}
+
+func TestParseSNMPCreds_V3_ValidPrivProtocol(t *testing.T) {
+	validProtos := []string{"DES", "AES"}
+	for _, proto := range validProtos {
+		t.Run(proto, func(t *testing.T) {
+			req := snmpCredsRequest{
+				Version:      "3",
+				Username:     "admin",
+				PrivProtocol: proto,
+			}
+			_, err := parseSNMPCreds(req)
+			if err != nil {
+				t.Fatalf("expected no error for priv_protocol=%q, got: %v", proto, err)
+			}
+		})
+	}
+}
+
+func TestParseSNMPCreds_V3_InvalidSecurityLevel(t *testing.T) {
+	req := snmpCredsRequest{
+		Version:       "3",
+		Username:      "admin",
+		SecurityLevel: "superAuth",
+	}
+	_, err := parseSNMPCreds(req)
+	if err == nil {
+		t.Fatal("expected error for invalid security_level superAuth, got nil")
+	}
+	if !strings.Contains(err.Error(), "security_level") {
+		t.Errorf("expected error message to mention security_level, got: %s", err.Error())
+	}
+}
+
+func TestParseSNMPCreds_V3_ValidSecurityLevel(t *testing.T) {
+	validLevels := []string{"noAuthNoPriv", "authNoPriv", "authPriv"}
+	for _, level := range validLevels {
+		t.Run(level, func(t *testing.T) {
+			req := snmpCredsRequest{
+				Version:       "3",
+				Username:      "admin",
+				SecurityLevel: level,
+			}
+			_, err := parseSNMPCreds(req)
+			if err != nil {
+				t.Fatalf("expected no error for security_level=%q, got: %v", level, err)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// D-10: HandleBatchAdd returns failures array with per-device IP and error reason
+// =============================================================================
+
+func TestHandleBatchAdd_InvalidIP_ReturnsFailures(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"devices":[{"ip":"not-valid!","snmp":{"version":"2c","community":"public"}},{"ip":"10.0.0.1","snmp":{"version":"2c","community":"public"}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/batch", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBatchAdd(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	failures, ok := resp["failures"]
+	if !ok {
+		t.Fatal("expected 'failures' key in response")
+	}
+
+	failureList, ok := failures.([]interface{})
+	if !ok {
+		t.Fatalf("expected failures to be an array, got %T", failures)
+	}
+	if len(failureList) != 1 {
+		t.Fatalf("expected 1 failure (invalid IP), got %d", len(failureList))
+	}
+
+	failureItem, ok := failureList[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected failure to be an object, got %T", failureList[0])
+	}
+	if failureItem["ip"] != "not-valid!" {
+		t.Errorf("expected failure IP to be 'not-valid!', got %v", failureItem["ip"])
+	}
+	if failureItem["reason"] == "" {
+		t.Error("expected failure to have a non-empty reason")
+	}
+}
+
+func TestHandleBatchAdd_AllValid_EmptyFailures(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"devices":[{"ip":"10.0.0.1","snmp":{"version":"2c","community":"public"}},{"ip":"10.0.0.2","snmp":{"version":"2c","community":"public"}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/batch", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBatchAdd(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	failures, ok := resp["failures"]
+	if !ok {
+		t.Fatal("expected 'failures' key in response")
+	}
+
+	failureList, ok := failures.([]interface{})
+	if !ok {
+		t.Fatalf("expected failures to be an array, got %T", failures)
+	}
+	if len(failureList) != 0 {
+		t.Errorf("expected 0 failures for valid IPs, got %d: %v", len(failureList), failureList)
+	}
+}

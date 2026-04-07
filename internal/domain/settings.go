@@ -8,7 +8,11 @@ const (
 	SettingSNMPWorkerPoolSize = "snmp_worker_pool_size"
 	SettingSNMPTimeout        = "snmp_timeout_seconds"
 	SettingSNMPRetries        = "snmp_retries"
-	SettingTimezone           = "timezone"
+	SettingTimezone                     = "timezone"
+	SettingInstanceBackupIntervalHours  = "instance_backup_interval_hours"
+	SettingInstanceBackupRetentionCount = "instance_backup_retention_count"
+	SettingDeviceBackupIntervalHours    = "device_backup_interval_hours"
+	SettingDeviceBackupRetentionCount   = "device_backup_retention_count"
 )
 
 // DefaultSettings returns the default runtime settings.
@@ -20,7 +24,11 @@ func DefaultSettings() map[string]string {
 		SettingSNMPWorkerPoolSize: "5",
 		SettingSNMPTimeout:        "10",
 		SettingSNMPRetries:        "2",
-		SettingTimezone:           "UTC",
+		SettingTimezone:                     "UTC",
+		SettingInstanceBackupIntervalHours:  "0",
+		SettingInstanceBackupRetentionCount: "5",
+		SettingDeviceBackupIntervalHours:    "0",
+		SettingDeviceBackupRetentionCount:   "5",
 	}
 }
 

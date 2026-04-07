@@ -286,6 +286,15 @@ export function useCanvasData({
     void loadTopology();
   }, []);
 
+  // Re-fetch topology when backend reconnects (e.g. after restore restart)
+  useEffect(() => {
+    const handleReconnect = () => {
+      void loadTopology(true);
+    };
+    window.addEventListener('backend-reconnected', handleReconnect);
+    return () => window.removeEventListener('backend-reconnected', handleReconnect);
+  }, [loadTopology]);
+
   // Re-fetch settings (Grafana URLs) on demand; called on mount and after
   // any settings panel or device config panel saves Grafana URL changes.
   const refreshSettings = useCallback(() => {

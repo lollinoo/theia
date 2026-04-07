@@ -50,7 +50,7 @@ type snmpCredsResponse struct {
 func (h *SNMPProfileHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	profiles, err := h.repo.GetAll()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -71,6 +71,14 @@ func (h *SNMPProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if len(req.Name) > 255 {
+		writeError(w, http.StatusBadRequest, "name too long (max 255 characters)")
+		return
+	}
+	if len(req.Description) > 255 {
+		writeError(w, http.StatusBadRequest, "description too long (max 255 characters)")
+		return
+	}
 
 	creds, err := parseSNMPCreds(req.SNMP)
 	if err != nil {
@@ -88,7 +96,7 @@ func (h *SNMPProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusConflict, "a profile with that name already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -110,7 +118,7 @@ func (h *SNMPProfileHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -133,6 +141,14 @@ func (h *SNMPProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if len(req.Name) > 255 {
+		writeError(w, http.StatusBadRequest, "name too long (max 255 characters)")
+		return
+	}
+	if len(req.Description) > 255 {
+		writeError(w, http.StatusBadRequest, "description too long (max 255 characters)")
+		return
+	}
 
 	profile, err := h.repo.GetByID(id)
 	if err != nil {
@@ -140,7 +156,7 @@ func (h *SNMPProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -159,7 +175,7 @@ func (h *SNMPProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusConflict, "a profile with that name already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -179,7 +195,7 @@ func (h *SNMPProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 

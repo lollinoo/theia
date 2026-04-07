@@ -41,7 +41,7 @@ type areaResponse struct {
 func (h *AreaHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	areas, err := h.repo.GetAllWithDeviceCount()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to list areas", err)
 		return
 	}
 
@@ -89,7 +89,7 @@ func (h *AreaHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "an area with that name already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to create area", err)
 		return
 	}
 
@@ -111,7 +111,7 @@ func (h *AreaHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to get area", err)
 		return
 	}
 
@@ -156,7 +156,7 @@ func (h *AreaHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to get area", err)
 		return
 	}
 
@@ -169,7 +169,7 @@ func (h *AreaHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "an area with that name already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to update area", err)
 		return
 	}
 
@@ -189,7 +189,7 @@ func (h *AreaHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to delete area", err)
 		return
 	}
 

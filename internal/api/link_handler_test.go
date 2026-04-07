@@ -270,3 +270,65 @@ func TestLinkHandlerCreate_BothPhysicalRequiresBothIfNames(t *testing.T) {
 		t.Errorf("expected 'source_if_name is required' error, got: %s", rec.Body.String())
 	}
 }
+
+// =============================================================================
+// D-08: Link interface name length validation
+// =============================================================================
+
+func TestLinkCreate_SourceIfNameTooLong_400(t *testing.T) {
+	handler, _, deviceRepo := newTestLinkHandler(t)
+
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	deviceRepo.Create(tgtDevice)
+
+	longName := strings.Repeat("e", 256)
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"` + longName + `",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"ether1"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for source_if_name > 255 chars, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "source_if_name too long") {
+		t.Errorf("expected error about source_if_name length, got: %s", rec.Body.String())
+	}
+}
+
+func TestLinkCreate_TargetIfNameTooLong_400(t *testing.T) {
+	handler, _, deviceRepo := newTestLinkHandler(t)
+
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	deviceRepo.Create(tgtDevice)
+
+	longName := strings.Repeat("e", 256)
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"ether1",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"` + longName + `"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for target_if_name > 255 chars, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "target_if_name too long") {
+		t.Errorf("expected error about target_if_name length, got: %s", rec.Body.String())
+	}
+}

@@ -58,7 +58,7 @@ func sshProfileToResponse(p *domain.SSHProfile) sshProfileResponse {
 func (h *SSHProfileHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	profiles, err := h.svc.GetAllSSHProfiles(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -79,11 +79,27 @@ func (h *SSHProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if len(req.Name) > 255 {
+		writeError(w, http.StatusBadRequest, "name too long (max 255 characters)")
+		return
+	}
+	if len(req.Username) > 255 {
+		writeError(w, http.StatusBadRequest, "username too long (max 255 characters)")
+		return
+	}
+	if len(req.Description) > 255 {
+		writeError(w, http.StatusBadRequest, "description too long (max 255 characters)")
+		return
+	}
 	if req.Username == "" {
 		req.Username = "admin"
 	}
 	if req.Port == 0 {
 		req.Port = 22
+	}
+	if req.Port < 1 || req.Port > 65535 {
+		writeError(w, http.StatusBadRequest, "port must be between 1 and 65535")
+		return
 	}
 	if req.AuthMethod == "" {
 		req.AuthMethod = "password"
@@ -101,7 +117,7 @@ func (h *SSHProfileHandler) HandleCreate(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusConflict, "a profile with that name already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -123,7 +139,7 @@ func (h *SSHProfileHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -146,11 +162,27 @@ func (h *SSHProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if len(req.Name) > 255 {
+		writeError(w, http.StatusBadRequest, "name too long (max 255 characters)")
+		return
+	}
+	if len(req.Username) > 255 {
+		writeError(w, http.StatusBadRequest, "username too long (max 255 characters)")
+		return
+	}
+	if len(req.Description) > 255 {
+		writeError(w, http.StatusBadRequest, "description too long (max 255 characters)")
+		return
+	}
 	if req.Username == "" {
 		req.Username = "admin"
 	}
 	if req.Port == 0 {
 		req.Port = 22
+	}
+	if req.Port < 1 || req.Port > 65535 {
+		writeError(w, http.StatusBadRequest, "port must be between 1 and 65535")
+		return
 	}
 	if req.AuthMethod == "" {
 		req.AuthMethod = "password"
@@ -172,7 +204,7 @@ func (h *SSHProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusConflict, "a profile with that name already exists")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -190,7 +222,7 @@ func (h *SSHProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request)
 	// Check if any device references this profile
 	inUse, err := h.sshProfileRepo.IsInUse(id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	if inUse {
@@ -203,7 +235,7 @@ func (h *SSHProfileHandler) HandleDelete(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 

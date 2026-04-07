@@ -110,6 +110,45 @@ func (r *mockBackupJobRepo) DeleteByDeviceID(deviceID uuid.UUID) error {
 	return nil
 }
 
+func (r *mockBackupJobRepo) ListSuccessfulByDeviceOldest(deviceID uuid.UUID) ([]domain.BackupJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result []domain.BackupJob
+	for _, j := range r.jobs {
+		if j.DeviceID == deviceID && j.Status == domain.BackupStatusSuccess {
+			result = append(result, *j)
+		}
+	}
+	return result, nil
+}
+
+func (r *mockBackupJobRepo) ListAllDeviceIDs() ([]uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	seen := make(map[uuid.UUID]bool)
+	var ids []uuid.UUID
+	for _, j := range r.jobs {
+		if !seen[j.DeviceID] {
+			seen[j.DeviceID] = true
+			ids = append(ids, j.DeviceID)
+		}
+	}
+	return ids, nil
+}
+
+func (r *mockBackupJobRepo) DeleteFailedOlderThan(cutoff time.Time) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 0
+	for id, j := range r.jobs {
+		if j.Status == domain.BackupStatusFailed && j.CreatedAt.Before(cutoff) {
+			delete(r.jobs, id)
+			count++
+		}
+	}
+	return count, nil
+}
+
 // mockBackupFileRepo implements domain.BackupFileRepository.
 type mockBackupFileRepo struct {
 	mu             sync.Mutex

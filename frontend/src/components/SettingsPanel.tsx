@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchSettings, updateSetting, fetchHealthVersion, type HealthVersion } from '../api/client';
+import { validateURL, validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
 import { AreaManager } from './AreaManager';
 import { SNMPProfileManager } from './SNMPProfileManager';
 import { SSHProfileManager } from './SSHProfileManager';
+import { InstanceBackupManager } from './InstanceBackupManager';
 
 const TIMEZONES = [
   { label: 'UTC', value: 'UTC' },
@@ -88,6 +90,13 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const [savedPrometheus, setSavedPrometheus] = useState(false);
   const [savedTimezone, setSavedTimezone] = useState(false);
   const [versionInfo, setVersionInfo] = useState<HealthVersion | null>(null);
+  const [backupSectionOpen, setBackupSectionOpen] = useState(false);
+  const [deviceBackupSectionOpen, setDeviceBackupSectionOpen] = useState(false);
+  const [deviceBackupInterval, setDeviceBackupInterval] = useState('0');
+  const [deviceBackupRetention, setDeviceBackupRetention] = useState('5');
+  const [savedDeviceInterval, setSavedDeviceInterval] = useState(false);
+  const [savedDeviceRetention, setSavedDeviceRetention] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const pollingTimerRef = useRef<number | null>(null);
   const grafanaTimerRef = useRef<number | null>(null);
@@ -96,6 +105,10 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const savedPrometheusTimerRef = useRef<number | null>(null);
   const savedTimezoneTimerRef = useRef<number | null>(null);
+  const deviceIntervalTimerRef = useRef<number | null>(null);
+  const deviceRetentionTimerRef = useRef<number | null>(null);
+  const savedDeviceIntervalTimerRef = useRef<number | null>(null);
+  const savedDeviceRetentionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     fetchSettings()
@@ -110,10 +123,21 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         setGrafanaUrl(settings['grafana_url'] ?? '');
         setPrometheusUrl(settings['prometheus_url'] ?? '');
         setTimezone(settings['timezone'] || 'UTC');
+        setDeviceBackupInterval(settings['device_backup_interval_hours'] ?? '0');
+        setDeviceBackupRetention(settings['device_backup_retention_count'] ?? '5');
       })
       .catch(() => {/* non-fatal */});
     fetchHealthVersion().then(setVersionInfo);
   }, []);
+
+  function setFieldError(field: string, error: string | null) {
+    setFieldErrors((prev) => {
+      if (error) return { ...prev, [field]: error };
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }
 
   function showSaved(
     setter: React.Dispatch<React.SetStateAction<boolean>>,
@@ -137,6 +161,14 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
 
   function scheduleGrafanaUpdate(value: string) {
     if (grafanaTimerRef.current !== null) window.clearTimeout(grafanaTimerRef.current);
+    // Gate auto-save: if value is non-empty and fails URL validation, set error and skip save
+    if (value.trim() !== '') {
+      const err = validateURL(value, 'Grafana URL');
+      if (err) {
+        setFieldError('grafanaUrl', err);
+        return;
+      }
+    }
     grafanaTimerRef.current = window.setTimeout(() => {
       void updateSetting('grafana_url', value).then(() => {
         showSaved(setSavedGrafana, savedGrafanaTimerRef);
@@ -147,11 +179,59 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
 
   function schedulePrometheusUpdate(value: string) {
     if (prometheusTimerRef.current !== null) window.clearTimeout(prometheusTimerRef.current);
+    // Gate auto-save: if value is non-empty and fails URL validation, set error and skip save
+    if (value.trim() !== '') {
+      const err = validateURL(value, 'Prometheus URL');
+      if (err) {
+        setFieldError('prometheusUrl', err);
+        return;
+      }
+    }
     prometheusTimerRef.current = window.setTimeout(() => {
       void updateSetting('prometheus_url', value).then(() =>
         showSaved(setSavedPrometheus, savedPrometheusTimerRef),
       );
     }, 500);
+  }
+
+  function handleDeviceIntervalChange(value: string) {
+    const err = validateIntervalAllowlist(value);
+    if (err) { setFieldError('deviceBackupInterval', err); setDeviceBackupInterval(value); return; }
+    setFieldError('deviceBackupInterval', null);
+    setDeviceBackupInterval(value);
+    if (deviceIntervalTimerRef.current !== null) window.clearTimeout(deviceIntervalTimerRef.current);
+    deviceIntervalTimerRef.current = window.setTimeout(() => {
+      void updateSetting('device_backup_interval_hours', value).then(() =>
+        showSaved(setSavedDeviceInterval, savedDeviceIntervalTimerRef),
+      );
+    }, 500);
+  }
+
+  function handleDeviceRetentionChange(value: string) {
+    const err = validateRetentionCount(value);
+    if (err) { setFieldError('deviceBackupRetention', err); setDeviceBackupRetention(value); return; }
+    setFieldError('deviceBackupRetention', null);
+    setDeviceBackupRetention(value);
+    if (deviceRetentionTimerRef.current !== null) window.clearTimeout(deviceRetentionTimerRef.current);
+    const num = parseInt(value, 10);
+    deviceRetentionTimerRef.current = window.setTimeout(() => {
+      void updateSetting('device_backup_retention_count', String(num)).then(() =>
+        showSaved(setSavedDeviceRetention, savedDeviceRetentionTimerRef),
+      );
+    }, 500);
+  }
+
+  function computeDeviceNextBackupText(): string {
+    const intervalHours = parseInt(deviceBackupInterval, 10);
+    if (!intervalHours || intervalHours <= 0) return 'Scheduling disabled';
+    return 'Backups run every ' + formatDeviceInterval(intervalHours);
+  }
+
+  function formatDeviceInterval(hours: number): string {
+    if (hours >= 168) return '7 days';
+    if (hours >= 48) return '48 hours';
+    if (hours >= 24) return '24 hours';
+    return hours + ' hours';
   }
 
   function handlePollingPresetChange(value: string) {
@@ -183,18 +263,32 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         </select>
         {pollingValue === 'custom' && (
           <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={5}
-              max={3600}
-              value={customPolling}
-              placeholder="Seconds (5–3600)"
-              onChange={(e) => {
-                setCustomPolling(e.target.value);
-                schedulePollingUpdate(e.target.value);
-              }}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-            />
+            <div className="w-full">
+              <input
+                type="number"
+                min={5}
+                max={3600}
+                value={customPolling}
+                placeholder="Seconds (5–3600)"
+                onChange={(e) => {
+                  setCustomPolling(e.target.value);
+                  setFieldError('customPolling', null);
+                  schedulePollingUpdate(e.target.value);
+                }}
+                onBlur={() => {
+                  const num = parseInt(customPolling, 10);
+                  if (!Number.isFinite(num) || num < 5 || num > 3600) {
+                    setFieldError('customPolling', 'Polling interval must be between 5 and 3600 seconds');
+                  } else {
+                    setFieldError('customPolling', null);
+                  }
+                }}
+                className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.customPolling ? ' border-status-down' : ' border-outline-subtle'}`}
+              />
+              {fieldErrors.customPolling && (
+                <p className="mt-1 text-xs text-status-down">{fieldErrors.customPolling}</p>
+              )}
+            </div>
             <span className="text-xs text-on-bg-secondary">sec</span>
           </div>
         )}
@@ -213,10 +307,15 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
           placeholder="http://localhost:3001"
           onChange={(e) => {
             setGrafanaUrl(e.target.value);
+            setFieldError('grafanaUrl', null);
             scheduleGrafanaUpdate(e.target.value);
           }}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+          onBlur={() => setFieldError('grafanaUrl', validateURL(grafanaUrl, 'Grafana URL'))}
+          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.grafanaUrl ? ' border-status-down' : ' border-outline-subtle'}`}
         />
+        {fieldErrors.grafanaUrl && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors.grafanaUrl}</p>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -232,10 +331,15 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
           placeholder="http://localhost:9090"
           onChange={(e) => {
             setPrometheusUrl(e.target.value);
+            setFieldError('prometheusUrl', null);
             schedulePrometheusUpdate(e.target.value);
           }}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+          onBlur={() => setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'))}
+          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.prometheusUrl ? ' border-status-down' : ' border-outline-subtle'}`}
         />
+        {fieldErrors.prometheusUrl && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors.prometheusUrl}</p>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -276,6 +380,110 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
 
       <div className="mt-6">
         <SSHProfileManager />
+      </div>
+
+      {/* Device Backup section (collapsible, collapsed by default) */}
+      <div className="mt-6">
+        <button
+          type="button"
+          onClick={() => setDeviceBackupSectionOpen((prev) => !prev)}
+          className="flex w-full items-center justify-between rounded-lg bg-surface-high px-3 py-2.5 text-left transition-colors hover:bg-elevated/50"
+        >
+          <span className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Device Backups
+          </span>
+          <svg
+            className={`w-4 h-4 text-on-bg-secondary transition-transform duration-200 ${deviceBackupSectionOpen ? 'rotate-180' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        {deviceBackupSectionOpen && (
+          <div className="mt-2 space-y-3 transition-colors duration-200">
+            {/* Schedule & Retention Settings */}
+            <div className="rounded-lg bg-surface-high p-3 space-y-3">
+              {/* Schedule Interval Dropdown */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-medium text-on-bg-secondary">
+                    Automatic Backup Schedule
+                  </label>
+                  {savedDeviceInterval && (
+                    <span className="text-[10px] text-status-up font-medium">Saved</span>
+                  )}
+                </div>
+                <select
+                  value={deviceBackupInterval}
+                  onChange={(e) => handleDeviceIntervalChange(e.target.value)}
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-2.5 py-1.5 text-xs text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                >
+                  <option value="0">Disabled</option>
+                  <option value="6">Every 6 hours</option>
+                  <option value="12">Every 12 hours</option>
+                  <option value="24">Every 24 hours</option>
+                  <option value="48">Every 48 hours</option>
+                  <option value="168">Every 7 days</option>
+                </select>
+                {/* Next backup helper text (per D-08) */}
+                <p className="text-[10px] text-on-bg-muted">
+                  {computeDeviceNextBackupText()}
+                </p>
+              </div>
+
+              {/* Retention Count Input (per D-04, D-05) */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-medium text-on-bg-secondary">
+                    Keep last N backups per device
+                  </label>
+                  {savedDeviceRetention && (
+                    <span className="text-[10px] text-status-up font-medium">Saved</span>
+                  )}
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={deviceBackupRetention}
+                  onChange={(e) => handleDeviceRetentionChange(e.target.value)}
+                  className={`w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.deviceBackupRetention ? ' border-status-down' : ' border-outline-subtle'}`}
+                />
+                {fieldErrors.deviceBackupRetention && (
+                  <p className="mt-0.5 text-[10px] text-status-down">{fieldErrors.deviceBackupRetention}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Instance Backup section (collapsible, collapsed by default) */}
+      <div className="mt-6">
+        <button
+          type="button"
+          onClick={() => setBackupSectionOpen((prev) => !prev)}
+          className="flex w-full items-center justify-between rounded-lg bg-surface-high px-3 py-2.5 text-left transition-colors hover:bg-elevated/50"
+        >
+          <span className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Instance Backups
+          </span>
+          <svg
+            className={`w-4 h-4 text-on-bg-secondary transition-transform duration-200 ${backupSectionOpen ? 'rotate-180' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        {backupSectionOpen && (
+          <div className="mt-2">
+            <InstanceBackupManager />
+          </div>
+        )}
       </div>
 
       {versionInfo && (

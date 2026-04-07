@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createLink } from '../api/client';
+import { ValidationError, ServerError } from '../api/errors';
 import type { Device, InterfaceInfo, Link } from '../types/api';
 
 interface LinkCreatePanelProps {
@@ -313,7 +314,15 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
       });
       onCreated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create link.');
+      if (err instanceof ServerError) {
+        setError(err.correlationId
+          ? `Something went wrong (ref: ${err.correlationId})`
+          : 'Something went wrong');
+      } else if (err instanceof ValidationError) {
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to create link.');
+      }
     } finally {
       setSubmitting(false);
     }

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { checkPrometheusHealth, createDevice, fetchAreas, fetchSNMPProfiles, fetchSSHProfiles } from '../api/client';
+import { ValidationError, ServerError } from '../api/errors';
 import type { Area, SNMPProfile, SSHProfile } from '../types/api';
+import { validateIPOrHostname, validateMaxLength, validateRequired, MAX_STRING_LENGTH } from '../utils/validation';
 import { MaterialIcon } from './MaterialIcon';
 
 interface AddDevicePanelProps {
@@ -55,9 +57,29 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [virtualSubtype, setVirtualSubtype] = useState('internet');
   const [virtualIp, setVirtualIp] = useState('');
 
+  // Field-level validation errors
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  function setFieldError(field: string, err: string | null) {
+    setFieldErrors((prev) => {
+      if (err) return { ...prev, [field]: err };
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }
+
+  function handleBlur(field: string, validator: () => string | null) {
+    return () => {
+      const err = validator();
+      setFieldError(field, err);
+    };
+  }
+
   function handleModeSwitch(mode: DeviceMode) {
     setDeviceMode(mode);
     setError(null);
+    setFieldErrors({});
     // Reset physical fields
     setHostname('');
     setDisplayName('');
@@ -127,8 +149,16 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (isVirtual) {
-      if (!displayName.trim()) {
-        setError('Display Name is required.');
+      // Validate virtual mode fields
+      const errors: Record<string, string> = {};
+      const displayNameErr = validateRequired(displayName, 'Display Name') ?? validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name');
+      if (displayNameErr) errors['displayName'] = displayNameErr;
+      if (virtualIp.trim()) {
+        const virtualIpErr = validateIPOrHostname(virtualIp.trim());
+        if (virtualIpErr) errors['virtualIp'] = virtualIpErr;
+      }
+      if (Object.keys(errors).length > 0) {
+        setFieldErrors(errors);
         return;
       }
       setLoading(true);
@@ -146,16 +176,43 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         });
         onDeviceAdded();
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to add virtual node.');
+        if (err instanceof ServerError) {
+          setError(err.correlationId
+            ? `Something went wrong (ref: ${err.correlationId})`
+            : 'Something went wrong');
+        } else if (err instanceof ValidationError) {
+          setError(err.message);
+        } else {
+          setError(err instanceof Error ? err.message : 'Failed to add virtual node.');
+        }
       } finally {
         setLoading(false);
       }
       return;
     }
-    if (!hostname.trim()) {
-      setError('Hostname or IP is required.');
+
+    // Validate physical mode fields
+    const errors: Record<string, string> = {};
+    const hostnameErr = validateIPOrHostname(hostname.trim());
+    if (hostnameErr) errors['hostname'] = hostnameErr;
+    const displayNameErr = validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name');
+    if (displayNameErr) errors['displayName'] = displayNameErr;
+    if (usesPrometheus) {
+      const labelValueErr = validateMaxLength(prometheusLabelValue, MAX_STRING_LENGTH, 'Label value');
+      if (labelValueErr) errors['prometheusLabelValue'] = labelValueErr;
+    }
+    if (!isV3) {
+      const communityErr = validateMaxLength(community, MAX_STRING_LENGTH, 'Community string');
+      if (communityErr) errors['community'] = communityErr;
+    } else {
+      const usernameErr = validateMaxLength(username, MAX_STRING_LENGTH, 'Username');
+      if (usernameErr) errors['username'] = usernameErr;
+    }
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
       return;
     }
+
     setLoading(true);
     setError(null);
     try {
@@ -185,7 +242,15 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       });
       onDeviceAdded();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add device.');
+      if (err instanceof ServerError) {
+        setError(err.correlationId
+          ? `Something went wrong (ref: ${err.correlationId})`
+          : 'Something went wrong');
+      } else if (err instanceof ValidationError) {
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to add device.');
+      }
     } finally {
       setLoading(false);
     }
@@ -231,11 +296,15 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             <input
               type="text"
               value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              onChange={(e) => { setDisplayName(e.target.value); setFieldError('displayName', null); }}
+              onBlur={handleBlur('displayName', () => validateRequired(displayName, 'Display Name') ?? validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name'))}
               placeholder="e.g. ISP Gateway"
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder:text-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder:text-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['displayName'] ? ' border-status-down' : ' border-outline-subtle'}`}
               required
             />
+            {fieldErrors['displayName'] && (
+              <p className="mt-1 text-xs text-status-down">{fieldErrors['displayName']}</p>
+            )}
           </div>
 
           {/* Subtype 2x2 grid */}
@@ -281,10 +350,14 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             <input
               type="text"
               value={virtualIp}
-              onChange={(e) => setVirtualIp(e.target.value)}
+              onChange={(e) => { setVirtualIp(e.target.value); setFieldError('virtualIp', null); }}
+              onBlur={handleBlur('virtualIp', () => virtualIp.trim() ? validateIPOrHostname(virtualIp.trim()) : null)}
               placeholder="e.g. 203.0.113.1"
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder:text-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder:text-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['virtualIp'] ? ' border-status-down' : ' border-outline-subtle'}`}
             />
+            {fieldErrors['virtualIp'] && (
+              <p className="mt-1 text-xs text-status-down">{fieldErrors['virtualIp']}</p>
+            )}
           </div>
         </div>
       ) : (
@@ -303,11 +376,15 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             <input
               type="text"
               value={hostname}
-              onChange={(e) => setHostname(e.target.value)}
+              onChange={(e) => { setHostname(e.target.value); setFieldError('hostname', null); }}
+              onBlur={handleBlur('hostname', () => validateIPOrHostname(hostname.trim()))}
               placeholder="192.168.1.1"
               required
-              className={inputClass}
+              className={`${inputClass}${fieldErrors['hostname'] ? ' border-status-down' : ''}`}
             />
+            {fieldErrors['hostname'] && (
+              <p className="mt-1 text-xs text-status-down">{fieldErrors['hostname']}</p>
+            )}
           </div>
 
           {/* Metrics & Collection Mode */}
@@ -361,10 +438,14 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                 <input
                   type="text"
                   value={prometheusLabelValue}
-                  onChange={(e) => setPrometheusLabelValue(e.target.value)}
+                  onChange={(e) => { setPrometheusLabelValue(e.target.value); setFieldError('prometheusLabelValue', null); }}
+                  onBlur={handleBlur('prometheusLabelValue', () => validateMaxLength(prometheusLabelValue, MAX_STRING_LENGTH, 'Label value'))}
                   placeholder={prometheusLabelName === 'instance' ? hostname || '192.168.1.1' : `e.g. my-router`}
-                  className={inputClass}
+                  className={`${inputClass}${fieldErrors['prometheusLabelValue'] ? ' border-status-down' : ''}`}
                 />
+                {fieldErrors['prometheusLabelValue'] && (
+                  <p className="mt-1 text-xs text-status-down">{fieldErrors['prometheusLabelValue']}</p>
+                )}
               </div>
             </div>
           )}
@@ -410,10 +491,14 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                   <input
                     type="text"
                     value={community}
-                    onChange={(e) => setCommunity(e.target.value)}
+                    onChange={(e) => { setCommunity(e.target.value); setFieldError('community', null); }}
+                    onBlur={handleBlur('community', () => validateMaxLength(community, MAX_STRING_LENGTH, 'Community string'))}
                     placeholder="public"
-                    className={inputClass}
+                    className={`${inputClass}${fieldErrors['community'] ? ' border-status-down' : ''}`}
                   />
+                  {fieldErrors['community'] && (
+                    <p className="mt-1 text-xs text-status-down">{fieldErrors['community']}</p>
+                  )}
                 </div>
               )}
 
@@ -424,10 +509,14 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                     <input
                       type="text"
                       value={username}
-                      onChange={(e) => setUsername(e.target.value)}
+                      onChange={(e) => { setUsername(e.target.value); setFieldError('username', null); }}
+                      onBlur={handleBlur('username', () => validateMaxLength(username, MAX_STRING_LENGTH, 'Username'))}
                       placeholder="snmpv3user"
-                      className={inputClass}
+                      className={`${inputClass}${fieldErrors['username'] ? ' border-status-down' : ''}`}
                     />
+                    {fieldErrors['username'] && (
+                      <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
+                    )}
                   </div>
 
                   <div className="space-y-1">
@@ -454,6 +543,10 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                         >
                           <option value="SHA">SHA</option>
                           <option value="MD5">MD5</option>
+                          <option value="SHA-224">SHA-224</option>
+                          <option value="SHA-256">SHA-256</option>
+                          <option value="SHA-384">SHA-384</option>
+                          <option value="SHA-512">SHA-512</option>
                         </select>
                       </div>
                       <div className="space-y-1">
@@ -508,10 +601,14 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             <input
               type="text"
               value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              onChange={(e) => { setDisplayName(e.target.value); setFieldError('displayName', null); }}
+              onBlur={handleBlur('displayName', () => validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name'))}
               placeholder="Auto-discovered from SNMP / Prometheus"
-              className={inputClass}
+              className={`${inputClass}${fieldErrors['displayName'] ? ' border-status-down' : ''}`}
             />
+            {fieldErrors['displayName'] && (
+              <p className="mt-1 text-xs text-status-down">{fieldErrors['displayName']}</p>
+            )}
           </div>
 
           <div className="space-y-2">

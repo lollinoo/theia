@@ -114,6 +114,66 @@ func (r *BackupJobRepo) DeleteByDeviceID(deviceID uuid.UUID) error {
 	return err
 }
 
+// ListSuccessfulByDeviceOldest returns all successful backup jobs for a device, oldest first.
+func (r *BackupJobRepo) ListSuccessfulByDeviceOldest(deviceID uuid.UUID) ([]domain.BackupJob, error) {
+	rows, err := r.db.Query(
+		`SELECT id, device_id, status, error_message, created_at
+		 FROM backup_jobs WHERE device_id = ? AND status = 'success'
+		 ORDER BY created_at ASC`,
+		deviceID.String(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []domain.BackupJob
+	for rows.Next() {
+		j, err := scanJobRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, *j)
+	}
+	return jobs, rows.Err()
+}
+
+// ListAllDeviceIDs returns distinct device IDs from backup_jobs table.
+func (r *BackupJobRepo) ListAllDeviceIDs() ([]uuid.UUID, error) {
+	rows, err := r.db.Query(`SELECT DISTINCT device_id FROM backup_jobs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, err
+		}
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid device id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// DeleteFailedOlderThan removes failed backup job records older than cutoff.
+func (r *BackupJobRepo) DeleteFailedOlderThan(cutoff time.Time) (int, error) {
+	res, err := r.db.Exec(
+		`DELETE FROM backup_jobs WHERE status = 'failed' AND created_at < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 func scanJobRow(row *sql.Row) (*domain.BackupJob, error) {
 	var idStr, deviceIDStr, status string
 	var j domain.BackupJob

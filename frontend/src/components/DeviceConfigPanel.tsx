@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Area, Device, SNMPProfile, SSHProfile } from '../types/api';
 import { checkPrometheusHealth, deleteDevice, fetchAreas, fetchSettings, fetchSNMPProfiles, fetchSSHProfiles, testSNMPConnection, updateDevice, updateSetting } from '../api/client';
+import { ValidationError, ServerError } from '../api/errors';
+import { validateIPOrHostname, validateMaxLength, validateURL, MAX_STRING_LENGTH } from '../utils/validation';
 
 const POLLING_PRESETS = [
   { label: 'Use Global', value: 'global' },
@@ -67,11 +69,30 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   const [savedPolling, setSavedPolling] = useState(false);
   const [savedGrafana, setSavedGrafana] = useState(false);
 
+  // Field-level validation errors
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
   const pollingTimerRef = useRef<number | null>(null);
   const grafanaTimerRef = useRef<number | null>(null);
   const savedPollingTimerRef = useRef<number | null>(null);
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const editSavedTimerRef = useRef<number | null>(null);
+
+  function setFieldError(field: string, err: string | null) {
+    setFieldErrors((prev) => {
+      if (err) return { ...prev, [field]: err };
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }
+
+  function handleBlur(field: string, validator: () => string | null) {
+    return () => {
+      const err = validator();
+      setFieldError(field, err);
+    };
+  }
 
   useEffect(() => {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
@@ -115,6 +136,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
     setMetricsSource((device.metrics_source as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback') || 'snmp');
     setPrometheusLabelName(device.prometheus_label_name || 'instance');
     setPrometheusLabelValue(device.prometheus_label_value || '');
+    setFieldErrors({});
   }, [device]);
 
   function applyProfile(profileId: string) {
@@ -170,14 +192,38 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
 
   async function handleEditSave(e: React.FormEvent) {
     e.preventDefault();
+
+    // Validate before API call
+    const errors: Record<string, string> = {};
+    const ipErr = validateIPOrHostname(ip.trim());
+    if (ipErr) errors['ip'] = ipErr;
+    const displayNameErr = validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name');
+    if (displayNameErr) errors['displayName'] = displayNameErr;
+    const usesPrometheus = metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback';
+    if (usesPrometheus) {
+      const labelValueErr = validateMaxLength(prometheusLabelValue, MAX_STRING_LENGTH, 'Label value');
+      if (labelValueErr) errors['prometheusLabelValue'] = labelValueErr;
+    }
+    const isV3 = snmpVersion === '3';
+    if (!isV3 && community.trim()) {
+      const communityErr = validateMaxLength(community, MAX_STRING_LENGTH, 'Community string');
+      if (communityErr) errors['community'] = communityErr;
+    }
+    if (isV3 && username.trim()) {
+      const usernameErr = validateMaxLength(username, MAX_STRING_LENGTH, 'Username');
+      if (usernameErr) errors['username'] = usernameErr;
+    }
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      return;
+    }
+
     setEditLoading(true);
     setEditError(null);
-    const isV3 = snmpVersion === '3';
     const needsAuth = securityLevel === 'authNoPriv' || securityLevel === 'authPriv';
     const needsPriv = securityLevel === 'authPriv';
     const hasSnmpChanges = isV3 ? username.trim() !== '' : community.trim() !== '';
     try {
-      const usesPrometheus = metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback';
       const effectiveLabelValue = prometheusLabelValue.trim() || ip.trim();
       const updated = await updateDevice(device.id, {
         hostname: device.hostname,
@@ -206,7 +252,15 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated(updated);
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Failed to update device.');
+      if (err instanceof ServerError) {
+        setEditError(err.correlationId
+          ? `Something went wrong (ref: ${err.correlationId})`
+          : 'Something went wrong');
+      } else if (err instanceof ValidationError) {
+        setEditError(err.message);
+      } else {
+        setEditError(err instanceof Error ? err.message : 'Failed to update device.');
+      }
     } finally {
       setEditLoading(false);
     }
@@ -289,8 +343,12 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
               setGrafanaUrl(e.target.value);
               scheduleGrafanaUpdate(e.target.value);
             }}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+            onBlur={handleBlur('grafanaUrl', () => validateURL(grafanaUrl, 'Grafana URL'))}
+            className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['grafanaUrl'] ? ' border-status-down' : ' border-outline-subtle'}`}
           />
+          {fieldErrors['grafanaUrl'] && (
+            <p className="mt-1 text-xs text-status-down">{fieldErrors['grafanaUrl']}</p>
+          )}
         </div>
       )}
 
@@ -317,18 +375,26 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
         <input
           type="text"
           value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
+          onChange={(e) => { setDisplayName(e.target.value); setFieldError('displayName', null); }}
+          onBlur={handleBlur('displayName', () => validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name'))}
           placeholder={device.sys_name ? `Override "${device.sys_name}"` : 'Custom name (optional)'}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['displayName'] ? ' border-status-down' : ' border-outline-subtle'}`}
         />
+        {fieldErrors['displayName'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['displayName']}</p>
+        )}
 
         <input
           type="text"
           value={ip}
-          onChange={(e) => setIp(e.target.value)}
+          onChange={(e) => { setIp(e.target.value); setFieldError('ip', null); }}
+          onBlur={handleBlur('ip', () => validateIPOrHostname(ip.trim()))}
           placeholder="IP Address"
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['ip'] ? ' border-status-down' : ' border-outline-subtle'}`}
         />
+        {fieldErrors['ip'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['ip']}</p>
+        )}
 
         <div className="space-y-1">
           <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Areas</label>
@@ -485,10 +551,14 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
                   <input
                     type="text"
                     value={prometheusLabelValue}
-                    onChange={(e) => setPrometheusLabelValue(e.target.value)}
+                    onChange={(e) => { setPrometheusLabelValue(e.target.value); setFieldError('prometheusLabelValue', null); }}
+                    onBlur={handleBlur('prometheusLabelValue', () => validateMaxLength(prometheusLabelValue, MAX_STRING_LENGTH, 'Label value'))}
                     placeholder={prometheusLabelName === 'instance' ? ip || device.ip : 'e.g. my-router'}
-                    className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                    className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['prometheusLabelValue'] ? ' border-status-down' : ' border-outline-subtle'}`}
                   />
+                  {fieldErrors['prometheusLabelValue'] && (
+                    <p className="mt-1 text-xs text-status-down">{fieldErrors['prometheusLabelValue']}</p>
+                  )}
                 </div>
               </div>
             )}
@@ -521,13 +591,19 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
             </select>
 
             {snmpVersion !== '3' && (
-              <input
-                type="text"
-                value={community}
-                onChange={(e) => setCommunity(e.target.value)}
-                placeholder="SNMP Community (leave blank to keep current)"
-                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-              />
+              <>
+                <input
+                  type="text"
+                  value={community}
+                  onChange={(e) => { setCommunity(e.target.value); setFieldError('community', null); }}
+                  onBlur={handleBlur('community', () => validateMaxLength(community, MAX_STRING_LENGTH, 'Community string'))}
+                  placeholder="SNMP Community (leave blank to keep current)"
+                  className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['community'] ? ' border-status-down' : ' border-outline-subtle'}`}
+                />
+                {fieldErrors['community'] && (
+                  <p className="mt-1 text-xs text-status-down">{fieldErrors['community']}</p>
+                )}
+              </>
             )}
 
             {snmpVersion === '3' && (
@@ -536,10 +612,14 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
                 <input
                   type="text"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => { setUsername(e.target.value); setFieldError('username', null); }}
+                  onBlur={handleBlur('username', () => validateMaxLength(username, MAX_STRING_LENGTH, 'Username'))}
                   placeholder="Username"
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                  className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['username'] ? ' border-status-down' : ' border-outline-subtle'}`}
                 />
+                {fieldErrors['username'] && (
+                  <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
+                )}
                 <select
                   value={securityLevel}
                   onChange={(e) => setSecurityLevel(e.target.value)}
@@ -558,6 +638,10 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
                     >
                       <option value="SHA">SHA</option>
                       <option value="MD5">MD5</option>
+                      <option value="SHA-224">SHA-224</option>
+                      <option value="SHA-256">SHA-256</option>
+                      <option value="SHA-384">SHA-384</option>
+                      <option value="SHA-512">SHA-512</option>
                     </select>
                     <input
                       type="password"

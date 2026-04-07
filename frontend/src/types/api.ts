@@ -341,6 +341,37 @@ export interface BackupJob {
   files: BackupFile[];
 }
 
+// Instance backup types
+export type InstanceBackupStatus = 'running' | 'success' | 'failed';
+
+export interface InstanceBackup {
+  id: string;
+  file_name: string;
+  size_bytes: number;
+  sha256: string;
+  app_version: string;
+  migration_version: number;
+  status: InstanceBackupStatus;
+  error_message: string;
+  trigger: 'manual' | 'scheduled';
+  created_at: string;
+}
+
+// Restore report from dry-run validation
+export interface RestoreReport {
+  valid: boolean;
+  app_version: string;
+  git_commit: string;
+  migration_version: number;
+  created_at: string;
+  db_size_bytes: number;
+  backup_file_count: number;
+  total_size_bytes: number;
+  needs_migration: boolean;
+  current_migration_version: number;
+  message: string;
+}
+
 // Vendor configuration
 export interface VendorConfig {
   name: string;

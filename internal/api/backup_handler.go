@@ -58,7 +58,7 @@ func (h *BackupHandler) HandleListBackups(w http.ResponseWriter, r *http.Request
 
 	jobs, err := h.svc.GetBackupJobs(r.Context(), deviceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -84,7 +84,7 @@ func (h *BackupHandler) HandleTriggerBackup(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -104,7 +104,7 @@ func (h *BackupHandler) HandleGetLatestBackup(w http.ResponseWriter, r *http.Req
 
 	job, err := h.svc.GetLatestBackupJob(r.Context(), deviceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	if job == nil {
@@ -127,7 +127,7 @@ func (h *BackupHandler) HandleGetBackupJob(w http.ResponseWriter, r *http.Reques
 
 	job, err := h.svc.GetBackupJob(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	if job == nil {
@@ -153,7 +153,7 @@ func (h *BackupHandler) HandleDeleteBackupJob(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -172,7 +172,7 @@ func (h *BackupHandler) HandleDownloadBackupFile(w http.ResponseWriter, r *http.
 
 	file, err := h.svc.GetBackupFile(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	if file == nil {
@@ -188,7 +188,7 @@ func (h *BackupHandler) HandleDownloadBackupFile(w http.ResponseWriter, r *http.
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+file.FileName+"\"")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+sanitizeFilename(file.FileName)+"\"")
 
 	http.ServeFile(w, r, file.FilePath)
 }
@@ -209,14 +209,14 @@ func (h *BackupHandler) HandleGetBackupFileContent(w http.ResponseWriter, r *htt
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	defer rc.Close()
 
 	content, err := io.ReadAll(rc)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -231,7 +231,7 @@ func (h *BackupHandler) HandleGetBackupFileContent(w http.ResponseWriter, r *htt
 func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request) {
 	results, err := h.svc.TriggerBulkBackup(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
@@ -283,7 +283,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 
 	entries, err := h.svc.GetBulkDownloadFiles(r.Context(), deviceIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	if len(entries) == 0 {

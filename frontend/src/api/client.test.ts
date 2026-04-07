@@ -6,8 +6,10 @@ import {
   createDevice,
   deleteDevice,
   fetchBackupJobs,
+  restoreInstanceBackup,
   type CreateDevicePayload,
 } from './client';
+import { ValidationError, ServerError } from './errors';
 
 // Helper to create a mock Response
 function mockResponse(body: unknown, init: { ok?: boolean; status?: number; statusText?: string } = {}) {
@@ -256,5 +258,111 @@ describe('fetchBackupJobs', () => {
 
     const result = await fetchBackupJobs('dev-1');
     expect(result).toEqual([]);
+  });
+});
+
+describe('restoreInstanceBackup', () => {
+  const mockRestoreReportPayload = {
+    data: {
+      valid: true,
+      app_version: '1.4.0',
+      git_commit: 'abc1234',
+      migration_version: 5,
+      created_at: '2026-01-01T00:00:00Z',
+      db_size_bytes: 102400,
+      backup_file_count: 3,
+      total_size_bytes: 204800,
+      needs_migration: false,
+      current_migration_version: 5,
+      message: 'OK',
+    },
+  };
+
+  it('throws ValidationError on 400', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({ error: 'encryption key mismatch' }, { ok: false, status: 400, statusText: 'Bad Request' }),
+      ),
+    );
+    const file = new File(['test'], 'backup.tar.gz');
+    try {
+      await restoreInstanceBackup(file, true);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ValidationError);
+      expect((err as ValidationError).message).toBe('encryption key mismatch');
+    }
+  });
+
+  it('throws ServerError with correlationId on 500 with ref', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          { error: 'internal error, ref: abc12345' },
+          { ok: false, status: 500, statusText: 'Internal Server Error' },
+        ),
+      ),
+    );
+    const file = new File(['test'], 'backup.tar.gz');
+    try {
+      await restoreInstanceBackup(file, true);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServerError);
+      expect((err as ServerError).correlationId).toBe('abc12345');
+      expect((err as ServerError).message).toBe('Something went wrong (ref: abc12345)');
+    }
+  });
+
+  it('throws ServerError without correlationId on 500 with no ref', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          { error: 'unexpected failure' },
+          { ok: false, status: 500, statusText: 'Internal Server Error' },
+        ),
+      ),
+    );
+    const file = new File(['test'], 'backup.tar.gz');
+    try {
+      await restoreInstanceBackup(file, true);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServerError);
+      expect((err as ServerError).correlationId).toBeUndefined();
+      expect((err as ServerError).message).toBe('Something went wrong');
+    }
+  });
+
+  it('throws plain Error for non-400/500 error status (413)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({ error: 'payload too large' }, { ok: false, status: 413, statusText: 'Payload Too Large' }),
+      ),
+    );
+    const file = new File(['test'], 'backup.tar.gz');
+    await expect(restoreInstanceBackup(file, true)).rejects.toThrow(/413/);
+    // Must not be ValidationError or ServerError
+    try {
+      await restoreInstanceBackup(file, true);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).not.toBeInstanceOf(ValidationError);
+      expect(err).not.toBeInstanceOf(ServerError);
+    }
+  });
+
+  it('returns parsed RestoreReport on 200 success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(mockRestoreReportPayload)));
+    const file = new File(['test'], 'backup.tar.gz');
+    const result = await restoreInstanceBackup(file, true);
+    expect(result.valid).toBe(true);
+    expect(result.app_version).toBe('1.4.0');
+    expect(result.migration_version).toBe(5);
+    expect(result.backup_file_count).toBe(3);
   });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Area, Device, SSHProfile } from '../types/api';
 import { deleteDevice, fetchAreas, fetchSSHProfiles, updateDevice } from '../api/client';
+import { ValidationError, ServerError } from '../api/errors';
 
 interface BulkEditPanelProps {
   devices: Device[];
@@ -89,7 +90,18 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
         if (result.status === 'fulfilled') {
           updatedDevices.push(result.value);
         } else {
-          errors.push(`${devices[i].hostname || devices[i].ip}: ${result.reason instanceof Error ? result.reason.message : 'failed'}`);
+          const reason = result.reason;
+          let errMsg: string;
+          if (reason instanceof ServerError) {
+            errMsg = reason.correlationId
+              ? `server error (ref: ${reason.correlationId})`
+              : 'server error';
+          } else if (reason instanceof ValidationError) {
+            errMsg = reason.message;
+          } else {
+            errMsg = reason instanceof Error ? reason.message : 'failed';
+          }
+          errors.push(`${devices[i].hostname || devices[i].ip}: ${errMsg}`);
         }
       }
 
@@ -108,7 +120,15 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
         setTimeout(() => setSaved(false), 2000);
       }
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Bulk update failed');
+      if (err instanceof ServerError) {
+        setSaveError(err.correlationId
+          ? `Something went wrong (ref: ${err.correlationId})`
+          : 'Something went wrong');
+      } else if (err instanceof ValidationError) {
+        setSaveError(err.message);
+      } else {
+        setSaveError(err instanceof Error ? err.message : 'Bulk update failed');
+      }
     } finally {
       setSaving(false);
     }

@@ -6,6 +6,15 @@ import {
   fetchSNMPProfiles,
   updateSNMPProfile,
 } from '../api/client';
+import { ValidationError, ServerError } from '../api/errors';
+import {
+  validateRequired,
+  validateMaxLength,
+  validateSNMPv3Auth,
+  validateSNMPv3Priv,
+  validateSNMPv3SecurityLevel,
+  MAX_STRING_LENGTH,
+} from '../utils/validation';
 
 const inputClass =
   'w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
@@ -67,23 +76,78 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
   const [form, setForm] = useState<FormState>(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const isV3 = form.version === '3';
   const needsAuth = form.securityLevel === 'authNoPriv' || form.securityLevel === 'authPriv';
   const needsPriv = form.securityLevel === 'authPriv';
 
+  function setFieldError(field: string, err: string | null) {
+    setFieldErrors((prev) => {
+      if (err) return { ...prev, [field]: err };
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }
+
+  function handleBlur(field: string, validator: () => string | null) {
+    return () => {
+      const err = validator();
+      setFieldError(field, err);
+    };
+  }
+
   function set(key: keyof FormState, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
+    setFieldError(key, null);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // Validate all fields before calling onSave
+    const errors: Record<string, string> = {};
+    const nameErr = validateRequired(form.name, 'Profile name') ?? validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name');
+    if (nameErr) errors['name'] = nameErr;
+    const descErr = validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description');
+    if (descErr) errors['description'] = descErr;
+    if (!isV3) {
+      const communityErr = validateMaxLength(form.community, MAX_STRING_LENGTH, 'Community string');
+      if (communityErr) errors['community'] = communityErr;
+    } else {
+      const usernameErr = validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username');
+      if (usernameErr) errors['username'] = usernameErr;
+      const secLevelErr = validateSNMPv3SecurityLevel(form.securityLevel);
+      if (secLevelErr) errors['securityLevel'] = secLevelErr;
+      if (needsAuth) {
+        const authErr = validateSNMPv3Auth(form.authProtocol);
+        if (authErr) errors['authProtocol'] = authErr;
+      }
+      if (needsPriv) {
+        const privErr = validateSNMPv3Priv(form.privProtocol);
+        if (privErr) errors['privProtocol'] = privErr;
+      }
+    }
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      return;
+    }
+
     setError(null);
     setLoading(true);
     try {
       await onSave(form);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save profile.');
+      if (err instanceof ServerError) {
+        setError(err.correlationId
+          ? `Something went wrong (ref: ${err.correlationId})`
+          : 'Something went wrong');
+      } else if (err instanceof ValidationError) {
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to save profile.');
+      }
     } finally {
       setLoading(false);
     }
@@ -97,10 +161,14 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
           type="text"
           value={form.name}
           onChange={(e) => set('name', e.target.value)}
+          onBlur={handleBlur('name', () => validateRequired(form.name, 'Profile name') ?? validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name'))}
           placeholder="e.g. Office SNMPv3"
           required
-          className={inputClass}
+          className={`${inputClass}${fieldErrors['name'] ? ' border-status-down' : ''}`}
         />
+        {fieldErrors['name'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['name']}</p>
+        )}
       </div>
 
       <div className="space-y-1">
@@ -109,9 +177,13 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
           type="text"
           value={form.description}
           onChange={(e) => set('description', e.target.value)}
+          onBlur={handleBlur('description', () => validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description'))}
           placeholder="Optional description"
-          className={inputClass}
+          className={`${inputClass}${fieldErrors['description'] ? ' border-status-down' : ''}`}
         />
+        {fieldErrors['description'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['description']}</p>
+        )}
       </div>
 
       <div className="space-y-1">
@@ -129,9 +201,13 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
             type="text"
             value={form.community}
             onChange={(e) => set('community', e.target.value)}
+            onBlur={handleBlur('community', () => validateMaxLength(form.community, MAX_STRING_LENGTH, 'Community string'))}
             placeholder="public"
-            className={inputClass}
+            className={`${inputClass}${fieldErrors['community'] ? ' border-status-down' : ''}`}
           />
+          {fieldErrors['community'] && (
+            <p className="mt-1 text-xs text-status-down">{fieldErrors['community']}</p>
+          )}
         </div>
       )}
 
@@ -145,28 +221,50 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
               type="text"
               value={form.username}
               onChange={(e) => set('username', e.target.value)}
+              onBlur={handleBlur('username', () => validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username'))}
               placeholder="snmpv3user"
-              className={inputClass}
+              className={`${inputClass}${fieldErrors['username'] ? ' border-status-down' : ''}`}
             />
+            {fieldErrors['username'] && (
+              <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
+            )}
           </div>
 
           <div className="space-y-1">
             <label className="text-xs text-on-bg-secondary">Security Level</label>
-            <select value={form.securityLevel} onChange={(e) => set('securityLevel', e.target.value)} className={selectClass}>
+            <select
+              value={form.securityLevel}
+              onChange={(e) => set('securityLevel', e.target.value)}
+              className={`${selectClass}${fieldErrors['securityLevel'] ? ' border-status-down' : ''}`}
+            >
               <option value="noAuthNoPriv">No Auth, No Privacy</option>
               <option value="authNoPriv">Auth, No Privacy</option>
               <option value="authPriv">Auth + Privacy</option>
             </select>
+            {fieldErrors['securityLevel'] && (
+              <p className="mt-1 text-xs text-status-down">{fieldErrors['securityLevel']}</p>
+            )}
           </div>
 
           {needsAuth && (
             <>
               <div className="space-y-1">
                 <label className="text-xs text-on-bg-secondary">Auth Protocol</label>
-                <select value={form.authProtocol} onChange={(e) => set('authProtocol', e.target.value)} className={selectClass}>
+                <select
+                  value={form.authProtocol}
+                  onChange={(e) => set('authProtocol', e.target.value)}
+                  className={`${selectClass}${fieldErrors['authProtocol'] ? ' border-status-down' : ''}`}
+                >
                   <option value="SHA">SHA</option>
                   <option value="MD5">MD5</option>
+                  <option value="SHA-224">SHA-224</option>
+                  <option value="SHA-256">SHA-256</option>
+                  <option value="SHA-384">SHA-384</option>
+                  <option value="SHA-512">SHA-512</option>
                 </select>
+                {fieldErrors['authProtocol'] && (
+                  <p className="mt-1 text-xs text-status-down">{fieldErrors['authProtocol']}</p>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-on-bg-secondary">Auth Key</label>
@@ -186,10 +284,17 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
             <>
               <div className="space-y-1">
                 <label className="text-xs text-on-bg-secondary">Encryption Protocol</label>
-                <select value={form.privProtocol} onChange={(e) => set('privProtocol', e.target.value)} className={selectClass}>
+                <select
+                  value={form.privProtocol}
+                  onChange={(e) => set('privProtocol', e.target.value)}
+                  className={`${selectClass}${fieldErrors['privProtocol'] ? ' border-status-down' : ''}`}
+                >
                   <option value="AES">AES</option>
                   <option value="DES">DES</option>
                 </select>
+                {fieldErrors['privProtocol'] && (
+                  <p className="mt-1 text-xs text-status-down">{fieldErrors['privProtocol']}</p>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-on-bg-secondary">Encryption Key</label>
