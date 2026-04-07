@@ -29,6 +29,7 @@ func NewRouter(
 	vendorConfigRepo domain.VendorConfigRepository,
 	poller *worker.Poller,
 	instanceBackupService *service.InstanceBackupService,
+	bridgeBinariesDir string,
 	wsHandler *ws.Handler,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -41,10 +42,12 @@ func NewRouter(
 	areaHandler := NewAreaHandler(areaRepo)
 	backupHandler := NewBackupHandler(backupService, settingsRepo)
 	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
+	deviceCredHandler := NewDeviceCredentialProfileHandler(backupService, credentialProfileRepo)
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandler(instanceBackupService)
+	_ = bridgeBinariesDir // used by bridge handler (Plan 03)
 
 	// Device routes
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +112,45 @@ func NewRouter(
 			default:
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
+			return
+		}
+
+		// Device credential profile assignment routes
+		if strings.HasSuffix(r.URL.Path, "/credential-profiles") {
+			switch r.Method {
+			case http.MethodGet:
+				deviceCredHandler.HandleListAssignments(w, r)
+			case http.MethodPost:
+				deviceCredHandler.HandleAssign(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+			return
+		}
+
+		// Device credential profile unassign (DELETE with profileId in path)
+		// Path: /api/v1/devices/{id}/credential-profiles/{profileId}
+		if strings.Contains(r.URL.Path, "/credential-profiles/") && r.Method == http.MethodDelete {
+			deviceCredHandler.HandleUnassign(w, r)
+			return
+		}
+
+		// WinBox profile designation routes
+		if strings.HasSuffix(r.URL.Path, "/winbox-profile") {
+			switch r.Method {
+			case http.MethodPut:
+				deviceCredHandler.HandleSetWinbox(w, r)
+			case http.MethodDelete:
+				deviceCredHandler.HandleClearWinbox(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+			return
+		}
+
+		// WinBox credentials endpoint
+		if strings.HasSuffix(r.URL.Path, "/winbox-credentials") && r.Method == http.MethodGet {
+			deviceCredHandler.HandleGetWinboxCredentials(w, r)
 			return
 		}
 

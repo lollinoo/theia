@@ -355,7 +355,7 @@ func main() {
 	wsHandler := ws.NewHandler(hub, collector.GetSnapshot, collector.IsPromAvailable)
 
 	// Create HTTP router with all /api/v1/ routes
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, poller, instanceBackupService, wsHandler)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, poller, instanceBackupService, cfg.BridgeBinariesDir, wsHandler)
 
 	// Create HTTP server
 	server := &http.Server{
