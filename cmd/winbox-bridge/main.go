@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
+
+	"fyne.io/systray"
 )
 
 // --- Request / response types ---
@@ -300,9 +302,17 @@ func main() {
 		return
 	}
 
-	// Plan 02 will replace this with systray.Run().
-	// For now, behave identically to --no-tray so the binary is functional.
-	runHeadless()
+	// When --no-tray is false, run with system tray (default desktop mode).
+	// Auto-start server on launch so the bridge is immediately usable.
+	if err := mgr.Start(cfg); err != nil {
+		log.Printf("winbox-bridge: auto-start failed: %v", err)
+	}
+	// systray.Run MUST block the main goroutine (macOS Cocoa requirement).
+	// All other goroutines are spawned inside setupTray (onReady callback).
+	systray.Run(
+		func() { setupTray(mgr, cfg) },
+		func() { mgr.Stop() }, //nolint:errcheck — best-effort shutdown on exit
+	)
 }
 
 // Ensure fmt is referenced (used in server.go via securityCheck caller).
