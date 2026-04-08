@@ -4,11 +4,15 @@ import { BulkBackupPanel } from './BulkBackupPanel';
 import type { Device } from '../../types/api';
 import { ValidationError, ServerError } from '../../api/errors';
 
-// Mock API calls — triggerBackup resolves by default; individual tests override as needed
+// Mock API calls — triggerBackup resolves by default; individual tests override as needed.
+// fetchDeviceCredentialProfiles returns one profile by default (device is eligible).
 vi.mock('../../api/client', () => ({
   triggerBackup: vi.fn().mockResolvedValue({ id: 'job-1', status: 'queued' }),
   triggerBulkDownload: vi.fn().mockResolvedValue(undefined),
   fetchBackupJob: vi.fn().mockResolvedValue({ id: 'job-1', status: 'success', error_message: '' }),
+  fetchDeviceCredentialProfiles: vi.fn().mockResolvedValue([
+    { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: false },
+  ]),
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -25,7 +29,6 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     managed: true,
     interfaces: [],
     backup_supported: true,
-    ssh_profile_id: 'ssh-1',
     metrics_source: 'snmp',
     prometheus_label_name: 'instance',
     prometheus_label_value: '10.0.0.1:9100',
@@ -92,15 +95,18 @@ describe('BulkBackupPanel — triggerBackup .catch handles ValidationError', () 
   });
 });
 
-describe('BulkBackupPanel — skips devices without ssh_profile_id', () => {
-  it('marks device as skipped with "no SSH profile assigned" reason', async () => {
-    const device = mockDevice({ ssh_profile_id: undefined });
+describe('BulkBackupPanel — skips devices without credential profile assigned', () => {
+  it('marks device as skipped with "no credential profile assigned" reason', async () => {
+    const { fetchDeviceCredentialProfiles } = await import('../../api/client');
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+    const device = mockDevice();
     render(<BulkBackupPanel devices={[device]} />);
 
     fireEvent.click(screen.getByText('Backup All Devices'));
 
     await waitFor(() => {
-      expect(screen.getByText('no SSH profile assigned')).toBeInTheDocument();
+      expect(screen.getByText('no credential profile assigned')).toBeInTheDocument();
     });
   });
 });
