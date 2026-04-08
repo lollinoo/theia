@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"log"
 	"math"
 	"sort"
@@ -41,6 +43,17 @@ type snmpCounterSample struct {
 	Time      time.Time
 }
 
+// sectionHashes stores FNV-64a hashes for each section of the snapshot, keyed by device_id.
+// The alerts section uses a single whole-set hash (alertsHash) per the design decision that
+// alerts are compared as an indivisible set — if any alert changed, the full array is sent.
+type sectionHashes struct {
+	deviceMetrics   map[string]uint64
+	linkMetrics     map[string]uint64
+	deviceStatuses  map[string]uint64
+	deviceHostnames map[string]uint64
+	alertsHash      uint64
+}
+
 // MetricsCollector queries Prometheus on a cadence and pushes full-state snapshots over WebSockets.
 type MetricsCollector struct {
 	promClient       *metrics.PromClient
@@ -63,6 +76,10 @@ type MetricsCollector struct {
 	// used to compute byte rates between successive polls.
 	prevCountersMu sync.Mutex
 	prevCounters   map[string]map[string]snmpCounterSample // deviceIP → ifName → sample
+
+	// prevHashes stores per-section FNV-64a hashes from the previous collection cycle.
+	// nil on the first cycle — causes a full snapshot broadcast instead of a delta.
+	prevHashes *sectionHashes
 }
 
 // NewMetricsCollector creates a background collector for live Prometheus data.
@@ -237,16 +254,34 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 
 	snapshot, promNowAvailable, promErr := c.buildSnapshot(collectCtx)
 
+	// Compute hashes for the current snapshot to drive delta detection.
+	currentHashes := computeSnapshotHashes(snapshot)
+
 	c.mu.Lock()
 	c.lastSnapshot = snapshot
 	prevAvailable := c.promAvailable
 	c.promAvailable = promNowAvailable
+	prev := c.prevHashes
+	c.prevHashes = currentHashes
 	c.mu.Unlock()
 
-	c.hub.Broadcast(ws.Message{
-		Type:    ws.MessageTypeSnapshot,
-		Payload: snapshot,
-	})
+	if prev == nil {
+		// First cycle: send full snapshot so new/reconnecting clients get complete state.
+		c.hub.Broadcast(ws.Message{
+			Type:    ws.MessageTypeSnapshot,
+			Payload: snapshot,
+		})
+	} else {
+		delta := buildDelta(snapshot, currentHashes, prev)
+		if delta != nil {
+			// Subsequent cycles: send only the changed entries as a snapshot_delta.
+			c.hub.Broadcast(ws.Message{
+				Type:    ws.MessageTypeSnapshotDelta,
+				Payload: delta,
+			})
+		}
+		// If delta is nil, nothing changed — skip broadcast entirely.
+	}
 
 	// Notify clients when Prometheus availability changes.
 	// The health check goroutine handles most transitions, but this catches
@@ -917,5 +952,130 @@ func interfaceSpeed(device domain.Device, observedIfName string) int64 {
 
 func normalizeInterfaceName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// --- Delta detection helpers ---
+
+// computeSectionHash computes a deterministic FNV-64a hash of a canonical string
+// representation of a single snapshot section entry. It is a pure function.
+func computeSectionHash(data string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(data))
+	return h.Sum64()
+}
+
+// computeSnapshotHashes builds per-section FNV-64a hashes for all entries in the snapshot.
+// Device metrics, link metrics, device statuses, and device hostnames are hashed per device_id.
+// Alerts are hashed as a whole set (a single alertsHash covers the entire sorted array).
+func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
+	sh := &sectionHashes{
+		deviceMetrics:   make(map[string]uint64, len(snapshot.DeviceMetrics)),
+		linkMetrics:     make(map[string]uint64, len(snapshot.LinkMetrics)),
+		deviceStatuses:  make(map[string]uint64, len(snapshot.DeviceStatuses)),
+		deviceHostnames: make(map[string]uint64, len(snapshot.DeviceHostnames)),
+	}
+
+	for id, dm := range snapshot.DeviceMetrics {
+		key := fmt.Sprintf("%s|%v|%v|%v|%v|%s",
+			dm.DeviceID,
+			dm.CPUPercent,
+			dm.MemPercent,
+			dm.TempCelsius,
+			dm.UptimeSecs,
+			dm.CollectedAt,
+		)
+		sh.deviceMetrics[id] = computeSectionHash(key)
+	}
+
+	for id, lms := range snapshot.LinkMetrics {
+		var sb strings.Builder
+		for _, lm := range lms {
+			sb.WriteString(fmt.Sprintf("%s|%s|%v|%v|%v|%s",
+				lm.DeviceID,
+				lm.IfName,
+				lm.TxBps,
+				lm.RxBps,
+				lm.Utilization,
+				lm.CollectedAt,
+			))
+		}
+		sh.linkMetrics[id] = computeSectionHash(sb.String())
+	}
+
+	for id, status := range snapshot.DeviceStatuses {
+		sh.deviceStatuses[id] = computeSectionHash(status)
+	}
+
+	for id, hostname := range snapshot.DeviceHostnames {
+		sh.deviceHostnames[id] = computeSectionHash(hostname)
+	}
+
+	// Alerts: whole-set hash over the sorted alert array.
+	var alertSb strings.Builder
+	for _, a := range snapshot.Alerts {
+		alertSb.WriteString(fmt.Sprintf("%s|%s|%s|%s|%s",
+			a.DeviceID,
+			a.Severity,
+			a.AlertName,
+			a.State,
+			a.Summary,
+		))
+	}
+	sh.alertsHash = computeSectionHash(alertSb.String())
+
+	return sh
+}
+
+// buildDelta compares currentHashes against prevHashes and returns a sparse SnapshotPayload
+// containing only the entries that changed. Returns nil if nothing changed (caller skips broadcast).
+func buildDelta(current *ws.SnapshotPayload, currentHashes, prevHashes *sectionHashes) *ws.SnapshotPayload {
+	delta := &ws.SnapshotPayload{
+		DeviceMetrics:   make(map[string]ws.DeviceMetricsDTO),
+		LinkMetrics:     make(map[string][]ws.LinkMetricsDTO),
+		DeviceStatuses:  make(map[string]string),
+		DeviceHostnames: make(map[string]string),
+		Alerts:          nil,
+	}
+
+	anyChanged := false
+
+	for id, hash := range currentHashes.deviceMetrics {
+		if prevHash, ok := prevHashes.deviceMetrics[id]; !ok || prevHash != hash {
+			delta.DeviceMetrics[id] = current.DeviceMetrics[id]
+			anyChanged = true
+		}
+	}
+
+	for id, hash := range currentHashes.linkMetrics {
+		if prevHash, ok := prevHashes.linkMetrics[id]; !ok || prevHash != hash {
+			delta.LinkMetrics[id] = current.LinkMetrics[id]
+			anyChanged = true
+		}
+	}
+
+	for id, hash := range currentHashes.deviceStatuses {
+		if prevHash, ok := prevHashes.deviceStatuses[id]; !ok || prevHash != hash {
+			delta.DeviceStatuses[id] = current.DeviceStatuses[id]
+			anyChanged = true
+		}
+	}
+
+	for id, hash := range currentHashes.deviceHostnames {
+		if prevHash, ok := prevHashes.deviceHostnames[id]; !ok || prevHash != hash {
+			delta.DeviceHostnames[id] = current.DeviceHostnames[id]
+			anyChanged = true
+		}
+	}
+
+	if currentHashes.alertsHash != prevHashes.alertsHash {
+		delta.Alerts = current.Alerts
+		anyChanged = true
+	}
+
+	if !anyChanged {
+		return nil
+	}
+
+	return delta
 }
 

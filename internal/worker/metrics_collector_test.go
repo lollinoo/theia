@@ -670,6 +670,408 @@ func TestBuildSnapshot_SNMPPollPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Delta detection tests: computeSectionHash
+// ---------------------------------------------------------------------------
+
+func TestComputeSectionHash_Deterministic(t *testing.T) {
+	// Same input must produce the same hash.
+	h1 := computeSectionHash("device_id|42.5|60.0|<nil>|<nil>|2024-01-01T00:00:00Z")
+	h2 := computeSectionHash("device_id|42.5|60.0|<nil>|<nil>|2024-01-01T00:00:00Z")
+	if h1 != h2 {
+		t.Errorf("computeSectionHash: same input produced different hashes: %d vs %d", h1, h2)
+	}
+
+	// Different input must produce a different hash.
+	h3 := computeSectionHash("device_id|99.0|60.0|<nil>|<nil>|2024-01-01T00:00:00Z")
+	if h1 == h3 {
+		t.Errorf("computeSectionHash: different inputs produced the same hash: %d", h1)
+	}
+
+	// Empty string has a defined (non-panicking) value.
+	h4 := computeSectionHash("")
+	h5 := computeSectionHash("")
+	if h4 != h5 {
+		t.Errorf("computeSectionHash: empty string is not deterministic: %d vs %d", h4, h5)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Delta detection tests: computeSnapshotHashes
+// ---------------------------------------------------------------------------
+
+func TestComputeSnapshotHashes_AllSections(t *testing.T) {
+	devID1 := uuid.New().String()
+	devID2 := uuid.New().String()
+
+	cpu := 42.5
+	mem := 60.0
+	tx := 1000.0
+	rx := 500.0
+
+	snapshot := &ws.SnapshotPayload{
+		DeviceMetrics: map[string]ws.DeviceMetricsDTO{
+			devID1: {DeviceID: devID1, CPUPercent: &cpu, MemPercent: &mem, CollectedAt: "2024-01-01T00:00:00Z"},
+			devID2: {DeviceID: devID2, CPUPercent: &cpu, CollectedAt: "2024-01-01T00:00:00Z"},
+		},
+		LinkMetrics: map[string][]ws.LinkMetricsDTO{
+			devID1: {
+				{DeviceID: devID1, IfName: "ether1", TxBps: &tx, RxBps: &rx, CollectedAt: "2024-01-01T00:00:00Z"},
+			},
+		},
+		DeviceStatuses: map[string]string{
+			devID1: "up",
+			devID2: "down",
+		},
+		DeviceHostnames: map[string]string{
+			devID1: "router-1",
+		},
+		Alerts: []ws.AlertDTO{
+			{DeviceID: devID1, Severity: "warning", AlertName: "HighCPU", State: "firing", Summary: "CPU high"},
+		},
+	}
+
+	hashes := computeSnapshotHashes(snapshot)
+
+	if hashes == nil {
+		t.Fatal("computeSnapshotHashes returned nil")
+	}
+
+	// device_metrics: both devices should have entries.
+	if _, ok := hashes.deviceMetrics[devID1]; !ok {
+		t.Errorf("expected deviceMetrics hash for %s", devID1)
+	}
+	if _, ok := hashes.deviceMetrics[devID2]; !ok {
+		t.Errorf("expected deviceMetrics hash for %s", devID2)
+	}
+
+	// link_metrics: devID1 should have an entry.
+	if _, ok := hashes.linkMetrics[devID1]; !ok {
+		t.Errorf("expected linkMetrics hash for %s", devID1)
+	}
+
+	// device_statuses: both devices should have entries.
+	if _, ok := hashes.deviceStatuses[devID1]; !ok {
+		t.Errorf("expected deviceStatuses hash for %s", devID1)
+	}
+	if _, ok := hashes.deviceStatuses[devID2]; !ok {
+		t.Errorf("expected deviceStatuses hash for %s", devID2)
+	}
+
+	// device_hostnames: devID1 should have an entry.
+	if _, ok := hashes.deviceHostnames[devID1]; !ok {
+		t.Errorf("expected deviceHostnames hash for %s", devID1)
+	}
+
+	// alerts: whole-set hash must be non-zero.
+	if hashes.alertsHash == 0 {
+		t.Error("expected non-zero alertsHash for non-empty alerts")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Delta detection tests: buildDelta
+// ---------------------------------------------------------------------------
+
+func TestBuildDelta_NoChanges_ReturnsNil(t *testing.T) {
+	devID := uuid.New().String()
+	cpu := 42.5
+	snapshot := &ws.SnapshotPayload{
+		DeviceMetrics:   map[string]ws.DeviceMetricsDTO{devID: {DeviceID: devID, CPUPercent: &cpu, CollectedAt: "2024-01-01T00:00:00Z"}},
+		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
+		DeviceStatuses:  map[string]string{devID: "up"},
+		DeviceHostnames: map[string]string{devID: "router-1"},
+		Alerts:          []ws.AlertDTO{},
+	}
+
+	hashes := computeSnapshotHashes(snapshot)
+	// Identical prev and current hashes → no changes.
+	delta := buildDelta(snapshot, hashes, hashes)
+
+	if delta != nil {
+		t.Errorf("buildDelta: expected nil delta when nothing changed, got non-nil")
+	}
+}
+
+func TestBuildDelta_OneDeviceMetricsChanged(t *testing.T) {
+	devID1 := uuid.New().String()
+	devID2 := uuid.New().String()
+	cpu1 := 42.5
+	cpu2 := 15.0
+
+	snapshot := &ws.SnapshotPayload{
+		DeviceMetrics: map[string]ws.DeviceMetricsDTO{
+			devID1: {DeviceID: devID1, CPUPercent: &cpu1, CollectedAt: "2024-01-01T00:00:00Z"},
+			devID2: {DeviceID: devID2, CPUPercent: &cpu2, CollectedAt: "2024-01-01T00:00:00Z"},
+		},
+		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
+		DeviceStatuses:  map[string]string{devID1: "up", devID2: "up"},
+		DeviceHostnames: map[string]string{},
+		Alerts:          []ws.AlertDTO{},
+	}
+
+	// Build "previous" hashes from the snapshot.
+	prevHashes := computeSnapshotHashes(snapshot)
+
+	// Simulate devID1 metrics changing.
+	cpu1Changed := 99.0
+	snapshotNew := &ws.SnapshotPayload{
+		DeviceMetrics: map[string]ws.DeviceMetricsDTO{
+			devID1: {DeviceID: devID1, CPUPercent: &cpu1Changed, CollectedAt: "2024-01-01T00:01:00Z"},
+			devID2: {DeviceID: devID2, CPUPercent: &cpu2, CollectedAt: "2024-01-01T00:00:00Z"},
+		},
+		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
+		DeviceStatuses:  map[string]string{devID1: "up", devID2: "up"},
+		DeviceHostnames: map[string]string{},
+		Alerts:          []ws.AlertDTO{},
+	}
+	currentHashes := computeSnapshotHashes(snapshotNew)
+
+	delta := buildDelta(snapshotNew, currentHashes, prevHashes)
+
+	if delta == nil {
+		t.Fatal("buildDelta: expected non-nil delta when one device metrics changed")
+	}
+
+	// Delta should contain only devID1 in device_metrics.
+	if _, ok := delta.DeviceMetrics[devID1]; !ok {
+		t.Errorf("expected devID1 in delta device_metrics")
+	}
+	if _, ok := delta.DeviceMetrics[devID2]; ok {
+		t.Errorf("expected devID2 NOT in delta device_metrics (unchanged)")
+	}
+
+	// Other sections should be empty/nil (unchanged).
+	if len(delta.LinkMetrics) != 0 {
+		t.Errorf("expected empty delta link_metrics, got %d entries", len(delta.LinkMetrics))
+	}
+	if len(delta.DeviceStatuses) != 0 {
+		t.Errorf("expected empty delta device_statuses, got %d entries", len(delta.DeviceStatuses))
+	}
+	if len(delta.DeviceHostnames) != 0 {
+		t.Errorf("expected empty delta device_hostnames, got %d entries", len(delta.DeviceHostnames))
+	}
+	if delta.Alerts != nil {
+		t.Errorf("expected nil delta alerts (unchanged), got %v", delta.Alerts)
+	}
+}
+
+func TestBuildDelta_AlertsChanged(t *testing.T) {
+	devID := uuid.New().String()
+
+	snapshotPrev := &ws.SnapshotPayload{
+		DeviceMetrics:   map[string]ws.DeviceMetricsDTO{},
+		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
+		DeviceStatuses:  map[string]string{},
+		DeviceHostnames: map[string]string{},
+		Alerts:          []ws.AlertDTO{},
+	}
+	prevHashes := computeSnapshotHashes(snapshotPrev)
+
+	// Add a new alert.
+	snapshotNew := &ws.SnapshotPayload{
+		DeviceMetrics:   map[string]ws.DeviceMetricsDTO{},
+		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
+		DeviceStatuses:  map[string]string{},
+		DeviceHostnames: map[string]string{},
+		Alerts: []ws.AlertDTO{
+			{DeviceID: devID, Severity: "critical", AlertName: "Down", State: "firing", Summary: "Device is down"},
+		},
+	}
+	currentHashes := computeSnapshotHashes(snapshotNew)
+
+	delta := buildDelta(snapshotNew, currentHashes, prevHashes)
+
+	if delta == nil {
+		t.Fatal("buildDelta: expected non-nil delta when alerts changed")
+	}
+	if delta.Alerts == nil {
+		t.Fatal("expected full alerts array in delta when alertsHash changed")
+	}
+	if len(delta.Alerts) != 1 {
+		t.Errorf("expected 1 alert in delta, got %d", len(delta.Alerts))
+	}
+	if delta.Alerts[0].AlertName != "Down" {
+		t.Errorf("expected alert name 'Down', got %q", delta.Alerts[0].AlertName)
+	}
+}
+
+func TestBuildDelta_MixedChanges(t *testing.T) {
+	devID1 := uuid.New().String()
+	devID2 := uuid.New().String()
+	devID3 := uuid.New().String()
+	cpu := 50.0
+	tx := 1000.0
+
+	snapshotPrev := &ws.SnapshotPayload{
+		DeviceMetrics: map[string]ws.DeviceMetricsDTO{
+			devID1: {DeviceID: devID1, CPUPercent: &cpu, CollectedAt: "2024-01-01T00:00:00Z"},
+			devID2: {DeviceID: devID2, CPUPercent: &cpu, CollectedAt: "2024-01-01T00:00:00Z"},
+			devID3: {DeviceID: devID3, CPUPercent: &cpu, CollectedAt: "2024-01-01T00:00:00Z"},
+		},
+		LinkMetrics: map[string][]ws.LinkMetricsDTO{
+			devID1: {{DeviceID: devID1, IfName: "ether1", TxBps: &tx, CollectedAt: "2024-01-01T00:00:00Z"}},
+		},
+		DeviceStatuses:  map[string]string{devID1: "up", devID2: "up", devID3: "up"},
+		DeviceHostnames: map[string]string{},
+		Alerts:          []ws.AlertDTO{},
+	}
+	prevHashes := computeSnapshotHashes(snapshotPrev)
+
+	// devID1 and devID2 metrics changed; devID3 status changed; alerts unchanged.
+	cpu1New := 80.0
+	cpu2New := 90.0
+	txNew := 2000.0
+
+	snapshotNew := &ws.SnapshotPayload{
+		DeviceMetrics: map[string]ws.DeviceMetricsDTO{
+			devID1: {DeviceID: devID1, CPUPercent: &cpu1New, CollectedAt: "2024-01-01T00:01:00Z"},
+			devID2: {DeviceID: devID2, CPUPercent: &cpu2New, CollectedAt: "2024-01-01T00:01:00Z"},
+			devID3: {DeviceID: devID3, CPUPercent: &cpu, CollectedAt: "2024-01-01T00:00:00Z"}, // unchanged
+		},
+		LinkMetrics: map[string][]ws.LinkMetricsDTO{
+			devID1: {{DeviceID: devID1, IfName: "ether1", TxBps: &txNew, CollectedAt: "2024-01-01T00:01:00Z"}},
+		},
+		DeviceStatuses:  map[string]string{devID1: "up", devID2: "up", devID3: "down"}, // devID3 changed
+		DeviceHostnames: map[string]string{},
+		Alerts:          []ws.AlertDTO{}, // unchanged
+	}
+	currentHashes := computeSnapshotHashes(snapshotNew)
+
+	delta := buildDelta(snapshotNew, currentHashes, prevHashes)
+
+	if delta == nil {
+		t.Fatal("buildDelta: expected non-nil delta for mixed changes")
+	}
+
+	// device_metrics: devID1 and devID2 changed; devID3 did not.
+	if _, ok := delta.DeviceMetrics[devID1]; !ok {
+		t.Errorf("expected devID1 in delta device_metrics")
+	}
+	if _, ok := delta.DeviceMetrics[devID2]; !ok {
+		t.Errorf("expected devID2 in delta device_metrics")
+	}
+	if _, ok := delta.DeviceMetrics[devID3]; ok {
+		t.Errorf("expected devID3 NOT in delta device_metrics (unchanged)")
+	}
+
+	// link_metrics: devID1 changed.
+	if _, ok := delta.LinkMetrics[devID1]; !ok {
+		t.Errorf("expected devID1 in delta link_metrics")
+	}
+
+	// device_statuses: only devID3 changed.
+	if _, ok := delta.DeviceStatuses[devID3]; !ok {
+		t.Errorf("expected devID3 in delta device_statuses")
+	}
+	if _, ok := delta.DeviceStatuses[devID1]; ok {
+		t.Errorf("expected devID1 NOT in delta device_statuses (unchanged)")
+	}
+
+	// alerts: unchanged → nil.
+	if delta.Alerts != nil {
+		t.Errorf("expected nil delta alerts (unchanged), got %v", delta.Alerts)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// collectAndBroadcast integration tests: delta behavior
+// ---------------------------------------------------------------------------
+
+func newMockCollector(t *testing.T) (*MetricsCollector, *ws.Hub) {
+	t.Helper()
+
+	devID := uuid.New()
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"status": "success",
+			"data": map[string]interface{}{
+				"resultType": "vector",
+				"result":     []interface{}{},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(promServer.Close)
+
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{
+			{
+				ID:                   devID,
+				IP:                   "10.0.0.1",
+				Status:               domain.DeviceStatusUp,
+				MetricsSource:        domain.MetricsSourcePrometheus,
+				PrometheusLabelName:  "instance",
+				PrometheusLabelValue: "10.0.0.1",
+				Vendor:               "default",
+			},
+		},
+	}
+	linkRepo := &mockWorkerLinkRepo{}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+
+	mc := NewMetricsCollector(
+		promClient,
+		hub,
+		dlCache,
+		deviceRepo,
+		settingsRepo,
+		registry,
+		nil,
+		nil,
+	)
+
+	return mc, hub
+}
+
+func TestCollectAndBroadcast_FirstCycle_SendsFullSnapshot(t *testing.T) {
+	mc, _ := newMockCollector(t)
+
+	// First call: prevHashes is nil → must send full snapshot.
+	mc.collectAndBroadcast(context.Background())
+
+	mc.mu.RLock()
+	prev := mc.prevHashes
+	mc.mu.RUnlock()
+
+	if prev == nil {
+		t.Error("expected prevHashes to be set after first collectAndBroadcast")
+	}
+}
+
+func TestCollectAndBroadcast_SecondCycle_SendsDelta(t *testing.T) {
+	mc, _ := newMockCollector(t)
+
+	// First cycle: seeds prevHashes.
+	mc.collectAndBroadcast(context.Background())
+
+	mc.mu.RLock()
+	prevAfterFirst := mc.prevHashes
+	mc.mu.RUnlock()
+
+	if prevAfterFirst == nil {
+		t.Fatal("expected prevHashes to be set after first cycle")
+	}
+
+	// Second cycle: prevHashes is non-nil → uses delta path.
+	mc.collectAndBroadcast(context.Background())
+
+	mc.mu.RLock()
+	prevAfterSecond := mc.prevHashes
+	mc.mu.RUnlock()
+
+	if prevAfterSecond == nil {
+		t.Error("expected prevHashes to remain set after second cycle")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helper: build minimal vendor registry
 // ---------------------------------------------------------------------------
 
