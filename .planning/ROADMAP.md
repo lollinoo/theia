@@ -108,9 +108,9 @@ Plans:
   3. WinBox action is visually disabled with an explanatory tooltip when no WinBox profile is designated for the device
   4. Frontend detects whether the bridge is running via a health check endpoint and reflects bridge status to the user
   5. User can view, create, edit, delete, and assign credential profiles to a device from within Theia UI
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 Plans:
-- [ ] 25-01-PLAN.md — Type rename (SSHProfile to CredentialProfile), API client update, CredentialProfileManager + role field
+- [x] 25-01-PLAN.md — Type rename (SSHProfile to CredentialProfile), API client update, CredentialProfileManager + role field
 - [ ] 25-02-PLAN.md — DeviceConfigPanel Credentials section (assignment list, add/remove, WinBox designation toggle)
 - [ ] 25-03-PLAN.md — WinBox actions (Canvas context menu + DeviceRow) + useBridgeHealth hook + 3-state disabled logic
 **UI hint**: yes
@@ -165,6 +165,6 @@ Plans:
 | 22. Validation Integration & Closure | v1.4.0 | 1/1 | Complete | 2026-04-07 |
 | 23. Credential Profile Schema + Domain | v1.5.0 | 2/2 | Complete   | 2026-04-07 |
 | 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete   | 2026-04-07 |
-| 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 0/3 | Not started | — |
+| 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 1/3 | In Progress|  |
 | 26. WinBox Bridge Binary | v1.5.0 | 0/? | Not started | — |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 0/? | Not started | — |
