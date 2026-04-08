@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
-status: executing
-stopped_at: Completed 27-01-PLAN.md
-last_updated: "2026-04-08T13:03:28.313Z"
+status: verifying
+stopped_at: Completed 27-02-PLAN.md
+last_updated: "2026-04-08T13:11:10.711Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 12
-  completed_plans: 11
-  percent: 92
+  completed_plans: 12
+  percent: 100
 ---
 
 # State: MikroTik Theia
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 
 Phase: 27 (schema-cleanup-drop-legacy-fk) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-08
 
 ```
@@ -54,6 +54,9 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 - [Phase 26-01]: startProcess injectable var pattern for WinBox process testability without OS-level mocking
 - [Phase 26-winbox-bridge-binary]: Matrix strategy (6 parallel jobs) over single loop in CI for build-bridge — softprops/action-gh-release@v2 pinned major version uses GITHUB_TOKEN automatically
 - [Phase 27]: Migration 000014 uses SQLite 12-step recreation with PRAGMA foreign_keys=off/on; GetBackupProfileForDevice resolves credentials via join table (ORDER BY is_winbox ASC)
+- [Phase 27-02]: SSHCredentialForm uses assignCredentialProfile/unassignCredentialProfile instead of updateDevice(ssh_profile_id) — T-27-07 mitigation
+- [Phase 27-02]: Dashboard currentProfileId for SSHCredentialForm fetched via fetchDeviceCredentialProfiles on panel open (Option A — live source of truth after ssh_profile_id removal)
+- [Phase 27-02]: BulkEditPanel SSH Profile section removed — bulk credential assignment not supported after ssh_profile_id removal
 
 ## Accumulated Context
 
@@ -74,5 +77,5 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 
 ## Session Continuity
 
-Stopped at: Completed 27-01-PLAN.md
+Stopped at: Completed 27-02-PLAN.md
 To resume: /gsd-execute-phase 27 (Schema Cleanup — Drop Legacy FK)

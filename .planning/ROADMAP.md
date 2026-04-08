@@ -63,7 +63,7 @@
 - [x] **Phase 24: Backend API — Profiles, Assignments, WinBox Credentials** - 7 new routes, per-device assignment management, WinBox credential endpoint, bridge download delivery (completed 2026-04-07)
 - [x] **Phase 25: Frontend — Credential Profile Manager + WinBox Actions** - Profile manager UI, per-device assignment, role field, WinBox actions in canvas and table, bridge health check (completed 2026-04-08)
 - [x] **Phase 26: WinBox Bridge Binary** - CGO-free Go binary for 6 targets, CORS+Host dual-validation, hardcoded WinBox-only execution (completed 2026-04-08)
-- [ ] **Phase 27: Schema Cleanup — Drop Legacy FK** - SQLite 12-step table-recreation migration dropping legacy ssh_profile_id FK column
+- [x] **Phase 27: Schema Cleanup — Drop Legacy FK** - SQLite 12-step table-recreation migration dropping legacy ssh_profile_id FK column (completed 2026-04-08)
 
 ## Phase Details
 
@@ -138,10 +138,10 @@ Plans:
   2. SQLite 12-step table-recreation migration executes without data loss on a populated database
   3. All existing device records survive the migration with all other fields intact
   4. Application starts and operates normally with no references to the dropped column
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 27-01-PLAN.md — Migration 000014 + Go backend cleanup (domain, repo, service, handler)
-- [ ] 27-02-PLAN.md — Frontend cleanup (types, API client, components)
+- [x] 27-02-PLAN.md — Frontend cleanup (types, API client, components)
 
 ## Progress
 
@@ -173,4 +173,4 @@ Plans:
 | 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete   | 2026-04-07 |
 | 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete   | 2026-04-08 |
 | 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
-| 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 1/2 | In Progress|  |
+| 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
