@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
-status: in_progress
-stopped_at: Phase 26 verification complete — ready for Phase 27
-last_updated: "2026-04-08T12:10:00.000Z"
+status: executing
+stopped_at: Completed 27-01-PLAN.md
+last_updated: "2026-04-08T13:03:28.313Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
-  percent: 80
+  total_plans: 12
+  completed_plans: 11
+  percent: 92
 ---
 
 # State: MikroTik Theia
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, drill into Grafana for deep dives, and manage devices directly — all from a single interactive map.
-**Current focus:** Phase 27 — Schema Cleanup — Drop Legacy FK
+**Current focus:** Phase 27 — schema-cleanup-drop-legacy-fk
 
 ## Current Position
 
-Phase: 26 (winbox-bridge-binary) — COMPLETE (verified 2026-04-08)
+Phase: 27 (schema-cleanup-drop-legacy-fk) — EXECUTING
 Plan: 2 of 2
-Status: Phase verified complete — ready for Phase 27
+Status: Ready to execute
 Last activity: 2026-04-08
 
 ```
@@ -53,6 +53,7 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 - [Phase 26-01]: CORS preflight handled in securityCheck middleware — Origin+Host validation and CORS headers co-located
 - [Phase 26-01]: startProcess injectable var pattern for WinBox process testability without OS-level mocking
 - [Phase 26-winbox-bridge-binary]: Matrix strategy (6 parallel jobs) over single loop in CI for build-bridge — softprops/action-gh-release@v2 pinned major version uses GITHUB_TOKEN automatically
+- [Phase 27]: Migration 000014 uses SQLite 12-step recreation with PRAGMA foreign_keys=off/on; GetBackupProfileForDevice resolves credentials via join table (ORDER BY is_winbox ASC)
 
 ## Accumulated Context
 
@@ -73,5 +74,5 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 
 ## Session Continuity
 
-Stopped at: Phase 26 verification complete
+Stopped at: Completed 27-01-PLAN.md
 To resume: /gsd-execute-phase 27 (Schema Cleanup — Drop Legacy FK)
