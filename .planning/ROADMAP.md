@@ -91,7 +91,7 @@ Plans:
   2. User can list all credential profiles assigned to a specific device
   3. User can designate exactly one profile per device as the WinBox profile via API
   4. A dedicated endpoint returns the WinBox credential (IP + decrypted username/password) for a device — only when a WinBox profile is designated
-  5. Bridge binaries for all 6 targets (Windows/Linux/macOS × amd64/arm64) are downloadable from Theia Settings via the API
+  5. Bridge binaries for all 6 targets (Windows/Linux/macOS x amd64/arm64) are downloadable from Theia Settings via the API
 **Plans:** 3/3 plans complete
 Plans:
 - [x] 24-01-PLAN.md — Migration 000013 + repo methods + route rename + config field
@@ -153,11 +153,29 @@ Plans:
   3. First connect and reconnects continue to receive a full snapshot (no behavior change)
   4. Frontend deep-merges delta payloads into existing state; full snapshots replace entire state
   5. All 5 sections are diffed: device_metrics, link_metrics, device_statuses, device_hostnames, alerts
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 28-01-PLAN.md — Backend hash-based delta detection in MetricsCollector + MessageTypeSnapshotDelta constant
-- [ ] 28-02-PLAN.md — Frontend snapshot_delta type, mergeSnapshotDelta function, useWebSocket delta handler
+- [x] 28-01-PLAN.md — Backend hash-based delta detection in MetricsCollector + MessageTypeSnapshotDelta constant
+- [x] 28-02-PLAN.md — Frontend snapshot_delta type, mergeSnapshotDelta function, useWebSocket delta handler
+
+### Phase 29: WinBox bridge system tray — configure path, port, and origin; start/stop server without restart
+**Goal:** The WinBox bridge binary shows a system tray icon with menu items to start/stop the HTTP server, configure WinBox path, listen port, and allowed origin, and persist settings to a JSON config file — all without restarting the process
+**Depends on:** Phase 28
+**Requirements**: TRAY-01, TRAY-02, TRAY-03, TRAY-04, TRAY-05, TRAY-06
+**Success Criteria** (what must be TRUE):
+  1. Bridge settings (WinBox path, listen port, Theia origin) persist in a JSON config file at the OS-appropriate config directory
+  2. The HTTP server can be started and stopped from the system tray without restarting the bridge process
+  3. Host header validation uses the configured port dynamically (not hardcoded to 1337)
+  4. A `--no-tray` flag enables headless operation for Linux servers without a display
+  5. Windows binaries suppress the console window via `-H=windowsgui` ldflags
+  6. macOS binaries build with CGO_ENABLED=1 on native macOS CI runners (fyne.io/systray Cocoa requirement)
+**Plans:** 3 plans
+
+Plans:
+- [ ] 29-01-PLAN.md — Config struct + ServerManager lifecycle + --no-tray headless flag
+- [ ] 29-02-PLAN.md — System tray integration (fyne.io/systray, icon, menu wiring)
+- [ ] 29-03-PLAN.md — CI/build pipeline (macOS CGO split, Windows -H=windowsgui, Makefile update)
 
 ## Progress
 
@@ -190,4 +208,5 @@ Plans:
 | 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete   | 2026-04-08 |
 | 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
-| 28. API call optimization — WS delta payloads | v1.5.0 | 0/2 | Planned | — |
+| 28. API call optimization — WS delta payloads | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
+| 29. WinBox bridge system tray | v1.5.0 | 0/3 | Planning  | — |
