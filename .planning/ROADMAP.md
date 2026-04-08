@@ -124,7 +124,10 @@ Plans:
   2. Bridge rejects any request whose `Host` header is not `localhost:1337`, preventing DNS rebinding attacks
   3. Bridge is hardcoded to launch only the WinBox executable — passing arbitrary executable paths is rejected
   4. Bridge compiles without CGO and produces working binaries for all 6 targets (Windows amd64/arm64, Linux amd64/arm64, macOS amd64/arm64)
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 26-01-PLAN.md — Core bridge binary (HTTP server, Origin+Host validation, /health, /launch, WinBox discovery)
+- [ ] 26-02-PLAN.md — Build pipeline (Makefile target, CI release job for 6 targets)
 
 ### Phase 27: Schema Cleanup — Drop Legacy FK
 **Goal**: The `devices` table no longer carries the legacy `ssh_profile_id` FK column — schema is clean post-migration
@@ -166,5 +169,5 @@ Plans:
 | 23. Credential Profile Schema + Domain | v1.5.0 | 2/2 | Complete   | 2026-04-07 |
 | 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete   | 2026-04-07 |
 | 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete   | 2026-04-08 |
-| 26. WinBox Bridge Binary | v1.5.0 | 0/? | Not started | — |
+| 26. WinBox Bridge Binary | v1.5.0 | 0/2 | Not started | — |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 0/? | Not started | — |
