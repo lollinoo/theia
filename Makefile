@@ -2,7 +2,7 @@
        prod prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
        snmpwalk-router snmpwalk-switch snmpwalk-ap \
-       version release
+       version release bridge-build-all
 
 # ---------------------------------------------------------------------------
 # Version management
@@ -140,3 +140,26 @@ release: ## Create release tag and push (Usage: make release VERSION=1.3.8)
 	@echo ""
 	@echo "Release v$(VERSION) tagged and pushed."
 	@echo "CI will build and push Docker images to GHCR."
+
+# ---------------------------------------------------------------------------
+# WinBox Bridge cross-compilation
+# ---------------------------------------------------------------------------
+BRIDGE_OUT := bridge_binaries
+BRIDGE_SRC := ./cmd/winbox-bridge/
+BRIDGE_TARGETS := windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+
+bridge-build-all: ## Cross-compile winbox-bridge for all 6 targets
+	@rm -rf $(BRIDGE_OUT)
+	@mkdir -p $(BRIDGE_OUT)
+	@for target in $(BRIDGE_TARGETS); do \
+		os=$$(echo $$target | cut -d/ -f1); \
+		arch=$$(echo $$target | cut -d/ -f2); \
+		ext=""; \
+		if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
+		output="$(BRIDGE_OUT)/winbox-bridge-$${os}-$${arch}$${ext}"; \
+		echo "Building $$output ..."; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags="-s -w" -o "$$output" $(BRIDGE_SRC) || exit 1; \
+	done
+	@echo ""
+	@echo "Bridge binaries built in $(BRIDGE_OUT)/:"
+	@ls -la $(BRIDGE_OUT)/

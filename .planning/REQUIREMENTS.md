@@ -19,8 +19,8 @@ Requirements for the WinBox Integration milestone. Each maps to roadmap phases (
 
 - [ ] **BRIDGE-01**: User can download the WinBox bridge binary for their platform from Theia Settings
 - [ ] **BRIDGE-02**: Bridge binary is available for Windows, Linux, and macOS (amd64 + arm64, 6 targets)
-- [ ] **BRIDGE-03**: Bridge validates both Origin and Host headers on every request (DNS rebinding protection)
-- [ ] **BRIDGE-04**: Bridge is hardcoded to launch only the WinBox executable — no arbitrary process execution
+- [x] **BRIDGE-03**: Bridge validates both Origin and Host headers on every request (DNS rebinding protection)
+- [x] **BRIDGE-04**: Bridge is hardcoded to launch only the WinBox executable — no arbitrary process execution
 - [x] **BRIDGE-05**: Frontend detects whether the bridge is running via a health check endpoint
 
 ### WinBox UI
@@ -74,8 +74,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WINBOX-02 | Phase 25 | Complete |
 | WINBOX-03 | Phase 25 | Complete |
 | BRIDGE-05 | Phase 25 | Complete |
-| BRIDGE-03 | Phase 26 | Pending |
-| BRIDGE-04 | Phase 26 | Pending |
+| BRIDGE-03 | Phase 26 | Complete |
+| BRIDGE-04 | Phase 26 | Complete |
 | WINBOX-04 | Phase 27 | Pending |
 
 **Coverage:**

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
 status: verifying
-stopped_at: Completed 25-frontend-credential-profile-manager-winbox-actions-25-03-PLAN.md
-last_updated: "2026-04-08T10:51:49.252Z"
+stopped_at: Completed 26-01-PLAN.md
+last_updated: "2026-04-08T12:04:08.289Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 10
+  completed_plans: 9
+  percent: 90
 ---
 
 # State: MikroTik Theia
@@ -25,21 +25,20 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 
 ## Current Position
 
-Phase: 24 (backend-api-profiles-assignments-winbox-credentials) — EXECUTING
+Phase: 25 (frontend-credential-profile-manager-winbox-actions) — COMPLETE
 Plan: 3 of 3
 Status: Phase complete — ready for verification
 Last activity: 2026-04-08
 
 ```
-v1.5.0 Progress: [█████░░░░░] 50% plans (Phase 23 in progress)
+v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 ```
 
 ## Performance Metrics
 
-- Phases complete (v1.5.0): 0/5
-- Plans complete (v1.5.0): 1/2 (Phase 23)
+- Phases complete (v1.5.0): 4/5
+- Plans complete (v1.5.0): 11/11
 - Requirements mapped: 14/14
-- 23-01: 2 tasks, 4 files, 2 min
 
 ## Decisions
 
@@ -51,6 +50,8 @@ v1.5.0 Progress: [█████░░░░░] 50% plans (Phase 23 in progres
 - [Phase 25-frontend-credential-profile-manager-winbox-actions]: Credentials section replaces ssh_profile_id select dropdown — assignment lifecycle managed via separate API calls
 - [Phase 25]: waitFor + fake timers causes timeout in Vitest — replaced with act + advanceTimersByTimeAsync for useBridgeHealth tests
 - [Phase 25]: deviceWinboxMap uses lazy fetch per-device on first render/menu-open rather than upfront batch
+- [Phase 26-01]: CORS preflight handled in securityCheck middleware — Origin+Host validation and CORS headers co-located
+- [Phase 26-01]: startProcess injectable var pattern for WinBox process testability without OS-level mocking
 
 ## Accumulated Context
 
@@ -71,5 +72,5 @@ v1.5.0 Progress: [█████░░░░░] 50% plans (Phase 23 in progres
 
 ## Session Continuity
 
-Stopped at: Completed 25-frontend-credential-profile-manager-winbox-actions-25-03-PLAN.md
-To resume: execute 23-02-PLAN.md (credential_profile_repo.go rename + BackupService + handler renames)
+Stopped at: Completed 26-01-PLAN.md
+To resume: /gsd-execute-phase 26 (or check ROADMAP.md for remaining phases in v1.5.0)
