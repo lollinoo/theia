@@ -33,7 +33,7 @@ Requirements for the WinBox Integration milestone. Each maps to roadmap phases (
 ### WinBox Bridge System Tray
 
 - [x] **TRAY-01**: Bridge binary shows a system tray icon when launched on a desktop system
-- [ ] **TRAY-02**: User can start and stop the bridge HTTP server from the system tray without restarting the binary
+- [x] **TRAY-02**: User can start and stop the bridge HTTP server from the system tray without restarting the binary
 - [x] **TRAY-03**: User can configure the WinBox executable path via the bridge config file, accessible from the tray
 - [x] **TRAY-04**: User can configure the bridge listening port via the bridge config file, accessible from the tray
 - [x] **TRAY-05**: User can configure the allowed Theia origin via the bridge config file, accessible from the tray
@@ -87,7 +87,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BRIDGE-04 | Phase 26 | Complete |
 | WINBOX-04 | Phase 27 | Complete |
 | TRAY-01 | Phase 29 | Complete |
-| TRAY-02 | Phase 29 | Pending |
+| TRAY-02 | Phase 29 | Complete |
 | TRAY-03 | Phase 29 | Complete |
 | TRAY-04 | Phase 29 | Complete |
 | TRAY-05 | Phase 29 | Complete |

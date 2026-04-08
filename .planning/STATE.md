@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
 status: executing
-stopped_at: Completed 29-01-PLAN.md
-last_updated: "2026-04-08T20:55:41.772Z"
+stopped_at: "Checkpoint 29-02: awaiting human verification of system tray on desktop"
+last_updated: "2026-04-08T20:59:45.987Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 17
-  completed_plans: 15
-  percent: 88
+  completed_plans: 16
+  percent: 94
 ---
 
 # State: MikroTik Theia
@@ -60,6 +60,9 @@ v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 - [Phase 29-01]: Config uses loadConfigFrom/saveConfigTo path helpers for testability — public loadConfig/saveConfig delegate via configFilePath()
 - [Phase 29-01]: securityCheck takes expectedHost param — removes hardcoded localhost:1337, enables dynamic port config (T-29-04 mitigated)
 - [Phase 29-01]: ServerManager.Start goroutine captures local srv var not m.server field — prevents nil dereference if Stop() races
+- [Phase 29]: 29-02: setupTray auto-starts server before systray.Run() in main() — bridge is immediately usable on launch without manual Start click
+- [Phase 29]: 29-02: Config reloaded from disk on every Start menu click — user edits config.json and clicks Stop/Start to apply changes without restarting bridge
+- [Phase 29]: 29-02: ensureConfigFileExists() creates config.json before opening in editor — first-run UX is seamless
 
 ## Accumulated Context
 
@@ -85,5 +88,5 @@ v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 
 ## Session Continuity
 
-Stopped at: Completed 29-01-PLAN.md
+Stopped at: Checkpoint 29-02: awaiting human verification of system tray on desktop
 To resume: /gsd-execute-phase 27 (Schema Cleanup — Drop Legacy FK)
