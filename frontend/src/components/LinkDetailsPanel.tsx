@@ -83,6 +83,9 @@ export function LinkDetailsPanel({
   const sourceDevice = deviceMap.get(link.source_device_id);
   const targetDevice = deviceMap.get(link.target_device_id);
 
+  const sourceIsVirtual = sourceDevice?.device_type === 'virtual';
+  const targetIsVirtual = targetDevice?.device_type === 'virtual';
+
   const [editing, setEditing] = useState(false);
   const [sourceIfName, setSourceIfName] = useState(link.source_if_name);
   const [targetIfName, setTargetIfName] = useState(link.target_if_name);
@@ -95,11 +98,11 @@ export function LinkDetailsPanel({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Load interfaces when entering edit mode
+  // Load interfaces when entering edit mode (skip for virtual nodes — they have no interfaces)
   useEffect(() => {
     if (!editing) return;
 
-    if (link.source_device_id) {
+    if (link.source_device_id && !sourceIsVirtual) {
       setSourceLoading(true);
       fetchDeviceInterfaces(link.source_device_id)
         .then((ifaces) => setSourceInterfaces(ifaces))
@@ -107,14 +110,14 @@ export function LinkDetailsPanel({
         .finally(() => setSourceLoading(false));
     }
 
-    if (link.target_device_id) {
+    if (link.target_device_id && !targetIsVirtual) {
       setTargetLoading(true);
       fetchDeviceInterfaces(link.target_device_id)
         .then((ifaces) => setTargetInterfaces(ifaces))
         .catch(() => setTargetInterfaces([]))
         .finally(() => setTargetLoading(false));
     }
-  }, [editing, link.source_device_id, link.target_device_id]);
+  }, [editing, link.source_device_id, link.target_device_id, sourceIsVirtual, targetIsVirtual]);
 
   // Reset edit state when link changes
   useEffect(() => {
@@ -209,26 +212,38 @@ export function LinkDetailsPanel({
             <p className="text-xs text-on-bg-secondary">
               Source: {sourceDevice?.tags?.display_name || sourceDevice?.hostname || link.source_device_id}
             </p>
-            <InterfaceSelect
-              label="Source Port"
-              interfaces={sourceInterfaces}
-              value={sourceIfName}
-              onChange={setSourceIfName}
-              loading={sourceLoading}
-            />
+            {sourceIsVirtual ? (
+              <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs italic text-on-bg-secondary">
+                (virtual node — no interface)
+              </p>
+            ) : (
+              <InterfaceSelect
+                label="Source Port"
+                interfaces={sourceInterfaces}
+                value={sourceIfName}
+                onChange={setSourceIfName}
+                loading={sourceLoading}
+              />
+            )}
           </div>
 
           <div className="space-y-1">
             <p className="text-xs text-on-bg-secondary">
               Target: {targetDevice?.tags?.display_name || targetDevice?.hostname || link.target_device_id}
             </p>
-            <InterfaceSelect
-              label="Target Port"
-              interfaces={targetInterfaces}
-              value={targetIfName}
-              onChange={setTargetIfName}
-              loading={targetLoading}
-            />
+            {targetIsVirtual ? (
+              <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs italic text-on-bg-secondary">
+                (virtual node — no interface)
+              </p>
+            ) : (
+              <InterfaceSelect
+                label="Target Port"
+                interfaces={targetInterfaces}
+                value={targetIfName}
+                onChange={setTargetIfName}
+                loading={targetLoading}
+              />
+            )}
           </div>
 
           {saveError && (
@@ -252,7 +267,7 @@ export function LinkDetailsPanel({
             </button>
             <button
               type="submit"
-              disabled={saving || !sourceIfName || !targetIfName}
+              disabled={saving || (!sourceIsVirtual && !sourceIfName) || (!targetIsVirtual && !targetIfName)}
               className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save'}
