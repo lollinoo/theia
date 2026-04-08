@@ -28,4 +28,7 @@ type CredentialProfileRepository interface {
 	GetAll() ([]CredentialProfile, error)
 	Update(profile *CredentialProfile) error
 	Delete(id uuid.UUID) error
+	// GetBackupProfileForDevice returns the first assigned (non-WinBox) credential
+	// profile for the given device, or an error if none is assigned.
+	GetBackupProfileForDevice(deviceID uuid.UUID) (*CredentialProfile, error)
 }

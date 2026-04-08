@@ -115,19 +115,11 @@ func (s *BackupService) TriggerBulkBackup(ctx context.Context) ([]BulkBackupResu
 			name = d.IP
 		}
 
-		if d.SSHProfileID == nil {
-			results = append(results, BulkBackupResult{
-				DeviceID: d.ID, DeviceName: name,
-				Status: "skipped", Reason: "no SSH profile assigned",
-			})
-			continue
-		}
-
-		profile, err := s.credentialProfileRepo.GetByID(*d.SSHProfileID)
+		profile, err := s.credentialProfileRepo.GetBackupProfileForDevice(d.ID)
 		if err != nil {
 			results = append(results, BulkBackupResult{
 				DeviceID: d.ID, DeviceName: name,
-				Status: "skipped", Reason: "SSH profile not found",
+				Status: "skipped", Reason: "no credential profile assigned",
 			})
 			continue
 		}
@@ -223,13 +215,9 @@ func (s *BackupService) TriggerBackup(ctx context.Context, deviceID uuid.UUID) (
 		return nil, fmt.Errorf("getting device: %w", err)
 	}
 
-	if device.SSHProfileID == nil {
-		return nil, fmt.Errorf("no SSH profile assigned to device %s", deviceID)
-	}
-
-	profile, err := s.credentialProfileRepo.GetByID(*device.SSHProfileID)
+	profile, err := s.credentialProfileRepo.GetBackupProfileForDevice(device.ID)
 	if err != nil {
-		return nil, fmt.Errorf("getting SSH profile: %w", err)
+		return nil, fmt.Errorf("no credential profile assigned to device %s", deviceID)
 	}
 
 	backupCfg := s.vendorRegistry.ResolveBackupConfig(device.Vendor)
@@ -625,13 +613,9 @@ func (s *BackupService) TestSSHConnection(ctx context.Context, deviceID uuid.UUI
 		return fmt.Errorf("getting device: %w", err)
 	}
 
-	if device.SSHProfileID == nil {
-		return fmt.Errorf("no SSH profile assigned to device %s", deviceID)
-	}
-
-	profile, err := s.credentialProfileRepo.GetByID(*device.SSHProfileID)
+	profile, err := s.credentialProfileRepo.GetBackupProfileForDevice(device.ID)
 	if err != nil {
-		return fmt.Errorf("getting SSH profile: %w", err)
+		return fmt.Errorf("no credential profile assigned to device %s", deviceID)
 	}
 
 	secret, err := s.decryptSecret(profile.EncryptedSecret)

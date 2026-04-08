@@ -283,6 +283,34 @@ func (r *CredentialProfileRepo) GetWinboxAssignment(deviceID uuid.UUID) (*Winbox
 	return &row, nil
 }
 
+// GetBackupProfileForDevice returns the first non-WinBox credential profile
+// assigned to the given device. If no non-WinBox profile exists, it falls back
+// to any assigned profile. Returns an error if no profile is assigned at all.
+func (r *CredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error) {
+	var p domain.CredentialProfile
+	var idStr, encSecret string
+	err := r.db.QueryRow(
+		`SELECT cp.id, cp.name, cp.description, cp.username, cp.port,
+		        cp.auth_method, cp.role, cp.encrypted_secret, cp.created_at, cp.updated_at
+		 FROM device_credential_profiles dcp
+		 JOIN credential_profiles cp ON cp.id = dcp.profile_id
+		 WHERE dcp.device_id = ?
+		 ORDER BY dcp.is_winbox ASC, cp.name ASC
+		 LIMIT 1`,
+		deviceID.String(),
+	).Scan(&idStr, &p.Name, &p.Description, &p.Username, &p.Port,
+		&p.AuthMethod, &p.Role, &encSecret, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("no credential profile assigned to device %s", deviceID)
+		}
+		return nil, err
+	}
+	p.ID = uuid.MustParse(idStr)
+	p.EncryptedSecret = encSecret
+	return &p, nil
+}
+
 // --- helpers ---
 
 func scanCredentialProfile(row *sql.Row) (*domain.CredentialProfile, error) {

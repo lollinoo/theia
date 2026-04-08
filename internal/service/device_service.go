@@ -32,7 +32,6 @@ type DeviceUpdate struct {
 	MetricsSource        *domain.MetricsSource
 	PrometheusLabelName  *string
 	PrometheusLabelValue *string
-	SSHProfileID         **uuid.UUID   // double pointer: nil=not set, *nil=unassign, **=set
 	AreaIDs              *[]uuid.UUID // nil=not set, non-nil=replace all area assignments
 }
 
@@ -75,7 +74,6 @@ func (s *DeviceService) AddDevice(
 	metricsSource domain.MetricsSource,
 	prometheusLabelName string,
 	prometheusLabelValue string,
-	sshProfileID *uuid.UUID,
 	areaIDs []uuid.UUID,
 ) (*domain.Device, error) {
 	if tags == nil {
@@ -116,7 +114,6 @@ func (s *DeviceService) AddDevice(
 		Vendor:               vendor,
 		Managed:              true,
 		Tags:                 tags,
-		SSHProfileID:         sshProfileID,
 		MetricsSource:        metricsSource,
 		PrometheusLabelName:  prometheusLabelName,
 		PrometheusLabelValue: prometheusLabelValue,
@@ -280,9 +277,6 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 	}
 	if update.PrometheusLabelValue != nil {
 		device.PrometheusLabelValue = *update.PrometheusLabelValue
-	}
-	if update.SSHProfileID != nil {
-		device.SSHProfileID = *update.SSHProfileID
 	}
 	if update.AreaIDs != nil {
 		device.AreaIDs = *update.AreaIDs

@@ -270,6 +270,17 @@ func (r *mockCredentialProfileRepo) Delete(id uuid.UUID) error {
 	return nil
 }
 
+func (r *mockCredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Return the first profile found for any device (test helper: return any profile)
+	for _, p := range r.profiles {
+		cp := *p
+		return &cp, nil
+	}
+	return nil, fmt.Errorf("no credential profile assigned to device %s", deviceID)
+}
+
 // mockBackupSettingsRepo implements domain.SettingsRepository for backup tests.
 type mockBackupSettingsRepo struct {
 	settings map[string]string
@@ -419,11 +430,11 @@ func TestConcurrentBackup(t *testing.T) {
 	dev2ID := uuid.New()
 	deviceRepo.Create(&domain.Device{
 		ID: dev1ID, IP: "127.0.0.1", Vendor: "testvendor",
-		SSHProfileID: &profileID, Managed: true, Status: domain.DeviceStatusUp,
+		Managed: true, Status: domain.DeviceStatusUp,
 	})
 	deviceRepo.Create(&domain.Device{
 		ID: dev2ID, IP: "127.0.0.1", Vendor: "testvendor",
-		SSHProfileID: &profileID, Managed: true, Status: domain.DeviceStatusUp,
+		Managed: true, Status: domain.DeviceStatusUp,
 	})
 
 	ctx := context.Background()
@@ -531,7 +542,7 @@ func TestBackupVendorRegistry(t *testing.T) {
 	deviceID := uuid.New()
 	deviceRepo.Create(&domain.Device{
 		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
-		SSHProfileID: &profileID, Managed: true, Status: domain.DeviceStatusUp,
+		Managed: true, Status: domain.DeviceStatusUp,
 	})
 
 	job, err := svc.TriggerBackup(context.Background(), deviceID)
@@ -835,7 +846,7 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	deviceID := uuid.New()
 	deviceRepo.Create(&domain.Device{
 		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
-		SSHProfileID: &profileID, Managed: true, Status: domain.DeviceStatusUp,
+		Managed: true, Status: domain.DeviceStatusUp,
 	})
 
 	// TriggerBackup creates the job and starts runFullBackup in a goroutine.

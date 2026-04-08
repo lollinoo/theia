@@ -308,6 +308,10 @@ func (r *mockCredentialProfileRepo) Delete(id uuid.UUID) error {
 	return nil
 }
 
+func (r *mockCredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error) {
+	return nil, nil
+}
+
 // --- Helper to build test VendorRegistry ---
 
 func buildTestVendorRegistry() *vendor.Registry {

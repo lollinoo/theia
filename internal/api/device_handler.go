@@ -80,7 +80,6 @@ type createDeviceRequest struct {
 	MetricsSource        string            `json:"metrics_source,omitempty"`
 	PrometheusLabelName  string            `json:"prometheus_label_name,omitempty"`
 	PrometheusLabelValue string            `json:"prometheus_label_value,omitempty"`
-	SSHProfileID         string            `json:"ssh_profile_id,omitempty"`
 	AreaIDs              []string          `json:"area_ids,omitempty"`
 }
 
@@ -105,7 +104,6 @@ type updateDeviceRequest struct {
 	MetricsSource        *string            `json:"metrics_source,omitempty"`
 	PrometheusLabelName  *string            `json:"prometheus_label_name,omitempty"`
 	PrometheusLabelValue *string            `json:"prometheus_label_value,omitempty"`
-	SSHProfileID         *string            `json:"ssh_profile_id,omitempty"`
 	AreaIDs              *[]string          `json:"area_ids,omitempty"`
 }
 
@@ -163,7 +161,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 
 		device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
 			domain.DeviceTypeVirtual,
-			domain.SNMPCredentials{}, req.Tags, "", "", "", "", nil, areaIDs)
+			domain.SNMPCredentials{}, req.Tags, "", "", "", "", areaIDs)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create virtual device", err)
 			return
@@ -231,20 +229,6 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	prometheusLabelName := req.PrometheusLabelName
 	prometheusLabelValue := req.PrometheusLabelValue
 
-	var sshProfileID *uuid.UUID
-	if req.SSHProfileID != "" {
-		parsed, err := uuid.Parse(req.SSHProfileID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid ssh_profile_id")
-			return
-		}
-		if _, err := h.credentialProfileRepo.GetByID(parsed); err != nil {
-			writeError(w, http.StatusBadRequest, "credential profile not found")
-			return
-		}
-		sshProfileID = &parsed
-	}
-
 	var areaIDs []uuid.UUID
 	for _, idStr := range req.AreaIDs {
 		if idStr == "" {
@@ -264,7 +248,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
 		deviceType,
 		creds, req.Tags, req.Vendor, metricsSource,
-		prometheusLabelName, prometheusLabelValue, sshProfileID, areaIDs)
+		prometheusLabelName, prometheusLabelValue, areaIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create device", err)
 		return
@@ -392,25 +376,6 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.PrometheusLabelValue != nil {
 		update.PrometheusLabelValue = req.PrometheusLabelValue
-	}
-	if req.SSHProfileID != nil {
-		if *req.SSHProfileID == "" {
-			// Explicitly unassign
-			update.SSHProfileID = new(*uuid.UUID)
-			*update.SSHProfileID = nil
-		} else {
-			parsed, err := uuid.Parse(*req.SSHProfileID)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid ssh_profile_id")
-				return
-			}
-			if _, err := h.credentialProfileRepo.GetByID(parsed); err != nil {
-				writeError(w, http.StatusBadRequest, "credential profile not found")
-				return
-			}
-			update.SSHProfileID = new(*uuid.UUID)
-			*update.SSHProfileID = &parsed
-		}
 	}
 	if req.AreaIDs != nil {
 		var parsedIDs []uuid.UUID
@@ -543,19 +508,6 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		ms := domain.MetricsSource(d.MetricsSource)
-		var batchSSHProfileID *uuid.UUID
-		if d.SSHProfileID != "" {
-			parsed, parseErr := uuid.Parse(d.SSHProfileID)
-			if parseErr != nil {
-				failures = append(failures, batchAddFailure{IP: d.IP, Reason: "invalid ssh_profile_id"})
-				continue
-			}
-			if _, lookupErr := h.credentialProfileRepo.GetByID(parsed); lookupErr != nil {
-				failures = append(failures, batchAddFailure{IP: d.IP, Reason: "credential profile not found"})
-				continue
-			}
-			batchSSHProfileID = &parsed
-		}
 		batchDeviceType := domain.DeviceType(d.DeviceType)
 		if batchDeviceType == "" {
 			batchDeviceType = domain.DeviceTypeUnknown
@@ -563,7 +515,7 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.svc.AddDevice(r.Context(), d.IP, d.Hostname,
 			batchDeviceType,
 			creds, d.Tags, d.Vendor, ms,
-			d.PrometheusLabelName, d.PrometheusLabelValue, batchSSHProfileID, nil); err != nil {
+			d.PrometheusLabelName, d.PrometheusLabelValue, nil); err != nil {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 		}
 	}
@@ -603,9 +555,6 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 		"updated_at":             d.UpdatedAt,
 	}
 
-	if d.SSHProfileID != nil {
-		attrs["ssh_profile_id"] = d.SSHProfileID.String()
-	}
 	areaIDStrs := make([]string, 0, len(d.AreaIDs))
 	for _, aid := range d.AreaIDs {
 		areaIDStrs = append(areaIDStrs, aid.String())

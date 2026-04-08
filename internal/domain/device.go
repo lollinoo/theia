@@ -97,7 +97,6 @@ type Device struct {
 	Managed              bool              `json:"managed"` // true=user-added, false=discovered placeholder
 	Tags                 map[string]string `json:"tags"`
 	Interfaces           []Interface       `json:"interfaces"`
-	SSHProfileID         *uuid.UUID        `json:"ssh_profile_id,omitempty"`
 	AreaIDs              []uuid.UUID       `json:"area_ids"`
 	MetricsSource        MetricsSource     `json:"metrics_source"`
 	PrometheusLabelName  string            `json:"prometheus_label_name"`
