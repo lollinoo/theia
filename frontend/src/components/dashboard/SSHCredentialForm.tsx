@@ -3,7 +3,8 @@ import type { CredentialProfile } from '../../types/api';
 import {
   fetchCredentialProfiles,
   createCredentialProfile,
-  updateDevice,
+  assignCredentialProfile,
+  unassignCredentialProfile,
   testSSHConnection,
 } from '../../api/client';
 
@@ -62,9 +63,18 @@ export function SSHCredentialForm({ deviceId, currentProfileId, onProfileChanged
     setSaving(true);
     setMessage('');
     try {
-      await updateDevice(deviceId, {
-        ssh_profile_id: selectedProfileId || '',
-      });
+      // Use the dedicated credential profile assignment API (T-27-07 mitigation:
+      // avoids exposing profile IDs via updateDevice request logs).
+      if (selectedProfileId) {
+        // Unassign previous profile first if one was set
+        if (currentProfileId) {
+          await unassignCredentialProfile(deviceId, currentProfileId);
+        }
+        await assignCredentialProfile(deviceId, selectedProfileId);
+      } else if (currentProfileId) {
+        // Unassign — no new profile selected
+        await unassignCredentialProfile(deviceId, currentProfileId);
+      }
       onProfileChanged?.(selectedProfileId || undefined);
       setMessage(hasProfile ? 'SSH profile assigned' : 'SSH profile unassigned');
     } catch (err) {

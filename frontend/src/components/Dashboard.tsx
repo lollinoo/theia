@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Device, Area } from '../types/api';
 import type { SnapshotPayload } from '../types/metrics';
 import { DeviceTable } from './dashboard/DeviceTable';
@@ -37,15 +37,10 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
   // Per-device WinBox profile status (true = has a WinBox-designated profile)
   const [deviceWinboxMap, setDeviceWinboxMap] = useState<Record<string, boolean>>({});
 
-  // Local overrides for ssh_profile_id (survives panel close/reopen until devices prop refreshes)
-  const [sshOverrides, setSSHOverrides] = useState<Record<string, string | undefined>>({});
-
-  const applyOverrides = useCallback((device: Device): Device => {
-    if (device.id in sshOverrides) {
-      return { ...device, ssh_profile_id: sshOverrides[device.id] };
-    }
-    return device;
-  }, [sshOverrides]);
+  // Current credential profile ID for the open ssh-credentials panel.
+  // Fetched via fetchDeviceCredentialProfiles when the panel opens (Option A: live source of truth
+  // after ssh_profile_id removal — avoids stale field dependency).
+  const [sshPanelProfileId, setSSHPanelProfileId] = useState<string | undefined>(undefined);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -240,7 +235,18 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
             areaMap={areaMap}
             resolvedTheme={resolvedTheme}
             snapshot={snapshot}
-            onSSHCredentials={(device) => setPanel({ kind: 'ssh-credentials', device: applyOverrides(device) })}
+            onSSHCredentials={(device) => {
+              // Fetch current credential profile assignment when opening the panel
+              // (Option A: live source of truth after ssh_profile_id removal)
+              setSSHPanelProfileId(undefined);
+              setPanel({ kind: 'ssh-credentials', device });
+              void fetchDeviceCredentialProfiles(device.id).then((profiles) => {
+                // Use first non-WinBox profile as the "current" SSH profile, matching
+                // GetBackupProfileForDevice ordering (is_winbox ASC).
+                const nonWinbox = profiles.find((p) => !p.is_winbox);
+                setSSHPanelProfileId(nonWinbox?.profile_id);
+              }).catch(() => {/* non-fatal — panel starts with no selection */});
+            }}
             onBackup={(device) => setPanel({ kind: 'backup', device })}
             onBackupHistory={(device) => setPanel({ kind: 'backup-history', device })}
             onViewConfig={(device) => setPanel({ kind: 'config-viewer', device })}
@@ -260,10 +266,10 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
         {panel?.kind === 'ssh-credentials' && (
           <SSHCredentialForm
             deviceId={panel.device.id}
-            currentProfileId={panel.device.ssh_profile_id}
+            currentProfileId={sshPanelProfileId}
             onProfileChanged={(profileId) => {
-              setSSHOverrides((prev) => ({ ...prev, [panel.device.id]: profileId }));
-              setPanel({ kind: 'ssh-credentials', device: { ...panel.device, ssh_profile_id: profileId } });
+              // Update local panel profile state so Save/Test reflect the new assignment
+              setSSHPanelProfileId(profileId);
             }}
           />
         )}

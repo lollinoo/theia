@@ -45,7 +45,6 @@ export interface Device {
   managed: boolean;
   tags?: Record<string, string>;
   interfaces: DeviceInterface[];
-  ssh_profile_id?: string;
   area_ids: string[];
   backup_supported: boolean;
   metrics_source: MetricsSource;
@@ -182,7 +181,6 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       managed: readBoolean(attributes, 'managed', true),
       tags,
       interfaces: interfacesData.map(parseDeviceInterface),
-      ssh_profile_id: typeof attributes.ssh_profile_id === 'string' ? attributes.ssh_profile_id : undefined,
       area_ids: Array.isArray(attributes.area_ids) ? (attributes.area_ids as string[]) : [],
       backup_supported: readBoolean(attributes, 'backup_supported', false),
       metrics_source: metricsSource,

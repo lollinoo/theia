@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { Area, CredentialProfile, Device } from '../types/api';
-import { deleteDevice, fetchAreas, fetchCredentialProfiles, updateDevice } from '../api/client';
+import type { Area, Device } from '../types/api';
+import { deleteDevice, fetchAreas, updateDevice } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
 
 interface BulkEditPanelProps {
@@ -22,11 +22,9 @@ function commonValue<T>(devices: Device[], extract: (d: Device) => T): T | 'mixe
 
 export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: BulkEditPanelProps) {
   const [areas, setAreas] = useState<Area[]>([]);
-  const [sshProfiles, setSSHProfiles] = useState<CredentialProfile[]>([]);
 
   // Bulk field state -- undefined means "no change"
   const [areaIds, setAreaIds] = useState<string[] | undefined>(undefined);
-  const [sshProfileId, setSSHProfileId] = useState<string | undefined>(undefined);
   const [metricsSource, setMetricsSource] = useState<string | undefined>(undefined);
   const [vendor, setVendor] = useState<string | undefined>(undefined);
 
@@ -41,22 +39,19 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
   // Load reference data
   useEffect(() => {
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
-    fetchCredentialProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
   }, []);
 
   // Compute current common values for display
   const commonAreaIds = commonValue(devices, (d) => [...(d.area_ids ?? [])].sort());
-  const commonSSHProfileId = commonValue(devices, (d) => d.ssh_profile_id ?? '');
   const commonMetricsSource = commonValue(devices, (d) => d.metrics_source || 'snmp');
   const commonVendor = commonValue(devices, (d) => d.vendor || '');
 
   // The effective values shown in the UI: user override or current common
   const displayAreaIds = areaIds ?? (commonAreaIds === 'mixed' ? [] : commonAreaIds);
-  const displaySSHProfileId = sshProfileId ?? (commonSSHProfileId === 'mixed' ? '' : commonSSHProfileId);
   const displayMetricsSource = metricsSource ?? (commonMetricsSource === 'mixed' ? '' : commonMetricsSource);
   const displayVendor = vendor ?? (commonVendor === 'mixed' ? '' : commonVendor);
 
-  const hasChanges = areaIds !== undefined || sshProfileId !== undefined || metricsSource !== undefined || vendor !== undefined;
+  const hasChanges = areaIds !== undefined || metricsSource !== undefined || vendor !== undefined;
 
   async function handleSave() {
     if (!hasChanges) return;
@@ -65,18 +60,11 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
     setSaved(false);
 
     try {
-      const payload: Record<string, unknown> = {};
-      if (areaIds !== undefined) payload.area_ids = areaIds;
-      if (sshProfileId !== undefined) payload.ssh_profile_id = sshProfileId;
-      if (metricsSource !== undefined) payload.metrics_source = metricsSource;
-      if (vendor !== undefined) payload.vendor = vendor;
-
       const results = await Promise.allSettled(
         devices.map((d) =>
           updateDevice(d.id, {
             hostname: d.hostname,
             ...(areaIds !== undefined ? { area_ids: areaIds } : {}),
-            ...(sshProfileId !== undefined ? { ssh_profile_id: sshProfileId } : {}),
             ...(metricsSource !== undefined ? { metrics_source: metricsSource } : {}),
             ...(vendor !== undefined ? { vendor: vendor || undefined } : {}),
           }),
@@ -114,7 +102,6 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
         setSaved(true);
         // Reset change tracking
         setAreaIds(undefined);
-        setSSHProfileId(undefined);
         setMetricsSource(undefined);
         setVendor(undefined);
         setTimeout(() => setSaved(false), 2000);
@@ -249,28 +236,6 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
           <option value="mikrotik">MikroTik</option>
         </select>
       </div>
-
-      {/* SSH Profile */}
-      {sshProfiles.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">SSH Profile</p>
-            {commonSSHProfileId === 'mixed' && sshProfileId === undefined && (
-              <span className="text-xs text-on-bg-muted italic">Mixed</span>
-            )}
-          </div>
-          <select
-            value={displaySSHProfileId}
-            onChange={(e) => setSSHProfileId(e.target.value)}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-          >
-            <option value="">-- No SSH Profile --</option>
-            {sshProfiles.map((p) => (
-              <option key={p.id} value={p.id}>{p.name} ({p.username}:{p.port})</option>
-            ))}
-          </select>
-        </div>
-      )}
 
       {/* Metrics Source */}
       <div className="space-y-2">

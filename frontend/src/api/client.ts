@@ -193,7 +193,6 @@ export interface CreateDevicePayload {
   metrics_source?: string;
   prometheus_label_name?: string;
   prometheus_label_value?: string;
-  ssh_profile_id?: string;
   area_ids?: string[];
 }
 
@@ -222,7 +221,6 @@ export async function updateDevice(
     metrics_source: string;
     prometheus_label_name: string;
     prometheus_label_value: string;
-    ssh_profile_id: string;
     area_ids: string[];
   }>,
 ): Promise<Device> {
