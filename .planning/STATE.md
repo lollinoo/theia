@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
-status: verifying
-stopped_at: Completed 26-02-PLAN.md
-last_updated: "2026-04-08T12:07:58.635Z"
+status: in_progress
+stopped_at: Phase 26 verification complete — ready for Phase 27
+last_updated: "2026-04-08T12:10:00.000Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 10
   completed_plans: 10
-  percent: 100
+  percent: 80
 ---
 
 # State: MikroTik Theia
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, drill into Grafana for deep dives, and manage devices directly — all from a single interactive map.
-**Current focus:** Phase 24 — backend-api-profiles-assignments-winbox-credentials
+**Current focus:** Phase 27 — Schema Cleanup — Drop Legacy FK
 
 ## Current Position
 
-Phase: 25 (frontend-credential-profile-manager-winbox-actions) — COMPLETE
-Plan: 3 of 3
-Status: Phase complete — ready for verification
+Phase: 26 (winbox-bridge-binary) — COMPLETE (verified 2026-04-08)
+Plan: 2 of 2
+Status: Phase verified complete — ready for Phase 27
 Last activity: 2026-04-08
 
 ```
@@ -37,7 +37,7 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 ## Performance Metrics
 
 - Phases complete (v1.5.0): 4/5
-- Plans complete (v1.5.0): 11/11
+- Plans complete (v1.5.0): 10/10
 - Requirements mapped: 14/14
 
 ## Decisions
@@ -64,8 +64,8 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 - EncryptedSecret has json:"-" tag — never exposed in API responses (T-23-01 mitigated)
 - BackupService and other files still reference domain.SSHProfile — will be updated in 23-02
 - WinBox CLI arg format: `winbox <address> <username> <password>`
-- Bridge port: localhost:1337 (provisional — confirm during planning)
-- Bridge binary: CGO-free, 6 targets (Windows/Linux/macOS x amd64/arm64)
+- Bridge port: localhost:1337 (confirmed)
+- Bridge binary: CGO-free, 6 targets (Windows/Linux/macOS x amd64/arm64) — BUILT AND VERIFIED
 - Bridge security: validate both Origin AND Host headers from day one (DNS rebinding protection)
 - Bridge is hardcoded to WinBox only — no arbitrary process execution
 - device_credential_profiles join table replaces direct ssh_profile_id FK on devices
@@ -73,5 +73,5 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 
 ## Session Continuity
 
-Stopped at: Completed 26-02-PLAN.md
-To resume: /gsd-execute-phase 26 (or check ROADMAP.md for remaining phases in v1.5.0)
+Stopped at: Phase 26 verification complete
+To resume: /gsd-execute-phase 27 (Schema Cleanup — Drop Legacy FK)
