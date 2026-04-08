@@ -143,6 +143,22 @@ Plans:
 - [x] 27-01-PLAN.md — Migration 000014 + Go backend cleanup (domain, repo, service, handler)
 - [x] 27-02-PLAN.md — Frontend cleanup (types, API client, components)
 
+### Phase 28: API call optimization (especially WebSocket payload optimization for /api/v1/ws endpoint) — delta payloads and batching for 77+ device scale
+**Goal**: WebSocket broadcasts send only changed entries via hash-based delta detection, reducing payload size from ~55KB to only modified device data per cycle
+**Depends on:** Phase 27
+**Requirements**: Performance improvement (no formal requirement IDs)
+**Success Criteria** (what must be TRUE):
+  1. After a collection cycle where no data changed, no WebSocket broadcast is sent
+  2. After a collection cycle where some devices changed, only changed entries appear in the delta
+  3. First connect and reconnects continue to receive a full snapshot (no behavior change)
+  4. Frontend deep-merges delta payloads into existing state; full snapshots replace entire state
+  5. All 5 sections are diffed: device_metrics, link_metrics, device_statuses, device_hostnames, alerts
+**Plans:** 2 plans
+
+Plans:
+- [ ] 28-01-PLAN.md — Backend hash-based delta detection in MetricsCollector + MessageTypeSnapshotDelta constant
+- [ ] 28-02-PLAN.md — Frontend snapshot_delta type, mergeSnapshotDelta function, useWebSocket delta handler
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -174,3 +190,4 @@ Plans:
 | 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete   | 2026-04-08 |
 | 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
+| 28. API call optimization — WS delta payloads | v1.5.0 | 0/2 | Planned | — |
