@@ -168,12 +168,14 @@ func securityCheck(allowedOrigin string, expectedHost string, next http.Handler)
 // --- Route handlers ---
 
 // handleHealth handles GET /health (D-12).
-// Returns 200 {"ok":true}. Subject to Origin+Host validation via securityCheck.
+// Public endpoint — no Origin/Host check. Returns Access-Control-Allow-Origin: *
+// so any Theia instance can poll bridge status regardless of its own origin.
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -218,11 +220,13 @@ func handleLaunch(winboxPath string) http.HandlerFunc {
 
 // --- Mux builder (extracted for testability) ---
 
-// buildMux creates the http.ServeMux with /health and /launch routes.
-func buildMux(winboxPath string) *http.ServeMux {
+// buildMux creates the http.Handler with per-route security:
+// /health is public (no auth — any origin may poll bridge status).
+// /launch is protected by securityCheck (CSRF guard for sensitive launch action).
+func buildMux(winboxPath, allowedOrigin, expectedHost string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/launch", handleLaunch(winboxPath))
+	mux.Handle("/launch", securityCheck(allowedOrigin, expectedHost, handleLaunch(winboxPath)))
 	return mux
 }
 

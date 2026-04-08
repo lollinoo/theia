@@ -29,9 +29,8 @@ func (m *ServerManager) Start(cfg Config) error {
 		return nil // already running — no-op
 	}
 	winboxPath := discoverWinBox(cfg.WinBoxPath)
-	mux := buildMux(winboxPath)
 	expectedHost := fmt.Sprintf("localhost:%d", cfg.ListenPort)
-	handler := securityCheck(cfg.TheiaOrigin, expectedHost, mux)
+	handler := buildMux(winboxPath, cfg.TheiaOrigin, expectedHost)
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.ListenPort),
 		Handler: handler,

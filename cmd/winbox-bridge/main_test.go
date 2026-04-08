@@ -37,11 +37,10 @@ func makeRequest(t *testing.T, method, path string, body interface{}, origin, ho
 	return req
 }
 
-// buildHandler constructs the full handler chain (security + mux) for testing.
-// expectedHost is the Host header value required by securityCheck (e.g. "localhost:1337").
+// buildHandler constructs the full handler chain for testing.
+// /health is public; /launch is protected by securityCheck.
 func buildHandler(theiaOrigin string, winboxPath string, expectedHost string) http.Handler {
-	mux := buildMux(winboxPath)
-	return securityCheck(theiaOrigin, expectedHost, mux)
+	return buildMux(winboxPath, theiaOrigin, expectedHost)
 }
 
 // --- Security: Origin validation ---
@@ -56,24 +55,25 @@ func TestOriginValidation_ValidOriginPasses(t *testing.T) {
 	}
 }
 
-func TestOriginValidation_EvilOriginReturns403(t *testing.T) {
+func TestOriginValidation_HealthPublicWithAnyOrigin(t *testing.T) {
+	// /health is public — evil origin still gets 200 (no CSRF risk on a read-only status check)
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "http://evil.com", "localhost:1337")
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("expected 403 got %d", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 got %d", rr.Code)
 	}
-	assertJSONError(t, rr, "forbidden")
 }
 
-func TestOriginValidation_MissingOriginReturns403(t *testing.T) {
+func TestOriginValidation_HealthPublicWithoutOrigin(t *testing.T) {
+	// /health is public — no Origin header still gets 200 (browser fetch without CORS header works)
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "", "localhost:1337")
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("expected 403 got %d", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 got %d", rr.Code)
 	}
 }
 
@@ -91,10 +91,13 @@ func TestOriginValidation_EvilOriginOnLaunchReturns403(t *testing.T) {
 
 // --- Security: Host validation ---
 
-func TestHostValidation_EvilHostReturns403(t *testing.T) {
+func TestHostValidation_EvilHostOnLaunchReturns403(t *testing.T) {
+	// /launch requires valid Host; /health is public and does not check Host
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
-	req := makeRequest(t, http.MethodGet, "/health", nil, "http://localhost:3000", "evil.com:1337")
+	req := makeRequest(t, http.MethodPost, "/launch",
+		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
+		"http://localhost:3000", "evil.com:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("expected 403 got %d for host evil.com:1337", rr.Code)
@@ -111,11 +114,13 @@ func TestHostValidation_ValidHostPasses(t *testing.T) {
 	}
 }
 
-func TestHostValidation_IPHostReturns403(t *testing.T) {
-	// Strict match on "localhost:1337" only — 127.0.0.1:1337 should fail
+func TestHostValidation_IPHostOnLaunchReturns403(t *testing.T) {
+	// /launch: strict match on "localhost:1337" only — 127.0.0.1:1337 should fail
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
-	req := makeRequest(t, http.MethodGet, "/health", nil, "http://localhost:3000", "127.0.0.1:1337")
+	req := makeRequest(t, http.MethodPost, "/launch",
+		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
+		"http://localhost:3000", "127.0.0.1:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("expected 403 got %d for host 127.0.0.1:1337", rr.Code)
@@ -306,17 +311,18 @@ func TestCORSPreflight_OptionsLaunchReturns204(t *testing.T) {
 	}
 }
 
-func TestCORSPreflight_OptionsHealthReturns204(t *testing.T) {
+func TestHealth_ReturnsCORSWildcard(t *testing.T) {
+	// /health is a simple GET — no preflight needed. ACAO: * lets any origin read the response.
 	h := buildHandler("http://localhost:3000", "", "localhost:1337")
 	rr := httptest.NewRecorder()
-	req := makeRequest(t, http.MethodOptions, "/health", nil, "http://localhost:3000", "localhost:1337")
+	req := makeRequest(t, http.MethodGet, "/health", nil, "", "localhost:1337")
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNoContent {
-		t.Errorf("expected 204 got %d", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 got %d", rr.Code)
 	}
 	acao := rr.Header().Get("Access-Control-Allow-Origin")
-	if acao != "http://localhost:3000" {
-		t.Errorf("expected ACAO=http://localhost:3000, got %q", acao)
+	if acao != "*" {
+		t.Errorf("expected ACAO=*, got %q", acao)
 	}
 }
 
