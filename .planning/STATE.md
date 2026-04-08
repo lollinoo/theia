@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
-status: verifying
-stopped_at: Completed 27-02-PLAN.md
-last_updated: "2026-04-08T13:11:10.711Z"
-last_activity: 2026-04-08
+status: complete
+stopped_at: Phase 28 complete — all v1.5.0 phases done
+last_updated: "2026-04-08T16:00:00.000Z"
+last_activity: 2026-04-08 -- Phase 28 complete (WebSocket delta payload optimization)
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 12
-  completed_plans: 12
+  total_phases: 6
+  completed_phases: 6
+  total_plans: 14
+  completed_plans: 14
   percent: 100
 ---
 
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, drill into Grafana for deep dives, and manage devices directly — all from a single interactive map.
-**Current focus:** Phase 27 — schema-cleanup-drop-legacy-fk
+**Current focus:** v1.5.0 WinBox Integration — all phases complete ✓
 
 ## Current Position
 
-Phase: 27 (schema-cleanup-drop-legacy-fk) — EXECUTING
+Phase: 28 (api-call-optimization-especially-websocket-payload-optimizat) — COMPLETE
 Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-04-08
+Status: All phases complete — ready for milestone completion
+Last activity: 2026-04-08 -- Phase 28 complete (WebSocket delta payload optimization)
 
 ```
-v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
+v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 ```
 
 ## Performance Metrics
 
-- Phases complete (v1.5.0): 4/5
-- Plans complete (v1.5.0): 10/10
+- Phases complete (v1.5.0): 6/6
+- Plans complete (v1.5.0): 14/14
 - Requirements mapped: 14/14
 
 ## Decisions
@@ -60,6 +60,10 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 28 added: API call optimization (especially WebSocket payload optimization for /api/v1/ws endpoint) — delta payloads and batching for 77+ device scale
+
 - Phase numbering continues from v1.4.0; last phase was 22, v1.5.0 starts at Phase 23
 - ssh_profiles table renamed to credential_profiles (migration 000012 applied on startup)
 - credential_profiles has role column (DEFAULT 'Admin') — all existing SSH profiles get 'Admin' role
@@ -77,5 +81,5 @@ v1.5.0 Progress: [████████░░] 80% phases (4/5 complete)
 
 ## Session Continuity
 
-Stopped at: Completed 27-02-PLAN.md
+Stopped at: Phase 28 context gathered (discuss mode)
 To resume: /gsd-execute-phase 27 (Schema Cleanup — Drop Legacy FK)
