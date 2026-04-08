@@ -38,15 +38,16 @@ func makeRequest(t *testing.T, method, path string, body interface{}, origin, ho
 }
 
 // buildHandler constructs the full handler chain (security + mux) for testing.
-func buildHandler(theiaOrigin string, winboxPath string) http.Handler {
+// expectedHost is the Host header value required by securityCheck (e.g. "localhost:1337").
+func buildHandler(theiaOrigin string, winboxPath string, expectedHost string) http.Handler {
 	mux := buildMux(winboxPath)
-	return securityCheck(theiaOrigin, mux)
+	return securityCheck(theiaOrigin, expectedHost, mux)
 }
 
 // --- Security: Origin validation ---
 
 func TestOriginValidation_ValidOriginPasses(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
@@ -56,7 +57,7 @@ func TestOriginValidation_ValidOriginPasses(t *testing.T) {
 }
 
 func TestOriginValidation_EvilOriginReturns403(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "http://evil.com", "localhost:1337")
 	h.ServeHTTP(rr, req)
@@ -67,7 +68,7 @@ func TestOriginValidation_EvilOriginReturns403(t *testing.T) {
 }
 
 func TestOriginValidation_MissingOriginReturns403(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "", "localhost:1337")
 	h.ServeHTTP(rr, req)
@@ -77,7 +78,7 @@ func TestOriginValidation_MissingOriginReturns403(t *testing.T) {
 }
 
 func TestOriginValidation_EvilOriginOnLaunchReturns403(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
 		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
@@ -91,7 +92,7 @@ func TestOriginValidation_EvilOriginOnLaunchReturns403(t *testing.T) {
 // --- Security: Host validation ---
 
 func TestHostValidation_EvilHostReturns403(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "http://localhost:3000", "evil.com:1337")
 	h.ServeHTTP(rr, req)
@@ -101,7 +102,7 @@ func TestHostValidation_EvilHostReturns403(t *testing.T) {
 }
 
 func TestHostValidation_ValidHostPasses(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
@@ -112,7 +113,7 @@ func TestHostValidation_ValidHostPasses(t *testing.T) {
 
 func TestHostValidation_IPHostReturns403(t *testing.T) {
 	// Strict match on "localhost:1337" only — 127.0.0.1:1337 should fail
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "http://localhost:3000", "127.0.0.1:1337")
 	h.ServeHTTP(rr, req)
@@ -124,7 +125,7 @@ func TestHostValidation_IPHostReturns403(t *testing.T) {
 // --- Health endpoint ---
 
 func TestHealth_GETReturns200OkTrue(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "")
+	h := buildHandler("http://localhost:3000", "", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/health", nil, "http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
@@ -141,7 +142,7 @@ func TestHealth_GETReturns200OkTrue(t *testing.T) {
 }
 
 func TestHealth_POSTReturns405(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "")
+	h := buildHandler("http://localhost:3000", "", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/health", nil, "http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
@@ -160,7 +161,7 @@ func TestLaunch_ValidRequestReturns200(t *testing.T) {
 		return nil
 	}
 
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
 		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass123"},
@@ -179,7 +180,7 @@ func TestLaunch_ValidRequestReturns200(t *testing.T) {
 }
 
 func TestLaunch_EmptyIPReturns400(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
 		map[string]string{"ip": "", "username": "admin", "password": "pass"},
@@ -191,7 +192,7 @@ func TestLaunch_EmptyIPReturns400(t *testing.T) {
 }
 
 func TestLaunch_EmptyUsernameReturns400(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
 		map[string]string{"ip": "192.168.1.1", "username": "", "password": "pass"},
@@ -203,7 +204,7 @@ func TestLaunch_EmptyUsernameReturns400(t *testing.T) {
 }
 
 func TestLaunch_EmptyPasswordReturns400(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
 		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": ""},
@@ -216,7 +217,7 @@ func TestLaunch_EmptyPasswordReturns400(t *testing.T) {
 
 func TestLaunch_WinBoxNotFoundReturns503(t *testing.T) {
 	// winboxPath is empty — WinBox not found
-	h := buildHandler("http://localhost:3000", "")
+	h := buildHandler("http://localhost:3000", "", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
 		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
@@ -235,7 +236,7 @@ func TestLaunch_StartProcessFailReturns500(t *testing.T) {
 		return &mockProcessError{"simulated start failure"}
 	}
 
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
 		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
@@ -248,7 +249,7 @@ func TestLaunch_StartProcessFailReturns500(t *testing.T) {
 }
 
 func TestLaunch_GETReturns405(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodGet, "/launch", nil, "http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
@@ -269,7 +270,7 @@ func TestLaunch_ExtraExecutableFieldIgnored(t *testing.T) {
 		return nil
 	}
 
-	h := buildHandler("http://localhost:3000", "/fake/winbox")
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 
 	// Manually create JSON with extra field
@@ -292,7 +293,7 @@ func TestLaunch_ExtraExecutableFieldIgnored(t *testing.T) {
 // --- CORS preflight ---
 
 func TestCORSPreflight_OptionsLaunchReturns204(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "")
+	h := buildHandler("http://localhost:3000", "", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodOptions, "/launch", nil, "http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
@@ -306,7 +307,7 @@ func TestCORSPreflight_OptionsLaunchReturns204(t *testing.T) {
 }
 
 func TestCORSPreflight_OptionsHealthReturns204(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "")
+	h := buildHandler("http://localhost:3000", "", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodOptions, "/health", nil, "http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)

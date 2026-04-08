@@ -1,17 +1,18 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
-	"time"
 )
 
 // --- Request / response types ---
@@ -129,9 +130,11 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // --- Security middleware ---
 
 // securityCheck validates Origin and Host headers on every request (D-04, D-05, D-06, D-07).
+// expectedHost is the required value for the Host header (e.g. "localhost:1337").
+// Using a parameter instead of a hardcoded value allows dynamic port configuration (T-29-04).
 // CORS preflight (OPTIONS) that passes validation is handled here with proper CORS headers.
 // Non-OPTIONS requests that pass validation also get the ACAO header set.
-func securityCheck(allowedOrigin string, next http.Handler) http.Handler {
+func securityCheck(allowedOrigin string, expectedHost string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin == "" || origin != allowedOrigin {
@@ -140,7 +143,7 @@ func securityCheck(allowedOrigin string, next http.Handler) http.Handler {
 		}
 
 		host := r.Host
-		if host != "localhost:1337" {
+		if host != expectedHost {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
@@ -221,49 +224,87 @@ func buildMux(winboxPath string) *http.ServeMux {
 	return mux
 }
 
+// --- Helpers ---
+
+// parsePort extracts a port number from an address string.
+// Accepts ":1337", "0.0.0.0:1337", or plain "1337".
+// Returns 1337 if parsing fails.
+func parsePort(addr string) int {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Try as a plain port number
+		if p, err := strconv.Atoi(addr); err == nil {
+			return p
+		}
+		return 1337
+	}
+	p, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 1337
+	}
+	return p
+}
+
 // --- main ---
 
 func main() {
-	theiaOrigin := flag.String("theia-origin", "http://localhost:3000",
-		"Accepted Theia frontend origin (Origin header must match exactly)")
+	// CLI flags — still supported for headless/scripted use and backward compatibility.
+	theiaOriginFlag := flag.String("theia-origin", "",
+		"Accepted Theia frontend origin (overrides config file)")
 	winboxPathFlag := flag.String("winbox-path", "",
-		"Path to WinBox executable (overrides auto-discovery)")
-	listenAddr := flag.String("listen", ":1337",
-		"Address to listen on (default :1337)")
+		"Path to WinBox executable (overrides config file and auto-discovery)")
+	listenFlag := flag.String("listen", "",
+		"Address to listen on, e.g. :1337 (overrides config file)")
+	noTray := flag.Bool("no-tray", false,
+		"Run in headless mode without system tray (for servers without a display)")
 	flag.Parse()
 
-	winboxPath := discoverWinBox(*winboxPathFlag)
-
-	log.Printf("winbox-bridge starting on %s (origin=%s winbox=%s)", *listenAddr, *theiaOrigin, winboxPath)
-	if winboxPath == "" {
-		log.Println("WARNING: WinBox executable not found — /launch will return 503. Use --winbox-path to specify.")
+	// Load persistent config — falls back to defaults if missing (first run).
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Printf("winbox-bridge: config load warning: %v (using defaults)", err)
 	}
 
-	mux := buildMux(winboxPath)
-	handler := securityCheck(*theiaOrigin, mux)
-
-	server := &http.Server{
-		Addr:    *listenAddr,
-		Handler: handler,
+	// CLI flag overrides — flags set to non-empty values win over config file.
+	if *theiaOriginFlag != "" {
+		cfg.TheiaOrigin = *theiaOriginFlag
+	}
+	if *winboxPathFlag != "" {
+		cfg.WinBoxPath = *winboxPathFlag
+	}
+	if *listenFlag != "" {
+		cfg.ListenPort = parsePort(*listenFlag)
 	}
 
-	// Graceful shutdown on SIGINT/SIGTERM (same pattern as cmd/theia/main.go)
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	mgr := &ServerManager{}
 
-	go func() {
+	// headless path: start server, block on signal, stop
+	runHeadless := func() {
+		if err := mgr.Start(cfg); err != nil {
+			log.Fatalf("winbox-bridge: failed to start server: %v", err)
+		}
+		log.Printf("winbox-bridge: started on :%d (origin=%s)", cfg.ListenPort, cfg.TheiaOrigin)
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		sig := <-sigCh
 		log.Printf("winbox-bridge: received signal %s, shutting down...", sig)
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		if err := mgr.Stop(); err != nil {
 			log.Printf("winbox-bridge: shutdown error: %v", err)
 		}
-	}()
-
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatalf("winbox-bridge: server error: %v", err)
+		log.Println("winbox-bridge: stopped")
 	}
-	log.Println("winbox-bridge: stopped")
+
+	if *noTray {
+		runHeadless()
+		return
+	}
+
+	// Plan 02 will replace this with systray.Run().
+	// For now, behave identically to --no-tray so the binary is functional.
+	runHeadless()
 }
+
+// Ensure fmt is referenced (used in server.go via securityCheck caller).
+var _ = fmt.Sprintf
 
