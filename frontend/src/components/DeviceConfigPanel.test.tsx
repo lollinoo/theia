@@ -7,7 +7,7 @@ import { ValidationError, ServerError } from '../api/errors';
 // Mock all API calls used in useEffect
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
-  fetchSSHProfiles: vi.fn().mockResolvedValue([]),
+  fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
   fetchAreas: vi.fn().mockResolvedValue([]),
   fetchSettings: vi.fn().mockResolvedValue({}),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),

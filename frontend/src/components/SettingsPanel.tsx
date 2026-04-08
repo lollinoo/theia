@@ -3,7 +3,7 @@ import { fetchSettings, updateSetting, fetchHealthVersion, type HealthVersion } 
 import { validateURL, validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
 import { AreaManager } from './AreaManager';
 import { SNMPProfileManager } from './SNMPProfileManager';
-import { SSHProfileManager } from './SSHProfileManager';
+import { CredentialProfileManager } from './CredentialProfileManager';
 import { InstanceBackupManager } from './InstanceBackupManager';
 
 const TIMEZONES = [
@@ -379,7 +379,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
       </div>
 
       <div className="mt-6">
-        <SSHProfileManager />
+        <CredentialProfileManager />
       </div>
 
       {/* Device Backup section (collapsible, collapsed by default) */}

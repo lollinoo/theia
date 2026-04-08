@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { SSHProfile } from '../types/api';
+import type { CredentialProfile } from '../types/api';
 import {
-  createSSHProfile,
-  deleteSSHProfile,
-  fetchSSHProfiles,
-  updateSSHProfile,
+  createCredentialProfile,
+  deleteCredentialProfile,
+  fetchCredentialProfiles,
+  updateCredentialProfile,
 } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
 import {
@@ -25,6 +25,7 @@ type FormState = {
   port: string;
   authMethod: 'password' | 'key';
   secret: string;
+  role: string;
 };
 
 function emptyForm(): FormState {
@@ -35,10 +36,11 @@ function emptyForm(): FormState {
     port: '22',
     authMethod: 'password',
     secret: '',
+    role: 'Admin',
   };
 }
 
-function profileToForm(p: SSHProfile): FormState {
+function profileToForm(p: CredentialProfile): FormState {
   return {
     name: p.name,
     description: p.description,
@@ -46,6 +48,7 @@ function profileToForm(p: SSHProfile): FormState {
     port: String(p.port),
     authMethod: p.auth_method,
     secret: '',
+    role: p.role,
   };
 }
 
@@ -156,6 +159,17 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
         {fieldErrors['description'] && (
           <p className="mt-1 text-xs text-status-down">{fieldErrors['description']}</p>
         )}
+      </div>
+
+      <div className="space-y-1">
+        <label className={labelClass}>Role</label>
+        <input
+          type="text"
+          value={form.role}
+          onChange={(e) => set('role', e.target.value)}
+          placeholder="e.g. Admin"
+          className={inputClass}
+        />
       </div>
 
       <div className="space-y-1">
@@ -272,11 +286,11 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
   );
 }
 
-export function SSHProfileManager() {
-  const [profiles, setProfiles] = useState<SSHProfile[]>([]);
+export function CredentialProfileManager() {
+  const [profiles, setProfiles] = useState<CredentialProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<'list' | 'create' | 'edit'>('list');
-  const [editing, setEditing] = useState<SSHProfile | null>(null);
+  const [editing, setEditing] = useState<CredentialProfile | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -284,7 +298,7 @@ export function SSHProfileManager() {
   async function load() {
     setLoading(true);
     try {
-      setProfiles(await fetchSSHProfiles());
+      setProfiles(await fetchCredentialProfiles());
     } catch {
       // non-fatal
     } finally {
@@ -302,18 +316,19 @@ export function SSHProfileManager() {
       port: parseInt(form.port, 10) || 22,
       auth_method: form.authMethod,
       secret: form.secret,
+      role: form.role.trim(),
     };
   }
 
   async function handleCreate(form: FormState) {
-    await createSSHProfile(formToPayload(form));
+    await createCredentialProfile(formToPayload(form));
     setMode('list');
     void load();
   }
 
   async function handleUpdate(form: FormState) {
     if (!editing) return;
-    await updateSSHProfile(editing.id, formToPayload(form));
+    await updateCredentialProfile(editing.id, formToPayload(form));
     setMode('list');
     setEditing(null);
     void load();
@@ -323,7 +338,7 @@ export function SSHProfileManager() {
     setDeleteLoading(true);
     setDeleteError(null);
     try {
-      await deleteSSHProfile(id);
+      await deleteCredentialProfile(id);
       setConfirmDeleteId(null);
       void load();
     } catch (err) {
@@ -346,7 +361,7 @@ export function SSHProfileManager() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <p className={labelClass}>New SSH Profile</p>
+          <p className={labelClass}>New Credential Profile</p>
         </div>
         <ProfileForm
           initial={emptyForm()}
@@ -371,7 +386,7 @@ export function SSHProfileManager() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <p className={labelClass}>Edit SSH Profile</p>
+          <p className={labelClass}>Edit Credential Profile</p>
         </div>
         <ProfileForm
           initial={profileToForm(editing)}
@@ -387,7 +402,7 @@ export function SSHProfileManager() {
   return (
     <div className="space-y-3 transition-colors duration-200">
       <div className="flex items-center justify-between">
-        <p className={labelClass}>SSH Profiles</p>
+        <p className={labelClass}>Credential Profiles</p>
         <button
           type="button"
           onClick={() => setMode('create')}
@@ -406,7 +421,7 @@ export function SSHProfileManager() {
 
       {!loading && profiles.length === 0 && (
         <p className="text-xs text-on-bg-secondary">
-          No SSH profiles yet. Create one to reuse credentials across devices.
+          No credential profiles yet. Create one to reuse credentials across devices.
         </p>
       )}
 
@@ -421,6 +436,7 @@ export function SSHProfileManager() {
               {profile.description && (
                 <p className="text-xs text-on-bg-secondary truncate">{profile.description}</p>
               )}
+              {profile.role && <span className="text-xs text-on-bg-secondary">Role: {profile.role}</span>}
               <p className="text-xs text-on-bg-secondary/60 mt-1">
                 {profile.username}:{profile.port} ({profile.auth_method})
               </p>

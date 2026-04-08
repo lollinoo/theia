@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Area, Device, SNMPProfile, SSHProfile } from '../types/api';
-import { checkPrometheusHealth, deleteDevice, fetchAreas, fetchSettings, fetchSNMPProfiles, fetchSSHProfiles, testSNMPConnection, updateDevice, updateSetting } from '../api/client';
+import type { Area, CredentialProfile, Device, SNMPProfile } from '../types/api';
+import { checkPrometheusHealth, deleteDevice, fetchAreas, fetchCredentialProfiles, fetchSettings, fetchSNMPProfiles, testSNMPConnection, updateDevice, updateSetting } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
 import { validateIPOrHostname, validateMaxLength, validateURL, MAX_STRING_LENGTH } from '../utils/validation';
 
@@ -60,7 +60,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
-  const [sshProfiles, setSSHProfiles] = useState<SSHProfile[]>([]);
+  const [sshProfiles, setSSHProfiles] = useState<CredentialProfile[]>([]);
   const [sshProfileId, setSSHProfileId] = useState(device.ssh_profile_id || '');
   const [areas, setAreas] = useState<Area[]>([]);
   const [areaIds, setAreaIds] = useState<string[]>(device.area_ids ?? []);
@@ -96,7 +96,7 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
 
   useEffect(() => {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
-    fetchSSHProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
+    fetchCredentialProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
     checkPrometheusHealth().then((result) => {
       setPrometheusAvailable(result.available);

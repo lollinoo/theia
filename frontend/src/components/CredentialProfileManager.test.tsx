@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { SSHProfileManager } from './SSHProfileManager';
+import { CredentialProfileManager } from './CredentialProfileManager';
 import { ValidationError, ServerError } from '../api/errors';
 
 // Mock API calls
 vi.mock('../api/client', () => ({
-  fetchSSHProfiles: vi.fn().mockResolvedValue([]),
-  createSSHProfile: vi.fn().mockResolvedValue({ id: 'new-ssh', name: 'Test SSH', description: '', username: 'admin', port: 22, auth_method: 'password' }),
-  updateSSHProfile: vi.fn().mockResolvedValue({}),
-  deleteSSHProfile: vi.fn().mockResolvedValue(undefined),
+  fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
+  createCredentialProfile: vi.fn().mockResolvedValue({ id: 'new-cp', name: 'Test Profile', description: '', username: 'admin', port: 22, auth_method: 'password', role: 'Admin' }),
+  updateCredentialProfile: vi.fn().mockResolvedValue({}),
+  deleteCredentialProfile: vi.fn().mockResolvedValue(undefined),
 }));
 
 beforeEach(() => {
@@ -17,7 +17,7 @@ beforeEach(() => {
 
 // Helper: navigate to the create form
 async function renderCreateForm() {
-  render(<SSHProfileManager />);
+  render(<CredentialProfileManager />);
   await waitFor(() => {
     expect(screen.queryByText('Loading profiles...')).not.toBeInTheDocument();
   });
@@ -27,9 +27,9 @@ async function renderCreateForm() {
   });
 }
 
-// --- Gap 4: SSHProfileManager blur+submit validation ---
+// --- CredentialProfileManager blur+submit validation ---
 
-describe('SSHProfileManager ProfileForm — name required validation', () => {
+describe('CredentialProfileManager ProfileForm — name required validation', () => {
   it('shows error text when name field is blurred while empty', async () => {
     await renderCreateForm();
 
@@ -55,7 +55,16 @@ describe('SSHProfileManager ProfileForm — name required validation', () => {
   });
 });
 
-describe('SSHProfileManager ProfileForm — username required validation', () => {
+describe('CredentialProfileManager ProfileForm — role field default value', () => {
+  it('role field renders with default value Admin when creating a new profile', async () => {
+    await renderCreateForm();
+
+    const roleInput = screen.getByPlaceholderText('e.g. Admin');
+    expect((roleInput as HTMLInputElement).value).toBe('Admin');
+  });
+});
+
+describe('CredentialProfileManager ProfileForm — username required validation', () => {
   it('shows error text when username is cleared and blurred', async () => {
     await renderCreateForm();
 
@@ -69,7 +78,7 @@ describe('SSHProfileManager ProfileForm — username required validation', () =>
   });
 });
 
-describe('SSHProfileManager ProfileForm — port range validation', () => {
+describe('CredentialProfileManager ProfileForm — port range validation', () => {
   it('shows error text when port 0 is blurred (below range)', async () => {
     await renderCreateForm();
 
@@ -106,14 +115,14 @@ describe('SSHProfileManager ProfileForm — port range validation', () => {
   });
 });
 
-describe('SSHProfileManager ProfileForm — secret required on create', () => {
+describe('CredentialProfileManager ProfileForm — secret required on create', () => {
   it('shows password required error when secret is empty on submit', async () => {
-    const { createSSHProfile } = await import('../api/client');
+    const { createCredentialProfile } = await import('../api/client');
     await renderCreateForm();
 
     // Fill required name and username (already defaulted)
     fireEvent.change(screen.getByPlaceholderText('e.g. MikroTik Admin'), {
-      target: { value: 'My SSH Profile' },
+      target: { value: 'My Credential Profile' },
     });
     // Leave password blank and submit
     fireEvent.click(screen.getByText('Create Profile'));
@@ -121,16 +130,16 @@ describe('SSHProfileManager ProfileForm — secret required on create', () => {
     await waitFor(() => {
       expect(screen.getByText('Password is required')).toBeInTheDocument();
     });
-    expect(createSSHProfile).not.toHaveBeenCalled();
+    expect(createCredentialProfile).not.toHaveBeenCalled();
   });
 
   it('does not require secret when isEdit=true (edit mode)', async () => {
-    const { fetchSSHProfiles } = await import('../api/client');
-    (fetchSSHProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { id: 'ssh-1', name: 'Existing Profile', description: '', username: 'admin', port: 22, auth_method: 'password' as const },
+    const { fetchCredentialProfiles } = await import('../api/client');
+    (fetchCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { id: 'cp-1', name: 'Existing Profile', description: '', username: 'admin', port: 22, auth_method: 'password' as const, role: 'Admin' },
     ]);
 
-    render(<SSHProfileManager />);
+    render(<CredentialProfileManager />);
     await waitFor(() => {
       expect(screen.getByText('Existing Profile')).toBeInTheDocument();
     });
@@ -147,7 +156,7 @@ describe('SSHProfileManager ProfileForm — secret required on create', () => {
   });
 });
 
-describe('SSHProfileManager ProfileForm — field errors clear on user edit', () => {
+describe('CredentialProfileManager ProfileForm — field errors clear on user edit', () => {
   it('clears name error when user types in the name field', async () => {
     await renderCreateForm();
 
@@ -167,17 +176,17 @@ describe('SSHProfileManager ProfileForm — field errors clear on user edit', ()
   });
 });
 
-describe('SSHProfileManager ProfileForm — backend typed error display', () => {
-  it('shows ServerError ref message when createSSHProfile throws ServerError', async () => {
-    const { createSSHProfile } = await import('../api/client');
-    (createSSHProfile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+describe('CredentialProfileManager ProfileForm — backend typed error display', () => {
+  it('shows ServerError ref message when createCredentialProfile throws ServerError', async () => {
+    const { createCredentialProfile } = await import('../api/client');
+    (createCredentialProfile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new ServerError('internal error, ref: xyz789', 'xyz789'),
     );
 
     await renderCreateForm();
 
     fireEvent.change(screen.getByPlaceholderText('e.g. MikroTik Admin'), {
-      target: { value: 'My SSH Profile' },
+      target: { value: 'My Credential Profile' },
     });
     // Fill password
     fireEvent.change(screen.getByPlaceholderText('Enter password'), {
@@ -190,16 +199,16 @@ describe('SSHProfileManager ProfileForm — backend typed error display', () => 
     });
   });
 
-  it('shows ValidationError message when createSSHProfile throws ValidationError', async () => {
-    const { createSSHProfile } = await import('../api/client');
-    (createSSHProfile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+  it('shows ValidationError message when createCredentialProfile throws ValidationError', async () => {
+    const { createCredentialProfile } = await import('../api/client');
+    (createCredentialProfile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new ValidationError('username contains invalid characters'),
     );
 
     await renderCreateForm();
 
     fireEvent.change(screen.getByPlaceholderText('e.g. MikroTik Admin'), {
-      target: { value: 'SSH Profile' },
+      target: { value: 'Credential Profile' },
     });
     fireEvent.change(screen.getByPlaceholderText('Enter password'), {
       target: { value: 'pass' },

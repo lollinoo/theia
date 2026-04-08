@@ -17,7 +17,7 @@ const KEY_FORM_FILES = [
   join(COMPONENTS_DIR, 'LinkDetailsPanel.tsx'),
   join(COMPONENTS_DIR, 'InterfaceStatsPanel.tsx'),
   join(COMPONENTS_DIR, 'SNMPProfileManager.tsx'),
-  join(COMPONENTS_DIR, 'SSHProfileManager.tsx'),
+  join(COMPONENTS_DIR, 'CredentialProfileManager.tsx'),
   join(COMPONENTS_DIR, 'AddDevicePanel.tsx'),
   join(COMPONENTS_DIR, 'DeviceConfigPanel.tsx'),
   join(COMPONENTS_DIR, 'LinkCreatePanel.tsx'),

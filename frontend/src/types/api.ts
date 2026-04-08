@@ -296,16 +296,32 @@ export function parseSNMPProfileResponse(payload: unknown): SNMPProfile {
   };
 }
 
-// SSH profile for reusable SSH credentials shared across devices
-export interface SSHProfile {
+// CredentialProfile for reusable SSH credentials shared across devices
+export interface CredentialProfile {
   id: string;
   name: string;
   description: string;
   username: string;
   port: number;
   auth_method: 'password' | 'key';
+  role: string;
   created_at: string;
   updated_at: string;
+}
+
+// DeviceCredentialProfile represents a credential profile assigned to a device
+export interface DeviceCredentialProfile {
+  profile_id: string;
+  name: string;
+  role: string;
+  is_winbox: boolean;
+}
+
+// WinBoxCredentials holds the resolved credentials needed to launch WinBox
+export interface WinBoxCredentials {
+  ip: string;
+  username: string;
+  password: string;
 }
 
 // Area represents a grouping of devices.
@@ -416,16 +432,16 @@ export interface VendorConfig {
   };
 }
 
-export function parseSSHProfilesResponse(payload: unknown): SSHProfile[] {
+export function parseCredentialProfilesResponse(payload: unknown): CredentialProfile[] {
   if (!isRecord(payload)) {
-    throw new Error('invalid ssh profiles response');
+    throw new Error('invalid credential profiles response');
   }
 
   const data = Array.isArray(payload.data) ? payload.data : [];
 
   return data.map((item) => {
     if (!isRecord(item)) {
-      throw new Error('invalid ssh profile item');
+      throw new Error('invalid credential profile item');
     }
     return {
       id: readString(item, 'id'),
@@ -434,10 +450,59 @@ export function parseSSHProfilesResponse(payload: unknown): SSHProfile[] {
       username: readString(item, 'username', 'admin'),
       port: readNumber(item, 'port', 22),
       auth_method: (item.auth_method === 'key' ? 'key' : 'password') as 'password' | 'key',
+      role: readString(item, 'role'),
       created_at: readString(item, 'created_at'),
       updated_at: readString(item, 'updated_at'),
     };
   });
+}
+
+export function parseCredentialProfileResponse(payload: unknown): CredentialProfile {
+  if (!isRecord(payload)) {
+    throw new Error('invalid credential profile response');
+  }
+  const data = isRecord(payload.data) ? payload.data : {};
+  return {
+    id: readString(data, 'id'),
+    name: readString(data, 'name'),
+    description: readString(data, 'description'),
+    username: readString(data, 'username', 'admin'),
+    port: readNumber(data, 'port', 22),
+    auth_method: (data.auth_method === 'key' ? 'key' : 'password') as 'password' | 'key',
+    role: readString(data, 'role'),
+    created_at: readString(data, 'created_at'),
+    updated_at: readString(data, 'updated_at'),
+  };
+}
+
+export function parseDeviceCredentialProfilesResponse(payload: unknown): DeviceCredentialProfile[] {
+  if (!isRecord(payload)) {
+    throw new Error('invalid device credential profiles response');
+  }
+
+  const data = Array.isArray(payload.data) ? payload.data : [];
+
+  return data.map((item) => {
+    if (!isRecord(item)) {
+      throw new Error('invalid device credential profile item');
+    }
+    return {
+      // Backend serializes profile ID as "id" (assignedProfileResponse.ID)
+      profile_id: readString(item, 'id'),
+      name: readString(item, 'name'),
+      role: readString(item, 'role'),
+      is_winbox: typeof item.is_winbox === 'boolean' ? item.is_winbox : false,
+    };
+  });
+}
+
+export function parseWinBoxCredentialsResponse(payload: unknown): WinBoxCredentials {
+  if (!isRecord(payload)) return { ip: '', username: '', password: '' };
+  return {
+    ip: readString(payload, 'ip'),
+    username: readString(payload, 'username'),
+    password: readString(payload, 'password'),
+  };
 }
 
 export function parseAreasResponse(payload: unknown): Area[] {

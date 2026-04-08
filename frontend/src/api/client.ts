@@ -1,25 +1,30 @@
 import {
   type Area,
+  type CredentialProfile,
   type Device,
+  type DeviceCredentialProfile,
   type InstanceBackup,
   type InstanceBackupStatus,
   type InterfaceInfo,
   type Link,
   type RestoreReport,
   type SNMPProfile,
-  type SSHProfile,
   type BackupJob,
   type BackupFile,
   type BackupStatus,
   type VendorConfig,
+  type WinBoxCredentials,
   parseAreaResponse,
   parseAreasResponse,
+  parseCredentialProfileResponse,
+  parseCredentialProfilesResponse,
+  parseDeviceCredentialProfilesResponse,
   parseDevicesResponse,
   parseInterfacesResponse,
   parseLinksResponse,
   parseSNMPProfilesResponse,
   parseSNMPProfileResponse,
-  parseSSHProfilesResponse,
+  parseWinBoxCredentialsResponse,
 } from '../types/api';
 import { ValidationError, ServerError } from './errors';
 
@@ -377,57 +382,36 @@ export async function testSNMPConnection(deviceId: string): Promise<{ success: b
   };
 }
 
-// --- SSH Profiles ---
+// --- Credential Profiles ---
 
-export async function fetchSSHProfiles(): Promise<SSHProfile[]> {
-  return parseSSHProfilesResponse(await requestJSON('/api/v1/ssh-profiles'));
+export async function fetchCredentialProfiles(): Promise<CredentialProfile[]> {
+  return parseCredentialProfilesResponse(await requestJSON('/api/v1/credential-profiles'));
 }
 
-export interface SSHProfilePayload {
+export interface CredentialProfilePayload {
   name: string;
   description?: string;
   username: string;
   port: number;
   auth_method: string;
   secret: string;
+  role: string;
 }
 
-export async function createSSHProfile(payload: SSHProfilePayload): Promise<SSHProfile> {
-  const response = await requestJSONWithBody('/api/v1/ssh-profiles', 'POST', payload);
-  const data = (response as Record<string, unknown>)?.data as Record<string, unknown>;
-  return {
-    id: typeof data.id === 'string' ? data.id : '',
-    name: typeof data.name === 'string' ? data.name : '',
-    description: typeof data.description === 'string' ? data.description : '',
-    username: typeof data.username === 'string' ? data.username : '',
-    port: typeof data.port === 'number' ? data.port : 22,
-    auth_method: data.auth_method === 'key' ? 'key' : 'password',
-    created_at: typeof data.created_at === 'string' ? data.created_at : '',
-    updated_at: typeof data.updated_at === 'string' ? data.updated_at : '',
-  };
-}
-
-export async function updateSSHProfile(id: string, payload: SSHProfilePayload): Promise<SSHProfile> {
-  const response = await requestJSONWithBody(
-    `/api/v1/ssh-profiles/${encodeURIComponent(id)}`,
-    'PUT',
-    payload,
+export async function createCredentialProfile(payload: CredentialProfilePayload): Promise<CredentialProfile> {
+  return parseCredentialProfileResponse(
+    await requestJSONWithBody('/api/v1/credential-profiles', 'POST', payload),
   );
-  const data = (response as Record<string, unknown>)?.data as Record<string, unknown>;
-  return {
-    id: typeof data.id === 'string' ? data.id : '',
-    name: typeof data.name === 'string' ? data.name : '',
-    description: typeof data.description === 'string' ? data.description : '',
-    username: typeof data.username === 'string' ? data.username : '',
-    port: typeof data.port === 'number' ? data.port : 22,
-    auth_method: data.auth_method === 'key' ? 'key' : 'password',
-    created_at: typeof data.created_at === 'string' ? data.created_at : '',
-    updated_at: typeof data.updated_at === 'string' ? data.updated_at : '',
-  };
 }
 
-export async function deleteSSHProfile(id: string): Promise<void> {
-  await requestJSONWithBody(`/api/v1/ssh-profiles/${encodeURIComponent(id)}`, 'DELETE');
+export async function updateCredentialProfile(id: string, payload: CredentialProfilePayload): Promise<CredentialProfile> {
+  return parseCredentialProfileResponse(
+    await requestJSONWithBody(`/api/v1/credential-profiles/${encodeURIComponent(id)}`, 'PUT', payload),
+  );
+}
+
+export async function deleteCredentialProfile(id: string): Promise<void> {
+  await requestJSONWithBody(`/api/v1/credential-profiles/${encodeURIComponent(id)}`, 'DELETE');
 }
 
 export async function testSSHProfile(id: string, targetIP: string): Promise<{ success: boolean; error?: string }> {
@@ -441,6 +425,48 @@ export async function testSSHProfile(id: string, targetIP: string): Promise<{ su
     success: data.success === true,
     error: typeof data.error === 'string' ? data.error : undefined,
   };
+}
+
+// --- Device Credential Profile Assignments ---
+
+export async function fetchDeviceCredentialProfiles(deviceId: string): Promise<DeviceCredentialProfile[]> {
+  const payload = await requestJSON(`/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`);
+  return parseDeviceCredentialProfilesResponse(payload);
+}
+
+export async function assignCredentialProfile(deviceId: string, profileId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`,
+    'POST',
+    { profile_id: profileId },
+  );
+}
+
+export async function unassignCredentialProfile(deviceId: string, profileId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles/${encodeURIComponent(profileId)}`,
+    'DELETE',
+  );
+}
+
+export async function setWinBoxProfile(deviceId: string, profileId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
+    'PUT',
+    { profile_id: profileId },
+  );
+}
+
+export async function clearWinBoxProfile(deviceId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
+    'DELETE',
+  );
+}
+
+export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCredentials> {
+  const payload = await requestJSON(`/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-credentials`);
+  return parseWinBoxCredentialsResponse(payload);
 }
 
 export async function testSSHConnection(deviceId: string): Promise<{ success: boolean; error?: string }> {

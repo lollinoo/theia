@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { Area, Device, SSHProfile } from '../types/api';
-import { deleteDevice, fetchAreas, fetchSSHProfiles, updateDevice } from '../api/client';
+import type { Area, CredentialProfile, Device } from '../types/api';
+import { deleteDevice, fetchAreas, fetchCredentialProfiles, updateDevice } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
 
 interface BulkEditPanelProps {
@@ -22,7 +22,7 @@ function commonValue<T>(devices: Device[], extract: (d: Device) => T): T | 'mixe
 
 export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: BulkEditPanelProps) {
   const [areas, setAreas] = useState<Area[]>([]);
-  const [sshProfiles, setSSHProfiles] = useState<SSHProfile[]>([]);
+  const [sshProfiles, setSSHProfiles] = useState<CredentialProfile[]>([]);
 
   // Bulk field state -- undefined means "no change"
   const [areaIds, setAreaIds] = useState<string[] | undefined>(undefined);
@@ -41,7 +41,7 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
   // Load reference data
   useEffect(() => {
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
-    fetchSSHProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
+    fetchCredentialProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
   }, []);
 
   // Compute current common values for display
