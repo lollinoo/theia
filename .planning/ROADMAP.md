@@ -62,7 +62,7 @@
 - [x] **Phase 23: Credential Profile Schema + Domain** - Join table, role column, BackupService update, data migration preserving encrypted credentials (completed 2026-04-07)
 - [x] **Phase 24: Backend API — Profiles, Assignments, WinBox Credentials** - 7 new routes, per-device assignment management, WinBox credential endpoint, bridge download delivery (completed 2026-04-07)
 - [x] **Phase 25: Frontend — Credential Profile Manager + WinBox Actions** - Profile manager UI, per-device assignment, role field, WinBox actions in canvas and table, bridge health check (completed 2026-04-08)
-- [ ] **Phase 26: WinBox Bridge Binary** - CGO-free Go binary for 6 targets, CORS+Host dual-validation, hardcoded WinBox-only execution
+- [x] **Phase 26: WinBox Bridge Binary** - CGO-free Go binary for 6 targets, CORS+Host dual-validation, hardcoded WinBox-only execution (completed 2026-04-08)
 - [ ] **Phase 27: Schema Cleanup — Drop Legacy FK** - SQLite 12-step table-recreation migration dropping legacy ssh_profile_id FK column
 
 ## Phase Details
@@ -124,10 +124,10 @@ Plans:
   2. Bridge rejects any request whose `Host` header is not `localhost:1337`, preventing DNS rebinding attacks
   3. Bridge is hardcoded to launch only the WinBox executable — passing arbitrary executable paths is rejected
   4. Bridge compiles without CGO and produces working binaries for all 6 targets (Windows amd64/arm64, Linux amd64/arm64, macOS amd64/arm64)
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 26-01-PLAN.md — Core bridge binary (HTTP server, Origin+Host validation, /health, /launch, WinBox discovery)
-- [ ] 26-02-PLAN.md — Build pipeline (Makefile target, CI release job for 6 targets)
+- [x] 26-02-PLAN.md — Build pipeline (Makefile target, CI release job for 6 targets)
 
 ### Phase 27: Schema Cleanup — Drop Legacy FK
 **Goal**: The `devices` table no longer carries the legacy `ssh_profile_id` FK column — schema is clean post-migration
@@ -169,5 +169,5 @@ Plans:
 | 23. Credential Profile Schema + Domain | v1.5.0 | 2/2 | Complete   | 2026-04-07 |
 | 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete   | 2026-04-07 |
 | 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete   | 2026-04-08 |
-| 26. WinBox Bridge Binary | v1.5.0 | 1/2 | In Progress|  |
+| 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 0/? | Not started | — |
