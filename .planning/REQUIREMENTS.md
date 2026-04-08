@@ -28,7 +28,16 @@ Requirements for the WinBox Integration milestone. Each maps to roadmap phases (
 - [x] **WINBOX-01**: User can open WinBox pre-authenticated from the canvas device context menu
 - [x] **WINBOX-02**: User can open WinBox pre-authenticated from the Devices table row action
 - [x] **WINBOX-03**: WinBox action is visually disabled with an explanatory tooltip when no WinBox profile is designated for the device
-- [ ] **WINBOX-04**: Legacy `ssh_profile_id` FK column is removed from the devices table (cleanup migration)
+- [x] **WINBOX-04**: Legacy `ssh_profile_id` FK column is removed from the devices table (cleanup migration)
+
+### WinBox Bridge System Tray
+
+- [x] **TRAY-01**: Bridge binary shows a system tray icon when launched on a desktop system
+- [ ] **TRAY-02**: User can start and stop the bridge HTTP server from the system tray without restarting the binary
+- [x] **TRAY-03**: User can configure the WinBox executable path via the bridge config file, accessible from the tray
+- [x] **TRAY-04**: User can configure the bridge listening port via the bridge config file, accessible from the tray
+- [x] **TRAY-05**: User can configure the allowed Theia origin via the bridge config file, accessible from the tray
+- [x] **TRAY-06**: Bridge supports a `--no-tray` headless mode for servers without a display (starts server directly, exits on SIGINT/SIGTERM)
 
 ## Future Requirements
 
@@ -76,11 +85,17 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BRIDGE-05 | Phase 25 | Complete |
 | BRIDGE-03 | Phase 26 | Complete |
 | BRIDGE-04 | Phase 26 | Complete |
-| WINBOX-04 | Phase 27 | Pending |
+| WINBOX-04 | Phase 27 | Complete |
+| TRAY-01 | Phase 29 | Complete |
+| TRAY-02 | Phase 29 | Pending |
+| TRAY-03 | Phase 29 | Complete |
+| TRAY-04 | Phase 29 | Complete |
+| TRAY-05 | Phase 29 | Complete |
+| TRAY-06 | Phase 29 | Complete |
 
 **Coverage:**
-- v1.5.0 requirements: 14 total
-- Mapped to phases: 14 (100%) ✓
+- v1.5.0 requirements: 20 total
+- Mapped to phases: 20 (100%) ✓
 - Unmapped: 0 ✓
 
 ---

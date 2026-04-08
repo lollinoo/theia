@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
-status: complete
-stopped_at: Phase 28 complete — all v1.5.0 phases done
-last_updated: "2026-04-08T16:00:00.000Z"
-last_activity: 2026-04-08 -- Phase 28 complete (WebSocket delta payload optimization)
+status: executing
+stopped_at: Completed 29-01-PLAN.md
+last_updated: "2026-04-08T20:55:41.772Z"
+last_activity: 2026-04-08
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 6
-  total_plans: 14
-  completed_plans: 14
-  percent: 100
+  total_plans: 17
+  completed_plans: 15
+  percent: 88
 ---
 
 # State: MikroTik Theia
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, drill into Grafana for deep dives, and manage devices directly — all from a single interactive map.
-**Current focus:** v1.5.0 WinBox Integration — all phases complete ✓
+**Current focus:** Phase 29 — winbox-bridge-system-tray-configure-path-port-and-origin-sta
 
 ## Current Position
 
-Phase: 28 (api-call-optimization-especially-websocket-payload-optimizat) — COMPLETE
-Plan: 2 of 2
-Status: All phases complete — ready for milestone completion
-Last activity: 2026-04-08 -- Phase 28 complete (WebSocket delta payload optimization)
+Phase: 29 (winbox-bridge-system-tray-configure-path-port-and-origin-sta) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-04-08
 
 ```
 v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
@@ -57,12 +57,16 @@ v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 - [Phase 27-02]: SSHCredentialForm uses assignCredentialProfile/unassignCredentialProfile instead of updateDevice(ssh_profile_id) — T-27-07 mitigation
 - [Phase 27-02]: Dashboard currentProfileId for SSHCredentialForm fetched via fetchDeviceCredentialProfiles on panel open (Option A — live source of truth after ssh_profile_id removal)
 - [Phase 27-02]: BulkEditPanel SSH Profile section removed — bulk credential assignment not supported after ssh_profile_id removal
+- [Phase 29-01]: Config uses loadConfigFrom/saveConfigTo path helpers for testability — public loadConfig/saveConfig delegate via configFilePath()
+- [Phase 29-01]: securityCheck takes expectedHost param — removes hardcoded localhost:1337, enables dynamic port config (T-29-04 mitigated)
+- [Phase 29-01]: ServerManager.Start goroutine captures local srv var not m.server field — prevents nil dereference if Stop() races
 
 ## Accumulated Context
 
 ### Roadmap Evolution
 
 - Phase 28 added: API call optimization (especially WebSocket payload optimization for /api/v1/ws endpoint) — delta payloads and batching for 77+ device scale
+- Phase 29 added: WinBox bridge system tray — configure path, port, and origin; start/stop server without restart
 
 - Phase numbering continues from v1.4.0; last phase was 22, v1.5.0 starts at Phase 23
 - ssh_profiles table renamed to credential_profiles (migration 000012 applied on startup)
@@ -81,5 +85,5 @@ v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 
 ## Session Continuity
 
-Stopped at: Phase 28 context gathered (discuss mode)
+Stopped at: Completed 29-01-PLAN.md
 To resume: /gsd-execute-phase 27 (Schema Cleanup — Drop Legacy FK)

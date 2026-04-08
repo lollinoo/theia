@@ -170,10 +170,10 @@ Plans:
   4. A `--no-tray` flag enables headless operation for Linux servers without a display
   5. Windows binaries suppress the console window via `-H=windowsgui` ldflags
   6. macOS binaries build with CGO_ENABLED=1 on native macOS CI runners (fyne.io/systray Cocoa requirement)
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 29-01-PLAN.md — Config struct + ServerManager lifecycle + --no-tray headless flag
+- [x] 29-01-PLAN.md — Config struct + ServerManager lifecycle + --no-tray headless flag
 - [ ] 29-02-PLAN.md — System tray integration (fyne.io/systray, icon, menu wiring)
 - [ ] 29-03-PLAN.md — CI/build pipeline (macOS CGO split, Windows -H=windowsgui, Makefile update)
 
@@ -209,4 +209,4 @@ Plans:
 | 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 28. API call optimization — WS delta payloads | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
-| 29. WinBox bridge system tray | v1.5.0 | 0/3 | Planning  | — |
+| 29. WinBox bridge system tray | v1.5.0 | 1/3 | In Progress|  |
