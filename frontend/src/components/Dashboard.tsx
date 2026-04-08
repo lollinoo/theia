@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Device, Area } from '../types/api';
 import type { SnapshotPayload } from '../types/metrics';
 import { DeviceTable } from './dashboard/DeviceTable';
+import { useBridgeHealth } from '../hooks/useBridgeHealth';
+import { fetchDeviceCredentialProfiles, fetchWinBoxCredentials } from '../api/client';
 import { FilterSelect, type FilterOption } from './dashboard/FilterSelect';
 import { MaterialIcon } from './MaterialIcon';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
@@ -30,6 +32,10 @@ interface DashboardProps {
 export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
   const { resolvedTheme } = useTheme();
   const [panel, setPanel] = useState<PanelType | null>(null);
+  const { bridgeRunning } = useBridgeHealth();
+
+  // Per-device WinBox profile status (true = has a WinBox-designated profile)
+  const [deviceWinboxMap, setDeviceWinboxMap] = useState<Record<string, boolean>>({});
 
   // Local overrides for ssh_profile_id (survives panel close/reopen until devices prop refreshes)
   const [sshOverrides, setSSHOverrides] = useState<Record<string, string | undefined>>({});
@@ -76,6 +82,51 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
     }
     return true;
   });
+
+  // Fetch WinBox profile status for visible non-virtual devices (once per device)
+  useEffect(() => {
+    const nonVirtual = filteredDevices.filter((d) => d.device_type !== 'virtual');
+    for (const device of nonVirtual) {
+      if (device.id in deviceWinboxMap) continue;
+      void (async () => {
+        try {
+          const profiles = await fetchDeviceCredentialProfiles(device.id);
+          setDeviceWinboxMap((prev) => ({
+            ...prev,
+            [device.id]: profiles.some((p) => p.is_winbox),
+          }));
+        } catch {
+          setDeviceWinboxMap((prev) => ({ ...prev, [device.id]: false }));
+        }
+      })();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredDevices]);
+
+  async function handleWinBox(device: Device) {
+    try {
+      const creds = await fetchWinBoxCredentials(device.id);
+      await fetch('http://localhost:1337/launch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: creds.ip, username: creds.username, password: creds.password }),
+      });
+    } catch {
+      // silent — bridge may not be running or no credentials
+    }
+  }
+
+  function isWinboxDisabled(device: Device): boolean {
+    const hasWinbox = deviceWinboxMap[device.id] ?? false;
+    return !hasWinbox || !bridgeRunning;
+  }
+
+  function getWinboxTitle(device: Device): string {
+    const hasWinbox = deviceWinboxMap[device.id] ?? false;
+    if (!hasWinbox) return 'No WinBox profile designated';
+    if (!bridgeRunning) return 'WinBox bridge not running \u2014 download from Settings';
+    return 'Open in WinBox';
+  }
 
   const types = [...new Set(devices.map((d) => d.device_type))].sort();
 
@@ -193,6 +244,9 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
             onBackup={(device) => setPanel({ kind: 'backup', device })}
             onBackupHistory={(device) => setPanel({ kind: 'backup-history', device })}
             onViewConfig={(device) => setPanel({ kind: 'config-viewer', device })}
+            onWinBox={handleWinBox}
+            winboxDisabled={isWinboxDisabled}
+            winboxTitle={getWinboxTitle}
           />
         )}
       </div>

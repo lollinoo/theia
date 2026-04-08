@@ -66,7 +66,8 @@ const noop = () => {};
 function renderRow(
   deviceOverrides: Partial<Device> = {},
   metrics: DeviceMetricsDTO | null = null,
-  areaEntries?: [string, Area][]
+  areaEntries?: [string, Area][],
+  winboxProps?: { winboxDisabled?: boolean; winboxTitle?: string }
 ) {
   return render(
     <table>
@@ -80,6 +81,9 @@ function renderRow(
           onBackup={noop}
           onBackupHistory={noop}
           onViewConfig={noop}
+          onWinBox={noop}
+          winboxDisabled={winboxProps?.winboxDisabled ?? false}
+          winboxTitle={winboxProps?.winboxTitle ?? 'Open in WinBox'}
         />
       </tbody>
     </table>
@@ -96,7 +100,32 @@ describe('DeviceRow', () => {
     expect(titles).toContain('Backup Now');
     expect(titles).toContain('Backup History');
     expect(titles).toContain('View Config');
-    expect(buttons.length).toBe(4);
+    expect(buttons.length).toBe(5);
+  });
+
+  it('renders WinBox icon action', () => {
+    renderRow();
+
+    const winboxIcon = screen.getByTestId('material-icon-open_in_new');
+    expect(winboxIcon).toBeInTheDocument();
+  });
+
+  it('WinBox action is disabled when winboxDisabled is true', () => {
+    renderRow({}, null, undefined, { winboxDisabled: true, winboxTitle: 'No WinBox profile designated' });
+
+    const buttons = screen.getAllByRole('button', { hidden: true });
+    const winboxButton = buttons.find(b => b.getAttribute('title') === 'No WinBox profile designated');
+    expect(winboxButton).toBeTruthy();
+    expect(winboxButton).toBeDisabled();
+  });
+
+  it('WinBox action shows tooltip from winboxTitle', () => {
+    renderRow({}, null, undefined, { winboxDisabled: true, winboxTitle: 'No WinBox profile designated' });
+
+    const buttons = screen.getAllByRole('button', { hidden: true });
+    const winboxButton = buttons.find(b => b.getAttribute('title') === 'No WinBox profile designated');
+    expect(winboxButton).toBeTruthy();
+    expect(winboxButton?.getAttribute('title')).toBe('No WinBox profile designated');
   });
 
   it('renders StatusDot component', () => {

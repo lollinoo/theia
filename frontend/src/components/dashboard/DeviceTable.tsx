@@ -16,6 +16,9 @@ interface DeviceTableProps {
   onBackup: (device: Device) => void;
   onBackupHistory: (device: Device) => void;
   onViewConfig: (device: Device) => void;
+  onWinBox: (device: Device) => void;
+  winboxDisabled: (device: Device) => boolean;
+  winboxTitle: (device: Device) => string;
 }
 
 function parseOsVersion(sysDescr: string): string {
@@ -34,6 +37,9 @@ export function DeviceTable({
   onBackup,
   onBackupHistory,
   onViewConfig,
+  onWinBox,
+  winboxDisabled,
+  winboxTitle,
 }: DeviceTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('hostname');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
@@ -113,6 +119,9 @@ export function DeviceTable({
               onBackup={() => onBackup(device)}
               onBackupHistory={() => onBackupHistory(device)}
               onViewConfig={() => onViewConfig(device)}
+              onWinBox={() => onWinBox(device)}
+              winboxDisabled={winboxDisabled(device)}
+              winboxTitle={winboxTitle(device)}
             />
           ))}
         </tbody>
