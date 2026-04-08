@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
-status: executing
-stopped_at: Completed 25-frontend-credential-profile-manager-winbox-actions-25-02-PLAN.md
-last_updated: "2026-04-08T10:44:33.534Z"
+status: verifying
+stopped_at: Completed 25-frontend-credential-profile-manager-winbox-actions-25-03-PLAN.md
+last_updated: "2026-04-08T10:51:49.252Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_plans: 8
+  percent: 100
 ---
 
 # State: MikroTik Theia
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 
 Phase: 24 (backend-api-profiles-assignments-winbox-credentials) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-08
 
 ```
@@ -49,6 +49,8 @@ v1.5.0 Progress: [█████░░░░░] 50% plans (Phase 23 in progres
 - [23-01] SSHAuthMethod type stays in backup.go unmodified per D-04
 - [Phase 25-01]: SSHProfile renamed to CredentialProfile with role field; 10 API client functions now hit /credential-profiles endpoints
 - [Phase 25-frontend-credential-profile-manager-winbox-actions]: Credentials section replaces ssh_profile_id select dropdown — assignment lifecycle managed via separate API calls
+- [Phase 25]: waitFor + fake timers causes timeout in Vitest — replaced with act + advanceTimersByTimeAsync for useBridgeHealth tests
+- [Phase 25]: deviceWinboxMap uses lazy fetch per-device on first render/menu-open rather than upfront batch
 
 ## Accumulated Context
 
@@ -69,5 +71,5 @@ v1.5.0 Progress: [█████░░░░░] 50% plans (Phase 23 in progres
 
 ## Session Continuity
 
-Stopped at: Completed 25-frontend-credential-profile-manager-winbox-actions-25-02-PLAN.md
+Stopped at: Completed 25-frontend-credential-profile-manager-winbox-actions-25-03-PLAN.md
 To resume: execute 23-02-PLAN.md (credential_profile_repo.go rename + BackupService + handler renames)
