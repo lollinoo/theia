@@ -138,7 +138,10 @@ Plans:
   2. SQLite 12-step table-recreation migration executes without data loss on a populated database
   3. All existing device records survive the migration with all other fields intact
   4. Application starts and operates normally with no references to the dropped column
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 27-01-PLAN.md — Migration 000014 + Go backend cleanup (domain, repo, service, handler)
+- [ ] 27-02-PLAN.md — Frontend cleanup (types, API client, components)
 
 ## Progress
 
@@ -170,4 +173,4 @@ Plans:
 | 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete   | 2026-04-07 |
 | 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete   | 2026-04-08 |
 | 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
-| 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 0/? | Not started | — |
+| 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 0/2 | Planned | — |
