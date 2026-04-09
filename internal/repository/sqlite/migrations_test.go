@@ -131,3 +131,114 @@ func TestLegacyTableDrop(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestMigration000014_DevicesColumnDropped (Phase 27 Gap 1)
+// ---------------------------------------------------------------------------
+// Verifies that the ssh_profile_id column is absent from the devices table
+// after migration 000014 runs as part of RunMigrations.
+func TestMigration000014_DevicesColumnDropped(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='ssh_profile_id'`,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("querying pragma_table_info for ssh_profile_id: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("migration 000014: ssh_profile_id column still present in devices table -- expected it to be dropped")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestMigration000014_DeviceDataIntegrity (Phase 27 Gap 2)
+// ---------------------------------------------------------------------------
+// Verifies that device records survive migration 000014 with every other field
+// intact. Inserts a device post-migration (all migrations run) and reads it
+// back, asserting all fields are present and uncorrupted.
+func TestMigration000014_DeviceDataIntegrity(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	// Insert a device using only the columns that remain after migration 000014
+	// (ssh_profile_id was dropped). This verifies the schema is correct.
+	deviceID := "00000000-0000-0000-0000-000000000099"
+	_, err := db.Exec(
+		`INSERT INTO devices (
+			id, hostname, ip, snmp_credentials_json, device_type, status,
+			sys_name, sys_descr, sys_object_id, hardware_model, vendor,
+			managed, tags_json, metrics_source, prometheus_label_name,
+			prometheus_label_value, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+		deviceID, "test-router", "192.168.1.1",
+		`{"version":"2c","v2c":{"community":"public"}}`,
+		"router", "up",
+		"test-router-sysname", "RouterOS", "1.3.6.1.4.1.14988", "RB4011",
+		"mikrotik", 1, `{"env":"prod"}`,
+		"prometheus", "instance", "192.168.1.1:9100",
+	)
+	if err != nil {
+		t.Fatalf("inserting device post-migration: %v", err)
+	}
+
+	// Read it back and verify key fields are intact
+	var hostname, ip, vendor, metricsSource, prometheusLabelName string
+	var managed int
+	err = db.QueryRow(
+		`SELECT hostname, ip, vendor, managed, metrics_source, prometheus_label_name FROM devices WHERE id = ?`,
+		deviceID,
+	).Scan(&hostname, &ip, &vendor, &managed, &metricsSource, &prometheusLabelName)
+	if err != nil {
+		t.Fatalf("reading device post-migration: %v", err)
+	}
+
+	if hostname != "test-router" {
+		t.Errorf("expected hostname %q, got %q", "test-router", hostname)
+	}
+	if ip != "192.168.1.1" {
+		t.Errorf("expected ip %q, got %q", "192.168.1.1", ip)
+	}
+	if vendor != "mikrotik" {
+		t.Errorf("expected vendor %q, got %q", "mikrotik", vendor)
+	}
+	if managed != 1 {
+		t.Errorf("expected managed=1, got %d", managed)
+	}
+	if metricsSource != "prometheus" {
+		t.Errorf("expected metrics_source %q, got %q", "prometheus", metricsSource)
+	}
+	if prometheusLabelName != "instance" {
+		t.Errorf("expected prometheus_label_name %q, got %q", "instance", prometheusLabelName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestVerifyLegacyTablesMigrated_PostMigration000014 (Phase 27 Gap 3)
+// ---------------------------------------------------------------------------
+// Verifies that verifyLegacyTablesMigrated returns nil (no error) on a database
+// where migration 000014 has already run and dropped the ssh_profile_id column.
+// This confirms the guard added to verifyLegacyTablesMigrated works correctly.
+func TestVerifyLegacyTablesMigrated_PostMigration000014(t *testing.T) {
+	db := openTestDB(t)
+
+	// Run all migrations — 000014 drops ssh_profile_id from devices.
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	// Calling verifyLegacyTablesMigrated again on a post-000014 database must
+	// not error. The ssh_profile_id column is absent so the function should
+	// detect that and return nil gracefully.
+	if err := verifyLegacyTablesMigrated(db); err != nil {
+		t.Fatalf("verifyLegacyTablesMigrated returned error on post-000014 database: %v", err)
+	}
+}

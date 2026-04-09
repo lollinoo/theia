@@ -875,6 +875,48 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Test 10: TestTriggerBackup_NoCredentialProfileAssigned (Phase 27 Gap 5)
+// ---------------------------------------------------------------------------
+// Verifies that TriggerBackup returns an error containing "no credential profile"
+// when no credential profile is assigned to the device. The mockCredentialProfileRepo
+// returns an error from GetBackupProfileForDevice when its profiles map is empty.
+func TestTriggerBackup_NoCredentialProfileAssigned(t *testing.T) {
+	port := listenOnRandomPort(t)
+	_ = port // port unused; backup fails before SSH dial
+
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	// Empty credential profile repo — GetBackupProfileForDevice will return an error.
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	dialer := &mockSSHDialer{}
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, dialer, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	// Create device with backup-supported vendor — NO credential profile added.
+	deviceID := uuid.New()
+	deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
+		Managed: true, Status: domain.DeviceStatusUp,
+	})
+
+	// TriggerBackup must return an error because no credential profile is assigned.
+	_, err := svc.TriggerBackup(context.Background(), deviceID)
+	if err == nil {
+		t.Fatal("expected error when no credential profile assigned, got nil")
+	}
+	if !strings.Contains(err.Error(), "no credential profile") {
+		t.Errorf("expected error to contain %q, got %q", "no credential profile", err.Error())
+	}
+}
+
 // recordingSSHDialer captures the SSH config passed to Dial for verification.
 type recordingSSHDialer struct {
 	mu           sync.Mutex

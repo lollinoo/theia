@@ -370,6 +370,96 @@ func TestCredentialProfileAssignProfile_MultipleProfiles(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// GetBackupProfileForDevice (Phase 27 Gap 4)
+// ---------------------------------------------------------------------------
+
+// TestGetBackupProfileForDevice_NoProfileAssigned verifies that
+// GetBackupProfileForDevice returns an error when no profiles are assigned.
+func TestGetBackupProfileForDevice_NoProfileAssigned(t *testing.T) {
+	repo, db := setupCredentialProfileAssignmentTest(t)
+	deviceID := insertTestDevice(t, db)
+
+	_, err := repo.GetBackupProfileForDevice(deviceID)
+	if err == nil {
+		t.Fatal("expected error when no profile assigned to device, got nil")
+	}
+	if !containsString(err.Error(), "no credential profile assigned") {
+		t.Errorf("expected error to contain %q, got %q", "no credential profile assigned", err.Error())
+	}
+}
+
+// TestGetBackupProfileForDevice_ReturnsProfile verifies that
+// GetBackupProfileForDevice returns the assigned profile when one exists.
+func TestGetBackupProfileForDevice_ReturnsProfile(t *testing.T) {
+	repo, db := setupCredentialProfileAssignmentTest(t)
+	deviceID := insertTestDevice(t, db)
+	profileID := insertTestProfile(t, repo, "backup-profile")
+
+	if err := repo.AssignProfile(deviceID, profileID); err != nil {
+		t.Fatalf("AssignProfile: %v", err)
+	}
+
+	profile, err := repo.GetBackupProfileForDevice(deviceID)
+	if err != nil {
+		t.Fatalf("GetBackupProfileForDevice: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("expected non-nil profile, got nil")
+	}
+	if profile.ID != profileID {
+		t.Errorf("expected profile ID %s, got %s", profileID, profile.ID)
+	}
+	if profile.Name != "backup-profile" {
+		t.Errorf("expected profile name %q, got %q", "backup-profile", profile.Name)
+	}
+}
+
+// TestGetBackupProfileForDevice_PrefersNonWinBox verifies that
+// GetBackupProfileForDevice returns the non-WinBox profile when both a
+// WinBox and a non-WinBox profile are assigned. The ORDER BY is_winbox ASC
+// ensures is_winbox=0 (false) sorts before is_winbox=1 (true).
+func TestGetBackupProfileForDevice_PrefersNonWinBox(t *testing.T) {
+	repo, db := setupCredentialProfileAssignmentTest(t)
+	deviceID := insertTestDevice(t, db)
+
+	winboxProfileID := insertTestProfile(t, repo, "winbox-profile")
+	nonWinboxProfileID := insertTestProfile(t, repo, "admin-profile")
+
+	if err := repo.AssignProfile(deviceID, winboxProfileID); err != nil {
+		t.Fatalf("AssignProfile winbox: %v", err)
+	}
+	if err := repo.AssignProfile(deviceID, nonWinboxProfileID); err != nil {
+		t.Fatalf("AssignProfile non-winbox: %v", err)
+	}
+	// Mark winbox profile as WinBox
+	if err := repo.SetWinboxProfile(deviceID, winboxProfileID); err != nil {
+		t.Fatalf("SetWinboxProfile: %v", err)
+	}
+
+	profile, err := repo.GetBackupProfileForDevice(deviceID)
+	if err != nil {
+		t.Fatalf("GetBackupProfileForDevice: %v", err)
+	}
+	if profile.ID != nonWinboxProfileID {
+		t.Errorf("expected non-WinBox profile ID %s, got %s (WinBox profile was returned instead)",
+			nonWinboxProfileID, profile.ID)
+	}
+}
+
+// containsString is a helper to avoid importing strings in this test file.
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
+}
+
 // --- Timestamp test: verify created_at is a valid recent time ---
 
 func TestCredentialProfileAssignProfile_CreatedAtIsSet(t *testing.T) {
