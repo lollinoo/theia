@@ -220,30 +220,48 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
   build-bridge:
-    name: Bridge Binaries
+    name: "Bridge: ${{ matrix.goos }}/${{ matrix.goarch }}"
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - goos: windows
             goarch: amd64
             ext: .exe
+            runs-on: ubuntu-latest
+            cgo: "0"
+            ldflags: "-s -w -H=windowsgui"
           - goos: windows
             goarch: arm64
             ext: .exe
+            runs-on: ubuntu-latest
+            cgo: "0"
+            ldflags: "-s -w -H=windowsgui"
           - goos: linux
             goarch: amd64
             ext: ""
+            runs-on: ubuntu-latest
+            cgo: "0"
+            ldflags: "-s -w"
           - goos: linux
             goarch: arm64
             ext: ""
+            runs-on: ubuntu-latest
+            cgo: "0"
+            ldflags: "-s -w"
           - goos: darwin
             goarch: amd64
             ext: ""
+            runs-on: macos-latest
+            cgo: "1"
+            ldflags: "-s -w"
           - goos: darwin
             goarch: arm64
             ext: ""
+            runs-on: macos-latest
+            cgo: "1"
+            ldflags: "-s -w"
+    runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v4
 
@@ -253,12 +271,12 @@ jobs:
 
       - name: Build bridge binary
         env:
-          CGO_ENABLED: 0
+          CGO_ENABLED: ${{ matrix.cgo }}
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p bridge_binaries
-          go build -ldflags="-s -w" -o "bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/winbox-bridge/
+          go build -ldflags="${{ matrix.ldflags }}" -o "bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/winbox-bridge/
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
