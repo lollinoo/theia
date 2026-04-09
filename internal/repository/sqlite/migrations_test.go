@@ -53,6 +53,55 @@ func TestMigrations(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestMigration000012_DefaultRole (CRED-04)
+// ---------------------------------------------------------------------------
+// Verifies the behavior introduced by migration 000012:
+//   (a) The credential_profiles table has a role column that defaults to 'Admin'
+//       — inserting a row without specifying role yields role='Admin'.
+//   (b) The device_credential_profiles join table exists with the expected columns.
+//
+// Because RunMigrations always runs all migrations to the latest version,
+// we verify these invariants on the final migrated schema rather than
+// replaying a partial migration.
+func TestMigration000012_DefaultRole(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	// (a) Insert a credential_profiles row without specifying role and verify
+	//     that the DEFAULT 'Admin' constraint fills it in.
+	profileID := "00000000-0000-0000-0000-000000000001"
+	_, err := db.Exec(
+		`INSERT INTO credential_profiles (id, name, description, username, port, auth_method, encrypted_secret, created_at, updated_at)
+		 VALUES (?, 'role-default-test', '', 'admin', 22, 'password', '', datetime('now'), datetime('now'))`,
+		profileID,
+	)
+	if err != nil {
+		t.Fatalf("CRED-04: inserting credential_profiles row without role: %v", err)
+	}
+
+	var role string
+	err = db.QueryRow(`SELECT role FROM credential_profiles WHERE id = ?`, profileID).Scan(&role)
+	if err != nil {
+		t.Fatalf("CRED-04: querying role from credential_profiles: %v", err)
+	}
+	if role != "Admin" {
+		t.Errorf("CRED-04: expected role='Admin' (DEFAULT), got %q", role)
+	}
+
+	// (b) Verify device_credential_profiles join table exists with expected columns
+	//     by performing a SELECT that references all required columns.
+	_, err = db.Exec(
+		`SELECT device_id, profile_id, is_winbox, created_at FROM device_credential_profiles LIMIT 0`,
+	)
+	if err != nil {
+		t.Fatalf("CRED-04: device_credential_profiles table missing or has wrong columns: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestLegacyTableDrop (DEBT-06)
 // ---------------------------------------------------------------------------
 // Verifies that legacy tables (config_backups, ssh_credentials) are dropped

@@ -332,6 +332,44 @@ func TestCredentialProfileIsInUse_False(t *testing.T) {
 	}
 }
 
+// --- CRED-02: Multiple profiles per device ---
+
+// TestCredentialProfileAssignProfile_MultipleProfiles assigns 2 different profiles to
+// the same device and verifies that ListAssignedProfiles returns both entries.
+func TestCredentialProfileAssignProfile_MultipleProfiles(t *testing.T) {
+	repo, db := setupCredentialProfileAssignmentTest(t)
+	deviceID := insertTestDevice(t, db)
+	profileID1 := insertTestProfile(t, repo, "multi-profile-1")
+	profileID2 := insertTestProfile(t, repo, "multi-profile-2")
+
+	if err := repo.AssignProfile(deviceID, profileID1); err != nil {
+		t.Fatalf("AssignProfile 1: %v", err)
+	}
+	if err := repo.AssignProfile(deviceID, profileID2); err != nil {
+		t.Fatalf("AssignProfile 2: %v", err)
+	}
+
+	rows, err := repo.ListAssignedProfiles(deviceID)
+	if err != nil {
+		t.Fatalf("ListAssignedProfiles: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 assigned profiles, got %d", len(rows))
+	}
+
+	// Verify both profile IDs are present
+	seen := make(map[string]bool)
+	for _, row := range rows {
+		seen[row.ProfileID.String()] = true
+	}
+	if !seen[profileID1.String()] {
+		t.Errorf("expected profileID1 (%s) in results, not found", profileID1)
+	}
+	if !seen[profileID2.String()] {
+		t.Errorf("expected profileID2 (%s) in results, not found", profileID2)
+	}
+}
+
 // --- Timestamp test: verify created_at is a valid recent time ---
 
 func TestCredentialProfileAssignProfile_CreatedAtIsSet(t *testing.T) {

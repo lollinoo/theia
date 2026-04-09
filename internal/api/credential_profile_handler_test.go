@@ -389,6 +389,110 @@ func TestCredentialProfile_DescriptionTooLong_400(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// CRED-01: Custom role round-trip and empty-role default
+// =============================================================================
+
+// TestCredentialProfile_CustomRole_RoundTrip creates a profile with role="Backup",
+// then GETs it and verifies the role is returned as "Backup" in the response.
+func TestCredentialProfile_CustomRole_RoundTrip(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
+
+	// Create with explicit custom role
+	body := `{"name":"backup-profile","username":"admin","port":22,"auth_method":"password","secret":"s3cret","role":"Backup"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var createResp struct {
+		Data struct {
+			ID   string `json:"id"`
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if createResp.Data.Role != "Backup" {
+		t.Errorf("create response: expected role='Backup', got %q", createResp.Data.Role)
+	}
+
+	// GET the profile and verify role is preserved
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/credential-profiles/"+createResp.Data.ID, nil)
+	getRec := httptest.NewRecorder()
+	handler.HandleGet(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get: expected 200, got %d; body: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var getResp struct {
+		Data struct {
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&getResp); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if getResp.Data.Role != "Backup" {
+		t.Errorf("get response: expected role='Backup' after round-trip, got %q", getResp.Data.Role)
+	}
+}
+
+// TestCredentialProfile_EmptyRole_DefaultsToAdmin creates a profile with no role field
+// and verifies that the handler defaults the role to "Admin".
+func TestCredentialProfile_EmptyRole_DefaultsToAdmin(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
+
+	// No role field in body
+	body := `{"name":"no-role-profile","username":"admin","port":22,"auth_method":"password","secret":"s3cret"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var createResp struct {
+		Data struct {
+			ID   string `json:"id"`
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if createResp.Data.Role != "Admin" {
+		t.Errorf("create response: expected role='Admin' when role omitted, got %q", createResp.Data.Role)
+	}
+
+	// Confirm via GET
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/credential-profiles/"+createResp.Data.ID, nil)
+	getRec := httptest.NewRecorder()
+	handler.HandleGet(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get: expected 200, got %d; body: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var getResp struct {
+		Data struct {
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&getResp); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if getResp.Data.Role != "Admin" {
+		t.Errorf("get response: expected role='Admin' after round-trip, got %q", getResp.Data.Role)
+	}
+}
+
 func TestCredentialProfileHandlerDelete_InUse(t *testing.T) {
 	handler, repo, db := setupCredentialProfileTest(t)
 
