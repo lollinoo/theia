@@ -12,7 +12,11 @@ import (
 
 // setupTray builds the system tray menu and wires click events to the ServerManager.
 // Called from systray.Run(onReady, onExit) — runs inside the onReady callback.
-func setupTray(mgr *ServerManager, initialCfg Config) {
+// activeLogFile is the path to the active debug log file, or "" if not logging to file.
+// When non-empty an "Open Log File" menu item is added so users can inspect logs
+// without a visible console (particularly useful on Windows where the console is
+// detached in tray mode).
+func setupTray(mgr *ServerManager, initialCfg Config, activeLogFile string) {
 	systray.SetIcon(iconBytes)
 	systray.SetTooltip("WinBox Bridge")
 
@@ -24,6 +28,14 @@ func setupTray(mgr *ServerManager, initialCfg Config) {
 	mStop.Disable() // initially stopped, so Stop is disabled
 	systray.AddSeparator()
 	mConfig := systray.AddMenuItem("Open Config File", "Open config.json in default editor")
+
+	// "Open Log File" is only shown when --log-level debug is active and the log
+	// file was opened successfully (activeLogFile != "").
+	var mLog *systray.MenuItem
+	if activeLogFile != "" {
+		mLog = systray.AddMenuItem("Open Log File", fmt.Sprintf("Open debug log: %s", activeLogFile))
+	}
+
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Stop server and exit WinBox Bridge")
 
@@ -47,6 +59,14 @@ func setupTray(mgr *ServerManager, initialCfg Config) {
 
 	// Set initial state (may have been auto-started before tray setup)
 	updateState()
+
+	// logClickedCh is the channel to receive "Open Log File" clicks.
+	// When mLog is nil (no active log file) this is a nil channel — a nil channel
+	// is never ready in a select, so the case is effectively disabled.
+	var logClickedCh <-chan struct{}
+	if mLog != nil {
+		logClickedCh = mLog.ClickedCh
+	}
 
 	go func() {
 		for {
@@ -81,6 +101,10 @@ func setupTray(mgr *ServerManager, initialCfg Config) {
 				if err := openFileInEditor(path); err != nil {
 					log.Printf("winbox-bridge: open config error: %v", err)
 				}
+			case <-logClickedCh:
+				if err := openFileInEditor(activeLogFile); err != nil {
+					log.Printf("winbox-bridge: open log file error: %v", err)
+				}
 			case <-mQuit.ClickedCh:
 				mgr.Stop() //nolint:errcheck — best-effort shutdown on quit
 				systray.Quit()
@@ -104,7 +128,7 @@ func openFileInEditor(path string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", "", path) //nolint:gosec
+		cmd = exec.Command("notepad.exe", path) //nolint:gosec
 	case "darwin":
 		cmd = exec.Command("open", path) //nolint:gosec
 	default:

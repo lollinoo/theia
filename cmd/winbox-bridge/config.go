@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,18 +12,39 @@ import (
 // Config holds the persistent bridge configuration.
 // Fields map directly to CLI flag defaults for backward compatibility.
 type Config struct {
-	WinBoxPath  string `json:"winbox_path"`
-	ListenPort  int    `json:"listen_port"`
-	TheiaOrigin string `json:"theia_origin"`
+	WinBoxPath   string `json:"winbox_path"`
+	ListenPort   int    `json:"listen_port"`
+	TheiaOrigin  string `json:"theia_origin"`
+	BridgeSecret string `json:"bridge_secret"` // hex-encoded 32-byte secret shared with the Theia backend
+	LogLevel     string `json:"log_level"`     // "info" (default) or "debug"
 }
 
 // DefaultConfig returns the config matching current CLI flag defaults.
+// BridgeSecret is intentionally left empty here; it is populated by
+// ensureBridgeSecret on first run so the caller can persist the updated config.
 func DefaultConfig() Config {
 	return Config{
-		WinBoxPath:  "",
-		ListenPort:  1337,
-		TheiaOrigin: "http://localhost:3000",
+		WinBoxPath:   "",
+		ListenPort:   1337,
+		TheiaOrigin:  "http://localhost:3000",
+		BridgeSecret: "",
+		LogLevel:     "info",
 	}
+}
+
+// ensureBridgeSecret generates and returns a new hex-encoded 32-byte random
+// secret if cfg.BridgeSecret is empty. The returned Config must be saved by
+// the caller; this function does not persist the config itself.
+func ensureBridgeSecret(cfg Config) (Config, error) {
+	if cfg.BridgeSecret != "" {
+		return cfg, nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return cfg, fmt.Errorf("generate bridge secret: %w", err)
+	}
+	cfg.BridgeSecret = hex.EncodeToString(key)
+	return cfg, nil
 }
 
 // configFilePath returns the platform-appropriate path for config.json.
@@ -35,6 +58,8 @@ func configFilePath() (string, error) {
 }
 
 // loadConfigFrom reads config from the given path.
+// Fields absent from the JSON file keep their DefaultConfig values so that
+// new fields added in later versions don't read as zero values on existing installs.
 // Returns DefaultConfig if file is missing (os.IsNotExist).
 // Returns DefaultConfig and a non-nil error if the file exists but cannot be parsed.
 func loadConfigFrom(path string) (Config, error) {
@@ -45,7 +70,7 @@ func loadConfigFrom(path string) (Config, error) {
 		}
 		return DefaultConfig(), fmt.Errorf("read config: %w", err)
 	}
-	var cfg Config
+	cfg := DefaultConfig() // start from defaults so missing fields keep their defaults
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return DefaultConfig(), fmt.Errorf("parse config: %w", err)
 	}

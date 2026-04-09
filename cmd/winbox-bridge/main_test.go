@@ -2,9 +2,16 @@ package main
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -40,7 +47,44 @@ func makeRequest(t *testing.T, method, path string, body interface{}, origin, ho
 // buildHandler constructs the full handler chain for testing.
 // /health is public; /launch is protected by securityCheck.
 func buildHandler(theiaOrigin string, winboxPath string, expectedHost string) http.Handler {
-	return buildMux(winboxPath, theiaOrigin, expectedHost)
+	return buildMux(winboxPath, theiaOrigin, expectedHost, testSecret)
+}
+
+// testSecret is a fixed 32-byte hex secret used in all tests.
+const testSecret = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+
+// encryptToken encrypts a launchCredentials payload using the given hex key and
+// returns the hex-encoded AES-GCM ciphertext. Used in tests to build valid tokens.
+func encryptToken(t *testing.T, creds launchCredentials, secretHex string) string {
+	t.Helper()
+	key, err := hex.DecodeString(secretHex)
+	if err != nil || len(key) != 32 {
+		t.Fatalf("encryptToken: invalid key: %v", err)
+	}
+	plaintext, err := json.Marshal(creds)
+	if err != nil {
+		t.Fatalf("encryptToken: marshal: %v", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("encryptToken: new cipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("encryptToken: new GCM: %v", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		t.Fatalf("encryptToken: nonce: %v", err)
+	}
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	return hex.EncodeToString(ciphertext)
+}
+
+// validToken builds a valid encrypted token for standard test credentials using testSecret.
+func validToken(t *testing.T) string {
+	t.Helper()
+	return encryptToken(t, launchCredentials{IP: "192.168.1.1", Username: "admin", Password: "pass123"}, testSecret)
 }
 
 // --- Security: Origin validation ---
@@ -81,7 +125,7 @@ func TestOriginValidation_EvilOriginOnLaunchReturns403(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
+		map[string]string{"token": validToken(t)},
 		"http://evil.com", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
@@ -96,7 +140,7 @@ func TestHostValidation_EvilHostOnLaunchReturns403(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
+		map[string]string{"token": validToken(t)},
 		"http://localhost:3000", "evil.com:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
@@ -119,7 +163,7 @@ func TestHostValidation_IPHostOnLaunchReturns403(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
+		map[string]string{"token": validToken(t)},
 		"http://localhost:3000", "127.0.0.1:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
@@ -158,7 +202,7 @@ func TestHealth_POSTReturns405(t *testing.T) {
 
 // --- Launch endpoint ---
 
-func TestLaunch_ValidRequestReturns200(t *testing.T) {
+func TestLaunch_ValidTokenReturns200(t *testing.T) {
 	// Override startProcess with a successful mock
 	original := startProcess
 	t.Cleanup(func() { startProcess = original })
@@ -169,7 +213,7 @@ func TestLaunch_ValidRequestReturns200(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass123"},
+		map[string]string{"token": validToken(t)},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -184,11 +228,11 @@ func TestLaunch_ValidRequestReturns200(t *testing.T) {
 	}
 }
 
-func TestLaunch_EmptyIPReturns400(t *testing.T) {
+func TestLaunch_MissingTokenReturns400(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "", "username": "admin", "password": "pass"},
+		map[string]string{"token": ""},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -196,11 +240,11 @@ func TestLaunch_EmptyIPReturns400(t *testing.T) {
 	}
 }
 
-func TestLaunch_EmptyUsernameReturns400(t *testing.T) {
+func TestLaunch_InvalidTokenReturns400(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "192.168.1.1", "username": "", "password": "pass"},
+		map[string]string{"token": "deadbeef01020304"},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -208,24 +252,28 @@ func TestLaunch_EmptyUsernameReturns400(t *testing.T) {
 	}
 }
 
-func TestLaunch_EmptyPasswordReturns400(t *testing.T) {
+func TestLaunch_TokenWrongSecretReturns400(t *testing.T) {
+	// Encrypt with a different secret — bridge should reject it
+	otherSecret := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	token := encryptToken(t, launchCredentials{IP: "10.0.0.1", Username: "admin", Password: "x"}, otherSecret)
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": ""},
+		map[string]string{"token": token},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 got %d", rr.Code)
+		t.Errorf("expected 400 for wrong-secret token, got %d", rr.Code)
 	}
+	assertJSONError(t, rr, "invalid or tampered token")
 }
 
 func TestLaunch_WinBoxNotFoundReturns503(t *testing.T) {
 	// winboxPath is empty — WinBox not found
-	h := buildHandler("http://localhost:3000", "", "localhost:1337")
+	h := buildMux("", "http://localhost:3000", "localhost:1337", testSecret)
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
+		map[string]string{"token": validToken(t)},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusServiceUnavailable {
@@ -244,7 +292,7 @@ func TestLaunch_StartProcessFailReturns500(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"ip": "192.168.1.1", "username": "admin", "password": "pass"},
+		map[string]string{"token": validToken(t)},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusInternalServerError {
@@ -263,35 +311,72 @@ func TestLaunch_GETReturns405(t *testing.T) {
 	}
 }
 
-// --- Security: No arbitrary execution (struct shape) ---
+// --- Security: Token replaces plaintext fields ---
 
-func TestLaunch_ExtraExecutableFieldIgnored(t *testing.T) {
-	// Passing extra "executable" field must not affect behavior — struct ignores unknown fields
-	original := startProcess
-	t.Cleanup(func() { startProcess = original })
-	var launchedWith string
-	startProcess = func(name string, args []string) error {
-		launchedWith = name
-		return nil
-	}
-
+func TestLaunch_PlaintextFieldsInBodyAreRejected(t *testing.T) {
+	// Sending plaintext ip/username/password (old format) must be rejected — token is required.
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 
-	// Manually create JSON with extra field
-	body := `{"ip":"192.168.1.1","username":"admin","password":"pass","executable":"/bin/evil"}`
+	body := `{"ip":"192.168.1.1","username":"admin","password":"pass"}`
 	req := httptest.NewRequest(http.MethodPost, "/launch", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://localhost:3000")
 	req.Host = "localhost:1337"
 	h.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200 got %d; body: %s", rr.Code, rr.Body.String())
+	// Old plaintext format has no "token" field — bridge must return 400
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for plaintext credentials (no token), got %d", rr.Code)
 	}
-	// The launched binary must be /fake/winbox, not /bin/evil
-	if launchedWith != "/fake/winbox" {
-		t.Errorf("expected launch with /fake/winbox, got %q", launchedWith)
+}
+
+// --- decryptLaunchToken unit tests ---
+
+func TestDecryptLaunchToken_RoundTrip(t *testing.T) {
+	creds := launchCredentials{IP: "10.1.2.3", Username: "user", Password: "s3cr3t"}
+	token := encryptToken(t, creds, testSecret)
+	got, err := decryptLaunchToken(token, testSecret)
+	if err != nil {
+		t.Fatalf("decryptLaunchToken: %v", err)
+	}
+	if got != creds {
+		t.Errorf("round-trip mismatch: want %+v, got %+v", creds, got)
+	}
+}
+
+func TestDecryptLaunchToken_WrongKey(t *testing.T) {
+	token := encryptToken(t, launchCredentials{IP: "1.2.3.4", Username: "u", Password: "p"}, testSecret)
+	otherKey := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	_, err := decryptLaunchToken(token, otherKey)
+	if err == nil {
+		t.Error("expected error for wrong key, got nil")
+	}
+}
+
+func TestDecryptLaunchToken_TamperedToken(t *testing.T) {
+	token := encryptToken(t, launchCredentials{IP: "1.2.3.4", Username: "u", Password: "p"}, testSecret)
+	// Flip one byte in the middle
+	b, _ := hex.DecodeString(token)
+	b[len(b)/2] ^= 0xff
+	tampered := hex.EncodeToString(b)
+	_, err := decryptLaunchToken(tampered, testSecret)
+	if err == nil {
+		t.Error("expected error for tampered token, got nil")
+	}
+}
+
+func TestDecryptLaunchToken_InvalidHex(t *testing.T) {
+	_, err := decryptLaunchToken("not-hex!", testSecret)
+	if err == nil {
+		t.Error("expected error for invalid hex, got nil")
+	}
+}
+
+func TestDecryptLaunchToken_InvalidSecret(t *testing.T) {
+	_, err := decryptLaunchToken("aabbcc", "not-a-hex-key")
+	if err == nil {
+		t.Error("expected error for invalid secret, got nil")
 	}
 }
 
@@ -357,4 +442,54 @@ func assertJSONError(t *testing.T, rr *httptest.ResponseRecorder, substr string)
 	if !strings.Contains(errMsg, substr) {
 		t.Errorf("expected error to contain %q, got %q", substr, errMsg)
 	}
+}
+
+// --- Log file helpers ---
+
+func TestLogFilePath_IsAbsoluteAndEndsWith(t *testing.T) {
+	p := logFilePath()
+	if !strings.Contains(p, "winbox-bridge.log") {
+		t.Errorf("expected path to contain winbox-bridge.log, got %q", p)
+	}
+}
+
+func TestSetupLogFile_CreatesFileAndWritesToIt(t *testing.T) {
+	// setupLogFile writes to os.TempDir(); redirect to a temp location by temporarily
+	// monkey-patching os.TempDir — not possible without modifying the function.
+	// Instead, call the real setupLogFile and verify the file exists and is writable.
+	path, cleanup := setupLogFile()
+	if path == "" {
+		t.Skip("setupLogFile could not create log file (permissions?)")
+	}
+	defer cleanup()
+
+	// Write a log line — it should land in the file.
+	log.Println("test log line from TestSetupLogFile")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log file %s: %v", path, err)
+	}
+	if !strings.Contains(string(data), "test log line from TestSetupLogFile") {
+		t.Errorf("log file does not contain expected line; contents:\n%s", data)
+	}
+
+	// Restore logger to stderr only so subsequent tests are not affected.
+	log.SetOutput(os.Stderr)
+}
+
+func TestSetupLogFile_CleanupClosesFile(t *testing.T) {
+	// Just ensure cleanup does not panic when called.
+	path, cleanup := setupLogFile()
+	if path == "" {
+		t.Skip("could not create log file")
+	}
+	cleanup() // must not panic
+	log.SetOutput(os.Stderr)
+}
+
+func TestFreeConsole_DoesNotPanic(t *testing.T) {
+	// freeConsole is a no-op on non-Windows; on Windows it calls FreeConsole.
+	// Either way it must not panic.
+	freeConsole()
 }

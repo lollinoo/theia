@@ -30,7 +30,7 @@ func (m *ServerManager) Start(cfg Config) error {
 	}
 	winboxPath := discoverWinBox(cfg.WinBoxPath)
 	expectedHost := fmt.Sprintf("localhost:%d", cfg.ListenPort)
-	handler := buildMux(winboxPath, cfg.TheiaOrigin, expectedHost)
+	handler := buildMux(winboxPath, cfg.TheiaOrigin, expectedHost, cfg.BridgeSecret)
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.ListenPort),
 		Handler: handler,

@@ -1,15 +1,20 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -20,33 +25,69 @@ import (
 // --- Request / response types ---
 
 // launchRequest is the POST /launch request body.
-// Exactly 3 fields: IP, Username, Password. No executable/command field (D-09).
+// Accepts an AES-GCM encrypted token (hex-encoded) produced by the Theia backend.
+// The token decrypts to a JSON object: {"ip":"...","username":"...","password":"..."}.
+// Plaintext credential fields are no longer accepted — the bridge secret must match.
 type launchRequest struct {
+	Token string `json:"token"`
+}
+
+// launchCredentials is the plaintext payload embedded inside the encrypted token.
+type launchCredentials struct {
 	IP       string `json:"ip"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+// --- Crypto helpers ---
+
+// decryptLaunchToken decrypts a hex-encoded AES-GCM ciphertext produced by the
+// Theia backend using the bridge's shared secret (32-byte hex key in config).
+// Returns the plaintext launchCredentials or an error if decryption fails.
+func decryptLaunchToken(tokenHex, secretHex string) (launchCredentials, error) {
+	var creds launchCredentials
+
+	key, err := hex.DecodeString(secretHex)
+	if err != nil || len(key) != 32 {
+		return creds, fmt.Errorf("invalid bridge secret")
+	}
+
+	ciphertext, err := hex.DecodeString(tokenHex)
+	if err != nil {
+		return creds, fmt.Errorf("invalid token encoding")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return creds, fmt.Errorf("create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return creds, fmt.Errorf("create GCM: %w", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return creds, fmt.Errorf("token too short")
+	}
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return creds, fmt.Errorf("decrypt: %w", err)
+	}
+
+	if err := json.Unmarshal(plaintext, &creds); err != nil {
+		return creds, fmt.Errorf("decode credentials: %w", err)
+	}
+	return creds, nil
 }
 
 // --- Process injection (for testability) ---
 
 // startProcess is the function used to start the WinBox process.
 // Tests override this variable to mock process launch behaviour.
+// The default implementation is platform-specific (see launch_windows.go /
+// launch_other.go) so that WinBox opens in the foreground on Windows.
 var startProcess = defaultStartProcess
-
-// defaultStartProcess launches the winbox binary with the given arguments.
-// It detaches stdout/stderr and calls cmd.Process.Release() to orphan the process
-// so the bridge returns immediately (fire-and-forget, per D-10).
-func defaultStartProcess(name string, args []string) error {
-	cmd := exec.Command(name, args...) //nolint:gosec — name comes from trusted discoverWinBox(), not request
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Stdin = nil
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	// Release ownership so the child outlives the bridge (D-10)
-	return cmd.Process.Release()
-}
 
 // --- WinBox discovery ---
 
@@ -79,6 +120,8 @@ func discoverWinBox(winboxPathFlag string) string {
 		}
 	}
 
+	cfgPath, _ := configFilePath()
+	log.Printf("winbox-bridge: WinBox not found — set \"winbox_path\" in %s", cfgPath)
 	return ""
 }
 
@@ -181,7 +224,10 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleLaunch returns an http.HandlerFunc for POST /launch (D-08, D-09, D-10, D-11).
 // winboxPath is the resolved WinBox executable path (may be "").
-func handleLaunch(winboxPath string) http.HandlerFunc {
+// bridgeSecret is the hex-encoded 32-byte AES key shared with the Theia backend.
+// The request body must be {"token":"<hex>"} — an AES-GCM ciphertext that decodes
+// to {"ip":"...","username":"...","password":"..."}.
+func handleLaunch(winboxPath, bridgeSecret string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -193,27 +239,46 @@ func handleLaunch(winboxPath string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
+		if req.Token == "" {
+			writeError(w, http.StatusBadRequest, "token is required")
+			return
+		}
 
-		if req.IP == "" || req.Username == "" || req.Password == "" {
-			writeError(w, http.StatusBadRequest, "ip, username, and password are required")
+		if bridgeSecret == "" {
+			writeError(w, http.StatusServiceUnavailable,
+				"bridge secret not configured — restart the bridge to generate one")
+			return
+		}
+
+		creds, err := decryptLaunchToken(req.Token, bridgeSecret)
+		if err != nil {
+			log.Printf("winbox-bridge: token decrypt failed: %v", err)
+			writeError(w, http.StatusBadRequest, "invalid or tampered token")
+			return
+		}
+
+		if creds.IP == "" || creds.Username == "" || creds.Password == "" {
+			writeError(w, http.StatusBadRequest, "decrypted token missing required fields")
 			return
 		}
 
 		if winboxPath == "" {
+			log.Printf("winbox-bridge: /launch: WinBox not found — set \"winbox_path\" in config.json")
 			writeError(w, http.StatusServiceUnavailable,
-				"winbox executable not found — use --winbox-path to specify location")
+				"winbox executable not found — set winbox_path in config.json")
 			return
 		}
 
 		// Construct args: winbox <ip> <username> <password> (D-08)
 		// exec.Command does NOT invoke a shell — each arg is a separate argv element (T-26-08).
-		args := []string{req.IP, req.Username, req.Password}
+		args := []string{creds.IP, creds.Username, creds.Password}
 		if err := startProcess(winboxPath, args); err != nil {
 			log.Printf("winbox-bridge: failed to start WinBox: %v", err)
 			writeError(w, http.StatusInternalServerError, "failed to launch WinBox")
 			return
 		}
 
+		log.Printf("winbox-bridge: launched WinBox for %s", creds.IP)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }
@@ -223,10 +288,11 @@ func handleLaunch(winboxPath string) http.HandlerFunc {
 // buildMux creates the http.Handler with per-route security:
 // /health is public (no auth — any origin may poll bridge status).
 // /launch is protected by securityCheck (CSRF guard for sensitive launch action).
-func buildMux(winboxPath, allowedOrigin, expectedHost string) http.Handler {
+// bridgeSecret is the hex-encoded 32-byte AES key used to decrypt launch tokens.
+func buildMux(winboxPath, allowedOrigin, expectedHost, bridgeSecret string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
-	mux.Handle("/launch", securityCheck(allowedOrigin, expectedHost, handleLaunch(winboxPath)))
+	mux.Handle("/launch", securityCheck(allowedOrigin, expectedHost, handleLaunch(winboxPath, bridgeSecret)))
 	return mux
 }
 
@@ -251,6 +317,33 @@ func parsePort(addr string) int {
 	return p
 }
 
+// --- Log file helpers ---
+
+// logFilePath returns the path used for the debug log file.
+// Uses os.TempDir() so no special permissions are needed on any platform.
+// Windows: %TEMP%\winbox-bridge.log   Linux/macOS: /tmp/winbox-bridge.log
+func logFilePath() string {
+	return filepath.Join(os.TempDir(), "winbox-bridge.log")
+}
+
+// setupLogFile opens (or creates/truncates) the log file and configures the
+// standard logger to write to both stderr and the file simultaneously.
+// Returns the log file path and a cleanup function that closes the file.
+// If the file cannot be opened the logger is left writing to stderr only and
+// an empty path is returned so callers can suppress the "Open Log File" menu item.
+func setupLogFile() (path string, cleanup func()) {
+	path = logFilePath()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		log.Printf("winbox-bridge: could not open log file %s: %v (logging to stderr only)", path, err)
+		return "", func() {}
+	}
+	// Tee: write to both the file and the original stderr so terminal use works too.
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	return path, func() { f.Close() }
+}
+
+
 // --- main ---
 
 func main() {
@@ -263,12 +356,53 @@ func main() {
 		"Address to listen on, e.g. :1337 (overrides config file)")
 	noTray := flag.Bool("no-tray", false,
 		"Run in headless mode without system tray (for servers without a display)")
+	logLevel := flag.String("log-level", "info",
+		"Log verbosity level: info (default) or debug (verbose request/response logging)")
 	flag.Parse()
 
-	// Load persistent config — falls back to defaults if missing (first run).
+	// Load persistent config first — log level may be set there.
+	// Falls back to defaults if missing (first run).
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Printf("winbox-bridge: config load warning: %v (using defaults)", err)
+	}
+
+	// Determine effective log level: CLI flag overrides config file.
+	// flag.Visit only visits flags that were explicitly set by the user.
+	logLevelExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "log-level" {
+			logLevelExplicit = true
+		}
+	})
+	if !logLevelExplicit && cfg.LogLevel == "debug" {
+		*logLevel = "debug"
+	}
+
+	// Apply log verbosity — debug adds timestamps and file/line info.
+	if *logLevel == "debug" {
+		log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+	} else {
+		log.SetFlags(log.LstdFlags)
+	}
+
+	// In tray mode, always write to a log file — the tray has no visible console,
+	// so the file is the only way to inspect logs without restarting with --no-tray.
+	// In headless mode (--no-tray), only write to a file when --log-level debug is set.
+	var activeLogFile string // non-empty when log output is tee'd to a file
+	if !*noTray || *logLevel == "debug" {
+		path, cleanup := setupLogFile()
+		defer cleanup()
+		activeLogFile = path
+		log.Printf("winbox-bridge: logging to file: %s", activeLogFile)
+	}
+
+	// Ensure a bridge secret exists — generate one on first run and persist it.
+	cfg, err = ensureBridgeSecret(cfg)
+	if err != nil {
+		log.Printf("winbox-bridge: failed to generate bridge secret: %v", err)
+	} else if err := saveConfig(cfg); err != nil {
+		log.Printf("winbox-bridge: failed to persist bridge secret: %v", err)
 	}
 
 	// CLI flag overrides — flags set to non-empty values win over config file.
@@ -311,10 +445,16 @@ func main() {
 	if err := mgr.Start(cfg); err != nil {
 		log.Printf("winbox-bridge: auto-start failed: %v", err)
 	}
+
+	// On Windows, detach from the console window so no black terminal flashes
+	// when the user double-clicks the .exe.  This is done programmatically
+	// (not via -H=windowsgui) so that terminal usage (--no-tray) still works.
+	freeConsole()
+
 	// systray.Run MUST block the main goroutine (macOS Cocoa requirement).
 	// All other goroutines are spawned inside setupTray (onReady callback).
 	systray.Run(
-		func() { setupTray(mgr, cfg) },
+		func() { setupTray(mgr, cfg, activeLogFile) },
 		func() { mgr.Stop() }, //nolint:errcheck — best-effort shutdown on exit
 	)
 }
