@@ -35,12 +35,12 @@ describe('useBridgeHealth', () => {
     expect(result.current.bridgeRunning).toBe(false);
   });
 
-  it('polls on 30s interval', async () => {
+  it('polls on 15s interval', async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
     renderHook(() => useBridgeHealth());
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(global.fetch).toHaveBeenCalledTimes(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 
