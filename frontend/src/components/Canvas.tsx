@@ -25,7 +25,7 @@ import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { usePositions } from '../hooks/usePositions';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
 import { useBridgeHealth } from '../hooks/useBridgeHealth';
-import { fetchDeviceCredentialProfiles, fetchWinBoxCredentials } from '../api/client';
+import { fetchDeviceCredentialProfiles, fetchBridgeToken, fetchSettings } from '../api/client';
 
 const nodeTypes = { device: DeviceCard };
 const edgeTypes = { link: LinkEdge };
@@ -51,6 +51,16 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
   const { bridgeRunning } = useBridgeHealth();
+  const [bridgeSecret, setBridgeSecret] = useState('');
+  const [winboxError, setWinboxError] = useState<string | null>(null);
+  useEffect(() => {
+    fetchSettings().then((s) => setBridgeSecret(s['bridge_secret'] ?? '')).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!winboxError) return;
+    const t = window.setTimeout(() => setWinboxError(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [winboxError]);
 
   // Per-device WinBox profile status (true = has a WinBox-designated profile)
   const [deviceWinboxState, setDeviceWinboxState] = useState<Record<string, boolean>>({});
@@ -240,13 +250,18 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   }, [deviceMenu, devices, deviceWinboxState]);
 
   async function handleLaunchWinBox(deviceId: string) {
+    if (!bridgeSecret) return;
     try {
-      const creds = await fetchWinBoxCredentials(deviceId);
-      await fetch('http://localhost:1337/launch', {
+      const token = await fetchBridgeToken(deviceId, bridgeSecret);
+      const res = await fetch('http://localhost:1337/launch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip: creds.ip, username: creds.username, password: creds.password }),
+        body: JSON.stringify({ token }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setWinboxError(data.error ?? `Bridge error (${res.status})`);
+      }
     } catch {
       // silent — bridge may not be running
     }
@@ -397,6 +412,14 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
             setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
           }
         }} />
+      {/* WinBox launch error toast */}
+      {winboxError && (
+        <div className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-status-down/40 bg-surface px-4 py-2.5 text-xs text-status-down shadow-lg">
+          <span>{winboxError}</span>
+          <button type="button" onClick={() => setWinboxError(null)} className="ml-1 hover:opacity-70">&times;</button>
+        </div>
+      )}
+
       <ZoomControls onZoomIn={() => { void reactFlow.zoomIn({ duration: 200 }); }}
         onZoomOut={() => { void reactFlow.zoomOut({ duration: 200 }); }}
         onFitView={() => { void reactFlow.fitView({ padding: 0.18, duration: 280 }); }} />

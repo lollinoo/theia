@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 const BRIDGE_HEALTH_URL = 'http://localhost:1337/health';
-const POLL_INTERVAL_MS = 30_000;
+const POLL_INTERVAL_MS = 15_000;
 
 export function useBridgeHealth(): { bridgeRunning: boolean } {
   const [bridgeRunning, setBridgeRunning] = useState(false);

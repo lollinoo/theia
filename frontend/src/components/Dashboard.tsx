@@ -3,7 +3,7 @@ import type { Device, Area } from '../types/api';
 import type { SnapshotPayload } from '../types/metrics';
 import { DeviceTable } from './dashboard/DeviceTable';
 import { useBridgeHealth } from '../hooks/useBridgeHealth';
-import { fetchDeviceCredentialProfiles, fetchWinBoxCredentials } from '../api/client';
+import { fetchDeviceCredentialProfiles, fetchBridgeToken, fetchSettings } from '../api/client';
 import { FilterSelect, type FilterOption } from './dashboard/FilterSelect';
 import { MaterialIcon } from './MaterialIcon';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
@@ -33,6 +33,16 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
   const { resolvedTheme } = useTheme();
   const [panel, setPanel] = useState<PanelType | null>(null);
   const { bridgeRunning } = useBridgeHealth();
+  const [bridgeSecret, setBridgeSecret] = useState('');
+  const [winboxError, setWinboxError] = useState<string | null>(null);
+  useEffect(() => {
+    fetchSettings().then((s) => setBridgeSecret(s['bridge_secret'] ?? '')).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!winboxError) return;
+    const t = window.setTimeout(() => setWinboxError(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [winboxError]);
 
   // Per-device WinBox profile status (true = has a WinBox-designated profile)
   const [deviceWinboxMap, setDeviceWinboxMap] = useState<Record<string, boolean>>({});
@@ -99,13 +109,18 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
   }, [filteredDevices]);
 
   async function handleWinBox(device: Device) {
+    if (!bridgeSecret) return;
     try {
-      const creds = await fetchWinBoxCredentials(device.id);
-      await fetch('http://localhost:1337/launch', {
+      const token = await fetchBridgeToken(device.id, bridgeSecret);
+      const res = await fetch('http://localhost:1337/launch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip: creds.ip, username: creds.username, password: creds.password }),
+        body: JSON.stringify({ token }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setWinboxError(data.error ?? `Bridge error (${res.status})`);
+      }
     } catch {
       // silent — bridge may not be running or no credentials
     }
@@ -200,6 +215,14 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
           {filteredDevices.length} / {devices.length}
         </span>
       </div>
+
+      {/* WinBox launch error banner */}
+      {winboxError && (
+        <div className="mx-4 mt-1 flex items-center justify-between rounded-md border border-status-down/30 bg-status-down/10 px-3 py-1.5 text-xs text-status-down">
+          <span>{winboxError}</span>
+          <button type="button" onClick={() => setWinboxError(null)} className="ml-3 hover:opacity-70">&times;</button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="flex-1 overflow-auto px-4 py-2">

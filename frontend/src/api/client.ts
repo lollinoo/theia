@@ -467,6 +467,23 @@ export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCr
   return parseWinBoxCredentialsResponse(payload);
 }
 
+// fetchBridgeToken requests an AES-GCM encrypted credential token from the backend.
+// The token is encrypted with bridgeSecret (the 64-char hex key stored in the bridge's config.json)
+// and can only be decrypted by the bridge binary.  The plaintext credentials never appear in the
+// browser's network traffic to the bridge.
+export async function fetchBridgeToken(deviceId: string, bridgeSecret: string): Promise<string> {
+  const payload = await requestJSONWithBody(
+    `/api/v1/bridge/token/${encodeURIComponent(deviceId)}`,
+    'POST',
+    { bridge_secret: bridgeSecret },
+  );
+  const p = payload as Record<string, unknown>;
+  if (typeof p?.token !== 'string' || p.token === '') {
+    throw new Error('invalid bridge token response');
+  }
+  return p.token;
+}
+
 export async function testSSHConnection(deviceId: string): Promise<{ success: boolean; error?: string }> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/ssh-credentials/test`,
