@@ -47,7 +47,7 @@ func NewRouter(
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandler(instanceBackupService)
-	bridgeHandler := NewBridgeHandler(bridgeBinariesDir)
+	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo)
 
 	// Device routes
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
@@ -408,6 +408,11 @@ func NewRouter(
 			return
 		}
 		bridgeHandler.HandleDownload(w, r)
+	})
+
+	// Bridge credential token — encrypts WinBox credentials with the bridge's own secret
+	mux.HandleFunc("/api/v1/bridge/token/", func(w http.ResponseWriter, r *http.Request) {
+		bridgeHandler.HandleBridgeToken(w, r)
 	})
 
 	// Health endpoint

@@ -35,6 +35,7 @@ var validSettingKeys = map[string]bool{
 	domain.SettingInstanceBackupRetentionCount: true,
 	domain.SettingDeviceBackupIntervalHours:    true,
 	domain.SettingDeviceBackupRetentionCount:   true,
+	domain.SettingBridgeSecret:                 true,
 }
 
 // numericSettings lists keys that must parse as valid integers.
