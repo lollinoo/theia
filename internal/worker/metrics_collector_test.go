@@ -1092,3 +1092,207 @@ func buildEmptyVendorRegistry() *vendor.Registry {
 	}
 	return reg
 }
+
+// newMockCollectorWithChangingData returns a MetricsCollector backed by a repo
+// whose device status can be mutated between cycles, so successive calls to
+// collectAndBroadcast produce different snapshots.
+// The returned invalidateCh must be sent on after mutating deviceRepo.devices
+// to force cache invalidation before the next collectAndBroadcast call.
+func newMockCollectorWithChangingData(t *testing.T) (*MetricsCollector, *ws.Hub, *mockWorkerDeviceRepo, chan<- struct{}) {
+	t.Helper()
+
+	devID := uuid.New()
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"status": "success",
+			"data": map[string]interface{}{
+				"resultType": "vector",
+				"result":     []interface{}{},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(promServer.Close)
+
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{
+			{
+				ID:                   devID,
+				IP:                   "10.0.0.1",
+				Status:               domain.DeviceStatusUp,
+				MetricsSource:        domain.MetricsSourcePrometheus,
+				PrometheusLabelName:  "instance",
+				PrometheusLabelValue: "10.0.0.1",
+				Vendor:               "default",
+			},
+		},
+	}
+	linkRepo := &mockWorkerLinkRepo{}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+
+	mc := NewMetricsCollector(
+		promClient,
+		hub,
+		dlCache,
+		deviceRepo,
+		settingsRepo,
+		registry,
+		nil,
+		nil,
+	)
+
+	return mc, hub, deviceRepo, invalidateCh
+}
+
+// drainBroadcastCh reads all currently queued messages from the hub's broadcast
+// channel without blocking. Returns the slice of raw JSON payloads.
+func drainBroadcastCh(hub *ws.Hub) [][]byte {
+	var msgs [][]byte
+	for {
+		select {
+		case msg := <-hub.BroadcastCh():
+			msgs = append(msgs, msg)
+		default:
+			return msgs
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GAP 3: First cycle broadcasts MessageTypeSnapshot
+// ---------------------------------------------------------------------------
+
+func TestCollectAndBroadcast_FirstCycle_BroadcastsSnapshotType(t *testing.T) {
+	mc, hub := newMockCollector(t)
+
+	mc.collectAndBroadcast(context.Background())
+
+	msgs := drainBroadcastCh(hub)
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one message in broadcast channel after first cycle")
+	}
+
+	// There may be a prometheus_status message too; find the first snapshot message.
+	var snapshotMsg map[string]interface{}
+	for _, raw := range msgs {
+		var m map[string]interface{}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("failed to unmarshal broadcast message: %v", err)
+		}
+		if m["type"] == "snapshot" {
+			snapshotMsg = m
+			break
+		}
+	}
+
+	if snapshotMsg == nil {
+		t.Fatalf("expected a message with type %q on first cycle, got types: %v",
+			"snapshot", func() []string {
+				var types []string
+				for _, raw := range msgs {
+					var m map[string]interface{}
+					_ = json.Unmarshal(raw, &m)
+					types = append(types, fmt.Sprintf("%v", m["type"]))
+				}
+				return types
+			}())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GAP 2: Second cycle skips broadcast when nothing changed
+// ---------------------------------------------------------------------------
+
+func TestCollectAndBroadcast_SecondCycle_SkipsBroadcastWhenUnchanged(t *testing.T) {
+	mc, hub := newMockCollector(t)
+
+	// First cycle: full snapshot broadcast.
+	mc.collectAndBroadcast(context.Background())
+
+	// Drain all messages from first cycle.
+	firstMsgs := drainBroadcastCh(hub)
+	if len(firstMsgs) == 0 {
+		t.Fatal("expected at least one broadcast after first cycle")
+	}
+
+	// Second cycle: data unchanged — no new broadcast expected.
+	mc.collectAndBroadcast(context.Background())
+
+	secondMsgs := drainBroadcastCh(hub)
+
+	// Filter out any prometheus_status messages (those come from Prometheus
+	// availability changes, not the delta/snapshot logic).
+	var nonStatusMsgs [][]byte
+	for _, raw := range secondMsgs {
+		var m map[string]interface{}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			continue
+		}
+		if m["type"] != "prometheus_status" {
+			nonStatusMsgs = append(nonStatusMsgs, raw)
+		}
+	}
+
+	if len(nonStatusMsgs) != 0 {
+		t.Errorf("expected no snapshot/delta broadcast on second cycle when data unchanged, got %d message(s)", len(nonStatusMsgs))
+		for _, raw := range nonStatusMsgs {
+			t.Logf("unexpected message: %s", string(raw))
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GAP 1: Second cycle broadcasts snapshot_delta when data changed
+// ---------------------------------------------------------------------------
+
+func TestCollectAndBroadcast_SecondCycle_BroadcastsSnapshotDelta(t *testing.T) {
+	mc, hub, deviceRepo, invalidateCh := newMockCollectorWithChangingData(t)
+
+	// First cycle: seeds prevHashes, broadcasts full snapshot.
+	mc.collectAndBroadcast(context.Background())
+
+	// Drain the first cycle's messages so the channel is empty.
+	drainBroadcastCh(hub)
+
+	// Mutate device status to force a snapshot change between cycles.
+	deviceRepo.devices[0].Status = domain.DeviceStatusDown
+	// Signal cache invalidation so the next buildSnapshot sees updated data.
+	invalidateCh <- struct{}{}
+
+	// Second cycle: data changed — should broadcast snapshot_delta.
+	mc.collectAndBroadcast(context.Background())
+
+	msgs := drainBroadcastCh(hub)
+
+	var deltaMsg map[string]interface{}
+	for _, raw := range msgs {
+		var m map[string]interface{}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("failed to unmarshal broadcast message: %v", err)
+		}
+		if m["type"] == "snapshot_delta" {
+			deltaMsg = m
+			break
+		}
+	}
+
+	if deltaMsg == nil {
+		t.Fatalf("expected a message with type %q on second cycle with changed data, got types: %v",
+			"snapshot_delta", func() []string {
+				var types []string
+				for _, raw := range msgs {
+					var m map[string]interface{}
+					_ = json.Unmarshal(raw, &m)
+					types = append(types, fmt.Sprintf("%v", m["type"]))
+				}
+				return types
+			}())
+	}
+}

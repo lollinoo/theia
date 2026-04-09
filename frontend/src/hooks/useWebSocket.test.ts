@@ -354,6 +354,27 @@ describe('useWebSocket', () => {
     expect(result.current.snapshot!.alerts[0].alert_name).toBe('Down');
   });
 
+  it('does not crash when receiving an unknown message type', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    // Send a message with an unrecognised type — parseWSMessage throws, caught internally.
+    expect(() => {
+      act(() => {
+        mockInstance.simulateMessage({
+          type: 'unknown_type',
+          payload: { some: 'data' },
+        });
+      });
+    }).not.toThrow();
+
+    // snapshot must remain null — no state mutation from the unknown message.
+    expect(result.current.snapshot).toBeNull();
+  });
+
   it('snapshot_delta with empty alerts preserves existing alerts', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
