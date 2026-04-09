@@ -28,6 +28,10 @@ func (m *ServerManager) Start(cfg Config) error {
 	if m.server != nil {
 		return nil // already running — no-op
 	}
+	// T-29-01: reject invalid ports before binding — clearer error than net.Listen's OS message
+	if cfg.ListenPort < 1 || cfg.ListenPort > 65535 {
+		return fmt.Errorf("invalid port %d: must be 1-65535", cfg.ListenPort)
+	}
 	winboxPath := discoverWinBox(cfg.WinBoxPath)
 	expectedHost := fmt.Sprintf("localhost:%d", cfg.ListenPort)
 	handler := buildMux(winboxPath, cfg.TheiaOrigin, expectedHost, cfg.BridgeSecret)
