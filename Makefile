@@ -146,20 +146,27 @@ release: ## Create release tag and push (Usage: make release VERSION=1.3.8)
 # ---------------------------------------------------------------------------
 BRIDGE_OUT := bridge_binaries
 BRIDGE_SRC := ./cmd/winbox-bridge/
-BRIDGE_TARGETS := windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-bridge-build-all: ## Cross-compile winbox-bridge for all 6 targets
+# Windows and Linux: CGO_ENABLED=0 (fyne.io/systray is pure Go on these platforms)
+# macOS: requires CGO_ENABLED=1 (Cocoa via Objective-C) — build natively on Mac or via CI
+BRIDGE_TARGETS_NOCGO := windows/amd64 windows/arm64 linux/amd64 linux/arm64
+
+bridge-build-all: ## Cross-compile winbox-bridge for Windows + Linux (macOS requires native Mac — use CI)
 	@rm -rf $(BRIDGE_OUT)
 	@mkdir -p $(BRIDGE_OUT)
-	@for target in $(BRIDGE_TARGETS); do \
+	@for target in $(BRIDGE_TARGETS_NOCGO); do \
 		os=$$(echo $$target | cut -d/ -f1); \
 		arch=$$(echo $$target | cut -d/ -f2); \
 		ext=""; \
-		if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
+		ldextra=""; \
+		if [ "$$os" = "windows" ]; then ext=".exe"; ldextra="-H=windowsgui"; fi; \
 		output="$(BRIDGE_OUT)/winbox-bridge-$${os}-$${arch}$${ext}"; \
 		echo "Building $$output ..."; \
-		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags="-s -w" -o "$$output" $(BRIDGE_SRC) || exit 1; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags="-s -w $${ldextra}" -o "$$output" $(BRIDGE_SRC) || exit 1; \
 	done
 	@echo ""
 	@echo "Bridge binaries built in $(BRIDGE_OUT)/:"
 	@ls -la $(BRIDGE_OUT)/
+	@echo ""
+	@echo "NOTE: macOS binaries (darwin/amd64, darwin/arm64) require CGO_ENABLED=1."
+	@echo "      Build natively on Mac: CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags=\"-s -w\" -o $(BRIDGE_OUT)/winbox-bridge-darwin-arm64 $(BRIDGE_SRC)"
