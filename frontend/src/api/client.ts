@@ -412,19 +412,6 @@ export async function deleteCredentialProfile(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/credential-profiles/${encodeURIComponent(id)}`, 'DELETE');
 }
 
-export async function testSSHProfile(id: string, targetIP: string): Promise<{ success: boolean; error?: string }> {
-  const response = await requestJSONWithBody(
-    `/api/v1/ssh-profiles/${encodeURIComponent(id)}/test`,
-    'POST',
-    { target_ip: targetIP },
-  );
-  const data = response as Record<string, unknown>;
-  return {
-    success: data.success === true,
-    error: typeof data.error === 'string' ? data.error : undefined,
-  };
-}
-
 // --- Device Credential Profile Assignments ---
 
 export async function fetchDeviceCredentialProfiles(deviceId: string): Promise<DeviceCredentialProfile[]> {
