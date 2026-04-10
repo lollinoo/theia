@@ -18,6 +18,9 @@ const (
 	// per-request credential token — it is never stored in plaintext in the DB beyond
 	// whatever the SettingsRepository already encrypts.
 	SettingBridgeSecret = "bridge_secret"
+	// SettingBridgePort holds the TCP port the WinBox bridge listens on.
+	// Defaults to "1337" to match the bridge's default ListenPort.
+	SettingBridgePort = "bridge_port"
 )
 
 // DefaultSettings returns the default runtime settings.
@@ -34,6 +37,7 @@ func DefaultSettings() map[string]string {
 		SettingInstanceBackupRetentionCount: "5",
 		SettingDeviceBackupIntervalHours:    "0",
 		SettingDeviceBackupRetentionCount:   "5",
+		SettingBridgePort:                   "1337",
 	}
 }
 

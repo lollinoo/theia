@@ -36,6 +36,7 @@ var validSettingKeys = map[string]bool{
 	domain.SettingDeviceBackupIntervalHours:    true,
 	domain.SettingDeviceBackupRetentionCount:   true,
 	domain.SettingBridgeSecret:                 true,
+	domain.SettingBridgePort:                   true,
 }
 
 // numericSettings lists keys that must parse as valid integers.
@@ -46,6 +47,7 @@ var numericSettings = map[string]bool{
 	domain.SettingSNMPRetries:                  true,
 	domain.SettingInstanceBackupRetentionCount: true,
 	domain.SettingDeviceBackupRetentionCount:   true,
+	domain.SettingBridgePort:                   true,
 }
 
 // urlSettings lists keys that must be valid http/https URLs (or empty to clear).
