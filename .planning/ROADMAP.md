@@ -6,6 +6,7 @@
 - ✅ **v1.3.7 Virtual/Representative Nodes** — Phases 8-10 (shipped 2026-04-02) — [archive](milestones/v1.3.7-ROADMAP.md)
 - ✅ **v1.3.8 CI/CD** — Phases 11-14 (shipped 2026-04-03) — [archive](milestones/v1.3.8-ROADMAP.md)
 - ✅ **v1.4.0 Backup & Restore** — Phases 15-22 (shipped 2026-04-07) — [archive](milestones/v1.4.0-ROADMAP.md)
+- ✅ **v1.5.0 WinBox Integration** — Phases 23-31 (shipped 2026-04-10) — [archive](milestones/v1.5.0-ROADMAP.md)
 
 ## Phases
 
@@ -55,160 +56,24 @@
 
 </details>
 
-### v1.5.0 WinBox Integration (In Progress)
+<details>
+<summary>✅ v1.5.0 WinBox Integration (Phases 23-31) — SHIPPED 2026-04-10</summary>
 
-**Milestone Goal:** One-click WinBox launch from the topology map, backed by a role-aware multi-profile credential system.
+- [x] Phase 23: Credential Profile Schema + Domain (2/2 plans) — completed 2026-04-07
+- [x] Phase 24: Backend API — Profiles, Assignments, WinBox Credentials (3/3 plans) — completed 2026-04-07
+- [x] Phase 25: Frontend — Credential Profile Manager + WinBox Actions (3/3 plans) — completed 2026-04-08
+- [x] Phase 26: WinBox Bridge Binary (2/2 plans) — completed 2026-04-08
+- [x] Phase 27: Schema Cleanup — Drop Legacy FK (2/2 plans) — completed 2026-04-08
+- [x] Phase 28: API Call Optimization — WS Delta Payloads (2/2 plans) — completed 2026-04-08
+- [x] Phase 29: WinBox Bridge System Tray (3/3 plans) — completed 2026-04-09
+- [x] Phase 30: Gap Closure — Verification Docs + Dead Code (1/1 plan) — completed 2026-04-10
+- [x] Phase 31: Dynamic Bridge Port (1/1 plan) — completed 2026-04-10
 
-- [x] **Phase 23: Credential Profile Schema + Domain** - Join table, role column, BackupService update, data migration preserving encrypted credentials (completed 2026-04-07)
-- [x] **Phase 24: Backend API — Profiles, Assignments, WinBox Credentials** - 7 new routes, per-device assignment management, WinBox credential endpoint, bridge download delivery (completed 2026-04-07)
-- [x] **Phase 25: Frontend — Credential Profile Manager + WinBox Actions** - Profile manager UI, per-device assignment, role field, WinBox actions in canvas and table, bridge health check (completed 2026-04-08)
-- [x] **Phase 26: WinBox Bridge Binary** - CGO-free Go binary for 6 targets, CORS+Host dual-validation, hardcoded WinBox-only execution (completed 2026-04-08)
-- [x] **Phase 27: Schema Cleanup — Drop Legacy FK** - SQLite 12-step table-recreation migration dropping legacy ssh_profile_id FK column (completed 2026-04-08)
-- [x] **Phase 28: API Call Optimization — WS Delta Payloads** - Hash-based delta detection, frontend deep-merge, zero-broadcast when nothing changed (completed 2026-04-08)
-- [x] **Phase 29: WinBox Bridge System Tray** - System tray icon, start/stop server, config persistence, --no-tray headless mode (completed 2026-04-09)
-- [x] **Phase 30: Gap Closure — Verification Docs + Dead Code** (pending) (completed 2026-04-10)
-- [x] **Phase 31: Dynamic Bridge Port** (pending) (completed 2026-04-10)
+</details>
 
-## Phase Details
+### 📋 Next Milestone
 
-### Phase 23: Credential Profile Schema + Domain
-**Goal**: The data model supports multiple credential profiles per device with custom role labels, and existing SSH profiles are automatically migrated to "Admin"
-**Depends on**: Phase 22 (v1.4.0 complete)
-**Requirements**: CRED-01, CRED-02, CRED-04
-**Success Criteria** (what must be TRUE):
-  1. A credential profile record has a `role` text field that accepts any user-defined string (e.g. "Admin", "Read-only")
-  2. The `device_credential_profiles` join table allows multiple profiles per device with no duplicates
-  3. On upgrade, every existing SSH profile gains a `role` of "Admin" automatically — zero data loss, `encrypted_secret` preserved
-  4. `BackupService` resolves credential profiles via the new join table and continues to perform successful backups without regression
-  5. The `json:"-"` annotation on `encrypted_secret` ensures credentials are never exposed in API responses
-**Plans:** 2/2 plans complete
-Plans:
-- [x] 23-01-PLAN.md — Migration 000012 + CredentialProfile domain type
-- [x] 23-02-PLAN.md — Repository, service, handler, router rename + test updates
-
-### Phase 24: Backend API — Profiles, Assignments, WinBox Credentials
-**Goal**: The backend exposes full CRUD for credential profiles and per-device assignments, plus a WinBox credential endpoint and bridge binary download
-**Depends on**: Phase 23
-**Requirements**: CRED-03, CRED-05, BRIDGE-01, BRIDGE-02
-**Success Criteria** (what must be TRUE):
-  1. User can create, read, update, and delete credential profiles via REST API
-  2. User can list all credential profiles assigned to a specific device
-  3. User can designate exactly one profile per device as the WinBox profile via API
-  4. A dedicated endpoint returns the WinBox credential (IP + decrypted username/password) for a device — only when a WinBox profile is designated
-  5. Bridge binaries for all 6 targets (Windows/Linux/macOS x amd64/arm64) are downloadable from Theia Settings via the API
-**Plans:** 3/3 plans complete
-Plans:
-- [x] 24-01-PLAN.md — Migration 000013 + repo methods + route rename + config field
-- [x] 24-02-PLAN.md — Device assignment handler + WinBox endpoints + router wiring
-- [x] 24-03-PLAN.md — Bridge binary download handler
-
-### Phase 25: Frontend — Credential Profile Manager + WinBox Actions
-**Goal**: Users can manage credential profiles and launch WinBox from the topology map and device table
-**Depends on**: Phase 24
-**Requirements**: WINBOX-01, WINBOX-02, WINBOX-03, BRIDGE-05
-**Success Criteria** (what must be TRUE):
-  1. User can open WinBox pre-authenticated from the canvas device context menu
-  2. User can open WinBox pre-authenticated from the Devices table row action
-  3. WinBox action is visually disabled with an explanatory tooltip when no WinBox profile is designated for the device
-  4. Frontend detects whether the bridge is running via a health check endpoint and reflects bridge status to the user
-  5. User can view, create, edit, delete, and assign credential profiles to a device from within Theia UI
-**Plans:** 3/3 plans complete
-Plans:
-- [x] 25-01-PLAN.md — Type rename (SSHProfile to CredentialProfile), API client update, CredentialProfileManager + role field
-- [x] 25-02-PLAN.md — DeviceConfigPanel Credentials section (assignment list, add/remove, WinBox designation toggle)
-- [x] 25-03-PLAN.md — WinBox actions (Canvas context menu + DeviceRow) + useBridgeHealth hook + 3-state disabled logic
-**UI hint**: yes
-
-### Phase 26: WinBox Bridge Binary
-**Goal**: A locally-runnable Go binary accepts WinBox launch requests from Theia and opens WinBox pre-authenticated, with security validated from day one
-**Depends on**: Phase 23
-**Requirements**: BRIDGE-03, BRIDGE-04
-**Success Criteria** (what must be TRUE):
-  1. Bridge rejects any request whose `Origin` header does not match the configured Theia origin
-  2. Bridge rejects any request whose `Host` header is not `localhost:1337`, preventing DNS rebinding attacks
-  3. Bridge is hardcoded to launch only the WinBox executable — passing arbitrary executable paths is rejected
-  4. Bridge compiles without CGO and produces working binaries for all 6 targets (Windows amd64/arm64, Linux amd64/arm64, macOS amd64/arm64)
-**Plans:** 2/2 plans complete
-Plans:
-- [x] 26-01-PLAN.md — Core bridge binary (HTTP server, Origin+Host validation, /health, /launch, WinBox discovery)
-- [x] 26-02-PLAN.md — Build pipeline (Makefile target, CI release job for 6 targets)
-
-### Phase 27: Schema Cleanup — Drop Legacy FK
-**Goal**: The `devices` table no longer carries the legacy `ssh_profile_id` FK column — schema is clean post-migration
-**Depends on**: Phase 25, Phase 26
-**Requirements**: WINBOX-04
-**Success Criteria** (what must be TRUE):
-  1. `ssh_profile_id` column is absent from the `devices` table after upgrade
-  2. SQLite 12-step table-recreation migration executes without data loss on a populated database
-  3. All existing device records survive the migration with all other fields intact
-  4. Application starts and operates normally with no references to the dropped column
-**Plans:** 2/2 plans complete
-Plans:
-- [x] 27-01-PLAN.md — Migration 000014 + Go backend cleanup (domain, repo, service, handler)
-- [x] 27-02-PLAN.md — Frontend cleanup (types, API client, components)
-
-### Phase 28: API call optimization (especially WebSocket payload optimization for /api/v1/ws endpoint) — delta payloads and batching for 77+ device scale
-**Goal**: WebSocket broadcasts send only changed entries via hash-based delta detection, reducing payload size from ~55KB to only modified device data per cycle
-**Depends on:** Phase 27
-**Requirements**: Performance improvement (no formal requirement IDs)
-**Success Criteria** (what must be TRUE):
-  1. After a collection cycle where no data changed, no WebSocket broadcast is sent
-  2. After a collection cycle where some devices changed, only changed entries appear in the delta
-  3. First connect and reconnects continue to receive a full snapshot (no behavior change)
-  4. Frontend deep-merges delta payloads into existing state; full snapshots replace entire state
-  5. All 5 sections are diffed: device_metrics, link_metrics, device_statuses, device_hostnames, alerts
-**Plans:** 2/2 plans complete
-
-Plans:
-- [x] 28-01-PLAN.md — Backend hash-based delta detection in MetricsCollector + MessageTypeSnapshotDelta constant
-- [x] 28-02-PLAN.md — Frontend snapshot_delta type, mergeSnapshotDelta function, useWebSocket delta handler
-
-### Phase 29: WinBox bridge system tray — configure path, port, and origin; start/stop server without restart
-**Goal:** The WinBox bridge binary shows a system tray icon with menu items to start/stop the HTTP server, configure WinBox path, listen port, and allowed origin, and persist settings to a JSON config file — all without restarting the process
-**Depends on:** Phase 28
-**Requirements**: TRAY-01, TRAY-02, TRAY-03, TRAY-04, TRAY-05, TRAY-06
-**Success Criteria** (what must be TRUE):
-  1. Bridge settings (WinBox path, listen port, Theia origin) persist in a JSON config file at the OS-appropriate config directory
-  2. The HTTP server can be started and stopped from the system tray without restarting the bridge process
-  3. Host header validation uses the configured port dynamically (not hardcoded to 1337)
-  4. A `--no-tray` flag enables headless operation for Linux servers without a display
-  5. Windows binaries suppress the console window via `-H=windowsgui` ldflags
-  6. macOS binaries build with CGO_ENABLED=1 on native macOS CI runners (fyne.io/systray Cocoa requirement)
-**Plans:** 3/3 plans complete
-
-Plans:
-- [x] 29-01-PLAN.md — Config struct + ServerManager lifecycle + --no-tray headless flag
-- [x] 29-02-PLAN.md — System tray integration (fyne.io/systray, icon, menu wiring)
-- [x] 29-03-PLAN.md — CI/build pipeline (macOS CGO split, Windows -H=windowsgui, Makefile update)
-
-### Phase 30: Gap Closure — Verification Docs + Dead Code
-**Goal**: All blockers from the v1.5.0 audit are resolved — Phase 25 and Phase 27 have VERIFICATION.md files, stale REQUIREMENTS.md checkboxes are corrected, and dead API code is removed
-**Depends on**: Phase 29
-**Requirements**: WINBOX-03, WINBOX-04 (verification closure), CRED-03, CRED-05, BRIDGE-01, BRIDGE-02 (stale checkbox fix)
-**Gap Closure**: Closes audit blockers B-1 and B-2, stale checkbox tech debt, dead code (testSSHProfile)
-**Success Criteria** (what must be TRUE):
-  1. Phase 25 has a VERIFICATION.md confirming all 5 success criteria pass
-  2. Phase 27 has a VERIFICATION.md confirming all 4 success criteria pass
-  3. REQUIREMENTS.md checkboxes for CRED-03, CRED-05, BRIDGE-01, BRIDGE-02 are marked [x]
-  4. `testSSHProfile` is removed from `frontend/src/api/client.ts`
-**Plans:** 1/1 plans complete
-Plans:
-- [x] 30-01-PLAN.md — Retroactive verification docs + REQUIREMENTS.md corrections + dead code removal
-
-### Phase 31: Dynamic Bridge Port
-**Goal**: The frontend reads the bridge port from Theia settings rather than hardcoding `:1337`, so WinBox launch and health detection work correctly when a user configures a non-default ListenPort in the bridge config
-**Depends on**: Phase 30
-**Requirements**: BRIDGE-05, WINBOX-01, WINBOX-02, TRAY-04
-**Gap Closure**: Closes hardcoded-port-1337 integration gap from v1.5.0 audit
-**Success Criteria** (what must be TRUE):
-  1. A `bridge_port` setting key exists in the backend settings with a default value of `"1337"`
-  2. Frontend fetches `bridge_port` from `/api/v1/settings` on startup alongside other settings
-  3. `useBridgeHealth.ts` constructs the health check URL using the configured port
-  4. `Canvas.tsx` and `Dashboard.tsx` send the WinBox launch POST to the configured port
-  5. Changing `bridge_port` in Theia Settings and refreshing the page routes bridge requests to the new port
-**Plans:** 1/1 plans complete
-Plans:
-- [x] 31-01-PLAN.md — Backend bridge_port setting constant + frontend dynamic URL construction
+_(Define next milestone with `/gsd-new-milestone`)_
 
 ## Progress
 
@@ -236,12 +101,12 @@ Plans:
 | 20. Server-Side Validation & Threat Hardening | v1.4.0 | 2/2 | Complete | 2026-04-07 |
 | 21. Frontend Validation Parity | v1.4.0 | 2/2 | Complete | 2026-04-07 |
 | 22. Validation Integration & Closure | v1.4.0 | 1/1 | Complete | 2026-04-07 |
-| 23. Credential Profile Schema + Domain | v1.5.0 | 2/2 | Complete   | 2026-04-07 |
-| 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete   | 2026-04-07 |
-| 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete   | 2026-04-08 |
-| 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
-| 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
-| 28. API call optimization — WS delta payloads | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
-| 29. WinBox bridge system tray | v1.5.0 | 3/3 | Complete    | 2026-04-09 |
-| 30. Gap Closure — Verification Docs + Dead Code | v1.5.0 | 1/1 | Complete   | 2026-04-10 |
-| 31. Dynamic Bridge Port | v1.5.0 | 1/1 | Complete   | 2026-04-10 |
+| 23. Credential Profile Schema + Domain | v1.5.0 | 2/2 | Complete | 2026-04-07 |
+| 24. Backend API — Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete | 2026-04-07 |
+| 25. Frontend — Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete | 2026-04-08 |
+| 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete | 2026-04-08 |
+| 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 2/2 | Complete | 2026-04-08 |
+| 28. API Call Optimization — WS Delta Payloads | v1.5.0 | 2/2 | Complete | 2026-04-08 |
+| 29. WinBox Bridge System Tray | v1.5.0 | 3/3 | Complete | 2026-04-09 |
+| 30. Gap Closure — Verification Docs + Dead Code | v1.5.0 | 1/1 | Complete | 2026-04-10 |
+| 31. Dynamic Bridge Port | v1.5.0 | 1/1 | Complete | 2026-04-10 |
