@@ -11,14 +11,14 @@ Requirements for the WinBox Integration milestone. Each maps to roadmap phases (
 
 - [x] **CRED-01**: User can assign a custom role label to any credential profile (free-text field, e.g. "Admin", "Backup", "Read-only")
 - [x] **CRED-02**: A device can have multiple credential profiles associated, one per role
-- [ ] **CRED-03**: User can explicitly designate one credential profile per device for WinBox access
+- [x] **CRED-03**: User can explicitly designate one credential profile per device for WinBox access
 - [x] **CRED-04**: Existing SSH profiles are automatically migrated to role "Admin" on upgrade
-- [ ] **CRED-05**: User can view and manage which credential profiles are assigned to a specific device
+- [x] **CRED-05**: User can view and manage which credential profiles are assigned to a specific device
 
 ### WinBox Bridge
 
-- [ ] **BRIDGE-01**: User can download the WinBox bridge binary for their platform from Theia Settings
-- [ ] **BRIDGE-02**: Bridge binary is available for Windows, Linux, and macOS (amd64 + arm64, 6 targets)
+- [x] **BRIDGE-01**: User can download the WinBox bridge binary for their platform from Theia Settings
+- [x] **BRIDGE-02**: Bridge binary is available for Windows, Linux, and macOS (amd64 + arm64, 6 targets)
 - [x] **BRIDGE-03**: Bridge validates both Origin and Host headers on every request (DNS rebinding protection)
 - [x] **BRIDGE-04**: Bridge is hardcoded to launch only the WinBox executable — no arbitrary process execution
 - [ ] **BRIDGE-05**: Frontend detects whether the bridge is running via a health check endpoint
@@ -75,17 +75,17 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CRED-01 | Phase 23 | Complete |
 | CRED-02 | Phase 23 | Complete |
 | CRED-04 | Phase 23 | Complete |
-| CRED-03 | Phase 30 | Pending |
-| CRED-05 | Phase 30 | Pending |
-| BRIDGE-01 | Phase 30 | Pending |
-| BRIDGE-02 | Phase 30 | Pending |
+| CRED-03 | Phase 24 | Complete |
+| CRED-05 | Phase 24 | Complete |
+| BRIDGE-01 | Phase 24 | Complete |
+| BRIDGE-02 | Phase 24 | Complete |
 | WINBOX-01 | Phase 31 | Pending |
 | WINBOX-02 | Phase 31 | Pending |
-| WINBOX-03 | Phase 30 | Pending |
+| WINBOX-03 | Phase 25 | Complete |
 | BRIDGE-05 | Phase 31 | Pending |
 | BRIDGE-03 | Phase 26 | Complete |
 | BRIDGE-04 | Phase 26 | Complete |
-| WINBOX-04 | Phase 30 | Pending |
+| WINBOX-04 | Phase 27 | Complete |
 | TRAY-01 | Phase 29 | Complete |
 | TRAY-02 | Phase 29 | Complete |
 | TRAY-03 | Phase 29 | Complete |
