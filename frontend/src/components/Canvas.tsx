@@ -50,11 +50,15 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
-  const { bridgeRunning } = useBridgeHealth();
+  const [bridgePort, setBridgePort] = useState('1337');
+  const { bridgeRunning } = useBridgeHealth(bridgePort);
   const [bridgeSecret, setBridgeSecret] = useState('');
   const [winboxError, setWinboxError] = useState<string | null>(null);
   useEffect(() => {
-    fetchSettings().then((s) => setBridgeSecret(s['bridge_secret'] ?? '')).catch(() => {});
+    fetchSettings().then((s) => {
+      setBridgeSecret(s['bridge_secret'] ?? '');
+      setBridgePort(s['bridge_port'] ?? '1337');
+    }).catch(() => {});
   }, []);
   useEffect(() => {
     if (!winboxError) return;
@@ -253,7 +257,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     if (!bridgeSecret) return;
     try {
       const token = await fetchBridgeToken(deviceId, bridgeSecret);
-      const res = await fetch('http://localhost:1337/launch', {
+      const res = await fetch(`http://localhost:${bridgePort}/launch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
