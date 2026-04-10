@@ -67,7 +67,7 @@
 - [x] **Phase 28: API Call Optimization — WS Delta Payloads** - Hash-based delta detection, frontend deep-merge, zero-broadcast when nothing changed (completed 2026-04-08)
 - [x] **Phase 29: WinBox Bridge System Tray** - System tray icon, start/stop server, config persistence, --no-tray headless mode (completed 2026-04-09)
 - [x] **Phase 30: Gap Closure — Verification Docs + Dead Code** (pending) (completed 2026-04-10)
-- [ ] **Phase 31: Dynamic Bridge Port** (pending)
+- [x] **Phase 31: Dynamic Bridge Port** (pending) (completed 2026-04-10)
 
 ## Phase Details
 
@@ -206,9 +206,9 @@ Plans:
   3. `useBridgeHealth.ts` constructs the health check URL using the configured port
   4. `Canvas.tsx` and `Dashboard.tsx` send the WinBox launch POST to the configured port
   5. Changing `bridge_port` in Theia Settings and refreshing the page routes bridge requests to the new port
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 Plans:
-- [ ] 31-01-PLAN.md — Backend bridge_port setting constant + frontend dynamic URL construction
+- [x] 31-01-PLAN.md — Backend bridge_port setting constant + frontend dynamic URL construction
 
 ## Progress
 
@@ -244,4 +244,4 @@ Plans:
 | 28. API call optimization — WS delta payloads | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 29. WinBox bridge system tray | v1.5.0 | 3/3 | Complete    | 2026-04-09 |
 | 30. Gap Closure — Verification Docs + Dead Code | v1.5.0 | 1/1 | Complete   | 2026-04-10 |
-| 31. Dynamic Bridge Port | v1.5.0 | 0/1 | Pending | — |
+| 31. Dynamic Bridge Port | v1.5.0 | 1/1 | Complete   | 2026-04-10 |

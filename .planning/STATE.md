@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
 status: verifying
-stopped_at: Completed 30-01-PLAN.md
-last_updated: "2026-04-10T07:13:47.456Z"
+stopped_at: Completed 31-01-PLAN.md
+last_updated: "2026-04-10T07:34:17.009Z"
 last_activity: 2026-04-10
 progress:
   total_phases: 9
-  completed_phases: 8
-  total_plans: 18
-  completed_plans: 18
+  completed_phases: 9
+  total_plans: 19
+  completed_plans: 19
   percent: 100
 ---
 
@@ -21,11 +21,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, drill into Grafana for deep dives, and manage devices directly — all from a single interactive map.
-**Current focus:** Phase 30 — gap-closure-verification-docs-dead-code
+**Current focus:** Phase 31 — dynamic-bridge-port
 
 ## Current Position
 
-Phase: 30 (gap-closure-verification-docs-dead-code) — EXECUTING
+Phase: 31 (dynamic-bridge-port) — EXECUTING
 Plan: 1 of 1
 Status: Phase complete — ready for verification
 Last activity: 2026-04-10
@@ -65,6 +65,8 @@ v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 - [Phase 29]: 29-02: ensureConfigFileExists() creates config.json before opening in editor — first-run UX is seamless
 - [Phase 30-01]: REQUIREMENTS.md edits accepted: documentation-only changes reflecting already-verified implementation state from Phase 24/25/27
 - [Phase 30-01]: testSSHProfile removed entirely: referenced defunct /api/v1/ssh-profiles/ endpoint renamed in Phase 23; function had zero callers
+- [Phase 31-01]: Port range validation (1-65535) frontend-only; backend numericSettings uses strconv.Atoi only — keeps backend minimal per plan
+- [Phase 31-01]: bridgePort added to useBridgeHealth useEffect deps so health check restarts automatically on port change at runtime
 
 ## Accumulated Context
 
@@ -90,5 +92,5 @@ v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 
 ## Session Continuity
 
-Stopped at: Completed 30-01-PLAN.md
+Stopped at: Completed 31-01-PLAN.md
 To resume: /gsd-execute-phase 27 (Schema Cleanup — Drop Legacy FK)
