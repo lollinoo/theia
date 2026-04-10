@@ -64,6 +64,10 @@
 - [x] **Phase 25: Frontend — Credential Profile Manager + WinBox Actions** - Profile manager UI, per-device assignment, role field, WinBox actions in canvas and table, bridge health check (completed 2026-04-08)
 - [x] **Phase 26: WinBox Bridge Binary** - CGO-free Go binary for 6 targets, CORS+Host dual-validation, hardcoded WinBox-only execution (completed 2026-04-08)
 - [x] **Phase 27: Schema Cleanup — Drop Legacy FK** - SQLite 12-step table-recreation migration dropping legacy ssh_profile_id FK column (completed 2026-04-08)
+- [x] **Phase 28: API Call Optimization — WS Delta Payloads** - Hash-based delta detection, frontend deep-merge, zero-broadcast when nothing changed (completed 2026-04-08)
+- [x] **Phase 29: WinBox Bridge System Tray** - System tray icon, start/stop server, config persistence, --no-tray headless mode (completed 2026-04-09)
+- [ ] **Phase 30: Gap Closure — Verification Docs + Dead Code** (pending)
+- [ ] **Phase 31: Dynamic Bridge Port** (pending)
 
 ## Phase Details
 
@@ -170,12 +174,41 @@ Plans:
   4. A `--no-tray` flag enables headless operation for Linux servers without a display
   5. Windows binaries suppress the console window via `-H=windowsgui` ldflags
   6. macOS binaries build with CGO_ENABLED=1 on native macOS CI runners (fyne.io/systray Cocoa requirement)
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 29-01-PLAN.md — Config struct + ServerManager lifecycle + --no-tray headless flag
 - [x] 29-02-PLAN.md — System tray integration (fyne.io/systray, icon, menu wiring)
-- [ ] 29-03-PLAN.md — CI/build pipeline (macOS CGO split, Windows -H=windowsgui, Makefile update)
+- [x] 29-03-PLAN.md — CI/build pipeline (macOS CGO split, Windows -H=windowsgui, Makefile update)
+
+### Phase 30: Gap Closure — Verification Docs + Dead Code
+**Goal**: All blockers from the v1.5.0 audit are resolved — Phase 25 and Phase 27 have VERIFICATION.md files, stale REQUIREMENTS.md checkboxes are corrected, and dead API code is removed
+**Depends on**: Phase 29
+**Requirements**: WINBOX-03, WINBOX-04 (verification closure), CRED-03, CRED-05, BRIDGE-01, BRIDGE-02 (stale checkbox fix)
+**Gap Closure**: Closes audit blockers B-1 and B-2, stale checkbox tech debt, dead code (testSSHProfile)
+**Success Criteria** (what must be TRUE):
+  1. Phase 25 has a VERIFICATION.md confirming all 5 success criteria pass
+  2. Phase 27 has a VERIFICATION.md confirming all 4 success criteria pass
+  3. REQUIREMENTS.md checkboxes for CRED-03, CRED-05, BRIDGE-01, BRIDGE-02 are marked [x]
+  4. `testSSHProfile` is removed from `frontend/src/api/client.ts`
+**Plans:** 0/1 plans complete
+Plans:
+- [ ] 30-01-PLAN.md — Retroactive verification docs + REQUIREMENTS.md corrections + dead code removal
+
+### Phase 31: Dynamic Bridge Port
+**Goal**: The frontend reads the bridge port from Theia settings rather than hardcoding `:1337`, so WinBox launch and health detection work correctly when a user configures a non-default ListenPort in the bridge config
+**Depends on**: Phase 30
+**Requirements**: BRIDGE-05, WINBOX-01, WINBOX-02, TRAY-04
+**Gap Closure**: Closes hardcoded-port-1337 integration gap from v1.5.0 audit
+**Success Criteria** (what must be TRUE):
+  1. A `bridge_port` setting key exists in the backend settings with a default value of `"1337"`
+  2. Frontend fetches `bridge_port` from `/api/v1/settings` on startup alongside other settings
+  3. `useBridgeHealth.ts` constructs the health check URL using the configured port
+  4. `Canvas.tsx` and `Dashboard.tsx` send the WinBox launch POST to the configured port
+  5. Changing `bridge_port` in Theia Settings and refreshing the page routes bridge requests to the new port
+**Plans:** 0/1 plans complete
+Plans:
+- [ ] 31-01-PLAN.md — Backend bridge_port setting constant + frontend dynamic URL construction
 
 ## Progress
 
@@ -209,4 +242,6 @@ Plans:
 | 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 28. API call optimization — WS delta payloads | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
-| 29. WinBox bridge system tray | v1.5.0 | 2/3 | In Progress|  |
+| 29. WinBox bridge system tray | v1.5.0 | 3/3 | Complete    | 2026-04-09 |
+| 30. Gap Closure — Verification Docs + Dead Code | v1.5.0 | 0/1 | Pending | — |
+| 31. Dynamic Bridge Port | v1.5.0 | 0/1 | Pending | — |
