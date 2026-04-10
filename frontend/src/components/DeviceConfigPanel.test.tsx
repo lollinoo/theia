@@ -7,7 +7,15 @@ import { ValidationError, ServerError } from '../api/errors';
 // Mock all API calls used in useEffect
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
-  fetchSSHProfiles: vi.fn().mockResolvedValue([]),
+  fetchCredentialProfiles: vi.fn().mockResolvedValue([
+    { id: 'p1', name: 'Admin SSH', description: '', username: 'admin', port: 22, auth_method: 'password', role: 'Admin', created_at: '', updated_at: '' },
+    { id: 'p2', name: 'Read SSH', description: '', username: 'read', port: 22, auth_method: 'password', role: 'Read', created_at: '', updated_at: '' },
+  ]),
+  fetchDeviceCredentialProfiles: vi.fn().mockResolvedValue([]),
+  assignCredentialProfile: vi.fn().mockResolvedValue(undefined),
+  unassignCredentialProfile: vi.fn().mockResolvedValue(undefined),
+  setWinBoxProfile: vi.fn().mockResolvedValue(undefined),
+  clearWinBoxProfile: vi.fn().mockResolvedValue(undefined),
   fetchAreas: vi.fn().mockResolvedValue([]),
   fetchSettings: vi.fn().mockResolvedValue({}),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
@@ -318,5 +326,74 @@ describe('DeviceConfigPanel — backend typed error display', () => {
     // The Grafana URL field must be present so blur validation can fire on it
     expect(screen.getByPlaceholderText('Leave blank to use default')).toBeInTheDocument();
     expect(screen.getByText('Custom Grafana Dashboard URL')).toBeInTheDocument();
+  });
+});
+
+// --- Credentials section tests ---
+
+describe('DeviceConfigPanel — Credentials section', () => {
+  it('renders credentials section with assigned profiles', async () => {
+    const { fetchDeviceCredentialProfiles } = await import('../api/client');
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { profile_id: 'p1', name: 'Admin SSH', role: 'Admin', is_winbox: true },
+    ]);
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin SSH')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Admin')).toBeInTheDocument();
+    });
+  });
+
+  it('shows empty state when no profiles assigned', async () => {
+    const { fetchDeviceCredentialProfiles } = await import('../api/client');
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('No credentials assigned. Add a profile to enable WinBox launch.'),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('shows Add select when + Add is clicked', async () => {
+    const { fetchDeviceCredentialProfiles } = await import('../api/client');
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    // Click the + Add button
+    const addButton = screen.getByText('+ Add');
+    fireEvent.click(addButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('Select a profile...')).toBeInTheDocument();
+    });
+
+    // Dismiss button should also appear
+    expect(screen.getByText('Dismiss')).toBeInTheDocument();
   });
 });

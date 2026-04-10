@@ -24,6 +24,8 @@ import { CanvasOverlays } from './canvas/CanvasOverlays';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { usePositions } from '../hooks/usePositions';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
+import { useBridgeHealth } from '../hooks/useBridgeHealth';
+import { fetchDeviceCredentialProfiles, fetchBridgeToken, fetchSettings } from '../api/client';
 
 const nodeTypes = { device: DeviceCard };
 const edgeTypes = { link: LinkEdge };
@@ -48,6 +50,24 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
+  const [bridgePort, setBridgePort] = useState('1337');
+  const { bridgeRunning } = useBridgeHealth(bridgePort);
+  const [bridgeSecret, setBridgeSecret] = useState('');
+  const [winboxError, setWinboxError] = useState<string | null>(null);
+  useEffect(() => {
+    fetchSettings().then((s) => {
+      setBridgeSecret(s['bridge_secret'] ?? '');
+      setBridgePort(s['bridge_port'] ?? '1337');
+    }).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!winboxError) return;
+    const t = window.setTimeout(() => setWinboxError(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [winboxError]);
+
+  // Per-device WinBox profile status (true = has a WinBox-designated profile)
+  const [deviceWinboxState, setDeviceWinboxState] = useState<Record<string, boolean>>({});
 
   const {
     deviceMenu, setDeviceMenu, edgeMenu, setEdgeMenu,
@@ -213,6 +233,44 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   }, [editMode, setNodes]);
   useEffect(() => () => { if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current); }, []);
 
+  // Fetch WinBox profile status when context menu opens for a non-virtual device
+  useEffect(() => {
+    if (!deviceMenu) return;
+    const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
+    if (!d || d.device_type === 'virtual') return;
+    if (deviceMenu.deviceId in deviceWinboxState) return; // already fetched
+
+    void (async () => {
+      try {
+        const profiles = await fetchDeviceCredentialProfiles(deviceMenu.deviceId);
+        setDeviceWinboxState((prev) => ({
+          ...prev,
+          [deviceMenu.deviceId]: profiles.some((p) => p.is_winbox),
+        }));
+      } catch {
+        setDeviceWinboxState((prev) => ({ ...prev, [deviceMenu.deviceId]: false }));
+      }
+    })();
+  }, [deviceMenu, devices, deviceWinboxState]);
+
+  async function handleLaunchWinBox(deviceId: string) {
+    if (!bridgeSecret) return;
+    try {
+      const token = await fetchBridgeToken(deviceId, bridgeSecret);
+      const res = await fetch(`http://localhost:${bridgePort}/launch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setWinboxError(data.error ?? `Bridge error (${res.status})`);
+      }
+    } catch {
+      // silent — bridge may not be running
+    }
+  }
+
   const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges((cur) => applyEdgeChanges(changes, cur));
   }, []);
@@ -299,9 +357,17 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
         const gUrl = grafanaUrl(d?.id);
         const isVirtual = d?.device_type === 'virtual';
+        const hasWinboxProfile = deviceWinboxState[deviceMenu.deviceId] ?? false;
+        const winboxDisabled = !hasWinboxProfile || !bridgeRunning;
+        const winboxTitle = !hasWinboxProfile
+          ? 'No WinBox profile designated'
+          : !bridgeRunning
+            ? 'WinBox bridge not running \u2014 download from Settings'
+            : undefined;
         const allItems: (ContextMenuItem & { id: string })[] = [
           { id: 'webfig', label: 'Open WebFig', icon: 'link', onClick: () => { if (d) window.open(`http://${d.ip}/webfig/`, '_blank'); setDeviceMenu(null); } },
           { id: 'grafana', label: gUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)', icon: 'hub', onClick: () => { if (gUrl) window.open(gUrl, '_blank'); setDeviceMenu(null); } },
+          { id: 'winbox', label: 'Open in WinBox', icon: 'open_in_new', disabled: winboxDisabled, title: winboxTitle, onClick: () => { if (d) void handleLaunchWinBox(d.id); setDeviceMenu(null); } },
           { id: 'interface-stats', label: 'Per-Interface Stats', icon: 'devices', onClick: () => { if (d) setPanelContent({ type: 'interfaceStats', data: { device: d } }); setDeviceMenu(null); } },
           { id: 'configure', label: 'Configure', icon: 'settings', onClick: () => { if (d) setPanelContent({ type: 'deviceConfig', data: { device: d } }); setDeviceMenu(null); } },
         ];
@@ -350,6 +416,14 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
             setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
           }
         }} />
+      {/* WinBox launch error toast */}
+      {winboxError && (
+        <div className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-status-down/40 bg-surface px-4 py-2.5 text-xs text-status-down shadow-lg">
+          <span>{winboxError}</span>
+          <button type="button" onClick={() => setWinboxError(null)} className="ml-1 hover:opacity-70">&times;</button>
+        </div>
+      )}
+
       <ZoomControls onZoomIn={() => { void reactFlow.zoomIn({ duration: 200 }); }}
         onZoomOut={() => { void reactFlow.zoomOut({ duration: 200 }); }}
         onFitView={() => { void reactFlow.fitView({ padding: 0.18, duration: 280 }); }} />

@@ -10,6 +10,9 @@ frontend/dist/
 frontend/dist/index.html
 # Build output
 /theia
+/winbox-bridge
+/winbox-bridge.exe
+bridge_binaries/
 .env
 .env.local
 .claude/

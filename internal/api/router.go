@@ -22,29 +22,32 @@ func NewRouter(
 	positionRepo domain.PositionRepository,
 	settingsRepo domain.SettingsRepository,
 	snmpProfileRepo domain.SNMPProfileRepository,
-	sshProfileRepo *sqlite.SSHProfileRepo,
+	credentialProfileRepo *sqlite.CredentialProfileRepo,
 	areaRepo domain.AreaRepository,
 	backupService *service.BackupService,
 	vendorRegistry *vendor.Registry,
 	vendorConfigRepo domain.VendorConfigRepository,
 	poller *worker.Poller,
 	instanceBackupService *service.InstanceBackupService,
+	bridgeBinariesDir string,
 	wsHandler *ws.Handler,
 ) http.Handler {
 	mux := http.NewServeMux()
 
-	deviceHandler := NewDeviceHandler(deviceService, sshProfileRepo, vendorRegistry)
+	deviceHandler := NewDeviceHandler(deviceService, credentialProfileRepo, vendorRegistry)
 	linkHandler := NewLinkHandler(linkRepo, deviceService)
 	positionHandler := NewPositionHandler(positionRepo)
 	settingsHandler := NewSettingsHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	areaHandler := NewAreaHandler(areaRepo)
 	backupHandler := NewBackupHandler(backupService, settingsRepo)
-	sshProfileHandler := NewSSHProfileHandler(backupService, sshProfileRepo)
+	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
+	deviceCredHandler := NewDeviceCredentialProfileHandler(backupService, credentialProfileRepo)
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandler(instanceBackupService)
+	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo)
 
 	// Device routes
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +112,45 @@ func NewRouter(
 			default:
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
+			return
+		}
+
+		// Device credential profile assignment routes
+		if strings.HasSuffix(r.URL.Path, "/credential-profiles") {
+			switch r.Method {
+			case http.MethodGet:
+				deviceCredHandler.HandleListAssignments(w, r)
+			case http.MethodPost:
+				deviceCredHandler.HandleAssign(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+			return
+		}
+
+		// Device credential profile unassign (DELETE with profileId in path)
+		// Path: /api/v1/devices/{id}/credential-profiles/{profileId}
+		if strings.Contains(r.URL.Path, "/credential-profiles/") && r.Method == http.MethodDelete {
+			deviceCredHandler.HandleUnassign(w, r)
+			return
+		}
+
+		// WinBox profile designation routes
+		if strings.HasSuffix(r.URL.Path, "/winbox-profile") {
+			switch r.Method {
+			case http.MethodPut:
+				deviceCredHandler.HandleSetWinbox(w, r)
+			case http.MethodDelete:
+				deviceCredHandler.HandleClearWinbox(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+			return
+		}
+
+		// WinBox credentials endpoint
+		if strings.HasSuffix(r.URL.Path, "/winbox-credentials") && r.Method == http.MethodGet {
+			deviceCredHandler.HandleGetWinboxCredentials(w, r)
 			return
 		}
 
@@ -230,30 +272,30 @@ func NewRouter(
 		}
 	})
 
-	// SSH profile routes
-	mux.HandleFunc("/api/v1/ssh-profiles", func(w http.ResponseWriter, r *http.Request) {
+	// Credential profile routes
+	mux.HandleFunc("/api/v1/credential-profiles", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			sshProfileHandler.HandleList(w, r)
+			credentialProfileHandler.HandleList(w, r)
 		case http.MethodPost:
-			sshProfileHandler.HandleCreate(w, r)
+			credentialProfileHandler.HandleCreate(w, r)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
 	})
 
-	mux.HandleFunc("/api/v1/ssh-profiles/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/credential-profiles/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/test") && r.Method == http.MethodPost {
-			sshProfileHandler.HandleTest(w, r)
+			credentialProfileHandler.HandleTest(w, r)
 			return
 		}
 		switch r.Method {
 		case http.MethodGet:
-			sshProfileHandler.HandleGet(w, r)
+			credentialProfileHandler.HandleGet(w, r)
 		case http.MethodPut:
-			sshProfileHandler.HandleUpdate(w, r)
+			credentialProfileHandler.HandleUpdate(w, r)
 		case http.MethodDelete:
-			sshProfileHandler.HandleDelete(w, r)
+			credentialProfileHandler.HandleDelete(w, r)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
@@ -359,6 +401,20 @@ func NewRouter(
 		}
 	})
 
+	// Bridge binary download
+	mux.HandleFunc("/api/v1/bridge/download/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		bridgeHandler.HandleDownload(w, r)
+	})
+
+	// Bridge credential token — encrypts WinBox credentials with the bridge's own secret
+	mux.HandleFunc("/api/v1/bridge/token/", func(w http.ResponseWriter, r *http.Request) {
+		bridgeHandler.HandleBridgeToken(w, r)
+	})
+
 	// Health endpoint
 	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		healthHandler.HandleHealth(w, r)
@@ -406,6 +462,12 @@ func NewRouter(
 
 		// Instance backup restore bypasses body size and JSON content-type middleware (multipart upload)
 		if r.URL.Path == "/api/v1/instance-backups/restore" && r.Method == http.MethodPost {
+			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			return
+		}
+
+		// Bridge binary download bypasses JSON content-type and body size middleware
+		if strings.HasPrefix(r.URL.Path, "/api/v1/bridge/download/") && r.Method == http.MethodGet {
 			CORS(RequestLogger(mux)).ServeHTTP(w, r)
 			return
 		}

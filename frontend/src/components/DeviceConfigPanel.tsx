@@ -1,8 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Area, Device, SNMPProfile, SSHProfile } from '../types/api';
-import { checkPrometheusHealth, deleteDevice, fetchAreas, fetchSettings, fetchSNMPProfiles, fetchSSHProfiles, testSNMPConnection, updateDevice, updateSetting } from '../api/client';
+import type { Area, CredentialProfile, Device, DeviceCredentialProfile, SNMPProfile } from '../types/api';
+import {
+  assignCredentialProfile,
+  checkPrometheusHealth,
+  clearWinBoxProfile,
+  deleteDevice,
+  fetchAreas,
+  fetchCredentialProfiles,
+  fetchDeviceCredentialProfiles,
+  fetchSettings,
+  fetchSNMPProfiles,
+  setWinBoxProfile,
+  testSNMPConnection,
+  unassignCredentialProfile,
+  updateDevice,
+  updateSetting,
+} from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
 import { validateIPOrHostname, validateMaxLength, validateURL, MAX_STRING_LENGTH } from '../utils/validation';
+import { MaterialIcon } from './MaterialIcon';
 
 const POLLING_PRESETS = [
   { label: 'Use Global', value: 'global' },
@@ -60,8 +76,11 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
-  const [sshProfiles, setSSHProfiles] = useState<SSHProfile[]>([]);
-  const [sshProfileId, setSSHProfileId] = useState(device.ssh_profile_id || '');
+  const [credentialProfiles, setCredentialProfiles] = useState<CredentialProfile[]>([]);
+  const [assignments, setAssignments] = useState<DeviceCredentialProfile[]>([]);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [showAddSelect, setShowAddSelect] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
   const [areaIds, setAreaIds] = useState<string[]>(device.area_ids ?? []);
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
@@ -94,15 +113,27 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
     };
   }
 
+  async function loadAssignments() {
+    setAssignmentsLoading(true);
+    try {
+      setAssignments(await fetchDeviceCredentialProfiles(device.id));
+    } catch {
+      // non-fatal — section shows empty
+    } finally {
+      setAssignmentsLoading(false);
+    }
+  }
+
   useEffect(() => {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
-    fetchSSHProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
+    fetchCredentialProfiles().then(setCredentialProfiles).catch(() => {/* non-fatal */});
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
     checkPrometheusHealth().then((result) => {
       setPrometheusAvailable(result.available);
     }).catch(() => {
       setPrometheusAvailable(false);
     });
+    void loadAssignments();
   }, []);
 
   useEffect(() => {
@@ -131,7 +162,6 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
     setAuthPassword('');
     setPrivPassword('');
     setVendorOverride(device.vendor || '');
-    setSSHProfileId(device.ssh_profile_id || '');
     setAreaIds(device.area_ids ?? []);
     setMetricsSource((device.metrics_source as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback') || 'snmp');
     setPrometheusLabelName(device.prometheus_label_name || 'instance');
@@ -243,7 +273,6 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
           : {}),
         tags: { ...device.tags, ...(displayName.trim() ? { display_name: displayName.trim() } : {}) },
         vendor: vendorOverride || undefined,
-        ssh_profile_id: sshProfileId || '',
         area_ids: areaIds,
         metrics_source: metricsSource,
         prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
@@ -274,6 +303,39 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
     } catch {
       setDeleteLoading(false);
       setConfirmDelete(false);
+    }
+  }
+
+  async function handleAssign(profileId: string) {
+    try {
+      await assignCredentialProfile(device.id, profileId);
+      setShowAddSelect(false);
+      void loadAssignments();
+    } catch {
+      // non-fatal
+    }
+  }
+
+  async function handleUnassign(profileId: string) {
+    try {
+      await unassignCredentialProfile(device.id, profileId);
+      setRemovingId(null);
+      void loadAssignments();
+    } catch {
+      // non-fatal
+    }
+  }
+
+  async function handleToggleWinBox(profileId: string, currentlyDesignated: boolean) {
+    try {
+      if (currentlyDesignated) {
+        await clearWinBoxProfile(device.id);
+      } else {
+        await setWinBoxProfile(device.id, profileId);
+      }
+      void loadAssignments();
+    } catch {
+      // non-fatal
     }
   }
 
@@ -470,26 +532,115 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
               </p>
             </div>
 
-            {sshProfiles.length > 0 && (
-              <div className="space-y-1">
-                <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">SSH Profile</label>
-                <select
-                  value={sshProfileId}
-                  onChange={(e) => setSSHProfileId(e.target.value)}
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+            {/* Credentials section */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Credentials</p>
+                <button
+                  type="button"
+                  onClick={() => setShowAddSelect((v) => !v)}
+                  className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg-secondary hover:text-on-bg"
                 >
-                  <option value="">-- No SSH Profile --</option>
-                  {sshProfiles.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.username}:{p.port})
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-on-bg-secondary/70">
-                  SSH profile is used for config backups.
-                </p>
+                  + Add
+                </button>
               </div>
-            )}
+
+              {showAddSelect && (
+                <div className="flex items-center gap-2">
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        void handleAssign(e.target.value);
+                      }
+                    }}
+                    className="flex-1 rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                  >
+                    <option value="" disabled>Select a profile...</option>
+                    {credentialProfiles
+                      .filter((p) => !assignments.some((a) => a.profile_id === p.id))
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddSelect(false)}
+                    className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg-secondary hover:text-on-bg"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              {assignmentsLoading && (
+                <p className="text-xs text-on-bg-secondary">Loading credentials...</p>
+              )}
+
+              {!assignmentsLoading && assignments.length === 0 && (
+                <p className="text-xs text-on-bg-secondary">
+                  No credentials assigned. Add a profile to enable WinBox launch.
+                </p>
+              )}
+
+              {!assignmentsLoading && assignments.map((assignment) => (
+                <div key={assignment.profile_id} className="rounded-lg bg-surface-high p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-medium text-on-bg truncate">{assignment.name}</span>
+                      <span className="text-xs font-medium px-2 py-0.5 bg-surface rounded-full text-on-bg-secondary shrink-0">
+                        {assignment.role}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      {/* WinBox key toggle */}
+                      <button
+                        type="button"
+                        title={assignment.is_winbox ? 'Clear WinBox designation' : 'Designate as WinBox profile'}
+                        onClick={() => { void handleToggleWinBox(assignment.profile_id, assignment.is_winbox); }}
+                        className={`p-1 rounded-md transition-colors${assignment.is_winbox ? ' text-primary' : ' text-on-bg-secondary hover:text-on-bg'}`}
+                      >
+                        <MaterialIcon name="key" size={18} />
+                      </button>
+                      {/* Remove button */}
+                      <button
+                        type="button"
+                        title="Remove assignment"
+                        onClick={() => setRemovingId(assignment.profile_id)}
+                        className="p-1 rounded-md text-on-bg-secondary hover:text-status-down transition-colors"
+                      >
+                        <MaterialIcon name="remove" size={18} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Inline removal confirmation */}
+                  {removingId === assignment.profile_id && (
+                    <div className="mt-2 border border-status-down/30 bg-status-down/10 rounded-lg px-3 py-2 flex items-center justify-between">
+                      <p className="text-xs text-status-down">Delete this profile?</p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setRemovingId(null)}
+                          className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg hover:bg-elevated"
+                        >
+                          Keep Profile
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { void handleUnassign(assignment.profile_id); }}
+                          className="px-2 py-1 text-xs rounded bg-status-down text-white hover:opacity-90"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
 
             {prometheusAvailable === false && (
               <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">

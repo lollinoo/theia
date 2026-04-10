@@ -86,9 +86,9 @@ func (d *mockSSHDialer) Dial(addr string, config *gossh.ClientConfig) (*gossh.Cl
 	return nil, nil
 }
 
-// setupSSHProfileTest creates an in-memory SQLite DB, runs migrations, and
-// builds a fully-wired SSHProfileHandler backed by a real SSHProfileRepo.
-func setupSSHProfileTest(t *testing.T) (*SSHProfileHandler, *sqlite.SSHProfileRepo, *sql.DB) {
+// setupCredentialProfileTest creates an in-memory SQLite DB, runs migrations, and
+// builds a fully-wired CredentialProfileHandler backed by a real CredentialProfileRepo.
+func setupCredentialProfileTest(t *testing.T) (*CredentialProfileHandler, *sqlite.CredentialProfileRepo, *sql.DB) {
 	t.Helper()
 
 	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
@@ -100,7 +100,7 @@ func setupSSHProfileTest(t *testing.T) (*SSHProfileHandler, *sqlite.SSHProfileRe
 	}
 	t.Cleanup(func() { db.Close() })
 
-	sshProfileRepo := sqlite.NewSSHProfileRepo(db)
+	credentialProfileRepo := sqlite.NewCredentialProfileRepo(db)
 	encKey := crypto.DeriveKey("test-key-for-handler-tests")
 
 	// Build minimal vendor registry
@@ -120,7 +120,7 @@ func setupSSHProfileTest(t *testing.T) (*SSHProfileHandler, *sqlite.SSHProfileRe
 	backupSvc := service.NewBackupService(
 		newMockBackupJobRepo(),
 		newMockBackupFileRepo(),
-		sshProfileRepo,
+		credentialProfileRepo,
 		newMockDeviceRepo(),
 		newMockSettingsRepo(),
 		reg,
@@ -130,14 +130,14 @@ func setupSSHProfileTest(t *testing.T) (*SSHProfileHandler, *sqlite.SSHProfileRe
 		gossh.InsecureIgnoreHostKey(),
 	)
 
-	handler := NewSSHProfileHandler(backupSvc, sshProfileRepo)
-	return handler, sshProfileRepo, db
+	handler := NewCredentialProfileHandler(backupSvc, credentialProfileRepo)
+	return handler, credentialProfileRepo, db
 }
 
-func TestSSHProfileHandlerList(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfileHandlerList(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/ssh-profiles", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/credential-profiles", nil)
 	rec := httptest.NewRecorder()
 	handler.HandleList(rec, req)
 
@@ -154,11 +154,11 @@ func TestSSHProfileHandlerList(t *testing.T) {
 	}
 }
 
-func TestSSHProfileHandlerCreate_HappyPath(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfileHandlerCreate_HappyPath(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	body := `{"name":"test-profile","username":"admin","port":22,"auth_method":"password","secret":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -175,10 +175,10 @@ func TestSSHProfileHandlerCreate_HappyPath(t *testing.T) {
 	}
 }
 
-func TestSSHProfileHandlerCreate_MalformedJSON(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfileHandlerCreate_MalformedJSON(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(`{invalid`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(`{invalid`))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -187,21 +187,22 @@ func TestSSHProfileHandlerCreate_MalformedJSON(t *testing.T) {
 	}
 }
 
-func TestSSHProfileHandlerGet_HappyPath(t *testing.T) {
-	handler, repo, _ := setupSSHProfileTest(t)
+func TestCredentialProfileHandlerGet_HappyPath(t *testing.T) {
+	handler, repo, _ := setupCredentialProfileTest(t)
 
 	// Seed a profile via the repo
-	profile := &domain.SSHProfile{
+	profile := &domain.CredentialProfile{
 		Name:       "get-test",
 		Username:   "admin",
 		Port:       22,
 		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
 	}
 	if err := repo.Create(profile); err != nil {
 		t.Fatalf("seeding profile: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/ssh-profiles/"+profile.ID.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/credential-profiles/"+profile.ID.String(), nil)
 	rec := httptest.NewRecorder()
 	handler.HandleGet(rec, req)
 
@@ -210,11 +211,11 @@ func TestSSHProfileHandlerGet_HappyPath(t *testing.T) {
 	}
 }
 
-func TestSSHProfileHandlerGet_NotFound(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfileHandlerGet_NotFound(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	randomID := uuid.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/ssh-profiles/"+randomID.String(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/credential-profiles/"+randomID.String(), nil)
 	rec := httptest.NewRecorder()
 	handler.HandleGet(rec, req)
 
@@ -223,21 +224,22 @@ func TestSSHProfileHandlerGet_NotFound(t *testing.T) {
 	}
 }
 
-func TestSSHProfileHandlerUpdate_HappyPath(t *testing.T) {
-	handler, repo, _ := setupSSHProfileTest(t)
+func TestCredentialProfileHandlerUpdate_HappyPath(t *testing.T) {
+	handler, repo, _ := setupCredentialProfileTest(t)
 
-	profile := &domain.SSHProfile{
+	profile := &domain.CredentialProfile{
 		Name:       "update-test",
 		Username:   "admin",
 		Port:       22,
 		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
 	}
 	if err := repo.Create(profile); err != nil {
 		t.Fatalf("seeding profile: %v", err)
 	}
 
 	body := `{"name":"updated-name","username":"root","port":2222,"auth_method":"password"}`
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/ssh-profiles/"+profile.ID.String(), strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/credential-profiles/"+profile.ID.String(), strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleUpdate(rec, req)
 
@@ -246,20 +248,21 @@ func TestSSHProfileHandlerUpdate_HappyPath(t *testing.T) {
 	}
 }
 
-func TestSSHProfileHandlerDelete_HappyPath(t *testing.T) {
-	handler, repo, _ := setupSSHProfileTest(t)
+func TestCredentialProfileHandlerDelete_HappyPath(t *testing.T) {
+	handler, repo, _ := setupCredentialProfileTest(t)
 
-	profile := &domain.SSHProfile{
+	profile := &domain.CredentialProfile{
 		Name:       "delete-test",
 		Username:   "admin",
 		Port:       22,
 		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
 	}
 	if err := repo.Create(profile); err != nil {
 		t.Fatalf("seeding profile: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/ssh-profiles/"+profile.ID.String(), nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/credential-profiles/"+profile.ID.String(), nil)
 	rec := httptest.NewRecorder()
 	handler.HandleDelete(rec, req)
 
@@ -269,14 +272,14 @@ func TestSSHProfileHandlerDelete_HappyPath(t *testing.T) {
 }
 
 // =============================================================================
-// D-05: SSH profile port range validation
+// D-05: Credential profile port range validation
 // =============================================================================
 
-func TestSSHProfile_PortOutOfRange_400(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfile_PortOutOfRange_400(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	body := `{"name":"test-profile","username":"admin","port":70000,"auth_method":"password","secret":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -288,11 +291,11 @@ func TestSSHProfile_PortOutOfRange_400(t *testing.T) {
 	}
 }
 
-func TestSSHProfile_PortNegative_400(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfile_PortNegative_400(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	body := `{"name":"test-profile","username":"admin","port":-1,"auth_method":"password","secret":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -304,12 +307,12 @@ func TestSSHProfile_PortNegative_400(t *testing.T) {
 	}
 }
 
-func TestSSHProfile_PortZero_UsesDefault(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfile_PortZero_UsesDefault(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	// Port 0 means "use default" (22) — should be accepted
 	body := `{"name":"test-default-port","username":"admin","port":0,"auth_method":"password","secret":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -318,11 +321,11 @@ func TestSSHProfile_PortZero_UsesDefault(t *testing.T) {
 	}
 }
 
-func TestSSHProfile_ValidPort_201(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfile_ValidPort_201(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	body := `{"name":"test-port-22","username":"admin","port":22,"auth_method":"password","secret":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -332,15 +335,15 @@ func TestSSHProfile_ValidPort_201(t *testing.T) {
 }
 
 // =============================================================================
-// D-03: SSH profile string length validation
+// D-03: Credential profile string length validation
 // =============================================================================
 
-func TestSSHProfile_NameTooLong_400(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfile_NameTooLong_400(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	longName := strings.Repeat("n", 256)
 	body := `{"name":"` + longName + `","username":"admin","port":22,"auth_method":"password","secret":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -352,12 +355,12 @@ func TestSSHProfile_NameTooLong_400(t *testing.T) {
 	}
 }
 
-func TestSSHProfile_UsernameTooLong_400(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfile_UsernameTooLong_400(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	longUsername := strings.Repeat("u", 256)
 	body := `{"name":"valid-name","username":"` + longUsername + `","port":22,"auth_method":"password","secret":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -369,12 +372,12 @@ func TestSSHProfile_UsernameTooLong_400(t *testing.T) {
 	}
 }
 
-func TestSSHProfile_DescriptionTooLong_400(t *testing.T) {
-	handler, _, _ := setupSSHProfileTest(t)
+func TestCredentialProfile_DescriptionTooLong_400(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
 
 	longDesc := strings.Repeat("d", 256)
 	body := `{"name":"valid-name","description":"` + longDesc + `","username":"admin","port":22,"auth_method":"password","secret":"s3cret"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh-profiles", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleCreate(rec, req)
 
@@ -386,32 +389,144 @@ func TestSSHProfile_DescriptionTooLong_400(t *testing.T) {
 	}
 }
 
-func TestSSHProfileHandlerDelete_InUse(t *testing.T) {
-	handler, repo, db := setupSSHProfileTest(t)
+// =============================================================================
+// CRED-01: Custom role round-trip and empty-role default
+// =============================================================================
+
+// TestCredentialProfile_CustomRole_RoundTrip creates a profile with role="Backup",
+// then GETs it and verifies the role is returned as "Backup" in the response.
+func TestCredentialProfile_CustomRole_RoundTrip(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
+
+	// Create with explicit custom role
+	body := `{"name":"backup-profile","username":"admin","port":22,"auth_method":"password","secret":"s3cret","role":"Backup"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var createResp struct {
+		Data struct {
+			ID   string `json:"id"`
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if createResp.Data.Role != "Backup" {
+		t.Errorf("create response: expected role='Backup', got %q", createResp.Data.Role)
+	}
+
+	// GET the profile and verify role is preserved
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/credential-profiles/"+createResp.Data.ID, nil)
+	getRec := httptest.NewRecorder()
+	handler.HandleGet(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get: expected 200, got %d; body: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var getResp struct {
+		Data struct {
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&getResp); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if getResp.Data.Role != "Backup" {
+		t.Errorf("get response: expected role='Backup' after round-trip, got %q", getResp.Data.Role)
+	}
+}
+
+// TestCredentialProfile_EmptyRole_DefaultsToAdmin creates a profile with no role field
+// and verifies that the handler defaults the role to "Admin".
+func TestCredentialProfile_EmptyRole_DefaultsToAdmin(t *testing.T) {
+	handler, _, _ := setupCredentialProfileTest(t)
+
+	// No role field in body
+	body := `{"name":"no-role-profile","username":"admin","port":22,"auth_method":"password","secret":"s3cret"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var createResp struct {
+		Data struct {
+			ID   string `json:"id"`
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if createResp.Data.Role != "Admin" {
+		t.Errorf("create response: expected role='Admin' when role omitted, got %q", createResp.Data.Role)
+	}
+
+	// Confirm via GET
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/credential-profiles/"+createResp.Data.ID, nil)
+	getRec := httptest.NewRecorder()
+	handler.HandleGet(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get: expected 200, got %d; body: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var getResp struct {
+		Data struct {
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&getResp); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if getResp.Data.Role != "Admin" {
+		t.Errorf("get response: expected role='Admin' after round-trip, got %q", getResp.Data.Role)
+	}
+}
+
+func TestCredentialProfileHandlerDelete_InUse(t *testing.T) {
+	handler, repo, db := setupCredentialProfileTest(t)
 
 	// Create a profile
-	profile := &domain.SSHProfile{
+	profile := &domain.CredentialProfile{
 		Name:       "in-use-profile",
 		Username:   "admin",
 		Port:       22,
 		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
 	}
 	if err := repo.Create(profile); err != nil {
 		t.Fatalf("seeding profile: %v", err)
 	}
 
-	// Insert a device that references this SSH profile via raw SQL
+	// Insert a device and assign the profile via device_credential_profiles join table (D-14)
 	deviceID := uuid.New()
 	_, err := db.Exec(
-		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status, managed, tags_json, metrics_source, prometheus_label_name, prometheus_label_value, vendor, ssh_profile_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
-		deviceID.String(), "test-device", "10.0.0.1", `{"version":"2c","v2c":{"community":"public"}}`, "router", "up", 1, "{}", "prometheus", "instance", "10.0.0.1", "default", profile.ID.String(),
+		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status, managed, tags_json, metrics_source, prometheus_label_name, prometheus_label_value, vendor, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+		deviceID.String(), "test-device", "10.0.0.1", `{"version":"2c","v2c":{"community":"public"}}`, "router", "up", 1, "{}", "prometheus", "instance", "10.0.0.1", "default",
 	)
 	if err != nil {
-		t.Fatalf("inserting device referencing SSH profile: %v", err)
+		t.Fatalf("inserting test device: %v", err)
+	}
+	_, err = db.Exec(
+		`INSERT INTO device_credential_profiles (device_id, profile_id, is_winbox, created_at) VALUES (?, ?, 0, CURRENT_TIMESTAMP)`,
+		deviceID.String(), profile.ID.String(),
+	)
+	if err != nil {
+		t.Fatalf("assigning credential profile to device: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/ssh-profiles/"+profile.ID.String(), nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/credential-profiles/"+profile.ID.String(), nil)
 	rec := httptest.NewRecorder()
 	handler.HandleDelete(rec, req)
 

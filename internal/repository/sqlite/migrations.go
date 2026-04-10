@@ -135,6 +135,19 @@ func verifyLegacyTablesMigrated(db *sql.DB) error {
 		return nil // Already dropped or never existed
 	}
 
+	// Check if ssh_profile_id column still exists on devices table.
+	// Migration 000014 drops this column; on databases that have already run
+	// 000014, the column is absent and the legacy verification is no longer needed.
+	var colExists int
+	err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='ssh_profile_id'`).Scan(&colExists)
+	if err != nil {
+		return fmt.Errorf("checking ssh_profile_id column: %w", err)
+	}
+	if colExists == 0 {
+		log.Printf("Legacy table verification: ssh_profile_id column already dropped, skipping")
+		return nil
+	}
+
 	// Count credentials that have no corresponding ssh_profile link on their device
 	var unmigrated int
 	err = db.QueryRow(`

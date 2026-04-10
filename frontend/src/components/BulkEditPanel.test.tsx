@@ -7,7 +7,7 @@ import { ValidationError, ServerError } from '../api/errors';
 // Mock API calls
 vi.mock('../api/client', () => ({
   fetchAreas: vi.fn().mockResolvedValue([]),
-  fetchSSHProfiles: vi.fn().mockResolvedValue([]),
+  fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
   updateDevice: vi.fn().mockResolvedValue({}),
   deleteDevice: vi.fn().mockResolvedValue(undefined),
 }));

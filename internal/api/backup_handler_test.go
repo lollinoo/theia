@@ -352,7 +352,7 @@ func setupBackupHandler(t *testing.T) (*BackupHandler, *backupJobRepoForHandler,
 	t.Helper()
 	jobRepo := newBackupJobRepoForHandler()
 	fileRepo := newBackupFileRepoForHandler()
-	sshProfileRepo := newMockSSHProfileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
 	deviceRepo := newMockDeviceRepo()
 	settingsRepo := newMockSettingsRepo()
 	encKey := crypto.DeriveKey("test-backup-handler-key")
@@ -371,7 +371,7 @@ func setupBackupHandler(t *testing.T) (*BackupHandler, *backupJobRepoForHandler,
 	}
 
 	backupSvc := service.NewBackupService(
-		jobRepo, fileRepo, sshProfileRepo, deviceRepo, settingsRepo,
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		reg, &mockSSHDialerForBackup{}, encKey, t.TempDir(),
 		gossh.InsecureIgnoreHostKey(),
 	)
@@ -521,7 +521,7 @@ func TestBackupDownload_SanitizedFilename(t *testing.T) {
 
 	// Rebuild handler with this file repo populated
 	jobRepo := newBackupJobRepoForHandler()
-	sshProfileRepo := newMockSSHProfileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
 	deviceRepo := newMockDeviceRepo()
 	settingsRepo := newMockSettingsRepo()
 	encKey := crypto.DeriveKey("test-backup-sanitize-key")
@@ -540,7 +540,7 @@ func TestBackupDownload_SanitizedFilename(t *testing.T) {
 	}
 
 	backupSvc := service.NewBackupService(
-		jobRepo, fileRepo, sshProfileRepo, deviceRepo, settingsRepo,
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		reg, &mockSSHDialerForBackup{}, encKey, t.TempDir(),
 		gossh.InsecureIgnoreHostKey(),
 	)

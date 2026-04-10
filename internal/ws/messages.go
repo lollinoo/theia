@@ -11,6 +11,8 @@ import (
 const (
 	// MessageTypeSnapshot pushes the full state to clients.
 	MessageTypeSnapshot = "snapshot"
+	// MessageTypeSnapshotDelta pushes only changed entries since the last broadcast.
+	MessageTypeSnapshotDelta = "snapshot_delta"
 	// MessageTypeMetrics carries device metrics-only payloads.
 	MessageTypeMetrics = "metrics"
 	// MessageTypeLinkMetrics carries link metrics-only payloads.

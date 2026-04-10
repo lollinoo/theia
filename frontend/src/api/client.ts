@@ -1,25 +1,30 @@
 import {
   type Area,
+  type CredentialProfile,
   type Device,
+  type DeviceCredentialProfile,
   type InstanceBackup,
   type InstanceBackupStatus,
   type InterfaceInfo,
   type Link,
   type RestoreReport,
   type SNMPProfile,
-  type SSHProfile,
   type BackupJob,
   type BackupFile,
   type BackupStatus,
   type VendorConfig,
+  type WinBoxCredentials,
   parseAreaResponse,
   parseAreasResponse,
+  parseCredentialProfileResponse,
+  parseCredentialProfilesResponse,
+  parseDeviceCredentialProfilesResponse,
   parseDevicesResponse,
   parseInterfacesResponse,
   parseLinksResponse,
   parseSNMPProfilesResponse,
   parseSNMPProfileResponse,
-  parseSSHProfilesResponse,
+  parseWinBoxCredentialsResponse,
 } from '../types/api';
 import { ValidationError, ServerError } from './errors';
 
@@ -188,7 +193,6 @@ export interface CreateDevicePayload {
   metrics_source?: string;
   prometheus_label_name?: string;
   prometheus_label_value?: string;
-  ssh_profile_id?: string;
   area_ids?: string[];
 }
 
@@ -217,7 +221,6 @@ export async function updateDevice(
     metrics_source: string;
     prometheus_label_name: string;
     prometheus_label_value: string;
-    ssh_profile_id: string;
     area_ids: string[];
   }>,
 ): Promise<Device> {
@@ -377,70 +380,95 @@ export async function testSNMPConnection(deviceId: string): Promise<{ success: b
   };
 }
 
-// --- SSH Profiles ---
+// --- Credential Profiles ---
 
-export async function fetchSSHProfiles(): Promise<SSHProfile[]> {
-  return parseSSHProfilesResponse(await requestJSON('/api/v1/ssh-profiles'));
+export async function fetchCredentialProfiles(): Promise<CredentialProfile[]> {
+  return parseCredentialProfilesResponse(await requestJSON('/api/v1/credential-profiles'));
 }
 
-export interface SSHProfilePayload {
+export interface CredentialProfilePayload {
   name: string;
   description?: string;
   username: string;
   port: number;
   auth_method: string;
   secret: string;
+  role: string;
 }
 
-export async function createSSHProfile(payload: SSHProfilePayload): Promise<SSHProfile> {
-  const response = await requestJSONWithBody('/api/v1/ssh-profiles', 'POST', payload);
-  const data = (response as Record<string, unknown>)?.data as Record<string, unknown>;
-  return {
-    id: typeof data.id === 'string' ? data.id : '',
-    name: typeof data.name === 'string' ? data.name : '',
-    description: typeof data.description === 'string' ? data.description : '',
-    username: typeof data.username === 'string' ? data.username : '',
-    port: typeof data.port === 'number' ? data.port : 22,
-    auth_method: data.auth_method === 'key' ? 'key' : 'password',
-    created_at: typeof data.created_at === 'string' ? data.created_at : '',
-    updated_at: typeof data.updated_at === 'string' ? data.updated_at : '',
-  };
-}
-
-export async function updateSSHProfile(id: string, payload: SSHProfilePayload): Promise<SSHProfile> {
-  const response = await requestJSONWithBody(
-    `/api/v1/ssh-profiles/${encodeURIComponent(id)}`,
-    'PUT',
-    payload,
+export async function createCredentialProfile(payload: CredentialProfilePayload): Promise<CredentialProfile> {
+  return parseCredentialProfileResponse(
+    await requestJSONWithBody('/api/v1/credential-profiles', 'POST', payload),
   );
-  const data = (response as Record<string, unknown>)?.data as Record<string, unknown>;
-  return {
-    id: typeof data.id === 'string' ? data.id : '',
-    name: typeof data.name === 'string' ? data.name : '',
-    description: typeof data.description === 'string' ? data.description : '',
-    username: typeof data.username === 'string' ? data.username : '',
-    port: typeof data.port === 'number' ? data.port : 22,
-    auth_method: data.auth_method === 'key' ? 'key' : 'password',
-    created_at: typeof data.created_at === 'string' ? data.created_at : '',
-    updated_at: typeof data.updated_at === 'string' ? data.updated_at : '',
-  };
 }
 
-export async function deleteSSHProfile(id: string): Promise<void> {
-  await requestJSONWithBody(`/api/v1/ssh-profiles/${encodeURIComponent(id)}`, 'DELETE');
+export async function updateCredentialProfile(id: string, payload: CredentialProfilePayload): Promise<CredentialProfile> {
+  return parseCredentialProfileResponse(
+    await requestJSONWithBody(`/api/v1/credential-profiles/${encodeURIComponent(id)}`, 'PUT', payload),
+  );
 }
 
-export async function testSSHProfile(id: string, targetIP: string): Promise<{ success: boolean; error?: string }> {
-  const response = await requestJSONWithBody(
-    `/api/v1/ssh-profiles/${encodeURIComponent(id)}/test`,
+export async function deleteCredentialProfile(id: string): Promise<void> {
+  await requestJSONWithBody(`/api/v1/credential-profiles/${encodeURIComponent(id)}`, 'DELETE');
+}
+
+// --- Device Credential Profile Assignments ---
+
+export async function fetchDeviceCredentialProfiles(deviceId: string): Promise<DeviceCredentialProfile[]> {
+  const payload = await requestJSON(`/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`);
+  return parseDeviceCredentialProfilesResponse(payload);
+}
+
+export async function assignCredentialProfile(deviceId: string, profileId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`,
     'POST',
-    { target_ip: targetIP },
+    { profile_id: profileId },
   );
-  const data = response as Record<string, unknown>;
-  return {
-    success: data.success === true,
-    error: typeof data.error === 'string' ? data.error : undefined,
-  };
+}
+
+export async function unassignCredentialProfile(deviceId: string, profileId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles/${encodeURIComponent(profileId)}`,
+    'DELETE',
+  );
+}
+
+export async function setWinBoxProfile(deviceId: string, profileId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
+    'PUT',
+    { profile_id: profileId },
+  );
+}
+
+export async function clearWinBoxProfile(deviceId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
+    'DELETE',
+  );
+}
+
+export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCredentials> {
+  const payload = await requestJSON(`/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-credentials`);
+  return parseWinBoxCredentialsResponse(payload);
+}
+
+// fetchBridgeToken requests an AES-GCM encrypted credential token from the backend.
+// The token is encrypted with bridgeSecret (the 64-char hex key stored in the bridge's config.json)
+// and can only be decrypted by the bridge binary.  The plaintext credentials never appear in the
+// browser's network traffic to the bridge.
+export async function fetchBridgeToken(deviceId: string, bridgeSecret: string): Promise<string> {
+  const payload = await requestJSONWithBody(
+    `/api/v1/bridge/token/${encodeURIComponent(deviceId)}`,
+    'POST',
+    { bridge_secret: bridgeSecret },
+  );
+  const p = payload as Record<string, unknown>;
+  if (typeof p?.token !== 'string' || p.token === '') {
+    throw new Error('invalid bridge token response');
+  }
+  return p.token;
 }
 
 export async function testSSHConnection(deviceId: string): Promise<{ success: boolean; error?: string }> {

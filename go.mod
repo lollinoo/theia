@@ -10,12 +10,16 @@ require (
 )
 
 require (
+	fyne.io/systray v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/pkg/sftp v1.13.10
 )
 
-require github.com/kr/fs v0.1.0 // indirect
+require (
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/kr/fs v0.1.0 // indirect
+)
 
 require (
 	golang.org/x/crypto v0.45.0

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  mergeSnapshotDelta,
   parseWSMessage,
   type PrometheusStatusPayload,
+  type SnapshotDeltaWSMessage,
   type SnapshotPayload,
   type SnapshotWSMessage,
 } from '../types/metrics';
@@ -105,6 +107,14 @@ export function useWebSocket(url: string): UseWebSocketResult {
 
           if (message.type === 'snapshot') {
             setSnapshot((message as SnapshotWSMessage).payload);
+          } else if (message.type === 'snapshot_delta') {
+            setSnapshot((prev) => {
+              if (prev === null) {
+                // No base snapshot yet — ignore delta (first message is always full snapshot)
+                return null;
+              }
+              return mergeSnapshotDelta(prev, (message as SnapshotDeltaWSMessage).payload);
+            });
           } else if (message.type === 'prometheus_status') {
             setPrometheusStatus(message.payload as PrometheusStatusPayload);
           }

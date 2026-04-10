@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { SSHProfile } from '../../types/api';
+import type { CredentialProfile } from '../../types/api';
 import {
-  fetchSSHProfiles,
-  createSSHProfile,
-  updateDevice,
+  fetchCredentialProfiles,
+  createCredentialProfile,
+  assignCredentialProfile,
+  unassignCredentialProfile,
   testSSHConnection,
 } from '../../api/client';
 
@@ -19,7 +20,7 @@ const selectClass =
   'w-full rounded-md border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg outline-none focus:border-primary focus:ring-1 focus:ring-primary/30 transition-colors';
 
 export function SSHCredentialForm({ deviceId, currentProfileId, onProfileChanged }: SSHCredentialFormProps) {
-  const [profiles, setProfiles] = useState<SSHProfile[]>([]);
+  const [profiles, setProfiles] = useState<CredentialProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState(currentProfileId || '');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -39,7 +40,7 @@ export function SSHCredentialForm({ deviceId, currentProfileId, onProfileChanged
 
   const load = useCallback(async () => {
     try {
-      const profs = await fetchSSHProfiles();
+      const profs = await fetchCredentialProfiles();
       setProfiles(profs);
     } catch {
       // non-fatal
@@ -62,9 +63,18 @@ export function SSHCredentialForm({ deviceId, currentProfileId, onProfileChanged
     setSaving(true);
     setMessage('');
     try {
-      await updateDevice(deviceId, {
-        ssh_profile_id: selectedProfileId || '',
-      });
+      // Use the dedicated credential profile assignment API (T-27-07 mitigation:
+      // avoids exposing profile IDs via updateDevice request logs).
+      if (selectedProfileId) {
+        // Unassign previous profile first if one was set
+        if (currentProfileId) {
+          await unassignCredentialProfile(deviceId, currentProfileId);
+        }
+        await assignCredentialProfile(deviceId, selectedProfileId);
+      } else if (currentProfileId) {
+        // Unassign — no new profile selected
+        await unassignCredentialProfile(deviceId, currentProfileId);
+      }
       onProfileChanged?.(selectedProfileId || undefined);
       setMessage(hasProfile ? 'SSH profile assigned' : 'SSH profile unassigned');
     } catch (err) {
@@ -106,13 +116,14 @@ export function SSHCredentialForm({ deviceId, currentProfileId, onProfileChanged
     setCreateLoading(true);
     setCreateError(null);
     try {
-      const profile = await createSSHProfile({
+      const profile = await createCredentialProfile({
         name: newName.trim(),
         description: newDescription.trim(),
         username: newUsername.trim() || 'admin',
         port: parseInt(newPort, 10) || 22,
         auth_method: newAuthMethod,
         secret: newSecret,
+        role: 'Admin',
       });
       await load();
       setSelectedProfileId(profile.id);

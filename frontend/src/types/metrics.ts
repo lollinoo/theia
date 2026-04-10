@@ -1,4 +1,4 @@
-type WSMessageType = 'snapshot' | 'metrics' | 'link_metrics' | 'alert' | 'prometheus_status';
+type WSMessageType = 'snapshot' | 'snapshot_delta' | 'metrics' | 'link_metrics' | 'alert' | 'prometheus_status';
 type APIRecord = Record<string, unknown>;
 
 export interface DeviceMetricsDTO {
@@ -49,6 +49,11 @@ export interface WSMessage {
 
 export interface SnapshotWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'snapshot';
+  payload: SnapshotPayload;
+}
+
+export interface SnapshotDeltaWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'snapshot_delta';
   payload: SnapshotPayload;
 }
 
@@ -156,7 +161,25 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
   };
 }
 
-export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | PrometheusStatusWSMessage {
+/**
+ * Deep-merges a sparse delta payload into an existing snapshot.
+ * Only entries present in the delta overwrite existing entries.
+ * Alerts are replaced entirely if the delta includes a non-empty alerts array.
+ */
+export function mergeSnapshotDelta(
+  existing: SnapshotPayload,
+  delta: SnapshotPayload,
+): SnapshotPayload {
+  return {
+    device_metrics: { ...existing.device_metrics, ...delta.device_metrics },
+    link_metrics: { ...existing.link_metrics, ...delta.link_metrics },
+    device_statuses: { ...existing.device_statuses, ...delta.device_statuses },
+    device_hostnames: { ...existing.device_hostnames, ...delta.device_hostnames },
+    alerts: delta.alerts.length > 0 ? delta.alerts : existing.alerts,
+  };
+}
+
+export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | SnapshotDeltaWSMessage | PrometheusStatusWSMessage {
   if (!isRecord(value)) {
     throw new Error('invalid websocket message');
   }
@@ -164,6 +187,7 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | 
   const type = readString(value, 'type');
   if (
     type !== 'snapshot' &&
+    type !== 'snapshot_delta' &&
     type !== 'metrics' &&
     type !== 'link_metrics' &&
     type !== 'alert' &&
@@ -177,6 +201,13 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | 
       type,
       payload: parseSnapshotPayload(value.payload),
     };
+  }
+
+  if (type === 'snapshot_delta') {
+    return {
+      type,
+      payload: parseSnapshotPayload(value.payload),
+    } as SnapshotDeltaWSMessage;
   }
 
   if (type === 'prometheus_status') {

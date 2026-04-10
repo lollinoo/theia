@@ -208,17 +208,17 @@ func (r *mockBackupFileRepo) DeleteByJobID(jobID uuid.UUID) error {
 	return nil
 }
 
-// mockSSHProfileRepo implements domain.SSHProfileRepository.
-type mockSSHProfileRepo struct {
+// mockCredentialProfileRepo implements domain.CredentialProfileRepository.
+type mockCredentialProfileRepo struct {
 	mu       sync.Mutex
-	profiles map[uuid.UUID]*domain.SSHProfile
+	profiles map[uuid.UUID]*domain.CredentialProfile
 }
 
-func newMockSSHProfileRepo() *mockSSHProfileRepo {
-	return &mockSSHProfileRepo{profiles: make(map[uuid.UUID]*domain.SSHProfile)}
+func newMockCredentialProfileRepo() *mockCredentialProfileRepo {
+	return &mockCredentialProfileRepo{profiles: make(map[uuid.UUID]*domain.CredentialProfile)}
 }
 
-func (r *mockSSHProfileRepo) Create(profile *domain.SSHProfile) error {
+func (r *mockCredentialProfileRepo) Create(profile *domain.CredentialProfile) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if profile.ID == uuid.Nil {
@@ -231,43 +231,54 @@ func (r *mockSSHProfileRepo) Create(profile *domain.SSHProfile) error {
 	return nil
 }
 
-func (r *mockSSHProfileRepo) GetByID(id uuid.UUID) (*domain.SSHProfile, error) {
+func (r *mockCredentialProfileRepo) GetByID(id uuid.UUID) (*domain.CredentialProfile, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p, ok := r.profiles[id]
 	if !ok {
-		return nil, fmt.Errorf("SSH profile not found: %s", id)
+		return nil, fmt.Errorf("credential profile not found: %s", id)
 	}
 	cp := *p
 	return &cp, nil
 }
 
-func (r *mockSSHProfileRepo) GetAll() ([]domain.SSHProfile, error) {
+func (r *mockCredentialProfileRepo) GetAll() ([]domain.CredentialProfile, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []domain.SSHProfile
+	var result []domain.CredentialProfile
 	for _, p := range r.profiles {
 		result = append(result, *p)
 	}
 	return result, nil
 }
 
-func (r *mockSSHProfileRepo) Update(profile *domain.SSHProfile) error {
+func (r *mockCredentialProfileRepo) Update(profile *domain.CredentialProfile) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.profiles[profile.ID]; !ok {
-		return fmt.Errorf("SSH profile not found: %s", profile.ID)
+		return fmt.Errorf("credential profile not found: %s", profile.ID)
 	}
 	profile.UpdatedAt = time.Now().UTC()
 	r.profiles[profile.ID] = profile
 	return nil
 }
 
-func (r *mockSSHProfileRepo) Delete(id uuid.UUID) error {
+func (r *mockCredentialProfileRepo) Delete(id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.profiles, id)
 	return nil
+}
+
+func (r *mockCredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Return the first profile found for any device (test helper: return any profile)
+	for _, p := range r.profiles {
+		cp := *p
+		return &cp, nil
+	}
+	return nil, fmt.Errorf("no credential profile assigned to device %s", deviceID)
 }
 
 // mockBackupSettingsRepo implements domain.SettingsRepository for backup tests.
@@ -391,26 +402,27 @@ func TestConcurrentBackup(t *testing.T) {
 
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
-	sshProfileRepo := newMockSSHProfileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
 	deviceRepo := newMockDeviceRepo()
 	settingsRepo := newMockBackupSettingsRepo()
 	registry := buildTestVendorRegistry("testvendor", true)
 	dialer := &mockSSHDialer{}
 
 	svc := NewBackupService(
-		jobRepo, fileRepo, sshProfileRepo, deviceRepo, settingsRepo,
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		registry, dialer, []byte("0123456789abcdef"), t.TempDir(),
 		ssh.InsecureIgnoreHostKey(),
 	)
 
-	// Create SSH profile using the test listener port
+	// Create credential profile using the test listener port
 	profileID := uuid.New()
-	sshProfileRepo.Create(&domain.SSHProfile{
+	credentialProfileRepo.Create(&domain.CredentialProfile{
 		ID:         profileID,
 		Name:       "test-profile",
 		Username:   "admin",
 		Port:       port,
 		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
 	})
 
 	// Create two devices with vendor "testvendor" (backup supported via registry)
@@ -418,11 +430,11 @@ func TestConcurrentBackup(t *testing.T) {
 	dev2ID := uuid.New()
 	deviceRepo.Create(&domain.Device{
 		ID: dev1ID, IP: "127.0.0.1", Vendor: "testvendor",
-		SSHProfileID: &profileID, Managed: true, Status: domain.DeviceStatusUp,
+		Managed: true, Status: domain.DeviceStatusUp,
 	})
 	deviceRepo.Create(&domain.Device{
 		ID: dev2ID, IP: "127.0.0.1", Vendor: "testvendor",
-		SSHProfileID: &profileID, Managed: true, Status: domain.DeviceStatusUp,
+		Managed: true, Status: domain.DeviceStatusUp,
 	})
 
 	ctx := context.Background()
@@ -503,33 +515,34 @@ func TestBackupVendorRegistry(t *testing.T) {
 
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
-	sshProfileRepo := newMockSSHProfileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
 	deviceRepo := newMockDeviceRepo()
 	settingsRepo := newMockBackupSettingsRepo()
 	registry := buildTestVendorRegistry("testvendor", true)
 	dialer := &mockSSHDialer{}
 
 	svc := NewBackupService(
-		jobRepo, fileRepo, sshProfileRepo, deviceRepo, settingsRepo,
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		registry, dialer, []byte("0123456789abcdef"), t.TempDir(),
 		ssh.InsecureIgnoreHostKey(),
 	)
 
-	// Create SSH profile
+	// Create credential profile
 	profileID := uuid.New()
-	sshProfileRepo.Create(&domain.SSHProfile{
+	credentialProfileRepo.Create(&domain.CredentialProfile{
 		ID:         profileID,
 		Name:       "test-profile",
 		Username:   "admin",
 		Port:       port,
 		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
 	})
 
 	// Create device with non-mikrotik vendor that has backup supported in registry
 	deviceID := uuid.New()
 	deviceRepo.Create(&domain.Device{
 		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
-		SSHProfileID: &profileID, Managed: true, Status: domain.DeviceStatusUp,
+		Managed: true, Status: domain.DeviceStatusUp,
 	})
 
 	job, err := svc.TriggerBackup(context.Background(), deviceID)
@@ -559,14 +572,14 @@ func TestBackupVendorRegistry(t *testing.T) {
 func TestDeleteBackupJobFileError(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
-	sshProfileRepo := newMockSSHProfileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
 	deviceRepo := newMockDeviceRepo()
 	settingsRepo := newMockBackupSettingsRepo()
 	registry := buildTestVendorRegistry("", false)
 	dialer := &mockSSHDialer{}
 
 	svc := NewBackupService(
-		jobRepo, fileRepo, sshProfileRepo, deviceRepo, settingsRepo,
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		registry, dialer, []byte("0123456789abcdef"), t.TempDir(),
 		ssh.InsecureIgnoreHostKey(),
 	)
@@ -791,7 +804,7 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	port := listenOnRandomPort(t)
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
-	sshProfileRepo := newMockSSHProfileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
 	deviceRepo := newMockDeviceRepo()
 	settingsRepo := newMockBackupSettingsRepo()
 	registry := buildTestVendorRegistry("testvendor", true)
@@ -800,7 +813,7 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	rd := &recordingSSHDialer{}
 
 	svc := NewBackupService(
-		jobRepo, fileRepo, sshProfileRepo, deviceRepo, settingsRepo,
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		registry, rd, encryptionKey, t.TempDir(),
 		ssh.InsecureIgnoreHostKey(),
 	)
@@ -820,19 +833,20 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 
 	// Now test the full flow: seed profile with encrypted password, trigger backup
 	profileID := uuid.New()
-	sshProfileRepo.Create(&domain.SSHProfile{
+	credentialProfileRepo.Create(&domain.CredentialProfile{
 		ID:              profileID,
 		Name:            "encrypted-profile",
 		Username:        "admin",
 		Port:            port,
 		AuthMethod:      domain.SSHAuthPassword,
 		EncryptedSecret: string(encrypted), // stored as encrypted bytes
+		Role:            "Admin",
 	})
 
 	deviceID := uuid.New()
 	deviceRepo.Create(&domain.Device{
 		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
-		SSHProfileID: &profileID, Managed: true, Status: domain.DeviceStatusUp,
+		Managed: true, Status: domain.DeviceStatusUp,
 	})
 
 	// TriggerBackup creates the job and starts runFullBackup in a goroutine.
@@ -858,6 +872,48 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	}
 	if capturedUser != "admin" {
 		t.Errorf("expected dialer to receive user %q, got %q", "admin", capturedUser)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: TestTriggerBackup_NoCredentialProfileAssigned (Phase 27 Gap 5)
+// ---------------------------------------------------------------------------
+// Verifies that TriggerBackup returns an error containing "no credential profile"
+// when no credential profile is assigned to the device. The mockCredentialProfileRepo
+// returns an error from GetBackupProfileForDevice when its profiles map is empty.
+func TestTriggerBackup_NoCredentialProfileAssigned(t *testing.T) {
+	port := listenOnRandomPort(t)
+	_ = port // port unused; backup fails before SSH dial
+
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	// Empty credential profile repo — GetBackupProfileForDevice will return an error.
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	dialer := &mockSSHDialer{}
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, dialer, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	// Create device with backup-supported vendor — NO credential profile added.
+	deviceID := uuid.New()
+	deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
+		Managed: true, Status: domain.DeviceStatusUp,
+	})
+
+	// TriggerBackup must return an error because no credential profile is assigned.
+	_, err := svc.TriggerBackup(context.Background(), deviceID)
+	if err == nil {
+		t.Fatal("expected error when no credential profile assigned, got nil")
+	}
+	if !strings.Contains(err.Error(), "no credential profile") {
+		t.Errorf("expected error to contain %q, got %q", "no credential profile", err.Error())
 	}
 }
 

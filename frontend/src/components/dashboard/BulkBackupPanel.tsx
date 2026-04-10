@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { triggerBackup, triggerBulkDownload, fetchBackupJob } from '../../api/client';
+import { triggerBackup, triggerBulkDownload, fetchBackupJob, fetchDeviceCredentialProfiles } from '../../api/client';
 import { ValidationError, ServerError } from '../../api/errors';
 import type { Device } from '../../types/api';
 
@@ -90,18 +90,32 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     }, 2000);
   }, []);
 
-  const handleStart = () => {
+  const handleStart = async () => {
     setPhase('running');
     setError('');
 
-    // Build entries — pre-check eligibility instantly on client side
+    // Pre-fetch credential profile assignments for all devices in parallel.
+    // Eligibility requires at least one assigned credential profile (replaces legacy ssh_profile_id check).
+    const profileResults = await Promise.allSettled(
+      devices.map((d) => fetchDeviceCredentialProfiles(d.id))
+    );
+    const deviceHasProfile = new Map<string, boolean>();
+    for (let i = 0; i < devices.length; i++) {
+      const result = profileResults[i];
+      deviceHasProfile.set(
+        devices[i].id,
+        result.status === 'fulfilled' && result.value.length > 0
+      );
+    }
+
+    // Build entries — pre-check eligibility
     const initial: DeviceEntry[] = devices.map((d) => {
       const name = getDeviceName(d);
       if (!d.backup_supported) {
         return { deviceId: d.id, deviceName: name, phase: 'skipped' as const, reason: 'backup not supported for this vendor' };
       }
-      if (!d.ssh_profile_id) {
-        return { deviceId: d.id, deviceName: name, phase: 'skipped' as const, reason: 'no SSH profile assigned' };
+      if (!deviceHasProfile.get(d.id)) {
+        return { deviceId: d.id, deviceName: name, phase: 'skipped' as const, reason: 'no credential profile assigned' };
       }
       return { deviceId: d.id, deviceName: name, phase: 'checking' as const };
     });
@@ -128,7 +142,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
           } else {
             const msg = err instanceof Error ? err.message : 'backup failed';
             reason = msg.includes('unreachable') ? 'device unreachable'
-              : msg.includes('no SSH') ? 'no SSH profile assigned'
+              : msg.includes('no credential') ? 'no credential profile assigned'
               : msg.includes('not supported') ? 'backup not supported for this vendor'
               : msg;
           }
@@ -165,7 +179,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       {/* Idle: start button */}
       {phase === 'idle' && (
         <button
-          onClick={handleStart}
+          onClick={() => { void handleStart(); }}
           className="w-full rounded-md bg-primary px-3 py-2.5 text-xs font-medium text-white hover:bg-primary/90 transition-colors"
         >
           Backup All Devices

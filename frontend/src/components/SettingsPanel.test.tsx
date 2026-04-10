@@ -18,8 +18,8 @@ vi.mock('./SNMPProfileManager', () => ({
   SNMPProfileManager: () => <div data-testid="snmp-profile-manager" />,
 }));
 
-vi.mock('./SSHProfileManager', () => ({
-  SSHProfileManager: () => <div data-testid="ssh-profile-manager" />,
+vi.mock('./CredentialProfileManager', () => ({
+  CredentialProfileManager: () => <div data-testid="credential-profile-manager" />,
 }));
 
 vi.mock('./InstanceBackupManager', () => ({

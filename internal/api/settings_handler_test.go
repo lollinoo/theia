@@ -296,3 +296,52 @@ func TestSettingsHandler_GET_UnknownKey_400(t *testing.T) {
 		t.Errorf("expected error about unknown setting key, got: %s", rec.Body.String())
 	}
 }
+
+func TestSettingsHandler_BridgePort_ValidInteger_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"8080"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingBridgePort, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	got, _ := repo.Get(domain.SettingBridgePort)
+	if got != "8080" {
+		t.Fatalf("expected bridge_port=8080, got %s", got)
+	}
+}
+
+func TestSettingsHandler_BridgePort_InvalidString_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"abc"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingBridgePort, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "must be a valid integer") {
+		t.Errorf("expected error about invalid integer, got: %s", rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_BridgePort_Default_InDefaultSettings(t *testing.T) {
+	defaults := domain.DefaultSettings()
+	val, ok := defaults[domain.SettingBridgePort]
+	if !ok {
+		t.Fatal("expected DefaultSettings() to contain bridge_port key")
+	}
+	if val != "1337" {
+		t.Fatalf("expected bridge_port default to be '1337', got %q", val)
+	}
+}

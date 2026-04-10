@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { checkPrometheusHealth, createDevice, fetchAreas, fetchSNMPProfiles, fetchSSHProfiles } from '../api/client';
+import { checkPrometheusHealth, createDevice, fetchAreas, fetchSNMPProfiles } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
-import type { Area, SNMPProfile, SSHProfile } from '../types/api';
+import type { Area, SNMPProfile } from '../types/api';
 import { validateIPOrHostname, validateMaxLength, validateRequired, MAX_STRING_LENGTH } from '../utils/validation';
 import { MaterialIcon } from './MaterialIcon';
 
@@ -42,8 +42,6 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
   // profiles
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
-  const [sshProfiles, setSSHProfiles] = useState<SSHProfile[]>([]);
-  const [sshProfileId, setSSHProfileId] = useState('');
 
   // areas
   const [areas, setAreas] = useState<Area[]>([]);
@@ -95,7 +93,6 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     setMetricsMode('snmp');
     setPrometheusLabelName('instance');
     setPrometheusLabelValue('');
-    setSSHProfileId('');
     setAreaIds([]);
     // Reset virtual fields
     setVirtualSubtype('internet');
@@ -104,7 +101,6 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
   useEffect(() => {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
-    fetchSSHProfiles().then(setSSHProfiles).catch(() => {/* non-fatal */});
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
     checkPrometheusHealth().then((result) => {
       setPrometheusAvailable(result.available);
@@ -237,7 +233,6 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         metrics_source: metricsMode,
         prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
         prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
-        ssh_profile_id: sshProfileId || undefined,
         area_ids: areaIds.length > 0 ? areaIds : undefined,
       });
       onDeviceAdded();
@@ -681,30 +676,6 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               ))}
             </select>
           )}
-        </div>
-      )}
-
-      {/* SSH Profile -- only for physical devices */}
-      {!isVirtual && sshProfiles.length > 0 && (
-        <div className="space-y-2">
-          <label className={labelClass}>
-            SSH Profile <span className="text-on-bg-secondary/50">(optional)</span>
-          </label>
-          <select
-            value={sshProfileId}
-            onChange={(e) => setSSHProfileId(e.target.value)}
-            className={selectClass}
-          >
-            <option value="">-- No SSH Profile --</option>
-            {sshProfiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.username}:{p.port})
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-on-bg-secondary/70">
-            SSH profile is used for config backups.
-          </p>
         </div>
       )}
 

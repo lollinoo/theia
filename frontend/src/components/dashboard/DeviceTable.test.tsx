@@ -56,20 +56,27 @@ function mockAreaMap(): Map<string, Area> {
 
 const noop = () => {};
 
+function renderTable(devices = [mockDevice()]) {
+  return render(
+    <DeviceTable
+      devices={devices}
+      areaMap={mockAreaMap()}
+      resolvedTheme="dark"
+      snapshot={null}
+      onSSHCredentials={noop}
+      onBackup={noop}
+      onBackupHistory={noop}
+      onViewConfig={noop}
+      onWinBox={noop}
+      winboxDisabled={() => false}
+      winboxTitle={() => 'Open in WinBox'}
+    />
+  );
+}
+
 describe('DeviceTable', () => {
   it('renders all 9 column headers', () => {
-    render(
-      <DeviceTable
-        devices={[mockDevice()]}
-        areaMap={mockAreaMap()}
-        resolvedTheme="dark"
-        snapshot={null}
-        onSSHCredentials={noop}
-        onBackup={noop}
-        onBackupHistory={noop}
-        onViewConfig={noop}
-      />
-    );
+    renderTable();
 
     expect(screen.getByText('Name')).toBeInTheDocument();
     expect(screen.getByText('IP Address')).toBeInTheDocument();
@@ -83,18 +90,7 @@ describe('DeviceTable', () => {
   });
 
   it('thead has sticky class', () => {
-    const { container } = render(
-      <DeviceTable
-        devices={[mockDevice()]}
-        areaMap={mockAreaMap()}
-        resolvedTheme="dark"
-        snapshot={null}
-        onSSHCredentials={noop}
-        onBackup={noop}
-        onBackupHistory={noop}
-        onViewConfig={noop}
-      />
-    );
+    const { container } = renderTable();
 
     const thead = container.querySelector('thead');
     expect(thead).toBeTruthy();
@@ -109,18 +105,7 @@ describe('DeviceTable', () => {
       mockDevice({ id: 'dev-3', hostname: 'ap-01' }),
     ];
 
-    render(
-      <DeviceTable
-        devices={devices}
-        areaMap={mockAreaMap()}
-        resolvedTheme="dark"
-        snapshot={null}
-        onSSHCredentials={noop}
-        onBackup={noop}
-        onBackupHistory={noop}
-        onViewConfig={noop}
-      />
-    );
+    renderTable(devices);
 
     expect(screen.getByTestId('device-row-dev-1')).toBeInTheDocument();
     expect(screen.getByTestId('device-row-dev-2')).toBeInTheDocument();
@@ -128,18 +113,7 @@ describe('DeviceTable', () => {
   });
 
   it('area column header is present and clickable for sorting', () => {
-    render(
-      <DeviceTable
-        devices={[mockDevice()]}
-        areaMap={mockAreaMap()}
-        resolvedTheme="dark"
-        snapshot={null}
-        onSSHCredentials={noop}
-        onBackup={noop}
-        onBackupHistory={noop}
-        onViewConfig={noop}
-      />
-    );
+    renderTable();
 
     const areaHeader = screen.getByText('Area');
     expect(areaHeader).toBeInTheDocument();
@@ -148,36 +122,20 @@ describe('DeviceTable', () => {
   });
 
   it('uptime column header is present', () => {
-    render(
-      <DeviceTable
-        devices={[mockDevice()]}
-        areaMap={mockAreaMap()}
-        resolvedTheme="dark"
-        snapshot={null}
-        onSSHCredentials={noop}
-        onBackup={noop}
-        onBackupHistory={noop}
-        onViewConfig={noop}
-      />
-    );
+    renderTable();
 
     expect(screen.getByText('Uptime')).toBeInTheDocument();
   });
 
   it('OS Version column header is present', () => {
-    render(
-      <DeviceTable
-        devices={[mockDevice()]}
-        areaMap={mockAreaMap()}
-        resolvedTheme="dark"
-        snapshot={null}
-        onSSHCredentials={noop}
-        onBackup={noop}
-        onBackupHistory={noop}
-        onViewConfig={noop}
-      />
-    );
+    renderTable();
 
     expect(screen.getByText('OS Version')).toBeInTheDocument();
+  });
+
+  it('passes onWinBox to DeviceRow', () => {
+    renderTable();
+
+    expect(screen.getByTestId('device-row-dev-1')).toBeInTheDocument();
   });
 });

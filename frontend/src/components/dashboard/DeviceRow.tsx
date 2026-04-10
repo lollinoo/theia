@@ -16,6 +16,9 @@ interface DeviceRowProps {
   onBackup: () => void;
   onBackupHistory: () => void;
   onViewConfig: () => void;
+  onWinBox: () => void;
+  winboxDisabled: boolean;
+  winboxTitle: string;
 }
 
 function parseOsVersion(sysDescr: string): string {
@@ -28,6 +31,7 @@ function parseOsVersion(sysDescr: string): string {
 export function DeviceRow({
   device, areaMap, resolvedTheme, deviceMetrics,
   onSSHCredentials, onBackup, onBackupHistory, onViewConfig,
+  onWinBox, winboxDisabled, winboxTitle,
 }: DeviceRowProps) {
   const displayName = device.tags?.display_name || device.sys_name || device.hostname || device.ip;
   const deviceAreas = (device.area_ids ?? []).map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
@@ -94,6 +98,7 @@ export function DeviceRow({
       <td className="px-3 py-2.5">
         {device.device_type !== 'virtual' && (
           <div className="flex items-center justify-end gap-0.5">
+            <IconAction icon="open_in_new" title={winboxTitle} onClick={onWinBox} disabled={winboxDisabled} />
             <IconAction icon="terminal" title="SSH Credentials" onClick={onSSHCredentials} />
             <IconAction icon="backup" title="Backup Now" onClick={onBackup} />
             <IconAction icon="history" title="Backup History" onClick={onBackupHistory} />
@@ -105,13 +110,20 @@ export function DeviceRow({
   );
 }
 
-function IconAction({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
+function IconAction({ icon, title, onClick, disabled }: {
+  icon: string; title: string; onClick: () => void; disabled?: boolean;
+}) {
   return (
     <button
       type="button"
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onClick={(e) => { e.stopPropagation(); if (!disabled) onClick(); }}
       title={title}
-      className="p-1.5 rounded-md text-on-bg-secondary hover:text-on-bg hover:bg-surface-high transition-colors"
+      disabled={disabled}
+      className={`p-1.5 rounded-md transition-colors ${
+        disabled
+          ? 'text-on-bg-muted cursor-not-allowed opacity-40'
+          : 'text-on-bg-secondary hover:text-on-bg hover:bg-surface-high'
+      }`}
     >
       <MaterialIcon name={icon} size={16} />
     </button>

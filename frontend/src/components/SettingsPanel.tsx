@@ -3,7 +3,7 @@ import { fetchSettings, updateSetting, fetchHealthVersion, type HealthVersion } 
 import { validateURL, validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
 import { AreaManager } from './AreaManager';
 import { SNMPProfileManager } from './SNMPProfileManager';
-import { SSHProfileManager } from './SSHProfileManager';
+import { CredentialProfileManager } from './CredentialProfileManager';
 import { InstanceBackupManager } from './InstanceBackupManager';
 
 const TIMEZONES = [
@@ -96,6 +96,10 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const [deviceBackupRetention, setDeviceBackupRetention] = useState('5');
   const [savedDeviceInterval, setSavedDeviceInterval] = useState(false);
   const [savedDeviceRetention, setSavedDeviceRetention] = useState(false);
+  const [bridgeSecret, setBridgeSecret] = useState('');
+  const [savedBridgeSecret, setSavedBridgeSecret] = useState(false);
+  const [bridgePort, setBridgePort] = useState('1337');
+  const [savedBridgePort, setSavedBridgePort] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const pollingTimerRef = useRef<number | null>(null);
@@ -109,6 +113,10 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const deviceRetentionTimerRef = useRef<number | null>(null);
   const savedDeviceIntervalTimerRef = useRef<number | null>(null);
   const savedDeviceRetentionTimerRef = useRef<number | null>(null);
+  const bridgeSecretTimerRef = useRef<number | null>(null);
+  const savedBridgeSecretTimerRef = useRef<number | null>(null);
+  const bridgePortTimerRef = useRef<number | null>(null);
+  const savedBridgePortTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     fetchSettings()
@@ -125,6 +133,8 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         setTimezone(settings['timezone'] || 'UTC');
         setDeviceBackupInterval(settings['device_backup_interval_hours'] ?? '0');
         setDeviceBackupRetention(settings['device_backup_retention_count'] ?? '5');
+        setBridgeSecret(settings['bridge_secret'] ?? '');
+        setBridgePort(settings['bridge_port'] ?? '1337');
       })
       .catch(() => {/* non-fatal */});
     fetchHealthVersion().then(setVersionInfo);
@@ -232,6 +242,32 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
     if (hours >= 48) return '48 hours';
     if (hours >= 24) return '24 hours';
     return hours + ' hours';
+  }
+
+  function handleBridgeSecretChange(value: string) {
+    setBridgeSecret(value);
+    if (bridgeSecretTimerRef.current !== null) window.clearTimeout(bridgeSecretTimerRef.current);
+    bridgeSecretTimerRef.current = window.setTimeout(() => {
+      void updateSetting('bridge_secret', value).then(() =>
+        showSaved(setSavedBridgeSecret, savedBridgeSecretTimerRef),
+      );
+    }, 500);
+  }
+
+  function handleBridgePortChange(value: string) {
+    setBridgePort(value);
+    setFieldError('bridgePort', null);
+    if (bridgePortTimerRef.current !== null) window.clearTimeout(bridgePortTimerRef.current);
+    const num = parseInt(value, 10);
+    if (!Number.isFinite(num) || num < 1 || num > 65535) {
+      setFieldError('bridgePort', 'Bridge port must be an integer between 1 and 65535');
+      return;
+    }
+    bridgePortTimerRef.current = window.setTimeout(() => {
+      void updateSetting('bridge_port', String(num)).then(() =>
+        showSaved(setSavedBridgePort, savedBridgePortTimerRef),
+      );
+    }, 500);
   }
 
   function handlePollingPresetChange(value: string) {
@@ -370,6 +406,58 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         </p>
       </div>
 
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            WinBox Bridge Secret
+          </label>
+          <SavedIndicator visible={savedBridgeSecret} />
+        </div>
+        <input
+          type="text"
+          value={bridgeSecret}
+          placeholder="Paste 64-char hex key from config.json"
+          onChange={(e) => handleBridgeSecretChange(e.target.value)}
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none font-mono"
+        />
+        <p className="text-xs text-on-bg-secondary/70">
+          Found in <span className="font-mono">~/.config/winbox-bridge/config.json</span> → <span className="font-mono">bridge_secret</span> field. Required to launch WinBox from Theia.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            WinBox Bridge Port
+          </label>
+          <SavedIndicator visible={savedBridgePort} />
+        </div>
+        <input
+          type="number"
+          min={1}
+          max={65535}
+          value={bridgePort}
+          placeholder="1337"
+          onChange={(e) => handleBridgePortChange(e.target.value)}
+          onBlur={() => {
+            const num = parseInt(bridgePort, 10);
+            if (!Number.isFinite(num) || num < 1 || num > 65535) {
+              setFieldError('bridgePort', 'Bridge port must be an integer between 1 and 65535');
+            } else {
+              setFieldError('bridgePort', null);
+            }
+          }}
+          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none font-mono${fieldErrors.bridgePort ? ' border-status-down' : ' border-outline-subtle'}`}
+        />
+        {fieldErrors.bridgePort && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors.bridgePort}</p>
+        )}
+        <p className="text-xs text-on-bg-secondary/70">
+          TCP port the WinBox bridge listens on. Default is <span className="font-mono">1337</span>.
+          Must match <span className="font-mono">ListenPort</span> in the bridge&apos;s config.json.
+        </p>
+      </div>
+
       <div className="mt-6">
         <AreaManager onAreasChange={onAreasChange} />
       </div>
@@ -379,7 +467,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
       </div>
 
       <div className="mt-6">
-        <SSHProfileManager />
+        <CredentialProfileManager />
       </div>
 
       {/* Device Backup section (collapsible, collapsed by default) */}

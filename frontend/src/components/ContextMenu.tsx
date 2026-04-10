@@ -8,6 +8,7 @@ export interface ContextMenuItem {
     disabled?: boolean;
     icon?: string;
     separator?: boolean;
+    title?: string;
 }
 
 interface ContextMenuProps {
@@ -79,6 +80,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
                     )}
                     <button
                         disabled={item.disabled}
+                        title={item.title}
                         className={`group flex w-full items-center gap-3 px-3 text-left text-sm transition-colors dark:h-[36px] h-[40px] ${
                             item.disabled
                                 ? 'cursor-not-allowed opacity-40'

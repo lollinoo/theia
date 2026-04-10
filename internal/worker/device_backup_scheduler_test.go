@@ -383,14 +383,15 @@ func (r *stubFileRepo) GetByJobID(jobID uuid.UUID) ([]domain.BackupFile, error) 
 func (r *stubFileRepo) GetByID(id uuid.UUID) (*domain.BackupFile, error)           { return nil, nil }
 func (r *stubFileRepo) DeleteByJobID(jobID uuid.UUID) error                        { return nil }
 
-// stubSSHProfileRepo satisfies domain.SSHProfileRepository with no-op methods.
-type stubSSHProfileRepo struct{}
+// stubCredentialProfileRepo satisfies domain.CredentialProfileRepository with no-op methods.
+type stubCredentialProfileRepo struct{}
 
-func (r *stubSSHProfileRepo) Create(profile *domain.SSHProfile) error                { return nil }
-func (r *stubSSHProfileRepo) GetByID(id uuid.UUID) (*domain.SSHProfile, error)       { return nil, nil }
-func (r *stubSSHProfileRepo) GetAll() ([]domain.SSHProfile, error)                   { return nil, nil }
-func (r *stubSSHProfileRepo) Update(profile *domain.SSHProfile) error                { return nil }
-func (r *stubSSHProfileRepo) Delete(id uuid.UUID) error                              { return nil }
+func (r *stubCredentialProfileRepo) Create(profile *domain.CredentialProfile) error                                    { return nil }
+func (r *stubCredentialProfileRepo) GetByID(id uuid.UUID) (*domain.CredentialProfile, error)                          { return nil, nil }
+func (r *stubCredentialProfileRepo) GetAll() ([]domain.CredentialProfile, error)                                       { return nil, nil }
+func (r *stubCredentialProfileRepo) Update(profile *domain.CredentialProfile) error                                    { return nil }
+func (r *stubCredentialProfileRepo) Delete(id uuid.UUID) error                                                         { return nil }
+func (r *stubCredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error)  { return nil, nil }
 
 // newTestDeviceBackupService creates a real BackupService whose TriggerBulkBackup
 // returns immediately with an empty result when deviceRepo.GetAll returns no devices.
@@ -400,7 +401,7 @@ func newTestDeviceBackupService(jobRepo domain.BackupJobRepository) *service.Bac
 	return service.NewBackupService(
 		jobRepo,
 		&stubFileRepo{},
-		&stubSSHProfileRepo{},
+		&stubCredentialProfileRepo{},
 		&stubDeviceRepo{},
 		newMockWorkerSettingsRepo(),
 		nil, // vendor registry — not reached with empty device list

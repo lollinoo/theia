@@ -11,9 +11,10 @@ import (
 // Runtime settings (Prometheus URL, polling interval, etc.) are stored
 // in the SQLite settings table and managed via the API.
 type Config struct {
-	ListenAddr string `yaml:"listen_addr"`
-	DBPath     string `yaml:"db_path"`
-	LogLevel   string `yaml:"log_level"`
+	ListenAddr        string `yaml:"listen_addr"`
+	DBPath            string `yaml:"db_path"`
+	LogLevel          string `yaml:"log_level"`
+	BridgeBinariesDir string `yaml:"bridge_binaries_dir"`
 }
 
 // defaults returns a Config with sensible default values.
@@ -32,6 +33,7 @@ func defaults() *Config {
 //   - THEIA_LISTEN_ADDR
 //   - THEIA_DB_PATH
 //   - THEIA_LOG_LEVEL
+//   - THEIA_BRIDGE_BINARIES_DIR
 func Load(path string) (*Config, error) {
 	cfg := defaults()
 
@@ -56,6 +58,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("THEIA_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
+	}
+	if v := os.Getenv("THEIA_BRIDGE_BINARIES_DIR"); v != "" {
+		cfg.BridgeBinariesDir = v
 	}
 
 	return cfg, nil
