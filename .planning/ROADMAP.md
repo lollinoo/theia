@@ -66,7 +66,7 @@
 - [x] **Phase 27: Schema Cleanup — Drop Legacy FK** - SQLite 12-step table-recreation migration dropping legacy ssh_profile_id FK column (completed 2026-04-08)
 - [x] **Phase 28: API Call Optimization — WS Delta Payloads** - Hash-based delta detection, frontend deep-merge, zero-broadcast when nothing changed (completed 2026-04-08)
 - [x] **Phase 29: WinBox Bridge System Tray** - System tray icon, start/stop server, config persistence, --no-tray headless mode (completed 2026-04-09)
-- [ ] **Phase 30: Gap Closure — Verification Docs + Dead Code** (pending)
+- [x] **Phase 30: Gap Closure — Verification Docs + Dead Code** (pending) (completed 2026-04-10)
 - [ ] **Phase 31: Dynamic Bridge Port** (pending)
 
 ## Phase Details
@@ -191,9 +191,9 @@ Plans:
   2. Phase 27 has a VERIFICATION.md confirming all 4 success criteria pass
   3. REQUIREMENTS.md checkboxes for CRED-03, CRED-05, BRIDGE-01, BRIDGE-02 are marked [x]
   4. `testSSHProfile` is removed from `frontend/src/api/client.ts`
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 Plans:
-- [ ] 30-01-PLAN.md — Retroactive verification docs + REQUIREMENTS.md corrections + dead code removal
+- [x] 30-01-PLAN.md — Retroactive verification docs + REQUIREMENTS.md corrections + dead code removal
 
 ### Phase 31: Dynamic Bridge Port
 **Goal**: The frontend reads the bridge port from Theia settings rather than hardcoding `:1337`, so WinBox launch and health detection work correctly when a user configures a non-default ListenPort in the bridge config
@@ -243,5 +243,5 @@ Plans:
 | 27. Schema Cleanup — Drop Legacy FK | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 28. API call optimization — WS delta payloads | v1.5.0 | 2/2 | Complete   | 2026-04-08 |
 | 29. WinBox bridge system tray | v1.5.0 | 3/3 | Complete    | 2026-04-09 |
-| 30. Gap Closure — Verification Docs + Dead Code | v1.5.0 | 0/1 | Pending | — |
+| 30. Gap Closure — Verification Docs + Dead Code | v1.5.0 | 1/1 | Complete   | 2026-04-10 |
 | 31. Dynamic Bridge Port | v1.5.0 | 0/1 | Pending | — |

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.5.0
 milestone_name: WinBox Integration
-status: executing
-stopped_at: "Checkpoint 29-02: awaiting human verification of system tray on desktop"
-last_updated: "2026-04-08T20:59:45.987Z"
-last_activity: 2026-04-08
+status: verifying
+stopped_at: Completed 30-01-PLAN.md
+last_updated: "2026-04-10T07:13:47.456Z"
+last_activity: 2026-04-10
 progress:
-  total_phases: 7
-  completed_phases: 6
-  total_plans: 17
-  completed_plans: 16
-  percent: 94
+  total_phases: 9
+  completed_phases: 8
+  total_plans: 18
+  completed_plans: 18
+  percent: 100
 ---
 
 # State: MikroTik Theia
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Network operators can see their entire topology at a glance with live stats on every device and link, drill into Grafana for deep dives, and manage devices directly — all from a single interactive map.
-**Current focus:** Phase 29 — winbox-bridge-system-tray-configure-path-port-and-origin-sta
+**Current focus:** Phase 30 — gap-closure-verification-docs-dead-code
 
 ## Current Position
 
-Phase: 29 (winbox-bridge-system-tray-configure-path-port-and-origin-sta) — EXECUTING
-Plan: 2 of 3
-Status: Ready to execute
-Last activity: 2026-04-08
+Phase: 30 (gap-closure-verification-docs-dead-code) — EXECUTING
+Plan: 1 of 1
+Status: Phase complete — ready for verification
+Last activity: 2026-04-10
 
 ```
 v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
@@ -63,6 +63,8 @@ v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 - [Phase 29]: 29-02: setupTray auto-starts server before systray.Run() in main() — bridge is immediately usable on launch without manual Start click
 - [Phase 29]: 29-02: Config reloaded from disk on every Start menu click — user edits config.json and clicks Stop/Start to apply changes without restarting bridge
 - [Phase 29]: 29-02: ensureConfigFileExists() creates config.json before opening in editor — first-run UX is seamless
+- [Phase 30-01]: REQUIREMENTS.md edits accepted: documentation-only changes reflecting already-verified implementation state from Phase 24/25/27
+- [Phase 30-01]: testSSHProfile removed entirely: referenced defunct /api/v1/ssh-profiles/ endpoint renamed in Phase 23; function had zero callers
 
 ## Accumulated Context
 
@@ -88,5 +90,5 @@ v1.5.0 Progress: [██████████] 100% phases (6/6 complete)
 
 ## Session Continuity
 
-Stopped at: Checkpoint 29-02: awaiting human verification of system tray on desktop
+Stopped at: Completed 30-01-PLAN.md
 To resume: /gsd-execute-phase 27 (Schema Cleanup — Drop Legacy FK)
