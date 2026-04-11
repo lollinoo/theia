@@ -30,12 +30,12 @@ type WinboxAssignmentRow struct {
 
 // CredentialProfileRepo implements domain.CredentialProfileRepository using SQLite.
 type CredentialProfileRepo struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewCredentialProfileRepo creates a new CredentialProfileRepo.
 func NewCredentialProfileRepo(db *sql.DB) *CredentialProfileRepo {
-	return &CredentialProfileRepo{db: db}
+	return &CredentialProfileRepo{db: wrapDB(db)}
 }
 
 // Create inserts a new credential profile.

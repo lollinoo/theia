@@ -130,6 +130,18 @@ describe('createDevice', () => {
 
     await expect(createDevice(payload)).rejects.toThrow();
   });
+
+  it('throws ValidationError on conflict error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({ error: 'a device with IP/host "10.0.0.2" already exists' }, { ok: false, status: 409, statusText: 'Conflict' }),
+      ),
+    );
+
+    await expect(createDevice(payload)).rejects.toThrow(ValidationError);
+    await expect(createDevice(payload)).rejects.toThrow('a device with IP/host "10.0.0.2" already exists');
+  });
 });
 
 describe('fetchSettings', () => {

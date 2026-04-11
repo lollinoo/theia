@@ -117,6 +117,8 @@ export function useWebSocket(url: string): UseWebSocketResult {
             });
           } else if (message.type === 'prometheus_status') {
             setPrometheusStatus(message.payload as PrometheusStatusPayload);
+          } else if (message.type === 'topology_changed') {
+            window.dispatchEvent(new Event('topology-changed'));
           }
         } catch (error) {
           console.error('Failed to parse WebSocket message', error);

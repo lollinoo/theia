@@ -56,9 +56,10 @@ func TestMigrations(t *testing.T) {
 // TestMigration000012_DefaultRole (CRED-04)
 // ---------------------------------------------------------------------------
 // Verifies the behavior introduced by migration 000012:
-//   (a) The credential_profiles table has a role column that defaults to 'Admin'
-//       — inserting a row without specifying role yields role='Admin'.
-//   (b) The device_credential_profiles join table exists with the expected columns.
+//
+//	(a) The credential_profiles table has a role column that defaults to 'Admin'
+//	    — inserting a row without specifying role yields role='Admin'.
+//	(b) The device_credential_profiles join table exists with the expected columns.
 //
 // Because RunMigrations always runs all migrations to the latest version,
 // we verify these invariants on the final migrated schema rather than
@@ -218,6 +219,44 @@ func TestMigration000014_DeviceDataIntegrity(t *testing.T) {
 	}
 	if prometheusLabelName != "instance" {
 		t.Errorf("expected prometheus_label_name %q, got %q", "instance", prometheusLabelName)
+	}
+}
+
+func TestMigration000015_AddsScaleIndexes(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	var sysNameLookupColumnCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='sys_name_lookup'`,
+	).Scan(&sysNameLookupColumnCount); err != nil {
+		t.Fatalf("querying devices columns: %v", err)
+	}
+	if sysNameLookupColumnCount != 1 {
+		t.Fatalf("expected sys_name_lookup column to exist, got count %d", sysNameLookupColumnCount)
+	}
+
+	indexes := []string{
+		"idx_devices_sys_name_lookup",
+		"idx_interfaces_device_id_if_index",
+		"idx_device_areas_area_id",
+		"idx_links_target_device_created_at",
+		"idx_links_pair_lookup",
+	}
+	for _, indexName := range indexes {
+		var count int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`,
+			indexName,
+		).Scan(&count); err != nil {
+			t.Fatalf("querying index %s: %v", indexName, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected index %s to exist, got count %d", indexName, count)
+		}
 	}
 }
 

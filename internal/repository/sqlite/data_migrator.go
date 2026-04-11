@@ -1,0 +1,651 @@
+package sqlite
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const defaultCopyBatchSize = 250
+
+type CopyOptions struct {
+	TruncateTarget bool
+	BatchSize      int
+	Logf           func(format string, args ...any)
+}
+
+type columnKind int
+
+const (
+	columnKindText columnKind = iota
+	columnKindInt64
+	columnKindFloat64
+	columnKindBool
+	columnKindTime
+)
+
+type columnSpec struct {
+	name string
+	kind columnKind
+}
+
+type tableCopySpec struct {
+	name       string
+	columns    []columnSpec
+	keyColumns []string
+}
+
+var primaryDataCopySpecs = []tableCopySpec{
+	{
+		name: "devices",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "hostname", kind: columnKindText},
+			{name: "ip", kind: columnKindText},
+			{name: "snmp_credentials_json", kind: columnKindText},
+			{name: "device_type", kind: columnKindText},
+			{name: "status", kind: columnKindText},
+			{name: "sys_name", kind: columnKindText},
+			{name: "sys_descr", kind: columnKindText},
+			{name: "sys_object_id", kind: columnKindText},
+			{name: "hardware_model", kind: columnKindText},
+			{name: "vendor", kind: columnKindText},
+			{name: "managed", kind: columnKindInt64},
+			{name: "tags_json", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+			{name: "updated_at", kind: columnKindTime},
+			{name: "metrics_source", kind: columnKindText},
+			{name: "prometheus_label_name", kind: columnKindText},
+			{name: "prometheus_label_value", kind: columnKindText},
+			{name: "sys_name_lookup", kind: columnKindText},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "snmp_profiles",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "name", kind: columnKindText},
+			{name: "description", kind: columnKindText},
+			{name: "credentials_json", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "vendor_configs",
+		columns: []columnSpec{
+			{name: "name", kind: columnKindText},
+			{name: "display_name", kind: columnKindText},
+			{name: "config_json", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"name"},
+	},
+	{
+		name: "areas",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "name", kind: columnKindText},
+			{name: "description", kind: columnKindText},
+			{name: "color", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "interfaces",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "device_id", kind: columnKindText},
+			{name: "if_index", kind: columnKindInt64},
+			{name: "if_name", kind: columnKindText},
+			{name: "if_descr", kind: columnKindText},
+			{name: "speed", kind: columnKindInt64},
+			{name: "admin_status", kind: columnKindText},
+			{name: "oper_status", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "device_positions",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "x", kind: columnKindFloat64},
+			{name: "y", kind: columnKindFloat64},
+			{name: "pinned", kind: columnKindInt64},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"device_id"},
+	},
+	{
+		name: "device_areas",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "area_id", kind: columnKindText},
+		},
+		keyColumns: []string{"device_id", "area_id"},
+	},
+	{
+		name: "credential_profiles",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "name", kind: columnKindText},
+			{name: "description", kind: columnKindText},
+			{name: "username", kind: columnKindText},
+			{name: "port", kind: columnKindInt64},
+			{name: "auth_method", kind: columnKindText},
+			{name: "encrypted_secret", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+			{name: "updated_at", kind: columnKindTime},
+			{name: "role", kind: columnKindText},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "device_credential_profiles",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "profile_id", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+			{name: "is_winbox", kind: columnKindBool},
+		},
+		keyColumns: []string{"device_id", "profile_id"},
+	},
+	{
+		name: "links",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "source_device_id", kind: columnKindText},
+			{name: "source_if_name", kind: columnKindText},
+			{name: "target_device_id", kind: columnKindText},
+			{name: "target_if_name", kind: columnKindText},
+			{name: "discovery_protocol", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "settings",
+		columns: []columnSpec{
+			{name: "key", kind: columnKindText},
+			{name: "value", kind: columnKindText},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"key"},
+	},
+	{
+		name: "backup_jobs",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "device_id", kind: columnKindText},
+			{name: "status", kind: columnKindText},
+			{name: "error_message", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "backup_files",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "job_id", kind: columnKindText},
+			{name: "file_type", kind: columnKindText},
+			{name: "file_name", kind: columnKindText},
+			{name: "file_path", kind: columnKindText},
+			{name: "file_hash", kind: columnKindText},
+			{name: "size_bytes", kind: columnKindInt64},
+			{name: "created_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "instance_backups",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "file_name", kind: columnKindText},
+			{name: "file_path", kind: columnKindText},
+			{name: "size_bytes", kind: columnKindInt64},
+			{name: "sha256", kind: columnKindText},
+			{name: "app_version", kind: columnKindText},
+			{name: "migration_version", kind: columnKindInt64},
+			{name: "status", kind: columnKindText},
+			{name: "error_message", kind: columnKindText},
+			{name: "trigger_type", kind: columnKindText},
+			{name: "created_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"id"},
+	},
+}
+
+func MigrateSQLiteToPostgres(sourcePath, targetDSN string, opts CopyOptions) error {
+	sourcePath = strings.TrimSpace(sourcePath)
+	if sourcePath == "" {
+		return fmt.Errorf("source sqlite path is required")
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		return fmt.Errorf("checking source sqlite database: %w", err)
+	}
+	if strings.TrimSpace(targetDSN) == "" {
+		return fmt.Errorf("target postgres dsn is required")
+	}
+
+	sourceDB, _, err := OpenPrimaryDB(string(DialectSQLite), sourcePath, "")
+	if err != nil {
+		return fmt.Errorf("opening source sqlite database: %w", err)
+	}
+	defer sourceDB.Close()
+	ConfigureDB(sourceDB)
+
+	targetDB, dialect, err := OpenPrimaryDB(string(DialectPostgres), "", targetDSN)
+	if err != nil {
+		return fmt.Errorf("opening target postgres database: %w", err)
+	}
+	defer targetDB.Close()
+	ConfigureDB(targetDB)
+
+	if dialect != DialectPostgres {
+		return fmt.Errorf("target database must be postgres, got %s", dialect)
+	}
+	if err := targetDB.Ping(); err != nil {
+		return fmt.Errorf("pinging target postgres database: %w", err)
+	}
+	if err := RunMigrations(targetDB); err != nil {
+		return fmt.Errorf("running target postgres migrations: %w", err)
+	}
+	if err := CopyPrimaryData(sourceDB, targetDB, opts); err != nil {
+		return err
+	}
+
+	if _, err := wrapDB(targetDB).Exec("ANALYZE"); err != nil {
+		return fmt.Errorf("analyzing target database: %w", err)
+	}
+	return nil
+}
+
+func CopyPrimaryData(source, target *sql.DB, opts CopyOptions) error {
+	if source == nil {
+		return fmt.Errorf("source database is nil")
+	}
+	if target == nil {
+		return fmt.Errorf("target database is nil")
+	}
+
+	batchSize := opts.BatchSize
+	if batchSize <= 0 {
+		batchSize = defaultCopyBatchSize
+	}
+
+	sourceTx, err := source.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning source read transaction: %w", err)
+	}
+	defer sourceTx.Rollback() //nolint:errcheck
+
+	targetTx, err := wrapDB(target).Begin()
+	if err != nil {
+		return fmt.Errorf("beginning target write transaction: %w", err)
+	}
+	defer targetTx.Rollback() //nolint:errcheck
+
+	if targetTx.dialect == DialectPostgres {
+		if _, err := targetTx.Exec("SET LOCAL synchronous_commit = OFF"); err != nil {
+			return fmt.Errorf("configuring postgres import transaction: %w", err)
+		}
+	}
+
+	if opts.TruncateTarget {
+		if err := clearTargetTables(targetTx, primaryDataCopySpecs); err != nil {
+			return fmt.Errorf("clearing target data: %w", err)
+		}
+	}
+
+	for _, spec := range primaryDataCopySpecs {
+		rowCount, err := copyTableData(sourceTx, targetTx, spec, batchSize)
+		if err != nil {
+			return fmt.Errorf("copying %s: %w", spec.name, err)
+		}
+		if opts.Logf != nil {
+			opts.Logf("copied %d rows into %s", rowCount, spec.name)
+		}
+	}
+
+	if err := targetTx.Commit(); err != nil {
+		return fmt.Errorf("committing target transaction: %w", err)
+	}
+	return nil
+}
+
+func clearTargetTables(targetTx *Tx, specs []tableCopySpec) error {
+	if targetTx.dialect == DialectPostgres {
+		tableNames := make([]string, 0, len(specs))
+		for _, spec := range specs {
+			tableNames = append(tableNames, spec.name)
+		}
+		_, err := targetTx.Exec("TRUNCATE TABLE " + strings.Join(tableNames, ", ") + " CASCADE")
+		return err
+	}
+
+	for i := len(specs) - 1; i >= 0; i-- {
+		if _, err := targetTx.Exec("DELETE FROM " + specs[i].name); err != nil {
+			return fmt.Errorf("deleting %s: %w", specs[i].name, err)
+		}
+	}
+	return nil
+}
+
+func copyTableData(sourceTx *sql.Tx, targetTx *Tx, spec tableCopySpec, batchSize int) (int, error) {
+	query := buildSelectQuery(spec)
+	rows, err := sourceTx.Query(query)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	totalRows := 0
+	batch := make([][]any, 0, batchSize)
+
+	for rows.Next() {
+		rawValues := make([]any, len(spec.columns))
+		dest := make([]any, len(spec.columns))
+		for i := range rawValues {
+			dest[i] = &rawValues[i]
+		}
+
+		if err := rows.Scan(dest...); err != nil {
+			return totalRows, fmt.Errorf("scanning source row: %w", err)
+		}
+
+		normalized := make([]any, len(spec.columns))
+		for i, column := range spec.columns {
+			normalized[i], err = normalizeCopyValue(column.kind, rawValues[i])
+			if err != nil {
+				return totalRows, fmt.Errorf("normalizing %s.%s: %w", spec.name, column.name, err)
+			}
+		}
+
+		batch = append(batch, normalized)
+		totalRows++
+
+		if len(batch) >= batchSize {
+			if err := insertBatch(targetTx, spec, batch); err != nil {
+				return totalRows, err
+			}
+			batch = batch[:0]
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return totalRows, err
+	}
+	if len(batch) > 0 {
+		if err := insertBatch(targetTx, spec, batch); err != nil {
+			return totalRows, err
+		}
+	}
+
+	return totalRows, nil
+}
+
+func buildSelectQuery(spec tableCopySpec) string {
+	columnNames := make([]string, 0, len(spec.columns))
+	for _, column := range spec.columns {
+		columnNames = append(columnNames, column.name)
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(columnNames, ", "), spec.name)
+	if len(spec.keyColumns) > 0 {
+		query += " ORDER BY " + strings.Join(spec.keyColumns, ", ")
+	}
+	return query
+}
+
+func insertBatch(targetTx *Tx, spec tableCopySpec, rows [][]any) error {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	query := buildBatchInsertQuery(spec, len(rows))
+	args := make([]any, 0, len(rows)*len(spec.columns))
+	for _, row := range rows {
+		args = append(args, row...)
+	}
+
+	if _, err := targetTx.Exec(query, args...); err != nil {
+		return fmt.Errorf("executing batch insert for %s: %w", spec.name, err)
+	}
+	return nil
+}
+
+func buildBatchInsertQuery(spec tableCopySpec, rowCount int) string {
+	columnNames := make([]string, 0, len(spec.columns))
+	for _, column := range spec.columns {
+		columnNames = append(columnNames, column.name)
+	}
+
+	var builder strings.Builder
+	builder.Grow((len(columnNames) + 4) * rowCount)
+	builder.WriteString("INSERT INTO ")
+	builder.WriteString(spec.name)
+	builder.WriteString(" (")
+	builder.WriteString(strings.Join(columnNames, ", "))
+	builder.WriteString(") VALUES ")
+
+	for rowIndex := 0; rowIndex < rowCount; rowIndex++ {
+		if rowIndex > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteByte('(')
+		for colIndex := range spec.columns {
+			if colIndex > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteByte('?')
+		}
+		builder.WriteByte(')')
+	}
+
+	if len(spec.keyColumns) == 0 {
+		return builder.String()
+	}
+
+	builder.WriteString(" ON CONFLICT (")
+	builder.WriteString(strings.Join(spec.keyColumns, ", "))
+	builder.WriteByte(')')
+
+	updateColumns := make([]string, 0, len(spec.columns))
+	keyLookup := make(map[string]struct{}, len(spec.keyColumns))
+	for _, keyColumn := range spec.keyColumns {
+		keyLookup[keyColumn] = struct{}{}
+	}
+	for _, column := range spec.columns {
+		if _, isKey := keyLookup[column.name]; isKey {
+			continue
+		}
+		updateColumns = append(updateColumns, column.name)
+	}
+
+	if len(updateColumns) == 0 {
+		builder.WriteString(" DO NOTHING")
+		return builder.String()
+	}
+
+	builder.WriteString(" DO UPDATE SET ")
+	for i, columnName := range updateColumns {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(columnName)
+		builder.WriteString(" = EXCLUDED.")
+		builder.WriteString(columnName)
+	}
+
+	return builder.String()
+}
+
+func normalizeCopyValue(kind columnKind, raw any) (any, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	switch kind {
+	case columnKindText:
+		return normalizeTextValue(raw)
+	case columnKindInt64:
+		return normalizeIntValue(raw)
+	case columnKindFloat64:
+		return normalizeFloatValue(raw)
+	case columnKindBool:
+		return normalizeBoolValue(raw)
+	case columnKindTime:
+		return normalizeTimeValue(raw)
+	default:
+		return nil, fmt.Errorf("unsupported column kind %d", kind)
+	}
+}
+
+func normalizeTextValue(raw any) (string, error) {
+	switch value := raw.(type) {
+	case string:
+		return value, nil
+	case []byte:
+		return string(value), nil
+	case time.Time:
+		return value.UTC().Format(time.RFC3339Nano), nil
+	default:
+		return fmt.Sprintf("%v", value), nil
+	}
+}
+
+func normalizeIntValue(raw any) (int64, error) {
+	switch value := raw.(type) {
+	case int:
+		return int64(value), nil
+	case int32:
+		return int64(value), nil
+	case int64:
+		return value, nil
+	case float64:
+		return int64(value), nil
+	case bool:
+		if value {
+			return 1, nil
+		}
+		return 0, nil
+	case []byte:
+		return strconv.ParseInt(string(value), 10, 64)
+	case string:
+		return strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	default:
+		return 0, fmt.Errorf("unsupported integer value type %T", raw)
+	}
+}
+
+func normalizeFloatValue(raw any) (float64, error) {
+	switch value := raw.(type) {
+	case int:
+		return float64(value), nil
+	case int32:
+		return float64(value), nil
+	case int64:
+		return float64(value), nil
+	case float32:
+		return float64(value), nil
+	case float64:
+		return value, nil
+	case []byte:
+		return strconv.ParseFloat(string(value), 64)
+	case string:
+		return strconv.ParseFloat(strings.TrimSpace(value), 64)
+	default:
+		return 0, fmt.Errorf("unsupported float value type %T", raw)
+	}
+}
+
+func normalizeBoolValue(raw any) (bool, error) {
+	switch value := raw.(type) {
+	case bool:
+		return value, nil
+	case int:
+		return value != 0, nil
+	case int32:
+		return value != 0, nil
+	case int64:
+		return value != 0, nil
+	case []byte:
+		return parseBoolString(string(value))
+	case string:
+		return parseBoolString(value)
+	default:
+		return false, fmt.Errorf("unsupported bool value type %T", raw)
+	}
+}
+
+func parseBoolString(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "t", "yes", "y":
+		return true, nil
+	case "0", "false", "f", "no", "n", "":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unsupported bool literal %q", value)
+	}
+}
+
+func normalizeTimeValue(raw any) (time.Time, error) {
+	switch value := raw.(type) {
+	case time.Time:
+		return value.UTC(), nil
+	case []byte:
+		return parseSQLiteTimestamp(string(value))
+	case string:
+		return parseSQLiteTimestamp(value)
+	default:
+		return time.Time{}, fmt.Errorf("unsupported time value type %T", raw)
+	}
+}
+
+func parseSQLiteTimestamp(value string) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, fmt.Errorf("empty timestamp")
+	}
+
+	layouts := []struct {
+		layout string
+		useUTC bool
+	}{
+		{layout: time.RFC3339Nano},
+		{layout: "2006-01-02 15:04:05.999999999-07:00"},
+		{layout: "2006-01-02 15:04:05.999999999Z07:00"},
+		{layout: "2006-01-02 15:04:05.999999999", useUTC: true},
+		{layout: "2006-01-02 15:04:05", useUTC: true},
+		{layout: "2006-01-02T15:04:05.999999999", useUTC: true},
+		{layout: "2006-01-02T15:04:05", useUTC: true},
+	}
+
+	for _, candidate := range layouts {
+		var (
+			parsed time.Time
+			err    error
+		)
+		if candidate.useUTC {
+			parsed, err = time.ParseInLocation(candidate.layout, trimmed, time.UTC)
+		} else {
+			parsed, err = time.Parse(candidate.layout, trimmed)
+		}
+		if err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("unsupported timestamp literal %q", value)
+}

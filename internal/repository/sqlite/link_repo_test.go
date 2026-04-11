@@ -1,10 +1,14 @@
 package sqlite
 
 import (
+	"database/sql"
+	"fmt"
+	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -106,7 +110,7 @@ func TestLinkRepo_Upsert_InsertNew(t *testing.T) {
 		DiscoveryProtocol: domain.DiscoveryProtocolCDP,
 	}
 
-	if err := linkRepo.Upsert(link); err != nil {
+	if _, err := linkRepo.Upsert(link); err != nil {
 		t.Fatalf("Upsert (insert): %v", err)
 	}
 
@@ -141,7 +145,7 @@ func TestLinkRepo_Upsert_UpdateExisting(t *testing.T) {
 		TargetIfName:      "ether3",
 		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
 	}
-	if err := linkRepo.Upsert(link1); err != nil {
+	if _, err := linkRepo.Upsert(link1); err != nil {
 		t.Fatalf("Upsert (insert): %v", err)
 	}
 	originalID := link1.ID
@@ -154,7 +158,7 @@ func TestLinkRepo_Upsert_UpdateExisting(t *testing.T) {
 		TargetIfName:      "ether3",
 		DiscoveryProtocol: domain.DiscoveryProtocolCDP,
 	}
-	if err := linkRepo.Upsert(link2); err != nil {
+	if _, err := linkRepo.Upsert(link2); err != nil {
 		t.Fatalf("Upsert (update): %v", err)
 	}
 
@@ -232,6 +236,399 @@ func TestLinkRepo_GetAll(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Errorf("GetAll returned %d links, want 2", len(all))
+	}
+}
+
+func TestLinkRepo_Upsert_PreservesDistinctParallelUplinks(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	first := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "sfp-sfpplus1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether1",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if created, err := linkRepo.Upsert(first); err != nil {
+		t.Fatalf("Upsert first uplink: %v", err)
+	} else if !created {
+		t.Fatal("Expected first uplink to be inserted")
+	}
+
+	second := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "sfp-sfpplus2",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if created, err := linkRepo.Upsert(second); err != nil {
+		t.Fatalf("Upsert second uplink: %v", err)
+	} else if !created {
+		t.Fatal("Expected second uplink to be inserted separately")
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 stored parallel uplinks, got %d", len(all))
+	}
+}
+
+// TestLinkRepo_Upsert_CleansUpBrokenLink verifies that upserting a link with a
+// non-empty SourceIfName deletes any existing link for the same physical link
+// that has an empty SourceIfName (a "broken" link from an incomplete discovery).
+func TestLinkRepo_Upsert_CleansUpBrokenLink(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	// Insert a broken link with empty SourceIfName
+	broken := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(broken); err != nil {
+		t.Fatalf("Create broken link: %v", err)
+	}
+
+	// Upsert a corrected link with SourceIfName populated
+	corrected := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(corrected); err != nil {
+		t.Fatalf("Upsert corrected link: %v", err)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link after cleanup, got %d", len(all))
+	}
+	if all[0].SourceIfName != "ether1" {
+		t.Errorf("expected SourceIfName 'ether1', got %q", all[0].SourceIfName)
+	}
+}
+
+// TestLinkRepo_Upsert_NoBrokenLinkNoDeletion verifies that upserting with a
+// non-empty SourceIfName when no broken link exists works as a normal insert.
+func TestLinkRepo_Upsert_NoBrokenLinkNoDeletion(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	// No pre-existing link — upsert should just insert
+	link := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(link); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(all))
+	}
+	if all[0].SourceIfName != "ether1" {
+		t.Errorf("expected SourceIfName 'ether1', got %q", all[0].SourceIfName)
+	}
+}
+
+// TestLinkRepo_Upsert_EmptySourceIfNamePreservesExisting verifies that upserting a link
+// with an empty SourceIfName for a physical link that already has a populated link does
+// NOT overwrite the existing port names.
+func TestLinkRepo_Upsert_EmptySourceIfNamePreservesExisting(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	// Insert a valid link first
+	valid := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(valid); err != nil {
+		t.Fatalf("Create valid link: %v", err)
+	}
+
+	// Upsert a new link with empty SourceIfName in the same direction — must match
+	// existing record by physical interface pair and preserve the populated port names.
+	empty := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(empty); err != nil {
+		t.Fatalf("Upsert empty: %v", err)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	// Should still be exactly 1 link; existing port names must be preserved.
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link after upsert of empty-port link, got %d", len(all))
+	}
+	if all[0].SourceIfName != "ether1" {
+		t.Errorf("SourceIfName overwritten: got %q, want %q", all[0].SourceIfName, "ether1")
+	}
+	if all[0].TargetIfName != "ether2" {
+		t.Errorf("TargetIfName overwritten: got %q, want %q", all[0].TargetIfName, "ether2")
+	}
+}
+
+// TestLinkRepo_Upsert_BidirectionalDedup verifies that when device A discovers
+// device B (A→B) and then device B discovers device A (B→A), only one link record
+// is created for the same physical interface pair.
+func TestLinkRepo_Upsert_BidirectionalDedup(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	// Device A (d1) discovers neighbor B on its local port "ether4";
+	// B's remote port is "ether8".
+	fromA := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether4 - uplink potenza centro",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether8 - uplink lavangone",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(fromA); err != nil {
+		t.Fatalf("Upsert from A: %v", err)
+	}
+	firstID := fromA.ID
+
+	// Device B (d2) discovers neighbor A on its local port "ether8";
+	// A's remote port is "ether4".
+	fromB := &domain.Link{
+		SourceDeviceID:    d2ID,
+		SourceIfName:      "ether8 - uplink lavangone",
+		TargetDeviceID:    d1ID,
+		TargetIfName:      "ether4 - uplink potenza centro",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(fromB); err != nil {
+		t.Fatalf("Upsert from B: %v", err)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link after bidirectional upsert, got %d", len(all))
+	}
+	if all[0].ID != firstID {
+		t.Errorf("link ID changed: got %s, want %s", all[0].ID, firstID)
+	}
+	if all[0].SourceIfName != "ether4 - uplink potenza centro" {
+		t.Errorf("SourceIfName changed: got %q, want %q",
+			all[0].SourceIfName, "ether4 - uplink potenza centro")
+	}
+	if all[0].TargetIfName != "ether8 - uplink lavangone" {
+		t.Errorf("TargetIfName changed: got %q, want %q",
+			all[0].TargetIfName, "ether8 - uplink lavangone")
+	}
+}
+
+func TestLinkRepo_Upsert_BidirectionalDedup_MatchesAnchoredInterfaceLabels(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	fromA := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether4 - uplink potenza centro",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether8 - uplink lavangone",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(fromA); err != nil {
+		t.Fatalf("Upsert from A: %v", err)
+	}
+	firstID := fromA.ID
+
+	fromB := &domain.Link{
+		SourceDeviceID:    d2ID,
+		SourceIfName:      "ether8",
+		TargetDeviceID:    d1ID,
+		TargetIfName:      "ether4",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(fromB); err != nil {
+		t.Fatalf("Upsert from B: %v", err)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link after anchored reverse upsert, got %d", len(all))
+	}
+	if all[0].ID != firstID {
+		t.Errorf("link ID changed: got %s, want %s", all[0].ID, firstID)
+	}
+}
+
+func TestLinkRepo_Upsert_BidirectionalDedup_EnrichesEmptyReverseInterface(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	fromA := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether8",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(fromA); err != nil {
+		t.Fatalf("Upsert from A: %v", err)
+	}
+	firstID := fromA.ID
+
+	fromB := &domain.Link{
+		SourceDeviceID:    d2ID,
+		SourceIfName:      "ether8",
+		TargetDeviceID:    d1ID,
+		TargetIfName:      "ether4",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(fromB); err != nil {
+		t.Fatalf("Upsert from B: %v", err)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link after reverse enrichment, got %d", len(all))
+	}
+	if all[0].ID != firstID {
+		t.Errorf("link ID changed: got %s, want %s", all[0].ID, firstID)
+	}
+	if all[0].SourceIfName != "ether4" {
+		t.Errorf("SourceIfName = %q, want %q", all[0].SourceIfName, "ether4")
+	}
+	if all[0].TargetIfName != "ether8" {
+		t.Errorf("TargetIfName = %q, want %q", all[0].TargetIfName, "ether8")
+	}
+}
+
+func TestLinkRepo_Upsert_RetriesAfterBusyLock(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "busy-retry.db")
+	dsn := fmt.Sprintf(
+		"%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=50&_foreign_keys=on&_txlock=immediate",
+		dbPath,
+	)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("opening primary db: %v", err)
+	}
+	ConfigureSQLiteDB(db)
+	defer db.Close()
+
+	lockerDB, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("opening locker db: %v", err)
+	}
+	ConfigureSQLiteDB(lockerDB)
+	defer lockerDB.Close()
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("running migrations: %v", err)
+	}
+
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	lockTx, err := lockerDB.Begin()
+	if err != nil {
+		t.Fatalf("beginning lock tx: %v", err)
+	}
+	if _, err := lockTx.Exec(
+		`INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('busy-lock', '1', datetime('now'))`,
+	); err != nil {
+		t.Fatalf("acquiring write lock: %v", err)
+	}
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, upsertErr := linkRepo.Upsert(&domain.Link{
+			SourceDeviceID:    d1ID,
+			SourceIfName:      "ether9",
+			TargetDeviceID:    d2ID,
+			TargetIfName:      "ether9",
+			DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+		})
+		resultCh <- upsertErr
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	if err := lockTx.Rollback(); err != nil {
+		t.Fatalf("releasing write lock: %v", err)
+	}
+
+	select {
+	case err := <-resultCh:
+		if err != nil {
+			t.Fatalf("Upsert should succeed after retry, got: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for upsert result")
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link after busy retry, got %d", len(all))
 	}
 }
 

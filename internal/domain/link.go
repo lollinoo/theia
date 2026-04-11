@@ -36,6 +36,7 @@ type LinkRepository interface {
 	Update(link *Link) error
 	Delete(id uuid.UUID) error
 	// Upsert inserts a new link or updates an existing one matching
-	// the same source+target interface pair.
-	Upsert(link *Link) error
+	// the same source+target interface pair. Returns true when a new
+	// link was inserted, false when an existing link was updated.
+	Upsert(link *Link) (bool, error)
 }

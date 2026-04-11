@@ -51,6 +51,7 @@ type sectionHashes struct {
 	linkMetrics     map[string]uint64
 	deviceStatuses  map[string]uint64
 	deviceHostnames map[string]uint64
+	deviceModels    map[string]uint64
 	alertsHash      uint64
 }
 
@@ -64,6 +65,7 @@ type MetricsCollector struct {
 	vendorRegistry   *vendor.Registry
 	snmpPollFunc     SNMPPollFunc     // optional; polls SNMP-sourced devices and fallback devices
 	snmpLinkPollFunc SNMPLinkPollFunc // optional; polls interface counters for SNMP link metrics
+	topologyNotify   <-chan struct{}   // drained after broadcast; triggers topology_changed WS event
 
 	mu              sync.RWMutex
 	lastSnapshot    *ws.SnapshotPayload
@@ -87,6 +89,8 @@ type MetricsCollector struct {
 // that Prometheus has no metrics for.
 // snmpLinkPollFunc may be nil; when provided it polls interface counters for
 // SNMP-sourced devices to produce link throughput metrics.
+// topologyNotify may be nil; when provided it is drained after each broadcast
+// and a topology_changed WS message is sent to all clients if the channel had data.
 func NewMetricsCollector(
 	promClient *metrics.PromClient,
 	hub *ws.Hub,
@@ -96,6 +100,7 @@ func NewMetricsCollector(
 	vendorRegistry *vendor.Registry,
 	snmpPollFunc SNMPPollFunc,
 	snmpLinkPollFunc SNMPLinkPollFunc,
+	topologyNotify <-chan struct{},
 ) *MetricsCollector {
 	return &MetricsCollector{
 		promClient:       promClient,
@@ -106,10 +111,11 @@ func NewMetricsCollector(
 		vendorRegistry:   vendorRegistry,
 		snmpPollFunc:     snmpPollFunc,
 		snmpLinkPollFunc: snmpLinkPollFunc,
+		topologyNotify:   topologyNotify,
 		lastSnapshot:     ws.EmptySnapshot(),
 		promAvailable:    true, // assume available until proven otherwise
 		prevCounters:     make(map[string]map[string]snmpCounterSample),
-		done:           make(chan struct{}),
+		done:             make(chan struct{}),
 	}
 }
 
@@ -300,6 +306,28 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 			Type:    ws.MessageTypePrometheusStatus,
 			Payload: payload,
 		})
+	}
+
+	// Drain topology notify channel and broadcast topology_changed event.
+	// This runs after the snapshot broadcast so the frontend receives fresh
+	// snapshot data before the topology_changed event triggers loadTopology.
+	if c.topologyNotify != nil {
+		drained := false
+		for {
+			select {
+			case <-c.topologyNotify:
+				drained = true
+			default:
+				goto topologyDrained
+			}
+		}
+	topologyDrained:
+		if drained {
+			c.hub.Broadcast(ws.Message{
+				Type:    ws.MessageTypeTopologyChanged,
+				Payload: nil,
+			})
+		}
 	}
 }
 
@@ -634,6 +662,21 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 				continue
 			}
 
+			// DISC-02: Skip SNMP counter walk if this device has no links with
+			// a usable interface name. Without a valid SourceIfName or TargetIfName,
+			// the counters cannot be matched to any link — the walk is wasted.
+			hasValidLink := false
+			for _, lnk := range links {
+				if (lnk.SourceDeviceID == dev.ID && lnk.SourceIfName != "") ||
+					(lnk.TargetDeviceID == dev.ID && lnk.TargetIfName != "") {
+					hasValidLink = true
+					break
+				}
+			}
+			if !hasValidLink {
+				continue
+			}
+
 			dev := dev
 			wg.Add(1)
 			go func() {
@@ -710,18 +753,36 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	snapshot.LinkMetrics = ws.LinkMetricsToDTOs(linkMetricsByID)
 	snapshot.Alerts = ws.AlertsToDTOs(alertsByDevice)
 
-	// Map Prometheus label-value hostnames → device IDs.
+	// Map hostnames → device IDs.
+	// Primary: DB-stored sys_name (written by probeDevice after SNMP discovery).
+	// Fallback: Prometheus-queried hostname (sysName metric).
 	hostnames := make(map[string]string, len(devices))
 	for _, dev := range devices {
+		devID := dev.ID.String()
+		// Primary: DB-stored sys_name (written by probeDevice after SNMP discovery)
+		if dev.SysName != "" {
+			hostnames[devID] = dev.SysName
+			continue
+		}
+		// Fallback: Prometheus-queried hostname
 		lv := effectiveLabelValue(dev)
 		if lv == "" {
 			continue
 		}
 		if name, ok := hostnamesByLabelValue[lv]; ok {
-			hostnames[dev.ID.String()] = name
+			hostnames[devID] = name
 		}
 	}
 	snapshot.DeviceHostnames = hostnames
+
+	// Build device_models from DB hardware_model field.
+	models := make(map[string]string, len(devices))
+	for _, dev := range devices {
+		if dev.HardwareModel != "" && dev.HardwareModel != "Unknown" {
+			models[dev.ID.String()] = dev.HardwareModel
+		}
+	}
+	snapshot.DeviceModels = models
 
 	statuses := make(map[string]string, len(devices))
 	for _, dev := range devices {
@@ -973,6 +1034,7 @@ func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 		linkMetrics:     make(map[string]uint64, len(snapshot.LinkMetrics)),
 		deviceStatuses:  make(map[string]uint64, len(snapshot.DeviceStatuses)),
 		deviceHostnames: make(map[string]uint64, len(snapshot.DeviceHostnames)),
+		deviceModels:    make(map[string]uint64, len(snapshot.DeviceModels)),
 	}
 
 	for id, dm := range snapshot.DeviceMetrics {
@@ -1010,6 +1072,10 @@ func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 		sh.deviceHostnames[id] = computeSectionHash(hostname)
 	}
 
+	for id, model := range snapshot.DeviceModels {
+		sh.deviceModels[id] = computeSectionHash(model)
+	}
+
 	// Alerts: whole-set hash over the sorted alert array.
 	var alertSb strings.Builder
 	for _, a := range snapshot.Alerts {
@@ -1034,6 +1100,7 @@ func buildDelta(current *ws.SnapshotPayload, currentHashes, prevHashes *sectionH
 		LinkMetrics:     make(map[string][]ws.LinkMetricsDTO),
 		DeviceStatuses:  make(map[string]string),
 		DeviceHostnames: make(map[string]string),
+		DeviceModels:    make(map[string]string),
 		Alerts:          nil,
 	}
 
@@ -1063,6 +1130,13 @@ func buildDelta(current *ws.SnapshotPayload, currentHashes, prevHashes *sectionH
 	for id, hash := range currentHashes.deviceHostnames {
 		if prevHash, ok := prevHashes.deviceHostnames[id]; !ok || prevHash != hash {
 			delta.DeviceHostnames[id] = current.DeviceHostnames[id]
+			anyChanged = true
+		}
+	}
+
+	for id, hash := range currentHashes.deviceModels {
+		if prevHash, ok := prevHashes.deviceModels[id]; !ok || prevHash != hash {
+			delta.DeviceModels[id] = current.DeviceModels[id]
 			anyChanged = true
 		}
 	}

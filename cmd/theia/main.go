@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"flag"
 	"io"
@@ -30,6 +29,7 @@ import (
 	"github.com/lollinoo/theia/internal/worker"
 	"github.com/lollinoo/theia/internal/ws"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -199,25 +199,50 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	log.Printf("Config loaded: listen=%s db=%s log_level=%s", cfg.ListenAddr, cfg.DBPath, cfg.LogLevel)
+	log.Printf("Config loaded: driver=%s listen=%s log_level=%s", cfg.DBDriver, cfg.ListenAddr, cfg.LogLevel)
 
-	// Ensure the database directory exists
-	dbDir := filepath.Dir(cfg.DBPath)
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
-		log.Fatalf("Failed to create database directory %s: %v", dbDir, err)
+	appDataDir := cfg.DataDir
+	if appDataDir == "" {
+		appDataDir = "./data"
+	}
+	if cfg.DBPath != "" {
+		appDataDir = filepath.Dir(cfg.DBPath)
+	}
+	if cfg.DataDir != "" {
+		appDataDir = cfg.DataDir
 	}
 
-	// Check for pending restore BEFORE opening the database (D-07)
-	if applyPendingRestore(cfg.DBPath) {
-		log.Println("Restore applied successfully, continuing with normal startup")
+	dialect, err := sqlite.NormalizeDialect(cfg.DBDriver)
+	if err != nil {
+		log.Fatalf("Invalid database driver: %v", err)
 	}
 
-	// Open SQLite database
-	db, err := sql.Open("sqlite3", cfg.DBPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	if dialect == sqlite.DialectSQLite {
+		dbDir := filepath.Dir(cfg.DBPath)
+		if err := os.MkdirAll(dbDir, 0755); err != nil {
+			log.Fatalf("Failed to create database directory %s: %v", dbDir, err)
+		}
+
+		// Check for pending restore BEFORE opening the database (D-07)
+		if applyPendingRestore(cfg.DBPath) {
+			log.Println("Restore applied successfully, continuing with normal startup")
+		}
+	}
+
+	if err := os.MkdirAll(appDataDir, 0755); err != nil {
+		log.Fatalf("Failed to create application data directory %s: %v", appDataDir, err)
+	}
+
+	db, dialect, err := sqlite.OpenPrimaryDB(cfg.DBDriver, cfg.DBPath, cfg.DBDSN)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
+	sqlite.ConfigureDB(db)
 	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
 
 	// Load encryption key (required for SNMP credential migration and all crypto operations)
 	encryptionKey, err := crypto.LoadEncryptionKey()
@@ -279,21 +304,26 @@ func main() {
 	// Create SNMP discovery function (real gosnmp clients)
 	discoverFunc := newSNMPDiscoverFunc(settingsRepo, vendorRegistry)
 
+	// Topology notify channel: DeviceService signals when probeDevice creates new LLDP/CDP links.
+	// MetricsCollector drains this channel after each broadcast and sends topology_changed to clients.
+	// Buffered(1) with non-blocking send so probeDevice goroutines never block (T-33-02).
+	topologyNotify := make(chan struct{}, 1)
+
 	// Create service layer
-	deviceService := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFunc)
+	deviceService := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFunc, topologyNotify)
 
 	// Create backup service
 	sshDialer := &ssh.DefaultDialer{}
 	backupDir := os.Getenv("THEIA_BACKUP_DIR")
 	if backupDir == "" {
-		backupDir = "/app/data/backups"
+		backupDir = filepath.Join(appDataDir, "backups")
 	}
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
 		log.Fatalf("Failed to create backup directory %s: %v", backupDir, err)
 	}
 
 	// Initialize SSH known hosts store for host key verification
-	knownHostsPath := filepath.Join(filepath.Dir(cfg.DBPath), "known_hosts")
+	knownHostsPath := filepath.Join(appDataDir, "known_hosts")
 	knownHostsStore, err := ssh.NewKnownHostsStore(knownHostsPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize SSH known hosts store: %v", err)
@@ -302,30 +332,33 @@ func main() {
 
 	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, backupDir, knownHostsStore.HostKeyCallback())
 
-	// Create instance backup service
-	instanceBackupRepo := sqlite.NewInstanceBackupRepo(db)
-	instanceBackupDir := os.Getenv("THEIA_INSTANCE_BACKUP_DIR")
-	if instanceBackupDir == "" {
-		instanceBackupDir = filepath.Join(filepath.Dir(cfg.DBPath), "instance-backups")
+	var instanceBackupService *service.InstanceBackupService
+	var backupScheduler *worker.BackupScheduler
+	if dialect == sqlite.DialectSQLite {
+		instanceBackupRepo := sqlite.NewInstanceBackupRepo(db)
+		instanceBackupDir := os.Getenv("THEIA_INSTANCE_BACKUP_DIR")
+		if instanceBackupDir == "" {
+			instanceBackupDir = filepath.Join(appDataDir, "instance-backups")
+		}
+		if err := os.MkdirAll(instanceBackupDir, 0755); err != nil {
+			log.Fatalf("Failed to create instance backup directory %s: %v", instanceBackupDir, err)
+		}
+		instanceBackupService = service.NewInstanceBackupService(
+			db,
+			instanceBackupRepo,
+			settingsRepo,
+			instanceBackupDir,
+			backupDir,
+			knownHostsPath,
+			cfg.DBPath,
+			encryptionKey,
+		)
+		log.Printf("Instance backup directory: %s", instanceBackupDir)
+		instanceBackupService.FailStaleRunning()
+		backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
+	} else {
+		log.Printf("Instance backup and restore are disabled for database driver %s", dialect)
 	}
-	if err := os.MkdirAll(instanceBackupDir, 0755); err != nil {
-		log.Fatalf("Failed to create instance backup directory %s: %v", instanceBackupDir, err)
-	}
-	instanceBackupService := service.NewInstanceBackupService(
-		db,
-		instanceBackupRepo,
-		settingsRepo,
-		instanceBackupDir,
-		backupDir,
-		knownHostsPath,
-		cfg.DBPath,
-		encryptionKey,
-	)
-	log.Printf("Instance backup directory: %s", instanceBackupDir)
-	instanceBackupService.FailStaleRunning()
-
-	// Create and start backup scheduler
-	backupScheduler := worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
 
 	// Create device backup scheduler
 	deviceBackupScheduler := worker.NewDeviceBackupScheduler(backupService, backupJobRepo, settingsRepo)
@@ -347,9 +380,11 @@ func main() {
 
 	snmpPollFunc := newSNMPMetricsPollFunc(settingsRepo, vendorRegistry)
 	snmpLinkPollFunc := newSNMPLinkPollFunc(settingsRepo)
-	collector := worker.NewMetricsCollector(promClient, hub, deviceLinkCache, deviceRepo, settingsRepo, vendorRegistry, snmpPollFunc, snmpLinkPollFunc)
+	collector := worker.NewMetricsCollector(promClient, hub, deviceLinkCache, deviceRepo, settingsRepo, vendorRegistry, snmpPollFunc, snmpLinkPollFunc, topologyNotify)
 	collector.Start(ctx)
-	backupScheduler.Start(ctx)
+	if backupScheduler != nil {
+		backupScheduler.Start(ctx)
+	}
 	deviceBackupScheduler.Start(ctx)
 
 	wsHandler := ws.NewHandler(hub, collector.GetSnapshot, collector.IsPromAvailable)
@@ -374,7 +409,9 @@ func main() {
 		// Stop background workers
 		poller.Stop()
 		collector.Stop()
-		backupScheduler.Stop()
+		if backupScheduler != nil {
+			backupScheduler.Stop()
+		}
 		deviceBackupScheduler.Stop()
 
 		// Shutdown HTTP server with timeout

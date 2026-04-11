@@ -5,6 +5,111 @@ import { type LinkEdgeData, type LinkEdgeType } from '../LinkEdge';
 import { formatBandwidth } from '../LinkEdge';
 import { inferSpeedLabel, type HandleSide } from './canvasHelpers';
 
+function normalizeLinkValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function extractPhysicalInterfaceAnchor(name: string): string {
+  const normalized = normalizeLinkValue(name);
+  if (!normalized) return '';
+
+  const virtualHints = [
+    'vlan', 'vrf', 'vpn', 'bridge', 'br-', 'bond', 'loopback', 'lo',
+    'gre', 'eoip', 'wg', 'wireguard', 'pppoe', 'ppp', 'sstp', 'ovpn',
+    'l2tp', 'vxlan', 'veth', 'tap', 'tun',
+  ];
+  if (virtualHints.some((hint) => normalized.includes(hint))) {
+    return '';
+  }
+
+  const physicalPatterns = [
+    'ether', 'eth', 'sfp-sfpplus', 'sfp', 'qsfp', 'ens', 'eno', 'enp',
+    'gigabitethernet', 'tengigabitethernet', 'fastethernet', 'ge-', 'xe-', 'et-',
+  ];
+  for (const pattern of physicalPatterns) {
+    const idx = normalized.indexOf(pattern);
+    if (idx < 0) continue;
+    let anchor = normalized.slice(idx);
+    const stop = anchor.search(/[^a-z0-9\-/]/);
+    if (stop >= 0) anchor = anchor.slice(0, stop);
+    anchor = anchor.replace(/^[-/\s]+|[-/\s]+$/g, '');
+    if (/\d/.test(anchor)) return anchor;
+  }
+
+  if (/^(gi|te|fo|port)/.test(normalized) && /\d/.test(normalized)) {
+    return normalized;
+  }
+
+  return '';
+}
+
+function isCompletePhysicalLink(link: Link): boolean {
+  return (
+    extractPhysicalInterfaceAnchor(link.source_if_name) !== '' &&
+    extractPhysicalInterfaceAnchor(link.target_if_name) !== ''
+  );
+}
+
+function linkPreferenceScore(link: Link): number {
+  let score = 0;
+  if (link.discovery_protocol === 'lldp') score += 100;
+  if (extractPhysicalInterfaceAnchor(link.source_if_name)) score += 50;
+  if (extractPhysicalInterfaceAnchor(link.target_if_name)) score += 40;
+  if (link.source_if_name) score += 20;
+  if (link.target_if_name) score += 20;
+  return score;
+}
+
+function canonicalLinkGroupKey(link: Link): string {
+  const endpoints = [link.source_device_id, link.target_device_id].sort().join('-');
+  const sourceAnchor = extractPhysicalInterfaceAnchor(link.source_if_name);
+  const targetAnchor = extractPhysicalInterfaceAnchor(link.target_if_name);
+
+  if (sourceAnchor && targetAnchor) {
+    return `${endpoints}|phy|${[sourceAnchor, targetAnchor].sort().join('|')}`;
+  }
+  if (sourceAnchor) return `${endpoints}|phy|${sourceAnchor}`;
+  if (targetAnchor) return `${endpoints}|phy|${targetAnchor}`;
+  return `${endpoints}|raw|${[
+    `${link.source_device_id}:${normalizeLinkValue(link.source_if_name)}`,
+    `${link.target_device_id}:${normalizeLinkValue(link.target_if_name)}`,
+  ].sort().join('|')}`;
+}
+
+export function preferVisibleLinks(links: Link[]): Link[] {
+  const bestByGroup = new Map<string, Link>();
+
+  for (const link of links) {
+    const key = canonicalLinkGroupKey(link);
+    const existing = bestByGroup.get(key);
+    if (!existing || linkPreferenceScore(link) > linkPreferenceScore(existing)) {
+      bestByGroup.set(key, link);
+    }
+  }
+
+  const completePhysicalByPair = new Map<string, Link>();
+  for (const link of bestByGroup.values()) {
+    const pairKey = [link.source_device_id, link.target_device_id].sort().join('-');
+    if (!isCompletePhysicalLink(link)) continue;
+    const existing = completePhysicalByPair.get(pairKey);
+    if (!existing || linkPreferenceScore(link) > linkPreferenceScore(existing)) {
+      completePhysicalByPair.set(pairKey, link);
+    }
+  }
+
+  const visible: Link[] = [];
+  for (const link of bestByGroup.values()) {
+    const pairKey = [link.source_device_id, link.target_device_id].sort().join('-');
+    const preferredPairLink = completePhysicalByPair.get(pairKey);
+    if (preferredPairLink && preferredPairLink.id !== link.id && !isCompletePhysicalLink(link)) {
+      continue;
+    }
+    visible.push(link);
+  }
+
+  return visible;
+}
+
 export function buildEdgeData(
   link: Link,
   devicesByID: Map<string, Device>,
@@ -112,19 +217,26 @@ export function buildTopologyEdges(
 ): LinkEdgeType[] {
   const nodesByID = new Map(nodes.map((node) => [node.id, node]));
   const pairCounts = new Map<string, number>();
-  const seenPairs = new Set<string>();
+  const seenPhysicalLinks = new Set<string>();
+  const visibleLinks = preferVisibleLinks(links);
 
-  return links
+  return visibleLinks
     .filter((link) => {
       if (!nodesByID.has(link.source_device_id) || !nodesByID.has(link.target_device_id)) {
         return false;
       }
-      // Deduplicate bidirectional links: A->B and B->A for the same port pair are the same physical link
-      const pairKey = [link.source_device_id, link.target_device_id].sort().join('-');
-      if (seenPairs.has(pairKey)) {
+
+      // Deduplicate only the same physical cable discovered from opposite ends.
+      // Distinct parallel uplinks between the same device pair must remain visible.
+      const normalizedEndpoints = [
+        `${link.source_device_id}:${link.source_if_name}`,
+        `${link.target_device_id}:${link.target_if_name}`,
+      ].sort();
+      const physicalKey = normalizedEndpoints.join('-');
+      if (seenPhysicalLinks.has(physicalKey)) {
         return false;
       }
-      seenPairs.add(pairKey);
+      seenPhysicalLinks.add(physicalKey);
       return true;
     })
     .map((link) => {

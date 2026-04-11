@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Device, Area } from '../types/api';
 import type { SnapshotPayload } from '../types/metrics';
 import { DeviceTable } from './dashboard/DeviceTable';
-import { useBridgeHealth } from '../hooks/useBridgeHealth';
-import { fetchDeviceCredentialProfiles, fetchBridgeToken, fetchSettings } from '../api/client';
+import { fetchDeviceCredentialProfiles } from '../api/client';
 import { FilterSelect, type FilterOption } from './dashboard/FilterSelect';
 import { MaterialIcon } from './MaterialIcon';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
@@ -32,24 +31,6 @@ interface DashboardProps {
 export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
   const { resolvedTheme } = useTheme();
   const [panel, setPanel] = useState<PanelType | null>(null);
-  const [bridgePort, setBridgePort] = useState('1337');
-  const { bridgeRunning } = useBridgeHealth(bridgePort);
-  const [bridgeSecret, setBridgeSecret] = useState('');
-  const [winboxError, setWinboxError] = useState<string | null>(null);
-  useEffect(() => {
-    fetchSettings().then((s) => {
-      setBridgeSecret(s['bridge_secret'] ?? '');
-      setBridgePort(s['bridge_port'] ?? '1337');
-    }).catch(() => {});
-  }, []);
-  useEffect(() => {
-    if (!winboxError) return;
-    const t = window.setTimeout(() => setWinboxError(null), 5000);
-    return () => window.clearTimeout(t);
-  }, [winboxError]);
-
-  // Per-device WinBox profile status (true = has a WinBox-designated profile)
-  const [deviceWinboxMap, setDeviceWinboxMap] = useState<Record<string, boolean>>({});
 
   // Current credential profile ID for the open ssh-credentials panel.
   // Fetched via fetchDeviceCredentialProfiles when the panel opens (Option A: live source of truth
@@ -91,56 +72,6 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
     }
     return true;
   });
-
-  // Fetch WinBox profile status for visible non-virtual devices (once per device)
-  useEffect(() => {
-    const nonVirtual = filteredDevices.filter((d) => d.device_type !== 'virtual');
-    for (const device of nonVirtual) {
-      if (device.id in deviceWinboxMap) continue;
-      void (async () => {
-        try {
-          const profiles = await fetchDeviceCredentialProfiles(device.id);
-          setDeviceWinboxMap((prev) => ({
-            ...prev,
-            [device.id]: profiles.some((p) => p.is_winbox),
-          }));
-        } catch {
-          setDeviceWinboxMap((prev) => ({ ...prev, [device.id]: false }));
-        }
-      })();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredDevices]);
-
-  async function handleWinBox(device: Device) {
-    if (!bridgeSecret) return;
-    try {
-      const token = await fetchBridgeToken(device.id, bridgeSecret);
-      const res = await fetch(`http://localhost:${bridgePort}/launch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({})) as { error?: string };
-        setWinboxError(data.error ?? `Bridge error (${res.status})`);
-      }
-    } catch {
-      // silent — bridge may not be running or no credentials
-    }
-  }
-
-  function isWinboxDisabled(device: Device): boolean {
-    const hasWinbox = deviceWinboxMap[device.id] ?? false;
-    return !hasWinbox || !bridgeRunning;
-  }
-
-  function getWinboxTitle(device: Device): string {
-    const hasWinbox = deviceWinboxMap[device.id] ?? false;
-    if (!hasWinbox) return 'No WinBox profile designated';
-    if (!bridgeRunning) return 'WinBox bridge not running \u2014 download from Settings';
-    return 'Open in WinBox';
-  }
 
   const types = [...new Set(devices.map((d) => d.device_type))].sort();
 
@@ -220,14 +151,6 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
         </span>
       </div>
 
-      {/* WinBox launch error banner */}
-      {winboxError && (
-        <div className="mx-4 mt-1 flex items-center justify-between rounded-md border border-status-down/30 bg-status-down/10 px-3 py-1.5 text-xs text-status-down">
-          <span>{winboxError}</span>
-          <button type="button" onClick={() => setWinboxError(null)} className="ml-3 hover:opacity-70">&times;</button>
-        </div>
-      )}
-
       {/* Table */}
       <div className="flex-1 overflow-auto px-4 py-2">
         {devices.length === 0 ? (
@@ -267,19 +190,24 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
               // (Option A: live source of truth after ssh_profile_id removal)
               setSSHPanelProfileId(undefined);
               setPanel({ kind: 'ssh-credentials', device });
+              const targetDeviceId = device.id;
               void fetchDeviceCredentialProfiles(device.id).then((profiles) => {
-                // Use first non-WinBox profile as the "current" SSH profile, matching
-                // GetBackupProfileForDevice ordering (is_winbox ASC).
-                const nonWinbox = profiles.find((p) => !p.is_winbox);
-                setSSHPanelProfileId(nonWinbox?.profile_id);
+                // Guard against stale fetch: only apply if the panel is still open
+                // for the same device (prevents race when user switches devices quickly).
+                setPanel((current) => {
+                  if (current?.kind === 'ssh-credentials' && current.device.id === targetDeviceId) {
+                    // Use first non-WinBox profile as the "current" SSH profile, matching
+                    // GetBackupProfileForDevice ordering (is_winbox ASC).
+                    const nonWinbox = profiles.find((p) => !p.is_winbox);
+                    setSSHPanelProfileId(nonWinbox?.profile_id);
+                  }
+                  return current;
+                });
               }).catch(() => {/* non-fatal — panel starts with no selection */});
             }}
             onBackup={(device) => setPanel({ kind: 'backup', device })}
             onBackupHistory={(device) => setPanel({ kind: 'backup-history', device })}
             onViewConfig={(device) => setPanel({ kind: 'config-viewer', device })}
-            onWinBox={handleWinBox}
-            winboxDisabled={isWinboxDisabled}
-            winboxTitle={getWinboxTitle}
           />
         )}
       </div>
@@ -328,7 +256,7 @@ function SkeletonTable() {
     <table className="w-full text-xs">
       <thead className="sticky top-0 z-10 bg-bg">
         <tr className="text-left text-on-bg-secondary">
-          {['Name', 'IP Address', 'Status', 'Area', 'Model', 'Vendor', 'Uptime', 'OS Version', 'Actions'].map(h => (
+          {['Name', 'IP Address', 'Status', 'Area', 'Vendor', 'Model', 'OS Version', 'Uptime', 'Actions'].map(h => (
             <th key={h} className="px-3 py-2 text-[12px] font-normal uppercase tracking-[0.16em]">{h}</th>
           ))}
         </tr>

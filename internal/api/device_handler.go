@@ -163,6 +163,10 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 			domain.DeviceTypeVirtual,
 			domain.SNMPCredentials{}, req.Tags, "", "", "", "", areaIDs)
 		if err != nil {
+			if isDeviceIPConflict(err) {
+				writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(req.IP))
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "failed to create virtual device", err)
 			return
 		}
@@ -250,6 +254,10 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		creds, req.Tags, req.Vendor, metricsSource,
 		prometheusLabelName, prometheusLabelValue, areaIDs)
 	if err != nil {
+		if isDeviceIPConflict(err) {
+			writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(req.IP))
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create device", err)
 		return
 	}
@@ -396,6 +404,10 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.UpdateDevice(r.Context(), id, update); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if isDeviceIPConflict(err) {
+			writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(derefString(req.IP)))
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to update device", err)
@@ -563,34 +575,11 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 
 	attrs["backup_supported"] = h.vendorRegistry.ResolveBackupConfig(d.Vendor).Supported
 
-	// Include interfaces as a relationship
-	var ifaceData []map[string]interface{}
-	for _, iface := range d.Interfaces {
-		ifaceData = append(ifaceData, map[string]interface{}{
-			"id":           iface.ID.String(),
-			"if_index":     iface.IfIndex,
-			"if_name":      iface.IfName,
-			"if_descr":     iface.IfDescr,
-			"speed":        iface.Speed,
-			"admin_status": iface.AdminStatus,
-			"oper_status":  iface.OperStatus,
-		})
-	}
-
-	var relationships map[string]interface{}
-	if len(ifaceData) > 0 {
-		relationships = map[string]interface{}{
-			"interfaces": map[string]interface{}{
-				"data": ifaceData,
-			},
-		}
-	}
-
 	return jsonAPIResource{
 		Type:          "device",
 		ID:            d.ID.String(),
 		Attributes:    attrs,
-		Relationships: relationships,
+		Relationships: nil,
 	}
 }
 
@@ -662,6 +651,32 @@ func writeError(w http.ResponseWriter, code int, message string, internalErr ...
 	}
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func isDeviceIPConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "idx_devices_ip") ||
+		(strings.Contains(message, "duplicate key value violates unique constraint") && strings.Contains(message, "devices")) ||
+		strings.Contains(message, "unique constraint failed: devices.ip")
+}
+
+func duplicateDeviceAddressMessage(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "a device with that address already exists"
+	}
+	return fmt.Sprintf("a device with IP/host %q already exists", address)
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // isValidIPOrHostname returns true if s is a valid IPv4/IPv6 address or RFC 1123 hostname.

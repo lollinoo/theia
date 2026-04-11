@@ -4,15 +4,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 // DeviceRepo implements domain.DeviceRepository using SQLite.
 type DeviceRepo struct {
-	db            *sql.DB
+	db            *DB
 	encryptionKey []byte
 	onChange      chan<- struct{}
 }
@@ -21,7 +22,7 @@ type DeviceRepo struct {
 // The onChange channel, if non-nil, receives a non-blocking signal after
 // every successful Create, Update, or Delete operation.
 func NewDeviceRepo(db *sql.DB, encryptionKey []byte, onChange chan<- struct{}) *DeviceRepo {
-	return &DeviceRepo{db: db, encryptionKey: encryptionKey, onChange: onChange}
+	return &DeviceRepo{db: wrapDB(db), encryptionKey: encryptionKey, onChange: onChange}
 }
 
 // notify sends a non-blocking signal on the onChange channel to indicate
@@ -38,6 +39,12 @@ func (r *DeviceRepo) notify() {
 
 // Create inserts a new device and its interfaces into the database.
 func (r *DeviceRepo) Create(device *domain.Device) error {
+	return withSQLiteBusyRetry(func() error {
+		return r.createOnce(device)
+	})
+}
+
+func (r *DeviceRepo) createOnce(device *domain.Device) error {
 	now := time.Now().UTC()
 	device.CreatedAt = now
 	device.UpdatedAt = now
@@ -61,6 +68,7 @@ func (r *DeviceRepo) Create(device *domain.Device) error {
 	if err != nil {
 		return fmt.Errorf("marshaling tags: %w", err)
 	}
+	managedValue := boolToDBInt(device.Managed)
 
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -70,13 +78,14 @@ func (r *DeviceRepo) Create(device *domain.Device) error {
 
 	_, err = tx.Exec(
 		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status,
-			sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
+			sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		device.ID.String(), device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
-		device.SysName, device.SysDescr, device.SysObjectID, device.HardwareModel,
-		device.Vendor, device.Managed, string(tagsJSON), device.CreatedAt, device.UpdatedAt,
+		device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
+		device.SysObjectID, device.HardwareModel,
+		device.Vendor, managedValue, string(tagsJSON), device.CreatedAt, device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
 	)
 	if err != nil {
@@ -189,20 +198,31 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 }
 
 // GetBySysName retrieves a device by SNMP sysName, or returns nil if not found.
+// Matching is normalization-aware for lookup only: it trims whitespace,
+// lowercases, strips a trailing dot, and removes any FQDN suffix.
 func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
+	normalizedLookup := normalizeDeviceSysNameLookup(sysName)
+	if normalizedLookup == "" {
+		return nil, nil
+	}
+
 	device, err := r.scanDevice(
 		r.db.QueryRow(
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value
-			FROM devices WHERE sys_name = ? LIMIT 1`, sysName,
+			FROM devices
+			WHERE sys_name_lookup = ?
+			ORDER BY updated_at DESC, created_at DESC
+			LIMIT 1`,
+			normalizedLookup,
 		),
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("querying device by sys_name: %w", err)
 	}
 
 	ifaces, err := r.loadInterfaces(device.ID)
@@ -218,6 +238,15 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 	device.AreaIDs = areaIDs
 
 	return device, nil
+}
+
+func normalizeDeviceSysNameLookup(sysName string) string {
+	normalized := strings.ToLower(strings.TrimSpace(sysName))
+	normalized = strings.TrimSuffix(normalized, ".")
+	if idx := strings.Index(normalized, "."); idx >= 0 {
+		normalized = normalized[:idx]
+	}
+	return normalized
 }
 
 // GetAll retrieves all devices with their interfaces.
@@ -279,6 +308,12 @@ func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 
 // Update modifies an existing device and replaces its interfaces.
 func (r *DeviceRepo) Update(device *domain.Device) error {
+	return withSQLiteBusyRetry(func() error {
+		return r.updateOnce(device)
+	})
+}
+
+func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 	device.UpdatedAt = time.Now().UTC()
 	if device.Tags == nil {
 		device.Tags = map[string]string{}
@@ -297,6 +332,7 @@ func (r *DeviceRepo) Update(device *domain.Device) error {
 	if err != nil {
 		return fmt.Errorf("marshaling tags: %w", err)
 	}
+	managedValue := boolToDBInt(device.Managed)
 
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -306,14 +342,15 @@ func (r *DeviceRepo) Update(device *domain.Device) error {
 
 	result, err := tx.Exec(
 		`UPDATE devices SET hostname=?, ip=?, snmp_credentials_json=?, device_type=?,
-			status=?, sys_name=?, sys_descr=?, sys_object_id=?, hardware_model=?,
+			status=?, sys_name=?, sys_name_lookup=?, sys_descr=?, sys_object_id=?, hardware_model=?,
 			vendor=?, managed=?, tags_json=?, updated_at=?,
 			metrics_source=?, prometheus_label_name=?, prometheus_label_value=?
 		WHERE id = ?`,
 		device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
-		device.SysName, device.SysDescr, device.SysObjectID, device.HardwareModel,
-		device.Vendor, device.Managed, string(tagsJSON), device.UpdatedAt,
+		device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
+		device.SysObjectID, device.HardwareModel,
+		device.Vendor, managedValue, string(tagsJSON), device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
 		device.ID.String(),
 	)
@@ -378,6 +415,12 @@ func (r *DeviceRepo) Update(device *domain.Device) error {
 
 // Delete removes a device and its interfaces (via CASCADE) by UUID.
 func (r *DeviceRepo) Delete(id uuid.UUID) error {
+	return withSQLiteBusyRetry(func() error {
+		return r.deleteOnce(id)
+	})
+}
+
+func (r *DeviceRepo) deleteOnce(id uuid.UUID) error {
 	result, err := r.db.Exec(`DELETE FROM devices WHERE id = ?`, id.String())
 	if err != nil {
 		return fmt.Errorf("deleting device: %w", err)
@@ -388,6 +431,13 @@ func (r *DeviceRepo) Delete(id uuid.UUID) error {
 	}
 	r.notify()
 	return nil
+}
+
+func boolToDBInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // scanDevice scans a single device row from a *sql.Row.

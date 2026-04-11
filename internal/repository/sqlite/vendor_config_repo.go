@@ -9,12 +9,12 @@ import (
 
 // VendorConfigRepo implements domain.VendorConfigRepository using SQLite.
 type VendorConfigRepo struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewVendorConfigRepo creates a new VendorConfigRepo.
 func NewVendorConfigRepo(db *sql.DB) *VendorConfigRepo {
-	return &VendorConfigRepo{db: db}
+	return &VendorConfigRepo{db: wrapDB(db)}
 }
 
 // GetAll returns all vendor configs.

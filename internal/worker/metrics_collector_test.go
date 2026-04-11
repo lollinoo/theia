@@ -69,7 +69,7 @@ func (r *mockWorkerLinkRepo) GetAll() ([]domain.Link, error) {
 }
 func (r *mockWorkerLinkRepo) Update(_ *domain.Link) error { return nil }
 func (r *mockWorkerLinkRepo) Delete(_ uuid.UUID) error    { return nil }
-func (r *mockWorkerLinkRepo) Upsert(_ *domain.Link) error { return nil }
+func (r *mockWorkerLinkRepo) Upsert(_ *domain.Link) (bool, error) { return false, nil }
 
 // ---------------------------------------------------------------------------
 // Pure function tests: normalizeInterfaceName
@@ -408,6 +408,7 @@ func TestBuildSnapshot_WithMockPrometheus(t *testing.T) {
 		registry,
 		nil, // no SNMP poll func
 		nil, // no SNMP link poll func
+		nil, // no topology notify
 	)
 
 	snapshot, promAvailable, promErr := mc.buildSnapshot(context.Background())
@@ -482,6 +483,7 @@ func TestCollectAndBroadcast_BroadcastsOnCollect(t *testing.T) {
 		registry,
 		nil,
 		nil,
+		nil,
 	)
 
 	// collectAndBroadcast should:
@@ -548,6 +550,7 @@ func TestBuildSnapshot_PromUnavailable(t *testing.T) {
 		deviceRepo,
 		settingsRepo,
 		registry,
+		nil,
 		nil,
 		nil,
 	)
@@ -638,6 +641,7 @@ func TestBuildSnapshot_SNMPPollPath(t *testing.T) {
 		settingsRepo,
 		registry,
 		snmpPollFunc,
+		nil,
 		nil,
 	)
 
@@ -1025,6 +1029,7 @@ func newMockCollector(t *testing.T) (*MetricsCollector, *ws.Hub) {
 		registry,
 		nil,
 		nil,
+		nil,
 	)
 
 	return mc, hub
@@ -1144,6 +1149,7 @@ func newMockCollectorWithChangingData(t *testing.T) (*MetricsCollector, *ws.Hub,
 		deviceRepo,
 		settingsRepo,
 		registry,
+		nil,
 		nil,
 		nil,
 	)
@@ -1294,5 +1300,281 @@ func TestCollectAndBroadcast_SecondCycle_BroadcastsSnapshotDelta(t *testing.T) {
 				}
 				return types
 			}())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SNMP link poll guard tests (DISC-02)
+// ---------------------------------------------------------------------------
+
+// TestBuildSnapshot_SNMPLinkPollSkipsDeviceWithNoValidLinks verifies that
+// snmpLinkPollFunc is NOT called for a device whose links all have empty
+// SourceIfName and TargetIfName — there is no usable interface name to match
+// counters against, so the walk would be wasted.
+func TestBuildSnapshot_SNMPLinkPollSkipsDeviceWithNoValidLinks(t *testing.T) {
+	devID := uuid.New()
+	linkID := uuid.New()
+
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"status": "success",
+			"data": map[string]interface{}{
+				"resultType": "vector",
+				"result":     []interface{}{},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(promServer.Close)
+
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{
+			{
+				ID:            devID,
+				IP:            "192.168.1.1",
+				Status:        domain.DeviceStatusUp,
+				MetricsSource: domain.MetricsSourceSNMP,
+				Vendor:        "default",
+				SNMPCredentials: domain.SNMPCredentials{
+					Version: domain.SNMPVersionV2c,
+					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+				},
+			},
+		},
+	}
+	// All links for this device have empty SourceIfName and TargetIfName
+	linkRepo := &mockWorkerLinkRepo{
+		links: []domain.Link{
+			{
+				ID:             linkID,
+				SourceDeviceID: devID,
+				SourceIfName:   "",
+				TargetDeviceID: uuid.New(),
+				TargetIfName:   "",
+			},
+		},
+	}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+
+	var pollCalled atomic.Bool
+	snmpLinkPollFunc := func(target string, creds domain.SNMPCredentials) ([]SNMPIfCounter, error) {
+		pollCalled.Store(true)
+		return nil, nil
+	}
+
+	mc := NewMetricsCollector(
+		promClient,
+		hub,
+		dlCache,
+		deviceRepo,
+		settingsRepo,
+		registry,
+		nil,
+		snmpLinkPollFunc,
+		nil,
+	)
+
+	snapshot, _, _ := mc.buildSnapshot(context.Background())
+	if snapshot == nil {
+		t.Fatal("expected non-nil snapshot")
+	}
+
+	if pollCalled.Load() {
+		t.Error("expected snmpLinkPollFunc NOT to be called when all links have empty interface names (DISC-02 guard)")
+	}
+}
+
+// TestBuildSnapshot_SNMPLinkPollCalledWithValidLinks verifies that
+// snmpLinkPollFunc IS called when the device has at least one link with a
+// non-empty SourceIfName.
+func TestBuildSnapshot_SNMPLinkPollCalledWithValidLinks(t *testing.T) {
+	devID := uuid.New()
+	linkID := uuid.New()
+
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"status": "success",
+			"data": map[string]interface{}{
+				"resultType": "vector",
+				"result":     []interface{}{},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(promServer.Close)
+
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{
+			{
+				ID:            devID,
+				IP:            "192.168.1.2",
+				Status:        domain.DeviceStatusUp,
+				MetricsSource: domain.MetricsSourceSNMP,
+				Vendor:        "default",
+				SNMPCredentials: domain.SNMPCredentials{
+					Version: domain.SNMPVersionV2c,
+					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+				},
+			},
+		},
+	}
+	// Link has a valid SourceIfName — poll should proceed
+	linkRepo := &mockWorkerLinkRepo{
+		links: []domain.Link{
+			{
+				ID:             linkID,
+				SourceDeviceID: devID,
+				SourceIfName:   "ether1",
+				TargetDeviceID: uuid.New(),
+				TargetIfName:   "",
+			},
+		},
+	}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+
+	var pollCalled atomic.Bool
+	snmpLinkPollFunc := func(target string, creds domain.SNMPCredentials) ([]SNMPIfCounter, error) {
+		pollCalled.Store(true)
+		return nil, nil
+	}
+
+	mc := NewMetricsCollector(
+		promClient,
+		hub,
+		dlCache,
+		deviceRepo,
+		settingsRepo,
+		registry,
+		nil,
+		snmpLinkPollFunc,
+		nil,
+	)
+
+	snapshot, _, _ := mc.buildSnapshot(context.Background())
+	if snapshot == nil {
+		t.Fatal("expected non-nil snapshot")
+	}
+
+	if !pollCalled.Load() {
+		t.Error("expected snmpLinkPollFunc to be called when device has at least one link with non-empty SourceIfName")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// New tests: device_models population and topology_changed broadcast
+// ---------------------------------------------------------------------------
+
+func TestBuildSnapshot_DeviceModels(t *testing.T) {
+	devID := uuid.New()
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"status": "success",
+			"data":   map[string]interface{}{"resultType": "vector", "result": []interface{}{}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(promServer.Close)
+
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{{
+			ID:            devID,
+			IP:            "10.0.0.1",
+			Status:        domain.DeviceStatusUp,
+			SysName:       "router1",
+			HardwareModel: "RB4011",
+			MetricsSource: domain.MetricsSourceSNMP,
+			Vendor:        "default",
+		}},
+	}
+	linkRepo := &mockWorkerLinkRepo{}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+
+	mc := NewMetricsCollector(promClient, hub, dlCache, deviceRepo, settingsRepo, registry, nil, nil, nil)
+
+	snapshot, _, _ := mc.buildSnapshot(context.Background())
+
+	// device_models should contain the hardware model
+	model, ok := snapshot.DeviceModels[devID.String()]
+	if !ok {
+		t.Fatal("expected device_models entry for device")
+	}
+	if model != "RB4011" {
+		t.Errorf("expected model RB4011, got %s", model)
+	}
+
+	// device_hostnames should use DB sys_name (D-02)
+	hostname, ok := snapshot.DeviceHostnames[devID.String()]
+	if !ok {
+		t.Fatal("expected device_hostnames entry for device")
+	}
+	if hostname != "router1" {
+		t.Errorf("expected hostname router1 (from DB sys_name), got %s", hostname)
+	}
+}
+
+func TestCollectAndBroadcast_TopologyChangedEvent(t *testing.T) {
+	devID := uuid.New()
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"status": "success",
+			"data": map[string]interface{}{
+				"resultType": "vector",
+				"result":     []interface{}{},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(promServer.Close)
+
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+	go hub.Run()
+
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{{
+			ID: devID, IP: "10.0.0.1", Status: domain.DeviceStatusUp,
+			MetricsSource: domain.MetricsSourceSNMP, Vendor: "default",
+		}},
+	}
+	linkRepo := &mockWorkerLinkRepo{}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+
+	topologyNotify := make(chan struct{}, 1)
+	topologyNotify <- struct{}{} // simulate a probeDevice link creation signal
+
+	mc := NewMetricsCollector(promClient, hub, dlCache, deviceRepo, settingsRepo, registry, nil, nil, topologyNotify)
+
+	mc.collectAndBroadcast(context.Background())
+
+	// After collectAndBroadcast, the topology_changed signal should have been drained
+	select {
+	case <-topologyNotify:
+		t.Error("expected topology notify channel to be drained after collectAndBroadcast")
+	default:
+		// Good — channel was drained
 	}
 }

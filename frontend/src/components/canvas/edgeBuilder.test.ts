@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildEdgeData } from './edgeBuilder';
+import { buildEdgeData, buildTopologyEdges } from './edgeBuilder';
 import type { Device, Link } from '../../types/api';
+import type { DeviceNode } from '../DeviceCard';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -34,6 +35,18 @@ function mockLink(overrides: Partial<Link> = {}): Link {
     discovery_protocol: 'lldp',
     ...overrides,
   };
+}
+
+function mockNode(id: string, x: number, y: number): DeviceNode {
+  return {
+    id,
+    type: 'device',
+    position: { x, y },
+    data: {
+      device: mockDevice({ id, ip: id === 'dev-1' ? '10.0.0.1' : '10.0.0.2', sys_name: id }),
+      pinned: false,
+    },
+  } as DeviceNode;
 }
 
 describe('buildEdgeData', () => {
@@ -216,5 +229,73 @@ describe('buildEdgeData', () => {
 
     expect(result.sourceIfStatus).toBe('up');
     expect(result.targetIfStatus).toBeUndefined();
+  });
+});
+
+describe('buildTopologyEdges', () => {
+  it('keeps distinct parallel uplinks between the same devices visible', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+      ['dev-2', dev2],
+    ]);
+    const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
+    const links = [
+      mockLink({ id: 'link-1', source_if_name: 'sfp1', target_if_name: 'ether1' }),
+      mockLink({ id: 'link-2', source_if_name: 'sfp2', target_if_name: 'ether2' }),
+    ];
+
+    const edges = buildTopologyEdges(links, devicesByID, nodes);
+
+    expect(edges).toHaveLength(2);
+    expect(edges.map((edge) => edge.id)).toEqual(['link-1', 'link-2']);
+    expect(edges.map((edge) => edge.data.parallelIndex)).toEqual([0, 1]);
+  });
+
+  it('hides lower-quality duplicate links when a physical link exists for the same device pair', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+      ['dev-2', dev2],
+    ]);
+    const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
+    const links = [
+      mockLink({ id: 'link-vlan', source_if_name: '', target_if_name: 'VLAN-99-MGMT-ETH6' }),
+      mockLink({ id: 'link-incomplete', source_if_name: '', target_if_name: 'ether6-link_new_apparati' }),
+      mockLink({ id: 'link-physical', source_if_name: 'ether2-verso-border-botte', target_if_name: 'ether6-link_new_apparati' }),
+    ];
+
+    const edges = buildTopologyEdges(links, devicesByID, nodes);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0].id).toBe('link-physical');
+  });
+
+  it('deduplicates only reverse-direction discovery of the same physical link', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+      ['dev-2', dev2],
+    ]);
+    const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
+    const links = [
+      mockLink({ id: 'link-1', source_if_name: 'sfp1', target_if_name: 'ether1' }),
+      mockLink({
+        id: 'link-1-reverse',
+        source_device_id: 'dev-2',
+        source_if_name: 'ether1',
+        target_device_id: 'dev-1',
+        target_if_name: 'sfp1',
+      }),
+    ];
+
+    const edges = buildTopologyEdges(links, devicesByID, nodes);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0].id).toBe('link-1');
+    expect(edges[0].data.parallelIndex).toBe(0);
   });
 });

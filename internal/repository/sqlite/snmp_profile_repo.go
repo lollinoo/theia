@@ -6,19 +6,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 // SNMPProfileRepo implements domain.SNMPProfileRepository using SQLite.
 type SNMPProfileRepo struct {
-	db            *sql.DB
+	db            *DB
 	encryptionKey []byte
 }
 
 // NewSNMPProfileRepo creates a new SNMPProfileRepo.
 func NewSNMPProfileRepo(db *sql.DB, encryptionKey []byte) *SNMPProfileRepo {
-	return &SNMPProfileRepo{db: db, encryptionKey: encryptionKey}
+	return &SNMPProfileRepo{db: wrapDB(db), encryptionKey: encryptionKey}
 }
 
 // Create inserts a new SNMP profile.

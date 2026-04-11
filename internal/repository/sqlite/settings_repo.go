@@ -8,12 +8,12 @@ import (
 
 // SettingsRepo implements domain.SettingsRepository using SQLite.
 type SettingsRepo struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewSettingsRepo creates a new SQLite-backed settings repository.
 func NewSettingsRepo(db *sql.DB) *SettingsRepo {
-	return &SettingsRepo{db: db}
+	return &SettingsRepo{db: wrapDB(db)}
 }
 
 // Get retrieves a single setting value by key.

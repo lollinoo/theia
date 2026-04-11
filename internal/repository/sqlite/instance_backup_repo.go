@@ -11,12 +11,12 @@ import (
 
 // InstanceBackupRepo implements domain.InstanceBackupRepository using SQLite.
 type InstanceBackupRepo struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewInstanceBackupRepo creates a new InstanceBackupRepo.
 func NewInstanceBackupRepo(db *sql.DB) *InstanceBackupRepo {
-	return &InstanceBackupRepo{db: db}
+	return &InstanceBackupRepo{db: wrapDB(db)}
 }
 
 // Create inserts a new instance backup record.

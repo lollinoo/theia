@@ -33,6 +33,11 @@ func newMockDeviceRepo() *mockDeviceRepo {
 func (r *mockDeviceRepo) Create(device *domain.Device) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.devices {
+		if device.IP != "" && existing.IP == device.IP {
+			return fmt.Errorf("inserting device: UNIQUE constraint failed: devices.ip")
+		}
+	}
 	if device.ID == uuid.Nil {
 		device.ID = uuid.New()
 	}
@@ -81,6 +86,11 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 	defer r.mu.Unlock()
 	if _, ok := r.devices[device.ID]; !ok {
 		return fmt.Errorf("device not found: %s", device.ID)
+	}
+	for existingID, existing := range r.devices {
+		if existingID != device.ID && device.IP != "" && existing.IP == device.IP {
+			return fmt.Errorf("updating device: UNIQUE constraint failed: devices.ip")
+		}
 	}
 	device.UpdatedAt = time.Now().UTC()
 	r.devices[device.ID] = device
@@ -187,7 +197,7 @@ func (r *mockLinkRepo) Delete(id uuid.UUID) error {
 	return nil
 }
 
-func (r *mockLinkRepo) Upsert(link *domain.Link) error {
+func (r *mockLinkRepo) Upsert(link *domain.Link) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, existing := range r.links {
@@ -198,7 +208,7 @@ func (r *mockLinkRepo) Upsert(link *domain.Link) error {
 			link.ID = id
 			link.UpdatedAt = time.Now().UTC()
 			r.links[id] = link
-			return nil
+			return false, nil
 		}
 	}
 	if link.ID == uuid.Nil {
@@ -208,7 +218,7 @@ func (r *mockLinkRepo) Upsert(link *domain.Link) error {
 	link.CreatedAt = now
 	link.UpdatedAt = now
 	r.links[link.ID] = link
-	return nil
+	return true, nil
 }
 
 // --- Mock SettingsRepo ---
@@ -343,7 +353,7 @@ func newTestDeviceHandler(t *testing.T) (*DeviceHandler, *mockDeviceRepo, *mockL
 		return &snmp.DiscoveryResult{}, nil
 	}
 
-	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 	registry := buildTestVendorRegistry()
 	handler := NewDeviceHandler(svc, credentialProfileRepo, registry)
 
@@ -881,6 +891,61 @@ func TestHandleCreate_ValidDeviceTypes_Accept(t *testing.T) {
 				t.Fatalf("expected 201 for device_type=%q, got %d; body: %s", dt, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandleCreate_DuplicateIP_Returns409(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+
+	if err := repo.Create(&domain.Device{
+		IP:         "10.0.0.1",
+		DeviceType: domain.DeviceTypeRouter,
+	}); err != nil {
+		t.Fatalf("failed to seed existing device: %v", err)
+	}
+
+	body := `{"ip":"10.0.0.1","hostname":"router-dup","snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for duplicate IP, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `a device with IP/host \"10.0.0.1\" already exists`) {
+		t.Errorf("expected duplicate IP message, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleUpdate_DuplicateIP_Returns409(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+
+	first := &domain.Device{
+		IP:         "10.0.0.1",
+		DeviceType: domain.DeviceTypeRouter,
+	}
+	second := &domain.Device{
+		IP:         "10.0.0.2",
+		DeviceType: domain.DeviceTypeRouter,
+	}
+
+	if err := repo.Create(first); err != nil {
+		t.Fatalf("failed to seed first device: %v", err)
+	}
+	if err := repo.Create(second); err != nil {
+		t.Fatalf("failed to seed second device: %v", err)
+	}
+
+	body := `{"ip":"10.0.0.1"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+second.ID.String(), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for duplicate IP update, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `a device with IP/host \"10.0.0.1\" already exists`) {
+		t.Errorf("expected duplicate IP update message, got: %s", rec.Body.String())
 	}
 }
 

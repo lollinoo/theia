@@ -24,7 +24,7 @@ func newTestLinkHandler(t *testing.T) (*LinkHandler, *mockLinkRepo, *mockDeviceR
 	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
 		return &snmp.DiscoveryResult{}, nil
 	}
-	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 	handler := NewLinkHandler(linkRepo, svc)
 	return handler, linkRepo, deviceRepo
 }

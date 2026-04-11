@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchDeviceInterfaces, updateLink, deleteLink } from '../api/client';
-import type { Device, InterfaceInfo, Link } from '../types/api';
+import type { Device, DeviceInterface, InterfaceInfo, Link } from '../types/api';
 
 interface LinkDetailsPanelProps {
   link: Link;
@@ -9,6 +9,8 @@ interface LinkDetailsPanelProps {
   onDeleted: () => void;
   onClose: () => void;
 }
+
+type InterfaceLabelInfo = Pick<DeviceInterface, 'if_name' | 'if_descr'>;
 
 function formatSpeed(bps: number): string {
   if (bps <= 0) return '';
@@ -72,6 +74,20 @@ function InterfaceSelect({
   );
 }
 
+// If value matches an if_name exactly, keep it. If it only matches an if_descr
+// (e.g. LLDP-discovered "ether4- uplink potenza centro" vs SNMP if_name "ether4"),
+// return the canonical if_name so the dropdown pre-selects the right option.
+function resolveIfName(value: string, ifaces: InterfaceLabelInfo[]): string {
+  if (!value) return value;
+  if (ifaces.some((i) => i.if_name === value)) return value;
+  const byDescr = ifaces.find((i) => i.if_descr === value);
+  return byDescr ? byDescr.if_name : value;
+}
+
+function displayIfName(value: string, ifaces: InterfaceLabelInfo[]): string {
+  return resolveIfName(value, ifaces) || '—';
+}
+
 export function LinkDetailsPanel({
   link,
   devices,
@@ -85,6 +101,8 @@ export function LinkDetailsPanel({
 
   const sourceIsVirtual = sourceDevice?.device_type === 'virtual';
   const targetIsVirtual = targetDevice?.device_type === 'virtual';
+  const sourceSummaryIfName = displayIfName(link.source_if_name, sourceDevice?.interfaces ?? []);
+  const targetSummaryIfName = displayIfName(link.target_if_name, targetDevice?.interfaces ?? []);
 
   const [editing, setEditing] = useState(false);
   const [sourceIfName, setSourceIfName] = useState(link.source_if_name);
@@ -105,7 +123,10 @@ export function LinkDetailsPanel({
     if (link.source_device_id && !sourceIsVirtual) {
       setSourceLoading(true);
       fetchDeviceInterfaces(link.source_device_id)
-        .then((ifaces) => setSourceInterfaces(ifaces))
+        .then((ifaces) => {
+          setSourceInterfaces(ifaces);
+          setSourceIfName((prev) => resolveIfName(prev, ifaces));
+        })
         .catch(() => setSourceInterfaces([]))
         .finally(() => setSourceLoading(false));
     }
@@ -113,7 +134,10 @@ export function LinkDetailsPanel({
     if (link.target_device_id && !targetIsVirtual) {
       setTargetLoading(true);
       fetchDeviceInterfaces(link.target_device_id)
-        .then((ifaces) => setTargetInterfaces(ifaces))
+        .then((ifaces) => {
+          setTargetInterfaces(ifaces);
+          setTargetIfName((prev) => resolveIfName(prev, ifaces));
+        })
         .catch(() => setTargetInterfaces([]))
         .finally(() => setTargetLoading(false));
     }
@@ -170,12 +194,12 @@ export function LinkDetailsPanel({
         <div className="space-y-0.5">
           <p className="text-sm font-medium text-on-bg truncate">
             {sourceDevice?.tags?.display_name || sourceDevice?.hostname || link.source_device_id}
-            <span className="text-on-bg-secondary font-normal">:{link.source_if_name || '—'}</span>
+            <span className="text-on-bg-secondary font-normal">:{sourceSummaryIfName}</span>
           </p>
           <p className="text-xs text-on-bg-secondary px-1">↕</p>
           <p className="text-sm font-medium text-on-bg truncate">
             {targetDevice?.tags?.display_name || targetDevice?.hostname || link.target_device_id}
-            <span className="text-on-bg-secondary font-normal">:{link.target_if_name || '—'}</span>
+            <span className="text-on-bg-secondary font-normal">:{targetSummaryIfName}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">

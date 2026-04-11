@@ -1,4 +1,7 @@
 .PHONY: dev test test-integration build clean seed verify stop logs help \
+       postgres-up postgres-down dev-postgres migrate-postgres \
+       prod-postgres prod-postgres-metrics staging-postgres \
+       wisp-lab wisp-lab-down wisp-seed wisp-radio-seed wisp-seed-all wisp-ospf wisp-bgp \
        prod prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
        snmpwalk-router snmpwalk-switch snmpwalk-ap \
@@ -28,6 +31,35 @@ dev: ## Start full dev stack (backend + frontend + Prometheus + SNMP sims)
 	@echo ""
 	@echo "Run 'make seed' to add SNMP simulator devices"
 	@echo "Run 'make logs' to follow backend logs"
+
+postgres-up: ## Start local PostgreSQL for Theia
+	docker compose --profile postgres up -d postgres
+
+postgres-down: ## Stop local PostgreSQL for Theia
+	docker compose --profile postgres down
+
+dev-postgres: ## Start dev stack with PostgreSQL instead of SQLite
+	@docker compose --profile dev --profile test down 2>/dev/null || true
+	docker compose --profile postgres up -d postgres
+	THEIA_DB_DRIVER=postgres \
+	THEIA_DB_DSN=postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable \
+	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
+		docker compose --profile dev up --build -d
+	@echo ""
+	@echo "Theia dev stack is running on PostgreSQL:"
+	@echo "  Backend:  http://localhost:8080"
+	@echo "  Frontend: http://localhost:3000"
+	@echo "  PostgreSQL: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
+
+migrate-postgres: ## Copy the current SQLite data set into PostgreSQL
+	@if [ -z "$${MIGRATE_DSN:-$${THEIA_DB_DSN}}" ]; then \
+		echo "Set MIGRATE_DSN or THEIA_DB_DSN to the PostgreSQL DSN"; exit 1; \
+	fi
+	go run ./cmd/theia-db-migrate \
+		-config config.yaml \
+		-source-sqlite "$${MIGRATE_SOURCE}" \
+		-target-dsn "$${MIGRATE_DSN:-$${THEIA_DB_DSN}}" \
+		-truncate-target
 
 stop: ## Stop all containers
 	docker compose --profile dev --profile test down
@@ -60,15 +92,31 @@ prod-metrics: ## Start production stack with Prometheus + SNMP exporter
 	@echo "MikroTik Theia production stack (with metrics) is running."
 	@echo "Edit docker/prometheus/prometheus.prod.yml to add your SNMP device IPs."
 
+prod-postgres: ## Start production stack on PostgreSQL
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
+	THEIA_DB_DRIVER=postgres \
+	THEIA_DB_DSN="$${THEIA_DB_DSN:-postgres://$${POSTGRES_USER:-theia}:$${POSTGRES_PASSWORD:-theia}@postgres:5432/$${POSTGRES_DB:-theia}?sslmode=disable}" \
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d
+	@echo ""
+	@echo "MikroTik Theia production stack is running on PostgreSQL."
+
+prod-postgres-metrics: ## Start production stack on PostgreSQL with metrics
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
+	THEIA_DB_DRIVER=postgres \
+	THEIA_DB_DSN="$${THEIA_DB_DSN:-postgres://$${POSTGRES_USER:-theia}:$${POSTGRES_PASSWORD:-theia}@postgres:5432/$${POSTGRES_DB:-theia}?sslmode=disable}" \
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres --profile metrics up -d
+	@echo ""
+	@echo "MikroTik Theia production metrics stack is running on PostgreSQL."
+
 prod-down: ## Stop production stack
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics down
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics --profile postgres down
 
 prod-logs: ## Follow production backend logs
 	docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f backend
 
 prod-clean: ## Stop production stack and remove volumes (resets database)
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics down -v
-	docker volume rm -f theia-data theia-prometheus-data 2>/dev/null || true
+	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics --profile postgres down -v
+	docker volume rm -f theia-data theia-prometheus-data theia-prod-postgres-data 2>/dev/null || true
 	@echo "Cleaned all production containers and volumes"
 
 # ---------------------------------------------------------------------------
@@ -84,8 +132,16 @@ staging: ## Start staging stack (auto-updates via Watchtower)
 	@echo ""
 	@echo "Run 'make staging-logs' to follow backend logs."
 
+staging-postgres: ## Start staging stack on PostgreSQL
+	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d postgres
+	THEIA_DB_DRIVER=postgres \
+	THEIA_DB_DSN="$${THEIA_DB_DSN:-postgres://$${POSTGRES_USER:-theia}:$${POSTGRES_PASSWORD:-theia}@postgres:5432/$${POSTGRES_DB:-theia}?sslmode=disable}" \
+	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d
+	@echo ""
+	@echo "MikroTik Theia staging stack is running on PostgreSQL."
+
 staging-down: ## Stop staging stack
-	docker compose -f docker-compose.staging.yml --env-file .env.staging down
+	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres down
 
 staging-logs: ## Follow staging backend logs
 	docker compose -f docker-compose.staging.yml --env-file .env.staging logs -f backend
@@ -100,6 +156,34 @@ clean: ## Stop containers, remove volumes, and prune build cache
 
 seed: ## Add SNMP simulator devices via the API
 	@bash scripts/seed.sh http://localhost:8080
+
+wisp-lab: ## Start WISP lab with 10 routers, radio access overlay, OSPF, and SNMP
+	docker compose -f docker-compose.wisp-lab.yml up --build -d
+	@echo ""
+	@echo "WISP lab is running:"
+	@echo "  SNMP targets: 127.0.10.21-127.0.10.42"
+	@echo "  Prometheus:   http://localhost:9091"
+	@echo ""
+	@echo "Run 'make wisp-seed-all' to add routers plus radio access nodes to Theia."
+
+wisp-lab-down: ## Stop the dedicated WISP lab
+	docker compose -f docker-compose.wisp-lab.yml down
+
+wisp-seed: ## Add the 10 WISP lab routers via the API
+	@bash scripts/seed-wisp.sh http://localhost:8080
+
+wisp-radio-seed: ## Add sector APs and CPE radio nodes via the API
+	@bash scripts/seed-wisp-radio.sh http://localhost:8080
+
+wisp-seed-all: ## Add routers plus radio access nodes via the API
+	@bash scripts/seed-wisp.sh http://localhost:8080
+	@bash scripts/seed-wisp-radio.sh http://localhost:8080
+
+wisp-ospf: ## Show OSPF neighbors for all WISP lab routers
+	@bash scripts/check-wisp-ospf.sh
+
+wisp-bgp: ## Show BGP and propagated default routes in the WISP lab
+	@bash scripts/check-wisp-bgp.sh
 
 verify: ## Run go vet and go build inside container
 	docker compose --profile test run --rm --no-deps backend sh -c "go vet ./... && go build ./cmd/theia/"
@@ -124,9 +208,9 @@ version: ## Show current version
 	@echo "Git commit: $(GIT_COMMIT)"
 	@echo "Build date: $(BUILD_DATE)"
 
-release: ## Create release tag and push (Usage: make release VERSION=1.3.8)
+release: ## Create release tag and push (Usage: make release VERSION=1.5.1)
 	@if [ -z "$(VERSION)" ] || [ "$(VERSION)" = "$$(git describe --tags --always 2>/dev/null || echo dev)" ]; then \
-		echo "Usage: make release VERSION=1.3.8"; exit 1; fi
+		echo "Usage: make release VERSION=1.5.1"; exit 1; fi
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "Error: working tree is not clean"; exit 1; fi
 	@if [ "$$(git rev-parse --abbrev-ref HEAD)" != "master" ]; then \
@@ -134,7 +218,7 @@ release: ## Create release tag and push (Usage: make release VERSION=1.3.8)
 	@if git rev-parse "v$(VERSION)" >/dev/null 2>&1; then \
 		echo "Error: tag v$(VERSION) already exists"; exit 1; fi
 	@if ! echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
-		echo "Error: VERSION must be valid semver (e.g., 1.3.8)"; exit 1; fi
+		echo "Error: VERSION must be valid semver (e.g., 1.5.1)"; exit 1; fi
 	@git tag -a "v$(VERSION)" -m "release: v$(VERSION)"
 	@git push origin "v$(VERSION)"
 	@echo ""

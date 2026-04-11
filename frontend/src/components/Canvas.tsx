@@ -51,7 +51,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
   const [bridgePort, setBridgePort] = useState('1337');
-  const { bridgeRunning } = useBridgeHealth(bridgePort);
+  const [menuEverOpened, setMenuEverOpened] = useState(false);
+  const { bridgeRunning } = useBridgeHealth(bridgePort, { enabled: menuEverOpened });
   const [bridgeSecret, setBridgeSecret] = useState('');
   const [winboxError, setWinboxError] = useState<string | null>(null);
   useEffect(() => {
@@ -90,11 +91,15 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
 
   const openEdgeMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => {
+      // Note: does NOT set menuEverOpened — bridge health check is only needed
+      // for device context menus (WinBox launch). If a bridge action is added
+      // here, add setMenuEverOpened(true).
       setEdgeMenu({ edgeID, x: event.clientX, y: event.clientY });
     }, [setEdgeMenu],
   );
   const openDeviceMenu = useCallback(
     (event: React.MouseEvent, deviceId: string) => {
+      setMenuEverOpened(true);
       setDeviceMenu({ deviceId, x: event.clientX, y: event.clientY });
     }, [setDeviceMenu],
   );
@@ -399,7 +404,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
 
       <SidePanel open={!!panelContent} onClose={() => setPanelContent(null)} title={getPanelTitle()}>
         <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} snapshot={snapshot}
-          devices={devices} topologyLinks={topologyLinks} loadTopology={loadTopology}
+          devices={devices} loadTopology={loadTopology}
           setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus}
           onAreasChange={onAreasChange} onSettingsChange={refreshSettings} />
       </SidePanel>

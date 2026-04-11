@@ -21,6 +21,8 @@ const (
 	MessageTypeAlert = "alert"
 	// MessageTypePrometheusStatus notifies clients of Prometheus availability changes.
 	MessageTypePrometheusStatus = "prometheus_status"
+	// MessageTypeTopologyChanged notifies clients that the topology has changed (new links discovered).
+	MessageTypeTopologyChanged = "topology_changed"
 )
 
 // PrometheusStatusPayload is sent when Prometheus availability changes.
@@ -42,6 +44,7 @@ type SnapshotPayload struct {
 	Alerts          []AlertDTO                  `json:"alerts"`
 	DeviceStatuses  map[string]string           `json:"device_statuses"`
 	DeviceHostnames map[string]string           `json:"device_hostnames"` // device ID → auto-discovered hostname
+	DeviceModels    map[string]string           `json:"device_models"`    // device ID → hardware model
 }
 
 // DeviceMetricsDTO is the frontend JSON shape for device metrics.
@@ -81,6 +84,7 @@ func EmptySnapshot() *SnapshotPayload {
 		Alerts:          []AlertDTO{},
 		DeviceStatuses:  map[string]string{},
 		DeviceHostnames: map[string]string{},
+		DeviceModels:    map[string]string{},
 	}
 }
 
@@ -96,6 +100,7 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 		Alerts:          append([]AlertDTO(nil), snapshot.Alerts...),
 		DeviceStatuses:  make(map[string]string, len(snapshot.DeviceStatuses)),
 		DeviceHostnames: make(map[string]string, len(snapshot.DeviceHostnames)),
+		DeviceModels:    make(map[string]string, len(snapshot.DeviceModels)),
 	}
 
 	for key, value := range snapshot.DeviceStatuses {
@@ -104,6 +109,10 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 
 	for key, value := range snapshot.DeviceHostnames {
 		cloned.DeviceHostnames[key] = value
+	}
+
+	for key, value := range snapshot.DeviceModels {
+		cloned.DeviceModels[key] = value
 	}
 
 	for key, value := range snapshot.DeviceMetrics {

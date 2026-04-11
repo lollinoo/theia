@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
+	pgdriver "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/google/uuid"
@@ -16,7 +17,10 @@ import (
 )
 
 //go:embed migrations/*.sql
-var migrationsFS embed.FS
+var sqliteMigrationsFS embed.FS
+
+//go:embed postgres_migrations/*.sql
+var postgresMigrationsFS embed.FS
 
 // lastPreMigrateVersion is the version of the last migration that re-expresses
 // the existing inline schema. Existing databases are seeded at this version
@@ -33,6 +37,34 @@ func RunMigrations(db *sql.DB, encryptionKey ...[]byte) error {
 	if len(encryptionKey) > 0 {
 		encKey = encryptionKey[0]
 	}
+	dialect := detectDialectFromDB(db)
+	switch dialect {
+	case DialectSQLite:
+		if err := runSQLiteMigrations(db); err != nil {
+			return err
+		}
+	case DialectPostgres:
+		if err := runPostgresMigrations(db); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported database dialect %q", dialect)
+	}
+
+	// Encrypt any plaintext SNMP credentials (Go-level data migration)
+	if err := migrateEncryptSNMPCredentials(db, encKey); err != nil {
+		return fmt.Errorf("encrypting SNMP credentials: %w", err)
+	}
+
+	// Seed default settings (INSERT OR IGNORE so existing values are not overwritten)
+	if err := seedDefaultSettings(db); err != nil {
+		return fmt.Errorf("seeding default settings: %w", err)
+	}
+
+	return nil
+}
+
+func runSQLiteMigrations(db *sql.DB) error {
 	if err := ensureMigrationVersion(db, lastPreMigrateVersion); err != nil {
 		return fmt.Errorf("ensuring migration version: %w", err)
 	}
@@ -41,7 +73,7 @@ func RunMigrations(db *sql.DB, encryptionKey ...[]byte) error {
 		return fmt.Errorf("verifying legacy table migration: %w", err)
 	}
 
-	sourceDriver, err := iofs.New(migrationsFS, "migrations")
+	sourceDriver, err := iofs.New(sqliteMigrationsFS, "migrations")
 	if err != nil {
 		return fmt.Errorf("creating migration source: %w", err)
 	}
@@ -63,18 +95,34 @@ func RunMigrations(db *sql.DB, encryptionKey ...[]byte) error {
 	}
 
 	version, dirty, _ := m.Version()
-	log.Printf("Migrations complete: version=%d dirty=%v", version, dirty)
+	log.Printf("Migrations complete: dialect=%s version=%d dirty=%v", DialectSQLite, version, dirty)
+	return nil
+}
 
-	// Encrypt any plaintext SNMP credentials (Go-level data migration)
-	if err := migrateEncryptSNMPCredentials(db, encKey); err != nil {
-		return fmt.Errorf("encrypting SNMP credentials: %w", err)
+func runPostgresMigrations(db *sql.DB) error {
+	sourceDriver, err := iofs.New(postgresMigrationsFS, "postgres_migrations")
+	if err != nil {
+		return fmt.Errorf("creating postgres migration source: %w", err)
 	}
 
-	// Seed default settings (INSERT OR IGNORE so existing values are not overwritten)
-	if err := seedDefaultSettings(db); err != nil {
-		return fmt.Errorf("seeding default settings: %w", err)
+	dbDriver, err := pgdriver.WithInstance(db, &pgdriver.Config{
+		MigrationsTable: "schema_migrations",
+	})
+	if err != nil {
+		return fmt.Errorf("creating postgres migration db driver: %w", err)
 	}
 
+	m, err := migrate.NewWithInstance("iofs", sourceDriver, "postgres", dbDriver)
+	if err != nil {
+		return fmt.Errorf("creating postgres migrator: %w", err)
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("running postgres migrations: %w", err)
+	}
+
+	version, dirty, _ := m.Version()
+	log.Printf("Migrations complete: dialect=%s version=%d dirty=%v", DialectPostgres, version, dirty)
 	return nil
 }
 
@@ -256,6 +304,7 @@ func migrateEncryptSNMPCredentials(db *sql.DB, encryptionKey []byte) error {
 }
 
 func migrateDeviceSNMPCredentials(db *sql.DB, key []byte) (int, error) {
+	queryDB := wrapDB(db)
 	rows, err := db.Query("SELECT id, snmp_credentials_json FROM devices WHERE snmp_credentials_json != '' AND snmp_credentials_json != '{}'")
 	if err != nil {
 		return 0, err
@@ -302,7 +351,7 @@ func migrateDeviceSNMPCredentials(db *sql.DB, key []byte) (int, error) {
 			continue
 		}
 
-		if _, err := db.Exec("UPDATE devices SET snmp_credentials_json = ? WHERE id = ?", string(newJSON), r.id); err != nil {
+		if _, err := queryDB.Exec("UPDATE devices SET snmp_credentials_json = ? WHERE id = ?", string(newJSON), r.id); err != nil {
 			log.Printf("Warning: failed to update device %s SNMP creds: %v", r.id, err)
 			continue
 		}
@@ -312,6 +361,7 @@ func migrateDeviceSNMPCredentials(db *sql.DB, key []byte) (int, error) {
 }
 
 func migrateSNMPProfileCredentials(db *sql.DB, key []byte) (int, error) {
+	queryDB := wrapDB(db)
 	rows, err := db.Query("SELECT id, credentials_json FROM snmp_profiles WHERE credentials_json != '' AND credentials_json != '{}'")
 	if err != nil {
 		return 0, err
@@ -356,7 +406,7 @@ func migrateSNMPProfileCredentials(db *sql.DB, key []byte) (int, error) {
 			continue
 		}
 
-		if _, err := db.Exec("UPDATE snmp_profiles SET credentials_json = ? WHERE id = ?", string(newJSON), r.id); err != nil {
+		if _, err := queryDB.Exec("UPDATE snmp_profiles SET credentials_json = ? WHERE id = ?", string(newJSON), r.id); err != nil {
 			log.Printf("Warning: failed to update profile %s SNMP creds: %v", r.id, err)
 			continue
 		}
@@ -390,12 +440,15 @@ func isAlreadyEncrypted(creds *domain.SNMPCredentials, key []byte) bool {
 
 // seedDefaultSettings inserts default settings without overwriting existing values.
 func seedDefaultSettings(db *sql.DB) error {
+	queryDB := wrapDB(db)
 	now := time.Now().UTC()
+	statement := `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO NOTHING`
+	if detectDialectFromDB(db) == DialectSQLite {
+		statement = `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)`
+	}
 	for key, value := range domain.DefaultSettings() {
-		_, err := db.Exec(
-			`INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)`,
-			key, value, now,
-		)
+		_, err := queryDB.Exec(statement, key, value, now)
 		if err != nil {
 			return fmt.Errorf("seeding default setting %q: %w", key, err)
 		}

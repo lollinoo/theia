@@ -1,19 +1,20 @@
-import type { Device, Link } from '../types/api';
+import { useEffect, useState } from 'react';
+import type { Device, InterfaceInfo, Link } from '../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
 import { formatThroughput, utilizationColor } from '../types/metrics';
+import { fetchDeviceInterfaces } from '../api/client';
 import { formatBandwidth } from './LinkEdge';
 
 interface InterfaceStatsSectionProps {
   device: Device;
   ifName: string;
+  interfaceInfo?: InterfaceInfo | null;
   snapshot: SnapshotPayload | null;
   prometheusStatus: PrometheusStatusPayload | null;
 }
 
-function InterfaceStatsSection({ device, ifName, snapshot, prometheusStatus }: InterfaceStatsSectionProps) {
-  const iface = device.interfaces.find(
-    (i) => i.if_name.trim().toLowerCase() === ifName.trim().toLowerCase(),
-  );
+function InterfaceStatsSection({ device, ifName, interfaceInfo, snapshot, prometheusStatus }: InterfaceStatsSectionProps) {
+  const iface = interfaceInfo;
 
   const isDown = device.status === 'down';
   const src = device.metrics_source || 'prometheus';
@@ -117,6 +118,64 @@ interface InterfaceStatsPanelProps {
   prometheusStatus: PrometheusStatusPayload | null;
 }
 
+interface NegotiationSummaryProps {
+  sourceInterfaceInfo: InterfaceInfo | null;
+  targetInterfaceInfo: InterfaceInfo | null;
+}
+
+function NegotiationSummary({
+  sourceInterfaceInfo,
+  targetInterfaceInfo,
+}: NegotiationSummaryProps) {
+  const sourceSpeed = sourceInterfaceInfo?.speed ?? 0;
+  const targetSpeed = targetInterfaceInfo?.speed ?? 0;
+  const sourceLabel = sourceSpeed > 0 ? formatBandwidth(sourceSpeed) : 'Unknown';
+  const targetLabel = targetSpeed > 0 ? formatBandwidth(targetSpeed) : 'Unknown';
+
+  let toneClass = 'border-outline-subtle bg-surface-high text-on-bg';
+  let summaryLabel = 'Autonegotiation';
+  let detailLabel = 'Waiting for interface speed data from one or both ends.';
+
+  if (sourceSpeed > 0 && targetSpeed > 0 && sourceSpeed === targetSpeed) {
+    toneClass = 'border-status-up/30 bg-status-up/10 text-status-up';
+    summaryLabel = `Matched at ${formatBandwidth(sourceSpeed)}`;
+    detailLabel = 'Both interfaces report the same negotiated speed.';
+  } else if (sourceSpeed > 0 && targetSpeed > 0) {
+    toneClass = 'border-status-probing/30 bg-status-probing/10 text-status-probing';
+    summaryLabel = `${formatBandwidth(sourceSpeed)} vs ${formatBandwidth(targetSpeed)}`;
+    detailLabel = 'The two ends report different negotiated speeds.';
+  } else if (sourceSpeed > 0 || targetSpeed > 0) {
+    toneClass = 'border-status-probing/30 bg-status-probing/10 text-status-probing';
+    summaryLabel = sourceSpeed > 0 ? sourceLabel : targetLabel;
+    detailLabel = 'Only one side exposed a negotiated speed.';
+  }
+
+  return (
+    <div className={`rounded-xl border px-4 py-3 transition-colors duration-200 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">
+            Autonegotiation
+          </p>
+          <p className="mt-1 text-sm font-semibold">{summaryLabel}</p>
+          <p className="mt-1 text-xs text-on-bg-secondary">{detailLabel}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3 border-t border-outline-subtle/70 pt-3">
+        <div>
+          <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Source</p>
+          <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{sourceLabel}</p>
+        </div>
+        <div>
+          <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Target</p>
+          <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{targetLabel}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function InterfaceStatsPanel({
   link,
   sourceDevice,
@@ -124,17 +183,43 @@ export function InterfaceStatsPanel({
   snapshot,
   prometheusStatus,
 }: InterfaceStatsPanelProps) {
+  const [sourceInterfaceInfo, setSourceInterfaceInfo] = useState<InterfaceInfo | null>(null);
+  const [targetInterfaceInfo, setTargetInterfaceInfo] = useState<InterfaceInfo | null>(null);
+
+  useEffect(() => {
+    setSourceInterfaceInfo(null);
+    setTargetInterfaceInfo(null);
+    fetchDeviceInterfaces(sourceDevice.id)
+      .then((ifaces) => {
+        const match = ifaces.find((i) => i.if_name.trim().toLowerCase() === link.source_if_name.trim().toLowerCase());
+        setSourceInterfaceInfo(match ?? null);
+      })
+      .catch(() => setSourceInterfaceInfo(null));
+    fetchDeviceInterfaces(targetDevice.id)
+      .then((ifaces) => {
+        const match = ifaces.find((i) => i.if_name.trim().toLowerCase() === link.target_if_name.trim().toLowerCase());
+        setTargetInterfaceInfo(match ?? null);
+      })
+      .catch(() => setTargetInterfaceInfo(null));
+  }, [sourceDevice.id, targetDevice.id, link.source_if_name, link.target_if_name]);
+
   return (
     <div className="space-y-3 p-4">
+      <NegotiationSummary
+        sourceInterfaceInfo={sourceInterfaceInfo}
+        targetInterfaceInfo={targetInterfaceInfo}
+      />
       <InterfaceStatsSection
         device={sourceDevice}
         ifName={link.source_if_name}
+        interfaceInfo={sourceInterfaceInfo}
         snapshot={snapshot}
         prometheusStatus={prometheusStatus}
       />
       <InterfaceStatsSection
         device={targetDevice}
         ifName={link.target_if_name}
+        interfaceInfo={targetInterfaceInfo}
         snapshot={snapshot}
         prometheusStatus={prometheusStatus}
       />
@@ -153,19 +238,30 @@ export function DeviceInterfaceStatsPanel({
   snapshot,
   prometheusStatus,
 }: DeviceInterfaceStatsPanelProps) {
-  const interfaces = device.interfaces
-    .filter((i) => {
-      const lower = i.if_name.toLowerCase();
-      return !lower.startsWith('lo') && lower !== 'null' && !lower.startsWith('null');
-    })
-    .sort((a, b) => {
-      const aUp = a.oper_status === 'up';
-      const bUp = b.oper_status === 'up';
-      if (aUp !== bUp) return aUp ? -1 : 1;
-      return a.if_name.localeCompare(b.if_name);
-    });
+  const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  if (interfaces.length === 0) {
+  useEffect(() => {
+    setLoading(true);
+    fetchDeviceInterfaces(device.id)
+      .then((ifaces) => {
+        const filtered = ifaces.filter((i) => {
+          const lower = i.if_name.toLowerCase();
+          return !lower.startsWith('lo') && lower !== 'null' && !lower.startsWith('null');
+        });
+        filtered.sort((a, b) => {
+          const aUp = a.oper_status === 'up';
+          const bUp = b.oper_status === 'up';
+          if (aUp !== bUp) return aUp ? -1 : 1;
+          return a.if_name.localeCompare(b.if_name);
+        });
+        setInterfaces(filtered);
+      })
+      .catch(() => setInterfaces([]))
+      .finally(() => setLoading(false));
+  }, [device.id]);
+
+  if (!loading && interfaces.length === 0) {
     return (
       <div className="p-4 text-sm text-on-bg-secondary">
         No interfaces discovered for this device.
@@ -180,6 +276,7 @@ export function DeviceInterfaceStatsPanel({
           key={iface.if_name}
           device={device}
           ifName={iface.if_name}
+          interfaceInfo={iface}
           snapshot={snapshot}
           prometheusStatus={prometheusStatus}
         />

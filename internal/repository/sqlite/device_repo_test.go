@@ -1,532 +1,170 @@
 package sqlite
 
 import (
-	"database/sql"
-	"strings"
 	"testing"
 
-	"github.com/lollinoo/theia/internal/crypto"
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
-var testKey = crypto.DeriveKey("test-encryption-key")
-
-func setupTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
-	if err != nil {
-		t.Fatalf("opening test db: %v", err)
-	}
-	if err := RunMigrations(db); err != nil {
-		t.Fatalf("running migrations: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
-
-func TestDeviceRepo_CreateAndGetByID(t *testing.T) {
-	db := setupTestDB(t)
+func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
+	db := newTestDB(t)
 	repo := NewDeviceRepo(db, testKey, nil)
 
-	device := &domain.Device{
-		Hostname: "core-router-01",
-		IP:       "192.168.1.1",
-		SNMPCredentials: domain.SNMPCredentials{
-			Version: domain.SNMPVersionV2c,
-			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		},
-		DeviceType: domain.DeviceTypeRouter,
-		Status:     domain.DeviceStatusUp,
-		SysName:    "core-router-01.local",
-		SysDescr:   "RouterOS v7.14",
-		Managed:    true,
-		Tags:       map[string]string{"site": "datacenter-1", "role": "core"},
-		Interfaces: []domain.Interface{
-			{IfIndex: 1, IfName: "ether1", IfDescr: "Ethernet 1", Speed: 1000000000, AdminStatus: "up", OperStatus: "up"},
-			{IfIndex: 2, IfName: "ether2", IfDescr: "Ethernet 2", Speed: 1000000000, AdminStatus: "up", OperStatus: "down"},
-		},
-	}
-
-	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	if device.ID == uuid.Nil {
-		t.Fatal("Expected UUID to be assigned after Create")
-	}
-
-	got, err := repo.GetByID(device.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-
-	if got.Hostname != "core-router-01" {
-		t.Errorf("Hostname = %q, want %q", got.Hostname, "core-router-01")
-	}
-	if got.IP != "192.168.1.1" {
-		t.Errorf("IP = %q, want %q", got.IP, "192.168.1.1")
-	}
-	if got.DeviceType != domain.DeviceTypeRouter {
-		t.Errorf("DeviceType = %q, want %q", got.DeviceType, domain.DeviceTypeRouter)
-	}
-	if got.Status != domain.DeviceStatusUp {
-		t.Errorf("Status = %q, want %q", got.Status, domain.DeviceStatusUp)
-	}
-	if got.SysName != "core-router-01.local" {
-		t.Errorf("SysName = %q, want %q", got.SysName, "core-router-01.local")
-	}
-	if !got.Managed {
-		t.Error("Expected Managed to be true")
-	}
-	if got.Tags["site"] != "datacenter-1" {
-		t.Errorf("Tags[site] = %q, want %q", got.Tags["site"], "datacenter-1")
-	}
-	if got.Tags["role"] != "core" {
-		t.Errorf("Tags[role] = %q, want %q", got.Tags["role"], "core")
-	}
-	if len(got.Interfaces) != 2 {
-		t.Fatalf("Interfaces count = %d, want 2", len(got.Interfaces))
-	}
-	if got.Interfaces[0].IfName != "ether1" {
-		t.Errorf("Interface[0].IfName = %q, want %q", got.Interfaces[0].IfName, "ether1")
-	}
-	if got.Interfaces[1].OperStatus != "down" {
-		t.Errorf("Interface[1].OperStatus = %q, want %q", got.Interfaces[1].OperStatus, "down")
-	}
-}
-
-func TestDeviceRepo_SNMPv2cRoundTrip(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
-
-	device := &domain.Device{
+	first := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "dist-sw-01",
 		IP:       "10.0.0.1",
-		Hostname: "test-v2c",
+		SysName:  "Dist-SW-01",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+		Tags:     map[string]string{},
 		SNMPCredentials: domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
-			V2c:     &domain.SNMPv2cCredentials{Community: "secret_community"},
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 		},
-		DeviceType: domain.DeviceTypeSwitch,
-		Status:     domain.DeviceStatusProbing,
-		Managed:    true,
+	}
+	if err := repo.Create(first); err != nil {
+		t.Fatalf("Create first device failed: %v", err)
 	}
 
-	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	got, err := repo.GetByID(device.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-
-	if got.SNMPCredentials.Version != domain.SNMPVersionV2c {
-		t.Errorf("SNMP Version = %q, want %q", got.SNMPCredentials.Version, domain.SNMPVersionV2c)
-	}
-	if got.SNMPCredentials.V2c == nil {
-		t.Fatal("Expected V2c credentials to be non-nil")
-	}
-	if got.SNMPCredentials.V2c.Community != "secret_community" {
-		t.Errorf("V2c.Community = %q, want %q", got.SNMPCredentials.V2c.Community, "secret_community")
-	}
-}
-
-func TestDeviceRepo_SNMPv3RoundTrip(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
-
-	device := &domain.Device{
+	second := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "core-sw-02",
 		IP:       "10.0.0.2",
-		Hostname: "test-v3",
+		SysName:  "core-sw-02.example.net.",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+		Tags:     map[string]string{},
 		SNMPCredentials: domain.SNMPCredentials{
-			Version: domain.SNMPVersionV3,
-			V3: &domain.SNMPv3Credentials{
-				Username:      "admin",
-				AuthProtocol:  "SHA",
-				AuthPassword:  "authpass123",
-				PrivProtocol:  "AES",
-				PrivPassword:  "privpass456",
-				SecurityLevel: "authPriv",
-			},
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 		},
-		DeviceType: domain.DeviceTypeRouter,
-		Status:     domain.DeviceStatusUp,
-		Managed:    true,
+	}
+	if err := repo.Create(second); err != nil {
+		t.Fatalf("Create second device failed: %v", err)
 	}
 
-	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
+	tests := []struct {
+		name       string
+		lookup     string
+		expectedID uuid.UUID
+	}{
+		{
+			name:       "matches case and whitespace",
+			lookup:     "  dist-sw-01  ",
+			expectedID: first.ID,
+		},
+		{
+			name:       "matches fqdn against short stored sysName",
+			lookup:     "dist-sw-01.example.net.",
+			expectedID: first.ID,
+		},
+		{
+			name:       "matches short name against stored fqdn",
+			lookup:     "CORE-SW-02",
+			expectedID: second.ID,
+		},
+		{
+			name:       "matches stored fqdn with different case",
+			lookup:     "core-sw-02.EXAMPLE.NET.",
+			expectedID: second.ID,
+		},
 	}
 
-	got, err := repo.GetByID(device.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-
-	if got.SNMPCredentials.Version != domain.SNMPVersionV3 {
-		t.Errorf("SNMP Version = %q, want %q", got.SNMPCredentials.Version, domain.SNMPVersionV3)
-	}
-	if got.SNMPCredentials.V3 == nil {
-		t.Fatal("Expected V3 credentials to be non-nil")
-	}
-	v3 := got.SNMPCredentials.V3
-	if v3.Username != "admin" {
-		t.Errorf("V3.Username = %q, want %q", v3.Username, "admin")
-	}
-	if v3.AuthProtocol != "SHA" {
-		t.Errorf("V3.AuthProtocol = %q, want %q", v3.AuthProtocol, "SHA")
-	}
-	if v3.AuthPassword != "authpass123" {
-		t.Errorf("V3.AuthPassword = %q, want %q", v3.AuthPassword, "authpass123")
-	}
-	if v3.PrivProtocol != "AES" {
-		t.Errorf("V3.PrivProtocol = %q, want %q", v3.PrivProtocol, "AES")
-	}
-	if v3.PrivPassword != "privpass456" {
-		t.Errorf("V3.PrivPassword = %q, want %q", v3.PrivPassword, "privpass456")
-	}
-	if v3.SecurityLevel != "authPriv" {
-		t.Errorf("V3.SecurityLevel = %q, want %q", v3.SecurityLevel, "authPriv")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			device, err := repo.GetBySysName(tc.lookup)
+			if err != nil {
+				t.Fatalf("GetBySysName failed: %v", err)
+			}
+			if device == nil {
+				t.Fatalf("expected device for lookup %q", tc.lookup)
+			}
+			if device.ID != tc.expectedID {
+				t.Fatalf("expected device %s, got %s", tc.expectedID, device.ID)
+			}
+		})
 	}
 }
 
-func TestDeviceRepo_Update(t *testing.T) {
-	db := setupTestDB(t)
+func TestDeviceRepoGetBySysName_EmptyOrUnknownLookup(t *testing.T) {
+	db := newTestDB(t)
 	repo := NewDeviceRepo(db, testKey, nil)
 
 	device := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "edge-sw-01",
 		IP:       "10.0.0.3",
-		Hostname: "old-hostname",
+		SysName:  "edge-sw-01",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+		Tags:     map[string]string{},
 		SNMPCredentials: domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 		},
-		DeviceType: domain.DeviceTypeUnknown,
-		Status:     domain.DeviceStatusProbing,
-		Managed:    true,
 	}
-
 	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf("Create device failed: %v", err)
 	}
 
-	device.Hostname = "new-hostname"
-	device.DeviceType = domain.DeviceTypeSwitch
-	device.Status = domain.DeviceStatusUp
-	device.Tags = map[string]string{"updated": "true"}
-
-	if err := repo.Update(device); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-
-	got, err := repo.GetByID(device.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-
-	if got.Hostname != "new-hostname" {
-		t.Errorf("Hostname = %q, want %q", got.Hostname, "new-hostname")
-	}
-	if got.DeviceType != domain.DeviceTypeSwitch {
-		t.Errorf("DeviceType = %q, want %q", got.DeviceType, domain.DeviceTypeSwitch)
-	}
-	if got.Status != domain.DeviceStatusUp {
-		t.Errorf("Status = %q, want %q", got.Status, domain.DeviceStatusUp)
-	}
-	if got.Tags["updated"] != "true" {
-		t.Errorf("Tags[updated] = %q, want %q", got.Tags["updated"], "true")
+	for _, lookup := range []string{"", "   ", ".", "unknown-host.example.net"} {
+		result, err := repo.GetBySysName(lookup)
+		if err != nil {
+			t.Fatalf("GetBySysName(%q) failed: %v", lookup, err)
+		}
+		if lookup == "unknown-host.example.net" && result != nil {
+			t.Fatalf("expected nil for unknown lookup %q, got %s", lookup, result.ID)
+		}
+		if lookup != "unknown-host.example.net" && result != nil {
+			t.Fatalf("expected nil for blank-equivalent lookup %q, got %s", lookup, result.ID)
+		}
 	}
 }
 
-func TestDeviceRepo_Delete(t *testing.T) {
-	db := setupTestDB(t)
+func TestDeviceRepoGetBySysName_UpdateRefreshesLookupIndex(t *testing.T) {
+	db := newTestDB(t)
 	repo := NewDeviceRepo(db, testKey, nil)
 
 	device := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "agg-01",
 		IP:       "10.0.0.4",
-		Hostname: "to-delete",
+		SysName:  "agg-01.old.example.net",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+		Tags:     map[string]string{},
 		SNMPCredentials: domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 		},
-		DeviceType: domain.DeviceTypeAP,
-		Status:     domain.DeviceStatusUp,
-		Managed:    true,
 	}
-
 	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf("Create device failed: %v", err)
 	}
 
-	if err := repo.Delete(device.ID); err != nil {
-		t.Fatalf("Delete: %v", err)
+	device.SysName = "agg-02.new.example.net."
+	if err := repo.Update(device); err != nil {
+		t.Fatalf("Update device failed: %v", err)
 	}
 
-	_, err := repo.GetByID(device.ID)
-	if err == nil {
-		t.Error("Expected error after deleting device, got nil")
-	}
-}
-
-func TestDeviceRepo_GetAll(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
-
-	for i, ip := range []string{"10.0.0.10", "10.0.0.11", "10.0.0.12"} {
-		device := &domain.Device{
-			IP:       ip,
-			Hostname: "device-" + string(rune('A'+i)),
-			SNMPCredentials: domain.SNMPCredentials{
-				Version: domain.SNMPVersionV2c,
-				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-			},
-			DeviceType: domain.DeviceTypeRouter,
-			Status:     domain.DeviceStatusUp,
-			Managed:    true,
-		}
-		if err := repo.Create(device); err != nil {
-			t.Fatalf("Create device %d: %v", i, err)
-		}
-	}
-
-	devices, err := repo.GetAll()
+	oldLookup, err := repo.GetBySysName("agg-01.old.example.net")
 	if err != nil {
-		t.Fatalf("GetAll: %v", err)
+		t.Fatalf("GetBySysName(old) failed: %v", err)
+	}
+	if oldLookup != nil {
+		t.Fatalf("expected old lookup to be empty, got %s", oldLookup.ID)
 	}
 
-	if len(devices) != 3 {
-		t.Errorf("GetAll returned %d devices, want 3", len(devices))
-	}
-}
-
-func TestDeviceRepo_GetByIP(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
-
-	device := &domain.Device{
-		IP:       "192.168.50.1",
-		Hostname: "by-ip-test",
-		SNMPCredentials: domain.SNMPCredentials{
-			Version: domain.SNMPVersionV2c,
-			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		},
-		DeviceType: domain.DeviceTypeRouter,
-		Status:     domain.DeviceStatusUp,
-		Managed:    true,
-	}
-
-	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	got, err := repo.GetByIP("192.168.50.1")
+	newLookup, err := repo.GetBySysName("AGG-02.NEW.EXAMPLE.NET")
 	if err != nil {
-		t.Fatalf("GetByIP: %v", err)
+		t.Fatalf("GetBySysName(new) failed: %v", err)
 	}
-	if got == nil {
-		t.Fatal("Expected device, got nil")
+	if newLookup == nil {
+		t.Fatal("expected updated device to be found by new lookup")
 	}
-	if got.Hostname != "by-ip-test" {
-		t.Errorf("Hostname = %q, want %q", got.Hostname, "by-ip-test")
-	}
-
-	// Non-existent IP should return nil
-	notFound, err := repo.GetByIP("10.99.99.99")
-	if err != nil {
-		t.Fatalf("GetByIP for non-existent: %v", err)
-	}
-	if notFound != nil {
-		t.Error("Expected nil for non-existent IP")
-	}
-}
-
-func TestDeviceRepo_TagsRoundTrip(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
-
-	tags := map[string]string{
-		"site":     "datacenter-2",
-		"role":     "access",
-		"floor":    "3",
-		"building": "HQ",
-	}
-
-	device := &domain.Device{
-		IP:       "10.0.0.20",
-		Hostname: "tags-test",
-		SNMPCredentials: domain.SNMPCredentials{
-			Version: domain.SNMPVersionV2c,
-			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		},
-		DeviceType: domain.DeviceTypeSwitch,
-		Status:     domain.DeviceStatusUp,
-		Managed:    true,
-		Tags:       tags,
-	}
-
-	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	got, err := repo.GetByID(device.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-
-	if len(got.Tags) != 4 {
-		t.Fatalf("Tags count = %d, want 4", len(got.Tags))
-	}
-	for k, v := range tags {
-		if got.Tags[k] != v {
-			t.Errorf("Tags[%q] = %q, want %q", k, got.Tags[k], v)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// SNMP Encryption Round-Trip Tests (SEC-04)
-// ---------------------------------------------------------------------------
-
-func TestDeviceRepoSNMPEncryptionRoundTrip(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
-
-	device := &domain.Device{
-		IP:       "10.0.1.1",
-		Hostname: "encryption-v3-test",
-		SNMPCredentials: domain.SNMPCredentials{
-			Version: domain.SNMPVersionV3,
-			V3: &domain.SNMPv3Credentials{
-				Username:      "admin",
-				AuthProtocol:  "SHA",
-				AuthPassword:  "auth-secret",
-				PrivProtocol:  "AES",
-				PrivPassword:  "priv-secret",
-				SecurityLevel: "authPriv",
-			},
-		},
-		DeviceType: domain.DeviceTypeRouter,
-		Status:     domain.DeviceStatusUp,
-		Managed:    true,
-	}
-
-	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	// Read back via repo (should decrypt transparently)
-	got, err := repo.GetByID(device.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-
-	if got.SNMPCredentials.V3 == nil {
-		t.Fatal("Expected V3 credentials to be non-nil")
-	}
-	if got.SNMPCredentials.V3.AuthPassword != "auth-secret" {
-		t.Errorf("AuthPassword = %q, want %q", got.SNMPCredentials.V3.AuthPassword, "auth-secret")
-	}
-	if got.SNMPCredentials.V3.PrivPassword != "priv-secret" {
-		t.Errorf("PrivPassword = %q, want %q", got.SNMPCredentials.V3.PrivPassword, "priv-secret")
-	}
-
-	// Verify raw DB value does NOT contain plaintext
-	var rawJSON string
-	err = db.QueryRow("SELECT snmp_credentials_json FROM devices WHERE id = ?", device.ID.String()).Scan(&rawJSON)
-	if err != nil {
-		t.Fatalf("querying raw JSON: %v", err)
-	}
-	if strings.Contains(rawJSON, "auth-secret") {
-		t.Error("Raw DB JSON contains plaintext 'auth-secret' -- encryption failed")
-	}
-	if strings.Contains(rawJSON, "priv-secret") {
-		t.Error("Raw DB JSON contains plaintext 'priv-secret' -- encryption failed")
-	}
-}
-
-func TestDeviceRepoSNMPv2cEncryptionRoundTrip(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
-
-	device := &domain.Device{
-		IP:       "10.0.1.2",
-		Hostname: "encryption-v2c-test",
-		SNMPCredentials: domain.SNMPCredentials{
-			Version: domain.SNMPVersionV2c,
-			V2c:     &domain.SNMPv2cCredentials{Community: "my-community"},
-		},
-		DeviceType: domain.DeviceTypeSwitch,
-		Status:     domain.DeviceStatusUp,
-		Managed:    true,
-	}
-
-	if err := repo.Create(device); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	// Read back via repo (should decrypt transparently)
-	got, err := repo.GetByID(device.ID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-
-	if got.SNMPCredentials.V2c == nil {
-		t.Fatal("Expected V2c credentials to be non-nil")
-	}
-	if got.SNMPCredentials.V2c.Community != "my-community" {
-		t.Errorf("Community = %q, want %q", got.SNMPCredentials.V2c.Community, "my-community")
-	}
-
-	// Verify raw DB value does NOT contain plaintext
-	var rawJSON string
-	err = db.QueryRow("SELECT snmp_credentials_json FROM devices WHERE id = ?", device.ID.String()).Scan(&rawJSON)
-	if err != nil {
-		t.Fatalf("querying raw JSON: %v", err)
-	}
-	if strings.Contains(rawJSON, "my-community") {
-		t.Error("Raw DB JSON contains plaintext 'my-community' -- encryption failed")
-	}
-}
-
-func TestEncryptSNMPCredentialsNilV3(t *testing.T) {
-	creds := &domain.SNMPCredentials{
-		Version: domain.SNMPVersionV2c,
-		V2c:     &domain.SNMPv2cCredentials{Community: "test"},
-		V3:      nil,
-	}
-
-	if err := encryptSNMPCredentials(creds, testKey); err != nil {
-		t.Fatalf("encryptSNMPCredentials with nil V3: %v", err)
-	}
-	// No panic means pass; V2c community should be encrypted (non-empty)
-	if creds.V2c.Community == "test" {
-		t.Error("Expected V2c community to be encrypted, but it was unchanged")
-	}
-}
-
-func TestDecryptSNMPCredentialsInvalidCiphertext(t *testing.T) {
-	// Simulate pre-migration data: plaintext values that are not valid base64/encrypted
-	creds := &domain.SNMPCredentials{
-		Version: domain.SNMPVersionV3,
-		V3: &domain.SNMPv3Credentials{
-			Username:      "admin",
-			AuthProtocol:  "SHA",
-			AuthPassword:  "plaintext-auth-password",
-			PrivProtocol:  "AES",
-			PrivPassword:  "plaintext-priv-password",
-			SecurityLevel: "authPriv",
-		},
-	}
-
-	// Should not panic, should leave values unchanged
-	decryptSNMPCredentials(creds, testKey)
-
-	if creds.V3.AuthPassword != "plaintext-auth-password" {
-		t.Errorf("AuthPassword changed unexpectedly: got %q", creds.V3.AuthPassword)
-	}
-	if creds.V3.PrivPassword != "plaintext-priv-password" {
-		t.Errorf("PrivPassword changed unexpectedly: got %q", creds.V3.PrivPassword)
+	if newLookup.ID != device.ID {
+		t.Fatalf("expected device %s, got %s", device.ID, newLookup.ID)
 	}
 }

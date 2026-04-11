@@ -5,18 +5,18 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 // PositionRepo implements domain.PositionRepository using SQLite.
 type PositionRepo struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewPositionRepo creates a new SQLite-backed position repository.
 func NewPositionRepo(db *sql.DB) *PositionRepo {
-	return &PositionRepo{db: db}
+	return &PositionRepo{db: wrapDB(db)}
 }
 
 // GetAll retrieves all persisted device positions.

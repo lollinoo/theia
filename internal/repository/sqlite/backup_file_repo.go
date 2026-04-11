@@ -11,12 +11,12 @@ import (
 
 // BackupFileRepo implements domain.BackupFileRepository using SQLite.
 type BackupFileRepo struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewBackupFileRepo creates a new BackupFileRepo.
 func NewBackupFileRepo(db *sql.DB) *BackupFileRepo {
-	return &BackupFileRepo{db: db}
+	return &BackupFileRepo{db: wrapDB(db)}
 }
 
 // Create inserts a new backup file record.

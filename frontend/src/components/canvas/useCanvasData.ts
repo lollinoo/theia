@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
 
-import { fetchDevices, fetchLinks, fetchSettings, createLink } from '../../api/client';
+import { fetchDevices, fetchDeviceInterfaces, fetchLinks, fetchSettings, createLink } from '../../api/client';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
 import { usePositions } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
@@ -126,6 +126,38 @@ export function useCanvasData({
         ]);
 
         const devicesByID = new Map(fetchedDevices.map((device) => [device.id, device]));
+
+        // Phase 36 removed interfaces from the devices list API response.
+        // Edge building still needs interface speed and oper_status for
+        // bandwidth labels and link coloring, so fetch interfaces for all
+        // devices that participate in links (parallel, best-effort).
+        const linkDeviceIDs = new Set<string>();
+        for (const link of fetchedLinks) {
+          linkDeviceIDs.add(link.source_device_id);
+          linkDeviceIDs.add(link.target_device_id);
+        }
+        const interfaceResults = await Promise.allSettled(
+          [...linkDeviceIDs].map(async (deviceId) => {
+            const ifaces = await fetchDeviceInterfaces(deviceId);
+            return { deviceId, ifaces };
+          }),
+        );
+        for (const result of interfaceResults) {
+          if (result.status !== 'fulfilled') continue;
+          const { deviceId, ifaces } = result.value;
+          const device = devicesByID.get(deviceId);
+          if (!device) continue;
+          device.interfaces = ifaces.map((info) => ({
+            id: '',
+            if_index: 0,
+            if_name: info.if_name,
+            if_descr: info.if_descr,
+            speed: info.speed,
+            admin_status: info.admin_status,
+            oper_status: info.oper_status,
+          }));
+        }
+
         const { width, height } = viewportSize();
 
         const computedPositions = computeForceLayout(
@@ -295,6 +327,15 @@ export function useCanvasData({
     return () => window.removeEventListener('backend-reconnected', handleReconnect);
   }, [loadTopology]);
 
+  // Re-fetch topology when backend signals new LLDP links were discovered (D-03)
+  useEffect(() => {
+    const handleTopologyChanged = () => {
+      void loadTopology(true);
+    };
+    window.addEventListener('topology-changed', handleTopologyChanged);
+    return () => window.removeEventListener('topology-changed', handleTopologyChanged);
+  }, [loadTopology]);
+
   // Re-fetch settings (Grafana URLs) on demand; called on mount and after
   // any settings panel or device config panel saves Grafana URL changes.
   const refreshSettings = useCallback(() => {
@@ -389,11 +430,13 @@ export function useCanvasData({
       currentNodes.map((node) => {
         const newStatus = effectiveStatuses[node.id];
         const newHostname = snapshot.device_hostnames[node.id];
-        const updatedDevice = newStatus || newHostname
+        const newModel = snapshot.device_models?.[node.id];
+        const updatedDevice = newStatus || newHostname || newModel
           ? {
               ...node.data.device,
               ...(newStatus ? { status: newStatus as Device['status'] } : {}),
               ...(newHostname ? { sys_name: newHostname } : {}),
+              ...(newModel ? { hardware_model: newModel } : {}),
             }
           : node.data.device;
 
@@ -414,17 +457,19 @@ export function useCanvasData({
       }),
     );
 
-    // Sync devices state with hostnames/statuses so panels (e.g. LinkCreatePanel) see them
-    if (Object.keys(snapshot.device_hostnames).length > 0 || Object.keys(effectiveStatuses).length > 0) {
+    // Sync devices state with hostnames/statuses/models so panels (e.g. LinkCreatePanel) see them
+    if (Object.keys(snapshot.device_hostnames).length > 0 || Object.keys(effectiveStatuses).length > 0 || Object.keys(snapshot.device_models ?? {}).length > 0) {
       setDevices((prev) =>
         prev.map((d) => {
           const newHostname = snapshot.device_hostnames[d.id];
           const newStatus = effectiveStatuses[d.id];
-          if (!newHostname && !newStatus) return d;
+          const newModel = snapshot.device_models?.[d.id];
+          if (!newHostname && !newStatus && !newModel) return d;
           return {
             ...d,
             ...(newHostname ? { sys_name: newHostname } : {}),
             ...(newStatus ? { status: newStatus as Device['status'] } : {}),
+            ...(newModel ? { hardware_model: newModel } : {}),
           };
         }),
       );

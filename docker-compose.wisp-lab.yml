@@ -1,0 +1,774 @@
+name: theia-wisp-lab
+
+services:
+  wisp-core-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-core-01
+    hostname: wisp-core-01
+    environment:
+      - ROUTER_NAME=wisp-core-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.21:161:161/udp"
+    networks:
+      wisp-core12:
+        ipv4_address: 10.100.0.10
+      wisp-core1-north:
+        ipv4_address: 10.100.1.10
+      wisp-core1-south:
+        ipv4_address: 10.100.2.10
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-core-02:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-core-02
+    hostname: wisp-core-02
+    environment:
+      - ROUTER_NAME=wisp-core-02
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.22:161:161/udp"
+    networks:
+      wisp-core12:
+        ipv4_address: 10.100.0.11
+      wisp-core2-north:
+        ipv4_address: 10.100.3.10
+      wisp-core2-ix:
+        ipv4_address: 10.100.4.10
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-pop-north-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-pop-north-01
+    hostname: wisp-pop-north-01
+    environment:
+      - ROUTER_NAME=wisp-pop-north-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.23:161:161/udp"
+    networks:
+      wisp-core1-north:
+        ipv4_address: 10.100.1.11
+      wisp-core2-north:
+        ipv4_address: 10.100.3.11
+      wisp-north-a:
+        ipv4_address: 10.110.0.10
+      wisp-north-b:
+        ipv4_address: 10.110.1.10
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-pop-south-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-pop-south-01
+    hostname: wisp-pop-south-01
+    environment:
+      - ROUTER_NAME=wisp-pop-south-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.24:161:161/udp"
+    networks:
+      wisp-core1-south:
+        ipv4_address: 10.100.2.11
+      wisp-south-a:
+        ipv4_address: 10.120.0.10
+      wisp-south-b:
+        ipv4_address: 10.120.1.10
+      wisp-south-dc:
+        ipv4_address: 10.100.5.10
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-ix-edge-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-ix-edge-01
+    hostname: wisp-ix-edge-01
+    environment:
+      - ROUTER_NAME=wisp-ix-edge-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.25:161:161/udp"
+    networks:
+      wisp-core2-ix:
+        ipv4_address: 10.100.4.11
+      wisp-ix-dc:
+        ipv4_address: 10.130.0.10
+      wisp-ix-upstream:
+        ipv4_address: 203.0.113.10
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-transit-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-transit-01
+    hostname: wisp-transit-01
+    environment:
+      - ROUTER_NAME=wisp-transit-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    networks:
+      wisp-ix-upstream:
+        ipv4_address: 203.0.113.11
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-tower-north-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-tower-north-01
+    hostname: wisp-tower-north-01
+    environment:
+      - ROUTER_NAME=wisp-tower-north-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.26:161:161/udp"
+    networks:
+      wisp-north-a:
+        ipv4_address: 10.110.0.11
+      wisp-north-ring:
+        ipv4_address: 10.110.2.10
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-tower-north-02:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-tower-north-02
+    hostname: wisp-tower-north-02
+    environment:
+      - ROUTER_NAME=wisp-tower-north-02
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.27:161:161/udp"
+    networks:
+      wisp-north-b:
+        ipv4_address: 10.110.1.11
+      wisp-north-ring:
+        ipv4_address: 10.110.2.11
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-tower-south-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-tower-south-01
+    hostname: wisp-tower-south-01
+    environment:
+      - ROUTER_NAME=wisp-tower-south-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.28:161:161/udp"
+    networks:
+      wisp-south-a:
+        ipv4_address: 10.120.0.11
+      wisp-south-ring:
+        ipv4_address: 10.120.2.10
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-tower-south-02:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-tower-south-02
+    hostname: wisp-tower-south-02
+    environment:
+      - ROUTER_NAME=wisp-tower-south-02
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.29:161:161/udp"
+    networks:
+      wisp-south-b:
+        ipv4_address: 10.120.1.11
+      wisp-south-ring:
+        ipv4_address: 10.120.2.11
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-dc-agg-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-dc-agg-01
+    hostname: wisp-dc-agg-01
+    environment:
+      - ROUTER_NAME=wisp-dc-agg-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    ports:
+      - "127.0.10.30:161:161/udp"
+    networks:
+      wisp-ix-dc:
+        ipv4_address: 10.130.0.11
+      wisp-south-dc:
+        ipv4_address: 10.100.5.11
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-ap-north-a-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-ap-north-a-01
+    hostname: wisp-ap-north-a-01
+    environment:
+      - ROUTER_NAME=wisp-ap-north-a-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.31:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.31
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-ap-north-b-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-ap-north-b-01
+    hostname: wisp-ap-north-b-01
+    environment:
+      - ROUTER_NAME=wisp-ap-north-b-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.32:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.32
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-ap-south-a-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-ap-south-a-01
+    hostname: wisp-ap-south-a-01
+    environment:
+      - ROUTER_NAME=wisp-ap-south-a-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.33:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.33
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-ap-south-b-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-ap-south-b-01
+    hostname: wisp-ap-south-b-01
+    environment:
+      - ROUTER_NAME=wisp-ap-south-b-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.34:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.34
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-cpe-north-a-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-cpe-north-a-01
+    hostname: wisp-cpe-north-a-01
+    environment:
+      - ROUTER_NAME=wisp-cpe-north-a-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.35:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.35
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-cpe-north-a-02:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-cpe-north-a-02
+    hostname: wisp-cpe-north-a-02
+    environment:
+      - ROUTER_NAME=wisp-cpe-north-a-02
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.36:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.36
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-cpe-north-b-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-cpe-north-b-01
+    hostname: wisp-cpe-north-b-01
+    environment:
+      - ROUTER_NAME=wisp-cpe-north-b-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.37:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.37
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-cpe-north-b-02:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-cpe-north-b-02
+    hostname: wisp-cpe-north-b-02
+    environment:
+      - ROUTER_NAME=wisp-cpe-north-b-02
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.38:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.38
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-cpe-south-a-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-cpe-south-a-01
+    hostname: wisp-cpe-south-a-01
+    environment:
+      - ROUTER_NAME=wisp-cpe-south-a-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.39:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.39
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-cpe-south-a-02:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-cpe-south-a-02
+    hostname: wisp-cpe-south-a-02
+    environment:
+      - ROUTER_NAME=wisp-cpe-south-a-02
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.40:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.40
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-cpe-south-b-01:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-cpe-south-b-01
+    hostname: wisp-cpe-south-b-01
+    environment:
+      - ROUTER_NAME=wisp-cpe-south-b-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.41:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.41
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-cpe-south-b-02:
+    build:
+      context: .
+      dockerfile: docker/wisp-lab/Dockerfile
+    container_name: theia-wisp-cpe-south-b-02
+    hostname: wisp-cpe-south-b-02
+    environment:
+      - ROUTER_NAME=wisp-cpe-south-b-02
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    ports:
+      - "127.0.10.42:161:161/udp"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.42
+    healthcheck:
+      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.5.0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  wisp-snmp-exporter:
+    image: prom/snmp-exporter:latest
+    container_name: theia-wisp-snmp-exporter
+    network_mode: host
+    command:
+      - --config.file=/etc/snmp_exporter/snmp.yml
+      - --web.listen-address=:9117
+    volumes:
+      - "./docker/prometheus/snmp.yml:/etc/snmp_exporter/snmp.yml:ro"
+    depends_on:
+      wisp-core-01:
+        condition: service_healthy
+      wisp-core-02:
+        condition: service_healthy
+      wisp-pop-north-01:
+        condition: service_healthy
+      wisp-pop-south-01:
+        condition: service_healthy
+      wisp-ix-edge-01:
+        condition: service_healthy
+      wisp-tower-north-01:
+        condition: service_healthy
+      wisp-tower-north-02:
+        condition: service_healthy
+      wisp-tower-south-01:
+        condition: service_healthy
+      wisp-tower-south-02:
+        condition: service_healthy
+      wisp-dc-agg-01:
+        condition: service_healthy
+      wisp-ap-north-a-01:
+        condition: service_healthy
+      wisp-ap-north-b-01:
+        condition: service_healthy
+      wisp-ap-south-a-01:
+        condition: service_healthy
+      wisp-ap-south-b-01:
+        condition: service_healthy
+      wisp-cpe-north-a-01:
+        condition: service_healthy
+      wisp-cpe-north-a-02:
+        condition: service_healthy
+      wisp-cpe-north-b-01:
+        condition: service_healthy
+      wisp-cpe-north-b-02:
+        condition: service_healthy
+      wisp-cpe-south-a-01:
+        condition: service_healthy
+      wisp-cpe-south-a-02:
+        condition: service_healthy
+      wisp-cpe-south-b-01:
+        condition: service_healthy
+      wisp-cpe-south-b-02:
+        condition: service_healthy
+
+  wisp-prometheus:
+    image: prom/prometheus:latest
+    container_name: theia-wisp-prometheus
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.listen-address=:9091
+    volumes:
+      - "./docker/prometheus/prometheus.wisp.yml:/etc/prometheus/prometheus.yml:ro"
+    depends_on:
+      - wisp-snmp-exporter
+
+networks:
+  wisp-core12:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.0.0/24
+  wisp-core1-north:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.1.0/24
+  wisp-core1-south:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.2.0/24
+  wisp-core2-north:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.3.0/24
+  wisp-core2-ix:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.4.0/24
+  wisp-south-dc:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.5.0/24
+  wisp-north-a:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.110.0.0/24
+  wisp-north-b:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.110.1.0/24
+  wisp-north-ring:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.110.2.0/24
+  wisp-south-a:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.120.0.0/24
+  wisp-south-b:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.120.1.0/24
+  wisp-south-ring:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.120.2.0/24
+  wisp-ix-dc:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.130.0.0/24
+  wisp-ix-upstream:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 203.0.113.0/24
+  wisp-access-mgmt:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24

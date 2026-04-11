@@ -125,15 +125,17 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   }
 
   useEffect(() => {
-    fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
-    fetchCredentialProfiles().then(setCredentialProfiles).catch(() => {/* non-fatal */});
+    if (!isVirtual) {
+      fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
+      fetchCredentialProfiles().then(setCredentialProfiles).catch(() => {/* non-fatal */});
+      void loadAssignments();
+    }
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
     checkPrometheusHealth().then((result) => {
       setPrometheusAvailable(result.available);
     }).catch(() => {
       setPrometheusAvailable(false);
     });
-    void loadAssignments();
   }, []);
 
   useEffect(() => {

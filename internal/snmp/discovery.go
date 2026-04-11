@@ -34,6 +34,19 @@ const (
 	OidLLDPRemPortId    = ".1.0.8802.1.1.2.1.4.1.1.7"
 	OidLLDPRemSysName   = ".1.0.8802.1.1.2.1.4.1.1.9"
 
+	// OidLLDPLocPortIfIndex maps the LLDP local port number (lldpLocPortNum) to
+	// the corresponding IF-MIB ifIndex. On most vendors (including MikroTik)
+	// the LLDP port numbering scheme is independent from the IF-MIB ifIndex
+	// numbering, so a direct lookup of lldpPortNum in ifIndexToName would fail.
+	// Walking this OID builds the bridge between the two numbering schemes.
+	OidLLDPLocPortIfIndex = ".1.0.8802.1.1.2.1.3.7.1.3"
+
+	// OidLLDPLocPortId is the local port identifier string from lldpLocPortTable.
+	// When lldpLocPortIdSubtype is interfaceName (7) or interfaceAlias (5), this
+	// OID directly contains the interface name, making it a reliable last-resort
+	// fallback for LocalIfName when the two-step ifIndex lookup fails.
+	OidLLDPLocPortId = ".1.0.8802.1.1.2.1.3.7.1.4"
+
 	OidCDPDeviceID = ".1.3.6.1.4.1.9.9.23.1.2.1.1.6"
 	OidCDPPortID   = ".1.3.6.1.4.1.9.9.23.1.2.1.1.7"
 
@@ -249,27 +262,90 @@ func discoverInterfaces(client ClientInterface) []domain.Interface {
 }
 
 // discoverNeighbors fetches LLDP and CDP remote parameters.
+// LLDP is treated as canonical when both protocols describe the same physical
+// connection. CDP is only used to fill gaps when LLDP data is absent or
+// incomplete for a given local/remote interface pair.
 func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string) []NeighborInfo {
 	var neighbors []NeighborInfo
 	lldpMap := make(map[string]*NeighborInfo)
+
+	// Build lldpPortNum -> IF-MIB ifIndex mapping from lldpLocPortIfIndex.
+	// On MikroTik (and most vendors), LLDP local port numbers differ from
+	// IF-MIB ifIndex values. This map bridges the two numbering schemes.
+	lldpPortNumToIfIndex := make(map[int]int)
+	lldpLocPortIfIndexPDUs, _ := client.BulkWalk(OidLLDPLocPortIfIndex)
+	for _, pdu := range lldpLocPortIfIndexPDUs {
+		// OID format: .1.0.8802.1.1.2.1.3.7.1.3.<lldpLocPortNum>
+		suffix := strings.TrimPrefix(pdu.Name, OidLLDPLocPortIfIndex+".")
+		if suffix == pdu.Name {
+			continue
+		}
+		portNum, err := strconv.Atoi(suffix)
+		if err != nil {
+			continue
+		}
+		ifIndex := int(int64FromPDU(pdu))
+		if ifIndex > 0 {
+			lldpPortNumToIfIndex[portNum] = ifIndex
+		}
+	}
+
+	// Build lldpPortNum -> port ID string from lldpLocPortId.
+	// When lldpLocPortIdSubtype is interfaceName (7) or interfaceAlias (5),
+	// this directly contains the interface name — used as a last-resort fallback
+	// when the two-step ifIndex lookup above yields an empty result.
+	lldpPortNumToPortId := make(map[int]string)
+	lldpLocPortIdPDUs, _ := client.BulkWalk(OidLLDPLocPortId)
+	for _, pdu := range lldpLocPortIdPDUs {
+		// OID format: .1.0.8802.1.1.2.1.3.7.1.4.<lldpLocPortNum>
+		suffix := strings.TrimPrefix(pdu.Name, OidLLDPLocPortId+".")
+		if suffix == pdu.Name {
+			continue
+		}
+		portNum, err := strconv.Atoi(suffix)
+		if err != nil {
+			continue
+		}
+		if s := stringFromPDU(pdu); s != "" {
+			lldpPortNumToPortId[portNum] = s
+		}
+	}
 
 	// Fetch LLDP Neighbors
 	lldpRemChassisIdPDUs, _ := client.BulkWalk(OidLLDPRemChassisId)
 	for _, pdu := range lldpRemChassisIdPDUs {
 		indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemChassisId)
-		if indexStr == "" {
+		if indexStr == pdu.Name {
 			continue
 		}
 		if _, ok := lldpMap[indexStr]; !ok {
 			lldpMap[indexStr] = &NeighborInfo{Protocol: domain.DiscoveryProtocolLLDP}
 		}
 		lldpMap[indexStr].RemoteChassisID = stringFromPDU(pdu)
-		// Try to extract LocalIfIndex from the first part of the LLDP index (timeMark.localPortNum.index)
+		// Extract localPortNum from the LLDP index (format: timeMark.localPortNum.remIndex)
+		// then do a two-step resolution: lldpPortNum -> ifIndex -> ifName.
 		parts := strings.Split(indexStr, ".")
 		if len(parts) >= 2 {
-			if localIfIndex, err := strconv.Atoi(parts[1]); err == nil {
-				lldpMap[indexStr].LocalIfIndex = localIfIndex
-				lldpMap[indexStr].LocalIfName = ifIndexToName[localIfIndex]
+			if localPortNum, err := strconv.Atoi(parts[1]); err == nil {
+				lldpMap[indexStr].LocalIfIndex = localPortNum
+				// Two-step resolution: lldpPortNum -> ifIndex -> ifName
+				if ifIdx, ok := lldpPortNumToIfIndex[localPortNum]; ok {
+					lldpMap[indexStr].LocalIfIndex = ifIdx
+					lldpMap[indexStr].LocalIfName = ifIndexToName[ifIdx]
+				} else {
+					// Fallback: treat lldpPortNum as ifIndex directly
+					// (works on devices where the numbering happens to match)
+					lldpMap[indexStr].LocalIfName = ifIndexToName[localPortNum]
+				}
+				// Last-resort fallback: use lldpLocPortId string directly.
+				// On devices where lldpLocPortIdSubtype is interfaceName (7) or
+				// interfaceAlias (5), this OID holds the interface name verbatim
+				// and is mandatory per the LLDP MIB — so it is always present.
+				if lldpMap[indexStr].LocalIfName == "" {
+					if portIdStr, ok := lldpPortNumToPortId[localPortNum]; ok {
+						lldpMap[indexStr].LocalIfName = portIdStr
+					}
+				}
 			}
 		}
 	}
@@ -277,6 +353,9 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string) []N
 	lldpRemPortIdPDUs, _ := client.BulkWalk(OidLLDPRemPortId)
 	for _, pdu := range lldpRemPortIdPDUs {
 		indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemPortId)
+		if indexStr == pdu.Name {
+			continue
+		}
 		if n, ok := lldpMap[indexStr]; ok {
 			n.RemotePortID = stringFromPDU(pdu)
 		}
@@ -285,13 +364,12 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string) []N
 	lldpRemSysNamePDUs, _ := client.BulkWalk(OidLLDPRemSysName)
 	for _, pdu := range lldpRemSysNamePDUs {
 		indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemSysName)
+		if indexStr == pdu.Name {
+			continue
+		}
 		if n, ok := lldpMap[indexStr]; ok {
 			n.RemoteSysName = stringFromPDU(pdu)
 		}
-	}
-
-	for _, n := range lldpMap {
-		neighbors = append(neighbors, *n)
 	}
 
 	// CDP discovery could go here analogously, utilizing OidCDPDeviceID and OidCDPPortID
@@ -300,7 +378,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string) []N
 	cdpDeviceIDPDUs, _ := client.BulkWalk(OidCDPDeviceID)
 	for _, pdu := range cdpDeviceIDPDUs {
 		indexStr := extractCDPIndex(pdu.Name, OidCDPDeviceID)
-		if indexStr == "" {
+		if indexStr == pdu.Name {
 			continue
 		}
 		if _, ok := cdpMap[indexStr]; !ok {
@@ -326,11 +404,232 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string) []N
 		}
 	}
 
+	lldpByKey := make(map[string]*NeighborInfo, len(lldpMap))
+	lldpByLocalIf := make(map[string][]*NeighborInfo, len(lldpMap))
+	for _, n := range lldpMap {
+		key := neighborMergeKey(*n)
+		lldpByKey[key] = n
+		localKey := strings.ToLower(strings.TrimSpace(n.LocalIfName))
+		lldpByLocalIf[localKey] = append(lldpByLocalIf[localKey], n)
+	}
+
 	for _, n := range cdpMap {
+		key := neighborMergeKey(*n)
+		if existing, ok := lldpByKey[key]; ok {
+			mergeCDPIntoLLDP(existing, *n)
+			continue
+		}
+		if existing := findLLDPGapFillCandidate(lldpByLocalIf, *n); existing != nil {
+			mergeCDPIntoLLDP(existing, *n)
+			continue
+		}
 		neighbors = append(neighbors, *n)
 	}
 
-	return neighbors
+	for _, n := range lldpMap {
+		neighbors = append(neighbors, *n)
+	}
+
+	return dedupePreferredNeighbors(neighbors)
+}
+
+func findLLDPGapFillCandidate(lldpByLocalIf map[string][]*NeighborInfo, cdp NeighborInfo) *NeighborInfo {
+	localKey := strings.ToLower(strings.TrimSpace(cdp.LocalIfName))
+	candidates := lldpByLocalIf[localKey]
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		if candidate.RemotePortID == "" || candidate.RemoteSysName == "" {
+			return candidate
+		}
+	}
+	return nil
+}
+
+func neighborMergeKey(neighbor NeighborInfo) string {
+	return strings.ToLower(strings.TrimSpace(fmt.Sprintf("%s|%s", neighbor.LocalIfName, neighbor.RemotePortID)))
+}
+
+func mergeCDPIntoLLDP(existing *NeighborInfo, cdp NeighborInfo) {
+	if existing == nil {
+		return
+	}
+	if existing.RemoteSysName == "" {
+		existing.RemoteSysName = cdp.RemoteSysName
+	}
+	if existing.RemotePortID == "" {
+		existing.RemotePortID = cdp.RemotePortID
+	}
+	if existing.LocalIfName == "" {
+		existing.LocalIfName = cdp.LocalIfName
+	}
+	if existing.LocalIfIndex == 0 {
+		existing.LocalIfIndex = cdp.LocalIfIndex
+	}
+	if existing.RemoteChassisID == "" {
+		existing.RemoteChassisID = cdp.RemoteChassisID
+	}
+}
+
+func dedupePreferredNeighbors(neighbors []NeighborInfo) []NeighborInfo {
+	result := make([]NeighborInfo, 0, len(neighbors))
+	for _, candidate := range neighbors {
+		if shouldDropPreferredNeighbor(candidate, neighbors) {
+			continue
+		}
+		result = append(result, candidate)
+	}
+	return result
+}
+
+func shouldDropPreferredNeighbor(candidate NeighborInfo, neighbors []NeighborInfo) bool {
+	candidateRemote := normalizeNeighborIdentity(candidate.RemoteSysName)
+	if candidateRemote == "" {
+		candidateRemote = normalizeNeighborIdentity(candidate.RemoteChassisID)
+	}
+	if candidateRemote == "" {
+		return false
+	}
+
+	candidateIsCompletePhysical := isCompletePhysicalNeighbor(candidate)
+	for _, other := range neighbors {
+		otherRemote := normalizeNeighborIdentity(other.RemoteSysName)
+		if otherRemote == "" {
+			otherRemote = normalizeNeighborIdentity(other.RemoteChassisID)
+		}
+		if otherRemote != candidateRemote {
+			continue
+		}
+		if !isCompletePhysicalNeighbor(other) {
+			continue
+		}
+		if compareNeighborPreference(other, candidate) <= 0 {
+			continue
+		}
+		if candidateIsCompletePhysical {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isCompletePhysicalNeighbor(neighbor NeighborInfo) bool {
+	return physicalInterfaceAnchor(neighbor.LocalIfName) != "" && physicalInterfaceAnchor(neighbor.RemotePortID) != ""
+}
+
+func compareNeighborPreference(candidate, existing NeighborInfo) int {
+	candidateScore := neighborPreferenceScore(candidate)
+	existingScore := neighborPreferenceScore(existing)
+	if candidateScore > existingScore {
+		return 1
+	}
+	if candidateScore < existingScore {
+		return -1
+	}
+	return 0
+}
+
+func neighborPreferenceScore(neighbor NeighborInfo) int {
+	score := 0
+	if strings.EqualFold(string(neighbor.Protocol), string(domain.DiscoveryProtocolLLDP)) {
+		score += 100
+	}
+	if isLikelyPhysicalInterface(neighbor.LocalIfName) {
+		score += 50
+	}
+	if isLikelyPhysicalInterface(neighbor.RemotePortID) {
+		score += 40
+	}
+	if neighbor.LocalIfName != "" {
+		score += 20
+	}
+	if neighbor.RemotePortID != "" {
+		score += 20
+	}
+	if neighbor.RemoteSysName != "" {
+		score += 10
+	}
+	if neighbor.RemoteChassisID != "" {
+		score += 5
+	}
+	return score
+}
+
+func physicalInterfaceAnchor(name string) string {
+	normalized := normalizeNeighborIdentity(name)
+	if normalized == "" {
+		return ""
+	}
+	anchor := extractPhysicalInterfaceAnchor(normalized)
+	if anchor == "" {
+		return ""
+	}
+	return anchor
+}
+
+func isLikelyPhysicalInterface(name string) bool {
+	normalized := normalizeNeighborIdentity(name)
+	if normalized == "" {
+		return false
+	}
+	return extractPhysicalInterfaceAnchor(normalized) != ""
+}
+
+func extractPhysicalInterfaceAnchor(normalized string) string {
+	virtualHints := []string{
+		"vlan", "vrf", "vpn", "bridge", "br-", "bond", "loopback", "lo",
+		"gre", "eoip", "wg", "wireguard", "pppoe", "ppp", "sstp", "ovpn",
+		"l2tp", "vxlan", "veth", "tap", "tun",
+	}
+	for _, hint := range virtualHints {
+		if strings.Contains(normalized, hint) {
+			return ""
+		}
+	}
+
+	physicalPatterns := []string{
+		"ether", "eth", "sfp-sfpplus", "sfp", "qsfp", "ens", "eno", "enp",
+		"gigabitethernet", "tengigabitethernet", "fastethernet", "ge-", "xe-", "et-",
+	}
+	for _, pattern := range physicalPatterns {
+		if idx := strings.Index(normalized, pattern); idx >= 0 {
+			anchor := normalized[idx:]
+			for i, r := range anchor {
+				if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '/' ) {
+					anchor = anchor[:i]
+					break
+				}
+			}
+			anchor = strings.Trim(anchor, "- /")
+			if hasDigit(anchor) {
+				return anchor
+			}
+		}
+	}
+
+	shortPrefixes := []string{"gi", "te", "fo", "port"}
+	for _, prefix := range shortPrefixes {
+		if strings.HasPrefix(normalized, prefix) && hasDigit(normalized) {
+			return normalized
+		}
+	}
+
+	return ""
+}
+
+func hasDigit(value string) bool {
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeNeighborIdentity(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 // --- Helpers ---

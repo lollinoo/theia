@@ -67,9 +67,6 @@ function renderTable(devices = [mockDevice()]) {
       onBackup={noop}
       onBackupHistory={noop}
       onViewConfig={noop}
-      onWinBox={noop}
-      winboxDisabled={() => false}
-      winboxTitle={() => 'Open in WinBox'}
     />
   );
 }
@@ -133,9 +130,5 @@ describe('DeviceTable', () => {
     expect(screen.getByText('OS Version')).toBeInTheDocument();
   });
 
-  it('passes onWinBox to DeviceRow', () => {
-    renderTable();
 
-    expect(screen.getByTestId('device-row-dev-1')).toBeInTheDocument();
-  });
 });

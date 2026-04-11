@@ -89,6 +89,51 @@ make snmpwalk-switch   # snmpwalk 172.28.10.11
 make snmpwalk-ap       # snmpwalk 172.28.10.12
 ```
 
+### 4.1 Run dev on PostgreSQL
+
+SQLite remains the default, but the backend can now run on PostgreSQL for larger deployments.
+
+```bash
+make dev-postgres
+```
+
+That starts a local PostgreSQL container on `127.0.0.1:5432` and boots the normal dev stack with:
+
+```bash
+THEIA_DB_DRIVER=postgres
+THEIA_DB_DSN=postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable
+```
+
+Instance backup / restore remains SQLite-only for now and returns `501 Not Implemented` when the backend is running on PostgreSQL.
+
+### 4.2 Migrate an existing SQLite dataset to PostgreSQL
+
+For an existing installation, stop the backend first so the SQLite source stays stable during the copy, then import the database into PostgreSQL:
+
+```bash
+make postgres-up
+export THEIA_DB_DSN='postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable'
+make migrate-postgres
+```
+
+The import command runs the PostgreSQL schema migrations first, then copies all application tables from the SQLite file configured in `config.yaml` (or from `MIGRATE_SOURCE` if you override it).
+
+You can also run the migrator directly:
+
+```bash
+go run ./cmd/theia-db-migrate \
+  -config config.yaml \
+  -source-sqlite ./data/theia.db \
+  -target-dsn 'postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable' \
+  -truncate-target
+```
+
+Notes:
+
+- `-truncate-target` makes the import deterministic by clearing the target tables before copying.
+- Device backup archives and `known_hosts` remain file-based in `data_dir`; move that directory separately if you are migrating the whole deployment to another host.
+- Instance backup metadata rows are copied, but instance backup / restore APIs stay disabled when the app itself runs on PostgreSQL.
+
 ### 5. How hot-reload works
 
 **Backend** — Air watches `internal/` and `cmd/`. On any `.go` file change, it recompiles and restarts the server automatically. The `./tmp/` directory holds the compiled binary; do not commit it.
@@ -115,6 +160,88 @@ curl -X POST http://localhost:8080/api/v1/devices \
 
 ---
 
+## WISP Lab
+
+If you want a denser topology than the default 3-device dev stack, this repo also includes a dedicated 10-router MikroTik-flavoured WISP lab with active OSPF and SNMP/LLDP discovery data for Theia.
+
+### What it gives you
+
+- 10 simulated MikroTik routers
+- Real OSPF adjacencies via FRRouting inside the lab containers
+- Static SNMP + LLDP data so Theia can discover interfaces and links
+- A separate Prometheus instance on `http://localhost:9091`
+
+### Topology shape
+
+- `wisp-core-01`, `wisp-core-02`: backbone core
+- `wisp-pop-north-01`, `wisp-pop-south-01`: POP aggregation / ABR
+- `wisp-ix-edge-01`: internet edge that originates default route
+- `wisp-dc-agg-01`: datacenter aggregation
+- `wisp-tower-{north,south}-{01,02}`: access tower routers
+
+The lab uses OSPF area `0.0.0.0` for the backbone, `0.0.0.10` for the north tower domain, and `0.0.0.20` for the south tower domain.
+
+### Start the lab
+
+```bash
+make wisp-lab
+```
+
+This starts only the lab containers plus a dedicated Prometheus at `http://localhost:9091`. It does not replace the normal Theia dev stack.
+The lab now includes an internal transit router used only for eBGP with `wisp-ix-edge-01`, while the 10 MikroTik WISP routers remain the seeded topology shown in Theia.
+
+If Theia is not already running, start it separately:
+
+```bash
+make dev
+```
+
+### Seed the 10 routers into Theia
+
+```bash
+make wisp-seed
+```
+
+The seed script registers the routers at `127.0.10.21` through `127.0.10.30`. After probing completes, Theia should populate the WISP topology automatically from LLDP.
+
+### Seed the radio access layer
+
+```bash
+make wisp-radio-seed
+```
+
+This adds 4 sector APs and 8 subscriber CPE nodes on `127.0.10.31` through `127.0.10.42`. The AP sector interfaces simulate PtMP by advertising multiple LLDP neighbors on the same wireless interface.
+
+For a fresh environment you can seed everything in one pass:
+
+```bash
+make wisp-seed-all
+```
+
+### Verify OSPF
+
+```bash
+make wisp-ospf
+```
+
+This executes `show ip ospf neighbor` on each simulated router and prints the adjacency table.
+
+### Verify BGP and default-route propagation
+
+```bash
+make wisp-bgp
+```
+
+This checks the eBGP session between `wisp-ix-edge-01` and the internal transit router, then shows the default route on the edge and on representative OSPF routers to confirm propagation.
+
+### Stop the lab
+
+```bash
+make wisp-lab-down
+```
+
+---
+
 ## Production Environment
 
 The production stack uses compiled images — no hot-reload, no source mounts, no SNMP simulators. The frontend is built into a static bundle served by nginx, which also proxies `/api` to the backend.
@@ -125,6 +252,7 @@ The production stack uses compiled images — no hot-reload, no source mounts, n
 |---------|-----|-------------|
 | Frontend | http://localhost:80 | nginx serving React SPA + API proxy |
 | Backend | http://localhost:8080 | Compiled Go binary |
+| PostgreSQL | `127.0.0.1:5432` | Optional bundled database (`--profile postgres`) |
 | Prometheus | http://localhost:9090 | Metrics (optional, `--profile metrics`) |
 | SNMP exporter | http://localhost:9116 | Scrape adapter (optional, `--profile metrics`) |
 
@@ -141,10 +269,28 @@ cp .env.prod.example .env.prod
 make prod
 ```
 
+To run production on the bundled PostgreSQL service instead of SQLite:
+
+```bash
+# in .env.prod set:
+# THEIA_DB_DRIVER=postgres
+# POSTGRES_PASSWORD=change-me
+# THEIA_DB_DSN=postgres://theia:change-me@postgres:5432/theia?sslmode=disable
+make prod-postgres
+```
+
+If you use an external PostgreSQL service instead, set `THEIA_DB_DRIVER=postgres` and `THEIA_DB_DSN=...` in `.env.prod`, then keep using `make prod` or `make prod-metrics`.
+
 Or with the metrics stack (Prometheus + SNMP exporter):
 
 ```bash
 make prod-metrics
+```
+
+Or PostgreSQL plus metrics:
+
+```bash
+make prod-postgres-metrics
 ```
 
 Open http://localhost in the browser.
@@ -188,10 +334,57 @@ docker compose -f docker-compose.prod.yml --profile metrics restart prometheus
 ```bash
 make prod           # Start backend + frontend
 make prod-metrics   # Start with Prometheus + SNMP exporter
+make prod-postgres  # Start backend + frontend on PostgreSQL
+make prod-postgres-metrics  # Start PostgreSQL + metrics stack
 make prod-down      # Stop all production containers
 make prod-build     # Build images without starting
 make prod-logs      # Follow backend logs
 make prod-clean     # Stop + delete volumes (resets database)
+```
+
+---
+
+## Staging Environment
+
+The staging stack pulls pre-built images from GHCR and keeps them updated with Watchtower. It uses different default ports so it can run next to production.
+
+### 1. Configure environment
+
+```bash
+cp .env.staging.example .env.staging
+```
+
+### 2. Start the stack
+
+```bash
+make staging
+```
+
+To run staging on the bundled PostgreSQL service:
+
+```bash
+# in .env.staging set:
+# THEIA_DB_DRIVER=postgres
+# POSTGRES_PASSWORD=change-me
+# THEIA_DB_DSN=postgres://theia:change-me@postgres:5432/theia?sslmode=disable
+make staging-postgres
+```
+
+For an external PostgreSQL service, set `THEIA_DB_DRIVER=postgres` and `THEIA_DB_DSN=...` in `.env.staging`, then use the normal `make staging` target.
+
+Default staging ports:
+
+- Frontend: `http://localhost:3001`
+- Backend: `http://localhost:8081`
+- PostgreSQL: `127.0.0.1:5433` when using the bundled postgres profile
+
+### 3. Staging commands
+
+```bash
+make staging           # Start staging stack on SQLite
+make staging-postgres  # Start staging stack on PostgreSQL
+make staging-down      # Stop all staging containers
+make staging-logs      # Follow staging backend logs
 ```
 
 ---
@@ -204,8 +397,11 @@ Configuration is loaded from `config.yaml` (or `config.example.yaml` as a templa
 
 | config.yaml key | Environment variable | Default | Description |
 |-----------------|---------------------|---------|-------------|
+| `db_driver` | `THEIA_DB_DRIVER` | `sqlite` | Primary database driver: `sqlite` or `postgres` |
 | `listen_addr` | `THEIA_LISTEN_ADDR` | `:8080` | HTTP server bind address |
 | `db_path` | `THEIA_DB_PATH` | `./data/theia.db` | SQLite database file path |
+| `db_dsn` | `THEIA_DB_DSN` | `` | PostgreSQL DSN, required when `db_driver=postgres` |
+| `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
 | `log_level` | `THEIA_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 Runtime settings (poll interval, Prometheus URL, Grafana URL) are stored in the database and configurable via the Settings panel in the UI — no restart needed.

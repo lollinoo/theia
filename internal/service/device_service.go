@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,21 +44,26 @@ type DeviceService struct {
 	settingsRepo domain.SettingsRepository
 	discoverFunc DiscoverFunc
 
-	probeWg sync.WaitGroup
+	probeWg        sync.WaitGroup
+	TopologyNotify chan struct{} // signaled when probeDevice creates new links
 }
 
 // NewDeviceService creates a new DeviceService with the given dependencies.
+// topologyNotify is an optional buffered channel signaled when probeDevice creates
+// new LLDP/CDP links so the MetricsCollector can broadcast a topology_changed event.
 func NewDeviceService(
 	deviceRepo domain.DeviceRepository,
 	linkRepo domain.LinkRepository,
 	settingsRepo domain.SettingsRepository,
 	discoverFunc DiscoverFunc,
+	topologyNotify chan struct{},
 ) *DeviceService {
 	return &DeviceService{
-		deviceRepo:   deviceRepo,
-		linkRepo:     linkRepo,
-		settingsRepo: settingsRepo,
-		discoverFunc: discoverFunc,
+		deviceRepo:     deviceRepo,
+		linkRepo:       linkRepo,
+		settingsRepo:   settingsRepo,
+		discoverFunc:   discoverFunc,
+		TopologyNotify: topologyNotify,
 	}
 }
 
@@ -212,8 +218,12 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		return
 	}
 
-	// Auto-create links from LLDP/CDP neighbors
-	for _, neighbor := range result.Neighbors {
+	// Auto-create links from LLDP/CDP neighbors.
+	// When a device reports multiple neighbors that collapse to the same physical
+	// relationship, prefer the most useful candidate (usually the physical/ether
+	// port) before writing anything to the repository.
+	linksCreated := 0
+	for _, neighbor := range dedupePreferredDiscoveredNeighbors(result.Neighbors) {
 		if neighbor.RemoteSysName == "" {
 			continue
 		}
@@ -234,16 +244,31 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 			TargetIfName:      neighbor.RemotePortID,
 			DiscoveryProtocol: neighbor.Protocol,
 		}
-		if err := s.linkRepo.Upsert(link); err != nil {
+		created, err := s.linkRepo.Upsert(link)
+		if err != nil {
 			log.Printf("Failed to upsert link %s:%s <-> %s:%s: %v",
 				fresh.SysName, neighbor.LocalIfName,
 				neighbor.RemoteSysName, neighbor.RemotePortID, err)
 			continue
 		}
+		if created {
+			linksCreated++
+		}
 		log.Printf("Auto-linked %s:%s <-> %s:%s via %s",
 			fresh.SysName, neighbor.LocalIfName,
 			neighbor.RemoteSysName, neighbor.RemotePortID,
 			string(neighbor.Protocol))
+	}
+
+	// Signal topology change if any new links were created.
+	// Non-blocking send: if the channel is full the next collection cycle will
+	// pick up the topology change, so dropping the signal is safe (T-33-02).
+	if linksCreated > 0 && s.TopologyNotify != nil {
+		select {
+		case s.TopologyNotify <- struct{}{}:
+		default:
+			// Channel full — skip; MetricsCollector will pick up change next cycle
+		}
 	}
 }
 
@@ -440,4 +465,160 @@ func (s *DeviceService) TestSNMP(ctx context.Context, id uuid.UUID) (*SNMPTestRe
 	result.SysName = discoveryResult.SysName
 	result.SysDescr = discoveryResult.SysDescr
 	return result, nil
+}
+
+func dedupePreferredDiscoveredNeighbors(neighbors []snmp.NeighborInfo) []snmp.NeighborInfo {
+	result := make([]snmp.NeighborInfo, 0, len(neighbors))
+	for _, candidate := range neighbors {
+		if shouldDropDiscoveredNeighbor(candidate, neighbors) {
+			continue
+		}
+		result = append(result, candidate)
+	}
+	return result
+}
+
+func shouldDropDiscoveredNeighbor(candidate snmp.NeighborInfo, neighbors []snmp.NeighborInfo) bool {
+	candidateRemote := normalizeDiscoveredNeighborIdentity(candidate.RemoteSysName)
+	if candidateRemote == "" {
+		candidateRemote = normalizeDiscoveredNeighborIdentity(candidate.RemoteChassisID)
+	}
+	if candidateRemote == "" {
+		return false
+	}
+
+	candidateIsCompletePhysical := isCompletePhysicalDiscoveredNeighbor(candidate)
+	for _, other := range neighbors {
+		otherRemote := normalizeDiscoveredNeighborIdentity(other.RemoteSysName)
+		if otherRemote == "" {
+			otherRemote = normalizeDiscoveredNeighborIdentity(other.RemoteChassisID)
+		}
+		if otherRemote != candidateRemote {
+			continue
+		}
+		if !isCompletePhysicalDiscoveredNeighbor(other) {
+			continue
+		}
+		if compareDiscoveredNeighborPreference(other, candidate) <= 0 {
+			continue
+		}
+		if candidateIsCompletePhysical {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isCompletePhysicalDiscoveredNeighbor(neighbor snmp.NeighborInfo) bool {
+	return discoveredPhysicalInterfaceAnchor(neighbor.LocalIfName) != "" && discoveredPhysicalInterfaceAnchor(neighbor.RemotePortID) != ""
+}
+
+func compareDiscoveredNeighborPreference(candidate, existing snmp.NeighborInfo) int {
+	candidateScore := discoveredNeighborPreferenceScore(candidate)
+	existingScore := discoveredNeighborPreferenceScore(existing)
+	if candidateScore > existingScore {
+		return 1
+	}
+	if candidateScore < existingScore {
+		return -1
+	}
+	return 0
+}
+
+func discoveredNeighborPreferenceScore(neighbor snmp.NeighborInfo) int {
+	score := 0
+	if neighbor.Protocol == domain.DiscoveryProtocolLLDP {
+		score += 100
+	}
+	if isLikelyPhysicalDiscoveredInterface(neighbor.LocalIfName) {
+		score += 50
+	}
+	if isLikelyPhysicalDiscoveredInterface(neighbor.RemotePortID) {
+		score += 40
+	}
+	if neighbor.LocalIfName != "" {
+		score += 20
+	}
+	if neighbor.RemotePortID != "" {
+		score += 20
+	}
+	if neighbor.RemoteSysName != "" {
+		score += 10
+	}
+	if neighbor.RemoteChassisID != "" {
+		score += 5
+	}
+	return score
+}
+
+func discoveredPhysicalInterfaceAnchor(name string) string {
+	normalized := normalizeDiscoveredNeighborIdentity(name)
+	if normalized == "" {
+		return ""
+	}
+	return extractDiscoveredPhysicalInterfaceAnchor(normalized)
+}
+
+func isLikelyPhysicalDiscoveredInterface(name string) bool {
+	normalized := normalizeDiscoveredNeighborIdentity(name)
+	if normalized == "" {
+		return false
+	}
+	return extractDiscoveredPhysicalInterfaceAnchor(normalized) != ""
+}
+
+func extractDiscoveredPhysicalInterfaceAnchor(normalized string) string {
+	virtualHints := []string{
+		"vlan", "vrf", "vpn", "bridge", "br-", "bond", "loopback", "lo",
+		"gre", "eoip", "wg", "wireguard", "pppoe", "ppp", "sstp", "ovpn",
+		"l2tp", "vxlan", "veth", "tap", "tun",
+	}
+	for _, hint := range virtualHints {
+		if strings.Contains(normalized, hint) {
+			return ""
+		}
+	}
+
+	physicalPatterns := []string{
+		"ether", "eth", "sfp-sfpplus", "sfp", "qsfp", "ens", "eno", "enp",
+		"gigabitethernet", "tengigabitethernet", "fastethernet", "ge-", "xe-", "et-",
+	}
+	for _, pattern := range physicalPatterns {
+		if idx := strings.Index(normalized, pattern); idx >= 0 {
+			anchor := normalized[idx:]
+			for i, r := range anchor {
+				if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '/') {
+					anchor = anchor[:i]
+					break
+				}
+			}
+			anchor = strings.Trim(anchor, "- /")
+			if discoveredHasDigit(anchor) {
+				return anchor
+			}
+		}
+	}
+
+	shortPrefixes := []string{"gi", "te", "fo", "port"}
+	for _, prefix := range shortPrefixes {
+		if strings.HasPrefix(normalized, prefix) && discoveredHasDigit(normalized) {
+			return normalized
+		}
+	}
+
+	return ""
+}
+
+func discoveredHasDigit(value string) bool {
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeDiscoveredNeighborIdentity(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }

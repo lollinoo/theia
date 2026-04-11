@@ -1,0 +1,1003 @@
+{
+  "routers": {
+    "wisp-core-01": {
+      "id": 1,
+      "sys_name": "wisp-core-01",
+      "model": "CCR2216-1G-12XS-2XQ",
+      "location": "NOC Core Rack 1",
+      "site": "noc",
+      "role": "core",
+      "snmp_host": "127.0.10.21",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.0.1/32",
+        "area": "0.0.0.0"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 10000,
+          "cidr": "10.100.0.10/24",
+          "network": "10.100.0.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-core-02",
+          "peer_if": "ether1"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 10000,
+          "cidr": "10.100.1.10/24",
+          "network": "10.100.1.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-pop-north-01",
+          "peer_if": "ether1"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 10000,
+          "cidr": "10.100.2.10/24",
+          "network": "10.100.2.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-pop-south-01",
+          "peer_if": "ether1"
+        }
+      ]
+    },
+    "wisp-core-02": {
+      "id": 2,
+      "sys_name": "wisp-core-02",
+      "model": "CCR2116-12G-4S+",
+      "location": "NOC Core Rack 2",
+      "site": "noc",
+      "role": "core",
+      "snmp_host": "127.0.10.22",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.0.2/32",
+        "area": "0.0.0.0"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 10000,
+          "cidr": "10.100.0.11/24",
+          "network": "10.100.0.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-core-01",
+          "peer_if": "ether1"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 10000,
+          "cidr": "10.100.3.10/24",
+          "network": "10.100.3.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-pop-north-01",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 10000,
+          "cidr": "10.100.4.10/24",
+          "network": "10.100.4.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-ix-edge-01",
+          "peer_if": "ether1"
+        }
+      ]
+    },
+    "wisp-pop-north-01": {
+      "id": 3,
+      "sys_name": "wisp-pop-north-01",
+      "model": "CCR2004-16G-2S+",
+      "location": "POP North Aggregation",
+      "site": "pop-north",
+      "role": "pop-abr",
+      "snmp_host": "127.0.10.23",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.0.3/32",
+        "area": "0.0.0.0"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 10000,
+          "cidr": "10.100.1.11/24",
+          "network": "10.100.1.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-core-01",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 10000,
+          "cidr": "10.100.3.11/24",
+          "network": "10.100.3.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-core-02",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 1000,
+          "cidr": "10.110.0.10/24",
+          "network": "10.110.0.0/24",
+          "area": "0.0.0.10",
+          "peer": "wisp-tower-north-01",
+          "peer_if": "ether1"
+        },
+        {
+          "ifindex": 4,
+          "name": "ether4",
+          "speed_mbps": 1000,
+          "cidr": "10.110.1.10/24",
+          "network": "10.110.1.0/24",
+          "area": "0.0.0.10",
+          "peer": "wisp-tower-north-02",
+          "peer_if": "ether1"
+        }
+      ]
+    },
+    "wisp-pop-south-01": {
+      "id": 4,
+      "sys_name": "wisp-pop-south-01",
+      "model": "CCR2004-1G-12S+2XS",
+      "location": "POP South Aggregation",
+      "site": "pop-south",
+      "role": "pop-abr",
+      "snmp_host": "127.0.10.24",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.0.4/32",
+        "area": "0.0.0.0"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 10000,
+          "cidr": "10.100.2.11/24",
+          "network": "10.100.2.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-core-01",
+          "peer_if": "ether3"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 1000,
+          "cidr": "10.120.0.10/24",
+          "network": "10.120.0.0/24",
+          "area": "0.0.0.20",
+          "peer": "wisp-tower-south-01",
+          "peer_if": "ether1"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 1000,
+          "cidr": "10.120.1.10/24",
+          "network": "10.120.1.0/24",
+          "area": "0.0.0.20",
+          "peer": "wisp-tower-south-02",
+          "peer_if": "ether1"
+        },
+        {
+          "ifindex": 4,
+          "name": "ether4",
+          "speed_mbps": 10000,
+          "cidr": "10.100.5.10/24",
+          "network": "10.100.5.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-dc-agg-01",
+          "peer_if": "ether2"
+        }
+      ]
+    },
+    "wisp-ix-edge-01": {
+      "id": 5,
+      "sys_name": "wisp-ix-edge-01",
+      "model": "CCR1072-1G-8S+",
+      "location": "Internet Exchange Edge",
+      "site": "ix",
+      "role": "edge",
+      "snmp_host": "127.0.10.25",
+      "originate_default_mode": "conditional",
+      "loopback": {
+        "cidr": "10.255.0.5/32",
+        "area": "0.0.0.0"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 10000,
+          "cidr": "10.100.4.11/24",
+          "network": "10.100.4.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-core-02",
+          "peer_if": "ether3"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 10000,
+          "cidr": "10.130.0.10/24",
+          "network": "10.130.0.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-dc-agg-01",
+          "peer_if": "ether1"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 10000,
+          "cidr": "203.0.113.10/24",
+          "network": "203.0.113.0/24",
+          "peer": "wisp-transit-01",
+          "peer_if": "ether1"
+        }
+      ],
+      "bgp": {
+        "asn": 65010,
+        "neighbors": [
+          {
+            "address": "203.0.113.11",
+            "remote_as": 64512,
+            "description": "wisp-transit-01"
+          }
+        ]
+      }
+    },
+    "wisp-tower-north-01": {
+      "id": 6,
+      "sys_name": "wisp-tower-north-01",
+      "model": "RB5009UG+S+",
+      "location": "North Tower A",
+      "site": "tower-north-a",
+      "role": "tower",
+      "snmp_host": "127.0.10.26",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.10.6/32",
+        "area": "0.0.0.10"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 1000,
+          "cidr": "10.110.0.11/24",
+          "network": "10.110.0.0/24",
+          "area": "0.0.0.10",
+          "peer": "wisp-pop-north-01",
+          "peer_if": "ether3"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 1000,
+          "cidr": "10.110.2.10/24",
+          "network": "10.110.2.0/24",
+          "area": "0.0.0.10",
+          "peer": "wisp-tower-north-02",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 1000,
+          "peer": "wisp-ap-north-a-01",
+          "peer_if": "eth0"
+        }
+      ]
+    },
+    "wisp-tower-north-02": {
+      "id": 7,
+      "sys_name": "wisp-tower-north-02",
+      "model": "RB5009UG+S+",
+      "location": "North Tower B",
+      "site": "tower-north-b",
+      "role": "tower",
+      "snmp_host": "127.0.10.27",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.10.7/32",
+        "area": "0.0.0.10"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 1000,
+          "cidr": "10.110.1.11/24",
+          "network": "10.110.1.0/24",
+          "area": "0.0.0.10",
+          "peer": "wisp-pop-north-01",
+          "peer_if": "ether4"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 1000,
+          "cidr": "10.110.2.11/24",
+          "network": "10.110.2.0/24",
+          "area": "0.0.0.10",
+          "peer": "wisp-tower-north-01",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 1000,
+          "peer": "wisp-ap-north-b-01",
+          "peer_if": "eth0"
+        }
+      ]
+    },
+    "wisp-tower-south-01": {
+      "id": 8,
+      "sys_name": "wisp-tower-south-01",
+      "model": "L009UiGS-RM",
+      "location": "South Tower A",
+      "site": "tower-south-a",
+      "role": "tower",
+      "snmp_host": "127.0.10.28",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.20.8/32",
+        "area": "0.0.0.20"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 1000,
+          "cidr": "10.120.0.11/24",
+          "network": "10.120.0.0/24",
+          "area": "0.0.0.20",
+          "peer": "wisp-pop-south-01",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 1000,
+          "cidr": "10.120.2.10/24",
+          "network": "10.120.2.0/24",
+          "area": "0.0.0.20",
+          "peer": "wisp-tower-south-02",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 1000,
+          "peer": "wisp-ap-south-a-01",
+          "peer_if": "eth0"
+        }
+      ]
+    },
+    "wisp-tower-south-02": {
+      "id": 9,
+      "sys_name": "wisp-tower-south-02",
+      "model": "L009UiGS-RM",
+      "location": "South Tower B",
+      "site": "tower-south-b",
+      "role": "tower",
+      "snmp_host": "127.0.10.29",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.20.9/32",
+        "area": "0.0.0.20"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 1000,
+          "cidr": "10.120.1.11/24",
+          "network": "10.120.1.0/24",
+          "area": "0.0.0.20",
+          "peer": "wisp-pop-south-01",
+          "peer_if": "ether3"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 1000,
+          "cidr": "10.120.2.11/24",
+          "network": "10.120.2.0/24",
+          "area": "0.0.0.20",
+          "peer": "wisp-tower-south-01",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 3,
+          "name": "ether3",
+          "speed_mbps": 1000,
+          "peer": "wisp-ap-south-b-01",
+          "peer_if": "eth0"
+        }
+      ]
+    },
+    "wisp-dc-agg-01": {
+      "id": 10,
+      "sys_name": "wisp-dc-agg-01",
+      "model": "CCR2004-16G-2S+",
+      "location": "Datacenter Aggregation",
+      "site": "dc",
+      "role": "datacenter-agg",
+      "snmp_host": "127.0.10.30",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.0.10/32",
+        "area": "0.0.0.0"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 10000,
+          "cidr": "10.130.0.11/24",
+          "network": "10.130.0.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-ix-edge-01",
+          "peer_if": "ether2"
+        },
+        {
+          "ifindex": 2,
+          "name": "ether2",
+          "speed_mbps": 10000,
+          "cidr": "10.100.5.11/24",
+          "network": "10.100.5.0/24",
+          "area": "0.0.0.0",
+          "peer": "wisp-pop-south-01",
+          "peer_if": "ether4"
+        }
+      ]
+    },
+    "wisp-transit-01": {
+      "id": 11,
+      "sys_name": "wisp-transit-01",
+      "model": "CCR2116-12G-4S+",
+      "location": "Transit Upstream POP",
+      "site": "upstream",
+      "role": "transit-upstream",
+      "originate_default": false,
+      "loopback": {
+        "cidr": "10.255.254.11/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "ether1",
+          "speed_mbps": 10000,
+          "cidr": "203.0.113.11/24",
+          "network": "203.0.113.0/24",
+          "peer": "wisp-ix-edge-01",
+          "peer_if": "ether3"
+        }
+      ],
+      "bgp": {
+        "asn": 64512,
+        "neighbors": [
+          {
+            "address": "203.0.113.10",
+            "remote_as": 65010,
+            "description": "wisp-ix-edge-01",
+            "default_originate": true
+          }
+        ]
+      }
+    }
+  },
+  "access_devices": {
+    "wisp-ap-north-a-01": {
+      "id": 31,
+      "sys_name": "wisp-ap-north-a-01",
+      "model": "Rocket Prism 5AC Gen2",
+      "location": "North Tower A - Sector AP",
+      "site": "tower-north-a",
+      "role": "sector-ap",
+      "snmp_host": "127.0.10.31",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.6",
+      "sys_descr": "airMAX Wireless Access Point Rocket Prism 5AC Gen2 8.7.4",
+      "sys_services": 72,
+      "contact": "rf@theia.lab",
+      "loopback": {
+        "cidr": "10.255.30.31/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "speed_mbps": 1000,
+          "peer": "wisp-tower-north-01",
+          "peer_if": "ether3"
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-sector-north-a",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "neighbors": [
+            {
+              "peer": "wisp-cpe-north-a-01",
+              "peer_if": "wlan1"
+            },
+            {
+              "peer": "wisp-cpe-north-a-02",
+              "peer_if": "wlan1"
+            }
+          ]
+        },
+        {
+          "ifindex": 3,
+          "name": "br-lan",
+          "if_descr": "bridge-lan",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-ap-north-b-01": {
+      "id": 32,
+      "sys_name": "wisp-ap-north-b-01",
+      "model": "Rocket Prism 5AC Gen2",
+      "location": "North Tower B - Sector AP",
+      "site": "tower-north-b",
+      "role": "sector-ap",
+      "snmp_host": "127.0.10.32",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.6",
+      "sys_descr": "airMAX Wireless Access Point Rocket Prism 5AC Gen2 8.7.4",
+      "sys_services": 72,
+      "contact": "rf@theia.lab",
+      "loopback": {
+        "cidr": "10.255.30.32/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "speed_mbps": 1000,
+          "peer": "wisp-tower-north-02",
+          "peer_if": "ether3"
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-sector-north-b",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "neighbors": [
+            {
+              "peer": "wisp-cpe-north-b-01",
+              "peer_if": "wlan1"
+            },
+            {
+              "peer": "wisp-cpe-north-b-02",
+              "peer_if": "wlan1"
+            }
+          ]
+        },
+        {
+          "ifindex": 3,
+          "name": "br-lan",
+          "if_descr": "bridge-lan",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-ap-south-a-01": {
+      "id": 33,
+      "sys_name": "wisp-ap-south-a-01",
+      "model": "Rocket Prism 5AC Gen2",
+      "location": "South Tower A - Sector AP",
+      "site": "tower-south-a",
+      "role": "sector-ap",
+      "snmp_host": "127.0.10.33",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.6",
+      "sys_descr": "airMAX Wireless Access Point Rocket Prism 5AC Gen2 8.7.4",
+      "sys_services": 72,
+      "contact": "rf@theia.lab",
+      "loopback": {
+        "cidr": "10.255.30.33/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "speed_mbps": 1000,
+          "peer": "wisp-tower-south-01",
+          "peer_if": "ether3"
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-sector-south-a",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "neighbors": [
+            {
+              "peer": "wisp-cpe-south-a-01",
+              "peer_if": "wlan1"
+            },
+            {
+              "peer": "wisp-cpe-south-a-02",
+              "peer_if": "wlan1"
+            }
+          ]
+        },
+        {
+          "ifindex": 3,
+          "name": "br-lan",
+          "if_descr": "bridge-lan",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-ap-south-b-01": {
+      "id": 34,
+      "sys_name": "wisp-ap-south-b-01",
+      "model": "Rocket Prism 5AC Gen2",
+      "location": "South Tower B - Sector AP",
+      "site": "tower-south-b",
+      "role": "sector-ap",
+      "snmp_host": "127.0.10.34",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.6",
+      "sys_descr": "airMAX Wireless Access Point Rocket Prism 5AC Gen2 8.7.4",
+      "sys_services": 72,
+      "contact": "rf@theia.lab",
+      "loopback": {
+        "cidr": "10.255.30.34/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "speed_mbps": 1000,
+          "peer": "wisp-tower-south-02",
+          "peer_if": "ether3"
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-sector-south-b",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "neighbors": [
+            {
+              "peer": "wisp-cpe-south-b-01",
+              "peer_if": "wlan1"
+            },
+            {
+              "peer": "wisp-cpe-south-b-02",
+              "peer_if": "wlan1"
+            }
+          ]
+        },
+        {
+          "ifindex": 3,
+          "name": "br-lan",
+          "if_descr": "bridge-lan",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-cpe-north-a-01": {
+      "id": 35,
+      "sys_name": "wisp-cpe-north-a-01",
+      "model": "LiteBeam 5AC Gen2",
+      "location": "Subscriber North A-01",
+      "site": "subscriber-north-a-01",
+      "role": "subscriber-cpe",
+      "snmp_host": "127.0.10.35",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.10",
+      "sys_descr": "airMAX Wireless Router CPE LiteBeam 5AC Gen2 8.7.4",
+      "contact": "subscriber@theia.lab",
+      "loopback": {
+        "cidr": "10.255.40.35/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "if_descr": "eth0-lan",
+          "speed_mbps": 1000
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-backhaul",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "peer": "wisp-ap-north-a-01",
+          "peer_if": "wlan1"
+        },
+        {
+          "ifindex": 3,
+          "name": "br-home",
+          "if_descr": "bridge-home",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-cpe-north-a-02": {
+      "id": 36,
+      "sys_name": "wisp-cpe-north-a-02",
+      "model": "LHG 5 ac",
+      "location": "Subscriber North A-02",
+      "site": "subscriber-north-a-02",
+      "role": "subscriber-cpe",
+      "snmp_host": "127.0.10.36",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.10",
+      "sys_descr": "airMAX Wireless Router CPE LHG 5 ac 8.7.4",
+      "contact": "subscriber@theia.lab",
+      "loopback": {
+        "cidr": "10.255.40.36/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "if_descr": "eth0-lan",
+          "speed_mbps": 1000
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-backhaul",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "peer": "wisp-ap-north-a-01",
+          "peer_if": "wlan1"
+        },
+        {
+          "ifindex": 3,
+          "name": "br-home",
+          "if_descr": "bridge-home",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-cpe-north-b-01": {
+      "id": 37,
+      "sys_name": "wisp-cpe-north-b-01",
+      "model": "LiteBeam 5AC Gen2",
+      "location": "Subscriber North B-01",
+      "site": "subscriber-north-b-01",
+      "role": "subscriber-cpe",
+      "snmp_host": "127.0.10.37",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.10",
+      "sys_descr": "airMAX Wireless Router CPE LiteBeam 5AC Gen2 8.7.4",
+      "contact": "subscriber@theia.lab",
+      "loopback": {
+        "cidr": "10.255.40.37/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "if_descr": "eth0-lan",
+          "speed_mbps": 1000
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-backhaul",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "peer": "wisp-ap-north-b-01",
+          "peer_if": "wlan1"
+        },
+        {
+          "ifindex": 3,
+          "name": "br-home",
+          "if_descr": "bridge-home",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-cpe-north-b-02": {
+      "id": 38,
+      "sys_name": "wisp-cpe-north-b-02",
+      "model": "NanoBeam 5AC Gen2",
+      "location": "Subscriber North B-02",
+      "site": "subscriber-north-b-02",
+      "role": "subscriber-cpe",
+      "snmp_host": "127.0.10.38",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.10",
+      "sys_descr": "airMAX Wireless Router CPE NanoBeam 5AC Gen2 8.7.4",
+      "contact": "subscriber@theia.lab",
+      "loopback": {
+        "cidr": "10.255.40.38/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "if_descr": "eth0-lan",
+          "speed_mbps": 1000
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-backhaul",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "peer": "wisp-ap-north-b-01",
+          "peer_if": "wlan1"
+        },
+        {
+          "ifindex": 3,
+          "name": "br-home",
+          "if_descr": "bridge-home",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-cpe-south-a-01": {
+      "id": 39,
+      "sys_name": "wisp-cpe-south-a-01",
+      "model": "LiteBeam 5AC Gen2",
+      "location": "Subscriber South A-01",
+      "site": "subscriber-south-a-01",
+      "role": "subscriber-cpe",
+      "snmp_host": "127.0.10.39",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.10",
+      "sys_descr": "airMAX Wireless Router CPE LiteBeam 5AC Gen2 8.7.4",
+      "contact": "subscriber@theia.lab",
+      "loopback": {
+        "cidr": "10.255.40.39/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "if_descr": "eth0-lan",
+          "speed_mbps": 1000
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-backhaul",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "peer": "wisp-ap-south-a-01",
+          "peer_if": "wlan1"
+        },
+        {
+          "ifindex": 3,
+          "name": "br-home",
+          "if_descr": "bridge-home",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-cpe-south-a-02": {
+      "id": 40,
+      "sys_name": "wisp-cpe-south-a-02",
+      "model": "PowerBeam 5AC Gen2",
+      "location": "Subscriber South A-02",
+      "site": "subscriber-south-a-02",
+      "role": "subscriber-cpe",
+      "snmp_host": "127.0.10.40",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.10",
+      "sys_descr": "airMAX Wireless Router CPE PowerBeam 5AC Gen2 8.7.4",
+      "contact": "subscriber@theia.lab",
+      "loopback": {
+        "cidr": "10.255.40.40/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "if_descr": "eth0-lan",
+          "speed_mbps": 1000
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-backhaul",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "peer": "wisp-ap-south-a-01",
+          "peer_if": "wlan1"
+        },
+        {
+          "ifindex": 3,
+          "name": "br-home",
+          "if_descr": "bridge-home",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-cpe-south-b-01": {
+      "id": 41,
+      "sys_name": "wisp-cpe-south-b-01",
+      "model": "LHG XL 5 ac",
+      "location": "Subscriber South B-01",
+      "site": "subscriber-south-b-01",
+      "role": "subscriber-cpe",
+      "snmp_host": "127.0.10.41",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.10",
+      "sys_descr": "airMAX Wireless Router CPE LHG XL 5 ac 8.7.4",
+      "contact": "subscriber@theia.lab",
+      "loopback": {
+        "cidr": "10.255.40.41/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "if_descr": "eth0-lan",
+          "speed_mbps": 1000
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-backhaul",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "peer": "wisp-ap-south-b-01",
+          "peer_if": "wlan1"
+        },
+        {
+          "ifindex": 3,
+          "name": "br-home",
+          "if_descr": "bridge-home",
+          "speed_mbps": 1000
+        }
+      ]
+    },
+    "wisp-cpe-south-b-02": {
+      "id": 42,
+      "sys_name": "wisp-cpe-south-b-02",
+      "model": "NanoBeam 5AC Gen2",
+      "location": "Subscriber South B-02",
+      "site": "subscriber-south-b-02",
+      "role": "subscriber-cpe",
+      "snmp_host": "127.0.10.42",
+      "sys_object_id": "1.3.6.1.4.1.41112.1.10",
+      "sys_descr": "airMAX Wireless Router CPE NanoBeam 5AC Gen2 8.7.4",
+      "contact": "subscriber@theia.lab",
+      "loopback": {
+        "cidr": "10.255.40.42/32"
+      },
+      "interfaces": [
+        {
+          "ifindex": 1,
+          "name": "eth0",
+          "if_descr": "eth0-lan",
+          "speed_mbps": 1000
+        },
+        {
+          "ifindex": 2,
+          "name": "wlan1",
+          "if_descr": "wlan1-backhaul",
+          "if_type": 71,
+          "speed_mbps": 450,
+          "peer": "wisp-ap-south-b-01",
+          "peer_if": "wlan1"
+        },
+        {
+          "ifindex": 3,
+          "name": "br-home",
+          "if_descr": "bridge-home",
+          "speed_mbps": 1000
+        }
+      ]
+    }
+  }
+}

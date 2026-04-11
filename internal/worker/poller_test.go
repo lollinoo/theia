@@ -198,7 +198,7 @@ func TestPollAllDevices_SkipsVirtualDevices(t *testing.T) {
 		return &snmp.DiscoveryResult{}, nil
 	}
 
-	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 
 	p := NewPoller(svc, settingsRepo, dlCache)
 	p.pollAllDevices(context.Background())

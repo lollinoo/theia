@@ -2,15 +2,17 @@
 # Theia - Production Docker Compose (GHCR Pull)
 # =============================================================================
 # Images pulled from ghcr.io/lollinoo/theia-{backend,frontend}
-# Set THEIA_VERSION in .env.prod to the semver tag (e.g., 1.3.8)
+# Set THEIA_VERSION in .env.prod to the semver tag (e.g., 1.5.1)
 #
 # Profiles:
 #   (default) -- Backend + nginx frontend only
 #   metrics   -- Also starts Prometheus + SNMP exporter
+#   postgres  -- Also starts a local PostgreSQL container for the backend
 #
 # Usage:
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics up -d
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
 #
 # First-time setup:
 #   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
@@ -30,6 +32,8 @@ volumes:
     name: theia-data
   prometheus-data:
     name: theia-prometheus-data
+  theia-prod-postgres-data:
+    name: theia-prod-postgres-data
 
 services:
   # ---------------------------------------------------------------------------
@@ -44,13 +48,38 @@ services:
     volumes:
       - theia-data:/data
     environment:
-      - THEIA_DB_PATH=/data/theia.db
+      - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-sqlite}
+      - THEIA_DB_PATH=${THEIA_DB_PATH:-/data/theia.db}
+      - THEIA_DB_DSN=${THEIA_DB_DSN:-}
+      - THEIA_DATA_DIR=${THEIA_DATA_DIR:-/data}
       - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8080}
       - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
       - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:${BACKEND_PORT:-8080}/api/v1/health"]
       interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: postgres:17
+    profiles: ["postgres"]
+    container_name: theia-prod-postgres
+    restart: unless-stopped
+    networks:
+      - theia-net
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-theia}
+      - POSTGRES_USER=${POSTGRES_USER:-theia}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-theia}
+    ports:
+      - "${POSTGRES_BIND_ADDR:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - theia-prod-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-theia} -d ${POSTGRES_DB:-theia}"]
+      interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s

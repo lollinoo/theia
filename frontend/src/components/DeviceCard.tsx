@@ -405,6 +405,7 @@ const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: Nod
     pd.device.status === nd.device.status &&
     pd.device.vendor === nd.device.vendor &&
     pd.device.sys_name === nd.device.sys_name &&
+    pd.device.hardware_model === nd.device.hardware_model &&
     pd.device.tags?.display_name === nd.device.tags?.display_name &&
     pd.device.ip === nd.device.ip &&
     pd.highlighted === nd.highlighted &&

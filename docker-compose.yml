@@ -18,6 +18,8 @@
 volumes:
   theia-data:
     name: theia-data
+  theia-postgres-data:
+    name: theia-postgres-data
 
 services:
   # ---------------------------------------------------------------------------
@@ -35,7 +37,10 @@ services:
       - ".:/app"
       - "theia-data:/app/data"
     environment:
+      - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-sqlite}
       - THEIA_DB_PATH=/app/data/theia.db
+      - THEIA_DB_DSN=${THEIA_DB_DSN:-}
+      - THEIA_DATA_DIR=/app/data
       - THEIA_LISTEN_ADDR=:8080
       - THEIA_ENCRYPTION_KEY=devkey1234567890
       - CGO_ENABLED=1
@@ -55,6 +60,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  postgres:
+    image: postgres:17
+    profiles: ["postgres"]
+    container_name: theia-postgres
+    environment:
+      - POSTGRES_DB=theia
+      - POSTGRES_USER=theia
+      - POSTGRES_PASSWORD=theia
+    ports:
+      - "5432:5432"
+    volumes:
+      - "theia-postgres-data:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U theia -d theia"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # ---------------------------------------------------------------------------
   # Frontend — React + Vite dev server

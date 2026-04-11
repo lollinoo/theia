@@ -13,6 +13,7 @@ function makeSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
     alerts: [],
     device_statuses: {},
     device_hostnames: {},
+    device_models: {},
     ...overrides,
   };
 }
@@ -36,6 +37,7 @@ describe('parseWSMessage — snapshot_delta', () => {
         alerts: [],
         device_statuses: {},
         device_hostnames: {},
+        device_models: {},
       },
     });
 
@@ -54,6 +56,7 @@ describe('parseWSMessage — snapshot_delta', () => {
         alerts: [],
         device_statuses: {},
         device_hostnames: {},
+        device_models: {},
       },
     });
 
@@ -78,6 +81,7 @@ describe('parseWSMessage — snapshot_delta', () => {
         alerts: [],
         device_statuses: {},
         device_hostnames: {},
+        device_models: {},
       },
     });
 
@@ -158,5 +162,41 @@ describe('mergeSnapshotDelta', () => {
 
     expect(result.alerts).toHaveLength(1);
     expect(result.alerts[0].alert_name).toBe('HighCPU');
+  });
+});
+
+describe('parseWSMessage — topology_changed', () => {
+  it('parses a topology_changed message with null payload', () => {
+    const message = parseWSMessage({
+      type: 'topology_changed',
+      payload: null,
+    });
+    expect(message.type).toBe('topology_changed');
+    expect(message.payload).toBeNull();
+  });
+});
+
+describe('mergeSnapshotDelta — device_models', () => {
+  it('merges device_models from delta into existing snapshot', () => {
+    const existing = makeSnapshot({
+      device_models: { 'dev-1': 'RB4011' },
+    });
+    const delta = makeSnapshot({
+      device_models: { 'dev-2': 'CCR2004' },
+    });
+    const result = mergeSnapshotDelta(existing, delta);
+    expect(result.device_models['dev-1']).toBe('RB4011');
+    expect(result.device_models['dev-2']).toBe('CCR2004');
+  });
+
+  it('overwrites existing device_models entry when delta has same key', () => {
+    const existing = makeSnapshot({
+      device_models: { 'dev-1': 'RB4011' },
+    });
+    const delta = makeSnapshot({
+      device_models: { 'dev-1': 'RB5009' },
+    });
+    const result = mergeSnapshotDelta(existing, delta);
+    expect(result.device_models['dev-1']).toBe('RB5009');
   });
 });

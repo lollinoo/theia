@@ -1,0 +1,14 @@
+DROP TABLE IF EXISTS backup_files;
+DROP TABLE IF EXISTS backup_jobs;
+DROP TABLE IF EXISTS device_positions;
+DROP TABLE IF EXISTS links;
+DROP TABLE IF EXISTS interfaces;
+DROP TABLE IF EXISTS device_credential_profiles;
+DROP TABLE IF EXISTS credential_profiles;
+DROP TABLE IF EXISTS device_areas;
+DROP TABLE IF EXISTS areas;
+DROP TABLE IF EXISTS instance_backups;
+DROP TABLE IF EXISTS snmp_profiles;
+DROP TABLE IF EXISTS vendor_configs;
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS devices;

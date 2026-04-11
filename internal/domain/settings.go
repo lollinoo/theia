@@ -1,13 +1,13 @@
 package domain
 
-// Setting keys for runtime configuration stored in SQLite.
+// Setting keys for runtime configuration stored in the primary database.
 const (
-	SettingPrometheusURL      = "prometheus_url"
-	SettingGrafanaURL         = "grafana_url"
-	SettingPollingInterval    = "polling_interval_seconds"
-	SettingSNMPWorkerPoolSize = "snmp_worker_pool_size"
-	SettingSNMPTimeout        = "snmp_timeout_seconds"
-	SettingSNMPRetries        = "snmp_retries"
+	SettingPrometheusURL                = "prometheus_url"
+	SettingGrafanaURL                   = "grafana_url"
+	SettingPollingInterval              = "polling_interval_seconds"
+	SettingSNMPWorkerPoolSize           = "snmp_worker_pool_size"
+	SettingSNMPTimeout                  = "snmp_timeout_seconds"
+	SettingSNMPRetries                  = "snmp_retries"
 	SettingTimezone                     = "timezone"
 	SettingInstanceBackupIntervalHours  = "instance_backup_interval_hours"
 	SettingInstanceBackupRetentionCount = "instance_backup_retention_count"
@@ -26,12 +26,12 @@ const (
 // DefaultSettings returns the default runtime settings.
 func DefaultSettings() map[string]string {
 	return map[string]string{
-		SettingPrometheusURL:      "",
-		SettingGrafanaURL:         "",
-		SettingPollingInterval:    "60",
-		SettingSNMPWorkerPoolSize: "5",
-		SettingSNMPTimeout:        "10",
-		SettingSNMPRetries:        "2",
+		SettingPrometheusURL:                "",
+		SettingGrafanaURL:                   "",
+		SettingPollingInterval:              "60",
+		SettingSNMPWorkerPoolSize:           "5",
+		SettingSNMPTimeout:                  "10",
+		SettingSNMPRetries:                  "2",
 		SettingTimezone:                     "UTC",
 		SettingInstanceBackupIntervalHours:  "0",
 		SettingInstanceBackupRetentionCount: "5",

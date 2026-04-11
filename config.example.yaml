@@ -3,11 +3,16 @@
 # =============================================================================
 # This file contains startup/bootstrap settings only.
 # Runtime settings (Prometheus URL, polling interval, Grafana URL, etc.)
-# are stored in the SQLite database and editable via the API.
+# are stored in the primary database and editable via the API.
 #
 # All values can be overridden with environment variables:
-#   THEIA_LISTEN_ADDR, THEIA_DB_PATH, THEIA_LOG_LEVEL
+#   THEIA_DB_DRIVER, THEIA_LISTEN_ADDR, THEIA_DB_PATH, THEIA_DB_DSN,
+#   THEIA_DATA_DIR, THEIA_LOG_LEVEL
 # =============================================================================
+
+# Database driver: sqlite or postgres
+# Default: "sqlite"
+db_driver: "sqlite"
 
 # Address and port the HTTP server listens on.
 # Default: ":8080"
@@ -17,6 +22,14 @@ listen_addr: ":8080"
 # The directory will be created automatically if it does not exist.
 # Default: "./data/theia.db"
 db_path: "./data/theia.db"
+
+# PostgreSQL DSN. Required when db_driver=postgres.
+# Example: "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
+# db_dsn: ""
+
+# Local app data directory used for known_hosts and backup files.
+# Default: "./data"
+data_dir: "./data"
 
 # Log verbosity: debug, info, warn, error
 # Default: "info"

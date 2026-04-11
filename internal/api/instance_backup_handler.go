@@ -27,10 +27,21 @@ func NewInstanceBackupHandler(svc *service.InstanceBackupService) *InstanceBacku
 	return &InstanceBackupHandler{svc: svc}
 }
 
+func (h *InstanceBackupHandler) ensureConfigured(w http.ResponseWriter) bool {
+	if h.svc != nil {
+		return true
+	}
+	writeError(w, http.StatusNotImplemented, "instance backups are only supported when using sqlite")
+	return false
+}
+
 // HandleCreate handles POST /api/v1/instance-backups.
 // Returns 202 Accepted with backup record in "running" status.
 // Returns 409 Conflict if a backup is already in progress.
 func (h *InstanceBackupHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
 	h.mu.Lock()
 
 	// Check for already-running backup
@@ -89,6 +100,9 @@ func (h *InstanceBackupHandler) HandleCreate(w http.ResponseWriter, r *http.Requ
 
 // HandleList handles GET /api/v1/instance-backups.
 func (h *InstanceBackupHandler) HandleList(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
 	backups, err := h.svc.List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "listing backups", err)
@@ -103,6 +117,9 @@ func (h *InstanceBackupHandler) HandleList(w http.ResponseWriter, r *http.Reques
 
 // HandleGet handles GET /api/v1/instance-backups/{id}.
 func (h *InstanceBackupHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
 	id, err := extractIDFromPath(r.URL.Path, "/api/v1/instance-backups/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid backup ID")
@@ -125,6 +142,9 @@ func (h *InstanceBackupHandler) HandleGet(w http.ResponseWriter, r *http.Request
 // HandleDownload handles GET /api/v1/instance-backups/{id}/download.
 // Streams the .tar.gz archive with Content-Disposition and Content-Length headers.
 func (h *InstanceBackupHandler) HandleDownload(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
 	// Parse: /api/v1/instance-backups/{id}/download
 	path := strings.TrimSuffix(r.URL.Path, "/download")
 	id, err := extractIDFromPath(path, "/api/v1/instance-backups/")
@@ -156,6 +176,9 @@ func (h *InstanceBackupHandler) HandleDownload(w http.ResponseWriter, r *http.Re
 
 // HandleDelete handles DELETE /api/v1/instance-backups/{id}.
 func (h *InstanceBackupHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
 	id, err := extractIDFromPath(r.URL.Path, "/api/v1/instance-backups/")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid backup ID")
@@ -176,6 +199,9 @@ func (h *InstanceBackupHandler) HandleDelete(w http.ResponseWriter, r *http.Requ
 // Accepts multipart/form-data with a "file" field containing a .tar.gz archive.
 // Query param dry_run=true validates without staging.
 func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

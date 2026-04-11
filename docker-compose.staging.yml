@@ -3,9 +3,14 @@
 # =============================================================================
 # Auto-updates via Watchtower: new :staging images are pulled every 30 seconds.
 #
+# Profiles:
+#   (default) -- Backend + frontend + watchtower
+#   postgres  -- Also starts a local PostgreSQL container for the backend
+#
 # Usage:
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 #   IMAGE_TAG=fix-links docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+#   docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d postgres
 #
 # First-time setup:
 #   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
@@ -23,6 +28,8 @@ networks:
 volumes:
   theia-staging-data:
     name: theia-staging-data
+  theia-staging-postgres-data:
+    name: theia-staging-postgres-data
 
 services:
   # ---------------------------------------------------------------------------
@@ -37,7 +44,10 @@ services:
     volumes:
       - theia-staging-data:/data
     environment:
-      - THEIA_DB_PATH=/data/theia.db
+      - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-sqlite}
+      - THEIA_DB_PATH=${THEIA_DB_PATH:-/data/theia.db}
+      - THEIA_DB_DSN=${THEIA_DB_DSN:-}
+      - THEIA_DATA_DIR=${THEIA_DATA_DIR:-/data}
       - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8081}
       - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
       - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-}
@@ -49,6 +59,28 @@ services:
       start_period: 10s
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+
+  postgres:
+    image: postgres:17
+    profiles: ["postgres"]
+    container_name: theia-staging-postgres
+    restart: unless-stopped
+    networks:
+      - theia-staging-net
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-theia}
+      - POSTGRES_USER=${POSTGRES_USER:-theia}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-theia}
+    ports:
+      - "${POSTGRES_BIND_ADDR:-127.0.0.1}:${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - theia-staging-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-theia} -d ${POSTGRES_DB:-theia}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # ---------------------------------------------------------------------------
   # Frontend — Pre-built nginx + React SPA from GHCR

@@ -195,7 +195,7 @@ function LinkEdgeInner({
       {data?.bandwidthLabel ? (
         <EdgeLabelRenderer>
           <div
-            className={`pointer-events-none absolute rounded-md border bg-surface px-2 py-1 text-[11px] font-medium shadow-pill transition-colors duration-200 ${
+            className={`pointer-events-none z-10 rounded-md border bg-surface px-2 py-1 text-[11px] font-medium shadow-pill transition-colors duration-200 ${
               (bothDevDown || bothIfDown || alertStatus === 'down')
                 ? 'border-status-down/40 text-status-down'
                 : (oneDevDown || oneDevInactive || bothDevInactive || oneIfDown || alertStatus === 'degraded')
@@ -207,6 +207,9 @@ function LinkEdgeInner({
                       : 'border-outline-subtle text-on-bg-secondary'
             }`}
             style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,
               ...(data.areaColor && !data.speedMismatch && !bothDevDown && !oneDevDown && !bothDevInactive && !oneDevInactive && !bothIfDown && !oneIfDown && alertStatus !== 'down' && alertStatus !== 'degraded'
                 ? { borderColor: data.areaColor, color: data.areaColor }
@@ -221,8 +224,11 @@ function LinkEdgeInner({
       {data?.throughputLabel ? (
         <EdgeLabelRenderer>
           <div
-            className={`pointer-events-none absolute rounded-md border bg-surface px-2 py-1 text-[10px] font-medium shadow-pill transition-colors duration-200 ${data.areaColor ? '' : 'border-outline-subtle'}`}
+            className={`pointer-events-none z-10 rounded-md border bg-surface px-2 py-1 text-[10px] font-medium shadow-pill transition-colors duration-200 ${data.areaColor ? '' : 'border-outline-subtle'}`}
             style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
               color: data.areaColor ?? throughputColor,
               ...(data.areaColor ? { borderColor: data.areaColor } : {}),
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY + 20}px)`,
@@ -253,7 +259,9 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.sourceX === next.sourceX &&
     prev.sourceY === next.sourceY &&
     prev.targetX === next.targetX &&
-    prev.targetY === next.targetY
+    prev.targetY === next.targetY &&
+    prev.sourcePosition === next.sourcePosition &&
+    prev.targetPosition === next.targetPosition
   );
 });
 

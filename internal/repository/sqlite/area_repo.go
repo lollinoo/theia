@@ -11,12 +11,12 @@ import (
 
 // AreaRepo implements domain.AreaRepository using SQLite.
 type AreaRepo struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewAreaRepo creates a new SQLite-backed area repository.
 func NewAreaRepo(db *sql.DB) *AreaRepo {
-	return &AreaRepo{db: db}
+	return &AreaRepo{db: wrapDB(db)}
 }
 
 // Create inserts a new area.

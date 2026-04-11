@@ -126,6 +126,21 @@ describe('client typed errors', () => {
     await expect(createDevice(payload)).rejects.toThrow('hostname too long');
   });
 
+  it('throws ValidationError for 409 response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          { error: 'a device with IP/host "10.0.0.2" already exists' },
+          { ok: false, status: 409, statusText: 'Conflict' },
+        ),
+      ),
+    );
+
+    await expect(createDevice(payload)).rejects.toThrow(ValidationError);
+    await expect(createDevice(payload)).rejects.toThrow('a device with IP/host "10.0.0.2" already exists');
+  });
+
   it('throws ServerError for 500 response with correlation ID', async () => {
     vi.stubGlobal(
       'fetch',

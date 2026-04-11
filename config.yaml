@@ -1,6 +1,11 @@
 # MikroTik Theia - Default Development Configuration
 # Override via THEIA_* environment variables
 
+# Database driver: sqlite or postgres
+db_driver: "sqlite"
+
 listen_addr: ":8080"
 db_path: "/app/data/theia.db"
+# db_dsn: "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
+data_dir: "/app/data"
 log_level: "debug"

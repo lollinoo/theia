@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createLink } from '../api/client';
+import { createLink, fetchDeviceInterfaces } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
-import type { Device, InterfaceInfo, Link } from '../types/api';
+import type { Device, InterfaceInfo } from '../types/api';
 
 interface LinkCreatePanelProps {
   devices: Device[];
-  links: Link[];
   onCreated: () => void;
   onClose: () => void;
   onRefreshDevices?: () => Promise<void>;
@@ -143,41 +142,6 @@ function SearchableDeviceSelect({
   );
 }
 
-function getDeviceInterfaces(
-  device: Device | undefined,
-  deviceId: string,
-  links: Link[],
-): InterfaceInfo[] {
-  if (!device || !device.interfaces?.length) return [];
-
-  const inUseIfaces = new Set<string>();
-  for (const link of links) {
-    if (link.source_device_id === deviceId) inUseIfaces.add(link.source_if_name);
-    if (link.target_device_id === deviceId) inUseIfaces.add(link.target_if_name);
-  }
-
-  return device.interfaces
-    .filter((i) => {
-      if (!i.if_name) return false;
-      const lower = i.if_name.toLowerCase();
-      return !lower.startsWith('lo') && lower !== 'null' && !lower.startsWith('null');
-    })
-    .sort((a, b) => {
-      const aUp = a.oper_status === 'up';
-      const bUp = b.oper_status === 'up';
-      if (aUp !== bUp) return aUp ? -1 : 1;
-      return a.if_name.localeCompare(b.if_name);
-    })
-    .map((i) => ({
-      if_name: i.if_name,
-      if_descr: i.if_descr,
-      speed: i.speed,
-      oper_status: i.oper_status,
-      admin_status: i.admin_status,
-      in_use: inUseIfaces.has(i.if_name),
-    }));
-}
-
 function InterfaceSelect({
   label,
   interfaces,
@@ -232,7 +196,7 @@ function InterfaceSelect({
   );
 }
 
-export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshDevices, initialSourceDeviceId, initialTargetDeviceId }: LinkCreatePanelProps) {
+export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices, initialSourceDeviceId, initialTargetDeviceId }: LinkCreatePanelProps) {
   const [sourceDeviceId, setSourceDeviceId] = useState(initialSourceDeviceId ?? '');
   const [targetDeviceId, setTargetDeviceId] = useState(initialTargetDeviceId ?? '');
   const [sourceIfName, setSourceIfName] = useState('');
@@ -248,15 +212,36 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
   const targetIsVirtual = targetDevice?.device_type === 'virtual';
   const bothVirtual = sourceIsVirtual && targetIsVirtual;
 
-  const sourceInterfaces = useMemo(
-    () => getDeviceInterfaces(sourceDevice, sourceDeviceId, links),
-    [sourceDevice, sourceDeviceId, links],
-  );
+  const [sourceInterfaces, setSourceInterfaces] = useState<InterfaceInfo[]>([]);
+  const [targetInterfaces, setTargetInterfaces] = useState<InterfaceInfo[]>([]);
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [targetLoading, setTargetLoading] = useState(false);
 
-  const targetInterfaces = useMemo(
-    () => getDeviceInterfaces(targetDevice, targetDeviceId, links),
-    [targetDevice, targetDeviceId, links],
-  );
+  useEffect(() => {
+    setSourceIfName('');
+    if (!sourceDeviceId || sourceIsVirtual) {
+      setSourceInterfaces([]);
+      return;
+    }
+    setSourceLoading(true);
+    fetchDeviceInterfaces(sourceDeviceId)
+      .then((ifaces) => setSourceInterfaces(ifaces))
+      .catch(() => setSourceInterfaces([]))
+      .finally(() => setSourceLoading(false));
+  }, [sourceDeviceId, sourceIsVirtual]);
+
+  useEffect(() => {
+    setTargetIfName('');
+    if (!targetDeviceId || targetIsVirtual) {
+      setTargetInterfaces([]);
+      return;
+    }
+    setTargetLoading(true);
+    fetchDeviceInterfaces(targetDeviceId)
+      .then((ifaces) => setTargetInterfaces(ifaces))
+      .catch(() => setTargetInterfaces([]))
+      .finally(() => setTargetLoading(false));
+  }, [targetDeviceId, targetIsVirtual]);
 
   function handleSourceDeviceChange(id: string) {
     setSourceDeviceId(id);
@@ -446,7 +431,7 @@ export function LinkCreatePanel({ devices, links, onCreated, onClose, onRefreshD
         </button>
         <button
           type="submit"
-          disabled={submitting || !sourceDeviceId || !targetDeviceId || bothVirtual || (!sourceIsVirtual && !sourceIfName) || (!targetIsVirtual && !targetIfName)}
+          disabled={submitting || sourceLoading || targetLoading || !sourceDeviceId || !targetDeviceId || bothVirtual || (!sourceIsVirtual && !sourceIfName) || (!targetIsVirtual && !targetIfName)}
           className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Creating...' : 'Create Link'}

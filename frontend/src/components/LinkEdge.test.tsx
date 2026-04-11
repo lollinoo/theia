@@ -34,4 +34,10 @@ describe('LinkEdge (COMP-10)', () => {
     );
     expect(pillSection).toContain('outline-subtle');
   });
+
+  it('positions bandwidth label at edge midpoint and throughput label below', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    expect(content).toContain('labelY + labelOffsetY}px)');
+    expect(content).toContain('labelY + labelOffsetY + 20}px)');
+  });
 });

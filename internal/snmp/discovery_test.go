@@ -1,7 +1,6 @@
 package snmp
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/lollinoo/theia/internal/domain"
@@ -60,6 +59,11 @@ func TestDiscoverDevice(t *testing.T) {
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("eth1")},
 					{Name: OidIfHighSpeed + ".1", Type: gosnmp.Gauge32, Value: uint(1000)}, // 1 Gbps
+				}, nil
+			case OidLLDPLocPortIfIndex:
+				// lldpPortNum 1 maps to ifIndex 1 — numbering happens to match on this test device
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPLocPortIfIndex + ".1", Type: gosnmp.Integer, Value: 1},
 				}, nil
 			case OidLLDPRemChassisId:
 				return []gosnmp.SnmpPDU{
@@ -301,16 +305,363 @@ func TestParseCDPNeighbors(t *testing.T) {
 	}
 }
 
-func TestDiscoverDevice_Error(t *testing.T) {
+func TestDiscoverNeighbors_PrefersLLDPOverCDPForSameConnection(t *testing.T) {
+	neighbors := discoverNeighbors(&MockClient{
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidLLDPLocPortIfIndex:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPLocPortIfIndex + ".1", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidLLDPRemChassisId:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemChassisId + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("AA:BB:CC:DD:EE:FF")}}, nil
+			case OidLLDPRemPortId:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemPortId + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("ether2")}}, nil
+			case OidLLDPRemSysName:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemSysName + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("switch-b")}}, nil
+			case OidCDPDeviceID:
+				return []gosnmp.SnmpPDU{{Name: OidCDPDeviceID + ".1.7", Type: gosnmp.OctetString, Value: []byte("switch-b-cdp")}}, nil
+			case OidCDPPortID:
+				return []gosnmp.SnmpPDU{{Name: OidCDPPortID + ".1.7", Type: gosnmp.OctetString, Value: []byte("ether2")}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}, map[int]string{1: "ether1"})
+
+	if len(neighbors) != 1 {
+		t.Fatalf("expected 1 merged neighbor, got %d", len(neighbors))
+	}
+
+	nbr := neighbors[0]
+	if nbr.Protocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected LLDP to remain canonical, got %s", nbr.Protocol)
+	}
+	if nbr.RemoteSysName != "switch-b" {
+		t.Fatalf("expected LLDP sysName to win, got %q", nbr.RemoteSysName)
+	}
+	if nbr.RemotePortID != "ether2" {
+		t.Fatalf("expected remote port ether2, got %q", nbr.RemotePortID)
+	}
+}
+
+func TestDiscoverNeighbors_UsesCDPToFillMissingLLDPFields(t *testing.T) {
+	neighbors := discoverNeighbors(&MockClient{
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidLLDPLocPortIfIndex:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPLocPortIfIndex + ".1", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidLLDPRemChassisId:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemChassisId + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("AA:BB:CC:DD:EE:FF")}}, nil
+			case OidLLDPRemPortId:
+				return nil, nil
+			case OidLLDPRemSysName:
+				return nil, nil
+			case OidCDPDeviceID:
+				return []gosnmp.SnmpPDU{{Name: OidCDPDeviceID + ".1.7", Type: gosnmp.OctetString, Value: []byte("switch-b")}}, nil
+			case OidCDPPortID:
+				return []gosnmp.SnmpPDU{{Name: OidCDPPortID + ".1.7", Type: gosnmp.OctetString, Value: []byte("ether2")}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}, map[int]string{1: "ether1"})
+
+	if len(neighbors) != 1 {
+		t.Fatalf("expected 1 merged neighbor, got %d", len(neighbors))
+	}
+
+	nbr := neighbors[0]
+	if nbr.Protocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected merged neighbor to stay LLDP, got %s", nbr.Protocol)
+	}
+	if nbr.RemoteSysName != "switch-b" {
+		t.Fatalf("expected CDP to fill missing remote sysName, got %q", nbr.RemoteSysName)
+	}
+	if nbr.RemotePortID != "ether2" {
+		t.Fatalf("expected CDP to fill missing remote port, got %q", nbr.RemotePortID)
+	}
+}
+
+func TestDiscoverNeighbors_PrefersPhysicalInterfacesWhenVirtualVariantsExist(t *testing.T) {
+	neighbors := dedupePreferredNeighbors([]NeighborInfo{
+		{
+			RemoteSysName:   "border-botte",
+			RemotePortID:    "VLAN-99-MGMT-ETH6",
+			LocalIfName:     "",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+		},
+		{
+			RemoteSysName:   "border-botte",
+			RemotePortID:    "ether6-link_new_apparati",
+			LocalIfName:     "ether2-verso-border-botte",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+		},
+		{
+			RemoteSysName:   "border-botte",
+			RemotePortID:    "ether6-link_new_apparati",
+			LocalIfName:     "",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+		},
+	})
+
+	if len(neighbors) != 1 {
+		t.Fatalf("expected 1 preferred neighbor, got %d", len(neighbors))
+	}
+
+	nbr := neighbors[0]
+	if nbr.LocalIfName != "ether2-verso-border-botte" {
+		t.Fatalf("expected physical local interface to win, got %q", nbr.LocalIfName)
+	}
+	if nbr.RemotePortID != "ether6-link_new_apparati" {
+		t.Fatalf("expected physical remote port to win, got %q", nbr.RemotePortID)
+	}
+}
+
+// TestDiscoverDevice_LLDPLocPortIfIndex verifies that when lldpLocPortIfIndex maps
+// lldpPortNum 3 to ifIndex 5, and ifIndex 5 has ifName "ether5", the discovered
+// neighbor gets LocalIfName == "ether5" and LocalIfIndex == 5.
+func TestDiscoverDevice_LLDPLocPortIfIndex(t *testing.T) {
 	reg := testDiscoveryRegistry(t)
-	mockErr := &MockClient{
+	mock := &MockClient{
 		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
-			return nil, fmt.Errorf("timeout")
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("router-lldp")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS RB5009")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfDescr + ".5", Type: gosnmp.OctetString, Value: []byte("ether5-descr")},
+					{Name: OidIfOperStatus + ".5", Type: gosnmp.Integer, Value: 1},
+				}, nil
+			case OidIfXTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfName + ".5", Type: gosnmp.OctetString, Value: []byte("ether5")},
+				}, nil
+			case OidLLDPLocPortIfIndex:
+				// lldpPortNum 3 maps to ifIndex 5
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPLocPortIfIndex + ".3", Type: gosnmp.Integer, Value: 5},
+				}, nil
+			case OidLLDPRemChassisId:
+				// Index: timeMark=0, localPortNum=3, remoteIndex=1 => "0.3.1"
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPRemChassisId + ".0.3.1", Type: gosnmp.OctetString, Value: []byte("AA:BB:CC:DD:EE:FF")},
+				}, nil
+			case OidLLDPRemPortId:
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPRemPortId + ".0.3.1", Type: gosnmp.OctetString, Value: []byte("eth0")},
+				}, nil
+			case OidLLDPRemSysName:
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPRemSysName + ".0.3.1", Type: gosnmp.OctetString, Value: []byte("neighbor-a")},
+				}, nil
+			}
+			return nil, nil
 		},
 	}
 
-	_, err := DiscoverDevice(mockErr, reg)
-	if err == nil {
-		t.Error("expected error but got nil")
+	res, err := DiscoverDevice(mock, reg)
+	if err != nil {
+		t.Fatalf("DiscoverDevice returned error: %v", err)
+	}
+
+	var lldpNeighbors []NeighborInfo
+	for _, n := range res.Neighbors {
+		if n.Protocol == domain.DiscoveryProtocolLLDP {
+			lldpNeighbors = append(lldpNeighbors, n)
+		}
+	}
+	if len(lldpNeighbors) != 1 {
+		t.Fatalf("expected 1 LLDP neighbor, got %d", len(lldpNeighbors))
+	}
+
+	nbr := lldpNeighbors[0]
+	if nbr.LocalIfName != "ether5" {
+		t.Errorf("expected LocalIfName 'ether5' via lldpLocPortIfIndex two-step lookup, got %q", nbr.LocalIfName)
+	}
+	if nbr.LocalIfIndex != 5 {
+		t.Errorf("expected LocalIfIndex 5, got %d", nbr.LocalIfIndex)
+	}
+}
+
+// TestDiscoverDevice_LLDPLocPortIfIndex_Fallback verifies that when lldpLocPortIfIndex
+// returns empty, the code falls back to treating lldpPortNum directly as ifIndex.
+func TestDiscoverDevice_LLDPLocPortIfIndex_Fallback(t *testing.T) {
+	reg := testDiscoveryRegistry(t)
+	mock := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("router-fallback")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS RB4011")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("eth1-descr")},
+					{Name: OidIfOperStatus + ".1", Type: gosnmp.Integer, Value: 1},
+				}, nil
+			case OidIfXTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("eth1")},
+				}, nil
+			case OidLLDPLocPortIfIndex:
+				// Empty — device does not support lldpLocPortIfIndex
+				return nil, nil
+			case OidLLDPRemChassisId:
+				// Index: timeMark=0, localPortNum=1, remoteIndex=1 => "0.1.1"
+				// lldpPortNum=1 happens to equal ifIndex=1 on this device
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPRemChassisId + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("11:22:33:44:55:66")},
+				}, nil
+			case OidLLDPRemPortId:
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPRemPortId + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("eth0")},
+				}, nil
+			case OidLLDPRemSysName:
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPRemSysName + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("neighbor-b")},
+				}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	res, err := DiscoverDevice(mock, reg)
+	if err != nil {
+		t.Fatalf("DiscoverDevice returned error: %v", err)
+	}
+
+	var lldpNeighbors []NeighborInfo
+	for _, n := range res.Neighbors {
+		if n.Protocol == domain.DiscoveryProtocolLLDP {
+			lldpNeighbors = append(lldpNeighbors, n)
+		}
+	}
+	if len(lldpNeighbors) != 1 {
+		t.Fatalf("expected 1 LLDP neighbor, got %d", len(lldpNeighbors))
+	}
+
+	nbr := lldpNeighbors[0]
+	// Fallback: lldpPortNum=1 used directly as ifIndex=1 => "eth1"
+	if nbr.LocalIfName != "eth1" {
+		t.Errorf("expected LocalIfName 'eth1' via fallback lookup, got %q", nbr.LocalIfName)
+	}
+}
+
+// TestDiscoverDevice_LLDPPartialNeighborData verifies that a neighbor with a
+// malformed LLDP index (no dot — cannot parse localPortNum) results in
+// LocalIfName="" without crashing, while a valid neighbor is still discovered.
+func TestDiscoverDevice_LLDPPartialNeighborData(t *testing.T) {
+	reg := testDiscoveryRegistry(t)
+	mock := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("router-partial")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+				}, nil
+			case OidIfXTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+				}, nil
+			case OidLLDPLocPortIfIndex:
+				return nil, nil
+			case OidLLDPRemChassisId:
+				return []gosnmp.SnmpPDU{
+					// Valid neighbor: index "0.1.1"
+					{Name: OidLLDPRemChassisId + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("AA:AA:AA:AA:AA:01")},
+					// Malformed neighbor: single-component index (no dot — cannot split to get localPortNum)
+					{Name: OidLLDPRemChassisId + ".99", Type: gosnmp.OctetString, Value: []byte("BB:BB:BB:BB:BB:02")},
+				}, nil
+			case OidLLDPRemPortId:
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPRemPortId + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("eth0")},
+					{Name: OidLLDPRemPortId + ".99", Type: gosnmp.OctetString, Value: []byte("eth1")},
+				}, nil
+			case OidLLDPRemSysName:
+				return []gosnmp.SnmpPDU{
+					{Name: OidLLDPRemSysName + ".0.1.1", Type: gosnmp.OctetString, Value: []byte("valid-neighbor")},
+					{Name: OidLLDPRemSysName + ".99", Type: gosnmp.OctetString, Value: []byte("malformed-neighbor")},
+				}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	res, err := DiscoverDevice(mock, reg)
+	if err != nil {
+		t.Fatalf("DiscoverDevice should not return error for partial LLDP data, got: %v", err)
+	}
+
+	var lldpNeighbors []NeighborInfo
+	for _, n := range res.Neighbors {
+		if n.Protocol == domain.DiscoveryProtocolLLDP {
+			lldpNeighbors = append(lldpNeighbors, n)
+		}
+	}
+
+	if len(lldpNeighbors) != 2 {
+		t.Fatalf("expected 2 LLDP neighbors (valid + malformed), got %d", len(lldpNeighbors))
+	}
+
+	// Find the valid neighbor and verify LocalIfName is populated
+	validFound := false
+	malformedFound := false
+	for _, n := range lldpNeighbors {
+		switch n.RemoteChassisID {
+		case "AA:AA:AA:AA:AA:01":
+			validFound = true
+			if n.LocalIfName != "ether1" {
+				t.Errorf("valid neighbor: expected LocalIfName 'ether1', got %q", n.LocalIfName)
+			}
+		case "BB:BB:BB:BB:BB:02":
+			malformedFound = true
+			if n.LocalIfName != "" {
+				t.Errorf("malformed neighbor: expected empty LocalIfName, got %q", n.LocalIfName)
+			}
+		}
+	}
+	if !validFound {
+		t.Error("valid neighbor (AA:AA:AA:AA:AA:01) not found in results")
+	}
+	if !malformedFound {
+		t.Error("malformed neighbor (BB:BB:BB:BB:BB:02) not found in results")
 	}
 }

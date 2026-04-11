@@ -11,12 +11,12 @@ import (
 
 // BackupJobRepo implements domain.BackupJobRepository using SQLite.
 type BackupJobRepo struct {
-	db *sql.DB
+	db *DB
 }
 
 // NewBackupJobRepo creates a new BackupJobRepo.
 func NewBackupJobRepo(db *sql.DB) *BackupJobRepo {
-	return &BackupJobRepo{db: db}
+	return &BackupJobRepo{db: wrapDB(db)}
 }
 
 // Create inserts a new backup job.

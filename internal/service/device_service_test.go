@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -180,7 +181,7 @@ func (r *mockLinkRepo) Delete(id uuid.UUID) error {
 	return nil
 }
 
-func (r *mockLinkRepo) Upsert(link *domain.Link) error {
+func (r *mockLinkRepo) Upsert(link *domain.Link) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// Check for existing match
@@ -192,7 +193,7 @@ func (r *mockLinkRepo) Upsert(link *domain.Link) error {
 			link.ID = id
 			link.UpdatedAt = time.Now().UTC()
 			r.links[id] = link
-			return nil
+			return false, nil
 		}
 	}
 	if link.ID == uuid.Nil {
@@ -202,7 +203,7 @@ func (r *mockLinkRepo) Upsert(link *domain.Link) error {
 	link.CreatedAt = now
 	link.UpdatedAt = now
 	r.links[link.ID] = link
-	return nil
+	return true, nil
 }
 
 // --- Mock Settings Repository ---
@@ -247,7 +248,7 @@ func newTestService(snmpResult *snmp.DiscoveryResult, snmpErr error) (*DeviceSer
 		return snmpResult, snmpErr
 	}
 
-	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 	return svc, deviceRepo, linkRepo
 }
 
@@ -350,7 +351,7 @@ func TestProbeFails_DeviceStatusDown(t *testing.T) {
 	}
 }
 
-func TestProbeDiscoversNeighbors_CreatesUnmanagedPlaceholders(t *testing.T) {
+func TestProbeDiscoversNeighbors_SkipsUnmatchedNeighbors(t *testing.T) {
 	result := &snmp.DiscoveryResult{
 		SysName:    "switch1",
 		DeviceType: domain.DeviceTypeSwitch,
@@ -452,6 +453,207 @@ func TestProbeDiscoversNeighbor_ExistingIP_NoDuplicate(t *testing.T) {
 	// Should be 2 (the pre-existing + the new one), NOT 3 (no duplicate for neighbor)
 	if len(devices) != 2 {
 		t.Errorf("expected 2 devices (no duplicate neighbor), got %d", len(devices))
+	}
+}
+
+func TestProbeDiscoversNeighbors_PrefersLLDPOverCDPForSameLink(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:    "switch1",
+		DeviceType: domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{{IfIndex: 1, IfName: "ether1"}},
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName:   "switch2",
+				RemotePortID:    "ether2",
+				LocalIfIndex:    1,
+				LocalIfName:     "ether1",
+				Protocol:        domain.DiscoveryProtocolLLDP,
+				RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+			},
+			{
+				RemoteSysName: "switch2-cdp",
+				RemotePortID:  "ether2",
+				LocalIfIndex:  1,
+				LocalIfName:   "ether1",
+				Protocol:      domain.DiscoveryProtocolCDP,
+			},
+		},
+	}
+
+	svc, deviceRepo, linkRepo := newTestService(result, nil)
+
+	remote := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch2",
+		SysName:  "switch2",
+		IP:       "10.0.0.2",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("failed to create remote device: %v", err)
+	}
+
+	_, err := svc.AddDevice(context.Background(), "10.0.0.1", "switch1",
+		domain.DeviceTypeUnknown,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	svc.WaitForProbes()
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link from matched LLDP neighbor, got %d", len(links))
+	}
+	if links[0].DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected LLDP link to win, got %s", links[0].DiscoveryProtocol)
+	}
+}
+
+func TestProbeDiscoversNeighbors_UsesCDPWhenLLDPFieldsAreMissing(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:    "switch1",
+		DeviceType: domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{{IfIndex: 1, IfName: "ether1"}},
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName:   "",
+				RemotePortID:    "",
+				LocalIfIndex:    1,
+				LocalIfName:     "ether1",
+				Protocol:        domain.DiscoveryProtocolLLDP,
+				RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+			},
+			{
+				RemoteSysName: "switch2",
+				RemotePortID:  "ether2",
+				LocalIfIndex:  1,
+				LocalIfName:   "ether1",
+				Protocol:      domain.DiscoveryProtocolCDP,
+			},
+		},
+	}
+
+	svc, deviceRepo, linkRepo := newTestService(result, nil)
+
+	remote := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch2",
+		SysName:  "switch2",
+		IP:       "10.0.0.2",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("failed to create remote device: %v", err)
+	}
+
+	_, err := svc.AddDevice(context.Background(), "10.0.0.1", "switch1",
+		domain.DeviceTypeUnknown,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	svc.WaitForProbes()
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link from CDP gap fill, got %d", len(links))
+	}
+	if links[0].DiscoveryProtocol != domain.DiscoveryProtocolCDP {
+		t.Fatalf("expected CDP link when LLDP lacks matchable data, got %s", links[0].DiscoveryProtocol)
+	}
+	if links[0].TargetIfName != "ether2" {
+		t.Fatalf("expected target interface ether2, got %q", links[0].TargetIfName)
+	}
+}
+
+func TestProbeDiscoversNeighbors_PrefersPhysicalLinkOverVirtualVariant(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:    "switch1",
+		DeviceType: domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{{IfIndex: 1, IfName: "ether2-verso-border-botte"}},
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName:   "switch2",
+				RemotePortID:    "VLAN-99-MGMT-ETH6",
+				LocalIfIndex:    1,
+				LocalIfName:     "",
+				Protocol:        domain.DiscoveryProtocolLLDP,
+				RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+			},
+			{
+				RemoteSysName:   "switch2",
+				RemotePortID:    "ether6-link_new_apparati",
+				LocalIfIndex:    1,
+				LocalIfName:     "ether2-verso-border-botte",
+				Protocol:        domain.DiscoveryProtocolLLDP,
+				RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+			},
+			{
+				RemoteSysName:   "switch2",
+				RemotePortID:    "ether6-link_new_apparati",
+				LocalIfIndex:    1,
+				LocalIfName:     "",
+				Protocol:        domain.DiscoveryProtocolLLDP,
+				RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+			},
+		},
+	}
+
+	svc, deviceRepo, linkRepo := newTestService(result, nil)
+
+	remote := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch2",
+		SysName:  "switch2",
+		IP:       "10.0.0.2",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("failed to create remote device: %v", err)
+	}
+
+	_, err := svc.AddDevice(context.Background(), "10.0.0.1", "switch1",
+		domain.DeviceTypeUnknown,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	svc.WaitForProbes()
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected 1 preferred link, got %d", len(links))
+	}
+	if links[0].SourceIfName != "ether2-verso-border-botte" {
+		t.Fatalf("expected physical source interface to win, got %q", links[0].SourceIfName)
+	}
+	if links[0].TargetIfName != "ether6-link_new_apparati" {
+		t.Fatalf("expected physical target interface to win, got %q", links[0].TargetIfName)
 	}
 }
 
@@ -626,7 +828,7 @@ func TestPrometheusDevice_SkipsSNMPProbe(t *testing.T) {
 		return nil, fmt.Errorf("should not be called")
 	}
 
-	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 
 	device, err := svc.AddDevice(context.Background(), "10.0.9.254", "",
 		domain.DeviceTypeUnknown,
@@ -668,7 +870,7 @@ func TestPrometheusDevice_SNMPv3WithPrivProtocol(t *testing.T) {
 		return nil, fmt.Errorf("securityParameters.PrivacyPassphrase is required when a privacy protocol is specified")
 	}
 
-	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 
 	// Simulate what happens when user picks "Prometheus without Fallback" but
 	// previously had v3 credentials in the form with authPriv + empty priv_password.
@@ -718,7 +920,7 @@ func TestAddDevice_VirtualNoIP(t *testing.T) {
 		return nil, fmt.Errorf("should not be called")
 	}
 
-	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 
 	device, err := svc.AddDevice(context.Background(), "", "",
 		domain.DeviceTypeVirtual,
@@ -757,7 +959,7 @@ func TestAddDevice_VirtualWithIP(t *testing.T) {
 		return nil, fmt.Errorf("should not be called")
 	}
 
-	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 
 	device, err := svc.AddDevice(context.Background(), "10.0.0.99", "",
 		domain.DeviceTypeVirtual,
@@ -795,7 +997,7 @@ func TestAddDevice_RegularStillRequiresProbe(t *testing.T) {
 		return &snmp.DiscoveryResult{SysName: "test-router"}, nil
 	}
 
-	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn)
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
 
 	device, err := svc.AddDevice(context.Background(), "10.0.0.1", "",
 		domain.DeviceTypeUnknown,
@@ -816,6 +1018,30 @@ func TestAddDevice_RegularStillRequiresProbe(t *testing.T) {
 	if !snmpCalled {
 		t.Error("discoverFunc was NOT called — regular devices should trigger SNMP probe")
 	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.b = append(b.b, p...)
+	return len(p), nil
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.b)
+}
+
+func (b *syncBuffer) Contains(substr string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Contains(string(b.b), substr)
 }
 
 // helper

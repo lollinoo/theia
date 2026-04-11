@@ -9,7 +9,7 @@ import (
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
-// testRegistry creates a vendor registry with mikrotik + default for testing.
+// testRegistry creates a vendor registry with default + selected vendor profiles for testing.
 func testRegistry(t *testing.T) *vendor.Registry {
 	t.Helper()
 	dir := t.TempDir()
@@ -82,9 +82,37 @@ snmp:
   temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
   temperature_scale: 0.1
 `
+	ubiquitiYAML := `
+vendor:
+  name: ubiquiti
+  display_name: Ubiquiti
+
+detection:
+  sys_object_id_prefixes:
+    - "1.3.6.1.4.1.41112"
+  sys_descr_patterns:
+    - "airMAX"
+
+device_type_rules:
+  - match:
+      sys_descr_contains: "Access Point"
+    type: ap
+  - match:
+      sys_descr_contains: "Router"
+    type: router
+  - match:
+      sys_descr_contains: "CPE"
+    type: router
+  - type: unknown
+
+model_extraction:
+  sys_descr_regex: "(?i)(?:Access Point|Router CPE)\\s+(.+?)\\s+[0-9]+(?:\\.[0-9]+)+"
+  capture_group: 1
+`
 
 	os.WriteFile(filepath.Join(dir, "default.yaml"), []byte(defaultYAML), 0644)
 	os.WriteFile(filepath.Join(dir, "mikrotik.yaml"), []byte(mikrotikYAML), 0644)
+	os.WriteFile(filepath.Join(dir, "ubiquiti.yaml"), []byte(ubiquitiYAML), 0644)
 
 	reg, err := vendor.LoadRegistry(dir)
 	if err != nil {
@@ -97,11 +125,11 @@ func TestDetectVendor(t *testing.T) {
 	reg := testRegistry(t)
 
 	tests := []struct {
-		name         string
-		sysObjectID  string
-		sysDescr     string
-		wantVendor   string
-		wantType     domain.DeviceType
+		name        string
+		sysObjectID string
+		sysDescr    string
+		wantVendor  string
+		wantType    domain.DeviceType
 	}{
 		// MikroTik
 		{
@@ -132,6 +160,20 @@ func TestDetectVendor(t *testing.T) {
 			sysDescr:    "Managed Switch 24-port",
 			wantVendor:  "default",
 			wantType:    domain.DeviceTypeSwitch,
+		},
+		{
+			name:        "Ubiquiti Sector AP",
+			sysObjectID: "1.3.6.1.4.1.41112.1.6",
+			sysDescr:    "airMAX Wireless Access Point Rocket Prism 5AC Gen2 8.7.4",
+			wantVendor:  "ubiquiti",
+			wantType:    domain.DeviceTypeAP,
+		},
+		{
+			name:        "Ubiquiti CPE",
+			sysObjectID: "1.3.6.1.4.1.41112.1.10",
+			sysDescr:    "airMAX Wireless Router CPE LiteBeam 5AC Gen2 8.7.4",
+			wantVendor:  "ubiquiti",
+			wantType:    domain.DeviceTypeRouter,
 		},
 		{
 			name:        "Unknown device",

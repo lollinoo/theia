@@ -1,4 +1,4 @@
-type WSMessageType = 'snapshot' | 'snapshot_delta' | 'metrics' | 'link_metrics' | 'alert' | 'prometheus_status';
+type WSMessageType = 'snapshot' | 'snapshot_delta' | 'metrics' | 'link_metrics' | 'alert' | 'prometheus_status' | 'topology_changed';
 type APIRecord = Record<string, unknown>;
 
 export interface DeviceMetricsDTO {
@@ -35,6 +35,7 @@ export interface SnapshotPayload {
   alerts: AlertDTO[];
   device_statuses: Record<string, string>;
   device_hostnames: Record<string, string>;
+  device_models: Record<string, string>;
 }
 
 export interface PrometheusStatusPayload {
@@ -133,6 +134,7 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
   const alerts = Array.isArray(value.alerts) ? value.alerts : [];
   const deviceStatuses = isRecord(value.device_statuses) ? value.device_statuses : {};
   const deviceHostnames = isRecord(value.device_hostnames) ? value.device_hostnames : {};
+  const deviceModels = isRecord(value.device_models) ? value.device_models : {};
 
   return {
     device_metrics: Object.fromEntries(
@@ -158,6 +160,11 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
         .filter(([, v]) => typeof v === 'string')
         .map(([k, v]) => [k, v as string]),
     ),
+    device_models: Object.fromEntries(
+      Object.entries(deviceModels)
+        .filter(([, v]) => typeof v === 'string')
+        .map(([k, v]) => [k, v as string]),
+    ),
   };
 }
 
@@ -175,6 +182,7 @@ export function mergeSnapshotDelta(
     link_metrics: { ...existing.link_metrics, ...delta.link_metrics },
     device_statuses: { ...existing.device_statuses, ...delta.device_statuses },
     device_hostnames: { ...existing.device_hostnames, ...delta.device_hostnames },
+    device_models: { ...existing.device_models, ...delta.device_models },
     alerts: delta.alerts.length > 0 ? delta.alerts : existing.alerts,
   };
 }
@@ -191,7 +199,8 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | 
     type !== 'metrics' &&
     type !== 'link_metrics' &&
     type !== 'alert' &&
-    type !== 'prometheus_status'
+    type !== 'prometheus_status' &&
+    type !== 'topology_changed'
   ) {
     throw new Error(`unsupported websocket message type: ${type}`);
   }
@@ -218,6 +227,13 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | 
         available: p.available === true,
         error: typeof p.error === 'string' ? p.error : undefined,
       },
+    };
+  }
+
+  if (type === 'topology_changed') {
+    return {
+      type,
+      payload: null,
     };
   }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { LinkCreatePanel } from './LinkCreatePanel';
-import type { Device, Link } from '../types/api';
+import type { Device } from '../types/api';
 import { ValidationError, ServerError } from '../api/errors';
 
 // Mock API calls
@@ -13,6 +13,13 @@ vi.mock('../api/client', () => ({
     target_device_id: 'dev-2',
     target_if_name: '',
     discovery_protocol: '',
+  }),
+  fetchDeviceInterfaces: vi.fn().mockImplementation((deviceId: string) => {
+    const iface = { if_name: 'ether1', if_descr: 'Eth1', speed: 1000000000, oper_status: 'up', admin_status: 'up', in_use: false };
+    if (deviceId === 'dev-p1' || deviceId === 'dev-p2' || deviceId === 'dev-physical') {
+      return Promise.resolve([iface]);
+    }
+    return Promise.resolve([]);
   }),
 }));
 
@@ -60,7 +67,6 @@ beforeEach(() => {
 
 describe('LinkCreatePanel', () => {
   const baseProps = {
-    links: [] as Link[],
     onCreated: vi.fn(),
     onClose: vi.fn(),
   };
@@ -189,7 +195,6 @@ describe('LinkCreatePanel — handleSubmit catch handles typed errors', () => {
     render(
       <LinkCreatePanel
         devices={[physical1, physical2]}
-        links={[]}
         onCreated={vi.fn()}
         onClose={vi.fn()}
         initialSourceDeviceId="dev-p1"
@@ -197,11 +202,11 @@ describe('LinkCreatePanel — handleSubmit catch handles typed errors', () => {
       />,
     );
 
-    // Select source interface
+    // Wait for async interface fetch to populate the dropdowns
+    await screen.findAllByText(/ether1/);
+
     const selects = screen.getAllByRole('combobox');
-    // First combobox is source interface selector (physical device with ether1)
     fireEvent.change(selects[0], { target: { value: 'ether1' } });
-    // Second is target interface selector
     fireEvent.change(selects[1], { target: { value: 'ether1' } });
 
     fireEvent.click(screen.getByText('Create Link'));
@@ -220,13 +225,15 @@ describe('LinkCreatePanel — handleSubmit catch handles typed errors', () => {
     render(
       <LinkCreatePanel
         devices={[physical1, physical2]}
-        links={[]}
         onCreated={vi.fn()}
         onClose={vi.fn()}
         initialSourceDeviceId="dev-p1"
         initialTargetDeviceId="dev-p2"
       />,
     );
+
+    // Wait for async interface fetch to populate the dropdowns
+    await screen.findAllByText(/ether1/);
 
     const selects = screen.getAllByRole('combobox');
     fireEvent.change(selects[0], { target: { value: 'ether1' } });

@@ -41,7 +41,7 @@ func (r *mockLinkRepo) GetByID(_ uuid.UUID) (*domain.Link, error)           { re
 func (r *mockLinkRepo) GetByDeviceID(_ uuid.UUID) ([]domain.Link, error)    { return nil, nil }
 func (r *mockLinkRepo) Update(_ *domain.Link) error                         { return nil }
 func (r *mockLinkRepo) Delete(_ uuid.UUID) error                            { return nil }
-func (r *mockLinkRepo) Upsert(_ *domain.Link) error                         { return nil }
+func (r *mockLinkRepo) Upsert(_ *domain.Link) (bool, error) { return false, nil }
 
 func (r *mockLinkRepo) GetAll() ([]domain.Link, error) {
 	atomic.AddInt32(&r.getAllCount, 1)

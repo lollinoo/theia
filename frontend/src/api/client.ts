@@ -125,7 +125,7 @@ async function requestJSONWithBody(
         ? payload.error
         : response.statusText;
 
-    if (response.status === 400) {
+    if (response.status === 400 || response.status === 409) {
       throw new ValidationError(errorMessage);
     }
 

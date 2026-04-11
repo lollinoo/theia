@@ -16,16 +16,18 @@ export function buildTopologyNodes(
     const saved = savedPositions.get(device.id);
     const position = saved ?? defaultPosition ?? computedPositions.get(device.id) ?? { x: 0, y: 0 };
 
-    // Merge snapshot status/hostname into device if available
+    // Merge snapshot status/hostname/model into device if available
     let deviceData = device;
     if (pendingSnapshot) {
       const snapStatus = pendingSnapshot.device_statuses[device.id];
       const snapHostname = pendingSnapshot.device_hostnames[device.id];
-      if (snapStatus || snapHostname) {
+      const snapModel = pendingSnapshot.device_models?.[device.id];
+      if (snapStatus || snapHostname || snapModel) {
         deviceData = {
           ...device,
           ...(snapStatus ? { status: snapStatus as Device['status'] } : {}),
           ...(snapHostname ? { sys_name: snapHostname } : {}),
+          ...(snapModel ? { hardware_model: snapModel } : {}),
         };
       }
     }
