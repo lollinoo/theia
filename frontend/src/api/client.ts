@@ -278,6 +278,10 @@ export async function createLink(payload: {
     target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
     discovery_protocol:
       typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
+    source_if_speed: typeof record.source_if_speed === 'number' ? record.source_if_speed : 0,
+    source_if_oper_status: typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
+    target_if_speed: typeof record.target_if_speed === 'number' ? record.target_if_speed : 0,
+    target_if_oper_status: typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
   };
 }
 
@@ -305,6 +309,10 @@ export async function updateLink(
     target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
     discovery_protocol:
       typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
+    source_if_speed: typeof record.source_if_speed === 'number' ? record.source_if_speed : 0,
+    source_if_oper_status: typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
+    target_if_speed: typeof record.target_if_speed === 'number' ? record.target_if_speed : 0,
+    target_if_oper_status: typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
   };
 }
 

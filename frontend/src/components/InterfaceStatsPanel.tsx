@@ -187,20 +187,24 @@ export function InterfaceStatsPanel({
   const [targetInterfaceInfo, setTargetInterfaceInfo] = useState<InterfaceInfo | null>(null);
 
   useEffect(() => {
+    let stale = false;
     setSourceInterfaceInfo(null);
     setTargetInterfaceInfo(null);
     fetchDeviceInterfaces(sourceDevice.id)
       .then((ifaces) => {
+        if (stale) return;
         const match = ifaces.find((i) => i.if_name.trim().toLowerCase() === link.source_if_name.trim().toLowerCase());
         setSourceInterfaceInfo(match ?? null);
       })
-      .catch(() => setSourceInterfaceInfo(null));
+      .catch(() => { if (!stale) setSourceInterfaceInfo(null); });
     fetchDeviceInterfaces(targetDevice.id)
       .then((ifaces) => {
+        if (stale) return;
         const match = ifaces.find((i) => i.if_name.trim().toLowerCase() === link.target_if_name.trim().toLowerCase());
         setTargetInterfaceInfo(match ?? null);
       })
-      .catch(() => setTargetInterfaceInfo(null));
+      .catch(() => { if (!stale) setTargetInterfaceInfo(null); });
+    return () => { stale = true; };
   }, [sourceDevice.id, targetDevice.id, link.source_if_name, link.target_if_name]);
 
   return (
@@ -242,9 +246,11 @@ export function DeviceInterfaceStatsPanel({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let stale = false;
     setLoading(true);
     fetchDeviceInterfaces(device.id)
       .then((ifaces) => {
+        if (stale) return;
         const filtered = ifaces.filter((i) => {
           const lower = i.if_name.toLowerCase();
           return !lower.startsWith('lo') && lower !== 'null' && !lower.startsWith('null');
@@ -257,8 +263,9 @@ export function DeviceInterfaceStatsPanel({
         });
         setInterfaces(filtered);
       })
-      .catch(() => setInterfaces([]))
-      .finally(() => setLoading(false));
+      .catch(() => { if (!stale) setInterfaces([]); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
   }, [device.id]);
 
   if (!loading && interfaces.length === 0) {

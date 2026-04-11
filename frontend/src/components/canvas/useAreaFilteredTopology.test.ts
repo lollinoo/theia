@@ -30,9 +30,9 @@ const deviceB = mockDevice({ id: 'b', area_ids: ['area-1'], sys_name: 'Router-B'
 const deviceC = mockDevice({ id: 'c', area_ids: ['area-2'], sys_name: 'Router-C', ip: '10.0.0.3' });
 const deviceD = mockDevice({ id: 'd', area_ids: [], sys_name: 'Unassigned', ip: '10.0.0.4' }); // no areas
 
-const linkAB: Link = { id: 'l1', source_device_id: 'a', target_device_id: 'b', source_if_name: 'ether1', target_if_name: 'ether1', discovery_protocol: 'lldp' };
-const linkAC: Link = { id: 'l2', source_device_id: 'a', target_device_id: 'c', source_if_name: 'ether2', target_if_name: 'ether1', discovery_protocol: 'lldp' };
-const linkCD: Link = { id: 'l3', source_device_id: 'c', target_device_id: 'd', source_if_name: 'ether3', target_if_name: 'ether1', discovery_protocol: 'lldp' };
+const linkAB: Link = { id: 'l1', source_device_id: 'a', target_device_id: 'b', source_if_name: 'ether1', target_if_name: 'ether1', discovery_protocol: 'lldp', source_if_speed: 0, source_if_oper_status: '', target_if_speed: 0, target_if_oper_status: '' };
+const linkAC: Link = { id: 'l2', source_device_id: 'a', target_device_id: 'c', source_if_name: 'ether2', target_if_name: 'ether1', discovery_protocol: 'lldp', source_if_speed: 0, source_if_oper_status: '', target_if_speed: 0, target_if_oper_status: '' };
+const linkCD: Link = { id: 'l3', source_device_id: 'c', target_device_id: 'd', source_if_name: 'ether3', target_if_name: 'ether1', discovery_protocol: 'lldp', source_if_speed: 0, source_if_oper_status: '', target_if_speed: 0, target_if_oper_status: '' };
 
 const allDevices = [deviceA, deviceB, deviceC, deviceD];
 const allLinks = [linkAB, linkAC, linkCD];

@@ -3,7 +3,7 @@ import type { AlertDTO, AlertStatus } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import { type LinkEdgeData, type LinkEdgeType } from '../LinkEdge';
 import { formatBandwidth } from '../LinkEdge';
-import { inferSpeedLabel, type HandleSide } from './canvasHelpers';
+import { type HandleSide } from './canvasHelpers';
 
 function normalizeLinkValue(value: string): string {
   return value.trim().toLowerCase();
@@ -118,12 +118,13 @@ export function buildEdgeData(
 ): LinkEdgeData {
   const sourceDevice = devicesByID.get(link.source_device_id);
   const targetDevice = devicesByID.get(link.target_device_id);
-  const sourceInterface = sourceDevice?.interfaces.find(
-    (iface) => iface.if_name === link.source_if_name,
-  );
-  const targetInterface = targetDevice?.interfaces.find(
-    (iface) => iface.if_name === link.target_if_name,
-  );
+
+  // Use enriched interface data from the link response directly instead of
+  // looking up device.interfaces (avoids per-device /interfaces API calls).
+  const sourceSpeed = link.source_if_speed > 0 ? link.source_if_speed : 0;
+  const targetSpeed = link.target_if_speed > 0 ? link.target_if_speed : 0;
+  const sourceIfOperStatus = link.source_if_oper_status || undefined;
+  const targetIfOperStatus = link.target_if_oper_status || undefined;
 
   // Detect virtual link: one side is a virtual device
   const sourceIsVirtual = sourceDevice?.device_type === 'virtual';
@@ -133,8 +134,7 @@ export function buildEdgeData(
   // For virtual links, use only the real device's interface speed (D-10)
   // Virtual devices have no interfaces, so their speed is always 0
   if (isVirtualLink) {
-    const realInterface = sourceIsVirtual ? targetInterface : sourceInterface;
-    const realSpeed = realInterface?.speed && realInterface.speed > 0 ? realInterface.speed : 0;
+    const realSpeed = sourceIsVirtual ? targetSpeed : sourceSpeed;
 
     return {
       link,
@@ -144,17 +144,14 @@ export function buildEdgeData(
       metrics: existingData?.metrics,
       throughputLabel: existingData?.throughputLabel,
       utilization: existingData?.utilization,
-      sourceIfStatus: sourceIsVirtual ? undefined : sourceInterface?.oper_status,
-      targetIfStatus: targetIsVirtual ? undefined : targetInterface?.oper_status,
+      sourceIfStatus: sourceIsVirtual ? undefined : sourceIfOperStatus,
+      targetIfStatus: targetIsVirtual ? undefined : targetIfOperStatus,
       sourceDeviceStatus: existingData?.sourceDeviceStatus ?? sourceDevice?.status,
       targetDeviceStatus: existingData?.targetDeviceStatus ?? targetDevice?.status,
     };
   }
 
   // Compare negotiation speeds from both sides; show minimum with warning on mismatch
-  const sourceSpeed = sourceInterface?.speed && sourceInterface.speed > 0 ? sourceInterface.speed : 0;
-  const targetSpeed = targetInterface?.speed && targetInterface.speed > 0 ? targetInterface.speed : 0;
-
   let bandwidthLabel: string | undefined;
   let speedMismatch = false;
 
@@ -171,8 +168,6 @@ export function buildEdgeData(
     bandwidthLabel = formatBandwidth(sourceSpeed);
   } else if (targetSpeed > 0) {
     bandwidthLabel = formatBandwidth(targetSpeed);
-  } else {
-    bandwidthLabel = inferSpeedLabel(sourceDevice, targetDevice);
   }
 
   return {
@@ -183,8 +178,8 @@ export function buildEdgeData(
     metrics: existingData?.metrics,
     throughputLabel: existingData?.throughputLabel,
     utilization: existingData?.utilization,
-    sourceIfStatus: sourceInterface?.oper_status,
-    targetIfStatus: targetInterface?.oper_status,
+    sourceIfStatus: sourceIfOperStatus,
+    targetIfStatus: targetIfOperStatus,
     sourceDeviceStatus: existingData?.sourceDeviceStatus ?? sourceDevice?.status,
     targetDeviceStatus: existingData?.targetDeviceStatus ?? targetDevice?.status,
   };

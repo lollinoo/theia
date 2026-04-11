@@ -33,6 +33,10 @@ function mockLink(overrides: Partial<Link> = {}): Link {
     target_device_id: 'dev-2',
     target_if_name: 'ether2',
     discovery_protocol: 'lldp',
+    source_if_speed: 0,
+    source_if_oper_status: '',
+    target_if_speed: 0,
+    target_if_oper_status: '',
     ...overrides,
   };
 }
@@ -51,23 +55,18 @@ function mockNode(id: string, x: number, y: number): DeviceNode {
 
 describe('buildEdgeData', () => {
   it('physical-physical link with speed mismatch sets speedMismatch=true', () => {
-    const source = mockDevice({
-      id: 'dev-1',
-      interfaces: [
-        { id: 'if-1', if_index: 1, if_name: 'ether1', if_descr: 'ether1', speed: 1_000_000_000, admin_status: 'up', oper_status: 'up' },
-      ],
-    });
-    const target = mockDevice({
-      id: 'dev-2',
-      interfaces: [
-        { id: 'if-2', if_index: 1, if_name: 'ether2', if_descr: 'ether2', speed: 100_000_000, admin_status: 'up', oper_status: 'up' },
-      ],
-    });
+    const source = mockDevice({ id: 'dev-1' });
+    const target = mockDevice({ id: 'dev-2' });
     const devicesByID = new Map([
       ['dev-1', source],
       ['dev-2', target],
     ]);
-    const link = mockLink();
+    const link = mockLink({
+      source_if_speed: 1_000_000_000,
+      source_if_oper_status: 'up',
+      target_if_speed: 100_000_000,
+      target_if_oper_status: 'up',
+    });
 
     const result = buildEdgeData(link, devicesByID);
 
@@ -77,23 +76,16 @@ describe('buildEdgeData', () => {
   });
 
   it('source is virtual device: speedMismatch=false, bandwidthLabel uses target speed', () => {
-    const source = mockDevice({
-      id: 'dev-1',
-      device_type: 'virtual',
-      interfaces: [],
-    });
-    const target = mockDevice({
-      id: 'dev-2',
-      device_type: 'router',
-      interfaces: [
-        { id: 'if-2', if_index: 1, if_name: 'ether2', if_descr: 'ether2', speed: 1_000_000_000, admin_status: 'up', oper_status: 'up' },
-      ],
-    });
+    const source = mockDevice({ id: 'dev-1', device_type: 'virtual' });
+    const target = mockDevice({ id: 'dev-2', device_type: 'router' });
     const devicesByID = new Map([
       ['dev-1', source],
       ['dev-2', target],
     ]);
-    const link = mockLink();
+    const link = mockLink({
+      target_if_speed: 1_000_000_000,
+      target_if_oper_status: 'up',
+    });
 
     const result = buildEdgeData(link, devicesByID);
 
@@ -102,23 +94,16 @@ describe('buildEdgeData', () => {
   });
 
   it('target is virtual device: speedMismatch=false, bandwidthLabel uses source speed', () => {
-    const source = mockDevice({
-      id: 'dev-1',
-      device_type: 'router',
-      interfaces: [
-        { id: 'if-1', if_index: 1, if_name: 'ether1', if_descr: 'ether1', speed: 1_000_000_000, admin_status: 'up', oper_status: 'up' },
-      ],
-    });
-    const target = mockDevice({
-      id: 'dev-2',
-      device_type: 'virtual',
-      interfaces: [],
-    });
+    const source = mockDevice({ id: 'dev-1', device_type: 'router' });
+    const target = mockDevice({ id: 'dev-2', device_type: 'virtual' });
     const devicesByID = new Map([
       ['dev-1', source],
       ['dev-2', target],
     ]);
-    const link = mockLink();
+    const link = mockLink({
+      source_if_speed: 1_000_000_000,
+      source_if_oper_status: 'up',
+    });
 
     const result = buildEdgeData(link, devicesByID);
 
@@ -150,23 +135,16 @@ describe('buildEdgeData', () => {
   });
 
   it('virtual link preserves existing throughputLabel and metrics from existingData', () => {
-    const source = mockDevice({
-      id: 'dev-1',
-      device_type: 'virtual',
-      interfaces: [],
-    });
-    const target = mockDevice({
-      id: 'dev-2',
-      device_type: 'router',
-      interfaces: [
-        { id: 'if-2', if_index: 1, if_name: 'ether2', if_descr: 'ether2', speed: 1_000_000_000, admin_status: 'up', oper_status: 'up' },
-      ],
-    });
+    const source = mockDevice({ id: 'dev-1', device_type: 'virtual' });
+    const target = mockDevice({ id: 'dev-2', device_type: 'router' });
     const devicesByID = new Map([
       ['dev-1', source],
       ['dev-2', target],
     ]);
-    const link = mockLink();
+    const link = mockLink({
+      target_if_speed: 1_000_000_000,
+      target_if_oper_status: 'up',
+    });
 
     const existingData = {
       throughputLabel: 'TX: 500M / RX: 300M',
@@ -182,23 +160,16 @@ describe('buildEdgeData', () => {
   });
 
   it('virtual source: sourceIfStatus is undefined, targetIfStatus shows real status', () => {
-    const source = mockDevice({
-      id: 'dev-1',
-      device_type: 'virtual',
-      interfaces: [],
-    });
-    const target = mockDevice({
-      id: 'dev-2',
-      device_type: 'router',
-      interfaces: [
-        { id: 'if-2', if_index: 1, if_name: 'ether2', if_descr: 'ether2', speed: 1_000_000_000, admin_status: 'up', oper_status: 'up' },
-      ],
-    });
+    const source = mockDevice({ id: 'dev-1', device_type: 'virtual' });
+    const target = mockDevice({ id: 'dev-2', device_type: 'router' });
     const devicesByID = new Map([
       ['dev-1', source],
       ['dev-2', target],
     ]);
-    const link = mockLink();
+    const link = mockLink({
+      target_if_speed: 1_000_000_000,
+      target_if_oper_status: 'up',
+    });
 
     const result = buildEdgeData(link, devicesByID);
 
@@ -207,23 +178,16 @@ describe('buildEdgeData', () => {
   });
 
   it('virtual target: targetIfStatus is undefined, sourceIfStatus shows real status', () => {
-    const source = mockDevice({
-      id: 'dev-1',
-      device_type: 'router',
-      interfaces: [
-        { id: 'if-1', if_index: 1, if_name: 'ether1', if_descr: 'ether1', speed: 1_000_000_000, admin_status: 'up', oper_status: 'up' },
-      ],
-    });
-    const target = mockDevice({
-      id: 'dev-2',
-      device_type: 'virtual',
-      interfaces: [],
-    });
+    const source = mockDevice({ id: 'dev-1', device_type: 'router' });
+    const target = mockDevice({ id: 'dev-2', device_type: 'virtual' });
     const devicesByID = new Map([
       ['dev-1', source],
       ['dev-2', target],
     ]);
-    const link = mockLink();
+    const link = mockLink({
+      source_if_speed: 1_000_000_000,
+      source_if_oper_status: 'up',
+    });
 
     const result = buildEdgeData(link, devicesByID);
 

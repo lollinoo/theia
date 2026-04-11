@@ -59,6 +59,14 @@ export interface Link {
   target_device_id: string;
   target_if_name: string;
   discovery_protocol: string;
+  /** Interface speed in bps, enriched by the links list endpoint. */
+  source_if_speed: number;
+  /** Interface operational status, enriched by the links list endpoint. */
+  source_if_oper_status: string;
+  /** Interface speed in bps, enriched by the links list endpoint. */
+  target_if_speed: number;
+  /** Interface operational status, enriched by the links list endpoint. */
+  target_if_oper_status: string;
 }
 
 export interface DevicePosition {
@@ -209,6 +217,10 @@ export function parseLinksResponse(payload: unknown): Link[] {
       target_device_id: readString(resource, 'target_device_id'),
       target_if_name: readString(resource, 'target_if_name'),
       discovery_protocol: readString(resource, 'discovery_protocol'),
+      source_if_speed: readNumber(resource, 'source_if_speed'),
+      source_if_oper_status: readString(resource, 'source_if_oper_status'),
+      target_if_speed: readNumber(resource, 'target_if_speed'),
+      target_if_oper_status: readString(resource, 'target_if_oper_status'),
     };
   });
 }

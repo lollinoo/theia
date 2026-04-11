@@ -64,6 +64,10 @@ function mockLink(overrides: Partial<Link> = {}): Link {
     target_device_id: 'dev-2',
     target_if_name: 'ether2',
     discovery_protocol: 'lldp',
+    source_if_speed: 0,
+    source_if_oper_status: '',
+    target_if_speed: 0,
+    target_if_oper_status: '',
     ...overrides,
   };
 }
