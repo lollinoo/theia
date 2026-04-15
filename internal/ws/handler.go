@@ -19,12 +19,12 @@ var upgrader = websocket.Upgrader{
 type Handler struct {
 	hub            *Hub
 	snapshotFunc   func() *SnapshotPayload
-	promStatusFunc func() bool
+	promStatusFunc func() PrometheusStatusPayload
 }
 
 // NewHandler creates a WebSocket handler that serves initial snapshots on connect.
-// promStatusFunc returns the current Prometheus availability (true = reachable).
-func NewHandler(hub *Hub, snapshotFunc func() *SnapshotPayload, promStatusFunc func() bool) *Handler {
+// promStatusFunc returns the current Prometheus integration status.
+func NewHandler(hub *Hub, snapshotFunc func() *SnapshotPayload, promStatusFunc func() PrometheusStatusPayload) *Handler {
 	return &Handler{
 		hub:            hub,
 		snapshotFunc:   snapshotFunc,
@@ -64,14 +64,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Send current Prometheus status so the client doesn't have to wait for
 	// the next health-check transition to learn Prometheus is unreachable.
+	// Disabled Prometheus is treated as "no status" to preserve SNMP-only mode.
 	if h.promStatusFunc != nil {
-		available := h.promStatusFunc()
-		h.hub.SendTo(client, Message{
-			Type: MessageTypePrometheusStatus,
-			Payload: PrometheusStatusPayload{
-				Available: available,
-			},
-		})
+		status := h.promStatusFunc()
+		if status.Enabled {
+			h.hub.SendTo(client, Message{
+				Type:    MessageTypePrometheusStatus,
+				Payload: status,
+			})
+		}
 	}
 
 	go client.writePump()

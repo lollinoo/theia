@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -464,12 +465,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	prometheusURL, err := ensurePrometheusURL(settingsRepo)
-	if err != nil {
-		log.Fatalf("Failed to initialize Prometheus URL: %v", err)
+	prometheusURL := ""
+	if value, err := settingsRepo.Get(domain.SettingPrometheusURL); err == nil {
+		prometheusURL = strings.TrimSpace(value)
+	} else {
+		log.Printf("Warning: failed to read Prometheus URL: %v", err)
 	}
 
-	promClient := metrics.NewPromClient(prometheusURL, http.DefaultClient)
+	var promClient collector.PrometheusEnrichmentClient
+	if prometheusURL != "" {
+		promClient = metrics.NewPromClient(prometheusURL, http.DefaultClient)
+	} else {
+		log.Println("Prometheus integration disabled: no prometheus_url configured")
+	}
 	hub := ws.NewHub()
 	go hub.Run()
 
@@ -500,7 +508,7 @@ func main() {
 	}
 	deviceBackupScheduler.Start(ctx)
 
-	wsHandler := ws.NewHandler(hub, pipeline.GetSnapshot, pipeline.IsPromAvailable)
+	wsHandler := ws.NewHandler(hub, pipeline.GetSnapshot, pipeline.GetPrometheusStatus)
 
 	// Create HTTP router with all /api/v1/ routes
 	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, cfg.BridgeBinariesDir, wsHandler)
@@ -608,21 +616,6 @@ func loadRegistryFromDB(repo *sqlite.VendorConfigRepo) (*vendor.Registry, error)
 	}
 
 	return vendor.LoadRegistryFromDB(dbRecords)
-}
-
-func ensurePrometheusURL(settingsRepo *sqlite.SettingsRepo) (string, error) {
-	const defaultPrometheusURL = "http://localhost:9090"
-
-	prometheusURL, err := settingsRepo.Get(domain.SettingPrometheusURL)
-	if err == nil && prometheusURL != "" {
-		return prometheusURL, nil
-	}
-
-	if err := settingsRepo.Set(domain.SettingPrometheusURL, defaultPrometheusURL); err != nil {
-		return "", err
-	}
-
-	return defaultPrometheusURL, nil
 }
 
 func newCollectorSNMPClientFunc(settingsRepo domain.SettingsRepository) collector.NewSNMPClientFunc {

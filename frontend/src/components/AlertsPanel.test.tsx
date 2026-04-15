@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { AlertsPanel } from './AlertsPanel';
-import type { AlertDTO } from '../types/metrics';
+import type { AlertDTO, PrometheusStatusPayload } from '../types/metrics';
 import type { Device } from '../types/api';
 
 // Mock MaterialIcon
@@ -85,5 +85,17 @@ describe('AlertsPanel (COMP-06)', () => {
     );
     const html = container.innerHTML;
     expect(html).toContain('motion-reduce:animate-none');
+  });
+
+  it('does not render Prometheus outage UI when Prometheus is disabled', () => {
+    const disabledStatus: PrometheusStatusPayload = {
+      enabled: false,
+      available: false,
+    };
+    const { queryByText } = render(
+      <AlertsPanel alerts={[]} devices={[mockDevice()]} prometheusStatus={disabledStatus} />,
+    );
+
+    expect(queryByText('Prometheus unreachable')).not.toBeInTheDocument();
   });
 });

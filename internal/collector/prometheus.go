@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/metrics"
 )
 
 // PrometheusEnrichmentClient is the collector-facing Prometheus client contract.
@@ -24,16 +26,40 @@ type PrometheusEnrichmentClient interface {
 
 // PrometheusCollector queries Prometheus for non-authoritative enrichment data.
 type PrometheusCollector struct {
-	client PrometheusEnrichmentClient
-	now    func() time.Time
+	mu        sync.RWMutex
+	client    PrometheusEnrichmentClient
+	now       func() time.Time
+	swappable bool
 }
 
 // NewPrometheusCollector constructs a stateless Prometheus enrichment collector.
 func NewPrometheusCollector(client PrometheusEnrichmentClient) *PrometheusCollector {
+	_, swappable := client.(*metrics.PromClient)
 	return &PrometheusCollector{
-		client: client,
-		now:    time.Now,
+		client:    client,
+		now:       time.Now,
+		swappable: swappable,
 	}
+}
+
+// SetClient swaps the underlying Prometheus client at runtime.
+func (c *PrometheusCollector) SetClient(client PrometheusEnrichmentClient) {
+	if c == nil {
+		return
+	}
+
+	c.mu.Lock()
+	if !c.swappable && client != nil {
+		c.mu.Unlock()
+		return
+	}
+	c.client = client
+	c.mu.Unlock()
+}
+
+// Enabled reports whether Prometheus queries are currently configured.
+func (c *PrometheusCollector) Enabled() bool {
+	return c.currentClient() != nil
 }
 
 // ResolvePrometheusLabel returns a safe Prometheus label selector target for a
@@ -72,12 +98,13 @@ func (c *PrometheusCollector) CollectDeviceEnrichment(ctx context.Context, devic
 	if c == nil {
 		return result, errors.New("prometheus collector is nil")
 	}
-	if c.client == nil {
+	client := c.currentClient()
+	if client == nil {
 		return result, errors.New("prometheus collector client is nil")
 	}
 
 	if labelName, labelValue, ok := ResolvePrometheusLabel(device); ok {
-		hostnames, err := c.client.QueryHostnames(ctx, labelName, []string{labelValue})
+		hostnames, err := client.QueryHostnames(ctx, labelName, []string{labelValue})
 		if err != nil {
 			return result, fmt.Errorf("query hostnames: %w", err)
 		}
@@ -85,7 +112,7 @@ func (c *PrometheusCollector) CollectDeviceEnrichment(ctx context.Context, devic
 	}
 
 	if ip := strings.TrimSpace(device.IP); ip != "" {
-		probeStatuses, err := c.client.QueryProbeStatus(ctx, []string{ip})
+		probeStatuses, err := client.QueryProbeStatus(ctx, []string{ip})
 		if err != nil {
 			return result, fmt.Errorf("query probe status: %w", err)
 		}
@@ -109,11 +136,12 @@ func (c *PrometheusCollector) CollectAlerts(ctx context.Context, devices []domai
 	if c == nil {
 		return nil, errors.New("prometheus collector is nil")
 	}
-	if c.client == nil {
+	client := c.currentClient()
+	if client == nil {
 		return nil, errors.New("prometheus collector client is nil")
 	}
 
-	alerts, err := c.client.QueryAlerts(ctx)
+	alerts, err := client.QueryAlerts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("query alerts: %w", err)
 	}
@@ -184,6 +212,16 @@ func collectorNowUTC(c *PrometheusCollector) time.Time {
 	}
 
 	return time.Now().UTC()
+}
+
+func (c *PrometheusCollector) currentClient() PrometheusEnrichmentClient {
+	if c == nil {
+		return nil
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.client
 }
 
 func boolPtr(value bool) *bool {

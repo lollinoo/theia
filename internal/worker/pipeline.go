@@ -3,7 +3,9 @@ package worker
 import (
 	"context"
 	"log"
+	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -50,8 +53,7 @@ type PipelineOrchestrator struct {
 	healthDone     chan struct{}
 	snapshotMu     sync.RWMutex
 	lastSnapshot   *ws.SnapshotPayload
-	promAvailable  bool
-	promErr        string
+	promStatus     ws.PrometheusStatusPayload
 	hostnames      map[uuid.UUID]string
 	alerts         map[uuid.UUID][]domain.AlertState
 	prevCounters   map[uuid.UUID]map[string]collector.CounterBaseline
@@ -88,7 +90,7 @@ func NewPipelineOrchestrator(
 		done:            make(chan struct{}),
 		healthDone:      make(chan struct{}),
 		lastSnapshot:    ws.EmptySnapshot(),
-		promAvailable:   true,
+		promStatus:      initialPrometheusStatus(settingsRepo),
 		hostnames:       make(map[uuid.UUID]string),
 		alerts:          make(map[uuid.UUID][]domain.AlertState),
 		prevCounters:    make(map[uuid.UUID]map[string]collector.CounterBaseline),
@@ -171,7 +173,13 @@ func (p *PipelineOrchestrator) GetSnapshot() *ws.SnapshotPayload {
 func (p *PipelineOrchestrator) IsPromAvailable() bool {
 	p.snapshotMu.RLock()
 	defer p.snapshotMu.RUnlock()
-	return p.promAvailable
+	return p.promStatus.Enabled && p.promStatus.Available
+}
+
+func (p *PipelineOrchestrator) GetPrometheusStatus() ws.PrometheusStatusPayload {
+	p.snapshotMu.RLock()
+	defer p.snapshotMu.RUnlock()
+	return p.promStatus
 }
 
 func (p *PipelineOrchestrator) Status() string {
@@ -241,7 +249,7 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 
 		update := result.ToStoreUpdate(task.ExpectedInterval)
 		if result.Err == nil {
-			if p.prometheus != nil {
+			if p.prometheus != nil && p.GetPrometheusStatus().Enabled {
 				enrichment, err := p.prometheus.CollectDeviceEnrichment(ctx, task.Device)
 				if err == nil && enrichment.Hostname != "" {
 					p.snapshotMu.Lock()
@@ -364,22 +372,54 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 		return
 	}
 
+	promURL := p.prometheusURL()
+	if promURL == "" {
+		p.prometheus.SetClient(nil)
+		p.snapshotMu.Lock()
+		p.alerts = make(map[uuid.UUID][]domain.AlertState)
+		p.snapshotMu.Unlock()
+		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
+			Enabled:   false,
+			Available: false,
+		})
+		return
+	}
+
+	p.prometheus.SetClient(metrics.NewPromClient(promURL, http.DefaultClient))
+
 	devices, err := p.cache.GetDevices()
 	if err != nil {
-		p.publishPrometheusStatus(false, err)
+		p.snapshotMu.Lock()
+		p.alerts = make(map[uuid.UUID][]domain.AlertState)
+		p.snapshotMu.Unlock()
+		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
+			Enabled:   true,
+			Available: false,
+			Error:     err.Error(),
+		})
 		return
 	}
 
 	alerts, err := p.prometheus.CollectAlerts(ctx, devices)
 	if err != nil {
-		p.publishPrometheusStatus(false, err)
+		p.snapshotMu.Lock()
+		p.alerts = make(map[uuid.UUID][]domain.AlertState)
+		p.snapshotMu.Unlock()
+		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
+			Enabled:   true,
+			Available: false,
+			Error:     err.Error(),
+		})
 		return
 	}
 
 	p.snapshotMu.Lock()
 	p.alerts = alerts
 	p.snapshotMu.Unlock()
-	p.publishPrometheusStatus(true, nil)
+	p.publishPrometheusStatus(ws.PrometheusStatusPayload{
+		Enabled:   true,
+		Available: true,
+	})
 }
 
 func (p *PipelineOrchestrator) broadcastLoop(ctx context.Context) {
@@ -457,29 +497,50 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 	}
 }
 
-func (p *PipelineOrchestrator) publishPrometheusStatus(available bool, err error) {
+func (p *PipelineOrchestrator) publishPrometheusStatus(status ws.PrometheusStatusPayload) {
 	p.snapshotMu.Lock()
-	changed := p.promAvailable != available
-	p.promAvailable = available
-	if err != nil {
-		p.promErr = err.Error()
-	} else {
-		p.promErr = ""
-	}
+	changed := p.promStatus != status
+	p.promStatus = status
 	p.snapshotMu.Unlock()
 
 	if !changed || p.hub == nil {
 		return
 	}
 
-	payload := ws.PrometheusStatusPayload{Available: available}
-	if !available && err != nil {
-		payload.Error = err.Error()
-	}
 	p.hub.Broadcast(ws.Message{
 		Type:    ws.MessageTypePrometheusStatus,
-		Payload: payload,
+		Payload: status,
 	})
+}
+
+func (p *PipelineOrchestrator) prometheusURL() string {
+	if p.settingsRepo == nil {
+		return ""
+	}
+
+	value, err := p.settingsRepo.Get(domain.SettingPrometheusURL)
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(value)
+}
+
+func initialPrometheusStatus(settingsRepo domain.SettingsRepository) ws.PrometheusStatusPayload {
+	if settingsRepo == nil {
+		return ws.PrometheusStatusPayload{}
+	}
+
+	value, err := settingsRepo.Get(domain.SettingPrometheusURL)
+	if err != nil {
+		return ws.PrometheusStatusPayload{}
+	}
+
+	enabled := strings.TrimSpace(value) != ""
+	return ws.PrometheusStatusPayload{
+		Enabled:   enabled,
+		Available: enabled,
+	}
 }
 
 func (p *PipelineOrchestrator) snmpTimeout() time.Duration {

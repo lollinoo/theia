@@ -48,6 +48,9 @@ func TestPrometheusHandlerHealth(t *testing.T) {
 	if !resp.Available {
 		t.Fatalf("expected available=true, got false; error=%s", resp.Error)
 	}
+	if !resp.Enabled {
+		t.Fatal("expected enabled=true for configured Prometheus")
+	}
 	if resp.URL != fakeProm.URL {
 		t.Fatalf("expected URL=%s, got %s", fakeProm.URL, resp.URL)
 	}
@@ -74,6 +77,12 @@ func TestPrometheusHandlerHealth_NoURL(t *testing.T) {
 	if resp.Available {
 		t.Fatal("expected available=false when no URL configured")
 	}
+	if resp.Enabled {
+		t.Fatal("expected enabled=false when no URL configured")
+	}
+	if resp.Error != "" {
+		t.Fatalf("expected empty error for disabled Prometheus, got %q", resp.Error)
+	}
 }
 
 func TestPrometheusHandlerHealth_Unreachable(t *testing.T) {
@@ -97,6 +106,9 @@ func TestPrometheusHandlerHealth_Unreachable(t *testing.T) {
 	}
 	if resp.Available {
 		t.Fatal("expected available=false for unreachable Prometheus")
+	}
+	if !resp.Enabled {
+		t.Fatal("expected enabled=true for configured-but-unreachable Prometheus")
 	}
 	if resp.Error == "" {
 		t.Fatal("expected non-empty error message for unreachable Prometheus")

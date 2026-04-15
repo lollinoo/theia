@@ -33,6 +33,7 @@ const (
 
 // PrometheusStatusPayload is sent when Prometheus availability changes.
 type PrometheusStatusPayload struct {
+	Enabled   bool   `json:"enabled"`
 	Available bool   `json:"available"`
 	Error     string `json:"error,omitempty"`
 }

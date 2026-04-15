@@ -1,4 +1,4 @@
-import type { PrometheusStatusPayload } from '../../types/metrics';
+import { isPrometheusUnavailable, type PrometheusStatusPayload } from '../../types/metrics';
 import { ReconnectBanner } from '../ReconnectBanner';
 
 interface CanvasOverlaysProps {
@@ -26,7 +26,7 @@ export function CanvasOverlays({
   selectedNodeCount,
   onBulkEditClick,
 }: CanvasOverlaysProps) {
-  const showPrometheusAlert = prometheusStatus !== null && !prometheusStatus.available && !prometheusAlertDismissed;
+  const showPrometheusAlert = isPrometheusUnavailable(prometheusStatus) && !prometheusAlertDismissed;
 
   return (
     <>

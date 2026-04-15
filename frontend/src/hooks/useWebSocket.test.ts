@@ -78,11 +78,12 @@ describe('useWebSocket', () => {
     act(() => {
       mockInstance.simulateMessage({
         type: 'prometheus_status',
-        payload: { available: false, error: 'connection refused' },
+        payload: { enabled: true, available: false, error: 'connection refused' },
       });
     });
 
     expect(result.current.prometheusStatus).toEqual({
+      enabled: true,
       available: false,
       error: 'connection refused',
     });
