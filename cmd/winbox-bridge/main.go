@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -172,6 +173,61 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+func allowPrivateNetwork(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Access-Control-Request-Private-Network") == "true" {
+		w.Header().Set("Access-Control-Allow-Private-Network", "true")
+	}
+}
+
+func originAllowed(origin string, allowedOrigin string) bool {
+	if origin == "" {
+		return false
+	}
+	if origin == allowedOrigin {
+		return true
+	}
+	if allowedOrigin != DefaultConfig().TheiaOrigin {
+		return false
+	}
+
+	originURL, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	allowedURL, err := url.Parse(allowedOrigin)
+	if err != nil {
+		return false
+	}
+
+	if originURL.Scheme != allowedURL.Scheme {
+		return false
+	}
+
+	originHost := originURL.Hostname()
+	if originHost != "localhost" && net.ParseIP(originHost) == nil {
+		return false
+	}
+
+	allowedPort := allowedURL.Port()
+	if allowedPort == "" {
+		if allowedURL.Scheme == "https" {
+			allowedPort = "443"
+		} else {
+			allowedPort = "80"
+		}
+	}
+	originPort := originURL.Port()
+	if originPort == "" {
+		if originURL.Scheme == "https" {
+			originPort = "443"
+		} else {
+			originPort = "80"
+		}
+	}
+
+	return allowedPort == originPort
+}
+
 // --- Security middleware ---
 
 // securityCheck validates Origin and Host headers on every request (D-04, D-05, D-06, D-07).
@@ -182,7 +238,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func securityCheck(allowedOrigin string, expectedHost string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "" || origin != allowedOrigin {
+		if !originAllowed(origin, allowedOrigin) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
@@ -193,8 +249,11 @@ func securityCheck(allowedOrigin string, expectedHost string, next http.Handler)
 			return
 		}
 
-		// Set CORS header on all passing requests so the browser can read the response
-		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		// Echo the requesting origin so LAN/IP-hosted Theia instances can use the bridge
+		// when the bridge still has the default localhost dev origin configured.
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+		allowPrivateNetwork(w, r)
 
 		// Handle CORS preflight
 		if r.Method == http.MethodOptions {
@@ -214,11 +273,25 @@ func securityCheck(allowedOrigin string, expectedHost string, next http.Handler)
 // Public endpoint — no Origin/Host check. Returns Access-Control-Allow-Origin: *
 // so any Theia instance can poll bridge status regardless of its own origin.
 func handleHealth(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+		allowPrivateNetwork(w, r)
+	} else {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
+
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -343,7 +416,6 @@ func setupLogFile() (path string, cleanup func()) {
 	return path, func() { f.Close() }
 }
 
-
 // --- main ---
 
 func main() {
@@ -461,4 +533,3 @@ func main() {
 
 // Ensure fmt is referenced (used in server.go via securityCheck caller).
 var _ = fmt.Sprintf
-
