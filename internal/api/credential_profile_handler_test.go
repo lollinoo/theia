@@ -2,12 +2,14 @@ package api
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/crypto"
@@ -30,7 +32,7 @@ func newMockBackupJobRepo() *mockBackupJobRepo {
 	return &mockBackupJobRepo{jobs: make(map[uuid.UUID]*domain.BackupJob)}
 }
 
-func (r *mockBackupJobRepo) Create(job *domain.BackupJob) error          { r.jobs[job.ID] = job; return nil }
+func (r *mockBackupJobRepo) Create(job *domain.BackupJob) error { r.jobs[job.ID] = job; return nil }
 func (r *mockBackupJobRepo) GetByID(id uuid.UUID) (*domain.BackupJob, error) {
 	j, ok := r.jobs[id]
 	if !ok {
@@ -155,7 +157,7 @@ func TestCredentialProfileHandlerList(t *testing.T) {
 }
 
 func TestCredentialProfileHandlerCreate_HappyPath(t *testing.T) {
-	handler, _, _ := setupCredentialProfileTest(t)
+	handler, _, db := setupCredentialProfileTest(t)
 
 	body := `{"name":"test-profile","username":"admin","port":22,"auth_method":"password","secret":"s3cret"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/credential-profiles", strings.NewReader(body))
@@ -172,6 +174,24 @@ func TestCredentialProfileHandlerCreate_HappyPath(t *testing.T) {
 	}
 	if _, ok := resp["data"]; !ok {
 		t.Fatal("expected 'data' key in response")
+	}
+
+	var storedSecret string
+	err := db.QueryRow(`SELECT encrypted_secret FROM credential_profiles WHERE name = ?`, "test-profile").Scan(&storedSecret)
+	if err != nil {
+		t.Fatalf("querying stored encrypted_secret: %v", err)
+	}
+	if storedSecret == "" {
+		t.Fatal("expected encrypted_secret to be persisted")
+	}
+	if storedSecret == "s3cret" {
+		t.Fatal("expected encrypted_secret to differ from plaintext")
+	}
+	if !utf8.ValidString(storedSecret) {
+		t.Fatal("expected encrypted_secret to be valid UTF-8 text")
+	}
+	if _, err := base64.StdEncoding.DecodeString(storedSecret); err != nil {
+		t.Fatalf("expected encrypted_secret to be base64-encoded: %v", err)
 	}
 }
 

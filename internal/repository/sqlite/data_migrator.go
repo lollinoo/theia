@@ -2,11 +2,13 @@ package sqlite
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const defaultCopyBatchSize = 250
@@ -373,6 +375,7 @@ func copyTableData(sourceTx *sql.Tx, targetTx *Tx, spec tableCopySpec, batchSize
 			if err != nil {
 				return totalRows, fmt.Errorf("normalizing %s.%s: %w", spec.name, column.name, err)
 			}
+			normalized[i] = normalizeCredentialProfileSecretForCopy(spec.name, column.name, normalized[i])
 		}
 
 		batch = append(batch, normalized)
@@ -395,6 +398,19 @@ func copyTableData(sourceTx *sql.Tx, targetTx *Tx, spec tableCopySpec, batchSize
 	}
 
 	return totalRows, nil
+}
+
+func normalizeCredentialProfileSecretForCopy(tableName, columnName string, value any) any {
+	if tableName != "credential_profiles" || columnName != "encrypted_secret" {
+		return value
+	}
+
+	text, ok := value.(string)
+	if !ok || text == "" || utf8.ValidString(text) {
+		return value
+	}
+
+	return base64.StdEncoding.EncodeToString([]byte(text))
 }
 
 func buildSelectQuery(spec tableCopySpec) string {
