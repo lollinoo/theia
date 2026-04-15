@@ -13,7 +13,6 @@ interface NavigationPillProps {
   onAreaSelect: (areaId: string | null) => void;
 }
 
-/** Floating navigation pill replacing NavBar. Glassmorphism dark, solid tinted light. */
 function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAreaSelect }: NavigationPillProps) {
   const [version, setVersion] = useState('');
   const { resolvedTheme, setTheme } = useTheme();
@@ -31,9 +30,9 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
   const isDashboard = activeView === 'dashboard';
 
   return (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-full border border-glass-border bg-glass-bg px-3 py-1.5 shadow-lg dark:backdrop-blur-[16px] transition-colors">
+    <div className="topology-glass topology-floating-shadow fixed left-1/2 top-4 z-30 flex max-w-[calc(100vw-1.5rem)] -translate-x-1/2 items-center gap-1 rounded-full px-3 py-2 transition-colors dark:backdrop-blur-[16px]">
       {/* BRANDING */}
-      <span className="px-2 text-sm font-semibold text-on-bg tracking-wide">THEIA</span>
+      <span className="px-2 text-sm font-semibold tracking-[0.14em] text-on-bg">THEIA</span>
       {version && version !== 'unknown' && (
         <span className="text-[11px] text-on-bg-secondary/50">{`v${version}`}</span>
       )}
@@ -43,10 +42,10 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
       {/* HUB ICON */}
       <button
         onClick={() => onViewChange('hub')}
-        className={`rounded-full p-2 flex items-center transition-colors ${
+        className={`flex items-center rounded-full border px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
           isHub
-            ? 'bg-surface-high text-on-bg'
-            : 'text-on-bg-secondary hover:text-on-bg hover:bg-surface-high'
+            ? 'border-outline bg-surface-container text-on-bg'
+            : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
         }`}
         aria-label="Area Hub"
         title="Area Hub"
@@ -60,13 +59,13 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
           Devices
         </span>
       ) : (
-        <div className="flex items-center gap-1">
+        <div className="flex max-w-[56vw] items-center gap-1 overflow-x-auto">
           <button
             onClick={() => onAreaSelect(null)}
-            className={`px-3 py-2 rounded-full text-sm whitespace-nowrap transition-colors ${
+            className={`rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
               isGlobal
-                ? 'bg-surface-high text-on-bg font-semibold'
-                : 'text-on-bg-secondary hover:text-on-bg hover:bg-surface-high'
+                ? 'border-outline bg-surface-container font-semibold text-on-bg'
+                : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
             }`}
           >
             Global
@@ -78,10 +77,10 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
               <button
                 key={area.id}
                 onClick={() => onAreaSelect(area.id)}
-                className={`px-3 py-2 rounded-full flex items-center gap-1.5 text-sm whitespace-nowrap transition-colors ${
+                className={`flex items-center gap-1.5 rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
                   isActive
-                    ? 'bg-surface-high text-on-bg font-semibold'
-                    : 'text-on-bg-secondary hover:text-on-bg hover:bg-surface-high'
+                    ? 'border-outline bg-surface-container font-semibold text-on-bg'
+                    : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
                 }`}
               >
                 <span
@@ -103,10 +102,10 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
       {/* DEVICES ICON */}
       <button
         onClick={() => onViewChange('dashboard')}
-        className={`rounded-full p-2 flex items-center transition-colors ${
+        className={`flex items-center rounded-full border px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
           isDashboard
-            ? 'bg-surface-high text-on-bg'
-            : 'text-on-bg-secondary hover:text-on-bg hover:bg-surface-high'
+            ? 'border-outline bg-surface-container text-on-bg'
+            : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
         }`}
         aria-label="Devices Dashboard"
         title="Devices"
@@ -117,7 +116,7 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
       {/* THEME TOGGLE */}
       <button
         onClick={toggleTheme}
-        className="rounded-full p-2 flex items-center text-on-bg-secondary hover:text-on-bg hover:bg-surface-high transition-colors"
+        className="flex items-center rounded-full border border-transparent px-3 py-2 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
         title={resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}
       >

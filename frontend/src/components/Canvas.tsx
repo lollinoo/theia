@@ -179,7 +179,21 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   // Build display nodes/edges by filtering the full node/edge set and adding ghost nodes
   const { displayNodes, displayEdges } = useMemo(() => {
     if (!selectedAreaId) {
-      return { displayNodes: nodesWithAreaColor, displayEdges: edgesWithAreaColor };
+      const selectedIds = new Set(nodesWithAreaColor.filter((node) => node.selected && !node.data.isGhost).map((node) => node.id));
+      const emphasizedEdges = edgesWithAreaColor.map((edge) => {
+        if (selectedIds.size === 0) {
+          if (!edge.data?.emphasis) return edge;
+          return { ...edge, data: { ...edge.data!, emphasis: 'default' } };
+        }
+
+        const emphasis = selectedIds.has(edge.source) || selectedIds.has(edge.target)
+          ? 'connected'
+          : 'muted';
+        if (edge.data?.emphasis === emphasis) return edge;
+        return { ...edge, data: { ...edge.data!, emphasis } };
+      });
+
+      return { displayNodes: nodesWithAreaColor, displayEdges: emphasizedEdges };
     }
 
     const filteredDeviceIds = new Set(filteredDevices.map((d) => d.id));
@@ -232,8 +246,21 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     // Filter edges to only include filtered links
     const filteredLinkIds = new Set(filteredLinks.map((l) => l.id));
     const areaEdges = edgesWithAreaColor.filter((e) => filteredLinkIds.has(e.id));
+    const selectedIds = new Set(allDisplayNodes.filter((node) => node.selected && !node.data.isGhost).map((node) => node.id));
+    const emphasizedEdges = areaEdges.map((edge) => {
+      if (selectedIds.size === 0) {
+        if (!edge.data?.emphasis) return edge;
+        return { ...edge, data: { ...edge.data!, emphasis: 'default' } };
+      }
 
-    return { displayNodes: allDisplayNodes, displayEdges: areaEdges };
+      const emphasis = selectedIds.has(edge.source) || selectedIds.has(edge.target)
+        ? 'connected'
+        : 'muted';
+      if (edge.data?.emphasis === emphasis) return edge;
+      return { ...edge, data: { ...edge.data!, emphasis } };
+    });
+
+    return { displayNodes: allDisplayNodes, displayEdges: emphasizedEdges };
   }, [selectedAreaId, nodesWithAreaColor, edgesWithAreaColor, filteredDevices, filteredLinks, ghostDevices, devices, onAreaSelect]);
 
   // fitView when selectedAreaId changes to re-center on filtered subset
@@ -329,8 +356,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center bg-bg">
-        <div className="rounded-3xl border border-outline-subtle bg-surface/85 px-6 py-5 text-center shadow-canvas">
+      <div className="topology-backdrop flex h-full items-center justify-center bg-bg">
+        <div className="rounded-[28px] border border-outline bg-surface/88 px-6 py-5 text-center shadow-canvas backdrop-blur-sm">
           <div className="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-2 border-outline-subtle border-t-primary" />
           <p className="text-sm uppercase tracking-[0.28em] text-on-bg-secondary">Loading topology...</p>
         </div>
@@ -340,8 +367,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
 
   if (error) {
     return (
-      <div className="flex h-full items-center justify-center bg-bg px-6">
-        <div className="max-w-md rounded-3xl border border-outline-subtle bg-surface/85 px-6 py-6 text-center shadow-canvas">
+      <div className="topology-backdrop flex h-full items-center justify-center bg-bg px-6">
+        <div className="max-w-md rounded-[28px] border border-outline bg-surface/88 px-6 py-6 text-center shadow-canvas backdrop-blur-sm">
           <p className="text-sm uppercase tracking-[0.28em] text-status-down">Topology Error</p>
           <h2 className="mt-3 text-2xl font-semibold tracking-tight text-on-bg">Canvas data could not load</h2>
           <p className="mt-3 text-sm text-on-bg-secondary">{error}</p>
@@ -355,7 +382,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   }
 
   return (
-    <div className="relative h-full w-full bg-bg">
+    <div className="topology-backdrop relative h-full w-full bg-bg">
       {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
       <Toolbar onSearch={() => setShowSearch((s) => !s)} onAddDevice={() => setPanelContent({ type: 'addDevice' })}
         onCreateLink={() => setPanelContent({ type: 'create-link' })} onAlerts={() => setPanelContent({ type: 'alerts' })}
@@ -441,7 +468,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         }} />
       {/* WinBox launch error toast */}
       {winboxError && (
-        <div className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-status-down/40 bg-surface px-4 py-2.5 text-xs text-status-down shadow-lg">
+        <div className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-status-down/35 bg-surface-container-high px-4 py-2.5 text-xs text-status-down shadow-floating">
           <span>{winboxError}</span>
           <button type="button" onClick={() => setWinboxError(null)} className="ml-1 hover:opacity-70">&times;</button>
         </div>
@@ -456,10 +483,10 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         onSelectionChange={handleSelectionChange}
         onPaneClick={() => { setEdgeMenu(null); setDeviceMenu(null); setPanelContent(null); setShowSearch(false); setShowShortcuts(false); }}
         onNodeClick={(_ev, node) => {
-          if (node.data.isGhost || !editMode) return;
+          if (node.data.isGhost) return;
           // Check if multiple nodes are selected (including the just-clicked one)
           const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
-          if (selectedNodes.length > 1) {
+          if (selectedNodes.length > 1 && editMode) {
             setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
           } else {
             const cd = devices.find((d) => d.id === node.id);
@@ -485,8 +512,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         selectionOnDrag={editMode} selectionMode={SelectionMode.Partial} selectionKeyCode="Shift"
         connectionMode={ConnectionMode.Loose} minZoom={0.1} maxZoom={2} fitView
         nodesDraggable={editMode} panOnDrag zoomOnScroll zoomOnDoubleClick={false}
-        connectionLineStyle={{ stroke: 'var(--nt-outline)', strokeWidth: 2 }} proOptions={{ hideAttribution: false }} className="bg-bg">
-        <Background color="var(--nt-outline)" gap={28} size={1.2} />
+        connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 2 }} proOptions={{ hideAttribution: false }} className="bg-transparent">
+        <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
         <MiniMap pannable zoomable
           nodeColor={(n) => {
             const d = (n as DeviceNode).data;
@@ -496,7 +523,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
               isGhost: !!d.isGhost,
             });
           }}
-          style={{ backgroundColor: 'var(--nt-surface)', border: '1px solid var(--nt-outline)' }} maskColor="var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))" />
+          style={{ backgroundColor: 'var(--nt-surface-container)', border: '1px solid var(--nt-outline)', borderRadius: 16, boxShadow: 'var(--nt-shadow-floating)' }} maskColor="var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))" />
       </ReactFlow>
     </div>
   );

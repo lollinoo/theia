@@ -4,7 +4,7 @@ import { formatThroughput } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { PositionPayload } from '../../hooks/usePositions';
 import type { ContextMenuItem } from '../ContextMenu';
-import { formatBandwidth } from '../LinkEdge';
+import { formatBandwidth } from '../linkSemantics';
 
 export type HandleSide = 'top' | 'right' | 'bottom' | 'left';
 
