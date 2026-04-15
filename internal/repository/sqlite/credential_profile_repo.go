@@ -190,8 +190,8 @@ func (r *CredentialProfileRepo) ListAssignedProfiles(deviceID uuid.UUID) ([]Devi
 // Returns an error if the pair already exists (UNIQUE constraint).
 func (r *CredentialProfileRepo) AssignProfile(deviceID, profileID uuid.UUID) error {
 	_, err := r.db.Exec(
-		`INSERT INTO device_credential_profiles (device_id, profile_id, is_winbox, created_at) VALUES (?, ?, 0, ?)`,
-		deviceID.String(), profileID.String(), time.Now().UTC(),
+		`INSERT INTO device_credential_profiles (device_id, profile_id, is_winbox, created_at) VALUES (?, ?, ?, ?)`,
+		deviceID.String(), profileID.String(), false, time.Now().UTC(),
 	)
 	return err
 }
@@ -225,16 +225,16 @@ func (r *CredentialProfileRepo) SetWinboxProfile(deviceID, profileID uuid.UUID) 
 
 	// Clear all winbox flags for this device
 	if _, err := tx.Exec(
-		`UPDATE device_credential_profiles SET is_winbox = 0 WHERE device_id = ?`,
-		deviceID.String(),
+		`UPDATE device_credential_profiles SET is_winbox = ? WHERE device_id = ?`,
+		false, deviceID.String(),
 	); err != nil {
 		return err
 	}
 
 	// Set the target profile as winbox
 	res, err := tx.Exec(
-		`UPDATE device_credential_profiles SET is_winbox = 1 WHERE device_id = ? AND profile_id = ?`,
-		deviceID.String(), profileID.String(),
+		`UPDATE device_credential_profiles SET is_winbox = ? WHERE device_id = ? AND profile_id = ?`,
+		true, deviceID.String(), profileID.String(),
 	)
 	if err != nil {
 		return err
@@ -251,8 +251,8 @@ func (r *CredentialProfileRepo) SetWinboxProfile(deviceID, profileID uuid.UUID) 
 // Idempotent — no error if no winbox profile is currently set.
 func (r *CredentialProfileRepo) ClearWinboxProfile(deviceID uuid.UUID) error {
 	_, err := r.db.Exec(
-		`UPDATE device_credential_profiles SET is_winbox = 0 WHERE device_id = ?`,
-		deviceID.String(),
+		`UPDATE device_credential_profiles SET is_winbox = ? WHERE device_id = ?`,
+		false, deviceID.String(),
 	)
 	return err
 }
@@ -266,8 +266,8 @@ func (r *CredentialProfileRepo) GetWinboxAssignment(deviceID uuid.UUID) (*Winbox
 		`SELECT cp.id, cp.username, cp.encrypted_secret
 		 FROM device_credential_profiles dcp
 		 JOIN credential_profiles cp ON cp.id = dcp.profile_id
-		 WHERE dcp.device_id = ? AND dcp.is_winbox = 1`,
-		deviceID.String(),
+		 WHERE dcp.device_id = ? AND dcp.is_winbox = ?`,
+		deviceID.String(), true,
 	).Scan(&idStr, &row.Username, &row.EncryptedSecret)
 	if err != nil {
 		if err == sql.ErrNoRows {
