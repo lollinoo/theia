@@ -1,0 +1,101 @@
+import type { CSSProperties, ReactNode } from 'react';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import LinkEdge from './LinkEdge';
+
+const mockZoom = 1.3;
+
+vi.mock('@xyflow/react', async () => {
+  const ReactModule = await import('react');
+
+  return {
+    BaseEdge: ({
+      id,
+      style,
+    }: {
+      id: string;
+      style?: CSSProperties;
+    }) => <div data-testid={id} style={style} />,
+    EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
+    getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
+    useStore: (selector: (state: { transform: [number, number, number] }) => unknown) =>
+      selector({ transform: [0, 0, mockZoom] }),
+  };
+});
+
+function renderEdge(
+  overrides: Record<string, unknown> = {},
+  dataOverrides: Record<string, unknown> = {},
+) {
+  return render(
+    <div>
+      <LinkEdge
+        {...({
+          id: 'edge-1',
+          source: 'dev-1',
+          target: 'dev-2',
+          sourceX: 0,
+          sourceY: 0,
+          targetX: 100,
+          targetY: 100,
+          sourcePosition: 'right',
+          targetPosition: 'left',
+          selected: false,
+          data: {
+            bandwidthLabel: '1 Gbps',
+            speedLabel: 'SPD 1 Gbps',
+            negotiationState: 'matched',
+            speedMismatch: false,
+            sourceDeviceStatus: 'up',
+            targetDeviceStatus: 'up',
+            sourceIfStatus: 'up',
+            targetIfStatus: 'up',
+            ...dataOverrides,
+          },
+          ...overrides,
+        }) as never}
+      />
+    </div>,
+  );
+}
+
+describe('LinkEdge render', () => {
+  it('shows stacked rate and throughput badges without a standalone AUTO pill', () => {
+    renderEdge({}, { throughputLabel: 'TX: 500M / RX: 300M' });
+
+    expect(screen.getByText('1 Gbps')).toBeInTheDocument();
+    expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
+    expect(screen.queryByText('SPD 1 Gbps')).not.toBeInTheDocument();
+    expect(screen.queryByText('AUTO')).not.toBeInTheDocument();
+    expect(screen.getByTestId('edge-1')).toHaveStyle({ stroke: 'var(--color-status-up)' });
+  });
+
+  it('keeps warning mismatches amber instead of green', () => {
+    renderEdge(
+      { id: 'edge-2' },
+      {
+        bandwidthLabel: '100 Mbps',
+        speedLabel: 'SPD 1 Gbps',
+        negotiationState: 'mismatch',
+        speedMismatch: true,
+      },
+    );
+
+    expect(screen.getByTestId('edge-2-badge-rate-warning')).toHaveTextContent('!');
+    expect(screen.getByTestId('edge-2')).toHaveStyle({ stroke: 'var(--color-edge-warning)' });
+  });
+
+  it('does not hide base telemetry when an edge is visually muted', () => {
+    renderEdge(
+      { id: 'edge-3' },
+      {
+        emphasis: 'muted',
+        throughputLabel: 'TX: 500M / RX: 300M',
+        negotiationState: 'partial',
+      },
+    );
+
+    expect(screen.getByText('1 Gbps')).toBeInTheDocument();
+    expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
+  });
+});

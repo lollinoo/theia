@@ -3,175 +3,219 @@
 @import "@fontsource-variable/jetbrains-mono";
 @import "@xyflow/react/dist/style.css" layer(base);
 
-/* --- Custom dark mode variant using data-theme attribute --- */
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
-/* --- Dark theme primitive variables (default) --- */
 :root,
 [data-theme="dark"] {
-  /* Surface hierarchy */
-  --nt-bg: #161618;
-  --nt-surface: #1E1E21;
-  --nt-surface-high: #262629;
-  --nt-elevated: #2E2E32;
+  --nt-bg: #0d121a;
+  --nt-surface: #141c28;
+  --nt-surface-container: #192435;
+  --nt-surface-container-high: #223148;
+  --nt-surface-high: var(--nt-surface-container);
+  --nt-elevated: #2a3b58;
 
-  /* Text */
-  --nt-on-bg: #F5F5F7;
-  --nt-on-bg-secondary: #8899A6;
-  --nt-on-bg-muted: #657786;
+  --nt-text-primary: #e6edf6;
+  --nt-text-secondary: #9caac1;
+  --nt-text-muted: #72819a;
+  --nt-on-bg: var(--nt-text-primary);
+  --nt-on-bg-secondary: var(--nt-text-secondary);
+  --nt-on-bg-muted: var(--nt-text-muted);
 
-  /* Borders */
-  --nt-outline: #333338;
-  --nt-outline-subtle: #2A2A2E;
+  --nt-outline: #2a3a50;
+  --nt-outline-strong: #405572;
+  --nt-outline-subtle: var(--nt-outline);
 
-  /* Glassmorphism (dark-only signature per D-07) */
-  --nt-glass-bg: rgba(255, 255, 255, 0.02);
-  --nt-glass-border: rgba(255, 255, 255, 0.06);
-  --nt-glass-backdrop: blur(16px);
+  --nt-primary: #4fd6a8;
+  --nt-area-secondary: #5a88ff;
+  --nt-area-tertiary: #cf88ff;
+  --nt-secondary: var(--nt-area-secondary);
+  --nt-tertiary: var(--nt-area-tertiary);
 
-  /* Glow intensity */
-  --nt-glow-shadow-opacity: 0.5;
-  --nt-glow-bloom-opacity: 0.15;
+  --nt-status-ok: #58d79d;
+  --nt-status-warning: #f0b65f;
+  --nt-status-critical: #ff7688;
+  --nt-status-unknown: #7f8ca3;
+  --nt-status-up: var(--nt-status-ok);
+  --nt-status-down: #ff4f64;
+  --nt-status-probing: var(--nt-status-warning);
+  --nt-warning: var(--nt-status-warning);
+  --nt-critical: var(--nt-status-critical);
 
-  /* MiniMap */
-  --nt-minimap-mask: rgba(22, 22, 24, 0.55);
+  --nt-edge-default: #64758d;
+  --nt-edge-muted: #4e5f79;
+  --nt-edge-active: #89cbff;
+  --nt-edge-warning: var(--nt-status-warning);
+  --nt-edge-critical: var(--nt-status-critical);
+  --nt-node-selected: #8bd5ff;
+  --nt-focus-ring: rgba(139, 213, 255, 0.34);
 
-  /* Shadows */
-  --nt-shadow-panel: 0 24px 48px rgba(0, 0, 0, 0.2);
-  --nt-shadow-pill: 0 24px 48px rgba(0, 0, 0, 0.5);
-  --nt-shadow-canvas: 0 24px 60px rgba(0, 0, 0, 0.28);
+  --nt-glass-bg: rgba(20, 28, 40, 0.84);
+  --nt-glass-border: rgba(156, 170, 193, 0.14);
+  --nt-glass-backdrop: blur(18px);
+  --nt-minimap-mask: rgba(13, 18, 26, 0.62);
+  --nt-selection-fill: rgba(137, 203, 255, 0.12);
+  --nt-selection-stroke: rgba(137, 203, 255, 0.48);
+  --nt-canvas-backdrop:
+    radial-gradient(circle at top, rgba(90, 136, 255, 0.14), transparent 34%),
+    linear-gradient(180deg, #101726 0%, #0d121a 58%, #0b1118 100%);
 
-  /* Status & accent (neon on dark) */
-  --nt-status-up: #00E676;
-  --nt-status-down: #FF1744;
-  --nt-status-probing: #FFEA00;
-  --nt-status-unknown: #9E9E9E;
-  --nt-primary: #00E676;
-  --nt-secondary: #2979FF;
-  --nt-tertiary: #E040FB;
-  --nt-warning: #FFEA00;
-  --nt-critical: #FF1744;
+  --nt-shadow-panel: 0 28px 56px rgba(1, 7, 18, 0.42);
+  --nt-shadow-floating: 0 18px 42px rgba(1, 7, 18, 0.34);
+  --nt-shadow-pill: 0 16px 34px rgba(1, 7, 18, 0.28);
+  --nt-shadow-canvas: 0 30px 80px rgba(0, 0, 0, 0.3);
+  --nt-node-shadow: 0 18px 32px rgba(2, 7, 16, 0.26);
 
+  --nt-glow-shadow-opacity: 0.32;
+  --nt-glow-bloom-opacity: 0.1;
+  --nt-glow-status-ok: 0 0 0 1px rgba(88, 215, 157, 0.18), 0 0 14px rgba(88, 215, 157, 0.18);
+  --nt-glow-status-warning: 0 0 0 1px rgba(240, 182, 95, 0.2), 0 0 18px rgba(240, 182, 95, 0.2);
+  --nt-glow-status-critical: 0 0 0 1px rgba(255, 118, 136, 0.22), 0 0 18px rgba(255, 118, 136, 0.24);
+  --nt-glow-status-down: 0 0 0 1px rgba(255, 79, 100, 0.24), 0 0 18px rgba(255, 79, 100, 0.26);
+  --nt-glow-status-unknown: 0 0 0 1px rgba(127, 140, 163, 0.18), 0 0 10px rgba(127, 140, 163, 0.18);
   color-scheme: dark;
 }
 
-/* --- Light theme primitive variables (per D-04, D-05, D-06, D-07) --- */
 [data-theme="light"] {
-  /* Surface hierarchy */
-  --nt-bg: #F5F5F7;
-  --nt-surface: #EDEDF0;
-  --nt-surface-high: #E4E4E8;
-  --nt-elevated: #FFFFFF;
+  --nt-bg: #e5ebf2;
+  --nt-surface: #f4f7fb;
+  --nt-surface-container: #edf2f8;
+  --nt-surface-container-high: #ffffff;
+  --nt-surface-high: var(--nt-surface-container);
+  --nt-elevated: #ffffff;
 
-  /* Text */
-  --nt-on-bg: #1A1A1C;
-  --nt-on-bg-secondary: #5A5A6E;
-  --nt-on-bg-muted: #8A8A93;
+  --nt-text-primary: #172235;
+  --nt-text-secondary: #455469;
+  --nt-text-muted: #6d7b8f;
+  --nt-on-bg: var(--nt-text-primary);
+  --nt-on-bg-secondary: var(--nt-text-secondary);
+  --nt-on-bg-muted: var(--nt-text-muted);
 
-  /* Borders */
-  --nt-outline: #D0D0D8;
-  --nt-outline-subtle: #E0E0E5;
+  --nt-outline: #c3cfdf;
+  --nt-outline-strong: #9aaac0;
+  --nt-outline-subtle: var(--nt-outline);
 
-  /* Tinted solid surfaces (NOT glassmorphism per D-07) */
-  --nt-glass-bg: rgba(255, 255, 255, 0.85);
-  --nt-glass-border: rgba(0, 0, 0, 0.06);
-  --nt-glass-backdrop: none;
+  --nt-primary: #0f8e69;
+  --nt-area-secondary: #2168d8;
+  --nt-area-tertiary: #893cb6;
+  --nt-secondary: var(--nt-area-secondary);
+  --nt-tertiary: var(--nt-area-tertiary);
 
-  /* Reduced glow (per D-06) */
-  --nt-glow-shadow-opacity: 0.25;
-  --nt-glow-bloom-opacity: 0.06;
+  --nt-status-ok: #177e5d;
+  --nt-status-warning: #a56e18;
+  --nt-status-critical: #b84252;
+  --nt-status-unknown: #677487;
+  --nt-status-up: var(--nt-status-ok);
+  --nt-status-down: #c13f32;
+  --nt-status-probing: var(--nt-status-warning);
+  --nt-warning: var(--nt-status-warning);
+  --nt-critical: var(--nt-status-critical);
 
-  /* MiniMap */
-  --nt-minimap-mask: rgba(245, 245, 247, 0.55);
+  --nt-edge-default: #7d8ea6;
+  --nt-edge-muted: #b8c4d2;
+  --nt-edge-active: #255fd2;
+  --nt-edge-warning: var(--nt-status-warning);
+  --nt-edge-critical: var(--nt-status-critical);
+  --nt-node-selected: #2f7ce7;
+  --nt-focus-ring: rgba(47, 124, 231, 0.28);
 
-  /* Shadows */
-  --nt-shadow-panel: 0 24px 48px rgba(0, 0, 0, 0.08);
-  --nt-shadow-pill: 0 24px 48px rgba(0, 0, 0, 0.15);
-  --nt-shadow-canvas: 0 24px 60px rgba(0, 0, 0, 0.12);
+  --nt-glass-bg: rgba(255, 255, 255, 0.74);
+  --nt-glass-border: rgba(23, 34, 53, 0.08);
+  --nt-glass-backdrop: blur(14px);
+  --nt-minimap-mask: rgba(229, 235, 242, 0.72);
+  --nt-selection-fill: rgba(47, 124, 231, 0.1);
+  --nt-selection-stroke: rgba(47, 124, 231, 0.38);
+  --nt-canvas-backdrop:
+    radial-gradient(circle at top, rgba(104, 136, 185, 0.18), transparent 34%),
+    linear-gradient(180deg, #eef3f8 0%, #e5ebf2 62%, #dfe6ee 100%);
 
-  /* Status & accent (darkened for legibility on light backgrounds) */
-  --nt-status-up: #00994D;
-  --nt-status-down: #C62828;
-  --nt-status-probing: #C49000;
-  --nt-status-unknown: #757575;
-  --nt-primary: #00994D;
-  --nt-secondary: #1565C0;
-  --nt-tertiary: #AB47BC;
-  --nt-warning: #C49000;
-  --nt-critical: #C62828;
+  --nt-shadow-panel: 0 22px 50px rgba(36, 56, 87, 0.14);
+  --nt-shadow-floating: 0 14px 28px rgba(36, 56, 87, 0.12);
+  --nt-shadow-pill: 0 12px 24px rgba(36, 56, 87, 0.1);
+  --nt-shadow-canvas: 0 24px 56px rgba(36, 56, 87, 0.1);
+  --nt-node-shadow: 0 12px 26px rgba(36, 56, 87, 0.08);
 
+  --nt-glow-shadow-opacity: 0.16;
+  --nt-glow-bloom-opacity: 0.04;
+  --nt-glow-status-ok: 0 0 0 1px rgba(23, 126, 93, 0.14), 0 0 8px rgba(23, 126, 93, 0.12);
+  --nt-glow-status-warning: 0 0 0 1px rgba(165, 110, 24, 0.16), 0 0 10px rgba(165, 110, 24, 0.12);
+  --nt-glow-status-critical: 0 0 0 1px rgba(184, 66, 82, 0.18), 0 0 10px rgba(184, 66, 82, 0.14);
+  --nt-glow-status-down: 0 0 0 1px rgba(193, 63, 50, 0.18), 0 0 10px rgba(193, 63, 50, 0.14);
+  --nt-glow-status-unknown: 0 0 0 1px rgba(103, 116, 135, 0.16), 0 0 6px rgba(103, 116, 135, 0.1);
   color-scheme: light;
 }
 
-/* --- Tailwind @theme inline: map primitive vars to semantic tokens --- */
 @theme inline {
-  /* Surface colors */
   --color-bg: var(--nt-bg);
   --color-surface: var(--nt-surface);
-  --color-surface-high: var(--nt-surface-high);
+  --color-surface-container: var(--nt-surface-container);
+  --color-surface-container-high: var(--nt-surface-container-high);
+  --color-surface-high: var(--nt-surface-container);
   --color-elevated: var(--nt-elevated);
 
-  /* Text colors */
-  --color-on-bg: var(--nt-on-bg);
-  --color-on-bg-secondary: var(--nt-on-bg-secondary);
-  --color-on-bg-muted: var(--nt-on-bg-muted);
+  --color-text-primary: var(--nt-text-primary);
+  --color-text-secondary: var(--nt-text-secondary);
+  --color-text-muted: var(--nt-text-muted);
+  --color-on-bg: var(--nt-text-primary);
+  --color-on-bg-secondary: var(--nt-text-secondary);
+  --color-on-bg-muted: var(--nt-text-muted);
 
-  /* Border colors */
   --color-outline: var(--nt-outline);
-  --color-outline-subtle: var(--nt-outline-subtle);
+  --color-outline-strong: var(--nt-outline-strong);
+  --color-outline-subtle: var(--nt-outline);
 
-  /* Glass colors */
-  --color-glass-bg: var(--nt-glass-bg);
-  --color-glass-border: var(--nt-glass-border);
-
-  /* Status colors (theme-adaptive for legibility) */
+  --color-primary: var(--nt-primary);
+  --color-area-secondary: var(--nt-area-secondary);
+  --color-area-tertiary: var(--nt-area-tertiary);
+  --color-status-ok: var(--nt-status-ok);
+  --color-status-warning: var(--nt-status-warning);
+  --color-status-critical: var(--nt-status-critical);
   --color-status-up: var(--nt-status-up);
   --color-status-down: var(--nt-status-down);
   --color-status-probing: var(--nt-status-probing);
   --color-status-unknown: var(--nt-status-unknown);
-
-  /* Accent colors (theme-adaptive for legibility) */
-  --color-primary: var(--nt-primary);
-  --color-secondary: var(--nt-secondary);
-  --color-tertiary: var(--nt-tertiary);
   --color-warning: var(--nt-warning);
   --color-critical: var(--nt-critical);
+  --color-edge-default: var(--nt-edge-default);
+  --color-edge-muted: var(--nt-edge-muted);
+  --color-edge-active: var(--nt-edge-active);
+  --color-edge-warning: var(--nt-edge-warning);
+  --color-edge-critical: var(--nt-edge-critical);
+  --color-node-selected: var(--nt-node-selected);
+  --color-focus-ring: var(--nt-focus-ring);
+  --color-glass-bg: var(--nt-glass-bg);
+  --color-glass-border: var(--nt-glass-border);
 
-  /* Typography */
   --font-display: "Outfit Variable", "Outfit", system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
   --font-sans: "Outfit Variable", "Outfit", system-ui, sans-serif;
 
-  /* Shadows */
   --shadow-panel: var(--nt-shadow-panel);
+  --shadow-floating: var(--nt-shadow-floating);
   --shadow-pill: var(--nt-shadow-pill);
   --shadow-canvas: var(--nt-shadow-canvas);
 
-  /* Radii */
   --radius-pill: 9999px;
-  --radius-panel: 12px;
+  --radius-panel: 16px;
 }
 
-/* --- ReactFlow v12 CSS variable overrides --- */
 .react-flow {
-  --xy-background-pattern-dots-color-default: var(--nt-outline);
-  --xy-edge-stroke-default: var(--nt-outline);
+  --xy-background-pattern-dots-color-default: var(--nt-edge-muted);
+  --xy-edge-stroke-default: var(--nt-edge-default);
   --xy-edge-stroke-width-default: 2;
   --xy-node-background-color-default: var(--nt-surface);
   --xy-node-border-default: 1px solid var(--nt-outline);
-  --xy-node-color-default: var(--nt-on-bg);
-  --xy-minimap-background-color-default: var(--nt-surface);
+  --xy-node-color-default: var(--nt-text-primary);
+  --xy-minimap-background-color-default: var(--nt-surface-container);
   --xy-controls-button-background-color-default: var(--nt-surface);
-  --xy-controls-button-background-color-hover-default: var(--nt-surface-high);
-  --xy-controls-button-color-default: var(--nt-on-bg);
+  --xy-controls-button-background-color-hover-default: var(--nt-surface-container);
+  --xy-controls-button-color-default: var(--nt-text-primary);
   --xy-controls-button-border-color-default: var(--nt-outline);
-  --xy-handle-background-color-default: var(--nt-on-bg-secondary);
+  --xy-handle-background-color-default: var(--nt-text-muted);
   --xy-handle-border-color-default: var(--nt-bg);
-  --xy-selection-background-color-default: rgba(0, 230, 118, 0.08);
-  --xy-selection-border-default: 1px dotted rgba(0, 230, 118, 0.5);
+  --xy-selection-background-color-default: var(--nt-selection-fill);
+  --xy-selection-border-default: 1px solid var(--nt-selection-stroke);
 }
 
-/* --- Base styles --- */
 @layer base {
   html,
   body,
@@ -186,7 +230,8 @@
   body {
     margin: 0;
     background-color: var(--nt-bg);
-    color: var(--nt-on-bg);
+    color: var(--nt-text-primary);
+    font-family: var(--font-sans);
   }
 
   * {
@@ -194,7 +239,37 @@
   }
 }
 
-/* --- Material Symbols Rounded (subset: 24 icons, self-hosted per D-04) --- */
+@layer utilities {
+  .topology-backdrop {
+    background: var(--nt-canvas-backdrop);
+  }
+
+  .topology-glass {
+    background: var(--nt-glass-bg);
+    border: 1px solid var(--nt-glass-border);
+    backdrop-filter: var(--nt-glass-backdrop);
+  }
+
+  .topology-focus {
+    outline: none;
+    box-shadow:
+      0 0 0 1px var(--nt-outline),
+      0 0 0 4px var(--nt-focus-ring);
+  }
+
+  .topology-panel-shadow {
+    box-shadow: var(--nt-shadow-panel);
+  }
+
+  .topology-floating-shadow {
+    box-shadow: var(--nt-shadow-floating);
+  }
+
+  .topology-node-shadow {
+    box-shadow: var(--nt-node-shadow);
+  }
+}
+
 @font-face {
   font-family: 'Material Symbols Rounded';
   font-style: normal;

@@ -56,13 +56,24 @@ describe('deviceVisualState', () => {
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-probing)');
   });
 
-  it('maps critical health on up devices to down minimap status', () => {
+  it('maps critical health on up devices to a dedicated critical minimap status', () => {
     const device = mockDevice();
     const metrics = mockMetrics({ health: 'critical' });
 
     expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
-      dotStatus: 'down',
+      dotStatus: 'critical',
       label: 'Critical',
+    });
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-critical)');
+  });
+
+  it('keeps down devices on the dedicated down color', () => {
+    const device = mockDevice({ status: 'down' });
+    const metrics = mockMetrics({ health: 'critical' });
+
+    expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
+      dotStatus: 'down',
+      label: 'Down',
     });
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-down)');
   });

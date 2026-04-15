@@ -16,6 +16,12 @@ describe('StatusDot (COMP-11)', () => {
     expect(dot?.className).toContain('animate-pulse');
   });
 
+  it('status critical renders with the dedicated critical token', () => {
+    const { container } = render(<StatusDot status="critical" />);
+    const dot = container.querySelector('span');
+    expect(dot?.className).toContain('bg-status-critical');
+  });
+
   it('status up does NOT have animate-pulse class', () => {
     const { container } = render(<StatusDot status="up" />);
     const dot = container.querySelector('span');

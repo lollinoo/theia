@@ -1,7 +1,7 @@
 import type { Device, DeviceStatus } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 
-export type DeviceVisualStatus = DeviceStatus | 'degraded';
+export type DeviceVisualStatus = DeviceStatus | 'degraded' | 'critical';
 
 type DeviceVisualLabel = 'Up' | 'Down' | 'Probing' | 'Unknown' | 'Warning' | 'Critical';
 
@@ -88,7 +88,7 @@ export function resolveDeviceVisualState(
       };
     case 'critical':
       return {
-        dotStatus: 'down',
+        dotStatus: 'critical',
         label: 'Critical',
         labelClass: healthLabelClass('critical'),
       };
@@ -117,6 +117,8 @@ export function minimapColorForDevice({
   switch (resolveDeviceVisualState(device, metrics).dotStatus) {
     case 'up':
       return 'var(--color-status-up)';
+    case 'critical':
+      return 'var(--color-status-critical)';
     case 'down':
       return 'var(--color-status-down)';
     case 'probing':

@@ -71,8 +71,9 @@ describe('buildEdgeData', () => {
     const result = buildEdgeData(link, devicesByID);
 
     expect(result.speedMismatch).toBe(true);
-    expect(result.bandwidthLabel).toContain('(!)');
-    expect(result.bandwidthLabel).toContain('100 Mbps');
+    expect(result.bandwidthLabel).toBe('100 Mbps');
+    expect(result.speedLabel).toBe('SPD 1 Gbps');
+    expect(result.negotiationState).toBe('mismatch');
   });
 
   it('source is virtual device: speedMismatch=false, bandwidthLabel uses target speed', () => {
@@ -91,6 +92,8 @@ describe('buildEdgeData', () => {
 
     expect(result.speedMismatch).toBe(false);
     expect(result.bandwidthLabel).toBe('1 Gbps');
+    expect(result.speedLabel).toBe('SPD 1 Gbps');
+    expect(result.negotiationState).toBe('not_applicable');
   });
 
   it('target is virtual device: speedMismatch=false, bandwidthLabel uses source speed', () => {
@@ -109,6 +112,8 @@ describe('buildEdgeData', () => {
 
     expect(result.speedMismatch).toBe(false);
     expect(result.bandwidthLabel).toBe('1 Gbps');
+    expect(result.speedLabel).toBe('SPD 1 Gbps');
+    expect(result.negotiationState).toBe('not_applicable');
   });
 
   it('virtual link with no real interface speed returns undefined bandwidthLabel', () => {
@@ -132,6 +137,8 @@ describe('buildEdgeData', () => {
 
     expect(result.bandwidthLabel).toBeUndefined();
     expect(result.speedMismatch).toBe(false);
+    expect(result.speedLabel).toBeUndefined();
+    expect(result.negotiationState).toBe('not_applicable');
   });
 
   it('virtual link preserves existing throughputLabel and metrics from existingData', () => {
@@ -157,6 +164,41 @@ describe('buildEdgeData', () => {
     expect(result.throughputLabel).toBe('TX: 500M / RX: 300M');
     expect(result.metrics).toEqual(existingData.metrics);
     expect(result.utilization).toBe(50);
+  });
+
+  it('physical links with one-sided speed still expose stacked rate and speed telemetry on the canvas', () => {
+    const source = mockDevice({ id: 'dev-1' });
+    const target = mockDevice({ id: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', source],
+      ['dev-2', target],
+    ]);
+    const link = mockLink({
+      source_if_speed: 1_000_000_000,
+      source_if_oper_status: 'up',
+    });
+
+    const result = buildEdgeData(link, devicesByID);
+
+    expect(result.bandwidthLabel).toBe('1 Gbps');
+    expect(result.speedLabel).toBe('SPD 1 Gbps');
+    expect(result.negotiationState).toBe('partial');
+  });
+
+  it('physical links with no negotiated speed still expose the primary rate signal without inventing AUTO pills', () => {
+    const source = mockDevice({ id: 'dev-1' });
+    const target = mockDevice({ id: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', source],
+      ['dev-2', target],
+    ]);
+    const link = mockLink();
+
+    const result = buildEdgeData(link, devicesByID);
+
+    expect(result.bandwidthLabel).toBe('SPD ?');
+    expect(result.speedLabel).toBeUndefined();
+    expect(result.negotiationState).toBe('unknown');
   });
 
   it('virtual source: sourceIfStatus is undefined, targetIfStatus shows real status', () => {
