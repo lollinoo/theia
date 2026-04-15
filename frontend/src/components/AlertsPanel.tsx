@@ -1,6 +1,6 @@
 import { MaterialIcon } from './MaterialIcon';
 import type { Device } from '../types/api';
-import type { AlertDTO, PrometheusStatusPayload } from '../types/metrics';
+import { isPrometheusUnavailable, type AlertDTO, type PrometheusStatusPayload } from '../types/metrics';
 
 interface AlertsPanelProps {
   alerts: AlertDTO[];
@@ -52,7 +52,7 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
 
   const firingAlerts = alerts.filter((a) => a.state === 'firing');
   const resolvedAlerts = alerts.filter((a) => a.state !== 'firing');
-  const promDown = prometheusStatus !== null && !prometheusStatus.available;
+  const promDown = isPrometheusUnavailable(prometheusStatus);
 
   // Categorize devices affected by Prometheus outage
   const promOnlyDevices = promDown

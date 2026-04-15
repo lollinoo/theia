@@ -44,6 +44,7 @@ export interface SnapshotPayload {
 }
 
 export interface PrometheusStatusPayload {
+  enabled?: boolean;
   available: boolean;
   error?: string;
 }
@@ -255,6 +256,7 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | 
     return {
       type,
       payload: {
+        enabled: typeof p.enabled === 'boolean' ? p.enabled : undefined,
         available: p.available === true,
         error: typeof p.error === 'string' ? p.error : undefined,
       },
@@ -329,6 +331,10 @@ export function alertStatusForDevice(deviceId: string, alerts: AlertDTO[]): Aler
   }
 
   return 'normal';
+}
+
+export function isPrometheusUnavailable(status: PrometheusStatusPayload | null): boolean {
+  return status !== null && status.enabled !== false && !status.available;
 }
 
 export function formatThroughput(bps: number): string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
@@ -21,6 +22,7 @@ func NewPrometheusHandler(settingsRepo domain.SettingsRepository) *PrometheusHan
 }
 
 type prometheusHealthResponse struct {
+	Enabled   bool   `json:"enabled"`
 	Available bool   `json:"available"`
 	URL       string `json:"url"`
 	Error     string `json:"error,omitempty"`
@@ -30,11 +32,12 @@ type prometheusHealthResponse struct {
 // It checks whether the configured Prometheus URL is set and reachable.
 func (h *PrometheusHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	promURL, err := h.settingsRepo.Get(domain.SettingPrometheusURL)
+	promURL = strings.TrimSpace(promURL)
 	if err != nil || promURL == "" {
 		json.NewEncoder(w).Encode(prometheusHealthResponse{
+			Enabled:   false,
 			Available: false,
 			URL:       "",
-			Error:     "prometheus_url is not configured",
 		})
 		return
 	}
@@ -45,6 +48,7 @@ func (h *PrometheusHandler) HandleHealth(w http.ResponseWriter, r *http.Request)
 	client := metrics.NewPromClient(promURL, nil)
 	if err := client.CheckHealth(ctx); err != nil {
 		json.NewEncoder(w).Encode(prometheusHealthResponse{
+			Enabled:   true,
 			Available: false,
 			URL:       promURL,
 			Error:     err.Error(),
@@ -53,6 +57,7 @@ func (h *PrometheusHandler) HandleHealth(w http.ResponseWriter, r *http.Request)
 	}
 
 	json.NewEncoder(w).Encode(prometheusHealthResponse{
+		Enabled:   true,
 		Available: true,
 		URL:       promURL,
 	})

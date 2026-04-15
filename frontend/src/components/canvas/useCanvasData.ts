@@ -7,6 +7,7 @@ import { usePositions } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import {
   alertStatusForDevice,
+  isPrometheusUnavailable,
   type PrometheusStatusPayload,
   type SnapshotPayload,
 } from '../../types/metrics';
@@ -85,7 +86,7 @@ export function useCanvasData({
   const { fetchPositions, savePositions } = usePositions();
 
   // Track Prometheus recovery transition and auto-dismiss recovery toast.
-  const prevPromAvailableRef = useRef<boolean | null>(null);
+  const prevPromDownRef = useRef<boolean | null>(null);
   const [showRecoveryToast, setShowRecoveryToast] = useState(false);
 
   // Keep refs in sync so async loadTopology and snapshot effect can read the latest state
@@ -158,7 +159,7 @@ export function useCanvasData({
         // for the snapshot effect to re-apply the override).
         let effectiveSnapshot = pendingSnapshot;
         const promStatus = prometheusStatusRef.current;
-        if (pendingSnapshot && promStatus !== null && !promStatus.available) {
+        if (pendingSnapshot && isPrometheusUnavailable(promStatus)) {
           const effectiveStatuses = { ...pendingSnapshot.device_statuses };
           for (const d of fetchedDevices) {
             const src = d.metrics_source || 'prometheus';
@@ -344,21 +345,23 @@ export function useCanvasData({
   useEffect(() => {
     if (prometheusStatus === null) return;
 
-    // Detect recovery: was unavailable, now available
-    if (prevPromAvailableRef.current === false && prometheusStatus.available) {
+    const promDown = isPrometheusUnavailable(prometheusStatus);
+
+    // Detect recovery only for configured Prometheus connections.
+    if (prevPromDownRef.current === true && !promDown && prometheusStatus.enabled !== false && prometheusStatus.available) {
       setShowRecoveryToast(true);
       setPrometheusAlertDismissed(false);
       const timer = window.setTimeout(() => setShowRecoveryToast(false), 8000);
-      prevPromAvailableRef.current = prometheusStatus.available;
+      prevPromDownRef.current = promDown;
       return () => { window.clearTimeout(timer); };
     }
 
-    if (prometheusStatus.available) {
+    if (!promDown) {
       setPrometheusAlertDismissed(false);
     }
 
-    prevPromAvailableRef.current = prometheusStatus.available;
-  }, [prometheusStatus?.available]);
+    prevPromDownRef.current = promDown;
+  }, [prometheusStatus?.enabled, prometheusStatus?.available]);
 
   // Apply snapshot data to nodes and edges.
   //
@@ -385,7 +388,7 @@ export function useCanvasData({
 
     // Compute effective device statuses: override prometheus-only devices to 'down'
     // when Prometheus is unreachable (no probe_success data available).
-    const promDown = prometheusStatus !== null && !prometheusStatus.available;
+    const promDown = isPrometheusUnavailable(prometheusStatus);
     const effectiveStatuses = { ...snapshot.device_statuses };
 
     if (promDown) {

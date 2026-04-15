@@ -10,7 +10,7 @@ import {
   fetchSettings,
 } from '../../api/client';
 import type { Device } from '../../types/api';
-import type { SnapshotPayload } from '../../types/metrics';
+import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { manualEdgeStorageKey, staleThresholdMs } from './canvasHelpers';
@@ -90,7 +90,7 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
   };
 }
 
-function renderUseCanvasData(snapshot: SnapshotPayload | null) {
+function renderUseCanvasData(snapshot: SnapshotPayload | null, prometheusStatus: PrometheusStatusPayload | null = null) {
   const reactFlow = {
     fitView: vi.fn(),
   } as unknown as ReactFlowInstance<DeviceNode, LinkEdgeType>;
@@ -102,7 +102,7 @@ function renderUseCanvasData(snapshot: SnapshotPayload | null) {
     const hook = useCanvasData({
       snapshot: currentSnapshot,
       reconnecting: false,
-      prometheusStatus: null,
+      prometheusStatus,
       editMode: false,
       openDeviceMenu: vi.fn(),
       openEdgeMenu: vi.fn(),
@@ -198,6 +198,22 @@ describe('useCanvasData', () => {
       last_polled_at: '2026-04-13T11:59:30Z',
       expected_poll_interval_seconds: 30,
     });
+  });
+
+  it('does not force Prometheus devices down when Prometheus is disabled', async () => {
+    const { result } = renderUseCanvasData(
+      mockSnapshot(),
+      { enabled: false, available: false },
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.nodes[0].data.device.status).toBe('up');
   });
 
   it('retains only failed manual edge migrations in localStorage', async () => {

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Device, InterfaceInfo, Link } from '../types/api';
-import type { PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
-import { formatThroughput, utilizationColor } from '../types/metrics';
+import { formatThroughput, isPrometheusUnavailable, type PrometheusStatusPayload, type SnapshotPayload, utilizationColor } from '../types/metrics';
 import { fetchDeviceInterfaces } from '../api/client';
 import { formatBandwidth } from './LinkEdge';
 
@@ -18,7 +17,7 @@ function InterfaceStatsSection({ device, ifName, interfaceInfo, snapshot, promet
 
   const isDown = device.status === 'down';
   const src = device.metrics_source || 'prometheus';
-  const promDown = prometheusStatus !== null && !prometheusStatus.available
+  const promDown = isPrometheusUnavailable(prometheusStatus)
     && (src === 'prometheus' || src === 'prometheus_snmp_fallback');
   const linkMetrics = (isDown || promDown) ? null : snapshot?.link_metrics[device.id];
   const metrics = linkMetrics?.find(

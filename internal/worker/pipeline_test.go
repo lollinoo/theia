@@ -301,6 +301,10 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 		hostnames:     map[string]string{"192.0.2.10": "core-sw-1"},
 		probeStatuses: map[string]bool{"192.0.2.10": true},
 	}
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingPrometheusURL, "http://prometheus.test"); err != nil {
+		t.Fatalf("set prometheus_url: %v", err)
+	}
 	pipeline := NewPipelineOrchestrator(
 		sched,
 		store,
@@ -317,7 +321,7 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 		newStaticTestCollector(t),
 		collector.NewPrometheusCollector(promClient),
 		&fakeTopologyService{},
-		newMockWorkerSettingsRepo(),
+		settingsRepo,
 		make(chan struct{}, 1),
 	)
 	pipeline.prevCounters[deviceID] = map[string]collector.CounterBaseline{
@@ -473,6 +477,10 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 			}},
 		},
 	}
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingPrometheusURL, "http://prometheus.test"); err != nil {
+		t.Fatalf("set prometheus_url: %v", err)
+	}
 	pipeline := NewPipelineOrchestrator(
 		newPipelineTestScheduler(),
 		state.NewStore(),
@@ -483,7 +491,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		newStaticTestCollector(t),
 		collector.NewPrometheusCollector(promClient),
 		&fakeTopologyService{},
-		newMockWorkerSettingsRepo(),
+		settingsRepo,
 		make(chan struct{}, 1),
 	)
 
@@ -507,7 +515,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 	if pipeline.IsPromAvailable() {
 		t.Fatal("expected prometheus availability to flip false on refresh failure")
 	}
-	if pipeline.promErr == "" {
+	if pipeline.GetPrometheusStatus().Error == "" {
 		t.Fatal("expected prometheus error message to be recorded")
 	}
 }
@@ -673,7 +681,9 @@ func newDetailSubscriptionTestServer(t *testing.T, hub *ws.Hub) string {
 	server := httptest.NewServer(ws.NewHandler(
 		hub,
 		func() *ws.SnapshotPayload { return ws.EmptySnapshot() },
-		func() bool { return true },
+		func() ws.PrometheusStatusPayload {
+			return ws.PrometheusStatusPayload{Enabled: true, Available: true}
+		},
 	))
 	t.Cleanup(server.Close)
 
@@ -953,23 +963,34 @@ func TestPipelineOrchestratorTopologyChangedForcesSnapshotWhenOverviewDeltaNil(t
 func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 
-	pipeline.publishPrometheusStatus(true, nil)
+	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{})
 	if messages := drainBroadcastCh(hub); len(messages) != 0 {
-		t.Fatalf("expected no broadcast for unchanged available=true state, got %d message(s)", len(messages))
+		t.Fatalf("expected no broadcast for unchanged disabled state, got %d message(s)", len(messages))
 	}
 
-	pipeline.publishPrometheusStatus(false, errors.New("prometheus down"))
+	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
+		Enabled:   true,
+		Available: false,
+		Error:     "prometheus down",
+	})
 	firstTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
 	if len(firstTypes) != 1 || firstTypes[0] != ws.MessageTypePrometheusStatus {
 		t.Fatalf("expected one prometheus_status message on failure transition, got %v", firstTypes)
 	}
 
-	pipeline.publishPrometheusStatus(false, errors.New("prometheus down"))
+	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
+		Enabled:   true,
+		Available: false,
+		Error:     "prometheus down",
+	})
 	if messages := drainBroadcastCh(hub); len(messages) != 0 {
 		t.Fatalf("expected no duplicate broadcast without state transition, got %d message(s)", len(messages))
 	}
 
-	pipeline.publishPrometheusStatus(true, nil)
+	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
+		Enabled:   true,
+		Available: true,
+	})
 	secondTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
 	if len(secondTypes) != 1 || secondTypes[0] != ws.MessageTypePrometheusStatus {
 		t.Fatalf("expected one prometheus_status message on recovery transition, got %v", secondTypes)

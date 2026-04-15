@@ -328,6 +328,7 @@ export interface SNMPProfilePayload {
 }
 
 export interface PrometheusHealthResult {
+  enabled?: boolean;
   available: boolean;
   url: string;
   error?: string;
@@ -339,6 +340,7 @@ export async function checkPrometheusHealth(): Promise<PrometheusHealthResult> {
     if (typeof payload === 'object' && payload !== null) {
       const p = payload as Record<string, unknown>;
       return {
+        enabled: typeof p.enabled === 'boolean' ? p.enabled : undefined,
         available: p.available === true,
         url: typeof p.url === 'string' ? p.url : '',
         error: typeof p.error === 'string' ? p.error : undefined,

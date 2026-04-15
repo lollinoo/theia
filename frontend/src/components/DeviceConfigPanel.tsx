@@ -175,7 +175,7 @@ export function DeviceConfigPanel({
     }
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
     checkPrometheusHealth().then((result) => {
-      setPrometheusAvailable(result.available);
+      setPrometheusAvailable(result.enabled !== false && result.available);
     }).catch(() => {
       setPrometheusAvailable(false);
     });

@@ -103,10 +103,11 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
     checkPrometheusHealth().then((result) => {
-      setPrometheusAvailable(result.available);
+      const nextAvailable = result.enabled !== false && result.available;
+      setPrometheusAvailable(nextAvailable);
       setPrometheusCheckDone(true);
       // If prometheus is unavailable, force SNMP mode
-      if (!result.available) {
+      if (!nextAvailable) {
         setMetricsMode('snmp');
       }
     }).catch(() => {

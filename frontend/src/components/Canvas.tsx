@@ -5,7 +5,7 @@ import {
   type Connection, type EdgeChange,
 } from '@xyflow/react';
 import type { Area, Device, Link } from '../types/api';
-import type { PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
+import { isPrometheusUnavailable, type PrometheusStatusPayload, type SnapshotPayload } from '../types/metrics';
 import DeviceCard, { type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import SearchOverlay from './SearchOverlay';
@@ -361,7 +361,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         onCreateLink={() => setPanelContent({ type: 'create-link' })} onAlerts={() => setPanelContent({ type: 'alerts' })}
         onSettings={() => setPanelContent({ type: 'settings' })} onToggleEditMode={() => setEditMode((m) => !m)}
         editMode={editMode}
-        alertCount={(snapshot?.alerts.filter((a) => a.state === 'firing').length ?? 0) + (prometheusStatus !== null && !prometheusStatus.available ? 1 : 0)} />
+        alertCount={(snapshot?.alerts.filter((a) => a.state === 'firing').length ?? 0) + (isPrometheusUnavailable(prometheusStatus) ? 1 : 0)} />
 
       {deviceMenu && (() => {
         const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
