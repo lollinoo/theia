@@ -3,13 +3,21 @@ import { renderHook, act } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
 
 class MockWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   onclose: (() => void) | null = null;
+  send = vi.fn();
   close = vi.fn();
+  readyState = MockWebSocket.CONNECTING;
 
   simulateOpen() {
+    this.readyState = MockWebSocket.OPEN;
     this.onopen?.();
   }
 
@@ -18,19 +26,25 @@ class MockWebSocket {
   }
 
   simulateClose() {
+    this.readyState = MockWebSocket.CLOSED;
     this.onclose?.();
   }
 }
 
 let mockInstance: MockWebSocket;
+let mockInstances: MockWebSocket[] = [];
 
 beforeEach(() => {
+  mockInstances = [];
+  vi.useFakeTimers();
+
   // Replace the global WebSocket with our MockWebSocket class.
   // When the hook calls `new WebSocket(url)`, it will construct a MockWebSocket.
   const OriginalMock = class extends MockWebSocket {
     constructor(_url: string) {
       super();
       mockInstance = this;
+      mockInstances.push(this);
     }
   };
   vi.stubGlobal('WebSocket', OriginalMock);
@@ -38,6 +52,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('useWebSocket', () => {
@@ -175,6 +190,186 @@ describe('useWebSocket', () => {
 
     expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(90);
     expect(result.current.snapshot!.device_metrics['dev-2'].cpu_percent).toBe(75);
+  });
+
+  it('handles snapshot_delta message with targeted link_metrics by merging into existing snapshot', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          device_metrics: {},
+          link_metrics: {
+            'dev-1': [
+              {
+                device_id: 'dev-1',
+                if_name: 'ether1',
+                tx_bps: 100,
+                rx_bps: 200,
+                utilization: 0.1,
+                collected_at: '2026-01-01T00:00:00Z',
+              },
+            ],
+            'dev-2': [
+              {
+                device_id: 'dev-2',
+                if_name: 'ether2',
+                tx_bps: 300,
+                rx_bps: 400,
+                utilization: 0.2,
+                collected_at: '2026-01-01T00:00:00Z',
+              },
+            ],
+          },
+          alerts: [],
+          device_statuses: {},
+          device_hostnames: {},
+          device_models: {},
+        },
+      });
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'snapshot_delta',
+        payload: {
+          device_metrics: {},
+          link_metrics: {
+            'dev-1': [
+              {
+                device_id: 'dev-1',
+                if_name: 'ether1',
+                tx_bps: 150,
+                rx_bps: 250,
+                utilization: 0.15,
+                collected_at: '2026-01-01T00:01:00Z',
+              },
+            ],
+          },
+          alerts: [],
+          device_statuses: {},
+          device_hostnames: {},
+          device_models: {},
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.link_metrics['dev-1']).toEqual([
+      {
+        device_id: 'dev-1',
+        if_name: 'ether1',
+        tx_bps: 150,
+        rx_bps: 250,
+        utilization: 0.15,
+        collected_at: '2026-01-01T00:01:00Z',
+      },
+    ]);
+    expect(result.current.snapshot!.link_metrics['dev-2']).toEqual([
+      {
+        device_id: 'dev-2',
+        if_name: 'ether2',
+        tx_bps: 300,
+        rx_bps: 400,
+        utilization: 0.2,
+        collected_at: '2026-01-01T00:00:00Z',
+      },
+    ]);
+  });
+
+  it('sends subscribe_detail on open when detailDeviceId is preset', () => {
+    renderHook(() => useWebSocket('ws://localhost:8080/ws', 'dev-1'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    expect(mockInstance.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'subscribe_detail',
+      payload: { device_id: 'dev-1' },
+    }));
+  });
+
+  it('sends unsubscribe_detail when detailDeviceId becomes null', () => {
+    const { rerender } = renderHook(
+      ({ detailDeviceId }: { detailDeviceId: string | null }) => useWebSocket('ws://localhost:8080/ws', detailDeviceId),
+      { initialProps: { detailDeviceId: 'dev-1' } },
+    );
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    mockInstance.send.mockClear();
+
+    act(() => {
+      rerender({ detailDeviceId: null });
+    });
+
+    expect(mockInstance.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'unsubscribe_detail',
+      payload: { device_id: 'dev-1' },
+    }));
+  });
+
+  it('sends unsubscribe then subscribe when switching devices', () => {
+    const { rerender } = renderHook(
+      ({ detailDeviceId }: { detailDeviceId: string | null }) => useWebSocket('ws://localhost:8080/ws', detailDeviceId),
+      { initialProps: { detailDeviceId: 'dev-1' } },
+    );
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    mockInstance.send.mockClear();
+
+    act(() => {
+      rerender({ detailDeviceId: 'dev-2' });
+    });
+
+    expect(mockInstance.send).toHaveBeenNthCalledWith(1, JSON.stringify({
+      type: 'unsubscribe_detail',
+      payload: { device_id: 'dev-1' },
+    }));
+    expect(mockInstance.send).toHaveBeenNthCalledWith(2, JSON.stringify({
+      type: 'subscribe_detail',
+      payload: { device_id: 'dev-2' },
+    }));
+  });
+
+  it('re-sends the current device subscription after reconnect', () => {
+    renderHook(() => useWebSocket('ws://localhost:8080/ws', 'dev-1'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    const firstSocket = mockInstance;
+
+    act(() => {
+      firstSocket.simulateClose();
+      vi.advanceTimersByTime(1000);
+    });
+
+    const secondSocket = mockInstances[1];
+    expect(secondSocket).toBeDefined();
+    if (!secondSocket) {
+      throw new Error('expected reconnect socket instance');
+    }
+
+    act(() => {
+      secondSocket.simulateOpen();
+    });
+
+    expect(secondSocket.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'subscribe_detail',
+      payload: { device_id: 'dev-1' },
+    }));
   });
 
   it('ignores snapshot_delta when no base snapshot exists', () => {

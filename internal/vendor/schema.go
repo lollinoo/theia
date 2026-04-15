@@ -55,13 +55,46 @@ type PrometheusMetrics struct {
 	Uptime      string `yaml:"uptime" json:"uptime"`
 }
 
-// SNMPConfig holds vendor-specific SNMP OIDs and scale factors.
+// SNMPConfig holds the vendor-specific OIDs for each volatility tier.
+// OIDs are grouped into three volatility classes per the Phase 39
+// architecture: static (inventory/topology), operational (reachability),
+// performance (counters/gauges). Collectors poll one tier per cycle.
 type SNMPConfig struct {
-	TemperatureOID   string  `yaml:"temperature_oid" json:"temperature_oid"`
-	TemperatureScale float64 `yaml:"temperature_scale" json:"temperature_scale"`
+	Static      StaticOIDs      `yaml:"static" json:"static"`
+	Operational OperationalOIDs `yaml:"operational" json:"operational"`
+	Performance PerformanceOIDs `yaml:"performance" json:"performance"`
+}
+
+// StaticOIDs holds inventory and topology OIDs that change rarely.
+// Phase 39 keeps this as an empty placeholder (D-12) — ifTable / LLDP /
+// CDP walks remain in internal/snmp/discovery.go. Phase 40 may migrate
+// them here when wiring StaticCollector.
+type StaticOIDs struct {
+	// Reserved for future use. Intentionally empty in Phase 39.
+}
+
+// OperationalOIDs holds reachability and link-state OIDs polled on a
+// medium schedule. Standard MIB values live in default.yaml per D-11;
+// vendor YAMLs override only on genuine divergence.
+type OperationalOIDs struct {
+	// SysUpTimeOID is the scalar OID for sysUpTime (TimeTicks, hundredths
+	// of a second). Used for reachability checks.
+	SysUpTimeOID string `yaml:"sys_uptime_oid" json:"sys_uptime_oid"`
+
+	// IfOperStatusOID is the column OID for ifOperStatus. Bulk-walked
+	// to enumerate per-interface link state.
+	IfOperStatusOID string `yaml:"if_oper_status_oid" json:"if_oper_status_oid"`
+}
+
+// PerformanceOIDs holds counter and gauge OIDs polled on the fastest
+// schedule. CPU, memory, and temperature were originally flat fields
+// on SNMPConfig; D-10 moved them into this nested group.
+type PerformanceOIDs struct {
 	CPUOID           string  `yaml:"cpu_oid" json:"cpu_oid"`
 	MemoryUsedOID    string  `yaml:"memory_used_oid" json:"memory_used_oid"`
 	MemoryTotalOID   string  `yaml:"memory_total_oid" json:"memory_total_oid"`
+	TemperatureOID   string  `yaml:"temperature_oid" json:"temperature_oid"`
+	TemperatureScale float64 `yaml:"temperature_scale" json:"temperature_scale"`
 }
 
 // BackupConfig describes how to back up a device's configuration.

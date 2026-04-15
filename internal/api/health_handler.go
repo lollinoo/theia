@@ -6,17 +6,20 @@ import (
 	"net/http"
 
 	"github.com/lollinoo/theia/internal/version"
-	"github.com/lollinoo/theia/internal/worker"
 )
+
+type statusProvider interface {
+	Status() string
+}
 
 // HealthHandler provides the health check endpoint.
 type HealthHandler struct {
 	db     *sql.DB
-	poller *worker.Poller
+	poller statusProvider
 }
 
 // NewHealthHandler creates a new HealthHandler.
-func NewHealthHandler(db *sql.DB, poller *worker.Poller) *HealthHandler {
+func NewHealthHandler(db *sql.DB, poller statusProvider) *HealthHandler {
 	return &HealthHandler{db: db, poller: poller}
 }
 

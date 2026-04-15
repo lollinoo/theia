@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gosnmp/gosnmp"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/vendor"
-	"github.com/gosnmp/gosnmp"
 )
 
 // OIDs for Discovery
@@ -64,10 +64,75 @@ const (
 
 // InterfaceCounter holds raw 64-bit octet counters for a single interface.
 type InterfaceCounter struct {
-	IfIndex    int
-	IfName     string
-	InOctets   uint64
-	OutOctets  uint64
+	IfIndex   int
+	IfName    string
+	InOctets  uint64
+	OutOctets uint64
+}
+
+// PollOperationalStatus collects sysUpTime and per-interface ifOperStatus
+// values using vendor-resolved operational OIDs. Missing fields remain partial;
+// transport/query failures return an error.
+func PollOperationalStatus(client ClientInterface, operationalOIDs vendor.OperationalOIDs) (uptimeSecs *float64, statuses map[string]string, err error) {
+	uptimeOID := operationalOIDs.SysUpTimeOID
+	if uptimeOID == "" {
+		uptimeOID = OidSysUpTime
+	}
+
+	statusOID := operationalOIDs.IfOperStatusOID
+	if statusOID == "" {
+		statusOID = OidIfOperStatus
+	}
+
+	pdus, err := client.Get([]string{uptimeOID})
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting sysUpTime: %w", err)
+	}
+	for _, pdu := range pdus {
+		if pdu.Name != uptimeOID {
+			continue
+		}
+		if v := uint32FromPDU(pdu); v > 0 {
+			secs := float64(v) / 100.0
+			uptimeSecs = &secs
+			break
+		}
+	}
+
+	ifNames := make(map[int]string)
+	for _, pdu := range bulkWalkSafe(client, OidIfName) {
+		if idx := lastOIDIndex(pdu.Name, OidIfName); idx >= 0 {
+			ifNames[idx] = stringFromPDU(pdu)
+		}
+	}
+	if len(ifNames) == 0 {
+		for _, pdu := range bulkWalkSafe(client, OidIfDescr) {
+			if idx := lastOIDIndex(pdu.Name, OidIfDescr); idx >= 0 {
+				ifNames[idx] = stringFromPDU(pdu)
+			}
+		}
+	}
+
+	statusPDUs, err := client.BulkWalk(statusOID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("walking ifOperStatus: %w", err)
+	}
+	for _, pdu := range statusPDUs {
+		idx := lastOIDIndex(pdu.Name, statusOID)
+		if idx < 0 {
+			continue
+		}
+		ifName := ifNames[idx]
+		if ifName == "" {
+			continue
+		}
+		if statuses == nil {
+			statuses = make(map[string]string)
+		}
+		statuses[ifName] = statusString(pdu.Value)
+	}
+
+	return uptimeSecs, statuses, nil
 }
 
 // PollInterfaceCounters walks ifHCInOctets and ifHCOutOctets (64-bit counters)
@@ -385,7 +450,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string) []N
 			cdpMap[indexStr] = &NeighborInfo{Protocol: domain.DiscoveryProtocolCDP}
 		}
 		cdpMap[indexStr].RemoteSysName = stringFromPDU(pdu)
-		
+
 		// CDP index typically looks like localIfIndex.cdpCacheDeviceIndex
 		parts := strings.Split(indexStr, ".")
 		if len(parts) >= 1 {
@@ -597,7 +662,7 @@ func extractPhysicalInterfaceAnchor(normalized string) string {
 		if idx := strings.Index(normalized, pattern); idx >= 0 {
 			anchor := normalized[idx:]
 			for i, r := range anchor {
-				if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '/' ) {
+				if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '/') {
 					anchor = anchor[:i]
 					break
 				}
@@ -690,10 +755,10 @@ func extractCDPIndex(oid, prefix string) string {
 }
 
 // PollDeviceMetrics collects live CPU, memory, uptime, and temperature metrics
-// directly from a device via SNMP. Uses vendor-resolved SNMP config for
+// directly from a device via SNMP. Uses vendor-resolved performance OIDs for
 // temperature OID and scale. Returns nil pointers for metrics that are
 // not available on the target device.
-func PollDeviceMetrics(client ClientInterface, snmpCfg vendor.SNMPConfig) (cpuPercent, memPercent, uptimeSecs, tempCelsius *float64) {
+func PollDeviceMetrics(client ClientInterface, perfOIDs vendor.PerformanceOIDs) (cpuPercent, memPercent, uptimeSecs, tempCelsius *float64) {
 	// Uptime — sysUpTime is in hundredths of seconds (TimeTicks)
 	if pdus, err := client.Get([]string{OidSysUpTime}); err == nil {
 		for _, pdu := range pdus {
@@ -708,8 +773,8 @@ func PollDeviceMetrics(client ClientInterface, snmpCfg vendor.SNMPConfig) (cpuPe
 
 	// CPU — average of all hrProcessorLoad entries (one per CPU core)
 	cpuOID := OidHrProcessorLoad
-	if snmpCfg.CPUOID != "" {
-		cpuOID = snmpCfg.CPUOID
+	if perfOIDs.CPUOID != "" {
+		cpuOID = perfOIDs.CPUOID
 	}
 	if pdus, err := client.BulkWalk(cpuOID); err == nil && len(pdus) > 0 {
 		var sum float64
@@ -733,8 +798,8 @@ func PollDeviceMetrics(client ClientInterface, snmpCfg vendor.SNMPConfig) (cpuPe
 	memPercent = pollMemoryPercent(client)
 
 	// Temperature — try vendor-specific OID first, fall back to entity sensor MIB
-	tempOID := snmpCfg.TemperatureOID
-	tempScale := snmpCfg.TemperatureScale
+	tempOID := perfOIDs.TemperatureOID
+	tempScale := perfOIDs.TemperatureScale
 	if tempOID != "" {
 		if pdus, err := client.Get([]string{tempOID}); err == nil {
 			for _, pdu := range pdus {

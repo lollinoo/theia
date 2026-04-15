@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -29,9 +30,10 @@ type Hub struct {
 
 // Client is a single WebSocket connection.
 type Client struct {
-	hub  *Hub
-	conn *websocket.Conn
-	send chan []byte
+	hub            *Hub
+	conn           *websocket.Conn
+	send           chan []byte
+	detailDeviceID uuid.UUID
 }
 
 // NewHub creates an empty WebSocket hub.
@@ -93,6 +95,34 @@ func (h *Hub) SendTo(client *Client, msg Message) {
 	}
 }
 
+func (h *Hub) SetDetailSubscription(client *Client, deviceID uuid.UUID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	client.detailDeviceID = deviceID
+}
+
+func (h *Hub) ClearDetailSubscription(client *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	client.detailDeviceID = uuid.Nil
+}
+
+func (h *Hub) DetailSubscribers(deviceID uuid.UUID) []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	subscribers := make([]*Client, 0)
+	for client := range h.clients {
+		if client.detailDeviceID == deviceID {
+			subscribers = append(subscribers, client)
+		}
+	}
+
+	return subscribers
+}
+
 func (h *Hub) enqueue(client *Client, payload []byte) bool {
 	select {
 	case client.send <- payload:
@@ -106,12 +136,13 @@ func (h *Hub) removeClient(client *Client) {
 	h.mu.Lock()
 	_, ok := h.clients[client]
 	if ok {
+		client.detailDeviceID = uuid.Nil
 		delete(h.clients, client)
 		close(client.send)
 	}
 	h.mu.Unlock()
 
-	if ok {
+	if ok && client.conn != nil {
 		_ = client.conn.Close()
 	}
 }
@@ -128,11 +159,29 @@ func (c *Client) readPump() {
 	})
 
 	for {
-		if _, _, err := c.conn.ReadMessage(); err != nil {
+		messageType, message, err := c.conn.ReadMessage()
+		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("WebSocket read error: %v", err)
 			}
 			break
+		}
+
+		if messageType != websocket.TextMessage {
+			continue
+		}
+
+		cmd, err := parseClientControlMessage(message)
+		if err != nil {
+			log.Printf("WebSocket control message ignored: %v", err)
+			continue
+		}
+
+		switch cmd.Type {
+		case MessageTypeSubscribeDetail:
+			c.hub.SetDetailSubscription(c, cmd.DeviceID)
+		case MessageTypeUnsubscribeDetail:
+			c.hub.ClearDetailSubscription(c)
 		}
 	}
 }

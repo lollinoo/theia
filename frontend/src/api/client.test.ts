@@ -7,6 +7,7 @@ import {
   deleteDevice,
   fetchBackupJobs,
   restoreInstanceBackup,
+  updateDevice,
   type CreateDevicePayload,
 } from './client';
 import { ValidationError, ServerError } from './errors';
@@ -38,6 +39,8 @@ function deviceResource(id: string, hostname: string, ip: string) {
       vendor: 'mikrotik',
       managed: true,
       backup_supported: true,
+      poll_class: 'standard',
+      poll_interval_override: null,
       metrics_source: 'prometheus',
       prometheus_label_name: 'instance',
       prometheus_label_value: `${ip}:9100`,
@@ -93,6 +96,27 @@ describe('fetchDevices', () => {
 
     const result = await fetchDevices();
     expect(result).toEqual([]);
+  });
+
+  it('round-trips poll classification fields from the API resource', async () => {
+    const payload = {
+      data: [
+        {
+          ...deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+          attributes: {
+            ...deviceResource('uuid-1', 'router-01', '10.0.0.1').attributes,
+            poll_class: 'core',
+            poll_interval_override: 30,
+          },
+        },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(payload)));
+
+    const result = await fetchDevices();
+
+    expect(result[0].poll_class).toBe('core');
+    expect(result[0].poll_interval_override).toBe(30);
   });
 });
 
@@ -194,6 +218,36 @@ describe('deleteDevice', () => {
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/v1/devices/device-123');
     expect(options.method).toBe('DELETE');
+  });
+});
+
+describe('updateDevice', () => {
+  it('sends null poll_interval_override unchanged', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateDevice('uuid-1', { poll_interval_override: null });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/devices/uuid-1');
+    expect(options.method).toBe('PUT');
+    expect(JSON.parse(options.body)).toEqual({ poll_interval_override: null });
+  });
+
+  it('sends numeric poll_interval_override unchanged', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateDevice('uuid-1', { poll_interval_override: 30 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual({ poll_interval_override: 30 });
   });
 });
 

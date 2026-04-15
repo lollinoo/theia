@@ -168,3 +168,130 @@ func TestDeviceRepoGetBySysName_UpdateRefreshesLookupIndex(t *testing.T) {
 		t.Fatalf("expected device %s, got %s", device.ID, newLookup.ID)
 	}
 }
+
+// intPtr is a local helper to create a *int from a literal int value.
+func intPtr(i int) *int { return &i }
+
+// ---------------------------------------------------------------------------
+// TestDeviceRepo_PollClassRoundTrip (Phase 39 Plan 03)
+// ---------------------------------------------------------------------------
+// Verifies that PollClass=PollClassCore round-trips through Create → GetByID.
+func TestDeviceRepo_PollClassRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		Hostname:  "core-router-01",
+		IP:        "10.1.0.1",
+		PollClass: domain.PollClassCore,
+		Status:    domain.DeviceStatusUnknown,
+		Tags:      map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	got, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+
+	if got.PollClass != domain.PollClassCore {
+		t.Errorf("PollClass: got %q, want %q", got.PollClass, domain.PollClassCore)
+	}
+	if got.PollIntervalOverride != nil {
+		t.Errorf("PollIntervalOverride: got %v, want nil", got.PollIntervalOverride)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDeviceRepo_PollIntervalOverrideRoundTrip (Phase 39 Plan 03)
+// ---------------------------------------------------------------------------
+// Verifies that a non-nil PollIntervalOverride persists and can be cleared.
+func TestDeviceRepo_PollIntervalOverrideRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+
+	device := &domain.Device{
+		ID:                  uuid.New(),
+		Hostname:            "standard-ap-01",
+		IP:                  "10.1.0.2",
+		PollClass:           domain.PollClassStandard,
+		PollIntervalOverride: intPtr(15),
+		Status:              domain.DeviceStatusUnknown,
+		Tags:                map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	got, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after Create failed: %v", err)
+	}
+	if got.PollIntervalOverride == nil {
+		t.Fatal("PollIntervalOverride: got nil, want non-nil")
+	}
+	if *got.PollIntervalOverride != 15 {
+		t.Errorf("PollIntervalOverride: got %d, want 15", *got.PollIntervalOverride)
+	}
+
+	// Clear the override via Update.
+	got.PollIntervalOverride = nil
+	if err := repo.Update(got); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after Update failed: %v", err)
+	}
+	if updated.PollIntervalOverride != nil {
+		t.Errorf("PollIntervalOverride after clear: got %v, want nil", updated.PollIntervalOverride)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDeviceRepo_PollClassEmptyDefaultsToStandard (Phase 39 Plan 03)
+// ---------------------------------------------------------------------------
+// Verifies that an empty PollClass is normalized to PollClassStandard by createOnce.
+func TestDeviceRepo_PollClassEmptyDefaultsToStandard(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		Hostname:  "virtual-node-01",
+		IP:        "10.1.0.3",
+		PollClass: "", // zero value — should default to PollClassStandard
+		Status:    domain.DeviceStatusUnknown,
+		Tags:      map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	got, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if got.PollClass != domain.PollClassStandard {
+		t.Errorf("PollClass: got %q, want %q (empty should default to standard)", got.PollClass, domain.PollClassStandard)
+	}
+}

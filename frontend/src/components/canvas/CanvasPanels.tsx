@@ -14,6 +14,7 @@ import { BulkEditPanel } from '../BulkEditPanel';
 import { LinkCreatePanel } from '../LinkCreatePanel';
 import { LinkDetailsPanel } from '../LinkDetailsPanel';
 import { viewportSize } from './canvasHelpers';
+import { getEffectivePollingIntervalSeconds } from '../../utils/polling';
 
 interface CanvasPanelsProps {
   panelContent: { type: string; data?: unknown } | null;
@@ -27,6 +28,7 @@ interface CanvasPanelsProps {
   prometheusStatus: PrometheusStatusPayload | null;
   onAreasChange?: () => void;
   onSettingsChange?: () => void;
+  onWinBoxAvailabilityChange?: (deviceId: string, hasWinboxProfile: boolean) => void;
 }
 
 export function CanvasPanels({
@@ -41,6 +43,7 @@ export function CanvasPanels({
   prometheusStatus,
   onAreasChange,
   onSettingsChange,
+  onWinBoxAvailabilityChange,
 }: CanvasPanelsProps) {
   return (
     <>
@@ -132,15 +135,28 @@ export function CanvasPanels({
       })()}
       {panelContent?.type === 'deviceConfig' && (() => {
         const data = panelContent.data as { device?: Device } | undefined;
-        if (data?.device) {
+        const device = data?.device;
+        if (device) {
           return (
             <DeviceConfigPanel
-              device={data.device}
-              isVirtual={data.device.device_type === 'virtual'}
+              device={device}
+              isVirtual={device.device_type === 'virtual'}
               onDeviceUpdated={(updated) => {
                 setDevices((prev) => prev.map((d) => d.id === updated.id ? updated : d));
                 setNodes((prev) => prev.map((n) => n.id === updated.id
-                  ? { ...n, data: { ...n.data, device: updated } }
+                  ? {
+                      ...n,
+                      data: {
+                        ...n.data,
+                        device: updated,
+                        metrics: n.data.metrics
+                          ? {
+                              ...n.data.metrics,
+                              expected_poll_interval_seconds: getEffectivePollingIntervalSeconds(updated),
+                            }
+                          : n.data.metrics,
+                      },
+                    }
                   : n,
                 ));
                 setPanelContent({ type: 'deviceConfig', data: { device: updated } });
@@ -150,6 +166,9 @@ export function CanvasPanels({
                 void loadTopology(true);
               }}
               onSettingsChange={onSettingsChange}
+              onWinBoxAvailabilityChange={(hasWinboxProfile) => {
+                onWinBoxAvailabilityChange?.(device.id, hasWinboxProfile);
+              }}
             />
           );
         }

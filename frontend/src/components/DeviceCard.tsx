@@ -1,12 +1,21 @@
 import { memo } from 'react';
-import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import type { Device } from '../types/api';
+import { Handle, Position, useStore, type Node, type NodeProps } from '@xyflow/react';
+import type { Device, DeviceStatus } from '../types/api';
 import {
   formatUptime,
   metricColor,
   type AlertStatus,
   type DeviceMetricsDTO,
 } from '../types/metrics';
+import {
+  formatFreshness,
+  formatHealthLabel,
+  formatPollingEvery,
+} from '../utils/freshness';
+import { isNodeVisibleInViewport } from '../utils/canvasVisibility';
+import { useDocumentVisibility } from '../hooks/useDocumentVisibility';
+import { useFreshnessClock } from '../hooks/useFreshnessClock';
+import { getEffectivePollingIntervalSeconds } from '../utils/polling';
 import { MaterialIcon } from './MaterialIcon';
 import { StatusDot } from './StatusDot';
 import { VendorIcon } from './icons/VendorIcon';
@@ -39,6 +48,9 @@ const subtypeIconMap: Record<string, string> = {
   generic: 'hub',
 };
 
+const macAddressPattern = /^([0-9A-Fa-f]{2}([:-])){5}[0-9A-Fa-f]{2}$/;
+const dottedMacAddressPattern = /^([0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}$/;
+
 function displayName(device: Device): string {
   return device.tags?.display_name || device.sys_name || device.ip;
 }
@@ -65,10 +77,139 @@ function formatTemperature(value: number | null): string {
   return value === null ? 'N/A' : `${Math.round(value)}C`;
 }
 
+function isMacAddress(value: string): boolean {
+  return macAddressPattern.test(value) || dottedMacAddressPattern.test(value);
+}
+
+function healthDotStatusForMetrics(health: string | undefined): 'up' | 'degraded' | 'down' | 'unknown' {
+  switch (health) {
+    case 'healthy':
+      return 'up';
+    case 'warning':
+      return 'degraded';
+    case 'critical':
+      return 'down';
+    default:
+      return 'unknown';
+  }
+}
+
+function healthLabelClassForMetrics(health: string | undefined): string {
+  switch (health) {
+    case 'healthy':
+      return 'text-[12px] font-semibold text-status-up';
+    case 'warning':
+      return 'text-[12px] font-semibold text-warning';
+    case 'critical':
+      return 'text-[12px] font-semibold text-critical';
+    default:
+      return 'text-[12px] font-semibold text-status-unknown';
+  }
+}
+
+function statusLabel(status: DeviceStatus): 'Up' | 'Down' | 'Probing' | 'Unknown' {
+  switch (status) {
+    case 'up':
+      return 'Up';
+    case 'down':
+      return 'Down';
+    case 'probing':
+      return 'Probing';
+    default:
+      return 'Unknown';
+  }
+}
+
+function statusLabelClass(status: DeviceStatus): string {
+  switch (status) {
+    case 'up':
+      return 'text-[12px] font-semibold text-status-up';
+    case 'down':
+      return 'text-[12px] font-semibold text-status-down';
+    case 'probing':
+      return 'text-[12px] font-semibold text-status-probing';
+    default:
+      return 'text-[12px] font-semibold text-status-unknown';
+  }
+}
+
+function effectiveHeaderState(
+  deviceStatus: DeviceStatus,
+  metricsHealth: string | undefined,
+): {
+  dotStatus: DeviceStatus | 'degraded';
+  label: string;
+  labelClass: string;
+} {
+  if (deviceStatus !== 'up') {
+    return {
+      dotStatus: deviceStatus,
+      label: statusLabel(deviceStatus),
+      labelClass: statusLabelClass(deviceStatus),
+    };
+  }
+
+  return {
+    dotStatus: healthDotStatusForMetrics(metricsHealth),
+    label: formatHealthLabel(metricsHealth),
+    labelClass: healthLabelClassForMetrics(metricsHealth),
+  };
+}
+
+function freshnessClassName(tier: 'Fresh' | 'Stale' | 'Dead'): string {
+  switch (tier) {
+    case 'Fresh':
+      return 'bg-surface-high text-on-bg-secondary';
+    case 'Stale':
+      return 'bg-warning/10 text-warning';
+    case 'Dead':
+      return 'bg-critical/10 text-critical';
+  }
+}
+
 function DeviceCardInner({
   data,
+  width,
+  height,
+  positionAbsoluteX,
+  positionAbsoluteY,
   selected,
 }: NodeProps<DeviceNode>) {
+  const metrics = data.metrics ?? null;
+  const transform = useStore((state) => state.transform);
+  const viewportWidth = useStore((state) => state.width);
+  const viewportHeight = useStore((state) => state.height);
+  const documentVisible = useDocumentVisibility();
+  const fallbackWidth = data.isGhost ? 120 : data.isVirtual ? (data.device.ip ? 200 : 160) : 260;
+  const fallbackHeight = data.isGhost ? 44 : data.isVirtual ? (data.device.ip ? 96 : 64) : 168;
+  const freshnessActive = documentVisible && isNodeVisibleInViewport({
+    nodeX: positionAbsoluteX,
+    nodeY: positionAbsoluteY,
+    nodeWidth: width ?? fallbackWidth,
+    nodeHeight: height ?? fallbackHeight,
+    viewportWidth,
+    viewportHeight,
+    transform,
+  });
+  const nowMs = useFreshnessClock(
+    metrics?.last_polled_at,
+    metrics?.expected_poll_interval_seconds,
+    freshnessActive,
+  );
+  const headerState = effectiveHeaderState(data.device.status, metrics?.health);
+  const freshness = metrics
+    ? formatFreshness(
+        metrics.last_polled_at,
+        metrics.expected_poll_interval_seconds,
+        nowMs,
+      )
+    : null;
+  const pollingEvery = metrics
+    ? formatPollingEvery(
+        metrics.expected_poll_interval_seconds ?? getEffectivePollingIntervalSeconds(data.device),
+      )
+    : null;
+
   // Ghost node: small muted card with hostname only, dashed border
   if (data.isGhost) {
     return (
@@ -101,17 +242,13 @@ function DeviceCardInner({
     const hasIP = !!data.device.ip;
     const subtypeIcon = subtypeIconMap[data.subtype ?? ''] ?? 'hub';
     const virtualLabel = data.device.tags?.display_name || data.device.sys_name || data.device.ip || 'Virtual';
-    const statusForDot =
-      data.alertStatus === 'down' ? 'down'
-        : data.alertStatus === 'degraded' ? 'degraded'
-          : data.device.status;
 
     const colors = data.areaColors ?? [];
     const hasArea = colors.length > 0;
     const firstColor = colors[0];
-    // Virtual nodes without IP are not monitored — never show down/degraded glow
-    const isDown = hasIP && (data.alertStatus === 'down' || data.device.status === 'down');
-    const isDegraded = hasIP && (data.alertStatus === 'degraded' || data.device.status === 'probing');
+    const isCriticalHealth = data.device.status === 'up' && metrics?.health === 'critical';
+    const isWarningHealth = data.device.status === 'up' && metrics?.health === 'warning';
+    const isProbing = data.device.status === 'probing';
 
     const conicGradient = colors.length >= 2
       ? `conic-gradient(${colors.map((c, i, arr) =>
@@ -124,11 +261,12 @@ function DeviceCardInner({
         ? 'var(--color-primary)'
         : conicGradient ?? (hasArea ? firstColor : 'var(--color-outline)');
 
-    const wrapperPadding = data.highlighted || selected || isDown || isDegraded ? '2px' : '1.5px';
+    const wrapperPadding = data.highlighted || selected || isCriticalHealth || isWarningHealth ? '2px' : '1.5px';
 
     const wrapperStatusClass =
-      isDown ? 'shadow-[0_0_28px_rgba(255,23,68,0.45)] animate-pulse'
-        : isDegraded ? 'shadow-[0_0_28px_rgba(255,193,7,0.35)]'
+      isCriticalHealth ? 'shadow-[0_0_28px_rgba(255,23,68,0.45)] animate-pulse'
+        : isProbing ? 'shadow-[0_0_24px_rgba(255,234,0,0.28)]'
+        : isWarningHealth ? 'shadow-[0_0_28px_rgba(255,193,7,0.35)]'
           : data.highlighted ? 'shadow-[0_0_28px_rgba(0,230,118,0.35)]'
             : selected ? 'shadow-[0_0_22px_rgba(0,230,118,0.18)]' : '';
 
@@ -173,8 +311,19 @@ function DeviceCardInner({
             <span className="font-mono text-[13px] font-semibold text-on-bg truncate">
               {virtualLabel}
             </span>
-            {hasIP && <StatusDot status={statusForDot} />}
+            {hasIP && <StatusDot status={headerState.dotStatus} />}
+            {hasIP && <span className={headerState.labelClass}>{headerState.label}</span>}
           </div>
+          {hasIP && metrics && freshness && pollingEvery && (
+            <div className="mt-2 flex w-full items-center justify-between gap-2 text-[12px]">
+              <span className={`rounded-full px-2 py-1 font-semibold ${freshnessClassName(freshness.tier)}`}>
+                {freshness.text}
+              </span>
+              <span className="font-mono text-on-bg-secondary">
+                {pollingEvery}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* BODY SECTION -- IP-bearing only per D-07 */}
@@ -207,30 +356,26 @@ function DeviceCardInner({
 
   const label = displayName(data.device);
   const detail = secondaryText(data.device, label);
-  const addressLabel =
-    data.device.ip.includes(':') && !data.device.ip.includes('.') ? 'MAC' : 'IP';
-  const metrics = data.metrics ?? null;
+  const addressLabel = isMacAddress(data.device.ip) ? 'MAC' : 'IP';
   const cpuPercent = metrics?.cpu_percent ?? null;
   const memPercent = metrics?.mem_percent ?? null;
   const tempCelsius = metrics?.temp_celsius ?? null;
   const uptimeSecs = metrics?.uptime_secs ?? null;
-  const statusForDot =
-    data.alertStatus === 'down'
-      ? 'down'
-      : data.alertStatus === 'degraded'
-        ? 'degraded'
-        : data.device.status;
 
   const isDeviceDown = data.device.status === 'down';
-  const isDeviceProbing = data.device.status === 'probing';
+  const displayCpuPercent = isDeviceDown ? null : cpuPercent;
+  const displayMemPercent = isDeviceDown ? null : memPercent;
+  const displayTempCelsius = isDeviceDown ? null : tempCelsius;
+  const displayUptimeSecs = isDeviceDown ? null : uptimeSecs;
 
   const colors = data.areaColors ?? [];
   const hasArea = colors.length > 0;
   const firstColor = colors[0];
 
   // Unified wrapper border: background determines border color(s)
-  const isDown = data.alertStatus === 'down' || isDeviceDown;
-  const isDegraded = data.alertStatus === 'degraded' || isDeviceProbing;
+  const isCriticalHealth = data.device.status === 'up' && metrics?.health === 'critical';
+  const isWarningHealth = data.device.status === 'up' && metrics?.health === 'warning';
+  const isProbing = data.device.status === 'probing';
 
   const conicGradient = colors.length >= 2
     ? `conic-gradient(${colors.map((c, i, arr) =>
@@ -243,12 +388,14 @@ function DeviceCardInner({
       ? 'var(--color-primary)'
       : conicGradient ?? (hasArea ? firstColor : 'var(--color-outline)');
 
-  const wrapperPadding = data.highlighted || selected || isDown || isDegraded ? '2px' : '1.5px';
+  const wrapperPadding = data.highlighted || selected || isCriticalHealth || isWarningHealth ? '2px' : '1.5px';
 
   const wrapperStatusClass =
-    isDown
+    isCriticalHealth
       ? 'shadow-[0_0_28px_rgba(255,23,68,0.45)] animate-pulse'
-      : isDegraded
+      : isProbing
+        ? 'shadow-[0_0_24px_rgba(255,234,0,0.28)]'
+      : isWarningHealth
         ? 'shadow-[0_0_28px_rgba(255,193,7,0.35)]'
         : data.highlighted
           ? 'shadow-[0_0_28px_rgba(0,230,118,0.35)]'
@@ -312,19 +459,30 @@ function DeviceCardInner({
             {label}
           </span>
         </div>
-        <div className="flex shrink-0 items-center justify-center">
-          <StatusDot status={statusForDot} />
+        <div className="flex shrink-0 items-center gap-2">
+          <StatusDot status={headerState.dotStatus} />
+          <span className={headerState.labelClass}>{headerState.label}</span>
         </div>
       </div>
 
       {/* BODY SECTION */}
       <div
-        className={`flex flex-col rounded-b-[12px] bg-bg px-4 pt-3 pb-6 ${data.alertStatus === 'down' || isDeviceDown ? 'opacity-70' : ''}`}
+        className={`flex flex-col rounded-b-[12px] bg-bg px-4 pt-3 pb-6 ${isDeviceDown ? 'opacity-70' : ''}`}
       >
         {detail && (
           <div className="flex items-center gap-2">
             <span className="text-[13px] font-medium text-on-bg-secondary/90">
               {detail}
+            </span>
+          </div>
+        )}
+        {metrics && freshness && pollingEvery && (
+          <div className="mt-3 flex items-center justify-between gap-2 text-[12px]">
+            <span className={`rounded-full px-2 py-1 font-semibold ${freshnessClassName(freshness.tier)}`}>
+              {freshness.text}
+            </span>
+            <span className="font-mono text-on-bg-secondary">
+              {pollingEvery}
             </span>
           </div>
         )}
@@ -343,9 +501,9 @@ function DeviceCardInner({
                 CPU
               </div>
               <div
-                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : cpuPercent === null ? 'text-on-bg-secondary' : metricColor(cpuPercent)}`}
+                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : displayCpuPercent === null ? 'text-on-bg-secondary' : metricColor(displayCpuPercent)}`}
               >
-                {formatPercent(cpuPercent)}
+                {formatPercent(displayCpuPercent)}
               </div>
             </div>
             <div className="text-center">
@@ -353,9 +511,9 @@ function DeviceCardInner({
                 MEM
               </div>
               <div
-                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : memPercent === null ? 'text-on-bg-secondary' : metricColor(memPercent)}`}
+                className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : displayMemPercent === null ? 'text-on-bg-secondary' : metricColor(displayMemPercent)}`}
               >
-                {formatPercent(memPercent)}
+                {formatPercent(displayMemPercent)}
               </div>
             </div>
             <div className="text-center">
@@ -363,7 +521,7 @@ function DeviceCardInner({
                 TEMP
               </div>
               <div className={`mt-1 font-mono text-[11px] font-semibold ${isDeviceDown ? 'text-status-down/70' : 'text-on-bg'}`}>
-                {formatTemperature(tempCelsius)}
+                {formatTemperature(displayTempCelsius)}
               </div>
             </div>
             <div className="text-center">
@@ -371,7 +529,7 @@ function DeviceCardInner({
                 UP
               </div>
               <div className={`mt-1 font-mono text-[11px] font-semibold whitespace-nowrap ${isDeviceDown ? 'text-status-down/70' : 'text-on-bg'}`}>
-                {uptimeSecs === null ? '--' : formatUptime(uptimeSecs)}
+                {displayUptimeSecs === null ? '--' : formatUptime(displayUptimeSecs)}
               </div>
             </div>
           </div>
@@ -418,7 +576,15 @@ const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: Nod
     pd.metrics?.mem_percent === nd.metrics?.mem_percent &&
     pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
     pd.metrics?.uptime_secs === nd.metrics?.uptime_secs &&
+    pd.metrics?.health === nd.metrics?.health &&
+    pd.metrics?.stale === nd.metrics?.stale &&
+    pd.metrics?.last_polled_at === nd.metrics?.last_polled_at &&
+    pd.metrics?.expected_poll_interval_seconds === nd.metrics?.expected_poll_interval_seconds &&
     pd.editMode === nd.editMode &&
+    prev.positionAbsoluteX === next.positionAbsoluteX &&
+    prev.positionAbsoluteY === next.positionAbsoluteY &&
+    prev.width === next.width &&
+    prev.height === next.height &&
     prev.selected === next.selected
   );
 });

@@ -70,6 +70,13 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 	}
 	managedValue := boolToDBInt(device.Managed)
 
+	// Default empty PollClass to PollClassStandard before insert so the SQL
+	// default never has to fire — keeps in-memory and DB state in sync.
+	pollClass := device.PollClass
+	if pollClass == "" {
+		pollClass = domain.PollClassStandard
+	}
+
 	tx, err := r.db.Begin()
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
@@ -79,18 +86,23 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 	_, err = tx.Exec(
 		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status,
 			sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
-			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
+			poll_class, poll_interval_override)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		device.ID.String(), device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
 		device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
 		device.SysObjectID, device.HardwareModel,
 		device.Vendor, managedValue, string(tagsJSON), device.CreatedAt, device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
+		string(pollClass), device.PollIntervalOverride,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting device: %w", err)
 	}
+
+	// Write canonicalized PollClass back so callers see the normalized value.
+	device.PollClass = pollClass
 
 	// Insert area associations
 	for _, areaID := range device.AreaIDs {
@@ -139,7 +151,8 @@ func (r *DeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 		r.db.QueryRow(
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
-				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value
+				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
+				poll_class, poll_interval_override
 			FROM devices WHERE id = ?`, id.String(),
 		),
 	)
@@ -171,7 +184,8 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 		r.db.QueryRow(
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
-				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value
+				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
+				poll_class, poll_interval_override
 			FROM devices WHERE ip = ?`, ip,
 		),
 	)
@@ -210,7 +224,8 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 		r.db.QueryRow(
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
-				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value
+				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
+				poll_class, poll_interval_override
 			FROM devices
 			WHERE sys_name_lookup = ?
 			ORDER BY updated_at DESC, created_at DESC
@@ -255,7 +270,8 @@ func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 	rows, err := r.db.Query(
 		`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 			sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
-			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value
+			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
+			poll_class, poll_interval_override
 		FROM devices ORDER BY hostname`,
 	)
 	if err != nil {
@@ -334,6 +350,12 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 	}
 	managedValue := boolToDBInt(device.Managed)
 
+	// Default empty PollClass to PollClassStandard before update.
+	pollClass := device.PollClass
+	if pollClass == "" {
+		pollClass = domain.PollClassStandard
+	}
+
 	tx, err := r.db.Begin()
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
@@ -344,7 +366,8 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		`UPDATE devices SET hostname=?, ip=?, snmp_credentials_json=?, device_type=?,
 			status=?, sys_name=?, sys_name_lookup=?, sys_descr=?, sys_object_id=?, hardware_model=?,
 			vendor=?, managed=?, tags_json=?, updated_at=?,
-			metrics_source=?, prometheus_label_name=?, prometheus_label_value=?
+			metrics_source=?, prometheus_label_name=?, prometheus_label_value=?,
+			poll_class=?, poll_interval_override=?
 		WHERE id = ?`,
 		device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
@@ -352,11 +375,15 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		device.SysObjectID, device.HardwareModel,
 		device.Vendor, managedValue, string(tagsJSON), device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
+		string(pollClass), device.PollIntervalOverride,
 		device.ID.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("updating device: %w", err)
 	}
+
+	// Write canonicalized PollClass back so callers see the normalized value.
+	device.PollClass = pollClass
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("device not found: %s", device.ID)
@@ -446,12 +473,15 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	var idStr, credsJSON, tagsJSON, deviceType, status string
 	var managed int
 	var metricsSource, prometheusLabelName, prometheusLabelValue string
+	var pollClass string
+	var pollIntervalOverride sql.NullInt64
 
 	err := row.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
 		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel,
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
+		&pollClass, &pollIntervalOverride,
 	)
 	if err != nil {
 		return nil, err
@@ -464,6 +494,11 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	d.MetricsSource = domain.MetricsSource(metricsSource)
 	d.PrometheusLabelName = prometheusLabelName
 	d.PrometheusLabelValue = prometheusLabelValue
+	d.PollClass = domain.PollClass(pollClass)
+	if pollIntervalOverride.Valid {
+		v := int(pollIntervalOverride.Int64)
+		d.PollIntervalOverride = &v
+	}
 
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
 		return nil, fmt.Errorf("unmarshaling snmp credentials: %w", err)
@@ -482,12 +517,15 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	var idStr, credsJSON, tagsJSON, deviceType, status string
 	var managed int
 	var metricsSource, prometheusLabelName, prometheusLabelValue string
+	var pollClass string
+	var pollIntervalOverride sql.NullInt64
 
 	err := rows.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
 		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel,
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
+		&pollClass, &pollIntervalOverride,
 	)
 	if err != nil {
 		return nil, err
@@ -500,6 +538,11 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	d.MetricsSource = domain.MetricsSource(metricsSource)
 	d.PrometheusLabelName = prometheusLabelName
 	d.PrometheusLabelValue = prometheusLabelValue
+	d.PollClass = domain.PollClass(pollClass)
+	if pollIntervalOverride.Valid {
+		v := int(pollIntervalOverride.Int64)
+		d.PollIntervalOverride = &v
+	}
 
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
 		return nil, fmt.Errorf("unmarshaling snmp credentials: %w", err)

@@ -1,0 +1,955 @@
+package state
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/lollinoo/theia/internal/domain"
+)
+
+// --- Concurrent access tests (STATE-01, T-38-01) ---
+
+func TestStore_ConcurrentUpdateAndSnapshot(t *testing.T) {
+	s := NewStore()
+	s.Start(context.Background())
+	defer s.Stop()
+
+	// Drain changes channel in a goroutine so Update's emitChanges does not
+	// accumulate dropped messages.
+	drainDone := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-s.Changes():
+			case <-drainDone:
+				return
+			}
+		}
+	}()
+	defer close(drainDone)
+
+	ids := make([]uuid.UUID, 5)
+	for i := range ids {
+		ids[i] = uuid.New()
+	}
+
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				cpu := float64(i % 100)
+				s.Update(StateUpdate{
+					DeviceID:         ids[i%len(ids)],
+					Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+					PollSuccess:      true,
+					ExpectedInterval: time.Second,
+					Timestamp:        time.Now(),
+				})
+			}
+		}()
+	}
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				_ = s.Snapshot()
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestStore_SnapshotIsDeepCopy(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	orig := 42.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &orig},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+
+	snap1 := s.Snapshot()
+	ds1, ok := snap1[id]
+	if !ok {
+		t.Fatalf("device not in snapshot")
+	}
+	if ds1.Metrics.CPUPercent == nil || *ds1.Metrics.CPUPercent != 42.0 {
+		t.Fatalf("snapshot CPU: got %v, want 42", ds1.Metrics.CPUPercent)
+	}
+	// Mutate through the returned pointer.
+	*ds1.Metrics.CPUPercent = 999.0
+
+	snap2 := s.Snapshot()
+	ds2 := snap2[id]
+	if ds2.Metrics.CPUPercent == nil || *ds2.Metrics.CPUPercent != 42.0 {
+		t.Errorf("mutating snapshot corrupted store: got %v, want 42", ds2.Metrics.CPUPercent)
+	}
+}
+
+func TestStoreUpdate_OperationalPollDoesNotOverwritePerformanceFreshnessMetadata(t *testing.T) {
+	t.Parallel()
+
+	s := NewStore()
+	id := uuid.New()
+	perfAt := time.Date(2026, 4, 13, 8, 0, 0, 0, time.UTC)
+	operationalAt := perfAt.Add(time.Minute)
+
+	cpu := 42.5
+	mem := 61.25
+	temp := 55.5
+	initialUptime := 1200.0
+	updatedUptime := 1800.0
+	tx := 1000.0
+	rx := 2000.0
+	util := 33.0
+
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &cpu,
+			MemPercent:  &mem,
+			TempCelsius: &temp,
+			UptimeSecs:  &initialUptime,
+			CollectedAt: perfAt,
+		},
+		LinkMetrics: []domain.LinkMetrics{
+			{
+				LinkID:      "link-1",
+				DeviceID:    id,
+				IfName:      "ether1",
+				TxBps:       &tx,
+				RxBps:       &rx,
+				Utilization: &util,
+				CollectedAt: perfAt,
+			},
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        perfAt,
+	})
+	<-s.Changes()
+
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassOperational,
+		Metrics: &domain.DeviceMetrics{
+			UptimeSecs:  &updatedUptime,
+			CollectedAt: operationalAt,
+		},
+		PollSuccess:      true,
+		ExpectedInterval: time.Minute,
+		Timestamp:        operationalAt,
+	})
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	assertFloatPtrEqual(t, ds.Metrics.CPUPercent, cpu, "CPUPercent")
+	assertFloatPtrEqual(t, ds.Metrics.MemPercent, mem, "MemPercent")
+	assertFloatPtrEqual(t, ds.Metrics.TempCelsius, temp, "TempCelsius")
+	assertFloatPtrEqual(t, ds.Metrics.UptimeSecs, updatedUptime, "UptimeSecs")
+	if !ds.Metrics.CollectedAt.Equal(perfAt) {
+		t.Fatalf("CollectedAt = %s, want %s", ds.Metrics.CollectedAt, perfAt)
+	}
+	if ds.Reachability != ReachabilityUp {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilityUp)
+	}
+	if len(ds.LinkMetrics) != 1 {
+		t.Fatalf("LinkMetrics len = %d, want 1", len(ds.LinkMetrics))
+	}
+	if ds.LinkMetrics[0].IfName != "ether1" {
+		t.Fatalf("IfName = %q, want %q", ds.LinkMetrics[0].IfName, "ether1")
+	}
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].TxBps, tx, "LinkMetrics[0].TxBps")
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].RxBps, rx, "LinkMetrics[0].RxBps")
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].Utilization, util, "LinkMetrics[0].Utilization")
+	if !ds.LastPolledAt.Equal(perfAt) {
+		t.Fatalf("LastPolledAt = %s, want performance poll timestamp %s", ds.LastPolledAt, perfAt)
+	}
+	if ds.ExpectedInterval != 30*time.Second {
+		t.Fatalf("ExpectedInterval = %s, want 30s performance cadence", ds.ExpectedInterval)
+	}
+	if ds.Stale {
+		t.Fatal("Stale = true, want false")
+	}
+}
+
+func TestStoreUpdate_StaticPollDoesNotOverwritePerformanceFreshnessMetadata(t *testing.T) {
+	t.Parallel()
+
+	s := NewStore()
+	id := uuid.New()
+	perfAt := time.Date(2026, 4, 13, 8, 30, 0, 0, time.UTC)
+	staticAt := perfAt.Add(5 * time.Minute)
+
+	cpu := 38.0
+	tx := 750.0
+	rx := 1250.0
+	util := 21.0
+
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &cpu,
+			CollectedAt: perfAt,
+		},
+		LinkMetrics: []domain.LinkMetrics{
+			{
+				LinkID:      "link-1",
+				DeviceID:    id,
+				IfName:      "ether1",
+				TxBps:       &tx,
+				RxBps:       &rx,
+				Utilization: &util,
+				CollectedAt: perfAt,
+			},
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        perfAt,
+	})
+	<-s.Changes()
+
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		VolatilityClass:  domain.VolatilityClassStatic,
+		PollSuccess:      true,
+		ExpectedInterval: 5 * time.Minute,
+		Timestamp:        staticAt,
+	})
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	assertFloatPtrEqual(t, ds.Metrics.CPUPercent, cpu, "CPUPercent")
+	if len(ds.LinkMetrics) != 1 {
+		t.Fatalf("LinkMetrics len = %d, want 1", len(ds.LinkMetrics))
+	}
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].TxBps, tx, "LinkMetrics[0].TxBps")
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].RxBps, rx, "LinkMetrics[0].RxBps")
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].Utilization, util, "LinkMetrics[0].Utilization")
+	if !ds.LastPolledAt.Equal(perfAt) {
+		t.Fatalf("LastPolledAt = %s, want performance poll timestamp %s", ds.LastPolledAt, perfAt)
+	}
+	if ds.ExpectedInterval != 30*time.Second {
+		t.Fatalf("ExpectedInterval = %s, want 30s performance cadence", ds.ExpectedInterval)
+	}
+	if ds.Stale {
+		t.Fatal("Stale = true, want false")
+	}
+}
+
+func TestStoreUpdate_FailedPerformancePollKeepsLastKnownMetricsAndLinks(t *testing.T) {
+	t.Parallel()
+
+	s := NewStore()
+	id := uuid.New()
+	perfAt := time.Date(2026, 4, 13, 9, 0, 0, 0, time.UTC)
+	operationalAt := perfAt.Add(time.Minute)
+	failedPerfAt := operationalAt.Add(30 * time.Second)
+
+	cpu := 48.0
+	mem := 58.0
+	temp := 51.0
+	initialUptime := 900.0
+	updatedUptime := 1500.0
+	tx := 1200.0
+	rx := 2200.0
+	util := 27.5
+
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &cpu,
+			MemPercent:  &mem,
+			TempCelsius: &temp,
+			UptimeSecs:  &initialUptime,
+			CollectedAt: perfAt,
+		},
+		LinkMetrics: []domain.LinkMetrics{
+			{
+				LinkID:      "link-1",
+				DeviceID:    id,
+				IfName:      "ether1",
+				TxBps:       &tx,
+				RxBps:       &rx,
+				Utilization: &util,
+				CollectedAt: perfAt,
+			},
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        perfAt,
+	})
+	<-s.Changes()
+
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassOperational,
+		Metrics: &domain.DeviceMetrics{
+			UptimeSecs:  &updatedUptime,
+			CollectedAt: operationalAt,
+		},
+		PollSuccess:      true,
+		ExpectedInterval: time.Minute,
+		Timestamp:        operationalAt,
+	})
+	<-s.Changes()
+
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		PollSuccess:      false,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        failedPerfAt,
+	})
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	assertFloatPtrEqual(t, ds.Metrics.CPUPercent, cpu, "CPUPercent")
+	assertFloatPtrEqual(t, ds.Metrics.MemPercent, mem, "MemPercent")
+	assertFloatPtrEqual(t, ds.Metrics.TempCelsius, temp, "TempCelsius")
+	assertFloatPtrEqual(t, ds.Metrics.UptimeSecs, updatedUptime, "UptimeSecs")
+	if !ds.Metrics.CollectedAt.Equal(perfAt) {
+		t.Fatalf("CollectedAt = %s, want %s", ds.Metrics.CollectedAt, perfAt)
+	}
+	if len(ds.LinkMetrics) != 1 {
+		t.Fatalf("LinkMetrics len = %d, want 1", len(ds.LinkMetrics))
+	}
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].TxBps, tx, "LinkMetrics[0].TxBps")
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].RxBps, rx, "LinkMetrics[0].RxBps")
+	assertFloatPtrEqual(t, ds.LinkMetrics[0].Utilization, util, "LinkMetrics[0].Utilization")
+	if ds.Health != HealthStatusHealthy {
+		t.Fatalf("Health = %q, want %q", ds.Health, HealthStatusHealthy)
+	}
+	if ds.Reachability != ReachabilityUp {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilityUp)
+	}
+	if ds.ConsecutiveFailures != 0 {
+		t.Fatalf("ConsecutiveFailures = %d, want 0", ds.ConsecutiveFailures)
+	}
+	if !ds.LastPolledAt.Equal(failedPerfAt) {
+		t.Fatalf("LastPolledAt = %s, want %s", ds.LastPolledAt, failedPerfAt)
+	}
+	if ds.ExpectedInterval != 30*time.Second {
+		t.Fatalf("ExpectedInterval = %s, want 30s performance cadence", ds.ExpectedInterval)
+	}
+}
+
+func TestStoreSnapshot_ClonesLinkMetrics(t *testing.T) {
+	t.Parallel()
+
+	s := NewStore()
+	id := uuid.New()
+	collectedAt := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
+	cpu := 35.0
+	tx := 500.0
+	rx := 700.0
+	util := 12.5
+
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &cpu,
+			CollectedAt: collectedAt,
+		},
+		LinkMetrics: []domain.LinkMetrics{
+			{
+				LinkID:      "link-1",
+				DeviceID:    id,
+				IfName:      "ether1",
+				TxBps:       &tx,
+				RxBps:       &rx,
+				Utilization: &util,
+				CollectedAt: collectedAt,
+			},
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        collectedAt,
+	})
+
+	snap := s.Snapshot()
+	ds, ok := snap[id]
+	if !ok {
+		t.Fatal("device missing from snapshot")
+	}
+	if len(ds.LinkMetrics) != 1 {
+		t.Fatalf("LinkMetrics len = %d, want 1", len(ds.LinkMetrics))
+	}
+	ds.LinkMetrics[0].IfName = "mutated"
+	*ds.LinkMetrics[0].TxBps = 9999
+
+	again := s.Snapshot()[id]
+	if again.LinkMetrics[0].IfName != "ether1" {
+		t.Fatalf("snapshot mutation corrupted store IfName: got %q", again.LinkMetrics[0].IfName)
+	}
+	assertFloatPtrEqual(t, again.LinkMetrics[0].TxBps, tx, "Snapshot LinkMetrics[0].TxBps")
+
+	device, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing from GetDevice")
+	}
+	*device.LinkMetrics[0].RxBps = 12345
+
+	deviceAgain, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing from second GetDevice")
+	}
+	assertFloatPtrEqual(t, deviceAgain.LinkMetrics[0].RxBps, rx, "GetDevice LinkMetrics[0].RxBps")
+}
+
+func TestStoreUpdate_LinkMetricDiffTriggersChange(t *testing.T) {
+	t.Parallel()
+
+	s := NewStore()
+	id := uuid.New()
+	collectedAt := time.Date(2026, 4, 13, 11, 0, 0, 0, time.UTC)
+	cpu := 40.0
+	initialTx := 100.0
+	updatedTx := 250.0
+	rx := 200.0
+	util := 20.0
+
+	baseUpdate := StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &cpu,
+			CollectedAt: collectedAt,
+		},
+		LinkMetrics: []domain.LinkMetrics{
+			{
+				LinkID:      "link-1",
+				DeviceID:    id,
+				IfName:      "ether1",
+				TxBps:       &initialTx,
+				RxBps:       &rx,
+				Utilization: &util,
+				CollectedAt: collectedAt,
+			},
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        collectedAt,
+	}
+
+	s.Update(baseUpdate)
+	<-s.Changes()
+
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &cpu,
+			CollectedAt: collectedAt,
+		},
+		LinkMetrics: []domain.LinkMetrics{
+			{
+				LinkID:      "link-1",
+				DeviceID:    id,
+				IfName:      "ether1",
+				TxBps:       &updatedTx,
+				RxBps:       &rx,
+				Utilization: &util,
+				CollectedAt: collectedAt,
+			},
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        collectedAt,
+	})
+
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != 1 || batch[0] != id {
+			t.Fatalf("expected single-ID change batch for %s, got %v", id, batch)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("link metric change did not emit")
+	}
+}
+
+// --- Reachability state machine tests (STATE-04) ---
+
+func TestReachability_SinglePollFailureIsSoftDown(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	s.Update(StateUpdate{DeviceID: id, PollSuccess: false, Timestamp: time.Now(), ExpectedInterval: time.Second})
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	if ds.Reachability != ReachabilitySoftDown {
+		t.Errorf("Reachability = %q, want %q", ds.Reachability, ReachabilitySoftDown)
+	}
+	if ds.ConsecutiveFailures != 1 {
+		t.Errorf("ConsecutiveFailures = %d, want 1", ds.ConsecutiveFailures)
+	}
+}
+
+func TestReachability_TwoFailuresStayedSoftDown(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	for i := 0; i < 2; i++ {
+		s.Update(StateUpdate{DeviceID: id, PollSuccess: false, Timestamp: time.Now(), ExpectedInterval: time.Second})
+	}
+	ds, _ := s.GetDevice(id)
+	if ds.Reachability != ReachabilitySoftDown {
+		t.Errorf("Reachability = %q, want %q", ds.Reachability, ReachabilitySoftDown)
+	}
+	if ds.ConsecutiveFailures != 2 {
+		t.Errorf("ConsecutiveFailures = %d, want 2", ds.ConsecutiveFailures)
+	}
+}
+
+func TestReachability_ThreeFailuresIsHardDown(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	for i := 0; i < 3; i++ {
+		s.Update(StateUpdate{DeviceID: id, PollSuccess: false, Timestamp: time.Now(), ExpectedInterval: time.Second})
+	}
+	ds, _ := s.GetDevice(id)
+	if ds.Reachability != ReachabilityHardDown {
+		t.Errorf("Reachability = %q, want %q", ds.Reachability, ReachabilityHardDown)
+	}
+	if ds.ConsecutiveFailures != 3 {
+		t.Errorf("ConsecutiveFailures = %d, want 3", ds.ConsecutiveFailures)
+	}
+}
+
+func TestReachability_SuccessResetsToUp(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	for i := 0; i < 3; i++ {
+		s.Update(StateUpdate{DeviceID: id, PollSuccess: false, Timestamp: time.Now(), ExpectedInterval: time.Second})
+	}
+	cpu := 50.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+	ds, _ := s.GetDevice(id)
+	if ds.Reachability != ReachabilityUp {
+		t.Errorf("Reachability = %q, want %q", ds.Reachability, ReachabilityUp)
+	}
+	if ds.ConsecutiveFailures != 0 {
+		t.Errorf("ConsecutiveFailures = %d, want 0", ds.ConsecutiveFailures)
+	}
+}
+
+func TestReachability_HealthFrozenOnSoftDown(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	// First: healthy
+	cpu := 50.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+	// Then: single failure
+	s.Update(StateUpdate{DeviceID: id, PollSuccess: false, Timestamp: time.Now(), ExpectedInterval: time.Second})
+
+	ds, _ := s.GetDevice(id)
+	if ds.Reachability != ReachabilitySoftDown {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilitySoftDown)
+	}
+	if ds.Health != HealthStatusHealthy {
+		t.Errorf("Health = %q, want %q (frozen)", ds.Health, HealthStatusHealthy)
+	}
+}
+
+func TestReachability_HardDownToUpWithNilMetricsResetsHealthToUnknown(t *testing.T) {
+	// WR-04: after a hard_down → up transition where the successful poll
+	// carries no metric payload (Metrics=nil), Health must NOT remain frozen
+	// at the pre-outage Critical value. The store should report Unknown
+	// instead of misleading the operator with stale health data.
+	s := NewStore()
+	id := uuid.New()
+
+	// Step 1: healthy-then-critical poll to set per-metric severities.
+	cpuCritical := 95.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpuCritical},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+	ds, _ := s.GetDevice(id)
+	if ds.Health != HealthStatusCritical {
+		t.Fatalf("precondition: Health = %q, want %q", ds.Health, HealthStatusCritical)
+	}
+
+	// Step 2: three consecutive failures → hard_down with Health frozen.
+	for i := 0; i < 3; i++ {
+		s.Update(StateUpdate{DeviceID: id, PollSuccess: false, Timestamp: time.Now(), ExpectedInterval: time.Second})
+	}
+	ds, _ = s.GetDevice(id)
+	if ds.Reachability != ReachabilityHardDown {
+		t.Fatalf("precondition: Reachability = %q, want %q", ds.Reachability, ReachabilityHardDown)
+	}
+	if ds.Health != HealthStatusCritical {
+		t.Fatalf("precondition: Health frozen = %q, want %q", ds.Health, HealthStatusCritical)
+	}
+
+	// Step 3: successful poll with nil metrics — e.g. transport succeeded
+	// but metric extraction returned empty.
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          nil,
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+	ds, _ = s.GetDevice(id)
+	if ds.Reachability != ReachabilityUp {
+		t.Errorf("Reachability = %q, want %q", ds.Reachability, ReachabilityUp)
+	}
+	if ds.Health != HealthStatusUnknown {
+		t.Errorf("Health = %q, want %q (stale frozen Critical must be reset)", ds.Health, HealthStatusUnknown)
+	}
+	if ds.CPUSeverity != "" {
+		t.Errorf("CPUSeverity = %q, want empty", ds.CPUSeverity)
+	}
+	if ds.MemSeverity != "" {
+		t.Errorf("MemSeverity = %q, want empty", ds.MemSeverity)
+	}
+	if ds.TempSeverity != "" {
+		t.Errorf("TempSeverity = %q, want empty", ds.TempSeverity)
+	}
+}
+
+func TestReachability_HealthFrozenOnHardDown(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	cpu := 95.0 // critical
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+	for i := 0; i < 3; i++ {
+		s.Update(StateUpdate{DeviceID: id, PollSuccess: false, Timestamp: time.Now(), ExpectedInterval: time.Second})
+	}
+	ds, _ := s.GetDevice(id)
+	if ds.Reachability != ReachabilityHardDown {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilityHardDown)
+	}
+	if ds.Health != HealthStatusCritical {
+		t.Errorf("Health = %q, want %q (frozen at last known)", ds.Health, HealthStatusCritical)
+	}
+}
+
+// --- Change emission tests (STATE-05) ---
+
+func TestChanges_FirstUpdateAlwaysEmits(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	cpu := 50.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != 1 || batch[0] != id {
+			t.Errorf("expected single-ID batch for %s, got %v", id, batch)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("no change emitted for first Update")
+	}
+}
+
+func TestSnapshot_CollectedAtAdvancesOnIdenticalMetricValues(t *testing.T) {
+	// WR-05: two polls with byte-identical metric values but different
+	// CollectedAt timestamps must keep Snapshot()'s Metrics.CollectedAt
+	// fresh (the store always writes the map on Update, even when the
+	// diff equality reports no semantic change).
+	s := NewStore()
+	id := uuid.New()
+	cpu := 50.0
+
+	t1 := time.Unix(1_700_000_000, 0)
+	s.Update(StateUpdate{
+		DeviceID: id,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &cpu,
+			CollectedAt: t1,
+		},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        t1,
+	})
+	ds1, _ := s.GetDevice(id)
+	if !ds1.Metrics.CollectedAt.Equal(t1) {
+		t.Fatalf("after first update, CollectedAt = %v, want %v", ds1.Metrics.CollectedAt, t1)
+	}
+
+	t2 := t1.Add(30 * time.Second)
+	s.Update(StateUpdate{
+		DeviceID: id,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &cpu, // same value
+			CollectedAt: t2,   // advanced timestamp
+		},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        t2,
+	})
+	ds2, _ := s.GetDevice(id)
+	if !ds2.Metrics.CollectedAt.Equal(t2) {
+		t.Errorf("after identical-value update, CollectedAt = %v, want %v (Snapshot must track latest poll)", ds2.Metrics.CollectedAt, t2)
+	}
+	if !ds2.LastPolledAt.Equal(t2) {
+		t.Errorf("LastPolledAt = %v, want %v", ds2.LastPolledAt, t2)
+	}
+}
+
+func TestChanges_UnchangedDeviceDoesNotEmit(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	cpu := 50.0
+	ts := time.Unix(1_700_000_000, 0)
+	update := StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        ts, // FIXED timestamp so LastPolledAt does not change
+	}
+
+	s.Update(update)
+	// Drain the first change.
+	<-s.Changes()
+
+	// Apply the same update again — must NOT emit.
+	s.Update(update)
+	select {
+	case batch := <-s.Changes():
+		t.Errorf("unchanged Update unexpectedly emitted: %v", batch)
+	case <-time.After(150 * time.Millisecond):
+		// expected
+	}
+}
+
+func TestChanges_ChangedDeviceEmits(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	cpu := 50.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+	<-s.Changes() // drain first
+
+	cpu2 := 75.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu2},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != 1 || batch[0] != id {
+			t.Errorf("expected single-ID batch for %s, got %v", id, batch)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("changed Update did not emit")
+	}
+}
+
+// --- Staleness tests ---
+
+func TestStaleness_MarksStaleAfterThreshold(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	pastTimestamp := time.Now().Add(-1 * time.Minute)
+	cpu := 50.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: 10 * time.Second, // 2x = 20s, which is in the past
+		Timestamp:        pastTimestamp,
+	})
+	<-s.Changes() // drain the update
+
+	s.markStale(time.Now())
+
+	ds, _ := s.GetDevice(id)
+	if !ds.Stale {
+		t.Errorf("device should be marked Stale; got Stale=%v", ds.Stale)
+	}
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != 1 || batch[0] != id {
+			t.Errorf("expected stale emission for %s, got %v", id, batch)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("no stale change emitted")
+	}
+}
+
+func TestStaleness_FreshDeviceNotMarked(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	cpu := 50.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Hour, // 2*1h in the future, never stale
+		Timestamp:        time.Now(),
+	})
+	<-s.Changes()
+
+	s.markStale(time.Now())
+
+	ds, _ := s.GetDevice(id)
+	if ds.Stale {
+		t.Errorf("fresh device incorrectly marked stale")
+	}
+}
+
+func TestStaleness_UpdateClearsStaleFlag(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	cpu := 50.0
+	pastTimestamp := time.Now().Add(-1 * time.Minute)
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        pastTimestamp,
+	})
+	<-s.Changes()
+	s.markStale(time.Now())
+	<-s.Changes()
+
+	ds, _ := s.GetDevice(id)
+	if !ds.Stale {
+		t.Fatal("precondition: device should be stale before fresh update")
+	}
+
+	// Fresh update clears stale flag.
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        time.Now(),
+	})
+	ds, _ = s.GetDevice(id)
+	if ds.Stale {
+		t.Errorf("Update should have cleared Stale flag")
+	}
+}
+
+// --- Lifecycle tests ---
+
+func TestStore_StartStopIsCleanShutdown(t *testing.T) {
+	s := NewStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.Start(ctx)
+
+	stopReturned := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopReturned)
+	}()
+	select {
+	case <-stopReturned:
+		// ok
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not return within 2 seconds — goroutine leak suspected")
+	}
+}
+
+func TestStore_StopWithoutStartIsNoOp(t *testing.T) {
+	s := NewStore()
+	s.Stop() // must not panic or hang
+}
+
+// --- Remove test ---
+
+func TestStore_RemoveDevice(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	cpu := 50.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+	<-s.Changes()
+
+	s.Remove(id)
+
+	if _, ok := s.GetDevice(id); ok {
+		t.Errorf("device still present after Remove")
+	}
+	snap := s.Snapshot()
+	if _, ok := snap[id]; ok {
+		t.Errorf("device still in Snapshot after Remove")
+	}
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != 1 || batch[0] != id {
+			t.Errorf("expected remove emission for %s, got %v", id, batch)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("no change emitted for Remove")
+	}
+}
+
+func assertFloatPtrEqual(t *testing.T, got *float64, want float64, field string) {
+	t.Helper()
+
+	if got == nil {
+		t.Fatalf("%s = nil, want %v", field, want)
+	}
+	if *got != want {
+		t.Fatalf("%s = %v, want %v", field, *got, want)
+	}
+}

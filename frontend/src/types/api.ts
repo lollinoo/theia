@@ -1,4 +1,5 @@
-export type DeviceType = 'router' | 'switch' | 'ap' | 'virtual' | 'unknown';
+export type DeviceType = 'router' | 'switch' | 'ap' | 'firewall' | 'virtual' | 'unknown';
+export type DevicePollClass = 'core' | 'standard' | 'low';
 
 // SNMPProfile represents a reusable set of SNMP credentials.
 export interface SNMPProfile {
@@ -37,6 +38,8 @@ export interface Device {
   hostname: string;
   ip: string;
   device_type: DeviceType;
+  poll_class: DevicePollClass;
+  poll_interval_override: number | null;
   status: DeviceStatus;
   sys_name: string;
   sys_descr: string;
@@ -103,6 +106,11 @@ function readNumber(record: APIRecord, key: string, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function readNullableNumber(record: APIRecord, key: string): number | null {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function readBoolean(record: APIRecord, key: string, fallback = false): boolean {
   const value = record[key];
   return typeof value === 'boolean' ? value : fallback;
@@ -110,13 +118,27 @@ function readBoolean(record: APIRecord, key: string, fallback = false): boolean 
 
 function parseDeviceType(value: unknown): DeviceType {
   switch (value) {
+    case 'access_point':
+      return 'ap';
     case 'router':
     case 'switch':
     case 'ap':
+    case 'firewall':
     case 'virtual':
       return value;
     default:
       return 'unknown';
+  }
+}
+
+function parseDevicePollClass(value: unknown): DevicePollClass {
+  switch (value) {
+    case 'core':
+    case 'standard':
+    case 'low':
+      return value;
+    default:
+      return 'standard';
   }
 }
 
@@ -181,6 +203,8 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       hostname: readString(attributes, 'hostname'),
       ip: readString(attributes, 'ip'),
       device_type: parseDeviceType(attributes.device_type),
+      poll_class: parseDevicePollClass(attributes.poll_class),
+      poll_interval_override: readNullableNumber(attributes, 'poll_interval_override'),
       status: parseDeviceStatus(attributes.status),
       sys_name: readString(attributes, 'sys_name'),
       sys_descr: readString(attributes, 'sys_descr'),

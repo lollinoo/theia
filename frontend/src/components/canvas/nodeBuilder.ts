@@ -32,10 +32,7 @@ export function buildTopologyNodes(
       }
     }
 
-    // When a device is effectively down, null out metrics so the card shows
-    // error styling rather than stale or empty values.
-    const isDown = deviceData.status === 'down';
-    const nodeMetrics = isDown ? null : (pendingSnapshot?.device_metrics[device.id] ?? null);
+    const nodeMetrics = pendingSnapshot?.device_metrics[device.id] ?? null;
 
     // Virtual devices have no SNMP metrics; detect and propagate flags
     const isVirtual = device.device_type === 'virtual';
@@ -53,7 +50,7 @@ export function buildTopologyNodes(
         highlighted: false,
         editMode,
         onContextMenu: openDeviceMenu,
-        metrics: isVirtual ? null : nodeMetrics,
+        metrics: nodeMetrics,
         alertStatus: pendingSnapshot
           ? alertStatusForDevice(device.id, pendingSnapshot.alerts)
           : undefined,

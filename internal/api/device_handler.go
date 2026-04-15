@@ -52,7 +52,11 @@ var validDeviceTypes = map[string]bool{
 }
 
 var validMetricsSources = map[string]bool{
-	"prometheus": true, "snmp": true, "": true,
+	"prometheus": true,
+	"snmp": true,
+	"prometheus_snmp_fallback": true,
+	"none": true,
+	"": true,
 }
 
 var validSNMPv3AuthProtocols = map[string]bool{
@@ -95,16 +99,38 @@ type snmpCredsRequest struct {
 	SecurityLevel string `json:"security_level"`
 }
 
+type optionalPollIntervalOverride struct {
+	Set   bool
+	Value *int
+}
+
+func (o *optionalPollIntervalOverride) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+
+	var value int
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+
+	o.Value = &value
+	return nil
+}
+
 type updateDeviceRequest struct {
-	Hostname             *string            `json:"hostname,omitempty"`
-	IP                   *string            `json:"ip,omitempty"`
-	Tags                 *map[string]string `json:"tags,omitempty"`
-	SNMP                 *snmpCredsRequest  `json:"snmp,omitempty"`
-	Vendor               *string            `json:"vendor,omitempty"`
-	MetricsSource        *string            `json:"metrics_source,omitempty"`
-	PrometheusLabelName  *string            `json:"prometheus_label_name,omitempty"`
-	PrometheusLabelValue *string            `json:"prometheus_label_value,omitempty"`
-	AreaIDs              *[]string          `json:"area_ids,omitempty"`
+	Hostname             *string                      `json:"hostname,omitempty"`
+	IP                   *string                      `json:"ip,omitempty"`
+	Tags                 *map[string]string           `json:"tags,omitempty"`
+	SNMP                 *snmpCredsRequest            `json:"snmp,omitempty"`
+	Vendor               *string                      `json:"vendor,omitempty"`
+	MetricsSource        *string                      `json:"metrics_source,omitempty"`
+	PrometheusLabelName  *string                      `json:"prometheus_label_name,omitempty"`
+	PrometheusLabelValue *string                      `json:"prometheus_label_value,omitempty"`
+	PollIntervalOverride optionalPollIntervalOverride `json:"poll_interval_override"`
+	AreaIDs              *[]string                    `json:"area_ids,omitempty"`
 }
 
 type batchAddRequest struct {
@@ -357,11 +383,20 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if req.PollIntervalOverride.Set && req.PollIntervalOverride.Value != nil {
+		if *req.PollIntervalOverride.Value < 5 || *req.PollIntervalOverride.Value > 3600 {
+			writeError(w, http.StatusBadRequest, "poll_interval_override must be between 5 and 3600 seconds")
+			return
+		}
+	}
 
 	update := service.DeviceUpdate{
 		Hostname: req.Hostname,
 		IP:       req.IP,
 		Tags:     req.Tags,
+	}
+	if req.PollIntervalOverride.Set {
+		update.PollIntervalOverride = &req.PollIntervalOverride.Value
 	}
 
 	if req.SNMP != nil {
@@ -552,6 +587,8 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 		"hostname":               d.Hostname,
 		"ip":                     d.IP,
 		"device_type":            string(d.DeviceType),
+		"poll_class":             string(d.PollClass),
+		"poll_interval_override": d.PollIntervalOverride,
 		"status":                 string(d.Status),
 		"sys_name":               d.SysName,
 		"sys_descr":              d.SysDescr,

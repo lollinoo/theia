@@ -278,30 +278,77 @@ func (r *Registry) ExtractModel(vendorName, sysDescr string) string {
 }
 
 // ResolveSNMPConfig returns merged SNMP config for a vendor.
-// Vendor-specific OIDs take precedence; missing ones fall back to default.
+// Composes the result from the three per-tier resolver methods so that
+// all merge semantics are defined in one place per tier.
+// Kept for backward compatibility; canonical callers should prefer
+// ResolvePerformanceOIDs / ResolveOperationalOIDs / ResolveStaticOIDs.
 func (r *Registry) ResolveSNMPConfig(vendorName string) SNMPConfig {
+	return SNMPConfig{
+		Static:      r.ResolveStaticOIDs(vendorName),
+		Operational: r.ResolveOperationalOIDs(vendorName),
+		Performance: r.ResolvePerformanceOIDs(vendorName),
+	}
+}
+
+// ResolveStaticOIDs returns merged StaticOIDs for a vendor.
+// Vendor-specific values override default tier-by-tier; missing values
+// fall back to default. Phase 39 leaves StaticOIDs as an empty
+// placeholder per D-12, so this method returns the zero struct unless
+// a future YAML populates fields.
+func (r *Registry) ResolveStaticOIDs(vendorName string) StaticOIDs {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := r.fallback.SNMP // start with defaults
-
+	result := r.fallback.SNMP.Static
+	// No fields defined on StaticOIDs in Phase 39; vendor overrides
+	// become a no-op until Phase 40 populates the struct.
 	if cfg := r.getByName(vendorName); cfg != nil {
-		if cfg.SNMP.TemperatureOID != "" {
-			result.TemperatureOID = cfg.SNMP.TemperatureOID
+		_ = cfg // placeholder; future fields merge here
+	}
+	return result
+}
+
+// ResolveOperationalOIDs returns merged OperationalOIDs for a vendor.
+// Standard MIB OIDs live in default.yaml per D-11; vendor overrides
+// apply only when the vendor genuinely diverges from the standard.
+func (r *Registry) ResolveOperationalOIDs(vendorName string) OperationalOIDs {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := r.fallback.SNMP.Operational
+	if cfg := r.getByName(vendorName); cfg != nil {
+		if cfg.SNMP.Operational.SysUpTimeOID != "" {
+			result.SysUpTimeOID = cfg.SNMP.Operational.SysUpTimeOID
 		}
-		if cfg.SNMP.TemperatureScale != 0 {
-			result.TemperatureScale = cfg.SNMP.TemperatureScale
-		}
-		if cfg.SNMP.CPUOID != "" {
-			result.CPUOID = cfg.SNMP.CPUOID
-		}
-		if cfg.SNMP.MemoryUsedOID != "" {
-			result.MemoryUsedOID = cfg.SNMP.MemoryUsedOID
-		}
-		if cfg.SNMP.MemoryTotalOID != "" {
-			result.MemoryTotalOID = cfg.SNMP.MemoryTotalOID
+		if cfg.SNMP.Operational.IfOperStatusOID != "" {
+			result.IfOperStatusOID = cfg.SNMP.Operational.IfOperStatusOID
 		}
 	}
+	return result
+}
 
+// ResolvePerformanceOIDs returns merged PerformanceOIDs for a vendor.
+// Vendor-specific OIDs and scale factors override default; missing
+// vendor values fall back to default tier-by-tier.
+func (r *Registry) ResolvePerformanceOIDs(vendorName string) PerformanceOIDs {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := r.fallback.SNMP.Performance
+	if cfg := r.getByName(vendorName); cfg != nil {
+		if cfg.SNMP.Performance.CPUOID != "" {
+			result.CPUOID = cfg.SNMP.Performance.CPUOID
+		}
+		if cfg.SNMP.Performance.MemoryUsedOID != "" {
+			result.MemoryUsedOID = cfg.SNMP.Performance.MemoryUsedOID
+		}
+		if cfg.SNMP.Performance.MemoryTotalOID != "" {
+			result.MemoryTotalOID = cfg.SNMP.Performance.MemoryTotalOID
+		}
+		if cfg.SNMP.Performance.TemperatureOID != "" {
+			result.TemperatureOID = cfg.SNMP.Performance.TemperatureOID
+		}
+		if cfg.SNMP.Performance.TemperatureScale != 0 {
+			result.TemperatureScale = cfg.SNMP.Performance.TemperatureScale
+		}
+	}
 	return result
 }
 

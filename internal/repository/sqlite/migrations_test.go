@@ -281,3 +281,142 @@ func TestVerifyLegacyTablesMigrated_PostMigration000014(t *testing.T) {
 		t.Fatalf("verifyLegacyTablesMigrated returned error on post-000014 database: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestMigrateDevicePollClass_BackfillsByDeviceType (Phase 39 Plan 03)
+// ---------------------------------------------------------------------------
+// Verifies that migrateDevicePollClass correctly backfills each device type
+// to its expected PollClass using domain.ClassifyPollClass as the source of
+// truth.
+func TestMigrateDevicePollClass_BackfillsByDeviceType(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	// Insert raw device rows with poll_class = 'standard' (the SQL DEFAULT),
+	// simulating the post-up-migration state before Go-level backfill.
+	// We use direct SQL (not DeviceRepo.Create) to test the migration alone.
+	devices := []struct {
+		id         string
+		deviceType string
+		wantClass  string
+	}{
+		{"00000000-0000-0000-0000-000000000101", "router", "core"},
+		{"00000000-0000-0000-0000-000000000102", "switch", "core"},
+		{"00000000-0000-0000-0000-000000000103", "ap", "standard"},
+		{"00000000-0000-0000-0000-000000000104", "virtual", "low"},
+		{"00000000-0000-0000-0000-000000000105", "unknown", "standard"},
+		{"00000000-0000-0000-0000-000000000106", "", "standard"},
+	}
+
+	for _, d := range devices {
+		_, err := db.Exec(
+			`INSERT INTO devices (
+				id, hostname, ip, snmp_credentials_json, device_type, status,
+				sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model,
+				vendor, managed, tags_json, created_at, updated_at,
+				metrics_source, prometheus_label_name, prometheus_label_value,
+				poll_class
+			) VALUES (?, ?, ?, '{}', ?, 'unknown', '', '', '', '', '', 'default', 0, '{}',
+				datetime('now'), datetime('now'), 'prometheus', 'instance', '', 'standard')`,
+			d.id, "host-"+d.deviceType, "10.0.99."+d.id[len(d.id)-3:], d.deviceType,
+		)
+		if err != nil {
+			t.Fatalf("inserting device %s (%s): %v", d.id, d.deviceType, err)
+		}
+	}
+
+	// Run the migration — it should update rows whose poll_class doesn't match
+	// what ClassifyPollClass would compute (router→core, switch→core, virtual→low).
+	if err := migrateDevicePollClass(db); err != nil {
+		t.Fatalf("migrateDevicePollClass failed: %v", err)
+	}
+
+	// Assert each row has the expected poll_class.
+	for _, d := range devices {
+		var gotClass string
+		err := db.QueryRow(`SELECT poll_class FROM devices WHERE id = ?`, d.id).Scan(&gotClass)
+		if err != nil {
+			t.Fatalf("querying poll_class for device %s: %v", d.id, err)
+		}
+		if gotClass != d.wantClass {
+			t.Errorf("device %s (type=%q): got poll_class=%q, want %q", d.id, d.deviceType, gotClass, d.wantClass)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestMigrateDevicePollClass_Idempotent (Phase 39 Plan 03)
+// ---------------------------------------------------------------------------
+// Verifies that running migrateDevicePollClass a second time on an already-
+// backfilled database performs no further changes.
+func TestMigrateDevicePollClass_Idempotent(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	// Insert a router (will be backfilled to 'core') and an AP (stays 'standard').
+	devices := []struct {
+		id         string
+		deviceType string
+		wantClass  string
+	}{
+		{"00000000-0000-0000-0000-000000000201", "router", "core"},
+		{"00000000-0000-0000-0000-000000000202", "ap", "standard"},
+	}
+
+	for _, d := range devices {
+		_, err := db.Exec(
+			`INSERT INTO devices (
+				id, hostname, ip, snmp_credentials_json, device_type, status,
+				sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model,
+				vendor, managed, tags_json, created_at, updated_at,
+				metrics_source, prometheus_label_name, prometheus_label_value,
+				poll_class
+			) VALUES (?, ?, ?, '{}', ?, 'unknown', '', '', '', '', '', 'default', 0, '{}',
+				datetime('now'), datetime('now'), 'prometheus', 'instance', '', 'standard')`,
+			d.id, "host-idem-"+d.deviceType, "10.0.98.1", d.deviceType,
+		)
+		if err != nil {
+			t.Fatalf("inserting device %s: %v", d.id, err)
+		}
+	}
+
+	// First run: backfills router to 'core'.
+	if err := migrateDevicePollClass(db); err != nil {
+		t.Fatalf("first migrateDevicePollClass failed: %v", err)
+	}
+
+	// Capture poll_class values after first run.
+	firstRunValues := make(map[string]string)
+	for _, d := range devices {
+		var class string
+		if err := db.QueryRow(`SELECT poll_class FROM devices WHERE id = ?`, d.id).Scan(&class); err != nil {
+			t.Fatalf("querying poll_class after first run for %s: %v", d.id, err)
+		}
+		firstRunValues[d.id] = class
+	}
+
+	// Second run: must be a no-op.
+	if err := migrateDevicePollClass(db); err != nil {
+		t.Fatalf("second migrateDevicePollClass failed: %v", err)
+	}
+
+	// Assert poll_class values are unchanged.
+	for _, d := range devices {
+		var class string
+		if err := db.QueryRow(`SELECT poll_class FROM devices WHERE id = ?`, d.id).Scan(&class); err != nil {
+			t.Fatalf("querying poll_class after second run for %s: %v", d.id, err)
+		}
+		if class != firstRunValues[d.id] {
+			t.Errorf("idempotency violated for device %s: before=%q after=%q", d.id, firstRunValues[d.id], class)
+		}
+		if class != d.wantClass {
+			t.Errorf("device %s: expected final poll_class=%q, got %q", d.id, d.wantClass, class)
+		}
+	}
+}

@@ -3,21 +3,24 @@ package service
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/scheduler"
+	"github.com/lollinoo/theia/internal/snmp"
 )
 
 // --- Mock Device Repository ---
 
 type mockDeviceRepo struct {
-	mu      sync.Mutex
-	devices map[uuid.UUID]*domain.Device
+	mu         sync.Mutex
+	devices    map[uuid.UUID]*domain.Device
+	updateHook func(*domain.Device) error
 }
 
 func newMockDeviceRepo() *mockDeviceRepo {
@@ -75,6 +78,11 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 	defer r.mu.Unlock()
 	if _, ok := r.devices[device.ID]; !ok {
 		return fmt.Errorf("device not found: %s", device.ID)
+	}
+	if r.updateHook != nil {
+		if err := r.updateHook(device); err != nil {
+			return err
+		}
 	}
 	device.UpdatedAt = time.Now().UTC()
 	r.devices[device.ID] = device
@@ -252,6 +260,30 @@ func newTestService(snmpResult *snmp.DiscoveryResult, snmpErr error) (*DeviceSer
 	return svc, deviceRepo, linkRepo
 }
 
+type fakePollRescheduler struct {
+	calls []pollRescheduleCall
+}
+
+type pollRescheduleCall struct {
+	device    domain.Device
+	changedAt time.Time
+}
+
+func (f *fakePollRescheduler) ReduePerformanceTask(device domain.Device, changedAt time.Time) {
+	f.calls = append(f.calls, pollRescheduleCall{
+		device:    device,
+		changedAt: changedAt,
+	})
+}
+
+type schedulerDeviceSource struct {
+	repo *mockDeviceRepo
+}
+
+func (s schedulerDeviceSource) GetDevices() ([]domain.Device, error) {
+	return s.repo.GetAll()
+}
+
 // --- Tests ---
 
 func TestAddDevice_CreatesWithStatusProbing(t *testing.T) {
@@ -282,6 +314,48 @@ func TestAddDevice_CreatesWithStatusProbing(t *testing.T) {
 	}
 	if stored.IP != "192.168.1.1" {
 		t.Errorf("expected IP 192.168.1.1, got %s", stored.IP)
+	}
+}
+
+func TestAddDevice_DerivesPollClassFromDeviceType(t *testing.T) {
+	snmpCalled := false
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		snmpCalled = true
+		return nil, fmt.Errorf("should not be called")
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+
+	device, err := svc.AddDevice(context.Background(), "10.0.9.254", "router1",
+		domain.DeviceTypeRouter,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	if device.PollClass != domain.PollClassCore {
+		t.Fatalf("expected returned device PollClass core, got %s", device.PollClass)
+	}
+
+	svc.WaitForProbes()
+
+	if snmpCalled {
+		t.Error("discoverFunc was called for a Prometheus device")
+	}
+
+	stored, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if stored.PollClass != domain.PollClassCore {
+		t.Errorf("expected stored device PollClass core, got %s", stored.PollClass)
 	}
 }
 
@@ -691,6 +765,319 @@ func TestUpdateDevice_ChangesFieldsWithoutReprobing(t *testing.T) {
 	}
 }
 
+func TestUpdateDevice_PollIntervalOverrideTriState(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+
+	device := &domain.Device{
+		ID:                   uuid.New(),
+		IP:                   "10.0.0.1",
+		Hostname:             "router1",
+		Managed:              true,
+		Status:               domain.DeviceStatusUp,
+		PollClass:            domain.PollClassCore,
+		PollIntervalOverride: intPtr(15),
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{}); err != nil {
+		t.Fatalf("UpdateDevice keep failed: %v", err)
+	}
+
+	unchanged, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed after keep: %v", err)
+	}
+	if unchanged.PollIntervalOverride == nil || *unchanged.PollIntervalOverride != 15 {
+		t.Fatalf("expected keep to preserve override=15, got %#v", unchanged.PollIntervalOverride)
+	}
+
+	var cleared *int
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		PollIntervalOverride: &cleared,
+	}); err != nil {
+		t.Fatalf("UpdateDevice clear failed: %v", err)
+	}
+
+	clearedDevice, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed after clear: %v", err)
+	}
+	if clearedDevice.PollIntervalOverride != nil {
+		t.Fatalf("expected clear to remove override, got %d", *clearedDevice.PollIntervalOverride)
+	}
+
+	newOverride := intPtr(30)
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		PollIntervalOverride: &newOverride,
+	}); err != nil {
+		t.Fatalf("UpdateDevice set failed: %v", err)
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed after set: %v", err)
+	}
+	if updated.PollIntervalOverride == nil || *updated.PollIntervalOverride != 30 {
+		t.Fatalf("expected set to store override=30, got %#v", updated.PollIntervalOverride)
+	}
+}
+
+func TestUpdateDevice_PollIntervalOverrideTriggersSchedulerRedueOnChange(t *testing.T) {
+	t.Run("set from nil", func(t *testing.T) {
+		svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+		rescheduler := &fakePollRescheduler{}
+		svc.SetPollRescheduler(rescheduler)
+
+		device := &domain.Device{
+			ID:        uuid.New(),
+			IP:        "10.0.1.1",
+			Hostname:  "router-nil",
+			Managed:   true,
+			Status:    domain.DeviceStatusUp,
+			PollClass: domain.PollClassCore,
+		}
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		override := intPtr(15)
+		if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+			PollIntervalOverride: &override,
+		}); err != nil {
+			t.Fatalf("UpdateDevice failed: %v", err)
+		}
+
+		if got := len(rescheduler.calls); got != 1 {
+			t.Fatalf("redue call count = %d, want 1", got)
+		}
+		if rescheduler.calls[0].device.PollIntervalOverride == nil || *rescheduler.calls[0].device.PollIntervalOverride != 15 {
+			t.Fatalf("rescheduled override = %#v, want 15", rescheduler.calls[0].device.PollIntervalOverride)
+		}
+		if rescheduler.calls[0].changedAt.IsZero() || rescheduler.calls[0].changedAt.Location() != time.UTC {
+			t.Fatalf("changedAt = %v, want non-zero UTC timestamp", rescheduler.calls[0].changedAt)
+		}
+	})
+
+	t.Run("change existing value", func(t *testing.T) {
+		svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+		rescheduler := &fakePollRescheduler{}
+		svc.SetPollRescheduler(rescheduler)
+
+		device := &domain.Device{
+			ID:                   uuid.New(),
+			IP:                   "10.0.1.2",
+			Hostname:             "router-old",
+			Managed:              true,
+			Status:               domain.DeviceStatusUp,
+			PollClass:            domain.PollClassCore,
+			PollIntervalOverride: intPtr(30),
+		}
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		override := intPtr(20)
+		if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+			PollIntervalOverride: &override,
+		}); err != nil {
+			t.Fatalf("UpdateDevice failed: %v", err)
+		}
+
+		if got := len(rescheduler.calls); got != 1 {
+			t.Fatalf("redue call count = %d, want 1", got)
+		}
+		if rescheduler.calls[0].device.PollIntervalOverride == nil || *rescheduler.calls[0].device.PollIntervalOverride != 20 {
+			t.Fatalf("rescheduled override = %#v, want 20", rescheduler.calls[0].device.PollIntervalOverride)
+		}
+	})
+
+	t.Run("clear existing override", func(t *testing.T) {
+		svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+		rescheduler := &fakePollRescheduler{}
+		svc.SetPollRescheduler(rescheduler)
+
+		device := &domain.Device{
+			ID:                   uuid.New(),
+			IP:                   "10.0.1.3",
+			Hostname:             "router-clear",
+			Managed:              true,
+			Status:               domain.DeviceStatusUp,
+			PollClass:            domain.PollClassCore,
+			PollIntervalOverride: intPtr(25),
+		}
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		var cleared *int
+		if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+			PollIntervalOverride: &cleared,
+		}); err != nil {
+			t.Fatalf("UpdateDevice failed: %v", err)
+		}
+
+		if got := len(rescheduler.calls); got != 1 {
+			t.Fatalf("redue call count = %d, want 1", got)
+		}
+		if rescheduler.calls[0].device.PollIntervalOverride != nil {
+			t.Fatalf("rescheduled override = %#v, want nil", rescheduler.calls[0].device.PollIntervalOverride)
+		}
+	})
+}
+
+func TestUpdateDevice_PollIntervalOverrideDoesNotTriggerSchedulerRedueWhenUnchanged(t *testing.T) {
+	t.Run("omit preserves existing override without redue", func(t *testing.T) {
+		svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+		rescheduler := &fakePollRescheduler{}
+		svc.SetPollRescheduler(rescheduler)
+
+		device := &domain.Device{
+			ID:                   uuid.New(),
+			IP:                   "10.0.2.1",
+			Hostname:             "router-keep",
+			Managed:              true,
+			Status:               domain.DeviceStatusUp,
+			PollClass:            domain.PollClassCore,
+			PollIntervalOverride: intPtr(15),
+		}
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{}); err != nil {
+			t.Fatalf("UpdateDevice failed: %v", err)
+		}
+
+		if got := len(rescheduler.calls); got != 0 {
+			t.Fatalf("redue call count = %d, want 0", got)
+		}
+	})
+
+	t.Run("same value override is a no-op", func(t *testing.T) {
+		svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+		rescheduler := &fakePollRescheduler{}
+		svc.SetPollRescheduler(rescheduler)
+
+		device := &domain.Device{
+			ID:                   uuid.New(),
+			IP:                   "10.0.2.2",
+			Hostname:             "router-same",
+			Managed:              true,
+			Status:               domain.DeviceStatusUp,
+			PollClass:            domain.PollClassCore,
+			PollIntervalOverride: intPtr(30),
+		}
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		override := intPtr(30)
+		if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+			PollIntervalOverride: &override,
+		}); err != nil {
+			t.Fatalf("UpdateDevice failed: %v", err)
+		}
+
+		if got := len(rescheduler.calls); got != 0 {
+			t.Fatalf("redue call count = %d, want 0", got)
+		}
+	})
+
+	t.Run("unrelated update does not redue", func(t *testing.T) {
+		svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+		rescheduler := &fakePollRescheduler{}
+		svc.SetPollRescheduler(rescheduler)
+
+		device := &domain.Device{
+			ID:        uuid.New(),
+			IP:        "10.0.2.3",
+			Hostname:  "router-name",
+			Managed:   true,
+			Status:    domain.DeviceStatusUp,
+			PollClass: domain.PollClassCore,
+		}
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+
+		if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+			Hostname: strPtr("router-renamed"),
+		}); err != nil {
+			t.Fatalf("UpdateDevice failed: %v", err)
+		}
+
+		if got := len(rescheduler.calls); got != 0 {
+			t.Fatalf("redue call count = %d, want 0", got)
+		}
+	})
+}
+
+func TestUpdateDevice_PollIntervalOverrideReduesNextPerformanceTask(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	// Use a deterministic fixed UUID whose seeded offsets stay beyond the quiet window
+	// plus a safety margin. That makes the first post-update task prove the override-
+	// triggered path instead of an initial seed firing early.
+	quietWindow := 150 * time.Millisecond
+	seededOffsetFloor := quietWindow + 150*time.Millisecond
+	deviceID := fixedSchedulerDeviceIDForQuietWindow(t, seededOffsetFloor)
+	device := &domain.Device{
+		ID:        deviceID,
+		IP:        "10.0.3.1",
+		Hostname:  "router-integration",
+		Managed:   true,
+		Status:    domain.DeviceStatusUp,
+		PollClass: domain.PollClassCore,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	sched := scheduler.NewScheduler(schedulerDeviceSource{repo: deviceRepo}, settingsRepo)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sched.Start(ctx)
+	defer sched.Stop()
+	svc.SetPollRescheduler(sched)
+
+	assertNoSchedulerTaskWithin(t, sched.Tasks(), quietWindow)
+
+	beforeSave := time.Now().UTC()
+	override := intPtr(12)
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		PollIntervalOverride: &override,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+	afterSave := time.Now().UTC()
+
+	task := waitForSchedulerTask(t, sched.Tasks(), time.Second)
+	if task.Key != scheduler.NewTaskKey(deviceID, domain.VolatilityClassPerformance) {
+		t.Fatalf("first post-update task key = %+v, want performance task for device %s", task.Key, deviceID)
+	}
+	if task.VolatilityClass != domain.VolatilityClassPerformance {
+		t.Fatalf("first post-update task volatility = %q, want performance", task.VolatilityClass)
+	}
+	if task.ExpectedInterval != 12*time.Second {
+		t.Fatalf("expected interval = %v, want 12s", task.ExpectedInterval)
+	}
+	if task.Device.PollIntervalOverride == nil || *task.Device.PollIntervalOverride != 12 {
+		t.Fatalf("task override = %#v, want 12", task.Device.PollIntervalOverride)
+	}
+	if task.DueAt.Before(beforeSave) || task.DueAt.After(afterSave) {
+		t.Fatalf("task dueAt = %v, want between save bounds [%v, %v]", task.DueAt, beforeSave, afterSave)
+	}
+}
+
 func TestDeleteDevice_RemovesDeviceAndLinks(t *testing.T) {
 	svc, deviceRepo, linkRepo := newTestService(&snmp.DiscoveryResult{}, nil)
 
@@ -906,6 +1293,63 @@ func TestPrometheusDevice_SNMPv3WithPrivProtocol(t *testing.T) {
 	}
 }
 
+func TestProbeDevice_PrometheusReclassifiesPollClassWithoutOverride(t *testing.T) {
+	snmpCalled := false
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		snmpCalled = true
+		return nil, fmt.Errorf("should not be called")
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "192.0.2.10",
+		Hostname:      "router-prometheus",
+		DeviceType:    domain.DeviceTypeRouter,
+		PollClass:     "",
+		Managed:       true,
+		Status:        domain.DeviceStatusProbing,
+		MetricsSource: domain.MetricsSourcePrometheus,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("failed to create device: %v", err)
+	}
+
+	svc.probeWg.Add(1)
+	go func() {
+		defer svc.probeWg.Done()
+		svc.probeDevice(device)
+	}()
+	svc.WaitForProbes()
+
+	if snmpCalled {
+		t.Error("discoverFunc was called for a Prometheus device")
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.Status != domain.DeviceStatusUp {
+		t.Errorf("expected status up, got %s", updated.Status)
+	}
+	if updated.PollClass != domain.PollClassCore {
+		t.Errorf("expected poll_class core for Prometheus router, got %s", updated.PollClass)
+	}
+	if updated.PollIntervalOverride != nil {
+		t.Errorf("expected PollIntervalOverride nil, got %v", updated.PollIntervalOverride)
+	}
+}
+
 // TestAddDevice_VirtualNoIP verifies that adding a virtual device with no IP
 // creates a device with DeviceType=virtual, Status=unknown, and does NOT call
 // the SNMP discovery function.
@@ -1046,3 +1490,266 @@ func (b *syncBuffer) Contains(substr string) bool {
 
 // helper
 func strPtr(s string) *string { return &s }
+
+func intPtr(v int) *int { return &v }
+
+func fixedSchedulerDeviceIDForQuietWindow(t *testing.T, minimumOffset time.Duration) uuid.UUID {
+	t.Helper()
+
+	candidates := []uuid.UUID{
+		uuid.MustParse("51000000-0000-0000-0000-000000000001"),
+		uuid.MustParse("52000000-0000-0000-0000-000000000002"),
+		uuid.MustParse("53000000-0000-0000-0000-000000000003"),
+		uuid.MustParse("54000000-0000-0000-0000-000000000004"),
+	}
+
+	for _, candidate := range candidates {
+		performanceOffset := schedulerInitialOffset(candidate, domain.PollClassCore.Interval())
+		operationalOffset := schedulerInitialOffset(candidate, domain.OperationalClassInterval)
+		staticOffset := schedulerInitialOffset(candidate, domain.StaticClassInterval)
+		if performanceOffset > minimumOffset && operationalOffset > minimumOffset && staticOffset > minimumOffset {
+			return candidate
+		}
+	}
+
+	t.Fatalf("no fixed UUID had seeded offsets beyond quiet window floor %v", minimumOffset)
+	return uuid.Nil
+}
+
+func schedulerInitialOffset(deviceID uuid.UUID, interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+
+	hasher := fnv.New64a()
+	_, _ = hasher.Write(deviceID[:])
+	return time.Duration(hasher.Sum64() % uint64(interval))
+}
+
+func assertNoSchedulerTaskWithin(t *testing.T, tasks <-chan scheduler.PollTask, quietWindow time.Duration) {
+	t.Helper()
+
+	select {
+	case task := <-tasks:
+		t.Fatalf("scheduler emitted task %+v inside quiet window %v", task, quietWindow)
+	case <-time.After(quietWindow):
+	}
+}
+
+func waitForSchedulerTask(t *testing.T, tasks <-chan scheduler.PollTask, timeout time.Duration) scheduler.PollTask {
+	t.Helper()
+
+	select {
+	case task := <-tasks:
+		return task
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for scheduler task after override save within %v", timeout)
+		return scheduler.PollTask{}
+	}
+}
+
+// TestProbeDevice_ReclassifyOnTypeChange verifies that when SNMP probe detects a
+// device_type change (unknown -> router), poll_class is auto-recomputed to core
+// via domain.ClassifyPollClass. PollIntervalOverride must remain nil (untouched).
+func TestProbeDevice_ReclassifyOnTypeChange(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:    "router-reclassify",
+		SysDescr:   "RouterOS",
+		DeviceType: domain.DeviceTypeRouter,
+	}
+
+	svc, deviceRepo, _ := newTestService(result, nil)
+
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "192.0.2.1",
+		Hostname:      "router-reclassify",
+		DeviceType:    domain.DeviceTypeUnknown,
+		PollClass:     domain.PollClassStandard,
+		Managed:       true,
+		Status:        domain.DeviceStatusProbing,
+		MetricsSource: domain.MetricsSourceSNMP,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("failed to create device: %v", err)
+	}
+
+	svc.probeWg.Add(1)
+	go func() {
+		defer svc.probeWg.Done()
+		svc.probeDevice(device)
+	}()
+	svc.WaitForProbes()
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.DeviceType != domain.DeviceTypeRouter {
+		t.Errorf("expected device_type router, got %s", updated.DeviceType)
+	}
+	if updated.PollClass != domain.PollClassCore {
+		t.Errorf("expected poll_class core (router->core per D-04), got %s", updated.PollClass)
+	}
+	if updated.PollIntervalOverride != nil {
+		t.Errorf("expected PollIntervalOverride nil, got %v", updated.PollIntervalOverride)
+	}
+}
+
+// TestProbeDevice_RespectsPollIntervalOverride verifies that when a device has a
+// manual PollIntervalOverride set, the auto-reclassify hook does NOT overwrite
+// poll_class even when device_type changes. DeviceType still propagates (SNMP wins).
+func TestProbeDevice_RespectsPollIntervalOverride(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:    "router-override",
+		DeviceType: domain.DeviceTypeRouter,
+	}
+
+	svc, deviceRepo, _ := newTestService(result, nil)
+
+	device := &domain.Device{
+		ID:                   uuid.New(),
+		IP:                   "192.0.2.2",
+		Hostname:             "router-override",
+		DeviceType:           domain.DeviceTypeUnknown,
+		PollClass:            domain.PollClassStandard,
+		PollIntervalOverride: intPtr(15),
+		Managed:              true,
+		Status:               domain.DeviceStatusProbing,
+		MetricsSource:        domain.MetricsSourceSNMP,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("failed to create device: %v", err)
+	}
+
+	svc.probeWg.Add(1)
+	go func() {
+		defer svc.probeWg.Done()
+		svc.probeDevice(device)
+	}()
+	svc.WaitForProbes()
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	// DeviceType MUST propagate from discovery (SNMP result wins)
+	if updated.DeviceType != domain.DeviceTypeRouter {
+		t.Errorf("expected device_type router (SNMP result propagates), got %s", updated.DeviceType)
+	}
+	// PollClass MUST NOT change when override is set (manual control wins)
+	if updated.PollClass != domain.PollClassStandard {
+		t.Errorf("expected poll_class standard (override set, must not stomp), got %s", updated.PollClass)
+	}
+	// Override value MUST be preserved
+	if updated.PollIntervalOverride == nil || *updated.PollIntervalOverride != 15 {
+		t.Errorf("expected PollIntervalOverride=15, got %v", updated.PollIntervalOverride)
+	}
+}
+
+// TestProbeDevice_NoTypeChangeStillSyncsPollClassWhenEmpty verifies that even when
+// device_type does NOT change (router -> router), an empty PollClass on a legacy row
+// is healed to the correct class on first probe (unconditional recompute path).
+func TestProbeDevice_NoTypeChangeStillSyncsPollClassWhenEmpty(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:    "router-legacy",
+		DeviceType: domain.DeviceTypeRouter,
+	}
+
+	svc, deviceRepo, _ := newTestService(result, nil)
+
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "192.0.2.3",
+		Hostname:      "router-legacy",
+		DeviceType:    domain.DeviceTypeRouter,
+		PollClass:     "", // legacy row: empty PollClass
+		Managed:       true,
+		Status:        domain.DeviceStatusUp,
+		MetricsSource: domain.MetricsSourceSNMP,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("failed to create device: %v", err)
+	}
+
+	svc.probeWg.Add(1)
+	go func() {
+		defer svc.probeWg.Done()
+		svc.probeDevice(device)
+	}()
+	svc.WaitForProbes()
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.PollClass != domain.PollClassCore {
+		t.Errorf("expected legacy empty PollClass healed to core (router->core), got %s", updated.PollClass)
+	}
+	if updated.PollIntervalOverride != nil {
+		t.Errorf("expected PollIntervalOverride nil, got %v", updated.PollIntervalOverride)
+	}
+}
+
+func TestProbeDevice_StaticDiscoveryPersistenceFailureStillMarksUp(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:    "router-persist-fail",
+		DeviceType: domain.DeviceTypeRouter,
+	}
+
+	svc, deviceRepo, _ := newTestService(result, nil)
+	deviceRepo.updateHook = func(device *domain.Device) error {
+		if device.SysName == "router-persist-fail" {
+			return fmt.Errorf("simulated static persistence failure")
+		}
+		return nil
+	}
+
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "192.0.2.44",
+		Hostname:      "router-persist-fail",
+		DeviceType:    domain.DeviceTypeUnknown,
+		PollClass:     domain.PollClassStandard,
+		Managed:       true,
+		Status:        domain.DeviceStatusProbing,
+		MetricsSource: domain.MetricsSourceSNMP,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("failed to create device: %v", err)
+	}
+
+	svc.probeWg.Add(1)
+	go func() {
+		defer svc.probeWg.Done()
+		svc.probeDevice(device)
+	}()
+	svc.WaitForProbes()
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.Status != domain.DeviceStatusUp {
+		t.Fatalf("status = %s, want up after successful discovery", updated.Status)
+	}
+	if updated.SysName != "" {
+		t.Fatalf("sysName = %q, want empty because static discovery persistence failed", updated.SysName)
+	}
+}

@@ -189,22 +189,31 @@ export function useCanvasData({
               target: string;
             }>;
             if (Array.isArray(storedManual) && storedManual.length > 0) {
-              const migrations = storedManual.map((edge) =>
+              const results = await Promise.allSettled(storedManual.map((edge) =>
                 createLink({
                   source_device_id: edge.source,
                   source_if_name: '',
                   target_device_id: edge.target,
                   target_if_name: '',
-                }).catch(() => {
-                  // Best-effort: ignore individual migration failures
                 }),
+              ));
+              const failedMigrations = storedManual.filter(
+                (_, index) => results[index]?.status === 'rejected',
               );
-              await Promise.allSettled(migrations);
+              if (failedMigrations.length === 0) {
+                window.localStorage.removeItem(manualEdgeStorageKey);
+              } else {
+                window.localStorage.setItem(
+                  manualEdgeStorageKey,
+                  JSON.stringify(failedMigrations),
+                );
+              }
+            } else {
+              window.localStorage.removeItem(manualEdgeStorageKey);
             }
           } catch {
-            // Ignore parse errors during migration
+            window.localStorage.removeItem(manualEdgeStorageKey);
           }
-          window.localStorage.removeItem(manualEdgeStorageKey);
         }
 
         let nextEdges = buildTopologyEdges(fetchedLinks, devicesByID, nextNodes, undefined, openEdgeMenu);
@@ -409,10 +418,9 @@ export function useCanvasData({
             }
           : node.data.device;
 
-        // When a device is confirmed down, null out metrics so the card shows
-        // error styling rather than potentially stale last-known values.
-        const isDown = newStatus === 'down' || (!newStatus && node.data.device.status === 'down');
-        const nodeMetrics = isDown ? null : (snapshot.device_metrics[node.id] ?? null);
+        // Preserve overview metadata like health, last_polled_at, and
+        // expected_poll_interval_seconds even when device status is down.
+        const nodeMetrics = snapshot.device_metrics[node.id] ?? null;
 
         return {
           ...node,
@@ -491,7 +499,17 @@ export function useCanvasData({
           ...node,
           data: {
             ...node.data,
-            metrics: null,
+            // Local stale fallback blanks numeric values only; health, stale,
+            // last_polled_at, and expected_poll_interval_seconds remain intact.
+            metrics: node.data.metrics
+              ? {
+                  ...node.data.metrics,
+                  cpu_percent: null,
+                  mem_percent: null,
+                  temp_celsius: null,
+                  uptime_secs: null,
+                }
+              : null,
             alertStatus: undefined,
           },
         })),

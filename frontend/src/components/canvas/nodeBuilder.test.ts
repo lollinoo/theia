@@ -1,0 +1,106 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { buildTopologyNodes } from './nodeBuilder';
+import type { Device } from '../../types/api';
+import type { SnapshotPayload } from '../../types/metrics';
+
+function mockDevice(overrides: Partial<Device> = {}): Device {
+  return {
+    id: 'dev-1',
+    hostname: 'router-01',
+    ip: '10.0.0.1',
+    device_type: 'router',
+    poll_class: 'standard',
+    poll_interval_override: null,
+    status: 'up',
+    sys_name: 'router-01',
+    sys_descr: 'RouterOS',
+    hardware_model: 'RB4011',
+    vendor: 'mikrotik',
+    managed: true,
+    interfaces: [],
+    area_ids: [],
+    backup_supported: true,
+    metrics_source: 'prometheus',
+    prometheus_label_name: 'instance',
+    prometheus_label_value: '10.0.0.1:9100',
+    ...overrides,
+  };
+}
+
+function mockSnapshot(): SnapshotPayload {
+  return {
+    device_metrics: {
+      'dev-1': {
+        device_id: 'dev-1',
+        cpu_percent: 42,
+        mem_percent: 68,
+        temp_celsius: 55,
+        uptime_secs: 86400,
+        collected_at: '2026-04-13T11:59:45Z',
+        health: 'warning',
+        stale: false,
+        last_polled_at: '2026-04-13T11:59:30Z',
+        expected_poll_interval_seconds: 30,
+      },
+    },
+    link_metrics: {},
+    alerts: [],
+    device_statuses: {
+      'dev-1': 'down',
+    },
+    device_hostnames: {},
+    device_models: {},
+  };
+}
+
+describe('buildTopologyNodes', () => {
+  it('keeps overview metadata on down physical nodes instead of nulling metrics', () => {
+    const nodes = buildTopologyNodes(
+      [mockDevice()],
+      new Map(),
+      new Map(),
+      { x: 120, y: 180 },
+      false,
+      vi.fn(),
+      mockSnapshot(),
+    );
+
+    expect(nodes[0].data.device.status).toBe('down');
+    expect(nodes[0].data.metrics).toMatchObject({
+      health: 'warning',
+      last_polled_at: '2026-04-13T11:59:30Z',
+      expected_poll_interval_seconds: 30,
+    });
+  });
+
+  it('passes overview metadata into virtual nodes instead of forcing metrics null', () => {
+    const nodes = buildTopologyNodes(
+      [
+        mockDevice({
+          device_type: 'virtual',
+          ip: '192.168.1.1',
+          tags: { display_name: 'Cloud VPN', virtual_subtype: 'cloud' },
+        }),
+      ],
+      new Map(),
+      new Map(),
+      { x: 120, y: 180 },
+      false,
+      vi.fn(),
+      {
+        ...mockSnapshot(),
+        device_statuses: {
+          'dev-1': 'up',
+        },
+      },
+    );
+
+    expect(nodes[0].data.isVirtual).toBe(true);
+    expect(nodes[0].data.metrics).toMatchObject({
+      health: 'warning',
+      last_polled_at: '2026-04-13T11:59:30Z',
+      expected_poll_interval_seconds: 30,
+    });
+  });
+});

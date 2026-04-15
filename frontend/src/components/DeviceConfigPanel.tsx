@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Area, CredentialProfile, Device, DeviceCredentialProfile, SNMPProfile } from '../types/api';
+import type {
+  Area,
+  CredentialProfile,
+  Device,
+  MetricsSource,
+  DeviceCredentialProfile,
+  DevicePollClass,
+  SNMPProfile,
+} from '../types/api';
 import {
   assignCredentialProfile,
   checkPrometheusHealth,
@@ -21,32 +29,47 @@ import { validateIPOrHostname, validateMaxLength, validateURL, MAX_STRING_LENGTH
 import { MaterialIcon } from './MaterialIcon';
 
 const POLLING_PRESETS = [
-  { label: 'Use Global', value: 'global' },
+  { label: 'Use device default', value: 'default' },
   { label: '15 seconds', value: '15' },
   { label: '30 seconds', value: '30' },
   { label: '60 seconds', value: '60' },
-  { label: '2 minutes', value: '120' },
   { label: '5 minutes', value: '300' },
   { label: 'Custom...', value: 'custom' },
 ];
 
 const PRESET_VALUES = new Set(
-  POLLING_PRESETS.map((p) => p.value).filter((v) => v !== 'custom' && v !== 'global'),
+  POLLING_PRESETS.map((p) => p.value).filter((v) => v !== 'custom' && v !== 'default'),
 );
+
+const DEFAULT_POLLING_DURATION_BY_CLASS: Record<DevicePollClass, string> = {
+  core: '30s',
+  standard: '1m',
+  low: '5m',
+};
+
+const POLLING_OVERRIDE_ERROR =
+  'Polling override must be an integer between 5 and 3600 seconds';
 
 interface DeviceConfigPanelProps {
   device: Device;
   onDeviceUpdated: (updated: Device) => void;
   onDeviceDeleted: () => void;
   onSettingsChange?: () => void;
+  onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void;
   isVirtual?: boolean;
 }
 
-export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, onSettingsChange, isVirtual }: DeviceConfigPanelProps) {
-  const pollingKey = `polling_interval_seconds:${device.id}`;
+export function DeviceConfigPanel({
+  device,
+  onDeviceUpdated,
+  onDeviceDeleted,
+  onSettingsChange,
+  onWinBoxAvailabilityChange,
+  isVirtual,
+}: DeviceConfigPanelProps) {
   const grafanaKey = `grafana_dashboard_url:${device.id}`;
 
-  const [pollingValue, setPollingValue] = useState('global');
+  const [pollingValue, setPollingValue] = useState('default');
   const [customPolling, setCustomPolling] = useState('');
   const [grafanaUrl, setGrafanaUrl] = useState('');
 
@@ -62,8 +85,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   const [privProtocol, setPrivProtocol] = useState('AES');
   const [privPassword, setPrivPassword] = useState('');
   // Metrics source
-  const [metricsSource, setMetricsSource] = useState<'prometheus' | 'snmp' | 'prometheus_snmp_fallback'>(
-    (device.metrics_source as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback') || 'snmp',
+  const [metricsSource, setMetricsSource] = useState<MetricsSource>(
+    device.metrics_source || 'snmp',
   );
   const [prometheusLabelName, setPrometheusLabelName] = useState(device.prometheus_label_name || 'instance');
   const [prometheusLabelValue, setPrometheusLabelValue] = useState(device.prometheus_label_value || '');
@@ -97,6 +120,24 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const editSavedTimerRef = useRef<number | null>(null);
 
+  function syncPollingState(pollIntervalOverride: number | null | undefined) {
+    if (pollIntervalOverride === null || pollIntervalOverride === undefined) {
+      setPollingValue('default');
+      setCustomPolling('');
+      return;
+    }
+
+    const overrideValue = String(pollIntervalOverride);
+    if (PRESET_VALUES.has(overrideValue)) {
+      setPollingValue(overrideValue);
+      setCustomPolling('');
+      return;
+    }
+
+    setPollingValue('custom');
+    setCustomPolling(overrideValue);
+  }
+
   function setFieldError(field: string, err: string | null) {
     setFieldErrors((prev) => {
       if (err) return { ...prev, [field]: err };
@@ -116,7 +157,9 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   async function loadAssignments() {
     setAssignmentsLoading(true);
     try {
-      setAssignments(await fetchDeviceCredentialProfiles(device.id));
+      const nextAssignments = await fetchDeviceCredentialProfiles(device.id);
+      setAssignments(nextAssignments);
+      onWinBoxAvailabilityChange?.(nextAssignments.some((assignment) => assignment.is_winbox));
     } catch {
       // non-fatal — section shows empty
     } finally {
@@ -141,19 +184,10 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   useEffect(() => {
     fetchSettings()
       .then((settings) => {
-        const devicePolling = settings[pollingKey];
-        if (!devicePolling) {
-          setPollingValue('global');
-        } else if (PRESET_VALUES.has(devicePolling)) {
-          setPollingValue(devicePolling);
-        } else {
-          setPollingValue('custom');
-          setCustomPolling(devicePolling);
-        }
         setGrafanaUrl(settings[grafanaKey] ?? '');
       })
       .catch(() => {/* non-fatal */ });
-  }, [device.id, pollingKey, grafanaKey]);
+  }, [device.id, grafanaKey]);
 
   // Sync inputs when the `device` prop updates from parent
   useEffect(() => {
@@ -165,9 +199,10 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
     setPrivPassword('');
     setVendorOverride(device.vendor || '');
     setAreaIds(device.area_ids ?? []);
-    setMetricsSource((device.metrics_source as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback') || 'snmp');
+    setMetricsSource(device.metrics_source || 'snmp');
     setPrometheusLabelName(device.prometheus_label_name || 'instance');
     setPrometheusLabelValue(device.prometheus_label_value || '');
+    syncPollingState(device.poll_interval_override);
     setFieldErrors({});
   }, [device]);
 
@@ -196,24 +231,68 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   function schedulePollingUpdate(rawValue: string, isDelete = false) {
     if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
     pollingTimerRef.current = window.setTimeout(() => {
-      const val = isDelete ? '' : rawValue;
-      void updateSetting(pollingKey, val).then(() =>
-        showSaved(setSavedPolling, savedPollingTimerRef),
-      );
+      const pollIntervalOverride = isDelete ? null : Number.parseInt(rawValue, 10);
+      void updateDevice(device.id, { poll_interval_override: pollIntervalOverride })
+        .then((updated) => {
+          setFieldError('polling', null);
+          showSaved(setSavedPolling, savedPollingTimerRef);
+          onDeviceUpdated(updated);
+        })
+        .catch((error) => {
+          if (error instanceof ValidationError || error instanceof ServerError) {
+            setFieldError('polling', error.message);
+            return;
+          }
+          setFieldError(
+            'polling',
+            error instanceof Error ? error.message : 'Failed to update polling override',
+          );
+        });
     }, 500);
   }
 
   function handlePollingChange(value: string) {
     setPollingValue(value);
-    if (value === 'global') {
+    setFieldError('polling', null);
+    if (value === 'default') {
+      setCustomPolling('');
       schedulePollingUpdate('', true);
     } else if (value !== 'custom') {
+      setCustomPolling('');
       schedulePollingUpdate(value);
     }
   }
 
+  function handleCustomPollingChange(rawValue: string) {
+    setCustomPolling(rawValue);
+
+    if (!/^\d+$/.test(rawValue)) {
+      if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
+      setFieldError('polling', POLLING_OVERRIDE_ERROR);
+      return;
+    }
+
+    const parsedValue = Number.parseInt(rawValue, 10);
+    if (!Number.isInteger(parsedValue) || parsedValue < 5 || parsedValue > 3600) {
+      if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
+      setFieldError('polling', POLLING_OVERRIDE_ERROR);
+      return;
+    }
+
+    setFieldError('polling', null);
+    schedulePollingUpdate(rawValue);
+  }
+
   function scheduleGrafanaUpdate(value: string) {
     if (grafanaTimerRef.current !== null) window.clearTimeout(grafanaTimerRef.current);
+    grafanaTimerRef.current = null;
+
+    const err = value.trim() === '' ? null : validateURL(value, 'Grafana URL');
+    setFieldError('grafanaUrl', err);
+    if (err) {
+      return;
+    }
+
     grafanaTimerRef.current = window.setTimeout(() => {
       void updateSetting(grafanaKey, value).then(() => {
         showSaved(setSavedGrafana, savedGrafanaTimerRef);
@@ -227,8 +306,11 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
 
     // Validate before API call
     const errors: Record<string, string> = {};
-    const ipErr = validateIPOrHostname(ip.trim());
-    if (ipErr) errors['ip'] = ipErr;
+    const trimmedIP = ip.trim();
+    if (!(isVirtual && trimmedIP === '')) {
+      const ipErr = validateIPOrHostname(trimmedIP);
+      if (ipErr) errors['ip'] = ipErr;
+    }
     const displayNameErr = validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name');
     if (displayNameErr) errors['displayName'] = displayNameErr;
     const usesPrometheus = metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback';
@@ -256,10 +338,10 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
     const needsPriv = securityLevel === 'authPriv';
     const hasSnmpChanges = isV3 ? username.trim() !== '' : community.trim() !== '';
     try {
-      const effectiveLabelValue = prometheusLabelValue.trim() || ip.trim();
+      const effectiveLabelValue = prometheusLabelValue.trim() || trimmedIP;
       const updated = await updateDevice(device.id, {
         hostname: device.hostname,
-        ip: ip.trim(),
+        ip: trimmedIP,
         ...(hasSnmpChanges
           ? {
               snmp: isV3
@@ -342,6 +424,8 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
   }
 
   const usesSNMP = metricsSource === 'snmp' || metricsSource === 'prometheus_snmp_fallback';
+  const pollClass = device.poll_class || 'standard';
+  const defaultPollingDuration = DEFAULT_POLLING_DURATION_BY_CLASS[pollClass];
 
   return (
     <div className="space-y-6 p-4 transition-colors duration-200">
@@ -357,6 +441,11 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
             >
               Saved
             </span>
+          </div>
+          <div className="rounded-lg bg-surface-high px-3 py-2">
+            <p className="text-sm text-on-bg">
+              Default cadence: every {defaultPollingDuration} ({pollClass} class)
+            </p>
           </div>
           <select
             value={pollingValue}
@@ -375,13 +464,13 @@ export function DeviceConfigPanel({ device, onDeviceUpdated, onDeviceDeleted, on
               min={5}
               max={3600}
               value={customPolling}
-              placeholder="Seconds (5–3600)"
-              onChange={(e) => {
-                setCustomPolling(e.target.value);
-                schedulePollingUpdate(e.target.value);
-              }}
+              placeholder="Seconds (5-3600)"
+              onChange={(e) => handleCustomPollingChange(e.target.value)}
               className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
             />
+          )}
+          {fieldErrors['polling'] && (
+            <p className="text-xs text-status-down">{fieldErrors['polling']}</p>
           )}
         </div>
       )}

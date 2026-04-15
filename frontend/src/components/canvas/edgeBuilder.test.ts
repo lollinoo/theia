@@ -262,4 +262,34 @@ describe('buildTopologyEdges', () => {
     expect(edges[0].id).toBe('link-1');
     expect(edges[0].data.parallelIndex).toBe(0);
   });
+
+  it('drops incomplete same-pair edges when a richer edge already provides link speed metadata', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+      ['dev-2', dev2],
+    ]);
+    const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
+    const links = [
+      mockLink({
+        id: 'link-rich',
+        source_if_name: 'ether1',
+        target_if_name: 'ether2',
+        source_if_speed: 1_000_000_000,
+        target_if_speed: 1_000_000_000,
+      }),
+      mockLink({
+        id: 'link-incomplete',
+        source_if_name: '',
+        target_if_name: 'lag-member',
+      }),
+    ];
+
+    const edges = buildTopologyEdges(links, devicesByID, nodes);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0].id).toBe('link-rich');
+    expect(edges[0].data.bandwidthLabel).toBe('1 Gbps');
+  });
 });

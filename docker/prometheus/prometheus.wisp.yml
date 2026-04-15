@@ -38,5 +38,7 @@ scrape_configs:
         replacement: public_v2
       - source_labels: [__param_target]
         target_label: instance
+      - source_labels: [__param_target]
+        target_label: identity
       - target_label: __address__
         replacement: localhost:9117

@@ -87,8 +87,10 @@ type Device struct {
 	Hostname        string            `json:"hostname"`
 	IP              string            `json:"ip"`
 	SNMPCredentials SNMPCredentials   `json:"snmp_credentials"`
-	DeviceType      DeviceType        `json:"device_type"`
-	Status          DeviceStatus      `json:"status"`
+	DeviceType           DeviceType        `json:"device_type"`
+	PollClass            PollClass         `json:"poll_class"`
+	PollIntervalOverride *int              `json:"poll_interval_override"`
+	Status               DeviceStatus      `json:"status"`
 	SysName         string            `json:"sys_name"`
 	SysDescr        string            `json:"sys_descr"`
 	SysObjectID     string            `json:"sys_object_id"`

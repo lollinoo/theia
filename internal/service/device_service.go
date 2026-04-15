@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/snmp"
-	"github.com/google/uuid"
 )
 
 // DiscoverFunc performs SNMP discovery on a target device and returns the result.
@@ -23,6 +23,10 @@ type DiscoverFunc func(target string, creds domain.SNMPCredentials) (*snmp.Disco
 // vendorName is used to resolve vendor-specific SNMP OIDs.
 type SNMPPollFunc func(target string, creds domain.SNMPCredentials, vendorName string) (domain.DeviceMetrics, error)
 
+type pollRescheduler interface {
+	ReduePerformanceTask(device domain.Device, changedAt time.Time)
+}
+
 // DeviceUpdate holds optional fields for partial device updates.
 type DeviceUpdate struct {
 	Hostname             *string
@@ -33,16 +37,18 @@ type DeviceUpdate struct {
 	MetricsSource        *domain.MetricsSource
 	PrometheusLabelName  *string
 	PrometheusLabelValue *string
+	PollIntervalOverride **int        // nil=not set, *nil=clear, **value=set
 	AreaIDs              *[]uuid.UUID // nil=not set, non-nil=replace all area assignments
 }
 
 // DeviceService orchestrates device management, combining SNMP discovery
 // with persistence through repositories.
 type DeviceService struct {
-	deviceRepo   domain.DeviceRepository
-	linkRepo     domain.LinkRepository
-	settingsRepo domain.SettingsRepository
-	discoverFunc DiscoverFunc
+	deviceRepo      domain.DeviceRepository
+	linkRepo        domain.LinkRepository
+	settingsRepo    domain.SettingsRepository
+	discoverFunc    DiscoverFunc
+	pollRescheduler pollRescheduler
 
 	probeWg        sync.WaitGroup
 	TopologyNotify chan struct{} // signaled when probeDevice creates new links
@@ -65,6 +71,10 @@ func NewDeviceService(
 		discoverFunc:   discoverFunc,
 		TopologyNotify: topologyNotify,
 	}
+}
+
+func (s *DeviceService) SetPollRescheduler(rescheduler pollRescheduler) {
+	s.pollRescheduler = rescheduler
 }
 
 // AddDevice creates a new device and triggers an async SNMP probe for
@@ -116,6 +126,7 @@ func (s *DeviceService) AddDevice(
 		IP:                   ip,
 		SNMPCredentials:      creds,
 		DeviceType:           deviceType,
+		PollClass:            domain.ClassifyPollClass(deviceType),
 		Status:               initialStatus,
 		Vendor:               vendor,
 		Managed:              true,
@@ -151,14 +162,17 @@ func (s *DeviceService) AddDevice(
 // probeDevice performs SNMP discovery and updates the device in the repository.
 // It re-fetches the device from the repo to avoid racing on the pointer
 // that was returned to the caller of AddDevice.
-func (s *DeviceService) markDeviceStatus(deviceID uuid.UUID, deviceIP string, status domain.DeviceStatus) {
+func (s *DeviceService) updateDeviceStatus(deviceID uuid.UUID, status domain.DeviceStatus) error {
 	fresh, err := s.deviceRepo.GetByID(deviceID)
 	if err != nil {
-		log.Printf("Failed to re-fetch device %s for status update: %v", deviceIP, err)
-		return
+		return err
 	}
 	fresh.Status = status
-	if err := s.deviceRepo.Update(fresh); err != nil {
+	return s.deviceRepo.Update(fresh)
+}
+
+func (s *DeviceService) markDeviceStatus(deviceID uuid.UUID, deviceIP string, status domain.DeviceStatus) {
+	if err := s.updateDeviceStatus(deviceID, status); err != nil {
 		log.Printf("Failed to update device %s status to %s: %v", deviceIP, string(status), err)
 	}
 }
@@ -181,7 +195,19 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 
 	// Prometheus-only devices never touch gosnmp — mark up and return.
 	if device.MetricsSource == domain.MetricsSourcePrometheus {
-		s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusUp)
+		fresh, err := s.deviceRepo.GetByID(deviceID)
+		if err != nil {
+			log.Printf("Failed to re-fetch device %s for prometheus probe: %v", deviceIP, err)
+			return
+		}
+		fresh.Status = domain.DeviceStatusUp
+		if fresh.PollIntervalOverride == nil {
+			fresh.PollClass = domain.ClassifyPollClass(fresh.DeviceType)
+		}
+		if err := s.deviceRepo.Update(fresh); err != nil {
+			log.Printf("Failed to update device %s status to up: %v", deviceIP, err)
+			return
+		}
 		log.Printf("Skipped SNMP probe for %s (metrics_source=prometheus); marked up", deviceIP)
 		return
 	}
@@ -193,77 +219,33 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		return
 	}
 
-	// Re-fetch from repo to get a fresh copy (avoids data race with caller)
-	fresh, fetchErr := s.deviceRepo.GetByID(deviceID)
-	if fetchErr != nil {
-		log.Printf("Failed to re-fetch device %s for probe update: %v", deviceIP, fetchErr)
+	persisted, err := s.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:       result.SysName,
+		SysDescr:      result.SysDescr,
+		SysObjectID:   result.SysObjectID,
+		HardwareModel: result.HardwareModel,
+		Vendor:        result.Vendor,
+		DeviceType:    result.DeviceType,
+		Interfaces:    result.Interfaces,
+		Neighbors:     result.Neighbors,
+	})
+	if err != nil {
+		if statusErr := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); statusErr != nil {
+			log.Printf("Failed to update device %s status to up after discovery persistence failure: %v", deviceIP, statusErr)
+		}
+		log.Printf("Failed to persist static discovery for %s: %v", deviceIP, err)
 		return
 	}
 
-	// Update device fields from discovery
-	fresh.SysName = result.SysName
-	fresh.SysDescr = result.SysDescr
-	fresh.SysObjectID = result.SysObjectID
-	fresh.HardwareModel = result.HardwareModel
-	// Only overwrite vendor if the user didn't manually tag one
-	if fresh.Vendor == "" || fresh.Vendor == "default" {
-		fresh.Vendor = result.Vendor
-	}
-	fresh.DeviceType = result.DeviceType
-	fresh.Status = domain.DeviceStatusUp
-	fresh.Interfaces = result.Interfaces
-
-	if err := s.deviceRepo.Update(fresh); err != nil {
-		log.Printf("Failed to update device %s after probe: %v", deviceIP, err)
+	if err := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); err != nil {
+		log.Printf("Failed to update device %s status to up: %v", deviceIP, err)
 		return
 	}
 
-	// Auto-create links from LLDP/CDP neighbors.
-	// When a device reports multiple neighbors that collapse to the same physical
-	// relationship, prefer the most useful candidate (usually the physical/ether
-	// port) before writing anything to the repository.
-	linksCreated := 0
-	for _, neighbor := range dedupePreferredDiscoveredNeighbors(result.Neighbors) {
-		if neighbor.RemoteSysName == "" {
-			continue
-		}
-		remoteDevice, err := s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
-		if err != nil {
-			log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, err)
-			continue
-		}
-		if remoteDevice == nil {
-			log.Printf("Skipping neighbor %s: device not found in system", neighbor.RemoteSysName)
-			continue
-		}
-
-		link := &domain.Link{
-			SourceDeviceID:    fresh.ID,
-			SourceIfName:      neighbor.LocalIfName,
-			TargetDeviceID:    remoteDevice.ID,
-			TargetIfName:      neighbor.RemotePortID,
-			DiscoveryProtocol: neighbor.Protocol,
-		}
-		created, err := s.linkRepo.Upsert(link)
-		if err != nil {
-			log.Printf("Failed to upsert link %s:%s <-> %s:%s: %v",
-				fresh.SysName, neighbor.LocalIfName,
-				neighbor.RemoteSysName, neighbor.RemotePortID, err)
-			continue
-		}
-		if created {
-			linksCreated++
-		}
-		log.Printf("Auto-linked %s:%s <-> %s:%s via %s",
-			fresh.SysName, neighbor.LocalIfName,
-			neighbor.RemoteSysName, neighbor.RemotePortID,
-			string(neighbor.Protocol))
-	}
-
-	// Signal topology change if any new links were created.
+	// Signal topology change when persisted topology changed.
 	// Non-blocking send: if the channel is full the next collection cycle will
 	// pick up the topology change, so dropping the signal is safe (T-33-02).
-	if linksCreated > 0 && s.TopologyNotify != nil {
+	if persisted.TopologyChanged && s.TopologyNotify != nil {
 		select {
 		case s.TopologyNotify <- struct{}{}:
 		default:
@@ -278,6 +260,7 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 	if err != nil {
 		return fmt.Errorf("getting device: %w", err)
 	}
+	previousOverride := clonePollIntervalOverride(device.PollIntervalOverride)
 
 	if update.Hostname != nil {
 		device.Hostname = *update.Hostname
@@ -303,11 +286,25 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 	if update.PrometheusLabelValue != nil {
 		device.PrometheusLabelValue = *update.PrometheusLabelValue
 	}
+	if update.PollIntervalOverride != nil {
+		device.PollIntervalOverride = *update.PollIntervalOverride
+	}
 	if update.AreaIDs != nil {
 		device.AreaIDs = *update.AreaIDs
 	}
 
-	return s.deviceRepo.Update(device)
+	if err := s.deviceRepo.Update(device); err != nil {
+		return err
+	}
+	if update.PollIntervalOverride == nil || s.pollRescheduler == nil {
+		return nil
+	}
+	if pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride) {
+		return nil
+	}
+
+	s.pollRescheduler.ReduePerformanceTask(*device, time.Now().UTC())
+	return nil
 }
 
 // DeleteDevice removes a device and all associated links.
@@ -465,6 +462,25 @@ func (s *DeviceService) TestSNMP(ctx context.Context, id uuid.UUID) (*SNMPTestRe
 	result.SysName = discoveryResult.SysName
 	result.SysDescr = discoveryResult.SysDescr
 	return result, nil
+}
+
+func clonePollIntervalOverride(override *int) *int {
+	if override == nil {
+		return nil
+	}
+	cloned := *override
+	return &cloned
+}
+
+func pollIntervalOverridesEqual(left, right *int) bool {
+	switch {
+	case left == nil && right == nil:
+		return true
+	case left == nil || right == nil:
+		return false
+	default:
+		return *left == *right
+	}
 }
 
 func dedupePreferredDiscoveredNeighbors(neighbors []snmp.NeighborInfo) []snmp.NeighborInfo {

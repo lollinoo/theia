@@ -40,8 +40,11 @@ metrics:
     uptime: "mtxrHlUpTime{%label%} / 100"
 
 snmp:
-  temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
-  temperature_scale: 0.1
+  static: {}
+  operational: {}
+  performance:
+    temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
+    temperature_scale: 0.1
 `
 	var cfg VendorConfig
 	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
@@ -72,10 +75,119 @@ snmp:
 	if cfg.Metrics.Prometheus.CPU != "mtxrHlCpuLoad{%label%}" {
 		t.Errorf("unexpected cpu query: %s", cfg.Metrics.Prometheus.CPU)
 	}
-	if cfg.SNMP.TemperatureOID != ".1.3.6.1.4.1.14988.1.1.3.10.0" {
-		t.Errorf("expected temp OID, got %q", cfg.SNMP.TemperatureOID)
+	// New nested shape assertions (replaces the old flat field assertions)
+	if cfg.SNMP.Performance.TemperatureOID != ".1.3.6.1.4.1.14988.1.1.3.10.0" {
+		t.Errorf("expected temp OID, got %q", cfg.SNMP.Performance.TemperatureOID)
 	}
-	if cfg.SNMP.TemperatureScale != 0.1 {
-		t.Errorf("expected temp scale 0.1, got %f", cfg.SNMP.TemperatureScale)
+	if cfg.SNMP.Performance.TemperatureScale != 0.1 {
+		t.Errorf("expected temp scale 0.1, got %f", cfg.SNMP.Performance.TemperatureScale)
 	}
+}
+
+// TestVendorConfigUnmarshal_NestedSNMPGroups verifies that the three-tiered
+// SNMP structure (static, operational, performance) unmarshals correctly from
+// YAML, and that missing sub-sections produce zero-value structs (no panic).
+func TestVendorConfigUnmarshal_NestedSNMPGroups(t *testing.T) {
+	t.Run("all_three_groups_populated", func(t *testing.T) {
+		raw := `
+vendor:
+  name: testvendor
+  display_name: Test Vendor
+
+snmp:
+  static: {}
+  operational:
+    sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
+    if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
+  performance:
+    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    memory_used_oid: ".1.3.6.1.2.1.25.2.3.1.6"
+    memory_total_oid: ".1.3.6.1.2.1.25.2.3.1.5"
+    temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
+    temperature_scale: 1.0
+`
+		var cfg VendorConfig
+		if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+
+		// Static group — placeholder, zero value
+		_ = cfg.SNMP.Static // must be accessible without panic
+
+		// Operational group
+		if cfg.SNMP.Operational.SysUpTimeOID != ".1.3.6.1.2.1.1.3.0" {
+			t.Errorf("expected sysUpTime OID, got %q", cfg.SNMP.Operational.SysUpTimeOID)
+		}
+		if cfg.SNMP.Operational.IfOperStatusOID != ".1.3.6.1.2.1.2.2.1.8" {
+			t.Errorf("expected ifOperStatus OID, got %q", cfg.SNMP.Operational.IfOperStatusOID)
+		}
+
+		// Performance group
+		if cfg.SNMP.Performance.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+			t.Errorf("expected cpu OID, got %q", cfg.SNMP.Performance.CPUOID)
+		}
+		if cfg.SNMP.Performance.MemoryUsedOID != ".1.3.6.1.2.1.25.2.3.1.6" {
+			t.Errorf("expected memory used OID, got %q", cfg.SNMP.Performance.MemoryUsedOID)
+		}
+		if cfg.SNMP.Performance.MemoryTotalOID != ".1.3.6.1.2.1.25.2.3.1.5" {
+			t.Errorf("expected memory total OID, got %q", cfg.SNMP.Performance.MemoryTotalOID)
+		}
+		if cfg.SNMP.Performance.TemperatureOID != ".1.3.6.1.2.1.99.1.1.1.4" {
+			t.Errorf("expected temperature OID, got %q", cfg.SNMP.Performance.TemperatureOID)
+		}
+		if cfg.SNMP.Performance.TemperatureScale != 1.0 {
+			t.Errorf("expected temperature scale 1.0, got %f", cfg.SNMP.Performance.TemperatureScale)
+		}
+	})
+
+	t.Run("missing_snmp_performance_section_no_panic", func(t *testing.T) {
+		// T-39-05: missing snmp.performance should produce zero-value struct, not panic
+		raw := `
+vendor:
+  name: testvendor
+  display_name: Test Vendor
+
+snmp:
+  static: {}
+  operational:
+    sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
+`
+		var cfg VendorConfig
+		if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+
+		// Performance should be zero value — no panic
+		if cfg.SNMP.Performance.CPUOID != "" {
+			t.Errorf("expected empty CPUOID for missing performance section, got %q", cfg.SNMP.Performance.CPUOID)
+		}
+		if cfg.SNMP.Performance.TemperatureOID != "" {
+			t.Errorf("expected empty TemperatureOID for missing performance section, got %q", cfg.SNMP.Performance.TemperatureOID)
+		}
+		if cfg.SNMP.Performance.TemperatureScale != 0 {
+			t.Errorf("expected 0 TemperatureScale for missing performance section, got %f", cfg.SNMP.Performance.TemperatureScale)
+		}
+	})
+
+	t.Run("no_snmp_section_at_all_no_panic", func(t *testing.T) {
+		// Completely missing snmp section should not panic
+		raw := `
+vendor:
+  name: testvendor
+  display_name: Test Vendor
+`
+		var cfg VendorConfig
+		if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+
+		// All tiers zero value — no panic
+		_ = cfg.SNMP.Static
+		if cfg.SNMP.Operational.SysUpTimeOID != "" {
+			t.Errorf("expected empty SysUpTimeOID, got %q", cfg.SNMP.Operational.SysUpTimeOID)
+		}
+		if cfg.SNMP.Performance.CPUOID != "" {
+			t.Errorf("expected empty CPUOID, got %q", cfg.SNMP.Performance.CPUOID)
+		}
+	})
 }

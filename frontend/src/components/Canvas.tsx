@@ -10,17 +10,18 @@ import DeviceCard, { type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import SearchOverlay from './SearchOverlay';
 import ZoomControls from './ZoomControls';
-import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { ContextMenu } from './ContextMenu';
 import { SidePanel } from './SidePanel';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Toolbar } from './Toolbar';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { buildPositionPayload, statusColor } from './canvas/canvasHelpers';
+import { buildDeviceContextMenuItems, buildPositionPayload, statusColor } from './canvas/canvasHelpers';
 import { buildTopologyEdges } from './canvas/edgeBuilder';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { CanvasPanels } from './canvas/CanvasPanels';
 import { CanvasOverlays } from './canvas/CanvasOverlays';
+import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { usePositions } from '../hooks/usePositions';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
@@ -40,9 +41,10 @@ interface CanvasProps {
   onLinksChange?: (links: Link[]) => void;
   onAreaSelect?: (areaId: string | null) => void;
   onAreasChange?: () => void;
+  onDetailDeviceChange?: (deviceId: string | null) => void;
 }
 
-export default function Canvas({ snapshot, reconnecting, prometheusStatus, selectedAreaId, areas, onDevicesChange, onLinksChange, onAreaSelect, onAreasChange }: CanvasProps) {
+export default function Canvas({ snapshot, reconnecting, prometheusStatus, selectedAreaId, areas, onDevicesChange, onLinksChange, onAreaSelect, onAreasChange, onDetailDeviceChange }: CanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
@@ -76,6 +78,11 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     showSearch, setShowSearch, editMode, setEditMode,
     shortcuts, getPanelTitle,
   } = useCanvasMenus({ reactFlow });
+
+  useEffect(() => {
+    onDetailDeviceChange?.(getCanvasDetailDeviceId(panelContent));
+    return () => onDetailDeviceChange?.(null);
+  }, [panelContent, onDetailDeviceChange]);
 
   const handleSelectionChange = useCallback(
     ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => {
@@ -369,18 +376,28 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
           : !bridgeRunning
             ? 'WinBox bridge not running \u2014 download from Settings'
             : undefined;
-        const allItems: (ContextMenuItem & { id: string })[] = [
-          { id: 'webfig', label: 'Open WebFig', icon: 'link', onClick: () => { if (d) window.open(`http://${d.ip}/webfig/`, '_blank'); setDeviceMenu(null); } },
-          { id: 'grafana', label: gUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)', icon: 'hub', onClick: () => { if (gUrl) window.open(gUrl, '_blank'); setDeviceMenu(null); } },
-          { id: 'winbox', label: 'Open in WinBox', icon: 'open_in_new', disabled: winboxDisabled, title: winboxTitle, onClick: () => { if (d) void handleLaunchWinBox(d.id); setDeviceMenu(null); } },
-          { id: 'interface-stats', label: 'Per-Interface Stats', icon: 'devices', onClick: () => { if (d) setPanelContent({ type: 'interfaceStats', data: { device: d } }); setDeviceMenu(null); } },
-          { id: 'configure', label: 'Configure', icon: 'settings', onClick: () => { if (d) setPanelContent({ type: 'deviceConfig', data: { device: d } }); setDeviceMenu(null); } },
-        ];
-        // Virtual nodes only get Configure (no real monitoring)
-        const virtualItemIds = new Set(['configure']);
-        const items = isVirtual
-          ? allItems.filter((item) => virtualItemIds.has(item.id))
-          : allItems;
+        const items = buildDeviceContextMenuItems({
+          isVirtual,
+          grafanaEnabled: Boolean(gUrl),
+          winboxDisabled,
+          winboxTitle,
+          onOpenWinbox: () => {
+            if (d) void handleLaunchWinBox(d.id);
+            setDeviceMenu(null);
+          },
+          onOpenGrafana: () => {
+            if (gUrl) window.open(gUrl, '_blank');
+            setDeviceMenu(null);
+          },
+          onOpenInterfaceStats: () => {
+            if (d) setPanelContent({ type: 'interfaceStats', data: { device: d } });
+            setDeviceMenu(null);
+          },
+          onConfigure: () => {
+            if (d) setPanelContent({ type: 'deviceConfig', data: { device: d } });
+            setDeviceMenu(null);
+          },
+        });
         return (
           <ContextMenu position={{ x: deviceMenu.x, y: deviceMenu.y }} onClose={() => setDeviceMenu(null)} items={items} />
         );
@@ -406,7 +423,10 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} snapshot={snapshot}
           devices={devices} loadTopology={loadTopology}
           setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus}
-          onAreasChange={onAreasChange} onSettingsChange={refreshSettings} />
+          onAreasChange={onAreasChange} onSettingsChange={refreshSettings}
+          onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {
+            setDeviceWinboxState((prev) => ({ ...prev, [deviceId]: hasWinboxProfile }));
+          }} />
       </SidePanel>
 
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />

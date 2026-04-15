@@ -15,11 +15,12 @@ export type ActiveView = 'hub' | 'canvas' | 'dashboard';
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>('canvas');
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
+  const [detailDeviceId, setDetailDeviceId] = useState<string | null>(null);
   const [canvasDevices, setCanvasDevices] = useState<Device[]>([]);
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
 
-  const { snapshot, reconnecting, prometheusStatus } = useWebSocket('/api/v1/ws');
+  const { snapshot, reconnecting, prometheusStatus } = useWebSocket('/api/v1/ws', detailDeviceId);
 
   // Fetch areas on mount
   useEffect(() => {
@@ -98,6 +99,7 @@ function App() {
             onLinksChange={handleCanvasLinksChange}
             onAreaSelect={handleAreaSelect}
             onAreasChange={handleAreasChange}
+            onDetailDeviceChange={setDetailDeviceId}
           />
         </ReactFlowProvider>
       </div>

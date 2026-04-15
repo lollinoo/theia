@@ -8,6 +8,7 @@
 - **v1.4.0 Backup & Restore** -- Phases 15-22 (shipped 2026-04-07) -- [archive](milestones/v1.4.0-ROADMAP.md)
 - **v1.5.0 WinBox Integration** -- Phases 23-31 (shipped 2026-04-10) -- [archive](milestones/v1.5.0-ROADMAP.md)
 - **v1.5.1 Production Stability** -- Phases 32-37 (shipped 2026-04-11) -- [archive](milestones/v1.5.1-ROADMAP.md)
+- **v1.5.3 SNMP Pipeline Architecture** -- Phases 38-49 (shipped 2026-04-15) -- [archive](milestones/v1.5.3-ROADMAP.md)
 
 ## Phases
 
@@ -75,53 +76,31 @@
 <details>
 <summary>v1.5.1 Production Stability (Phases 32-37) -- SHIPPED 2026-04-11</summary>
 
-- [x] **Phase 32: SNMP Discovery Fixes** -- Correct source_port population and guard stats fetch when source_port is absent (completed 2026-04-10)
-- [x] **Phase 33: Real-time Canvas Reactivity** -- Canvas updates hostname, model, and LLDP links live after async probe completes (completed 2026-04-10)
-- [x] **Phase 34: Lazy Credential-Profiles Fetch** -- Eliminate per-device GET /credential-profiles on every canvas load (completed 2026-04-10)
-- [x] **Phase 35: Lazy Health Check for Bridge Server** -- Defer bridge health poll from Canvas mount to first context menu open (completed 2026-04-10)
-- [x] **Phase 36: Remove Per-Interface Stats from /api/v1/devices** -- Remove interface relationships from the devices payload and fetch interfaces lazily on demand (completed 2026-04-10)
-- [x] **Phase 37: Better LLDP Handling neighbors** -- Follow-up LLDP neighbor handling improvements, including normalized neighbor matching and parallel uplink correctness (completed 2026-04-11)
+- [x] Phase 32: SNMP Discovery Fixes (1/1 plan) -- completed 2026-04-10
+- [x] Phase 33: Real-time Canvas Reactivity (2/2 plans) -- completed 2026-04-10
+- [x] Phase 34: Lazy Credential-Profiles Fetch (1/1 plan) -- completed 2026-04-10
+- [x] Phase 35: Lazy Health Check for Bridge Server (1/1 plan) -- completed 2026-04-10
+- [x] Phase 36: Remove Per-Interface Stats from /api/v1/devices (1/1 plan) -- completed 2026-04-10
+- [x] Phase 37: Better LLDP Handling neighbors (1/1 plan) -- completed 2026-04-11
 
 </details>
 
-## Progress
+<details>
+<summary>v1.5.3 SNMP Pipeline Architecture (Phases 38-49) -- SHIPPED 2026-04-15</summary>
 
-| Phase | Milestone | Plans Complete | Status | Completed |
-|-------|-----------|----------------|--------|-----------|
-| 1. Design Token Foundation | v1.3.0 | 3/3 | Complete | 2026-03-25 |
-| 2. Component Restyling | v1.3.0 | 6/6 | Complete | 2026-03-26 |
-| 3. Area Backend and Management | v1.3.0 | 2/2 | Complete | 2026-03-26 |
-| 4. Area Hub View and Filtered Topology | v1.3.0 | 4/4 | Complete | 2026-03-26 |
-| 5. Redesign the Devices Page | v1.3.0 | 3/3 | Complete | 2026-03-26 |
-| 6. Canvas Token Migration | v1.3.0 | 2/2 | Complete | 2026-03-27 |
-| 7. SettingsPanel Verification | v1.3.0 | 1/1 | Complete | 2026-03-27 |
-| 8. Virtual Device Backend | v1.3.7 | 2/2 | Complete | 2026-04-01 |
-| 9. Virtual Node Rendering | v1.3.7 | 2/2 | Complete | 2026-04-01 |
-| 10. Virtual Node Forms | v1.3.7 | 2/2 | Complete | 2026-04-01 |
-| 11. CI Pipeline | v1.3.8 | 1/1 | Complete | 2026-04-03 |
-| 12. Release Pipeline | v1.3.8 | 2/2 | Complete | 2026-04-03 |
-| 13. Deployment Stacks | v1.3.8 | 2/2 | Complete | 2026-04-03 |
-| 14. Fix Makefile Release Regression | v1.3.8 | 1/1 | Complete | 2026-04-03 |
-| 15. Backup Core | v1.4.0 | 2/2 | Complete | 2026-04-07 |
-| 16. Backup API & Management UI | v1.4.0 | 2/2 | Complete | 2026-04-07 |
-| 17. Restore Pipeline | v1.4.0 | 2/2 | Complete | 2026-04-07 |
-| 18. Backup Scheduler & Retention | v1.4.0 | 2/2 | Complete | 2026-04-07 |
-| 19. Device Config Backup Scheduler | v1.4.0 | 2/2 | Complete | 2026-04-07 |
-| 20. Server-Side Validation & Threat Hardening | v1.4.0 | 2/2 | Complete | 2026-04-07 |
-| 21. Frontend Validation Parity | v1.4.0 | 2/2 | Complete | 2026-04-07 |
-| 22. Validation Integration & Closure | v1.4.0 | 1/1 | Complete | 2026-04-07 |
-| 23. Credential Profile Schema + Domain | v1.5.0 | 2/2 | Complete | 2026-04-07 |
-| 24. Backend API -- Profiles, Assignments, WinBox Credentials | v1.5.0 | 3/3 | Complete | 2026-04-07 |
-| 25. Frontend -- Credential Profile Manager + WinBox Actions | v1.5.0 | 3/3 | Complete | 2026-04-08 |
-| 26. WinBox Bridge Binary | v1.5.0 | 2/2 | Complete | 2026-04-08 |
-| 27. Schema Cleanup -- Drop Legacy FK | v1.5.0 | 2/2 | Complete | 2026-04-08 |
-| 28. API Call Optimization -- WS Delta Payloads | v1.5.0 | 2/2 | Complete | 2026-04-08 |
-| 29. WinBox Bridge System Tray | v1.5.0 | 3/3 | Complete | 2026-04-09 |
-| 30. Gap Closure -- Verification Docs + Dead Code | v1.5.0 | 1/1 | Complete | 2026-04-10 |
-| 31. Dynamic Bridge Port | v1.5.0 | 1/1 | Complete | 2026-04-10 |
-| 32. SNMP Discovery Fixes | v1.5.1 | 1/1 | Complete   | 2026-04-10 |
-| 33. Real-time Canvas Reactivity | v1.5.1 | 2/2 | Complete   | 2026-04-10 |
-| 34. Lazy Credential-Profiles Fetch | v1.5.1 | 1/1 | Complete   | 2026-04-10 |
-| 35. Lazy Health Check for Bridge Server | v1.5.1 | 1/1 | Complete   | 2026-04-10 |
-| 36. Remove Per-Interface Stats from /api/v1/devices | v1.5.1 | 1/1 | Complete   | 2026-04-10 |
-| 37. Better LLDP Handling neighbors | v1.5.1 | 1/1 | Complete   | 2026-04-11 |
+- [x] Phase 38: State Engine (2/2 plans) -- completed 2026-04-12
+- [x] Phase 39: Domain Types & DB Migration (4/4 plans) -- completed 2026-04-12
+- [x] Phase 40: Collectors (4/4 plans) -- completed 2026-04-12
+- [x] Phase 41: Jittered Scheduler (3/3 plans) -- completed 2026-04-12
+- [x] Phase 42: Pipeline Orchestrator & Cutover (4/4 plans) -- completed 2026-04-13
+- [x] Phase 43: WebSocket Detail-on-Demand (3/3 plans) -- completed 2026-04-13
+- [x] Phase 44: Frontend Integration (4/4 plans) -- completed 2026-04-13
+- [x] Phase 45: Polling Cadence Gap Closure (2/2 plans) -- completed 2026-04-13
+- [x] Phase 46: Detail Delta Gap Closure (1/1 plan) -- completed 2026-04-14
+- [x] Phase 47: Audit Traceability Cleanup (1/1 plan) -- completed 2026-04-15
+- [x] Phase 48: Live Runtime Verification Closure (2/2 plans) -- completed 2026-04-14
+- [x] Phase 49: Nyquist Validation Backfill (4/4 plans) -- completed 2026-04-15
+
+</details>
+
+No active milestone. Start the next one with `$gsd-new-milestone`.

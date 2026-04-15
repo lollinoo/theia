@@ -3,6 +3,7 @@ import type { LinkMetricsDTO } from '../../types/metrics';
 import { formatThroughput } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { PositionPayload } from '../../hooks/usePositions';
+import type { ContextMenuItem } from '../ContextMenu';
 import { formatBandwidth } from '../LinkEdge';
 
 export type HandleSide = 'top' | 'right' | 'bottom' | 'left';
@@ -104,4 +105,63 @@ export function viewportSize(): { width: number; height: number } {
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
     height: typeof window === 'undefined' ? 900 : window.innerHeight,
   };
+}
+
+type DeviceContextMenuItemId = 'winbox' | 'grafana' | 'interface-stats' | 'configure';
+
+export type DeviceContextMenuItem = ContextMenuItem & { id: DeviceContextMenuItemId };
+
+interface BuildDeviceContextMenuItemsOptions {
+  isVirtual: boolean;
+  grafanaEnabled: boolean;
+  winboxDisabled: boolean;
+  winboxTitle?: string;
+  onOpenWinbox: () => void;
+  onOpenGrafana: () => void;
+  onOpenInterfaceStats: () => void;
+  onConfigure: () => void;
+}
+
+export function buildDeviceContextMenuItems({
+  isVirtual,
+  grafanaEnabled,
+  winboxDisabled,
+  winboxTitle,
+  onOpenWinbox,
+  onOpenGrafana,
+  onOpenInterfaceStats,
+  onConfigure,
+}: BuildDeviceContextMenuItemsOptions): DeviceContextMenuItem[] {
+  const allItems: DeviceContextMenuItem[] = [
+    {
+      id: 'winbox',
+      label: 'Open in WinBox',
+      icon: 'open_in_new',
+      disabled: winboxDisabled,
+      title: winboxTitle,
+      onClick: onOpenWinbox,
+    },
+    {
+      id: 'grafana',
+      label: grafanaEnabled ? 'Open in Grafana' : 'Open in Grafana (not configured)',
+      icon: 'hub',
+      onClick: onOpenGrafana,
+    },
+    {
+      id: 'interface-stats',
+      label: 'Per-Interface Stats',
+      icon: 'devices',
+      onClick: onOpenInterfaceStats,
+    },
+    {
+      id: 'configure',
+      label: 'Configure',
+      icon: 'settings',
+      onClick: onConfigure,
+    },
+  ];
+
+  return isVirtual
+    ? allItems.filter((item) => item.id === 'configure')
+    : allItems;
 }

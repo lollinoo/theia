@@ -381,6 +381,8 @@ func seedDevice(t *testing.T, repo *mockDeviceRepo) *domain.Device {
 	return d
 }
 
+func intPtr(v int) *int { return &v }
+
 // --- DeviceHandler tests ---
 
 func TestDeviceHandlerList(t *testing.T) {
@@ -403,6 +405,52 @@ func TestDeviceHandlerList(t *testing.T) {
 	}
 	if len(resp.Data) < 1 {
 		t.Fatalf("expected at least 1 device in list, got %d", len(resp.Data))
+	}
+}
+
+func TestDeviceHandlerList_IncludesPollClassificationFields(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+
+	device := &domain.Device{
+		ID:                   uuid.New(),
+		IP:                   "10.0.0.1",
+		Hostname:             "core-router",
+		Managed:              true,
+		Status:               domain.DeviceStatusUp,
+		PollClass:            domain.PollClassCore,
+		PollIntervalOverride: intPtr(45),
+		Tags:                 map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp jsonAPIList
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 device in list, got %d", len(resp.Data))
+	}
+
+	attrs := resp.Data[0].Attributes
+	if got := attrs["poll_class"]; got != "core" {
+		t.Fatalf("expected poll_class core, got %#v", got)
+	}
+	if got := attrs["poll_interval_override"]; got != float64(45) {
+		t.Fatalf("expected poll_interval_override 45, got %#v", got)
 	}
 }
 
@@ -555,6 +603,95 @@ func TestDeviceHandlerUpdate_AreaID(t *testing.T) {
 	}
 	if gotAreaIDs[0] != areaID {
 		t.Errorf("area_ids[0] = %q, want %q", gotAreaIDs[0], areaID)
+	}
+}
+
+func TestDeviceHandlerUpdate_PollIntervalOverrideSet(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, deviceRepo)
+
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/"+device.ID.String(),
+		strings.NewReader(`{"poll_interval_override":30}`),
+	)
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.PollIntervalOverride == nil || *updated.PollIntervalOverride != 30 {
+		t.Fatalf("expected override=30, got %#v", updated.PollIntervalOverride)
+	}
+}
+
+func TestDeviceHandlerUpdate_PollIntervalOverrideClear(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, deviceRepo)
+	device.PollIntervalOverride = intPtr(45)
+	if err := deviceRepo.Update(device); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/"+device.ID.String(),
+		strings.NewReader(`{"poll_interval_override":null}`),
+	)
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.PollIntervalOverride != nil {
+		t.Fatalf("expected override cleared, got %d", *updated.PollIntervalOverride)
+	}
+}
+
+func TestDeviceHandlerUpdate_PollIntervalOverrideRejectsOutOfRange(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, deviceRepo)
+	device.PollIntervalOverride = intPtr(45)
+	if err := deviceRepo.Update(device); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/"+device.ID.String(),
+		strings.NewReader(`{"poll_interval_override":4}`),
+	)
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "poll_interval_override must be between 5 and 3600 seconds") {
+		t.Fatalf("expected range validation error, got %s", rec.Body.String())
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.PollIntervalOverride == nil || *updated.PollIntervalOverride != 45 {
+		t.Fatalf("expected override to remain 45 after rejection, got %#v", updated.PollIntervalOverride)
 	}
 }
 
@@ -875,6 +1012,34 @@ func TestHandleCreate_InvalidMetricsSource_400(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "invalid metrics_source") {
 		t.Errorf("expected error about metrics_source, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleUpdate_AllowsFrontendMetricsSources(t *testing.T) {
+	tests := []string{"prometheus_snmp_fallback", "none"}
+
+	for _, metricsSource := range tests {
+		t.Run(metricsSource, func(t *testing.T) {
+			handler, repo, _ := newTestDeviceHandler(t)
+
+			device := &domain.Device{
+				IP:            "10.0.0.1",
+				DeviceType:    domain.DeviceTypeVirtual,
+				MetricsSource: domain.MetricsSourcePrometheus,
+			}
+			if err := repo.Create(device); err != nil {
+				t.Fatalf("failed to seed device: %v", err)
+			}
+
+			body := fmt.Sprintf(`{"metrics_source":"%s"}`, metricsSource)
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			handler.HandleUpdate(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200 for metrics_source=%q, got %d; body: %s", metricsSource, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

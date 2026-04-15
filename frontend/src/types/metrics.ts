@@ -8,6 +8,11 @@ export interface DeviceMetricsDTO {
   temp_celsius: number | null;
   uptime_secs: number | null;
   collected_at: string;
+  health?: string;
+  reachability?: string;
+  stale?: boolean;
+  last_polled_at?: string;
+  expected_poll_interval_seconds?: number | null;
 }
 
 export interface LinkMetricsDTO {
@@ -80,6 +85,27 @@ function readNullableNumber(record: APIRecord, key: string): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function readOptionalString(record: APIRecord, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readOptionalBoolean(record: APIRecord, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function readOptionalNumber(record: APIRecord, key: string): number | null | undefined {
+  const value = record[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 export function parseDeviceMetrics(value: unknown): DeviceMetricsDTO {
   if (!isRecord(value)) {
     throw new Error('invalid device metrics payload');
@@ -92,6 +118,11 @@ export function parseDeviceMetrics(value: unknown): DeviceMetricsDTO {
     temp_celsius: readNullableNumber(value, 'temp_celsius'),
     uptime_secs: readNullableNumber(value, 'uptime_secs'),
     collected_at: readString(value, 'collected_at'),
+    health: readOptionalString(value, 'health'),
+    reachability: readOptionalString(value, 'reachability'),
+    stale: readOptionalBoolean(value, 'stale'),
+    last_polled_at: readOptionalString(value, 'last_polled_at'),
+    expected_poll_interval_seconds: readOptionalNumber(value, 'expected_poll_interval_seconds'),
   };
 }
 

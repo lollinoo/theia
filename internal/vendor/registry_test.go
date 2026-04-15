@@ -27,9 +27,14 @@ metrics:
     uptime: 'sysUpTime{%label%}'
 
 snmp:
-  cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
-  temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
-  temperature_scale: 1.0
+  static: {}
+  operational:
+    sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
+    if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
+  performance:
+    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
+    temperature_scale: 1.0
 `
 	mikrotikYAML := `
 vendor:
@@ -60,8 +65,11 @@ metrics:
     cpu: "mtxrHlCpuLoad{%label%}"
 
 snmp:
-  temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
-  temperature_scale: 0.1
+  static: {}
+  operational: {}
+  performance:
+    temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
+    temperature_scale: 0.1
 `
 
 	os.WriteFile(filepath.Join(dir, "default.yaml"), []byte(defaultYAML), 0644)
@@ -247,9 +255,14 @@ vendor:
   display_name: Generic SNMP
 
 snmp:
-  temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
-  temperature_scale: 1.0
-  cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+  static: {}
+  operational:
+    sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
+    if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
+  performance:
+    temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
+    temperature_scale: 1.0
+    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
 `
 	mikrotikYAML := `
 vendor:
@@ -261,8 +274,11 @@ detection:
     - "1.3.6.1.4.1.14988"
 
 snmp:
-  temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
-  temperature_scale: 0.1
+  static: {}
+  operational: {}
+  performance:
+    temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
+    temperature_scale: 0.1
 `
 	os.WriteFile(filepath.Join(dir, "default.yaml"), []byte(defaultYAML), 0644)
 	os.WriteFile(filepath.Join(dir, "mikrotik.yaml"), []byte(mikrotikYAML), 0644)
@@ -273,14 +289,14 @@ snmp:
 	}
 
 	s := reg.ResolveSNMPConfig("mikrotik")
-	if s.TemperatureOID != ".1.3.6.1.4.1.14988.1.1.3.10.0" {
-		t.Errorf("expected mikrotik temp OID, got %q", s.TemperatureOID)
+	if s.Performance.TemperatureOID != ".1.3.6.1.4.1.14988.1.1.3.10.0" {
+		t.Errorf("expected mikrotik temp OID, got %q", s.Performance.TemperatureOID)
 	}
-	if s.TemperatureScale != 0.1 {
-		t.Errorf("expected 0.1 scale, got %f", s.TemperatureScale)
+	if s.Performance.TemperatureScale != 0.1 {
+		t.Errorf("expected 0.1 scale, got %f", s.Performance.TemperatureScale)
 	}
-	if s.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
-		t.Errorf("expected default cpu OID, got %q", s.CPUOID)
+	if s.Performance.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+		t.Errorf("expected default cpu OID, got %q", s.Performance.CPUOID)
 	}
 }
 
@@ -331,9 +347,14 @@ metrics:
     uptime: 'sysUpTime{%label%}'
 
 snmp:
-  cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
-  temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
-  temperature_scale: 1.0
+  static: {}
+  operational:
+    sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
+    if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
+  performance:
+    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
+    temperature_scale: 1.0
 
 backup:
   supported: false
@@ -377,6 +398,8 @@ backup:
 				_ = reg.ResolveBackupConfig("mikrotik")
 				_ = reg.ResolvePrometheusMetrics("mikrotik")
 				_ = reg.ResolveSNMPConfig("mikrotik")
+				_ = reg.ResolvePerformanceOIDs("mikrotik")
+				_ = reg.ResolveOperationalOIDs("mikrotik")
 				_ = reg.ResolveDeviceType("mikrotik", "RouterOS RB5009")
 				_ = reg.ExtractModel("mikrotik", "RouterOS RB5009")
 				_ = reg.GetAllVendorNames()
@@ -416,5 +439,142 @@ backup:
 
 	if reg.VendorCount() < 2 {
 		t.Errorf("expected at least 2 vendors (default + mikrotik), got %d", reg.VendorCount())
+	}
+}
+
+// TestResolvePerformanceOIDs_VendorOverride verifies that per-tier resolution
+// merges vendor-specific OIDs over defaults, respecting empty-string semantics:
+// a vendor's empty CPUOID does NOT clobber the default.
+func TestResolvePerformanceOIDs_VendorOverride(t *testing.T) {
+	dir := t.TempDir()
+
+	defaultYAML := `
+vendor:
+  name: default
+  display_name: Generic SNMP
+
+snmp:
+  static: {}
+  operational:
+    sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
+    if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
+  performance:
+    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    memory_used_oid: ".1.3.6.1.2.1.25.2.3.1.6"
+    memory_total_oid: ".1.3.6.1.2.1.25.2.3.1.5"
+    temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
+    temperature_scale: 1.0
+`
+	mikrotikYAML := `
+vendor:
+  name: mikrotik
+  display_name: MikroTik
+
+detection:
+  sys_object_id_prefixes:
+    - "1.3.6.1.4.1.14988"
+
+snmp:
+  static: {}
+  operational: {}
+  performance:
+    temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
+    temperature_scale: 0.1
+`
+	os.WriteFile(filepath.Join(dir, "default.yaml"), []byte(defaultYAML), 0644)
+	os.WriteFile(filepath.Join(dir, "mikrotik.yaml"), []byte(mikrotikYAML), 0644)
+
+	reg, err := LoadRegistry(dir)
+	if err != nil {
+		t.Fatalf("LoadRegistry failed: %v", err)
+	}
+
+	// mikrotik does not set CPUOID — must fall back to default's value
+	p := reg.ResolvePerformanceOIDs("mikrotik")
+	if p.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+		t.Errorf("expected default CPUOID for mikrotik (fallback), got %q", p.CPUOID)
+	}
+	// mikrotik overrides TemperatureOID
+	if p.TemperatureOID != ".1.3.6.1.4.1.14988.1.1.3.10.0" {
+		t.Errorf("expected mikrotik TemperatureOID override, got %q", p.TemperatureOID)
+	}
+	// mikrotik overrides TemperatureScale
+	if p.TemperatureScale != 0.1 {
+		t.Errorf("expected mikrotik TemperatureScale 0.1, got %f", p.TemperatureScale)
+	}
+
+	// Non-existent vendor — must return default values without panic
+	pDefault := reg.ResolvePerformanceOIDs("nonexistent")
+	if pDefault.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+		t.Errorf("expected default CPUOID for nonexistent vendor, got %q", pDefault.CPUOID)
+	}
+	if pDefault.TemperatureOID != ".1.3.6.1.2.1.99.1.1.1.4" {
+		t.Errorf("expected default TemperatureOID for nonexistent vendor, got %q", pDefault.TemperatureOID)
+	}
+
+	// Default vendor — returns default performance group untouched
+	pExplicitDefault := reg.ResolvePerformanceOIDs("default")
+	if pExplicitDefault.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+		t.Errorf("expected default CPUOID for explicit default vendor, got %q", pExplicitDefault.CPUOID)
+	}
+}
+
+// TestResolveOperationalOIDs_DefaultStandardMIB verifies that standard-MIB
+// operational OIDs from default.yaml are returned for all vendors that do not
+// override them, including vendors with an empty operational block and
+// non-existent vendors.
+func TestResolveOperationalOIDs_DefaultStandardMIB(t *testing.T) {
+	dir := t.TempDir()
+
+	defaultYAML := `
+vendor:
+  name: default
+  display_name: Generic SNMP
+
+snmp:
+  static: {}
+  operational:
+    sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
+    if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
+  performance:
+    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+`
+	mikrotikYAML := `
+vendor:
+  name: mikrotik
+  display_name: MikroTik
+
+detection:
+  sys_object_id_prefixes:
+    - "1.3.6.1.4.1.14988"
+
+snmp:
+  static: {}
+  operational: {}
+  performance:
+    temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
+    temperature_scale: 0.1
+`
+	os.WriteFile(filepath.Join(dir, "default.yaml"), []byte(defaultYAML), 0644)
+	os.WriteFile(filepath.Join(dir, "mikrotik.yaml"), []byte(mikrotikYAML), 0644)
+
+	reg, err := LoadRegistry(dir)
+	if err != nil {
+		t.Fatalf("LoadRegistry failed: %v", err)
+	}
+
+	// Vendor with empty operational block — must fall back to standard MIB OIDs
+	op := reg.ResolveOperationalOIDs("mikrotik")
+	if op.SysUpTimeOID != ".1.3.6.1.2.1.1.3.0" {
+		t.Errorf("expected default SysUpTimeOID for mikrotik (empty operational), got %q", op.SysUpTimeOID)
+	}
+	if op.IfOperStatusOID != ".1.3.6.1.2.1.2.2.1.8" {
+		t.Errorf("expected default IfOperStatusOID for mikrotik (empty operational), got %q", op.IfOperStatusOID)
+	}
+
+	// Non-existent vendor — must also fall back to standard MIB defaults
+	opNonExistent := reg.ResolveOperationalOIDs("nonexistent")
+	if opNonExistent.SysUpTimeOID != ".1.3.6.1.2.1.1.3.0" {
+		t.Errorf("expected default SysUpTimeOID for nonexistent vendor, got %q", opNonExistent.SysUpTimeOID)
 	}
 }

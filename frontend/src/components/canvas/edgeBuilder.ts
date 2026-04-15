@@ -211,11 +211,10 @@ export function buildTopologyEdges(
   onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void,
 ): LinkEdgeType[] {
   const nodesByID = new Map(nodes.map((node) => [node.id, node]));
-  const pairCounts = new Map<string, number>();
   const seenPhysicalLinks = new Set<string>();
   const visibleLinks = preferVisibleLinks(links);
 
-  return visibleLinks
+  const candidateEdges = visibleLinks
     .filter((link) => {
       if (!nodesByID.has(link.source_device_id) || !nodesByID.has(link.target_device_id)) {
         return false;
@@ -242,17 +241,12 @@ export function buildTopologyEdges(
         targetNode.position,
       );
 
-      const pairKey = [link.source_device_id, link.target_device_id].sort().join('-');
-      const parallelIndex = pairCounts.get(pairKey) || 0;
-      pairCounts.set(pairKey, parallelIndex + 1);
-
       const data = buildEdgeData(
         link,
         devicesByID,
         existingEdgeDataByID?.get(link.id),
         onContextMenu,
       );
-      data.parallelIndex = parallelIndex;
 
       return {
         id: link.id,
@@ -265,6 +259,47 @@ export function buildTopologyEdges(
         data,
       };
     });
+
+  const candidateEdgesByPair = new Map<string, LinkEdgeType[]>();
+  for (const edge of candidateEdges) {
+    const pairKey = [edge.source, edge.target].sort().join('-');
+    const pairEdges = candidateEdgesByPair.get(pairKey) ?? [];
+    pairEdges.push(edge);
+    candidateEdgesByPair.set(pairKey, pairEdges);
+  }
+
+  const filteredEdges: LinkEdgeType[] = [];
+  for (const pairEdges of candidateEdgesByPair.values()) {
+    const hasRichPhysicalEdge = pairEdges.some((edge) => {
+      const link = edge.data?.link;
+      return !!link && (isCompletePhysicalLink(link) || !!edge.data?.bandwidthLabel);
+    });
+
+    const survivingEdges = hasRichPhysicalEdge
+      ? pairEdges.filter((edge) => {
+          const link = edge.data?.link;
+          if (!link) {
+            return true;
+          }
+          if (isCompletePhysicalLink(link) || edge.data?.bandwidthLabel) {
+            return true;
+          }
+          return false;
+        })
+      : pairEdges;
+
+    survivingEdges.forEach((edge, parallelIndex) => {
+      filteredEdges.push({
+        ...edge,
+        data: {
+          ...edge.data!,
+          parallelIndex,
+        },
+      });
+    });
+  }
+
+  return filteredEdges;
 }
 
 export function alertStatusForLink(link: Link, alerts: AlertDTO[]): AlertStatus {

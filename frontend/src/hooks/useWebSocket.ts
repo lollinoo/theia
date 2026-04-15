@@ -15,6 +15,8 @@ interface UseWebSocketResult {
   prometheusStatus: PrometheusStatusPayload | null;
 }
 
+type DetailControlType = 'subscribe_detail' | 'unsubscribe_detail';
+
 function buildWebSocketURL(url: string): string {
   if (/^wss?:\/\//i.test(url)) {
     return url;
@@ -33,16 +35,29 @@ function buildWebSocketURL(url: string): string {
   return `${protocol}//${window.location.host}${normalizedPath}`;
 }
 
-export function useWebSocket(url: string): UseWebSocketResult {
+export function useWebSocket(url: string, detailDeviceId: string | null = null): UseWebSocketResult {
   const [snapshot, setSnapshot] = useState<SnapshotPayload | null>(null);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [prometheusStatus, setPrometheusStatus] = useState<PrometheusStatusPayload | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
+  const detailDeviceIdRef = useRef<string | null>(detailDeviceId);
+  const lastSubscribedDeviceIdRef = useRef<string | null>(null);
 
   const reconnectAttemptRef = useRef(0);
   const disposed = useRef(false);
+
+  function sendDetailControl(type: DetailControlType, deviceId: string | null): void {
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    socketRef.current.send(JSON.stringify({
+      type,
+      payload: { device_id: deviceId },
+    }));
+  }
 
   useEffect(() => {
     disposed.current = false;
@@ -97,6 +112,10 @@ export function useWebSocket(url: string): UseWebSocketResult {
         setReconnecting(false);
         if (wasReconnect) {
           window.dispatchEvent(new Event('backend-reconnected'));
+        }
+        if (detailDeviceIdRef.current !== null) {
+          sendDetailControl('subscribe_detail', detailDeviceIdRef.current);
+          lastSubscribedDeviceIdRef.current = detailDeviceIdRef.current;
         }
       };
 
@@ -158,6 +177,25 @@ export function useWebSocket(url: string): UseWebSocketResult {
       }
     };
   }, [url]);
+
+  useEffect(() => {
+    detailDeviceIdRef.current = detailDeviceId;
+
+    const previousDeviceId = lastSubscribedDeviceIdRef.current;
+    if (previousDeviceId === detailDeviceId) {
+      return;
+    }
+
+    if (previousDeviceId !== null) {
+      sendDetailControl('unsubscribe_detail', previousDeviceId);
+    }
+
+    if (detailDeviceId !== null) {
+      sendDetailControl('subscribe_detail', detailDeviceId);
+    }
+
+    lastSubscribedDeviceIdRef.current = detailDeviceId;
+  }, [detailDeviceId]);
 
   return {
     snapshot,

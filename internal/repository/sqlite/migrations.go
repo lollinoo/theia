@@ -56,6 +56,12 @@ func RunMigrations(db *sql.DB, encryptionKey ...[]byte) error {
 		return fmt.Errorf("encrypting SNMP credentials: %w", err)
 	}
 
+	// Backfill devices.poll_class from device_type using the runtime
+	// classification helper (Phase 39 D-16). Idempotent.
+	if err := migrateDevicePollClass(db); err != nil {
+		return fmt.Errorf("backfilling device poll_class: %w", err)
+	}
+
 	// Seed default settings (INSERT OR IGNORE so existing values are not overwritten)
 	if err := seedDefaultSettings(db); err != nil {
 		return fmt.Errorf("seeding default settings: %w", err)
@@ -436,6 +442,87 @@ func isAlreadyEncrypted(creds *domain.SNMPCredentials, key []byte) bool {
 		}
 	}
 	return false
+}
+
+// migrateDevicePollClass backfills the devices.poll_class column by
+// applying domain.ClassifyPollClass(device_type) to every row whose
+// stored poll_class does not already match the computed value. This is
+// a Go-level data migration that runs after SQL migrations apply, so
+// the new column already exists. The function is idempotent: re-running
+// on a fully-backfilled DB performs zero writes.
+//
+// Per D-16, this reuses the runtime classification helper as the single
+// source of truth — the SQL CASE statement an .up.sql file would need
+// and the runtime helper would otherwise drift over time.
+func migrateDevicePollClass(db *sql.DB) error {
+	queryDB := wrapDB(db)
+
+	// Check the column exists before attempting backfill. On Postgres,
+	// migrations have a different number; on SQLite the up file added
+	// the column. Skip silently if the column is absent so this function
+	// can run unconditionally from RunMigrations on every dialect.
+	if !devicePollClassColumnExists(db) {
+		return nil
+	}
+
+	rows, err := db.Query(`SELECT id, device_type, poll_class FROM devices`)
+	if err != nil {
+		return fmt.Errorf("querying devices for poll_class backfill: %w", err)
+	}
+	defer rows.Close()
+
+	type row struct {
+		id           string
+		deviceType   string
+		currentClass string
+	}
+	var toCheck []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.deviceType, &r.currentClass); err != nil {
+			return fmt.Errorf("scanning device row for poll_class backfill: %w", err)
+		}
+		toCheck = append(toCheck, r)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating devices for poll_class backfill: %w", err)
+	}
+
+	updated := 0
+	for _, r := range toCheck {
+		computed := domain.ClassifyPollClass(domain.DeviceType(r.deviceType))
+		if string(computed) == r.currentClass {
+			continue // already correct — idempotency guarantee
+		}
+		if _, err := queryDB.Exec(
+			`UPDATE devices SET poll_class = ? WHERE id = ?`,
+			string(computed), r.id,
+		); err != nil {
+			log.Printf("Warning: failed to backfill poll_class for device %s: %v", r.id, err)
+			continue
+		}
+		updated++
+	}
+
+	if updated > 0 {
+		log.Printf("Device poll_class backfill: %d rows updated", updated)
+	}
+	return nil
+}
+
+// devicePollClassColumnExists returns true when the devices table has
+// the poll_class column. Used by migrateDevicePollClass to skip cleanly
+// on Postgres or partially-migrated databases.
+func devicePollClassColumnExists(db *sql.DB) bool {
+	if detectDialectFromDB(db) == DialectSQLite {
+		var count int
+		err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='poll_class'`).Scan(&count)
+		return err == nil && count > 0
+	}
+	// Postgres path: information_schema check
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_name='devices' AND column_name='poll_class'`).Scan(&count)
+	return err == nil && count > 0
 }
 
 // seedDefaultSettings inserts default settings without overwriting existing values.

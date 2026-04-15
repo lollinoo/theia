@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { DeviceConfigPanel } from './DeviceConfigPanel';
 import type { Device } from '../types/api';
 import { ValidationError, ServerError } from '../api/errors';
@@ -31,6 +31,8 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     hostname: 'router-01',
     ip: '10.0.0.1',
     device_type: 'router',
+    poll_class: 'core',
+    poll_interval_override: null,
     status: 'up',
     sys_name: 'router-01',
     sys_descr: 'RouterOS',
@@ -49,6 +51,184 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('DeviceConfigPanel — polling override', () => {
+  it('renders default cadence context from device poll class', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Polling Override')).toBeInTheDocument();
+    expect(screen.getByText('Default cadence: every 30s (core class)')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Use device default')).toBeInTheDocument();
+  });
+
+  it('selecting Use device default sends poll_interval_override null', async () => {
+    const { updateDevice, updateSetting } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({ poll_interval_override: 30 })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByDisplayValue('30 seconds'), { target: { value: 'default' } });
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', { poll_interval_override: null });
+    });
+    expect(updateSetting).not.toHaveBeenCalled();
+  });
+
+  it('selecting 30 seconds sends poll_interval_override 30', async () => {
+    const { updateDevice, updateSetting } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', { poll_interval_override: 30 });
+    });
+    expect(updateSetting).not.toHaveBeenCalled();
+  });
+
+  it('custom override initializes from non-preset device value', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({ poll_interval_override: 123 })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByDisplayValue('Custom...')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('123')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Seconds (5-3600)')).toBeInTheDocument();
+  });
+
+  it('invalid custom override blocks updateDevice and shows validation error', async () => {
+    const { updateDevice } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: 'custom' } });
+
+    const customInput = screen.getByPlaceholderText('Seconds (5-3600)');
+    fireEvent.change(customInput, { target: { value: '4' } });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Polling override must be an integer between 5 and 3600 seconds'),
+      ).toBeInTheDocument();
+    });
+    expect(updateDevice).not.toHaveBeenCalled();
+
+    fireEvent.change(customInput, { target: { value: '3601' } });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Polling override must be an integer between 5 and 3600 seconds'),
+      ).toBeInTheDocument();
+    });
+    expect(updateDevice).not.toHaveBeenCalled();
+  });
+
+  it('successful polling save shows Saved and calls onDeviceUpdated', async () => {
+    const { updateDevice, updateSetting } = await import('../api/client');
+    const onDeviceUpdated = vi.fn();
+    (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockDevice({ poll_interval_override: 123 }),
+    );
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={onDeviceUpdated}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByPlaceholderText('Seconds (5-3600)'), { target: { value: '123' } });
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', { poll_interval_override: 123 });
+    });
+    expect(updateSetting).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(onDeviceUpdated).toHaveBeenCalledWith(mockDevice({ poll_interval_override: 123 }));
+    });
+
+    const pollingHeader = screen.getByText('Polling Override').parentElement;
+    expect(pollingHeader).not.toBeNull();
+    await waitFor(() => {
+      expect(within(pollingHeader as HTMLElement).getByText('Saved').className).toContain('opacity-100');
+    });
+  });
+
+  it('allows saving virtual devices without an IP address', async () => {
+    const { updateDevice } = await import('../api/client');
+    const onDeviceUpdated = vi.fn();
+    (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        metrics_source: 'none',
+        tags: { display_name: 'Virtual cloud', virtual_subtype: 'cloud' },
+      }),
+    );
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({
+          device_type: 'virtual',
+          ip: '',
+          metrics_source: 'none',
+          tags: { display_name: 'Virtual cloud', virtual_subtype: 'cloud' },
+        })}
+        isVirtual
+        onDeviceUpdated={onDeviceUpdated}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Save Changes'));
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith(
+        'dev-1',
+        expect.objectContaining({
+          ip: '',
+          metrics_source: 'none',
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(onDeviceUpdated).toHaveBeenCalled();
+    });
+  });
 });
 
 describe('DeviceConfigPanel', () => {
@@ -329,6 +509,72 @@ describe('DeviceConfigPanel — backend typed error display', () => {
   });
 });
 
+describe('DeviceConfigPanel — Grafana URL autosave validation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not persist invalid Grafana URLs during debounced autosave', async () => {
+    const { updateSetting } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    const grafanaInput = screen.getByPlaceholderText('Leave blank to use default');
+    await act(async () => {
+      fireEvent.change(grafanaInput, { target: { value: 'not-a-url' } });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('URL must start with http:// or https://')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(updateSetting).not.toHaveBeenCalled();
+  });
+
+  it('persists valid Grafana URLs after the debounce window', async () => {
+    const { updateSetting } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    const grafanaInput = screen.getByPlaceholderText('Leave blank to use default');
+    await act(async () => {
+      fireEvent.change(grafanaInput, {
+        target: { value: 'https://grafana.example/d/router-overview' },
+      });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+    });
+
+    expect(updateSetting).toHaveBeenCalledWith(
+      'grafana_dashboard_url:dev-1',
+      'https://grafana.example/d/router-overview',
+    );
+  });
+});
+
 // --- Credentials section tests ---
 
 describe('DeviceConfigPanel — Credentials section', () => {
@@ -395,5 +641,37 @@ describe('DeviceConfigPanel — Credentials section', () => {
 
     // Dismiss button should also appear
     expect(screen.getByText('Dismiss')).toBeInTheDocument();
+  });
+
+  it('notifies parent when WinBox designation changes', async () => {
+    const { fetchDeviceCredentialProfiles, setWinBoxProfile } = await import('../api/client');
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([
+        { profile_id: 'p1', name: 'Admin SSH', role: 'Admin', is_winbox: false },
+      ])
+      .mockResolvedValueOnce([
+        { profile_id: 'p1', name: 'Admin SSH', role: 'Admin', is_winbox: true },
+      ]);
+
+    const onWinBoxAvailabilityChange = vi.fn();
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+        onWinBoxAvailabilityChange={onWinBoxAvailabilityChange}
+      />,
+    );
+
+    const toggleButton = await screen.findByTitle('Designate as WinBox profile');
+    fireEvent.click(toggleButton);
+
+    await waitFor(() => {
+      expect(setWinBoxProfile).toHaveBeenCalledWith('dev-1', 'p1');
+    });
+    await waitFor(() => {
+      expect(onWinBoxAvailabilityChange).toHaveBeenLastCalledWith(true);
+    });
   });
 });

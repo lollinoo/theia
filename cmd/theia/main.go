@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -16,14 +17,17 @@ import (
 
 	"github.com/lollinoo/theia/internal/api"
 	"github.com/lollinoo/theia/internal/cache"
+	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/config"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/ssh"
+	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/vendor"
 	"github.com/lollinoo/theia/internal/version"
 	"github.com/lollinoo/theia/internal/worker"
@@ -43,6 +47,14 @@ type restoreMarker struct {
 	DeviceBackupDir  string `json:"device_backup_dir"`
 	KnownHostsPath   string `json:"known_hosts_path"`
 	Timestamp        string `json:"timestamp"`
+}
+
+var newCollectorSNMPClient = func(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+	return snmp.NewClient(target, creds, timeout, retries)
+}
+
+func wirePollRescheduler(deviceService *service.DeviceService, sched *scheduler.Scheduler) {
+	deviceService.SetPollRescheduler(sched)
 }
 
 // applyPendingRestore checks for a .theia-restore-pending marker file and
@@ -98,14 +110,9 @@ func applyPendingRestore(dbPath string) bool {
 	// Step 3: Replace device backup directory with staged backups
 	if marker.StagedBackups != "" && marker.DeviceBackupDir != "" {
 		if info, err := os.Stat(marker.StagedBackups); err == nil && info.IsDir() {
-			// Remove current backup dir contents (but not the dir itself if it has special perms)
-			os.RemoveAll(marker.DeviceBackupDir)
-			if err := os.Rename(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
-				log.Printf("Warning: could not replace backup dir, copying instead: %v", err)
-				// Fallback: copy dir if rename fails (cross-device)
-				if err := copyDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
-					log.Printf("Warning: failed to copy staged backups: %v", err)
-				}
+			if err := replaceDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
+				log.Printf("Warning: failed to replace device backups at %s: %v", marker.DeviceBackupDir, err)
+				return false
 			}
 			log.Printf("Restore: replaced device backups at %s", marker.DeviceBackupDir)
 		}
@@ -114,12 +121,9 @@ func applyPendingRestore(dbPath string) bool {
 	// Step 4: Replace known_hosts with staged version
 	if marker.StagedKnownHosts != "" && marker.KnownHostsPath != "" {
 		if _, err := os.Stat(marker.StagedKnownHosts); err == nil {
-			os.Remove(marker.KnownHostsPath)
-			if err := os.Rename(marker.StagedKnownHosts, marker.KnownHostsPath); err != nil {
-				log.Printf("Warning: could not replace known_hosts, copying instead: %v", err)
-				if err := copyFileForRestore(marker.StagedKnownHosts, marker.KnownHostsPath); err != nil {
-					log.Printf("Warning: failed to copy staged known_hosts: %v", err)
-				}
+			if err := replaceFileForRestore(marker.StagedKnownHosts, marker.KnownHostsPath); err != nil {
+				log.Printf("Warning: failed to replace known_hosts at %s: %v", marker.KnownHostsPath, err)
+				return false
 			}
 			log.Printf("Restore: replaced known_hosts at %s", marker.KnownHostsPath)
 		}
@@ -159,6 +163,96 @@ func copyFileForRestore(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+func replaceDirForRestore(src, dst string) error {
+	tmpPath := dst + ".restore-tmp"
+	backupPath := dst + ".restore-old"
+
+	if err := os.RemoveAll(tmpPath); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(backupPath); err != nil {
+		return err
+	}
+	if err := copyDirForRestore(src, tmpPath); err != nil {
+		return err
+	}
+
+	movedExisting := false
+	if _, err := os.Stat(dst); err == nil {
+		if err := os.Rename(dst, backupPath); err != nil {
+			_ = os.RemoveAll(tmpPath)
+			return err
+		}
+		movedExisting = true
+	} else if !os.IsNotExist(err) {
+		_ = os.RemoveAll(tmpPath)
+		return err
+	}
+
+	if err := os.Rename(tmpPath, dst); err != nil {
+		if movedExisting {
+			if restoreErr := os.Rename(backupPath, dst); restoreErr != nil {
+				return fmt.Errorf("activate staged restore dir: %w (restore previous dir: %v)", err, restoreErr)
+			}
+		}
+		_ = os.RemoveAll(tmpPath)
+		return err
+	}
+
+	if movedExisting {
+		if err := os.RemoveAll(backupPath); err != nil {
+			log.Printf("Warning: failed to remove restore backup dir %s: %v", backupPath, err)
+		}
+	}
+
+	return nil
+}
+
+func replaceFileForRestore(src, dst string) error {
+	tmpPath := dst + ".restore-tmp"
+	backupPath := dst + ".restore-old"
+
+	if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := copyFileForRestore(src, tmpPath); err != nil {
+		return err
+	}
+
+	movedExisting := false
+	if _, err := os.Stat(dst); err == nil {
+		if err := os.Rename(dst, backupPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		movedExisting = true
+	} else if !os.IsNotExist(err) {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	if err := os.Rename(tmpPath, dst); err != nil {
+		if movedExisting {
+			if restoreErr := os.Rename(backupPath, dst); restoreErr != nil {
+				return fmt.Errorf("activate staged restore file: %w (restore previous file: %v)", err, restoreErr)
+			}
+		}
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	if movedExisting {
+		if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Warning: failed to remove restore backup file %s: %v", backupPath, err)
+		}
+	}
+
+	return nil
 }
 
 // copyDirForRestore recursively copies a directory from src to dst.
@@ -280,8 +374,12 @@ func main() {
 
 	// Build live registry from DB
 	vendorRegistry, err := loadRegistryFromDB(vendorConfigRepo)
-	if err != nil {
-		log.Printf("Warning: failed to load registry from DB, falling back to YAML: %v", err)
+	if err != nil || vendorRegistry == nil {
+		if err != nil {
+			log.Printf("Warning: failed to load registry from DB, falling back to YAML: %v", err)
+		} else {
+			log.Printf("Warning: DB vendor registry empty/invalid, falling back to YAML registry")
+		}
 		vendorRegistry = yamlRegistry
 	}
 	log.Printf("Vendor registry loaded: %d vendors", vendorRegistry.VendorCount())
@@ -363,11 +461,8 @@ func main() {
 	// Create device backup scheduler
 	deviceBackupScheduler := worker.NewDeviceBackupScheduler(backupService, backupJobRepo, settingsRepo)
 
-	// Create and start background poller
-	poller := worker.NewPoller(deviceService, settingsRepo, deviceLinkCache)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	poller.Start(ctx)
 
 	prometheusURL, err := ensurePrometheusURL(settingsRepo)
 	if err != nil {
@@ -378,19 +473,37 @@ func main() {
 	hub := ws.NewHub()
 	go hub.Run()
 
-	snmpPollFunc := newSNMPMetricsPollFunc(settingsRepo, vendorRegistry)
-	snmpLinkPollFunc := newSNMPLinkPollFunc(settingsRepo)
-	collector := worker.NewMetricsCollector(promClient, hub, deviceLinkCache, deviceRepo, settingsRepo, vendorRegistry, snmpPollFunc, snmpLinkPollFunc, topologyNotify)
-	collector.Start(ctx)
+	stateStore := state.NewStore()
+	sched := scheduler.NewScheduler(deviceLinkCache, settingsRepo)
+	wirePollRescheduler(deviceService, sched)
+	snmpClientFactory := newCollectorSNMPClientFunc(settingsRepo)
+	performanceCollector := collector.NewPerformanceCollector(vendorRegistry, snmpClientFactory)
+	operationalCollector := collector.NewOperationalCollector(vendorRegistry, snmpClientFactory)
+	staticCollector := collector.NewStaticCollector(vendorRegistry, snmpClientFactory)
+	promCollector := collector.NewPrometheusCollector(promClient)
+	pipeline := worker.NewPipelineOrchestrator(
+		sched,
+		stateStore,
+		deviceLinkCache,
+		hub,
+		performanceCollector,
+		operationalCollector,
+		staticCollector,
+		promCollector,
+		deviceService,
+		settingsRepo,
+		topologyNotify,
+	)
+	pipeline.Start(ctx)
 	if backupScheduler != nil {
 		backupScheduler.Start(ctx)
 	}
 	deviceBackupScheduler.Start(ctx)
 
-	wsHandler := ws.NewHandler(hub, collector.GetSnapshot, collector.IsPromAvailable)
+	wsHandler := ws.NewHandler(hub, pipeline.GetSnapshot, pipeline.IsPromAvailable)
 
 	// Create HTTP router with all /api/v1/ routes
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, poller, instanceBackupService, cfg.BridgeBinariesDir, wsHandler)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, cfg.BridgeBinariesDir, wsHandler)
 
 	// Create HTTP server
 	server := &http.Server{
@@ -407,8 +520,7 @@ func main() {
 		log.Printf("Received signal %s, shutting down...", sig)
 
 		// Stop background workers
-		poller.Stop()
-		collector.Stop()
+		pipeline.Stop()
 		if backupScheduler != nil {
 			backupScheduler.Stop()
 		}
@@ -490,6 +602,11 @@ func loadRegistryFromDB(repo *sqlite.VendorConfigRepo) (*vendor.Registry, error)
 		})
 	}
 
+	if len(dbRecords) == 0 {
+		log.Printf("Warning: all DB vendor records failed JSON validation, falling back to YAML registry")
+		return nil, nil
+	}
+
 	return vendor.LoadRegistryFromDB(dbRecords)
 }
 
@@ -506,6 +623,32 @@ func ensurePrometheusURL(settingsRepo *sqlite.SettingsRepo) (string, error) {
 	}
 
 	return defaultPrometheusURL, nil
+}
+
+func newCollectorSNMPClientFunc(settingsRepo domain.SettingsRepository) collector.NewSNMPClientFunc {
+	return func(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+		if retries < 0 {
+			retries = 2
+		}
+
+		if settingsRepo != nil {
+			if val, err := settingsRepo.Get(domain.SettingSNMPTimeout); err == nil {
+				if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+					timeout = time.Duration(secs) * time.Second
+				}
+			}
+			if val, err := settingsRepo.Get(domain.SettingSNMPRetries); err == nil {
+				if parsed, err := strconv.Atoi(val); err == nil && parsed >= 0 {
+					retries = parsed
+				}
+			}
+		}
+
+		return newCollectorSNMPClient(target, creds, timeout, retries)
+	}
 }
 
 // newSNMPMetricsPollFunc creates an SNMPPollFunc that polls CPU/MEM/UPTIME/TEMP
@@ -530,8 +673,8 @@ func newSNMPMetricsPollFunc(settingsRepo domain.SettingsRepository, vendorRegist
 		}
 		defer client.Close()
 
-		snmpCfg := vendorRegistry.ResolveSNMPConfig(vendorName)
-		cpu, mem, uptime, temp := snmp.PollDeviceMetrics(client, snmpCfg)
+		perfOIDs := vendorRegistry.ResolvePerformanceOIDs(vendorName)
+		cpu, mem, uptime, temp := snmp.PollDeviceMetrics(client, perfOIDs)
 		return domain.DeviceMetrics{
 			CPUPercent:  cpu,
 			MemPercent:  mem,

@@ -8,8 +8,11 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/lollinoo/theia/internal/worker"
 )
+
+type fakeStatusProvider struct{ status string }
+
+func (f fakeStatusProvider) Status() string { return f.status }
 
 func TestHealthHandlerHealth(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
@@ -18,7 +21,7 @@ func TestHealthHandlerHealth(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	poller := worker.NewPoller(nil, nil, nil)
+	poller := fakeStatusProvider{status: "running"}
 	h := NewHealthHandler(db, poller)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -48,8 +51,8 @@ func TestHealthHandlerHealth(t *testing.T) {
 	if resp.Components["db"] != "ok" {
 		t.Fatalf("expected db=ok, got %s", resp.Components["db"])
 	}
-	if resp.Components["snmp_poller"] != "stopped" {
-		t.Fatalf("expected snmp_poller=stopped, got %s", resp.Components["snmp_poller"])
+	if resp.Components["snmp_poller"] != "running" {
+		t.Fatalf("expected snmp_poller=running, got %s", resp.Components["snmp_poller"])
 	}
 }
 
@@ -61,7 +64,7 @@ func TestHealthHandlerHealth_DBDown(t *testing.T) {
 	// Close DB before calling health to simulate DB down
 	db.Close()
 
-	poller := worker.NewPoller(nil, nil, nil)
+	poller := fakeStatusProvider{status: "stopped"}
 	h := NewHealthHandler(db, poller)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)

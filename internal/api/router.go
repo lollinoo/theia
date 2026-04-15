@@ -9,7 +9,6 @@ import (
 	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/vendor"
-	"github.com/lollinoo/theia/internal/worker"
 	"github.com/lollinoo/theia/internal/ws"
 )
 
@@ -27,7 +26,7 @@ func NewRouter(
 	backupService *service.BackupService,
 	vendorRegistry *vendor.Registry,
 	vendorConfigRepo domain.VendorConfigRepository,
-	poller *worker.Poller,
+	poller statusProvider,
 	instanceBackupService *service.InstanceBackupService,
 	bridgeBinariesDir string,
 	wsHandler *ws.Handler,

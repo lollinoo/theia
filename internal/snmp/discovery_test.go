@@ -3,8 +3,9 @@ package snmp
 import (
 	"testing"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/gosnmp/gosnmp"
+	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/vendor"
 )
 
 // testDiscoveryRegistry creates a vendor registry suitable for discovery tests.
@@ -29,6 +30,191 @@ func (m *MockClient) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
 		return m.BulkWalkFunc(rootOid)
 	}
 	return nil, nil
+}
+
+func TestPollOperationalStatus_Success(t *testing.T) {
+	t.Parallel()
+
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			if len(oids) != 1 || oids[0] != ".1.3.6.1.4.1.9999.1.0" {
+				t.Fatalf("Get oids = %v, want [%q]", oids, ".1.3.6.1.4.1.9999.1.0")
+			}
+			return []gosnmp.SnmpPDU{
+				{Name: ".1.3.6.1.4.1.9999.1.0", Type: gosnmp.TimeTicks, Value: uint32(32100)},
+			}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfName:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+					{Name: OidIfName + ".2", Type: gosnmp.OctetString, Value: []byte("ether2")},
+				}, nil
+			case ".1.3.6.1.4.1.9999.2":
+				return []gosnmp.SnmpPDU{
+					{Name: ".1.3.6.1.4.1.9999.2.1", Type: gosnmp.Integer, Value: 1},
+					{Name: ".1.3.6.1.4.1.9999.2.2", Type: gosnmp.Integer, Value: 2},
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	uptimeSecs, statuses, err := PollOperationalStatus(client, vendor.OperationalOIDs{
+		SysUpTimeOID:    ".1.3.6.1.4.1.9999.1.0",
+		IfOperStatusOID: ".1.3.6.1.4.1.9999.2",
+	})
+	if err != nil {
+		t.Fatalf("PollOperationalStatus() error = %v", err)
+	}
+	if uptimeSecs == nil || *uptimeSecs != 321 {
+		t.Fatalf("uptimeSecs = %v, want 321", uptimeSecs)
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("status count = %d, want 2", len(statuses))
+	}
+	if statuses["ether1"] != "up" {
+		t.Fatalf("statuses[ether1] = %q, want %q", statuses["ether1"], "up")
+	}
+	if statuses["ether2"] != "down" {
+		t.Fatalf("statuses[ether2] = %q, want %q", statuses["ether2"], "down")
+	}
+}
+
+func TestPollOperationalStatus_UsesFallbackOIDsWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	var gotGetOIDs []string
+	var walked []string
+
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			gotGetOIDs = append([]string(nil), oids...)
+			return []gosnmp.SnmpPDU{
+				{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(12300)},
+			}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			walked = append(walked, rootOid)
+			switch rootOid {
+			case OidIfName:
+				return nil, nil
+			case OidIfDescr:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("port7")},
+				}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfOperStatus + ".7", Type: gosnmp.Integer, Value: 3},
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	uptimeSecs, statuses, err := PollOperationalStatus(client, vendor.OperationalOIDs{})
+	if err != nil {
+		t.Fatalf("PollOperationalStatus() error = %v", err)
+	}
+	if len(gotGetOIDs) != 1 || gotGetOIDs[0] != OidSysUpTime {
+		t.Fatalf("Get oids = %v, want [%q]", gotGetOIDs, OidSysUpTime)
+	}
+	if len(walked) != 3 || walked[0] != OidIfName || walked[1] != OidIfDescr || walked[2] != OidIfOperStatus {
+		t.Fatalf("walked roots = %v, want [%q %q %q]", walked, OidIfName, OidIfDescr, OidIfOperStatus)
+	}
+	if uptimeSecs == nil || *uptimeSecs != 123 {
+		t.Fatalf("uptimeSecs = %v, want 123", uptimeSecs)
+	}
+	if len(statuses) != 1 || statuses["port7"] != "testing" {
+		t.Fatalf("statuses = %#v, want map[port7:testing]", statuses)
+	}
+}
+
+func TestPollOperationalStatus_MissingFieldsStayPartial(t *testing.T) {
+	t.Parallel()
+
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			return nil, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfName:
+				return nil, nil
+			case OidIfDescr:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("uplink")},
+				}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfOperStatus + ".1", Type: gosnmp.Integer, Value: 1},
+					{Name: OidIfOperStatus + ".99", Type: gosnmp.Integer, Value: 2},
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	uptimeSecs, statuses, err := PollOperationalStatus(client, vendor.OperationalOIDs{})
+	if err != nil {
+		t.Fatalf("PollOperationalStatus() error = %v", err)
+	}
+	if uptimeSecs != nil {
+		t.Fatalf("uptimeSecs = %v, want nil", *uptimeSecs)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("status count = %d, want 1", len(statuses))
+	}
+	if statuses["uplink"] != "up" {
+		t.Fatalf("statuses[uplink] = %q, want %q", statuses["uplink"], "up")
+	}
+}
+
+func TestPollOperationalStatus_QueryError(t *testing.T) {
+	t.Parallel()
+
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			return []gosnmp.SnmpPDU{
+				{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(100)},
+			}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			if rootOid == OidIfName {
+				return nil, nil
+			}
+			if rootOid == OidIfDescr {
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("port1")},
+				}, nil
+			}
+			if rootOid == OidIfOperStatus {
+				return nil, assertiveError("bulk walk failed")
+			}
+			return nil, nil
+		},
+	}
+
+	uptimeSecs, statuses, err := PollOperationalStatus(client, vendor.OperationalOIDs{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if uptimeSecs != nil {
+		t.Fatalf("uptimeSecs = %v, want nil", *uptimeSecs)
+	}
+	if statuses != nil {
+		t.Fatalf("statuses = %#v, want nil", statuses)
+	}
+}
+
+type assertiveError string
+
+func (e assertiveError) Error() string {
+	return string(e)
 }
 
 func TestDiscoverDevice(t *testing.T) {

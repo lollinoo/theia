@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/cache"
+	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/vendor"
@@ -28,11 +30,11 @@ func floatPtr(f float64) *float64 { return &f }
 // ---------------------------------------------------------------------------
 
 type mockWorkerDeviceRepo struct {
-	devices    []domain.Device
+	devices     []domain.Device
 	updateCalls int32
 }
 
-func (r *mockWorkerDeviceRepo) Create(_ *domain.Device) error                  { return nil }
+func (r *mockWorkerDeviceRepo) Create(_ *domain.Device) error { return nil }
 func (r *mockWorkerDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 	for _, d := range r.devices {
 		if d.ID == id {
@@ -42,8 +44,8 @@ func (r *mockWorkerDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 	}
 	return nil, fmt.Errorf("device not found: %s", id)
 }
-func (r *mockWorkerDeviceRepo) GetByIP(_ string) (*domain.Device, error)       { return nil, nil }
-func (r *mockWorkerDeviceRepo) GetBySysName(_ string) (*domain.Device, error)  { return nil, nil }
+func (r *mockWorkerDeviceRepo) GetByIP(_ string) (*domain.Device, error)      { return nil, nil }
+func (r *mockWorkerDeviceRepo) GetBySysName(_ string) (*domain.Device, error) { return nil, nil }
 func (r *mockWorkerDeviceRepo) GetAll() ([]domain.Device, error) {
 	result := make([]domain.Device, len(r.devices))
 	copy(result, r.devices)
@@ -67,8 +69,8 @@ func (r *mockWorkerLinkRepo) GetAll() ([]domain.Link, error) {
 	copy(result, r.links)
 	return result, nil
 }
-func (r *mockWorkerLinkRepo) Update(_ *domain.Link) error { return nil }
-func (r *mockWorkerLinkRepo) Delete(_ uuid.UUID) error    { return nil }
+func (r *mockWorkerLinkRepo) Update(_ *domain.Link) error         { return nil }
+func (r *mockWorkerLinkRepo) Delete(_ uuid.UUID) error            { return nil }
 func (r *mockWorkerLinkRepo) Upsert(_ *domain.Link) (bool, error) { return false, nil }
 
 // ---------------------------------------------------------------------------
@@ -1471,6 +1473,212 @@ func TestBuildSnapshot_SNMPLinkPollCalledWithValidLinks(t *testing.T) {
 
 	if !pollCalled.Load() {
 		t.Error("expected snmpLinkPollFunc to be called when device has at least one link with non-empty SourceIfName")
+	}
+}
+
+func TestBuildSnapshot_SNMPLinkRates_ResetDiscarded(t *testing.T) {
+	calls := 0
+	mc, _, devID, deviceIP := newSNMPLinkRateTestCollector(t, func(target string, creds domain.SNMPCredentials) ([]SNMPIfCounter, error) {
+		calls++
+		switch calls {
+		case 1:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 400, OutOctets: 500}}, nil
+		case 2:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 450, OutOctets: 550}}, nil
+		case 3:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 1_450, OutOctets: 1_550}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected poll %d", calls)
+		}
+	})
+
+	mc.prevCounters[deviceIP] = map[string]collector.CounterBaseline{
+		"ether1": {
+			InOctets:  500,
+			OutOctets: 450,
+			SampledAt: time.Now().Add(-time.Second),
+		},
+	}
+
+	snapshot, _, _ := mc.buildSnapshot(context.Background())
+	assertNoSNMPLinkMetrics(t, snapshot, devID)
+
+	snapshot, _, _ = mc.buildSnapshot(context.Background())
+	assertNoSNMPLinkMetrics(t, snapshot, devID)
+
+	time.Sleep(5 * time.Millisecond)
+	snapshot, _, _ = mc.buildSnapshot(context.Background())
+	assertSNMPLinkMetricsPresent(t, snapshot, devID)
+}
+
+func TestBuildSnapshot_SNMPLinkRates_GapRequiresWarmup(t *testing.T) {
+	calls := 0
+	mc, settingsRepo, devID, deviceIP := newSNMPLinkRateTestCollector(t, func(target string, creds domain.SNMPCredentials) ([]SNMPIfCounter, error) {
+		calls++
+		switch calls {
+		case 1:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 1_100, OutOctets: 2_100}}, nil
+		case 2:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 1_200, OutOctets: 2_200}}, nil
+		case 3:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 2_200, OutOctets: 3_200}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected poll %d", calls)
+		}
+	})
+	settingsRepo.Set(domain.SettingPollingInterval, "1")
+
+	mc.prevCounters[deviceIP] = map[string]collector.CounterBaseline{
+		"ether1": {
+			InOctets:  1_000,
+			OutOctets: 2_000,
+			SampledAt: time.Now().Add(-4 * time.Second),
+		},
+	}
+
+	snapshot, _, _ := mc.buildSnapshot(context.Background())
+	assertNoSNMPLinkMetrics(t, snapshot, devID)
+
+	snapshot, _, _ = mc.buildSnapshot(context.Background())
+	assertNoSNMPLinkMetrics(t, snapshot, devID)
+
+	time.Sleep(5 * time.Millisecond)
+	snapshot, _, _ = mc.buildSnapshot(context.Background())
+	assertSNMPLinkMetricsPresent(t, snapshot, devID)
+}
+
+func TestBuildSnapshot_SNMPLinkRates_OverSpeedDiscarded(t *testing.T) {
+	calls := 0
+	mc, _, devID, deviceIP := newSNMPLinkRateTestCollector(t, func(target string, creds domain.SNMPCredentials) ([]SNMPIfCounter, error) {
+		calls++
+		switch calls {
+		case 1:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 162_500_000, OutOctets: 0}}, nil
+		case 2:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 162_500_100, OutOctets: 100}}, nil
+		case 3:
+			return []SNMPIfCounter{{IfName: "ether1", InOctets: 162_501_100, OutOctets: 1_100}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected poll %d", calls)
+		}
+	})
+
+	mc.prevCounters[deviceIP] = map[string]collector.CounterBaseline{
+		"ether1": {
+			InOctets:  0,
+			OutOctets: 0,
+			SampledAt: time.Now().Add(-time.Second),
+		},
+	}
+
+	snapshot, _, _ := mc.buildSnapshot(context.Background())
+	assertNoSNMPLinkMetrics(t, snapshot, devID)
+
+	snapshot, _, _ = mc.buildSnapshot(context.Background())
+	assertNoSNMPLinkMetrics(t, snapshot, devID)
+
+	time.Sleep(5 * time.Millisecond)
+	snapshot, _, _ = mc.buildSnapshot(context.Background())
+	assertSNMPLinkMetricsPresent(t, snapshot, devID)
+}
+
+func newSNMPLinkRateTestCollector(t *testing.T, snmpLinkPollFunc SNMPLinkPollFunc) (*MetricsCollector, *mockWorkerSettingsRepo, uuid.UUID, string) {
+	t.Helper()
+
+	devID := uuid.New()
+	deviceIP := "192.168.10.1"
+	linkID := uuid.New()
+
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"status": "success",
+			"data": map[string]interface{}{
+				"resultType": "vector",
+				"result":     []interface{}{},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(promServer.Close)
+
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{
+			{
+				ID:            devID,
+				IP:            deviceIP,
+				Status:        domain.DeviceStatusUp,
+				MetricsSource: domain.MetricsSourceSNMP,
+				Vendor:        "default",
+				Interfaces: []domain.Interface{
+					{DeviceID: devID, IfName: "ether1", Speed: 1_000_000_000},
+				},
+				SNMPCredentials: domain.SNMPCredentials{
+					Version: domain.SNMPVersionV2c,
+					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+				},
+			},
+		},
+	}
+	linkRepo := &mockWorkerLinkRepo{
+		links: []domain.Link{
+			{
+				ID:             linkID,
+				SourceDeviceID: devID,
+				SourceIfName:   "ether1",
+				TargetDeviceID: uuid.New(),
+				TargetIfName:   "ether2",
+			},
+		},
+	}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+
+	mc := NewMetricsCollector(
+		promClient,
+		hub,
+		dlCache,
+		deviceRepo,
+		settingsRepo,
+		registry,
+		nil,
+		snmpLinkPollFunc,
+		nil,
+	)
+
+	return mc, settingsRepo, devID, deviceIP
+}
+
+func assertNoSNMPLinkMetrics(t *testing.T, snapshot *ws.SnapshotPayload, devID uuid.UUID) {
+	t.Helper()
+
+	if snapshot == nil {
+		t.Fatal("expected non-nil snapshot")
+	}
+	if got := len(snapshot.LinkMetrics[devID.String()]); got != 0 {
+		t.Fatalf("expected no link metrics for %s, got %d", devID, got)
+	}
+}
+
+func assertSNMPLinkMetricsPresent(t *testing.T, snapshot *ws.SnapshotPayload, devID uuid.UUID) {
+	t.Helper()
+
+	if snapshot == nil {
+		t.Fatal("expected non-nil snapshot")
+	}
+	metrics := snapshot.LinkMetrics[devID.String()]
+	if len(metrics) != 1 {
+		t.Fatalf("expected one link metric for %s, got %d", devID, len(metrics))
+	}
+	if metrics[0].IfName != "ether1" {
+		t.Fatalf("unexpected interface name: got %q", metrics[0].IfName)
+	}
+	if metrics[0].TxBps == nil || metrics[0].RxBps == nil {
+		t.Fatalf("expected non-nil tx/rx rates, got tx=%v rx=%v", metrics[0].TxBps, metrics[0].RxBps)
 	}
 }
 

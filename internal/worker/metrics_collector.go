@@ -2,21 +2,19 @@ package worker
 
 import (
 	"context"
-	"fmt"
-	"hash/fnv"
 	"log"
-	"math"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/cache"
+	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/vendor"
 	"github.com/lollinoo/theia/internal/ws"
-	"github.com/google/uuid"
 )
 
 // SNMPPollFunc polls a single device via SNMP for live CPU/MEM/UPTIME/TEMP metrics.
@@ -36,25 +34,6 @@ type SNMPIfCounter struct {
 	OutOctets uint64
 }
 
-// snmpCounterSample stores a previous counter reading for rate computation.
-type snmpCounterSample struct {
-	InOctets  uint64
-	OutOctets uint64
-	Time      time.Time
-}
-
-// sectionHashes stores FNV-64a hashes for each section of the snapshot, keyed by device_id.
-// The alerts section uses a single whole-set hash (alertsHash) per the design decision that
-// alerts are compared as an indivisible set — if any alert changed, the full array is sent.
-type sectionHashes struct {
-	deviceMetrics   map[string]uint64
-	linkMetrics     map[string]uint64
-	deviceStatuses  map[string]uint64
-	deviceHostnames map[string]uint64
-	deviceModels    map[string]uint64
-	alertsHash      uint64
-}
-
 // MetricsCollector queries Prometheus on a cadence and pushes full-state snapshots over WebSockets.
 type MetricsCollector struct {
 	promClient       *metrics.PromClient
@@ -65,19 +44,20 @@ type MetricsCollector struct {
 	vendorRegistry   *vendor.Registry
 	snmpPollFunc     SNMPPollFunc     // optional; polls SNMP-sourced devices and fallback devices
 	snmpLinkPollFunc SNMPLinkPollFunc // optional; polls interface counters for SNMP link metrics
-	topologyNotify   <-chan struct{}   // drained after broadcast; triggers topology_changed WS event
+	topologyNotify   <-chan struct{}  // drained after broadcast; triggers topology_changed WS event
 
-	mu              sync.RWMutex
-	lastSnapshot    *ws.SnapshotPayload
-	promAvailable   bool // last known Prometheus availability
-	cancel          context.CancelFunc
-	done            chan struct{}
-	healthDone      chan struct{} // closed when health check goroutine exits
+	mu            sync.RWMutex
+	lastSnapshot  *ws.SnapshotPayload
+	promAvailable bool // last known Prometheus availability
+	cancel        context.CancelFunc
+	done          chan struct{}
+	healthDone    chan struct{} // closed when health check goroutine exits
 
-	// prevCounters stores the previous SNMP counter sample per device IP + interface name,
-	// used to compute byte rates between successive polls.
+	// prevCounters stores the current runtime counter baseline per device IP +
+	// interface name. Rate math stays in internal/collector; the worker only
+	// persists the explicit baseline between polls.
 	prevCountersMu sync.Mutex
-	prevCounters   map[string]map[string]snmpCounterSample // deviceIP → ifName → sample
+	prevCounters   map[string]map[string]collector.CounterBaseline // deviceIP → ifName → baseline
 
 	// prevHashes stores per-section FNV-64a hashes from the previous collection cycle.
 	// nil on the first cycle — causes a full snapshot broadcast instead of a delta.
@@ -114,7 +94,7 @@ func NewMetricsCollector(
 		topologyNotify:   topologyNotify,
 		lastSnapshot:     ws.EmptySnapshot(),
 		promAvailable:    true, // assume available until proven otherwise
-		prevCounters:     make(map[string]map[string]snmpCounterSample),
+		prevCounters:     make(map[string]map[string]collector.CounterBaseline),
 		done:             make(chan struct{}),
 	}
 }
@@ -645,9 +625,11 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	}
 
 	// Poll SNMP interface counters for link throughput on SNMP-sourced devices.
-	// Converts raw counter deltas to bit rates and injects them as LinkMetrics.
+	// Converts raw counter snapshots through the shared collector helper and
+	// injects only valid LinkMetrics into the snapshot.
 	snmpLinkMetricsByIP := make(map[string][]domain.LinkMetrics)
 	if c.snmpLinkPollFunc != nil {
+		expectedInterval := GetPollingInterval(c.settingsRepo)
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 		for _, dev := range devices {
@@ -686,38 +668,17 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 					log.Printf("SNMP link poll failed for %s: %v", dev.IP, err)
 					return
 				}
-				now := time.Now()
-				var linkMetrics []domain.LinkMetrics
+				now := time.Now().UTC()
+				snapshots := interfaceCounterSnapshots(dev, counters)
 
 				c.prevCountersMu.Lock()
-				prev := c.prevCounters[dev.IP]
-				if prev == nil {
-					prev = make(map[string]snmpCounterSample)
-					c.prevCounters[dev.IP] = prev
-				}
-				for _, counter := range counters {
-					if old, ok := prev[counter.IfName]; ok {
-						dt := now.Sub(old.Time).Seconds()
-						if dt > 0 {
-							// Handle 64-bit counter wraps gracefully
-							inDelta := counter.InOctets - old.InOctets
-							outDelta := counter.OutOctets - old.OutOctets
-							rxBps := float64(inDelta) * 8.0 / dt
-							txBps := float64(outDelta) * 8.0 / dt
-							linkMetrics = append(linkMetrics, domain.LinkMetrics{
-								IfName:      counter.IfName,
-								TxBps:       &txBps,
-								RxBps:       &rxBps,
-								CollectedAt: now.UTC(),
-							})
-						}
-					}
-					prev[counter.IfName] = snmpCounterSample{
-						InOctets:  counter.InOctets,
-						OutOctets: counter.OutOctets,
-						Time:      now,
-					}
-				}
+				linkMetrics, next := collector.ComputeCounterRates(
+					snapshots,
+					c.prevCounters[dev.IP],
+					now,
+					expectedInterval,
+				)
+				c.prevCounters[dev.IP] = next
 				c.prevCountersMu.Unlock()
 
 				if len(linkMetrics) > 0 {
@@ -936,220 +897,3 @@ func attachAlerts(devices []domain.Device, alerts []domain.AlertState) []domain.
 
 	return mapped
 }
-
-func matchLinkID(device domain.Device, links []domain.Link, metricIfName string) string {
-	for _, link := range links {
-		switch {
-		case link.SourceDeviceID == device.ID && sameInterface(device, metricIfName, link.SourceIfName):
-			return link.ID.String()
-		case link.TargetDeviceID == device.ID && sameInterface(device, metricIfName, link.TargetIfName):
-			return link.ID.String()
-		}
-	}
-	return ""
-}
-
-func sameInterface(device domain.Device, observedIfName, linkIfName string) bool {
-	observed := normalizeInterfaceName(observedIfName)
-	linkName := normalizeInterfaceName(linkIfName)
-	if observed == "" || linkName == "" {
-		return false
-	}
-	if observed == linkName {
-		return true
-	}
-
-	for _, iface := range device.Interfaces {
-		ifaceName := normalizeInterfaceName(iface.IfName)
-		ifaceDescr := normalizeInterfaceName(iface.IfDescr)
-
-		if (observed == ifaceName || observed == ifaceDescr) &&
-			(linkName == ifaceName || linkName == ifaceDescr) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func computeUtilization(device domain.Device, observedIfName string, metric domain.LinkMetrics) *float64 {
-	speed := interfaceSpeed(device, observedIfName)
-	if speed <= 0 {
-		return metric.Utilization
-	}
-
-	var (
-		maxRate float64
-		hasRate bool
-	)
-
-	if metric.TxBps != nil {
-		maxRate = *metric.TxBps
-		hasRate = true
-	}
-	if metric.RxBps != nil && (!hasRate || *metric.RxBps > maxRate) {
-		maxRate = *metric.RxBps
-		hasRate = true
-	}
-
-	if !hasRate {
-		return nil
-	}
-
-	utilization := maxRate / float64(speed)
-	utilization = math.Max(0, utilization)
-	return &utilization
-}
-
-func interfaceSpeed(device domain.Device, observedIfName string) int64 {
-	observed := normalizeInterfaceName(observedIfName)
-	for _, iface := range device.Interfaces {
-		if observed == normalizeInterfaceName(iface.IfName) || observed == normalizeInterfaceName(iface.IfDescr) {
-			return iface.Speed
-		}
-	}
-	return 0
-}
-
-func normalizeInterfaceName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// --- Delta detection helpers ---
-
-// computeSectionHash computes a deterministic FNV-64a hash of a canonical string
-// representation of a single snapshot section entry. It is a pure function.
-func computeSectionHash(data string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(data))
-	return h.Sum64()
-}
-
-// computeSnapshotHashes builds per-section FNV-64a hashes for all entries in the snapshot.
-// Device metrics, link metrics, device statuses, and device hostnames are hashed per device_id.
-// Alerts are hashed as a whole set (a single alertsHash covers the entire sorted array).
-func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
-	sh := &sectionHashes{
-		deviceMetrics:   make(map[string]uint64, len(snapshot.DeviceMetrics)),
-		linkMetrics:     make(map[string]uint64, len(snapshot.LinkMetrics)),
-		deviceStatuses:  make(map[string]uint64, len(snapshot.DeviceStatuses)),
-		deviceHostnames: make(map[string]uint64, len(snapshot.DeviceHostnames)),
-		deviceModels:    make(map[string]uint64, len(snapshot.DeviceModels)),
-	}
-
-	for id, dm := range snapshot.DeviceMetrics {
-		key := fmt.Sprintf("%s|%v|%v|%v|%v|%s",
-			dm.DeviceID,
-			dm.CPUPercent,
-			dm.MemPercent,
-			dm.TempCelsius,
-			dm.UptimeSecs,
-			dm.CollectedAt,
-		)
-		sh.deviceMetrics[id] = computeSectionHash(key)
-	}
-
-	for id, lms := range snapshot.LinkMetrics {
-		var sb strings.Builder
-		for _, lm := range lms {
-			sb.WriteString(fmt.Sprintf("%s|%s|%v|%v|%v|%s",
-				lm.DeviceID,
-				lm.IfName,
-				lm.TxBps,
-				lm.RxBps,
-				lm.Utilization,
-				lm.CollectedAt,
-			))
-		}
-		sh.linkMetrics[id] = computeSectionHash(sb.String())
-	}
-
-	for id, status := range snapshot.DeviceStatuses {
-		sh.deviceStatuses[id] = computeSectionHash(status)
-	}
-
-	for id, hostname := range snapshot.DeviceHostnames {
-		sh.deviceHostnames[id] = computeSectionHash(hostname)
-	}
-
-	for id, model := range snapshot.DeviceModels {
-		sh.deviceModels[id] = computeSectionHash(model)
-	}
-
-	// Alerts: whole-set hash over the sorted alert array.
-	var alertSb strings.Builder
-	for _, a := range snapshot.Alerts {
-		alertSb.WriteString(fmt.Sprintf("%s|%s|%s|%s|%s",
-			a.DeviceID,
-			a.Severity,
-			a.AlertName,
-			a.State,
-			a.Summary,
-		))
-	}
-	sh.alertsHash = computeSectionHash(alertSb.String())
-
-	return sh
-}
-
-// buildDelta compares currentHashes against prevHashes and returns a sparse SnapshotPayload
-// containing only the entries that changed. Returns nil if nothing changed (caller skips broadcast).
-func buildDelta(current *ws.SnapshotPayload, currentHashes, prevHashes *sectionHashes) *ws.SnapshotPayload {
-	delta := &ws.SnapshotPayload{
-		DeviceMetrics:   make(map[string]ws.DeviceMetricsDTO),
-		LinkMetrics:     make(map[string][]ws.LinkMetricsDTO),
-		DeviceStatuses:  make(map[string]string),
-		DeviceHostnames: make(map[string]string),
-		DeviceModels:    make(map[string]string),
-		Alerts:          nil,
-	}
-
-	anyChanged := false
-
-	for id, hash := range currentHashes.deviceMetrics {
-		if prevHash, ok := prevHashes.deviceMetrics[id]; !ok || prevHash != hash {
-			delta.DeviceMetrics[id] = current.DeviceMetrics[id]
-			anyChanged = true
-		}
-	}
-
-	for id, hash := range currentHashes.linkMetrics {
-		if prevHash, ok := prevHashes.linkMetrics[id]; !ok || prevHash != hash {
-			delta.LinkMetrics[id] = current.LinkMetrics[id]
-			anyChanged = true
-		}
-	}
-
-	for id, hash := range currentHashes.deviceStatuses {
-		if prevHash, ok := prevHashes.deviceStatuses[id]; !ok || prevHash != hash {
-			delta.DeviceStatuses[id] = current.DeviceStatuses[id]
-			anyChanged = true
-		}
-	}
-
-	for id, hash := range currentHashes.deviceHostnames {
-		if prevHash, ok := prevHashes.deviceHostnames[id]; !ok || prevHash != hash {
-			delta.DeviceHostnames[id] = current.DeviceHostnames[id]
-			anyChanged = true
-		}
-	}
-
-	for id, hash := range currentHashes.deviceModels {
-		if prevHash, ok := prevHashes.deviceModels[id]; !ok || prevHash != hash {
-			delta.DeviceModels[id] = current.DeviceModels[id]
-			anyChanged = true
-		}
-	}
-
-	if currentHashes.alertsHash != prevHashes.alertsHash {
-		delta.Alerts = current.Alerts
-		anyChanged = true
-	}
-
-	if !anyChanged {
-		return nil
-	}
-
-	return delta
-}
-

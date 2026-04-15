@@ -1,11 +1,13 @@
 package ws
 
 import (
+	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 const (
@@ -23,6 +25,10 @@ const (
 	MessageTypePrometheusStatus = "prometheus_status"
 	// MessageTypeTopologyChanged notifies clients that the topology has changed (new links discovered).
 	MessageTypeTopologyChanged = "topology_changed"
+	// MessageTypeSubscribeDetail registers a device-specific detail subscription for one client.
+	MessageTypeSubscribeDetail = "subscribe_detail"
+	// MessageTypeUnsubscribeDetail clears the active device-specific detail subscription for one client.
+	MessageTypeUnsubscribeDetail = "unsubscribe_detail"
 )
 
 // PrometheusStatusPayload is sent when Prometheus availability changes.
@@ -37,6 +43,20 @@ type Message struct {
 	Payload any    `json:"payload"`
 }
 
+type clientControlMessage struct {
+	Type     string
+	DeviceID uuid.UUID
+}
+
+type clientControlEnvelope struct {
+	Type    string               `json:"type"`
+	Payload clientControlPayload `json:"payload"`
+}
+
+type clientControlPayload struct {
+	DeviceID string `json:"device_id"`
+}
+
 // SnapshotPayload contains the complete live state sent to clients.
 type SnapshotPayload struct {
 	DeviceMetrics   map[string]DeviceMetricsDTO `json:"device_metrics"`
@@ -49,12 +69,17 @@ type SnapshotPayload struct {
 
 // DeviceMetricsDTO is the frontend JSON shape for device metrics.
 type DeviceMetricsDTO struct {
-	DeviceID    string   `json:"device_id"`
-	CPUPercent  *float64 `json:"cpu_percent"`
-	MemPercent  *float64 `json:"mem_percent"`
-	TempCelsius *float64 `json:"temp_celsius"`
-	UptimeSecs  *float64 `json:"uptime_secs"`
-	CollectedAt string   `json:"collected_at"`
+	DeviceID                    string   `json:"device_id"`
+	CPUPercent                  *float64 `json:"cpu_percent"`
+	MemPercent                  *float64 `json:"mem_percent"`
+	TempCelsius                 *float64 `json:"temp_celsius"`
+	UptimeSecs                  *float64 `json:"uptime_secs"`
+	CollectedAt                 string   `json:"collected_at"`
+	Health                      string   `json:"health,omitempty"`
+	Reachability                string   `json:"reachability,omitempty"`
+	Stale                       *bool    `json:"stale,omitempty"`
+	LastPolledAt                string   `json:"last_polled_at,omitempty"`
+	ExpectedPollIntervalSeconds *int64   `json:"expected_poll_interval_seconds,omitempty"`
 }
 
 // LinkMetricsDTO is the frontend JSON shape for interface/link metrics.
@@ -124,6 +149,40 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	return cloned
+}
+
+func parseClientControlMessage(raw []byte) (clientControlMessage, error) {
+	var envelope clientControlEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return clientControlMessage{}, fmt.Errorf("unmarshal client control message: %w", err)
+	}
+
+	switch envelope.Type {
+	case MessageTypeSubscribeDetail, MessageTypeUnsubscribeDetail:
+	default:
+		return clientControlMessage{}, fmt.Errorf("unsupported client control type %q", envelope.Type)
+	}
+
+	if envelope.Payload.DeviceID == "" {
+		if envelope.Type == MessageTypeUnsubscribeDetail {
+			return clientControlMessage{Type: envelope.Type, DeviceID: uuid.Nil}, nil
+		}
+		return clientControlMessage{}, fmt.Errorf("missing payload.device_id for %s", envelope.Type)
+	}
+
+	deviceID, err := uuid.Parse(envelope.Payload.DeviceID)
+	if err != nil {
+		return clientControlMessage{}, fmt.Errorf("parse payload.device_id for %s: %w", envelope.Type, err)
+	}
+
+	if envelope.Type == MessageTypeSubscribeDetail && deviceID == uuid.Nil {
+		return clientControlMessage{}, fmt.Errorf("payload.device_id for %s must be non-nil", envelope.Type)
+	}
+
+	return clientControlMessage{
+		Type:     envelope.Type,
+		DeviceID: deviceID,
+	}, nil
 }
 
 // DeviceMetricsToDTOs converts domain metrics keyed by device ID into DTOs.
