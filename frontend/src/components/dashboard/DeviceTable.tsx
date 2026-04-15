@@ -3,6 +3,7 @@ import type { Device, Area } from '../../types/api';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import type { SnapshotPayload } from '../../types/metrics';
 import { DeviceRow } from './DeviceRow';
+import { parseOsVersion } from './parseOsVersion';
 
 type SortKey = 'hostname' | 'ip' | 'status' | 'area' | 'hardware_model' | 'vendor' | 'uptime' | 'os_version';
 type SortDir = 'asc' | 'desc';
@@ -16,13 +17,6 @@ interface DeviceTableProps {
   onBackup: (device: Device) => void;
   onBackupHistory: (device: Device) => void;
   onViewConfig: (device: Device) => void;
-}
-
-function parseOsVersion(sysDescr: string): string {
-  if (!sysDescr) return '';
-  // Match patterns like "RouterOS 7.14.3", "Version 6.49.10", "IOS-XE 17.3.4"
-  const match = sysDescr.match(/(?:RouterOS|Version|IOS(?:-XE)?|JunOS|EOS)\s*([\d.]+\S*)/i);
-  return match ? match[0] : '';
 }
 
 export function DeviceTable({

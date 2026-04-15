@@ -177,6 +177,23 @@ describe('buildEdgeData', () => {
     expect(result.targetIfStatus).toBe('up');
   });
 
+  it('marks links to no-IP virtual nodes as inert for live color telemetry', () => {
+    const source = mockDevice({ id: 'dev-1', device_type: 'virtual', ip: '' });
+    const target = mockDevice({ id: 'dev-2', device_type: 'router' });
+    const devicesByID = new Map([
+      ['dev-1', source],
+      ['dev-2', target],
+    ]);
+    const link = mockLink({
+      target_if_speed: 1_000_000_000,
+      target_if_oper_status: 'up',
+    });
+
+    const result = buildEdgeData(link, devicesByID);
+
+    expect(result.inertVirtualLink).toBe(true);
+  });
+
   it('virtual target: targetIfStatus is undefined, sourceIfStatus shows real status', () => {
     const source = mockDevice({ id: 'dev-1', device_type: 'router' });
     const target = mockDevice({ id: 'dev-2', device_type: 'virtual' });
@@ -193,6 +210,23 @@ describe('buildEdgeData', () => {
 
     expect(result.sourceIfStatus).toBe('up');
     expect(result.targetIfStatus).toBeUndefined();
+  });
+
+  it('keeps IP-bearing virtual links live for telemetry coloring', () => {
+    const source = mockDevice({ id: 'dev-1', device_type: 'virtual', ip: '192.168.1.1' });
+    const target = mockDevice({ id: 'dev-2', device_type: 'router' });
+    const devicesByID = new Map([
+      ['dev-1', source],
+      ['dev-2', target],
+    ]);
+    const link = mockLink({
+      target_if_speed: 1_000_000_000,
+      target_if_oper_status: 'up',
+    });
+
+    const result = buildEdgeData(link, devicesByID);
+
+    expect(result.inertVirtualLink).toBe(false);
   });
 });
 

@@ -320,6 +320,9 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 		log.Printf("Metrics collector: failed to load devices: %v", err)
 		return snapshot, true, ""
 	}
+	for i := range devices {
+		domain.NormalizeVirtualNoIPDevice(&devices[i])
+	}
 
 	links, err := c.cache.GetLinks()
 	if err != nil {

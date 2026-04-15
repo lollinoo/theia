@@ -5,6 +5,7 @@ import type { DeviceMetricsDTO } from '../../types/metrics';
 import { formatUptime } from '../../types/metrics';
 import { StatusDot } from '../StatusDot';
 import { MaterialIcon } from '../MaterialIcon';
+import { parseOsVersion } from './parseOsVersion';
 
 
 interface DeviceRowProps {
@@ -16,13 +17,6 @@ interface DeviceRowProps {
   onBackup: () => void;
   onBackupHistory: () => void;
   onViewConfig: () => void;
-}
-
-function parseOsVersion(sysDescr: string): string {
-  if (!sysDescr) return '';
-  // Match patterns like "RouterOS 7.14.3", "Version 6.49.10", "IOS-XE 17.3.4"
-  const match = sysDescr.match(/(?:RouterOS|Version|IOS(?:-XE)?|JunOS|EOS)\s*([\d.]+\S*)/i);
-  return match ? match[0] : '';
 }
 
 export function DeviceRow({

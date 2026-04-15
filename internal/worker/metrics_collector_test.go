@@ -433,6 +433,75 @@ func TestBuildSnapshot_WithMockPrometheus(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshot_VirtualNoIPNormalizesLegacyStatus(t *testing.T) {
+	devID := uuid.New()
+	var requestCount int32
+
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		resp := map[string]interface{}{
+			"status": "success",
+			"data": map[string]interface{}{
+				"resultType": "vector",
+				"result":     []interface{}{},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(promServer.Close)
+
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{
+			{
+				ID:                   devID,
+				Hostname:             "support-node",
+				IP:                   "",
+				DeviceType:           domain.DeviceTypeVirtual,
+				Status:               domain.DeviceStatusDown,
+				MetricsSource:        domain.MetricsSourcePrometheus,
+				PrometheusLabelName:  "instance",
+				PrometheusLabelValue: "10.0.0.99",
+				Vendor:               "default",
+			},
+		},
+	}
+	linkRepo := &mockWorkerLinkRepo{}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+
+	mc := NewMetricsCollector(
+		promClient,
+		hub,
+		dlCache,
+		deviceRepo,
+		settingsRepo,
+		registry,
+		nil,
+		nil,
+		nil,
+	)
+
+	snapshot, promAvailable, promErr := mc.buildSnapshot(context.Background())
+
+	if snapshot == nil {
+		t.Fatal("expected non-nil snapshot")
+	}
+	if !promAvailable {
+		t.Fatalf("expected Prometheus to remain available, error: %s", promErr)
+	}
+	if got := snapshot.DeviceStatuses[devID.String()]; got != string(domain.DeviceStatusUnknown) {
+		t.Fatalf("expected no-IP virtual node status unknown in snapshot, got %q", got)
+	}
+	if got := atomic.LoadInt32(&requestCount); got != 0 {
+		t.Fatalf("expected no Prometheus queries for no-IP virtual node, got %d", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // collectAndBroadcast test: verifies WebSocket broadcast trigger
 // ---------------------------------------------------------------------------
