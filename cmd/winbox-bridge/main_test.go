@@ -133,6 +133,27 @@ func TestOriginValidation_EvilOriginOnLaunchReturns403(t *testing.T) {
 	}
 }
 
+func TestOriginValidation_IPOriginOnLaunchPassesWithDefaultLocalhostConfig(t *testing.T) {
+	original := startProcess
+	t.Cleanup(func() { startProcess = original })
+	startProcess = func(name string, args []string) error {
+		return nil
+	}
+
+	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
+	rr := httptest.NewRecorder()
+	req := makeRequest(t, http.MethodPost, "/launch",
+		map[string]string{"token": validToken(t)},
+		"http://10.10.0.35:3000", "localhost:1337")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 got %d; body: %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "http://10.10.0.35:3000" {
+		t.Errorf("expected ACAO=http://10.10.0.35:3000, got %q", got)
+	}
+}
+
 // --- Security: Host validation ---
 
 func TestHostValidation_EvilHostOnLaunchReturns403(t *testing.T) {
@@ -396,6 +417,24 @@ func TestCORSPreflight_OptionsLaunchReturns204(t *testing.T) {
 	}
 }
 
+func TestCORSPreflight_OptionsLaunchAllowsPrivateNetworkForIPOrigin(t *testing.T) {
+	h := buildHandler("http://localhost:3000", "", "localhost:1337")
+	rr := httptest.NewRecorder()
+	req := makeRequest(t, http.MethodOptions, "/launch", nil, "http://10.10.0.35:3000", "localhost:1337")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Private-Network", "true")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("expected 204 got %d", rr.Code)
+	}
+	if acao := rr.Header().Get("Access-Control-Allow-Origin"); acao != "http://10.10.0.35:3000" {
+		t.Errorf("expected ACAO=http://10.10.0.35:3000, got %q", acao)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Private-Network"); got != "true" {
+		t.Errorf("expected ACAPN=true, got %q", got)
+	}
+}
+
 func TestHealth_ReturnsCORSWildcard(t *testing.T) {
 	// /health is a simple GET — no preflight needed. ACAO: * lets any origin read the response.
 	h := buildHandler("http://localhost:3000", "", "localhost:1337")
@@ -408,6 +447,24 @@ func TestHealth_ReturnsCORSWildcard(t *testing.T) {
 	acao := rr.Header().Get("Access-Control-Allow-Origin")
 	if acao != "*" {
 		t.Errorf("expected ACAO=*, got %q", acao)
+	}
+}
+
+func TestHealth_OptionsPrivateNetworkPreflightReturns204(t *testing.T) {
+	h := buildHandler("http://localhost:3000", "", "localhost:1337")
+	rr := httptest.NewRecorder()
+	req := makeRequest(t, http.MethodOptions, "/health", nil, "http://10.10.0.35:3000", "localhost:1337")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Private-Network", "true")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("expected 204 got %d", rr.Code)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "http://10.10.0.35:3000" {
+		t.Errorf("expected ACAO=http://10.10.0.35:3000, got %q", got)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Private-Network"); got != "true" {
+		t.Errorf("expected ACAPN=true, got %q", got)
 	}
 }
 
