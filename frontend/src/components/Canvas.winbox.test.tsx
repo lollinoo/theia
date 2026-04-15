@@ -1,12 +1,18 @@
 import type React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import Canvas from './Canvas';
 import type { Device } from '../types/api';
+import {
+  BRIDGE_HEALTH_TIMEOUT_MESSAGE,
+  BRIDGE_LAUNCH_TIMEOUT_MESSAGE,
+  BRIDGE_REQUEST_TIMEOUT_MS,
+} from '../utils/bridgeRequests';
 
 const testState = vi.hoisted(() => ({
   openDeviceMenu: null as null | ((event: unknown, deviceId: string) => void),
   bridgeRunningAfterCheck: true,
+  bridgeErrorAfterCheck: null as string | null,
   devices: [
     {
       id: 'dev-1',
@@ -129,12 +135,15 @@ vi.mock('../hooks/useBridgeHealth', async () => {
     useBridgeHealth: () => {
       const [bridgeRunning, setBridgeRunning] = ReactModule.useState(false);
       const [bridgeChecked, setBridgeChecked] = ReactModule.useState(false);
+      const [bridgeError, setBridgeError] = ReactModule.useState<string | null>(null);
       return {
         bridgeRunning,
         bridgeChecked,
+        bridgeError,
         checkBridgeHealth: () => {
           setBridgeRunning(testState.bridgeRunningAfterCheck);
           setBridgeChecked(true);
+          setBridgeError(testState.bridgeErrorAfterCheck);
         },
       };
     },
@@ -208,6 +217,7 @@ describe('Canvas WinBox gating', () => {
   beforeEach(() => {
     testState.openDeviceMenu = null;
     testState.bridgeRunningAfterCheck = true;
+    testState.bridgeErrorAfterCheck = null;
     apiMocks.fetchDeviceCredentialProfiles.mockReset();
     apiMocks.fetchSettings.mockReset();
     apiMocks.fetchBridgeToken.mockReset();
@@ -215,6 +225,12 @@ describe('Canvas WinBox gating', () => {
       bridge_port: '1337',
       bridge_secret: 'secret',
     });
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it('refreshes a stale false WinBox cache when reopening the same device menu', async () => {
@@ -298,5 +314,59 @@ describe('Canvas WinBox gating', () => {
       'title',
       'WinBox bridge appears unavailable - click to try launch anyway',
     );
+  });
+
+  it('shows a toast when the bridge health check times out', async () => {
+    testState.bridgeRunningAfterCheck = false;
+    testState.bridgeErrorAfterCheck = BRIDGE_HEALTH_TIMEOUT_MESSAGE;
+    apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([
+      { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true },
+    ]);
+
+    render(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
+
+    expect(await screen.findByText(BRIDGE_HEALTH_TIMEOUT_MESSAGE)).toBeInTheDocument();
+  });
+
+  it('shows a toast when the launch request times out', async () => {
+    apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([
+      { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true },
+    ]);
+    apiMocks.fetchBridgeToken.mockResolvedValue('bridge-token');
+    (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}));
+
+    render(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
+    const winboxButton = await screen.findByRole('button', { name: 'Open in WinBox' });
+
+    vi.useFakeTimers();
+    fireEvent.click(winboxButton);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(BRIDGE_REQUEST_TIMEOUT_MS); });
+
+    expect(screen.getByText(BRIDGE_LAUNCH_TIMEOUT_MESSAGE)).toBeInTheDocument();
   });
 });
