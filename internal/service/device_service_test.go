@@ -765,6 +765,45 @@ func TestUpdateDevice_ChangesFieldsWithoutReprobing(t *testing.T) {
 	}
 }
 
+func TestUpdateDevice_VirtualNoIPNormalizesStatusAndMetricsSource(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+
+	device := &domain.Device{
+		ID:                   uuid.New(),
+		IP:                   "10.0.0.99",
+		Hostname:             "support-node",
+		DeviceType:           domain.DeviceTypeVirtual,
+		Managed:              true,
+		Status:               domain.DeviceStatusDown,
+		MetricsSource:        domain.MetricsSourcePrometheus,
+		PrometheusLabelName:  "instance",
+		PrometheusLabelValue: "10.0.0.99",
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		IP: strPtr(""),
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.IP != "" {
+		t.Fatalf("expected empty IP, got %q", updated.IP)
+	}
+	if updated.Status != domain.DeviceStatusUnknown {
+		t.Fatalf("expected status unknown after removing IP from virtual device, got %s", updated.Status)
+	}
+	if updated.MetricsSource != domain.MetricsSourceNone {
+		t.Fatalf("expected metrics source none after removing IP from virtual device, got %s", updated.MetricsSource)
+	}
+}
+
 func TestUpdateDevice_PollIntervalOverrideTriState(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
 
@@ -1425,6 +1464,50 @@ func TestAddDevice_VirtualWithIP(t *testing.T) {
 	}
 	if snmpCalled {
 		t.Error("discoverFunc was called for virtual device — should have been skipped")
+	}
+}
+
+func TestGetAllDevices_NormalizesLegacyVirtualNoIPState(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+
+	legacyVirtual := &domain.Device{
+		ID:                   uuid.New(),
+		Hostname:             "support-node",
+		IP:                   "",
+		DeviceType:           domain.DeviceTypeVirtual,
+		Managed:              true,
+		Status:               domain.DeviceStatusUp,
+		MetricsSource:        domain.MetricsSourcePrometheus,
+		PrometheusLabelName:  "instance",
+		PrometheusLabelValue: "10.0.0.99",
+	}
+	if err := deviceRepo.Create(legacyVirtual); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	devices, err := svc.GetAllDevices(context.Background())
+	if err != nil {
+		t.Fatalf("GetAllDevices failed: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+	if devices[0].Status != domain.DeviceStatusUnknown {
+		t.Fatalf("expected returned status unknown for legacy no-IP virtual node, got %s", devices[0].Status)
+	}
+	if devices[0].MetricsSource != domain.MetricsSourceNone {
+		t.Fatalf("expected returned metrics source none for legacy no-IP virtual node, got %s", devices[0].MetricsSource)
+	}
+
+	stored, err := deviceRepo.GetByID(legacyVirtual.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if stored.Status != domain.DeviceStatusUp {
+		t.Fatalf("expected repo state to remain unchanged during read normalization, got %s", stored.Status)
+	}
+	if stored.MetricsSource != domain.MetricsSourcePrometheus {
+		t.Fatalf("expected repo metrics source to remain unchanged during read normalization, got %s", stored.MetricsSource)
 	}
 }
 

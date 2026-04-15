@@ -158,6 +158,12 @@ describe('DeviceRow', () => {
     expect(screen.getByText('RouterOS 7.14.3')).toBeInTheDocument();
   });
 
+  it('renders RouterOS version when sys_descr includes model text before the version', () => {
+    renderRow({ sys_descr: 'RouterOS RB4011iGS+5HacQ2HnD-IN 7.13.5 (stable)' });
+
+    expect(screen.getByText('RouterOS 7.13.5 (stable)')).toBeInTheDocument();
+  });
+
   it('renders em dash for uptime when no metrics available', () => {
     renderRow({}, null);
 

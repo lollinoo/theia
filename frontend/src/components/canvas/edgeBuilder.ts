@@ -130,6 +130,9 @@ export function buildEdgeData(
   const sourceIsVirtual = sourceDevice?.device_type === 'virtual';
   const targetIsVirtual = targetDevice?.device_type === 'virtual';
   const isVirtualLink = sourceIsVirtual || targetIsVirtual;
+  const inertVirtualLink =
+    (sourceIsVirtual && !sourceDevice?.ip) ||
+    (targetIsVirtual && !targetDevice?.ip);
 
   // For virtual links, use only the real device's interface speed (D-10)
   // Virtual devices have no interfaces, so their speed is always 0
@@ -140,6 +143,7 @@ export function buildEdgeData(
       link,
       bandwidthLabel: realSpeed > 0 ? formatBandwidth(realSpeed) : undefined,
       speedMismatch: false, // Never show mismatch for virtual links (D-10)
+      inertVirtualLink,
       onContextMenu,
       metrics: existingData?.metrics,
       throughputLabel: existingData?.throughputLabel,

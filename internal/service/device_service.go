@@ -136,6 +136,7 @@ func (s *DeviceService) AddDevice(
 		PrometheusLabelValue: prometheusLabelValue,
 		AreaIDs:              areaIDs,
 	}
+	domain.NormalizeVirtualNoIPDevice(device)
 
 	if err := s.deviceRepo.Create(device); err != nil {
 		return nil, fmt.Errorf("creating device: %w", err)
@@ -292,6 +293,7 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 	if update.AreaIDs != nil {
 		device.AreaIDs = *update.AreaIDs
 	}
+	domain.NormalizeVirtualNoIPDevice(device)
 
 	if err := s.deviceRepo.Update(device); err != nil {
 		return err
@@ -326,12 +328,24 @@ func (s *DeviceService) DeleteDevice(ctx context.Context, id uuid.UUID) error {
 
 // GetDevice retrieves a single device by ID.
 func (s *DeviceService) GetDevice(ctx context.Context, id uuid.UUID) (*domain.Device, error) {
-	return s.deviceRepo.GetByID(id)
+	device, err := s.deviceRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	domain.NormalizeVirtualNoIPDevice(device)
+	return device, nil
 }
 
 // GetAllDevices retrieves all devices with their interfaces.
 func (s *DeviceService) GetAllDevices(ctx context.Context) ([]domain.Device, error) {
-	return s.deviceRepo.GetAll()
+	devices, err := s.deviceRepo.GetAll()
+	if err != nil {
+		return nil, err
+	}
+	for i := range devices {
+		domain.NormalizeVirtualNoIPDevice(&devices[i])
+	}
+	return devices, nil
 }
 
 // ProbeDevice triggers a re-probe of an existing device.
@@ -393,7 +407,10 @@ func (s *DeviceService) PingVirtualDevice(ctx context.Context, id uuid.UUID, tim
 	}
 
 	if device.IP == "" {
-		// No IP — nothing to ping; keep status as-is (unknown).
+		// No IP — keep the virtual node inert/unknown.
+		if domain.NormalizeVirtualNoIPDevice(device) {
+			return s.deviceRepo.Update(device)
+		}
 		return nil
 	}
 

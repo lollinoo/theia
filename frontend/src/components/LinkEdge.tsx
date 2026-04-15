@@ -13,6 +13,7 @@ export interface LinkEdgeData {
   link?: Link;
   bandwidthLabel?: string;
   speedMismatch?: boolean;
+  inertVirtualLink?: boolean;
   manual?: boolean;
   parallelIndex?: number;
   onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
@@ -50,6 +51,35 @@ export function formatBandwidth(speed: number): string {
   return `${speed} bps`;
 }
 
+export function normalizeInterfaceStatusForLink(status: string | undefined): string | undefined {
+  const normalized = status?.trim().toLowerCase();
+  if (!normalized || normalized === 'unknown') {
+    return undefined;
+  }
+  return normalized;
+}
+
+export function normalizeLinkStateForColor(data: LinkEdgeData | undefined): {
+  inertVirtualLink: boolean;
+  alertStatus: AlertStatus | undefined;
+  sourceDeviceStatus: string | undefined;
+  targetDeviceStatus: string | undefined;
+  sourceIfStatus: string | undefined;
+  targetIfStatus: string | undefined;
+  utilization: number | null;
+} {
+  const inertVirtualLink = data?.inertVirtualLink === true;
+  return {
+    inertVirtualLink,
+    alertStatus: data?.alertStatus,
+    sourceDeviceStatus: inertVirtualLink ? undefined : data?.sourceDeviceStatus,
+    targetDeviceStatus: inertVirtualLink ? undefined : data?.targetDeviceStatus,
+    sourceIfStatus: normalizeInterfaceStatusForLink(data?.sourceIfStatus),
+    targetIfStatus: normalizeInterfaceStatusForLink(data?.targetIfStatus),
+    utilization: data?.utilization ?? data?.metrics?.utilization ?? null,
+  };
+}
+
 function LinkEdgeInner({
   id,
   sourceX,
@@ -77,14 +107,21 @@ function LinkEdgeInner({
   const sign = index % 2 === 0 ? 1 : -1;
   const magnitude = Math.ceil(index / 2) * 26;
   const labelOffsetY = sign * magnitude;
-  const utilization = data?.utilization ?? data?.metrics?.utilization ?? null;
-  const alertStatus = data?.alertStatus;
+  const {
+    inertVirtualLink,
+    alertStatus,
+    sourceDeviceStatus,
+    targetDeviceStatus,
+    sourceIfStatus,
+    targetIfStatus,
+    utilization,
+  } = normalizeLinkStateForColor(data);
 
   // Device-level status (from probe_success / Prometheus-down override)
-  const srcDevDown = data?.sourceDeviceStatus === 'down';
-  const tgtDevDown = data?.targetDeviceStatus === 'down';
-  const srcDevProbing = data?.sourceDeviceStatus === 'probing';
-  const tgtDevProbing = data?.targetDeviceStatus === 'probing';
+  const srcDevDown = sourceDeviceStatus === 'down';
+  const tgtDevDown = targetDeviceStatus === 'down';
+  const srcDevProbing = sourceDeviceStatus === 'probing';
+  const tgtDevProbing = targetDeviceStatus === 'probing';
   const srcDevInactive = srcDevDown || srcDevProbing;
   const tgtDevInactive = tgtDevDown || tgtDevProbing;
   const bothDevDown = srcDevDown && tgtDevDown;
@@ -93,15 +130,21 @@ function LinkEdgeInner({
   const oneDevInactive = srcDevInactive !== tgtDevInactive;
 
   // Interface-level oper_status
-  // Treat null/undefined (e.g. virtual device side with no interface) as neutral —
-  // only known oper_status values participate in link color decisions.
-  const sourceIfKnown = data?.sourceIfStatus != null;
-  const targetIfKnown = data?.targetIfStatus != null;
-  const sourceUp = data?.sourceIfStatus === 'up' || !sourceIfKnown;
-  const targetUp = data?.targetIfStatus === 'up' || !targetIfKnown;
+  // Treat null/undefined/unknown (e.g. virtual device side with no interface)
+  // as neutral — only meaningful oper_status values participate in link color decisions.
+  // Support links to no-IP virtual nodes also opt out of live port-state coloring.
+  const sourceIfKnown = sourceIfStatus != null;
+  const targetIfKnown = targetIfStatus != null;
+  const sourceUp = sourceIfStatus === 'up' || !sourceIfKnown;
+  const targetUp = targetIfStatus === 'up' || !targetIfKnown;
   const bothUp = sourceUp && targetUp;
+  const singleKnownIf = sourceIfKnown !== targetIfKnown;
+  const singleKnownIfUp = sourceIfKnown ? sourceUp : targetIfKnown ? targetUp : false;
+  const singleKnownIfDown = singleKnownIf && !singleKnownIfUp;
   const oneIfDown = (sourceIfKnown || targetIfKnown) && ((sourceUp && !targetUp) || (!sourceUp && targetUp));
   const bothIfDown = sourceIfKnown && targetIfKnown && !sourceUp && !targetUp;
+  const inertUtilDown = inertVirtualLink && utilization !== null && utilization > 0.8;
+  const inertUtilWarn = inertVirtualLink && utilization !== null && utilization >= 0.5 && utilization <= 0.8;
 
   // Priority: alerts → device status → interface oper_status → utilization → default
   let strokeColor: string;
@@ -112,6 +155,15 @@ function LinkEdgeInner({
   } else if (alertStatus === 'degraded') {
     strokeColor = 'var(--color-status-probing)';
     strokeWidth = 2.5;
+  } else if (inertVirtualLink && singleKnownIfDown) {
+    strokeColor = 'var(--color-status-down)';
+    strokeWidth = 2;
+  } else if (inertVirtualLink && utilization !== null) {
+    strokeColor = utilizationColor(utilization);
+    strokeWidth = 2;
+  } else if (inertVirtualLink && singleKnownIfUp) {
+    strokeColor = 'var(--color-status-up)';
+    strokeWidth = 2;
   } else if (bothDevDown) {
     strokeColor = 'var(--color-status-down)';
     strokeWidth = 2;
@@ -132,10 +184,10 @@ function LinkEdgeInner({
   } else if (oneIfDown) {
     strokeColor = 'var(--color-status-probing)';
     strokeWidth = 2;
-  } else if (data?.areaColor) {
+  } else if (data?.areaColor && !inertVirtualLink) {
     strokeColor = data.areaColor;
     strokeWidth = 2;
-  } else if (bothUp && utilization === null) {
+  } else if (!inertVirtualLink && bothUp && utilization === null) {
     strokeColor = 'var(--color-status-up)';
     strokeWidth = 2;
   } else {
@@ -144,17 +196,21 @@ function LinkEdgeInner({
   }
 
   // Throughput label color matches link color
-  const throughputColor = (bothDevDown || bothIfDown || alertStatus === 'down')
+  const throughputColor = (alertStatus === 'down' || inertUtilDown || (inertVirtualLink && singleKnownIfDown) || bothDevDown || bothIfDown)
     ? 'var(--color-status-down)'
-    : (oneDevDown || oneDevInactive || bothDevInactive || oneIfDown || alertStatus === 'degraded')
+    : (alertStatus === 'degraded' || inertUtilWarn || oneDevDown || oneDevInactive || bothDevInactive || oneIfDown)
       ? 'var(--color-status-probing)'
+      : inertVirtualLink && utilization !== null
+        ? utilizationColor(utilization)
+        : inertVirtualLink && singleKnownIfUp
+          ? 'var(--color-status-up)'
       : utilization === null
         ? 'var(--nt-on-bg-secondary)'
         : utilizationColor(utilization);
 
   const activeStrokeWidth = isActive ? strokeWidth + 1.5 : strokeWidth;
   const activeStrokeColor = isActive
-    ? data?.areaColor
+    ? data?.areaColor && !inertVirtualLink
       ? data.areaColor
       : strokeColor === 'var(--color-outline)'
         ? 'var(--nt-on-bg-muted)'
@@ -196,22 +252,24 @@ function LinkEdgeInner({
         <EdgeLabelRenderer>
           <div
             className={`pointer-events-none z-10 rounded-md border bg-surface px-2 py-1 text-[11px] font-medium shadow-pill transition-colors duration-200 ${
-              (bothDevDown || bothIfDown || alertStatus === 'down')
+              (alertStatus === 'down' || inertUtilDown || (inertVirtualLink && singleKnownIfDown) || bothDevDown || bothIfDown)
                 ? 'border-status-down/40 text-status-down'
-                : (oneDevDown || oneDevInactive || bothDevInactive || oneIfDown || alertStatus === 'degraded')
+                : (alertStatus === 'degraded' || inertUtilWarn || oneDevDown || oneDevInactive || bothDevInactive || oneIfDown)
                   ? 'border-status-probing/40 text-status-probing'
                   : data.speedMismatch
                     ? 'border-status-probing/40 text-status-probing'
-                    : data.areaColor
+                    : data.areaColor && !inertVirtualLink
                       ? ''
-                      : 'border-outline-subtle text-on-bg-secondary'
+                      : inertVirtualLink && singleKnownIfUp
+                        ? 'border-status-up/40 text-status-up'
+                        : 'border-outline-subtle text-on-bg-secondary'
             }`}
             style={{
               position: 'absolute',
               top: 0,
               left: 0,
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,
-              ...(data.areaColor && !data.speedMismatch && !bothDevDown && !oneDevDown && !bothDevInactive && !oneDevInactive && !bothIfDown && !oneIfDown && alertStatus !== 'down' && alertStatus !== 'degraded'
+              ...(data.areaColor && !inertVirtualLink && !data.speedMismatch && !bothDevDown && !oneDevDown && !bothDevInactive && !oneDevInactive && !bothIfDown && !oneIfDown && alertStatus !== 'down' && alertStatus !== 'degraded'
                 ? { borderColor: data.areaColor, color: data.areaColor }
                 : {}),
             }}
@@ -229,8 +287,8 @@ function LinkEdgeInner({
               position: 'absolute',
               top: 0,
               left: 0,
-              color: data.areaColor ?? throughputColor,
-              ...(data.areaColor ? { borderColor: data.areaColor } : {}),
+              color: data.areaColor && !inertVirtualLink ? data.areaColor : throughputColor,
+              ...(data.areaColor && !inertVirtualLink ? { borderColor: data.areaColor } : {}),
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY + 20}px)`,
             }}
           >
@@ -246,6 +304,7 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
   return (
     prev.id === next.id &&
     prev.selected === next.selected &&
+    prev.data?.inertVirtualLink === next.data?.inertVirtualLink &&
     prev.data?.utilization === next.data?.utilization &&
     prev.data?.throughputLabel === next.data?.throughputLabel &&
     prev.data?.alertStatus === next.data?.alertStatus &&
