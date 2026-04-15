@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchDeviceInterfaces, updateLink, deleteLink } from '../api/client';
 import type { Device, DeviceInterface, InterfaceInfo, Link } from '../types/api';
+import { formatBandwidth } from './LinkEdge';
 
 interface LinkDetailsPanelProps {
   link: Link;
@@ -8,6 +9,7 @@ interface LinkDetailsPanelProps {
   onUpdated: () => void;
   onDeleted: () => void;
   onClose: () => void;
+  readOnly?: boolean;
 }
 
 type InterfaceLabelInfo = Pick<DeviceInterface, 'if_name' | 'if_descr'>;
@@ -94,6 +96,7 @@ export function LinkDetailsPanel({
   onUpdated,
   onDeleted,
   onClose: _onClose,
+  readOnly = false,
 }: LinkDetailsPanelProps) {
   const deviceMap = new Map(devices.map((d) => [d.id, d]));
   const sourceDevice = deviceMap.get(link.source_device_id);
@@ -101,8 +104,16 @@ export function LinkDetailsPanel({
 
   const sourceIsVirtual = sourceDevice?.device_type === 'virtual';
   const targetIsVirtual = targetDevice?.device_type === 'virtual';
+  const sourceDeviceLabel =
+    sourceDevice?.tags?.display_name || sourceDevice?.sys_name || sourceDevice?.hostname || link.source_device_id;
+  const targetDeviceLabel =
+    targetDevice?.tags?.display_name || targetDevice?.sys_name || targetDevice?.hostname || link.target_device_id;
   const sourceSummaryIfName = displayIfName(link.source_if_name, sourceDevice?.interfaces ?? []);
   const targetSummaryIfName = displayIfName(link.target_if_name, targetDevice?.interfaces ?? []);
+  const sourceSpeedLabel = sourceIsVirtual ? 'Virtual link' : formatBandwidth(link.source_if_speed);
+  const targetSpeedLabel = targetIsVirtual ? 'Virtual link' : formatBandwidth(link.target_if_speed);
+  const sourceStatusLabel = sourceIsVirtual ? 'virtual' : (link.source_if_oper_status || 'unknown');
+  const targetStatusLabel = targetIsVirtual ? 'virtual' : (link.target_if_oper_status || 'unknown');
 
   const [editing, setEditing] = useState(false);
   const [sourceIfName, setSourceIfName] = useState(link.source_if_name);
@@ -115,10 +126,11 @@ export function LinkDetailsPanel({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const isEditing = editing && !readOnly;
 
   // Load interfaces when entering edit mode (skip for virtual nodes — they have no interfaces)
   useEffect(() => {
-    if (!editing) return;
+    if (!isEditing) return;
 
     if (link.source_device_id && !sourceIsVirtual) {
       setSourceLoading(true);
@@ -141,7 +153,7 @@ export function LinkDetailsPanel({
         .catch(() => setTargetInterfaces([]))
         .finally(() => setTargetLoading(false));
     }
-  }, [editing, link.source_device_id, link.target_device_id, sourceIsVirtual, targetIsVirtual]);
+  }, [isEditing, link.source_device_id, link.target_device_id, sourceIsVirtual, targetIsVirtual]);
 
   // Reset edit state when link changes
   useEffect(() => {
@@ -151,6 +163,13 @@ export function LinkDetailsPanel({
     setSaveError(null);
     setConfirmDelete(false);
   }, [link.id, link.source_if_name, link.target_if_name]);
+
+  useEffect(() => {
+    if (!readOnly) return;
+    setEditing(false);
+    setSaveError(null);
+    setConfirmDelete(false);
+  }, [readOnly]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -193,12 +212,12 @@ export function LinkDetailsPanel({
       <div className="rounded-lg bg-surface-high p-3 space-y-2">
         <div className="space-y-0.5">
           <p className="text-sm font-medium text-on-bg truncate">
-            {sourceDevice?.tags?.display_name || sourceDevice?.hostname || link.source_device_id}
+            {sourceDeviceLabel}
             <span className="text-on-bg-secondary font-normal">:{sourceSummaryIfName}</span>
           </p>
           <p className="text-xs text-on-bg-secondary px-1">↕</p>
           <p className="text-sm font-medium text-on-bg truncate">
-            {targetDevice?.tags?.display_name || targetDevice?.hostname || link.target_device_id}
+            {targetDeviceLabel}
             <span className="text-on-bg-secondary font-normal">:{targetSummaryIfName}</span>
           </p>
         </div>
@@ -208,10 +227,61 @@ export function LinkDetailsPanel({
           >
             {link.discovery_protocol || 'manual'}
           </span>
+          <span className="text-xs text-on-bg-secondary">ID {link.id.slice(0, 8)}</span>
         </div>
       </div>
 
-      {!editing ? (
+      {readOnly ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-3">
+            <div className="rounded-lg bg-surface-high p-3 space-y-2">
+              <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                Source Endpoint
+              </p>
+              <p className="text-sm font-medium text-on-bg">{sourceDeviceLabel}</p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <p className="text-on-bg-secondary">Port</p>
+                  <p className="mt-0.5 font-mono text-on-bg">{sourceSummaryIfName}</p>
+                </div>
+                <div>
+                  <p className="text-on-bg-secondary">Status</p>
+                  <p className="mt-0.5 font-mono text-on-bg">{sourceStatusLabel}</p>
+                </div>
+                <div>
+                  <p className="text-on-bg-secondary">Speed</p>
+                  <p className="mt-0.5 font-mono text-on-bg">{sourceSpeedLabel}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-surface-high p-3 space-y-2">
+              <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                Target Endpoint
+              </p>
+              <p className="text-sm font-medium text-on-bg">{targetDeviceLabel}</p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <p className="text-on-bg-secondary">Port</p>
+                  <p className="mt-0.5 font-mono text-on-bg">{targetSummaryIfName}</p>
+                </div>
+                <div>
+                  <p className="text-on-bg-secondary">Status</p>
+                  <p className="mt-0.5 font-mono text-on-bg">{targetStatusLabel}</p>
+                </div>
+                <div>
+                  <p className="text-on-bg-secondary">Speed</p>
+                  <p className="mt-0.5 font-mono text-on-bg">{targetSpeedLabel}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs text-on-bg-secondary">
+            Enter edit mode to change ports or delete this link.
+          </p>
+        </div>
+      ) : !isEditing ? (
         /* View mode */
         <button
           type="button"
@@ -300,41 +370,42 @@ export function LinkDetailsPanel({
         </form>
       )}
 
-      {/* Delete section */}
-      <div className="mt-6 space-y-3">
-        {!confirmDelete ? (
-          <button
-            type="button"
-            onClick={() => setConfirmDelete(true)}
-            className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20"
-          >
-            Delete Link
-          </button>
-        ) : (
-          <div className="space-y-2 rounded-lg border border-status-down/30 bg-status-down/10 p-3">
-            <p className="text-sm text-status-down">Delete this link?</p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(false)}
-                className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={deleting}
-                onClick={() => {
-                  void handleDelete();
-                }}
-                className="flex-1 rounded-lg bg-status-down px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {deleting ? 'Deleting...' : 'Confirm Delete'}
-              </button>
+      {!readOnly && (
+        <div className="mt-6 space-y-3">
+          {!confirmDelete ? (
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+              className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20"
+            >
+              Delete Link
+            </button>
+          ) : (
+            <div className="space-y-2 rounded-lg border border-status-down/30 bg-status-down/10 p-3">
+              <p className="text-sm text-status-down">Delete this link?</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => {
+                    void handleDelete();
+                  }}
+                  className="flex-1 rounded-lg bg-status-down px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {deleting ? 'Deleting...' : 'Confirm Delete'}
+                </button>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
