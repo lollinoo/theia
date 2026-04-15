@@ -15,7 +15,7 @@ import { SidePanel } from './SidePanel';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Toolbar } from './Toolbar';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { buildDeviceContextMenuItems, buildPositionPayload, statusColor } from './canvas/canvasHelpers';
+import { buildDeviceContextMenuItems, buildPositionPayload } from './canvas/canvasHelpers';
 import { buildTopologyEdges } from './canvas/edgeBuilder';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
@@ -27,6 +27,7 @@ import { usePositions } from '../hooks/usePositions';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
 import { useBridgeHealth } from '../hooks/useBridgeHealth';
 import { useDeviceWinboxAvailability } from '../hooks/useDeviceWinboxAvailability';
+import { minimapColorForDevice } from './deviceVisualState';
 import { fetchBridgeToken, fetchSettings } from '../api/client';
 import { fetchBridgeWithTimeout, getBridgeLaunchErrorMessage } from '../utils/bridgeRequests';
 
@@ -480,7 +481,14 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         connectionLineStyle={{ stroke: 'var(--nt-outline)', strokeWidth: 2 }} proOptions={{ hideAttribution: false }} className="bg-bg">
         <Background color="var(--nt-outline)" gap={28} size={1.2} />
         <MiniMap pannable zoomable
-          nodeColor={(n) => { const d = (n as DeviceNode).data; if (d.isGhost) return 'var(--nt-on-bg-muted)'; const a = d.alertStatus as string | undefined; if (a === 'down') return 'var(--color-status-down)'; if (a === 'degraded') return 'var(--color-status-probing)'; return statusColor(d.device.status); }}
+          nodeColor={(n) => {
+            const d = (n as DeviceNode).data;
+            return minimapColorForDevice({
+              device: d.device,
+              metrics: d.metrics,
+              isGhost: !!d.isGhost,
+            });
+          }}
           style={{ backgroundColor: 'var(--nt-surface)', border: '1px solid var(--nt-outline)' }} maskColor="var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))" />
       </ReactFlow>
     </div>

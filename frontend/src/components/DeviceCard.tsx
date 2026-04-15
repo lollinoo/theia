@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, useStore, type Node, type NodeProps } from '@xyflow/react';
-import type { Device, DeviceStatus } from '../types/api';
+import type { Device } from '../types/api';
 import {
   formatUptime,
   metricColor,
@@ -9,7 +9,6 @@ import {
 } from '../types/metrics';
 import {
   formatFreshness,
-  formatHealthLabel,
   formatPollingEvery,
 } from '../utils/freshness';
 import { isNodeVisibleInViewport } from '../utils/canvasVisibility';
@@ -18,6 +17,7 @@ import { useFreshnessClock } from '../hooks/useFreshnessClock';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
 import { MaterialIcon } from './MaterialIcon';
 import { StatusDot } from './StatusDot';
+import { resolveDeviceVisualState } from './deviceVisualState';
 import { VendorIcon } from './icons/VendorIcon';
 
 export interface DeviceNodeData {
@@ -81,81 +81,6 @@ function isMacAddress(value: string): boolean {
   return macAddressPattern.test(value) || dottedMacAddressPattern.test(value);
 }
 
-function healthDotStatusForMetrics(health: string | undefined): 'up' | 'degraded' | 'down' | 'unknown' {
-  switch (health) {
-    case 'healthy':
-      return 'up';
-    case 'warning':
-      return 'degraded';
-    case 'critical':
-      return 'down';
-    default:
-      return 'unknown';
-  }
-}
-
-function healthLabelClassForMetrics(health: string | undefined): string {
-  switch (health) {
-    case 'healthy':
-      return 'text-[12px] font-semibold text-status-up';
-    case 'warning':
-      return 'text-[12px] font-semibold text-warning';
-    case 'critical':
-      return 'text-[12px] font-semibold text-critical';
-    default:
-      return 'text-[12px] font-semibold text-status-unknown';
-  }
-}
-
-function statusLabel(status: DeviceStatus): 'Up' | 'Down' | 'Probing' | 'Unknown' {
-  switch (status) {
-    case 'up':
-      return 'Up';
-    case 'down':
-      return 'Down';
-    case 'probing':
-      return 'Probing';
-    default:
-      return 'Unknown';
-  }
-}
-
-function statusLabelClass(status: DeviceStatus): string {
-  switch (status) {
-    case 'up':
-      return 'text-[12px] font-semibold text-status-up';
-    case 'down':
-      return 'text-[12px] font-semibold text-status-down';
-    case 'probing':
-      return 'text-[12px] font-semibold text-status-probing';
-    default:
-      return 'text-[12px] font-semibold text-status-unknown';
-  }
-}
-
-function effectiveHeaderState(
-  deviceStatus: DeviceStatus,
-  metricsHealth: string | undefined,
-): {
-  dotStatus: DeviceStatus | 'degraded';
-  label: string;
-  labelClass: string;
-} {
-  if (deviceStatus !== 'up') {
-    return {
-      dotStatus: deviceStatus,
-      label: statusLabel(deviceStatus),
-      labelClass: statusLabelClass(deviceStatus),
-    };
-  }
-
-  return {
-    dotStatus: healthDotStatusForMetrics(metricsHealth),
-    label: formatHealthLabel(metricsHealth),
-    labelClass: healthLabelClassForMetrics(metricsHealth),
-  };
-}
-
 function freshnessClassName(tier: 'Fresh' | 'Stale' | 'Dead'): string {
   switch (tier) {
     case 'Fresh':
@@ -196,7 +121,7 @@ function DeviceCardInner({
     metrics?.expected_poll_interval_seconds,
     freshnessActive,
   );
-  const headerState = effectiveHeaderState(data.device.status, metrics?.health);
+  const headerState = resolveDeviceVisualState(data.device, metrics);
   const freshness = metrics
     ? formatFreshness(
         metrics.last_polled_at,
