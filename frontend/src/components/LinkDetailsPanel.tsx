@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchDeviceInterfaces, updateLink, deleteLink } from '../api/client';
 import type { Device, DeviceInterface, InterfaceInfo, Link } from '../types/api';
-import { formatBandwidth } from './LinkEdge';
+import { formatBandwidth } from './linkSemantics';
 
 interface LinkDetailsPanelProps {
   link: Link;

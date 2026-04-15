@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Device, InterfaceInfo, Link } from '../types/api';
 import { formatThroughput, isPrometheusUnavailable, type PrometheusStatusPayload, type SnapshotPayload, utilizationColor } from '../types/metrics';
 import { fetchDeviceInterfaces } from '../api/client';
-import { formatBandwidth } from './LinkEdge';
+import { formatBandwidth } from './linkSemantics';
 
 interface InterfaceStatsSectionProps {
   device: Device;
