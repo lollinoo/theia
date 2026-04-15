@@ -28,6 +28,7 @@ import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
 import { useBridgeHealth } from '../hooks/useBridgeHealth';
 import { useDeviceWinboxAvailability } from '../hooks/useDeviceWinboxAvailability';
 import { fetchBridgeToken, fetchSettings } from '../api/client';
+import { fetchBridgeWithTimeout, getBridgeLaunchErrorMessage } from '../utils/bridgeRequests';
 
 const nodeTypes = { device: DeviceCard };
 const edgeTypes = { link: LinkEdge };
@@ -54,7 +55,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
   const [bridgePort, setBridgePort] = useState('1337');
-  const { bridgeRunning, bridgeChecked, checkBridgeHealth } = useBridgeHealth(bridgePort);
+  const { bridgeRunning, bridgeChecked, bridgeError, checkBridgeHealth } = useBridgeHealth(bridgePort);
   const {
     deviceWinboxState,
     refreshDeviceWinboxAvailability,
@@ -73,6 +74,11 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     const t = window.setTimeout(() => setWinboxError(null), 5000);
     return () => window.clearTimeout(t);
   }, [winboxError]);
+  useEffect(() => {
+    if (bridgeError) {
+      setWinboxError(bridgeError);
+    }
+  }, [bridgeError]);
   const {
     deviceMenu, setDeviceMenu, edgeMenu, setEdgeMenu,
     panelContent, setPanelContent, showShortcuts, setShowShortcuts,
@@ -251,9 +257,16 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
       setWinboxError('Bridge secret not configured');
       return;
     }
+    let token: string;
     try {
-      const token = await fetchBridgeToken(deviceId, bridgeSecret);
-      const res = await fetch(`http://localhost:${bridgePort}/launch`, {
+      token = await fetchBridgeToken(deviceId, bridgeSecret);
+    } catch (error) {
+      setWinboxError(error instanceof Error ? error.message : 'Failed to launch WinBox');
+      return;
+    }
+
+    try {
+      const res = await fetchBridgeWithTimeout(`http://localhost:${bridgePort}/launch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
@@ -263,7 +276,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         setWinboxError(data.error ?? `Bridge error (${res.status})`);
       }
     } catch (error) {
-      setWinboxError(error instanceof Error ? error.message : 'Failed to launch WinBox');
+      setWinboxError(getBridgeLaunchErrorMessage(error));
     }
   }
 
