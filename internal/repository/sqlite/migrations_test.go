@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"database/sql"
+	"io/fs"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -417,6 +419,37 @@ func TestMigrateDevicePollClass_Idempotent(t *testing.T) {
 		}
 		if class != d.wantClass {
 			t.Errorf("device %s: expected final poll_class=%q, got %q", d.id, d.wantClass, class)
+		}
+	}
+}
+
+func TestPostgresMigrations_AddPollClassificationColumns(t *testing.T) {
+	files, err := fs.Glob(postgresMigrationsFS, "postgres_migrations/*.up.sql")
+	if err != nil {
+		t.Fatalf("globbing postgres migrations: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected embedded postgres migrations to exist")
+	}
+
+	var combined strings.Builder
+	for _, name := range files {
+		content, err := postgresMigrationsFS.ReadFile(name)
+		if err != nil {
+			t.Fatalf("reading postgres migration %s: %v", name, err)
+		}
+		combined.Write(content)
+		combined.WriteByte('\n')
+	}
+
+	sql := combined.String()
+	wants := []string{
+		"ADD COLUMN IF NOT EXISTS poll_class TEXT NOT NULL DEFAULT 'standard'",
+		"ADD COLUMN IF NOT EXISTS poll_interval_override INTEGER",
+	}
+	for _, want := range wants {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("expected postgres migrations to contain %q", want)
 		}
 	}
 }

@@ -61,6 +61,8 @@ var primaryDataCopySpecs = []tableCopySpec{
 			{name: "prometheus_label_name", kind: columnKindText},
 			{name: "prometheus_label_value", kind: columnKindText},
 			{name: "sys_name_lookup", kind: columnKindText},
+			{name: "poll_class", kind: columnKindText},
+			{name: "poll_interval_override", kind: columnKindInt64},
 		},
 		keyColumns: []string{"id"},
 	},

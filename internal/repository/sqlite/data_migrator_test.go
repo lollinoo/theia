@@ -21,7 +21,7 @@ func TestCopyPrimaryData_CopiesAndUpsertsRows(t *testing.T) {
 		t.Fatalf("CopyPrimaryData() failed: %v", err)
 	}
 
-	assertCopyTargetState(t, target, "core-router", "https://prom.example", true)
+	assertCopyTargetState(t, target, "core-router", "https://prom.example", true, "core", intPtr(45))
 
 	if _, err := source.Exec(`UPDATE devices SET hostname = 'core-router-renamed' WHERE id = 'dev-1'`); err != nil {
 		t.Fatalf("updating source device: %v", err)
@@ -37,7 +37,7 @@ func TestCopyPrimaryData_CopiesAndUpsertsRows(t *testing.T) {
 		t.Fatalf("second CopyPrimaryData() failed: %v", err)
 	}
 
-	assertCopyTargetState(t, target, "core-router-renamed", "https://prom-2.example", false)
+	assertCopyTargetState(t, target, "core-router-renamed", "https://prom-2.example", false, "core", intPtr(45))
 }
 
 func TestCopyPrimaryData_TruncateTargetRemovesStaleRows(t *testing.T) {
@@ -78,7 +78,7 @@ func TestCopyPrimaryData_TruncateTargetRemovesStaleRows(t *testing.T) {
 		t.Fatalf("stale target row still present after truncate copy")
 	}
 
-	assertCopyTargetState(t, target, "core-router", "https://prom.example", true)
+	assertCopyTargetState(t, target, "core-router", "https://prom.example", true, "core", intPtr(45))
 }
 
 func seedCopyTestSource(t *testing.T, db testExecer) {
@@ -89,12 +89,14 @@ func seedCopyTestSource(t *testing.T, db testExecer) {
 		`INSERT INTO devices (
 			id, hostname, ip, snmp_credentials_json, device_type, status, sys_name, sys_descr,
 			sys_object_id, hardware_model, vendor, managed, tags_json, created_at, updated_at,
-			metrics_source, prometheus_label_name, prometheus_label_value, sys_name_lookup
+			metrics_source, prometheus_label_name, prometheus_label_value, sys_name_lookup,
+			poll_class, poll_interval_override
 		) VALUES (
 			'dev-1', 'core-router', '192.0.2.10', '{"version":"2c","v2c":{"community":"secret"}}',
 			'router', 'up', 'core-router.example.com', 'RouterOS', '1.3.6.1.4.1.14988',
 			'CCR2004', 'mikrotik', 1, '{"role":"core"}', '2026-04-10 00:00:00',
-			'2026-04-10 00:00:00', 'prometheus', 'instance', 'core-router:9100', 'core-router'
+			'2026-04-10 00:00:00', 'prometheus', 'instance', 'core-router:9100', 'core-router',
+			'core', 45
 		)`,
 		`INSERT INTO interfaces (
 			id, device_id, if_index, if_name, if_descr, speed, admin_status, oper_status, created_at, updated_at
@@ -151,11 +153,20 @@ func seedCopyTestSource(t *testing.T, db testExecer) {
 	}
 }
 
-func assertCopyTargetState(t *testing.T, db testQueryRower, wantHostname, wantPromURL string, wantWinbox bool) {
+func assertCopyTargetState(
+	t *testing.T,
+	db testQueryRower,
+	wantHostname, wantPromURL string,
+	wantWinbox bool,
+	wantPollClass string,
+	wantPollIntervalOverride *int,
+) {
 	t.Helper()
 
 	var hostname, promURL string
 	var winbox bool
+	var pollClass string
+	var pollIntervalOverride sql.NullInt64
 	var areaCount, linkCount, backupFileCount, instanceBackupCount, vendorConfigCount int
 
 	if err := db.QueryRow(`SELECT hostname FROM devices WHERE id = 'dev-1'`).Scan(&hostname); err != nil {
@@ -177,6 +188,22 @@ func assertCopyTargetState(t *testing.T, db testQueryRower, wantHostname, wantPr
 	}
 	if winbox != wantWinbox {
 		t.Fatalf("is_winbox = %v, want %v", winbox, wantWinbox)
+	}
+
+	if err := db.QueryRow(`SELECT poll_class, poll_interval_override FROM devices WHERE id = 'dev-1'`).Scan(&pollClass, &pollIntervalOverride); err != nil {
+		t.Fatalf("querying copied poll fields: %v", err)
+	}
+	if pollClass != wantPollClass {
+		t.Fatalf("poll_class = %q, want %q", pollClass, wantPollClass)
+	}
+	switch {
+	case wantPollIntervalOverride == nil && pollIntervalOverride.Valid:
+		t.Fatalf("poll_interval_override = %d, want NULL", pollIntervalOverride.Int64)
+	case wantPollIntervalOverride != nil && (!pollIntervalOverride.Valid || int(pollIntervalOverride.Int64) != *wantPollIntervalOverride):
+		if !pollIntervalOverride.Valid {
+			t.Fatalf("poll_interval_override = NULL, want %d", *wantPollIntervalOverride)
+		}
+		t.Fatalf("poll_interval_override = %d, want %d", pollIntervalOverride.Int64, *wantPollIntervalOverride)
 	}
 
 	if err := db.QueryRow(`SELECT COUNT(*) FROM device_areas WHERE device_id = 'dev-1'`).Scan(&areaCount); err != nil {
