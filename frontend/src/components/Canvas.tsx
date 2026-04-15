@@ -26,7 +26,8 @@ import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { usePositions } from '../hooks/usePositions';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
 import { useBridgeHealth } from '../hooks/useBridgeHealth';
-import { fetchDeviceCredentialProfiles, fetchBridgeToken, fetchSettings } from '../api/client';
+import { useDeviceWinboxAvailability } from '../hooks/useDeviceWinboxAvailability';
+import { fetchBridgeToken, fetchSettings } from '../api/client';
 
 const nodeTypes = { device: DeviceCard };
 const edgeTypes = { link: LinkEdge };
@@ -53,8 +54,12 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
   const [bridgePort, setBridgePort] = useState('1337');
-  const [menuEverOpened, setMenuEverOpened] = useState(false);
-  const { bridgeRunning } = useBridgeHealth(bridgePort, { enabled: menuEverOpened });
+  const { bridgeRunning, bridgeChecked, checkBridgeHealth } = useBridgeHealth(bridgePort);
+  const {
+    deviceWinboxState,
+    refreshDeviceWinboxAvailability,
+    setDeviceWinboxAvailability,
+  } = useDeviceWinboxAvailability();
   const [bridgeSecret, setBridgeSecret] = useState('');
   const [winboxError, setWinboxError] = useState<string | null>(null);
   useEffect(() => {
@@ -68,10 +73,6 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     const t = window.setTimeout(() => setWinboxError(null), 5000);
     return () => window.clearTimeout(t);
   }, [winboxError]);
-
-  // Per-device WinBox profile status (true = has a WinBox-designated profile)
-  const [deviceWinboxState, setDeviceWinboxState] = useState<Record<string, boolean>>({});
-
   const {
     deviceMenu, setDeviceMenu, edgeMenu, setEdgeMenu,
     panelContent, setPanelContent, showShortcuts, setShowShortcuts,
@@ -98,17 +99,17 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
 
   const openEdgeMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => {
-      // Note: does NOT set menuEverOpened — bridge health check is only needed
-      // for device context menus (WinBox launch). If a bridge action is added
-      // here, add setMenuEverOpened(true).
+      // Bridge health is only checked for device menus because WinBox launch
+      // is not available from edge menus.
       setEdgeMenu({ edgeID, x: event.clientX, y: event.clientY });
     }, [setEdgeMenu],
   );
   const openDeviceMenu = useCallback(
     (event: React.MouseEvent, deviceId: string) => {
-      setMenuEverOpened(true);
+      checkBridgeHealth();
+      refreshDeviceWinboxAvailability(deviceId);
       setDeviceMenu({ deviceId, x: event.clientX, y: event.clientY });
-    }, [setDeviceMenu],
+    }, [checkBridgeHealth, refreshDeviceWinboxAvailability, setDeviceMenu],
   );
 
   const {
@@ -245,28 +246,11 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
   }, [editMode, setNodes]);
   useEffect(() => () => { if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current); }, []);
 
-  // Fetch WinBox profile status when context menu opens for a non-virtual device
-  useEffect(() => {
-    if (!deviceMenu) return;
-    const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
-    if (!d || d.device_type === 'virtual') return;
-    if (deviceMenu.deviceId in deviceWinboxState) return; // already fetched
-
-    void (async () => {
-      try {
-        const profiles = await fetchDeviceCredentialProfiles(deviceMenu.deviceId);
-        setDeviceWinboxState((prev) => ({
-          ...prev,
-          [deviceMenu.deviceId]: profiles.some((p) => p.is_winbox),
-        }));
-      } catch {
-        setDeviceWinboxState((prev) => ({ ...prev, [deviceMenu.deviceId]: false }));
-      }
-    })();
-  }, [deviceMenu, devices, deviceWinboxState]);
-
   async function handleLaunchWinBox(deviceId: string) {
-    if (!bridgeSecret) return;
+    if (!bridgeSecret) {
+      setWinboxError('Bridge secret not configured');
+      return;
+    }
     try {
       const token = await fetchBridgeToken(deviceId, bridgeSecret);
       const res = await fetch(`http://localhost:${bridgePort}/launch`, {
@@ -278,8 +262,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         const data = await res.json().catch(() => ({})) as { error?: string };
         setWinboxError(data.error ?? `Bridge error (${res.status})`);
       }
-    } catch {
-      // silent — bridge may not be running
+    } catch (error) {
+      setWinboxError(error instanceof Error ? error.message : 'Failed to launch WinBox');
     }
   }
 
@@ -369,12 +353,12 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
         const gUrl = grafanaUrl(d?.id);
         const isVirtual = d?.device_type === 'virtual';
-        const hasWinboxProfile = deviceWinboxState[deviceMenu.deviceId] ?? false;
-        const winboxDisabled = !hasWinboxProfile || !bridgeRunning;
-        const winboxTitle = !hasWinboxProfile
+        const hasWinboxProfile = deviceWinboxState[deviceMenu.deviceId];
+        const winboxDisabled = hasWinboxProfile === false;
+        const winboxTitle = hasWinboxProfile === false
           ? 'No WinBox profile designated'
-          : !bridgeRunning
-            ? 'WinBox bridge not running \u2014 download from Settings'
+          : bridgeChecked && !bridgeRunning
+            ? 'WinBox bridge appears unavailable - click to try launch anyway'
             : undefined;
         const items = buildDeviceContextMenuItems({
           isVirtual,
@@ -425,7 +409,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
           setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus}
           onAreasChange={onAreasChange} onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {
-            setDeviceWinboxState((prev) => ({ ...prev, [deviceId]: hasWinboxProfile }));
+            setDeviceWinboxAvailability(deviceId, hasWinboxProfile);
           }} />
       </SidePanel>
 

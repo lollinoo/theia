@@ -15,94 +15,105 @@ describe('useBridgeHealth', () => {
 
   it('returns bridgeRunning=true when health check succeeds', async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
-    const { result } = renderHook(() => useBridgeHealth('1337', { enabled: true }));
-    // Flush the initial check promise
+    const { result } = renderHook(() => useBridgeHealth('1337'));
+    expect(result.current.bridgeChecked).toBe(false);
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(result.current.bridgeRunning).toBe(true);
+    expect(result.current.bridgeChecked).toBe(true);
   });
 
   it('returns bridgeRunning=false when health check fails', async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('network'));
-    const { result } = renderHook(() => useBridgeHealth('1337', { enabled: true }));
+    const { result } = renderHook(() => useBridgeHealth('1337'));
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(result.current.bridgeRunning).toBe(false);
+    expect(result.current.bridgeChecked).toBe(true);
   });
 
   it('returns bridgeRunning=false when response is not ok', async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false });
-    const { result } = renderHook(() => useBridgeHealth('1337', { enabled: true }));
+    const { result } = renderHook(() => useBridgeHealth('1337'));
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(result.current.bridgeRunning).toBe(false);
+    expect(result.current.bridgeChecked).toBe(true);
   });
 
-  it('polls on 15s interval', async () => {
+  it('does not fetch until the context menu triggers the check', async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
-    renderHook(() => useBridgeHealth('1337', { enabled: true }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
-    expect(global.fetch).toHaveBeenCalledTimes(2);
-  });
-
-  it('cleans up interval on unmount', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
-    const { unmount } = renderHook(() => useBridgeHealth('1337', { enabled: true }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    unmount();
+    renderHook(() => useBridgeHealth('1337'));
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    // After unmount + 60s, fetch should have been called only once (initial) or twice (initial + one interval before unmount)
-    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(2);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('does not start polling after a manual trigger', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+    const { result } = renderHook(() => useBridgeHealth('1337'));
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches again each time the trigger is called', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+    const { result } = renderHook(() => useBridgeHealth('1337'));
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 
   it('uses the provided bridgePort in the health URL', async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
-    renderHook(() => useBridgeHealth('9000', { enabled: true }));
+    const { result } = renderHook(() => useBridgeHealth('9000'));
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(global.fetch).toHaveBeenCalledWith('http://localhost:9000/health');
   });
 
-  it('does not fetch when enabled is false', async () => {
+  it('keeps bridgeRunning=false before the first trigger', async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
-    const { result } = renderHook(() => useBridgeHealth('1337', { enabled: false }));
+    const { result } = renderHook(() => useBridgeHealth('1337'));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(global.fetch).not.toHaveBeenCalled();
     expect(result.current.bridgeRunning).toBe(false);
+    expect(result.current.bridgeChecked).toBe(false);
   });
 
-  it('does not poll when enabled is false even after 15s', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
-    renderHook(() => useBridgeHealth('1337', { enabled: false }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
-    expect(global.fetch).not.toHaveBeenCalled();
-  });
-
-  it('starts fetching when enabled changes from false to true', async () => {
+  it('uses the latest bridgePort after rerender', async () => {
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
     const { result, rerender } = renderHook(
-      ({ enabled }) => useBridgeHealth('1337', { enabled }),
-      { initialProps: { enabled: false } },
+      ({ bridgePort }) => useBridgeHealth(bridgePort),
+      { initialProps: { bridgePort: '1337' } },
     );
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(global.fetch).not.toHaveBeenCalled();
-    expect(result.current.bridgeRunning).toBe(false);
-
-    // Transition enabled to true
-    rerender({ enabled: true });
+    rerender({ bridgePort: '9000' });
+    act(() => {
+      result.current.checkBridgeHealth();
+    });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    expect(result.current.bridgeRunning).toBe(true);
-  });
-
-  it('polls after enabled transitions to true', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
-    const { rerender } = renderHook(
-      ({ enabled }) => useBridgeHealth('1337', { enabled }),
-      { initialProps: { enabled: false } },
-    );
-    rerender({ enabled: true });
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
-    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenNthCalledWith(1, 'http://localhost:1337/health');
+    expect(global.fetch).toHaveBeenNthCalledWith(2, 'http://localhost:9000/health');
   });
 });

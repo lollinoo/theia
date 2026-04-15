@@ -1,36 +1,40 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-const POLL_INTERVAL_MS = 15_000;
-
-export function useBridgeHealth(bridgePort: string, options?: { enabled?: boolean }): { bridgeRunning: boolean } {
-  const enabled = options?.enabled ?? false;
+export function useBridgeHealth(bridgePort: string): {
+  bridgeRunning: boolean;
+  bridgeChecked: boolean;
+  checkBridgeHealth: () => void;
+} {
   const [bridgeRunning, setBridgeRunning] = useState(false);
+  const [bridgeChecked, setBridgeChecked] = useState(false);
+  const unmountedRef = useRef(false);
+  const latestCheckRef = useRef(0);
 
-  useEffect(() => {
-    if (!enabled) {
-      setBridgeRunning(false); // reset to false when disabled — prevents stale true after polling stops
-      return;
-    }
+  useEffect(() => () => {
+    unmountedRef.current = true;
+  }, []);
 
-    let cancelled = false;
+  const checkBridgeHealth = useCallback(() => {
+    const checkId = latestCheckRef.current + 1;
+    latestCheckRef.current = checkId;
+    setBridgeChecked(false);
     const url = `http://localhost:${bridgePort}/health`;
 
-    async function check() {
+    void (async () => {
       try {
         const resp = await fetch(url);
-        if (!cancelled) setBridgeRunning(resp.ok);
+        if (!unmountedRef.current && latestCheckRef.current === checkId) {
+          setBridgeRunning(resp.ok);
+          setBridgeChecked(true);
+        }
       } catch {
-        if (!cancelled) setBridgeRunning(false);
+        if (!unmountedRef.current && latestCheckRef.current === checkId) {
+          setBridgeRunning(false);
+          setBridgeChecked(true);
+        }
       }
-    }
+    })();
+  }, [bridgePort]);
 
-    void check();
-    const id = window.setInterval(() => { void check(); }, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [bridgePort, enabled]);
-
-  return { bridgeRunning };
+  return { bridgeRunning, bridgeChecked, checkBridgeHealth };
 }
