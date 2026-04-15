@@ -412,7 +412,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
           <ContextMenu position={{ x: edgeMenu.x, y: edgeMenu.y }} onClose={() => setEdgeMenu(null)} items={[
             { label: 'Per-Interface Stats', icon: 'devices', onClick: () => { if (ml && sd && td) setPanelContent({ type: 'interfaceStats', data: { linkId: ml.id, link: ml, sourceDevice: sd, targetDevice: td } }); setEdgeMenu(null); } },
             { label: gUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)', icon: 'hub', onClick: () => { if (gUrl) window.open(gUrl, '_blank'); setEdgeMenu(null); } },
-            { label: 'View Details', icon: 'search', onClick: () => { const el = edges.find((e) => e.id === edgeMenu.edgeID)?.data?.link; if (el) setPanelContent({ type: 'link-details', data: { link: el } }); setEdgeMenu(null); } },
+            { label: 'View Details', icon: 'search', onClick: () => { const el = edges.find((e) => e.id === edgeMenu.edgeID)?.data?.link; if (el) setPanelContent({ type: 'link-details', data: { link: el, readOnly: true } }); setEdgeMenu(null); } },
           ]} />
         );
       })()}
@@ -466,7 +466,14 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
             if (cd) setPanelContent({ type: 'deviceConfig', data: { device: cd } });
           }
         }}
-        onEdgeClick={(_ev, edge) => { if (!editMode) return; const lk = edge.data?.link; if (lk) setPanelContent({ type: 'link-details', data: { link: lk } }); }}
+        onEdgeClick={(_ev, edge) => {
+          const lk = edge.data?.link;
+          if (!lk) return;
+          setPanelContent({
+            type: 'link-details',
+            data: { link: lk, readOnly: !editMode },
+          });
+        }}
         onNodeDragStop={(_ev, node) => {
           if (node.data.isGhost) return;
           const updated = reactFlow.getNodes().map((cn) => cn.id === node.id ? { ...cn, position: node.position, data: { ...cn.data, pinned: true } } : cn);

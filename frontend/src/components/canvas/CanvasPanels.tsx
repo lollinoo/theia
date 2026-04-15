@@ -113,11 +113,12 @@ export function CanvasPanels({
         />
       )}
       {panelContent?.type === 'link-details' && (() => {
-        const data = panelContent.data as { link?: Link } | undefined;
+        const data = panelContent.data as { link?: Link; readOnly?: boolean } | undefined;
         if (data?.link) {
           return (
             <LinkDetailsPanel
               link={data.link}
+              readOnly={data.readOnly === true}
               devices={devices}
               onUpdated={() => {
                 setPanelContent(null);
