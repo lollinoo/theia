@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/crypto"
@@ -823,6 +825,12 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptSecret failed: %v", err)
 	}
+	if !utf8.ValidString(encStr) {
+		t.Fatal("EncryptSecret returned a non-UTF-8 string")
+	}
+	if _, err := base64.StdEncoding.DecodeString(encStr); err != nil {
+		t.Fatalf("EncryptSecret returned a non-base64 string: %v", err)
+	}
 	decrypted, err := svc.decryptSecret(encStr)
 	if err != nil {
 		t.Fatalf("decryptSecret failed: %v", err)
@@ -839,7 +847,7 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 		Username:        "admin",
 		Port:            port,
 		AuthMethod:      domain.SSHAuthPassword,
-		EncryptedSecret: string(encrypted), // stored as encrypted bytes
+		EncryptedSecret: encStr,
 		Role:            "Admin",
 	})
 
@@ -872,6 +880,36 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	}
 	if capturedUser != "admin" {
 		t.Errorf("expected dialer to receive user %q, got %q", "admin", capturedUser)
+	}
+}
+
+func TestBackupServiceDecryptSecret_LegacyRawCiphertextCompatible(t *testing.T) {
+	encryptionKey := crypto.DeriveKey("test-encryption-passphrase")
+	plaintext := "legacy-raw-ciphertext-secret"
+	rawCiphertext, err := crypto.Encrypt([]byte(plaintext), encryptionKey)
+	if err != nil {
+		t.Fatalf("crypto.Encrypt failed: %v", err)
+	}
+
+	svc := NewBackupService(
+		newMockBackupJobRepo(),
+		newMockBackupFileRepo(),
+		newMockCredentialProfileRepo(),
+		newMockDeviceRepo(),
+		newMockBackupSettingsRepo(),
+		buildTestVendorRegistry("testvendor", true),
+		&recordingSSHDialer{},
+		encryptionKey,
+		t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	decrypted, err := svc.decryptSecret(string(rawCiphertext))
+	if err != nil {
+		t.Fatalf("decryptSecret failed for legacy raw ciphertext: %v", err)
+	}
+	if decrypted != plaintext {
+		t.Fatalf("expected decrypted plaintext %q, got %q", plaintext, decrypted)
 	}
 }
 

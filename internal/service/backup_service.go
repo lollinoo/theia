@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -90,11 +91,11 @@ func (s *BackupService) nowInConfiguredTZ() time.Time {
 
 // BulkBackupResult describes the outcome of a bulk backup request per device.
 type BulkBackupResult struct {
-	DeviceID   uuid.UUID        `json:"device_id"`
-	DeviceName string           `json:"device_name"`
-	Status     string           `json:"status"` // "queued", "skipped"
-	Reason     string           `json:"reason,omitempty"`
-	JobID      *uuid.UUID       `json:"job_id,omitempty"`
+	DeviceID   uuid.UUID  `json:"device_id"`
+	DeviceName string     `json:"device_name"`
+	Status     string     `json:"status"` // "queued", "skipped"
+	Reason     string     `json:"reason,omitempty"`
+	JobID      *uuid.UUID `json:"job_id,omitempty"`
 }
 
 // TriggerBulkBackup validates all devices and queues backups for eligible ones.
@@ -478,11 +479,24 @@ func (s *BackupService) decryptSecret(encrypted string) (string, error) {
 	if encrypted == "" {
 		return "", nil
 	}
-	decrypted, err := crypto.Decrypt([]byte(encrypted), s.encryptionKey)
-	if err != nil {
-		return "", err
+
+	var base64DecryptErr error
+	if ciphertext, err := base64.StdEncoding.DecodeString(encrypted); err == nil {
+		decrypted, err := crypto.Decrypt(ciphertext, s.encryptionKey)
+		if err == nil {
+			return string(decrypted), nil
+		}
+		base64DecryptErr = err
 	}
-	return string(decrypted), nil
+
+	decrypted, err := crypto.Decrypt([]byte(encrypted), s.encryptionKey)
+	if err == nil {
+		return string(decrypted), nil
+	}
+	if base64DecryptErr != nil {
+		return "", base64DecryptErr
+	}
+	return "", err
 }
 
 // EncryptSecret encrypts a plaintext secret for storage.
@@ -494,7 +508,7 @@ func (s *BackupService) EncryptSecret(plaintext string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string(encrypted), nil
+	return base64.StdEncoding.EncodeToString(encrypted), nil
 }
 
 // GetWinboxCredentials retrieves the decrypted WinBox password for a device.

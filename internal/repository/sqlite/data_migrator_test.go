@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"testing"
 )
 
@@ -79,6 +80,34 @@ func TestCopyPrimaryData_TruncateTargetRemovesStaleRows(t *testing.T) {
 	}
 
 	assertCopyTargetState(t, target, "core-router", "https://prom.example", true, "core", intPtr(45))
+}
+
+func TestNormalizeCredentialProfileSecretForCopy_Base64EncodesInvalidUTF8(t *testing.T) {
+	raw := string([]byte{0x9d, 0x01, 0x02})
+
+	got := normalizeCredentialProfileSecretForCopy("credential_profiles", "encrypted_secret", raw)
+	gotText, ok := got.(string)
+	if !ok {
+		t.Fatalf("normalizeCredentialProfileSecretForCopy returned %T, want string", got)
+	}
+
+	want := base64.StdEncoding.EncodeToString([]byte(raw))
+	if gotText != want {
+		t.Fatalf("normalizeCredentialProfileSecretForCopy() = %q, want %q", gotText, want)
+	}
+}
+
+func TestNormalizeCredentialProfileSecretForCopy_LeavesValidUTF8Unchanged(t *testing.T) {
+	const raw = "enc-secret"
+
+	got := normalizeCredentialProfileSecretForCopy("credential_profiles", "encrypted_secret", raw)
+	gotText, ok := got.(string)
+	if !ok {
+		t.Fatalf("normalizeCredentialProfileSecretForCopy returned %T, want string", got)
+	}
+	if gotText != raw {
+		t.Fatalf("normalizeCredentialProfileSecretForCopy() = %q, want %q", gotText, raw)
+	}
 }
 
 func seedCopyTestSource(t *testing.T, db testExecer) {
