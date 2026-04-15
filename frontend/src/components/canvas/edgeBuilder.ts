@@ -1,8 +1,8 @@
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, AlertStatus } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
-import { type LinkEdgeData, type LinkEdgeType } from '../LinkEdge';
-import { formatBandwidth } from '../LinkEdge';
+import type { LinkEdgeType } from '../LinkEdge';
+import { buildLinkTelemetryBadges, type LinkEdgeData } from '../linkSemantics';
 import { type HandleSide } from './canvasHelpers';
 
 function normalizeLinkValue(value: string): string {
@@ -136,13 +136,17 @@ export function buildEdgeData(
 
   // For virtual links, use only the real device's interface speed (D-10)
   // Virtual devices have no interfaces, so their speed is always 0
-  if (isVirtualLink) {
-    const realSpeed = sourceIsVirtual ? targetSpeed : sourceSpeed;
+  const telemetryBadges = buildLinkTelemetryBadges({
+    sourceSpeed,
+    targetSpeed,
+    isVirtualLink,
+    sourceIsVirtual: !!sourceIsVirtual,
+  });
 
+  if (isVirtualLink) {
     return {
       link,
-      bandwidthLabel: realSpeed > 0 ? formatBandwidth(realSpeed) : undefined,
-      speedMismatch: false, // Never show mismatch for virtual links (D-10)
+      ...telemetryBadges,
       inertVirtualLink,
       onContextMenu,
       metrics: existingData?.metrics,
@@ -155,29 +159,9 @@ export function buildEdgeData(
     };
   }
 
-  // Compare negotiation speeds from both sides; show minimum with warning on mismatch
-  let bandwidthLabel: string | undefined;
-  let speedMismatch = false;
-
-  if (sourceSpeed > 0 && targetSpeed > 0) {
-    if (sourceSpeed !== targetSpeed) {
-      // Mismatch: show minimum speed with warning indicator
-      const minSpeed = Math.min(sourceSpeed, targetSpeed);
-      bandwidthLabel = `${formatBandwidth(minSpeed)} (!)`;
-      speedMismatch = true;
-    } else {
-      bandwidthLabel = formatBandwidth(sourceSpeed);
-    }
-  } else if (sourceSpeed > 0) {
-    bandwidthLabel = formatBandwidth(sourceSpeed);
-  } else if (targetSpeed > 0) {
-    bandwidthLabel = formatBandwidth(targetSpeed);
-  }
-
   return {
     link,
-    bandwidthLabel,
-    speedMismatch,
+    ...telemetryBadges,
     onContextMenu,
     metrics: existingData?.metrics,
     throughputLabel: existingData?.throughputLabel,
