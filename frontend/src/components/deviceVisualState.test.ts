@@ -4,6 +4,8 @@ import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 import {
   minimapColorForDevice,
+  resolveDeviceNodeStatusStyles,
+  resolveDeviceStatusDotStyles,
   resolveDeviceMonitoringState,
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
@@ -81,6 +83,25 @@ describe('deviceVisualState', () => {
       label: 'Down',
     });
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-down)');
+  });
+
+  it('gives down nodes a dedicated frame glow without reusing it for critical', () => {
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain('var(--nt-node-down-ring)');
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain('var(--nt-node-down-glow)');
+    expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow).not.toContain('var(--nt-node-down-ring)');
+    expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow).not.toContain('var(--nt-node-down-glow)');
+  });
+
+  it('preserves the down glow when selected so failure semantics stay visible', () => {
+    const selectedDown = resolveDeviceNodeStatusStyles({ status: 'down', selected: true });
+
+    expect(selectedDown.frameStyle.boxShadow).toContain('var(--color-focus-ring)');
+    expect(selectedDown.frameStyle.boxShadow).toContain('var(--nt-node-down-glow)');
+  });
+
+  it('keeps critical dots static while down dots keep the stronger active emphasis', () => {
+    expect(resolveDeviceStatusDotStyles('critical').className).not.toContain('animate-pulse');
+    expect(resolveDeviceStatusDotStyles('down').className).toContain('animate-pulse');
   });
 
   it('keeps virtual nodes without IP inert instead of rendering them offline', () => {

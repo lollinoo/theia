@@ -17,10 +17,12 @@ import {
   type DeviceMonitoringState,
   resolveDeviceAddressState,
   resolveDeviceMonitoringState,
+  resolveDeviceNodeStatusStyles,
   resolveDeviceOperationalReadouts,
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
+import { resolveDeviceCardRenderModel } from './deviceCardVariant';
 import { VendorIcon } from './icons/VendorIcon';
 
 export interface DeviceNodeData {
@@ -115,24 +117,6 @@ function readoutToneClass(tone: Readout['tone']): string {
   }
 }
 
-function statusBadgeClass(dotStatus: ReturnType<typeof resolveDeviceVisualState>['dotStatus']): string {
-  switch (dotStatus) {
-    case 'up':
-      return 'border-status-up/30 bg-status-up/10 text-status-up';
-    case 'critical':
-      return 'border-status-critical/30 bg-status-critical/10 text-status-critical';
-    case 'down':
-      return 'border-status-down/30 bg-status-down/10 text-status-down';
-    case 'degraded':
-    case 'probing':
-      return 'border-warning/30 bg-warning/10 text-warning';
-    case 'unmonitored':
-      return 'border-outline-strong bg-surface-container text-on-bg-secondary';
-    default:
-      return 'border-outline bg-surface-container text-on-bg-secondary';
-  }
-}
-
 function buildReadouts({
   cpuPercent,
   memPercent,
@@ -163,51 +147,16 @@ function buildReadouts({
   ];
 }
 
-function frameStyle({
-  selected,
-  highlighted,
-  status,
-}: {
-  selected: boolean;
-  highlighted: boolean;
-  status: ReturnType<typeof resolveDeviceVisualState>['dotStatus'];
-}): CSSProperties {
-  if (selected || highlighted) {
-    return {
-      borderColor: 'var(--color-node-selected)',
-      boxShadow: '0 0 0 1px var(--color-node-selected), 0 0 0 4px var(--color-focus-ring), var(--nt-node-shadow)',
-    };
-  }
-  switch (status) {
-    case 'down':
-      return {
-        borderColor: 'var(--color-status-down)',
-        boxShadow: '0 0 0 1px var(--color-status-down), var(--nt-node-shadow)',
-      };
-    case 'critical':
-      return {
-        borderColor: 'var(--color-status-critical)',
-        boxShadow: '0 0 0 1px var(--color-status-critical), var(--nt-node-shadow)',
-      };
-    case 'degraded':
-    case 'probing':
-      return {
-        borderColor: 'var(--color-status-warning)',
-        boxShadow: '0 0 0 1px var(--color-status-warning), var(--nt-node-shadow)',
-      };
-    default:
-      return {
-        boxShadow: 'var(--nt-node-shadow)',
-      };
-  }
-}
-
 function ghostFrameStyle(color?: string): CSSProperties | undefined {
   if (!color) return undefined;
   return {
     borderColor: color,
     color,
   };
+}
+
+function categoryBadgeClass(): string {
+  return 'border-outline-strong bg-surface-container-high text-on-bg-secondary';
 }
 
 function DeviceCardInner({
@@ -269,16 +218,22 @@ function DeviceCardInner({
     uptimeSecs,
     isDeviceDown,
   } = resolveDeviceOperationalReadouts(data.device, metrics);
+  const renderModel = resolveDeviceCardRenderModel({
+    device: data.device,
+    monitoringState,
+    addressState,
+    hasFreshnessMeta: freshness !== null && pollingEvery !== null,
+  });
   const readouts = buildReadouts({
     cpuPercent,
     memPercent,
     uptimeSecs,
     isDeviceDown,
   });
-  const panelFrameStyle = frameStyle({
+  const statusStyles = resolveDeviceNodeStatusStyles({
+    status: headerState.dotStatus,
     selected,
     highlighted: data.highlighted === true,
-    status: headerState.dotStatus,
   });
 
   if (data.isGhost) {
@@ -312,7 +267,7 @@ function DeviceCardInner({
   return (
     <div
       className="group relative w-full rounded-[20px] border border-outline bg-surface transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-outline-strong"
-      style={panelFrameStyle}
+      style={statusStyles.frameStyle}
       onContextMenu={(event) => {
         if (!data.onContextMenu) return;
         event.preventDefault();
@@ -359,70 +314,150 @@ function DeviceCardInner({
           style={hasArea && areaAccent ? { background: areaAccent } : undefined}
         />
 
-        <div className="px-4 pb-3.5 pt-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-on-bg-secondary">
-                <VendorIcon vendor={data.device.vendor} size={16} />
-                <span>{deviceTypeLabel(data.device, isVirtual, data.subtype)}</span>
+        {renderModel.variant === 'physical' ? (
+          <div className="px-4 pb-3.5 pt-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-on-bg-secondary">
+                  <VendorIcon vendor={data.device.vendor} size={16} />
+                  <span>{deviceTypeLabel(data.device, isVirtual, data.subtype)}</span>
+                </div>
+                <div className="mt-2 min-w-0 text-[15px] font-semibold leading-tight tracking-tight text-on-bg">
+                  <span className="line-clamp-2 break-words">{label}</span>
+                </div>
               </div>
-              <div className="mt-2 min-w-0 text-[15px] font-semibold leading-tight tracking-tight text-on-bg">
-                <span className="line-clamp-2 break-words">{label}</span>
+
+              <div
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
+                style={statusStyles.badgeStyle}
+              >
+                <StatusDot status={headerState.dotStatus} />
+                <span>{headerState.label}</span>
               </div>
             </div>
 
-            <div className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusBadgeClass(headerState.dotStatus)}`}>
-              <StatusDot status={headerState.dotStatus} />
-              <span>{headerState.label}</span>
+            <div className="mt-3 flex items-center justify-between gap-3">
+              {addressState === 'address' ? (
+                <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 font-mono text-[11px] text-on-bg">
+                  {addressLabel} {data.device.ip}
+                </span>
+              ) : (
+                <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
+                  No IP
+                </span>
+              )}
+
+              {renderModel.showFreshnessMeta ? (
+                <div className="min-w-0 text-right">
+                  <div className={`text-[10px] font-medium ${readoutToneClass(freshnessTone(freshness!.tier))}`}>
+                    {freshness!.text}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-on-bg-secondary">
+                    {pollingEvery}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          </div>
 
-          <div className="mt-3 flex items-center justify-between gap-3">
-            {addressState === 'address' ? (
-              <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 font-mono text-[11px] text-on-bg">
-                {addressLabel} {data.device.ip}
-              </span>
-            ) : addressState === 'unmonitored' ? (
-              <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
-                Virtual node
-              </span>
-            ) : (
-              <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
-                No IP
-              </span>
-            )}
-
-            {freshness && pollingEvery ? (
-              <div className="min-w-0 text-right">
-                <div className={`text-[10px] font-medium ${readoutToneClass(freshnessTone(freshness.tier))}`}>
-                  {freshness.text}
-                </div>
-                <div className="mt-0.5 text-[10px] text-on-bg-secondary">
-                  {pollingEvery}
-                </div>
+            {renderModel.showOperationalReadouts ? (
+              <div className="mt-3 grid grid-cols-3 gap-1.5">
+                {readouts.map((readout) => (
+                  <div key={readout.label} className="rounded-2xl border border-outline bg-surface-container px-2.5 py-2">
+                    <div className="text-[9px] uppercase tracking-[0.16em] text-on-bg-secondary">
+                      {readout.label}
+                    </div>
+                    <div className={`mt-1 truncate font-mono text-[11px] font-semibold ${readoutToneClass(readout.tone)}`}>
+                      {readout.tone === 'default' && readout.label === 'CPU' && cpuPercent !== null ? (
+                        <span className={metricColor(cpuPercent)}>{readout.value}</span>
+                      ) : readout.tone === 'default' && readout.label === 'MEM' && memPercent !== null ? (
+                        <span className={metricColor(memPercent)}>{readout.value}</span>
+                      ) : (
+                        readout.value
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>
+        ) : (
+          <div className="px-4 pb-4 pt-3.5">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-outline bg-surface-container-high text-on-bg">
+                <VendorIcon vendor={data.device.vendor} size={18} />
+              </div>
 
-          <div className="mt-3 grid grid-cols-3 gap-1.5">
-            {readouts.map((readout) => (
-              <div key={readout.label} className="rounded-2xl border border-outline bg-surface-container px-2.5 py-2">
-                <div className="text-[9px] uppercase tracking-[0.16em] text-on-bg-secondary">
-                  {readout.label}
-                </div>
-                <div className={`mt-1 truncate font-mono text-[11px] font-semibold ${readoutToneClass(readout.tone)}`}>
-                  {readout.tone === 'default' && readout.label === 'CPU' && cpuPercent !== null ? (
-                    <span className={metricColor(cpuPercent)}>{readout.value}</span>
-                  ) : readout.tone === 'default' && readout.label === 'MEM' && memPercent !== null ? (
-                    <span className={metricColor(memPercent)}>{readout.value}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] uppercase tracking-[0.18em] text-on-bg-secondary">
+                      {deviceTypeLabel(data.device, isVirtual, data.subtype)}
+                    </div>
+                    <div className="mt-1.5 min-w-0 text-[16px] font-semibold leading-tight tracking-tight text-on-bg">
+                      <span className="line-clamp-2 break-words">{label}</span>
+                    </div>
+                  </div>
+
+                  {renderModel.showVirtualCategoryBadge ? (
+                    <div className={`inline-flex shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${categoryBadgeClass()}`}>
+                      <span>Virtual node</span>
+                    </div>
                   ) : (
-                    readout.value
+                    <div
+                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
+                      style={statusStyles.badgeStyle}
+                    >
+                      <StatusDot status={headerState.dotStatus} />
+                      <span>{headerState.label}</span>
+                    </div>
                   )}
                 </div>
+
+                {renderModel.showVirtualStatusPanel ? (
+                  <div
+                    className={`mt-4 rounded-2xl border px-3.5 py-3 ${statusStyles.panelClass}`}
+                    style={statusStyles.panelStyle}
+                  >
+                    <div className="text-[9px] uppercase tracking-[0.16em] text-on-bg-secondary">
+                      Status
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-2.5">
+                      <StatusDot status={headerState.dotStatus} />
+                      <span className={`text-[15px] font-semibold tracking-tight ${headerState.labelClass}`}>
+                        {headerState.label}
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  {renderModel.showVirtualIdentityTag ? (
+                    <span className="rounded-full border border-outline bg-surface-container px-3 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
+                      Virtual node
+                    </span>
+                  ) : null}
+
+                  {renderModel.showVirtualAddressChip ? (
+                    <span className="rounded-full border border-outline bg-surface-container-high px-3 py-1 font-mono text-[11px] text-on-bg">
+                      {addressLabel} {data.device.ip}
+                    </span>
+                  ) : null}
+                </div>
+
+                {renderModel.showFreshnessMeta ? (
+                  <div className="mt-3 flex items-center justify-between gap-3 text-[10px]">
+                    <div className={`font-medium ${readoutToneClass(freshnessTone(freshness!.tier))}`}>
+                      {freshness!.text}
+                    </div>
+                    <div className="text-on-bg-secondary">
+                      {pollingEvery}
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
