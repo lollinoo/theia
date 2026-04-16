@@ -49,10 +49,13 @@ The dev stack runs everything locally with hot-reload for both backend and front
 ```bash
 git clone <repo-url>
 cd mikrotik-theia
+make install-hooks
 make dev
 ```
 
 This builds all images and starts the full stack in the background. First build takes 2–4 minutes to compile Go and download npm packages.
+
+`make install-hooks` is a one-time setup step per clone. It enables the repo-managed Git hooks so local commits must follow the conventional commits format, for example `feat(api): add device backup endpoint`. GitHub Actions validates the same rule again in CI.
 
 ### 2. Verify everything is up
 
