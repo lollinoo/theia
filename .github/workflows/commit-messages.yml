@@ -1,0 +1,56 @@
+name: Commit Messages
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: commit-messages-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conventional-commits:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch PR base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags --prune --depth=0 origin "${{ github.base_ref }}"
+
+      - name: Validate commit messages
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            RANGE="${PR_BASE_SHA}..${PR_HEAD_SHA}"
+          elif [ -n "${BEFORE_SHA}" ] && [ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
+            RANGE="${BEFORE_SHA}..${AFTER_SHA}"
+          else
+            git fetch --no-tags --prune --depth=0 origin "${DEFAULT_BRANCH}"
+
+            if MERGE_BASE=$(git merge-base "${AFTER_SHA}" "origin/${DEFAULT_BRANCH}" 2>/dev/null); then
+              if [ "${MERGE_BASE}" = "${AFTER_SHA}" ]; then
+                RANGE="${AFTER_SHA}"
+              else
+                RANGE="${MERGE_BASE}..${AFTER_SHA}"
+              fi
+            else
+              RANGE="${AFTER_SHA}"
+            fi
+          fi
+
+          echo "Validating commits in range: ${RANGE}"
+          bash scripts/validate-commit-msg.sh --range "${RANGE}"

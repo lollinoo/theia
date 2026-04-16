@@ -1,4 +1,4 @@
-.PHONY: dev test test-integration build clean seed verify stop logs help \
+.PHONY: dev test test-integration build clean seed verify stop logs help install-hooks \
        postgres-up postgres-down dev-postgres migrate-postgres \
        prod-postgres prod-postgres-metrics staging-postgres \
        wisp-lab wisp-lab-down wisp-seed wisp-radio-seed wisp-seed-all wisp-ospf wisp-bgp \
@@ -17,6 +17,10 @@ BUILD_DATE := $(shell date -u +%FT%TZ)
 # Default target
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
+
+install-hooks: ## Configure repo-managed Git hooks
+	git config core.hooksPath .githooks
+	@echo "Configured Git hooks path to .githooks"
 
 dev: ## Start full dev stack (backend + frontend + Prometheus + SNMP sims)
 	@docker compose --profile dev --profile test down 2>/dev/null || true
