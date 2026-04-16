@@ -21,7 +21,7 @@ jobs:
 
       - name: Fetch PR base branch
         if: github.event_name == 'pull_request'
-        run: git fetch --no-tags --prune --depth=0 origin "${{ github.base_ref }}"
+        run: git fetch --no-tags --prune origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
 
       - name: Validate commit messages
         env:
@@ -39,7 +39,7 @@ jobs:
           elif [ -n "${BEFORE_SHA}" ] && [ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
             RANGE="${BEFORE_SHA}..${AFTER_SHA}"
           else
-            git fetch --no-tags --prune --depth=0 origin "${DEFAULT_BRANCH}"
+            git fetch --no-tags --prune origin "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
 
             if MERGE_BASE=$(git merge-base "${AFTER_SHA}" "origin/${DEFAULT_BRANCH}" 2>/dev/null); then
               if [ "${MERGE_BASE}" = "${AFTER_SHA}" ]; then
