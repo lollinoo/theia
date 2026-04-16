@@ -119,13 +119,13 @@ func seedCopyTestSource(t *testing.T, db testExecer) {
 			id, hostname, ip, snmp_credentials_json, device_type, status, sys_name, sys_descr,
 			sys_object_id, hardware_model, vendor, managed, tags_json, created_at, updated_at,
 			metrics_source, prometheus_label_name, prometheus_label_value, sys_name_lookup,
-			poll_class, poll_interval_override
+			poll_class, poll_interval_override, notes
 		) VALUES (
 			'dev-1', 'core-router', '192.0.2.10', '{"version":"2c","v2c":{"community":"secret"}}',
 			'router', 'up', 'core-router.example.com', 'RouterOS', '1.3.6.1.4.1.14988',
 			'CCR2004', 'mikrotik', 1, '{"role":"core"}', '2026-04-10 00:00:00',
 			'2026-04-10 00:00:00', 'prometheus', 'instance', 'core-router:9100', 'core-router',
-			'core', 45
+			'core', 45, 'Primary aggregation node'
 		)`,
 		`INSERT INTO interfaces (
 			id, device_id, if_index, if_name, if_descr, speed, admin_status, oper_status, created_at, updated_at
@@ -196,6 +196,7 @@ func assertCopyTargetState(
 	var winbox bool
 	var pollClass string
 	var pollIntervalOverride sql.NullInt64
+	var notes sql.NullString
 	var areaCount, linkCount, backupFileCount, instanceBackupCount, vendorConfigCount int
 
 	if err := db.QueryRow(`SELECT hostname FROM devices WHERE id = 'dev-1'`).Scan(&hostname); err != nil {
@@ -233,6 +234,13 @@ func assertCopyTargetState(
 			t.Fatalf("poll_interval_override = NULL, want %d", *wantPollIntervalOverride)
 		}
 		t.Fatalf("poll_interval_override = %d, want %d", pollIntervalOverride.Int64, *wantPollIntervalOverride)
+	}
+
+	if err := db.QueryRow(`SELECT notes FROM devices WHERE id = 'dev-1'`).Scan(&notes); err != nil {
+		t.Fatalf("querying copied notes: %v", err)
+	}
+	if !notes.Valid || notes.String != "Primary aggregation node" {
+		t.Fatalf("notes = %#v, want %q", notes, "Primary aggregation node")
 	}
 
 	if err := db.QueryRow(`SELECT COUNT(*) FROM device_areas WHERE device_id = 'dev-1'`).Scan(&areaCount); err != nil {

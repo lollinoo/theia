@@ -31,10 +31,10 @@ const (
 type MetricsSource string
 
 const (
-	MetricsSourcePrometheus            MetricsSource = "prometheus"
-	MetricsSourceSNMP                  MetricsSource = "snmp"
+	MetricsSourcePrometheus             MetricsSource = "prometheus"
+	MetricsSourceSNMP                   MetricsSource = "snmp"
 	MetricsSourcePrometheusSNMPFallback MetricsSource = "prometheus_snmp_fallback"
-	MetricsSourceNone                  MetricsSource = "none"
+	MetricsSourceNone                   MetricsSource = "none"
 )
 
 // SNMPVersion indicates which SNMP version is configured.
@@ -53,9 +53,9 @@ type SNMPv2cCredentials struct {
 // SNMPv3Credentials holds SNMP v3 authentication and privacy data.
 type SNMPv3Credentials struct {
 	Username      string `json:"username" yaml:"username"`
-	AuthProtocol  string `json:"auth_protocol" yaml:"auth_protocol"`   // MD5, SHA
+	AuthProtocol  string `json:"auth_protocol" yaml:"auth_protocol"` // MD5, SHA
 	AuthPassword  string `json:"auth_password" yaml:"auth_password"`
-	PrivProtocol  string `json:"priv_protocol" yaml:"priv_protocol"`   // DES, AES
+	PrivProtocol  string `json:"priv_protocol" yaml:"priv_protocol"` // DES, AES
 	PrivPassword  string `json:"priv_password" yaml:"priv_password"`
 	SecurityLevel string `json:"security_level" yaml:"security_level"` // noAuthNoPriv, authNoPriv, authPriv
 }
@@ -83,19 +83,20 @@ type Interface struct {
 
 // Device represents a managed or discovered network device.
 type Device struct {
-	ID              uuid.UUID         `json:"id"`
-	Hostname        string            `json:"hostname"`
-	IP              string            `json:"ip"`
-	SNMPCredentials SNMPCredentials   `json:"snmp_credentials"`
+	ID                   uuid.UUID         `json:"id"`
+	Hostname             string            `json:"hostname"`
+	IP                   string            `json:"ip"`
+	Notes                *string           `json:"notes"`
+	SNMPCredentials      SNMPCredentials   `json:"snmp_credentials"`
 	DeviceType           DeviceType        `json:"device_type"`
 	PollClass            PollClass         `json:"poll_class"`
 	PollIntervalOverride *int              `json:"poll_interval_override"`
 	Status               DeviceStatus      `json:"status"`
-	SysName         string            `json:"sys_name"`
-	SysDescr        string            `json:"sys_descr"`
-	SysObjectID     string            `json:"sys_object_id"`
-	HardwareModel   string            `json:"hardware_model"`
-	Vendor          string            `json:"vendor"` // vendor name from vendor registry (e.g. "mikrotik", "default")
+	SysName              string            `json:"sys_name"`
+	SysDescr             string            `json:"sys_descr"`
+	SysObjectID          string            `json:"sys_object_id"`
+	HardwareModel        string            `json:"hardware_model"`
+	Vendor               string            `json:"vendor"`  // vendor name from vendor registry (e.g. "mikrotik", "default")
 	Managed              bool              `json:"managed"` // true=user-added, false=discovered placeholder
 	Tags                 map[string]string `json:"tags"`
 	Interfaces           []Interface       `json:"interfaces"`

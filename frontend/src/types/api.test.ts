@@ -8,6 +8,7 @@ function deviceResource(id: string, deviceType: string) {
     attributes: {
       hostname: `${id}.example.test`,
       ip: `10.0.0.${id === 'ap-1' ? '1' : '2'}`,
+      notes: id === 'ap-1' ? 'Managed by NOC' : null,
       device_type: deviceType,
       status: 'up',
       sys_name: `${id}.example.test`,
@@ -41,5 +42,7 @@ describe('parseDevicesResponse', () => {
 
     expect(devices[0].device_type).toBe('ap');
     expect(devices[1].device_type).toBe('firewall');
+    expect(devices[0].notes).toBe('Managed by NOC');
+    expect(devices[1].notes).toBeNull();
   });
 });

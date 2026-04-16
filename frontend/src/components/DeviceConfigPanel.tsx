@@ -75,6 +75,7 @@ export function DeviceConfigPanel({
 
   const [displayName, setDisplayName] = useState(device.tags?.display_name || '');
   const [ip, setIp] = useState(device.ip);
+  const [notes, setNotes] = useState(device.notes ?? '');
   const [snmpVersion, setSnmpVersion] = useState('2c');
   const [community, setCommunity] = useState('');
   // SNMPv3 fields
@@ -193,6 +194,7 @@ export function DeviceConfigPanel({
   useEffect(() => {
     setDisplayName(device.tags?.display_name || '');
     setIp(device.ip || '');
+    setNotes(device.notes ?? '');
     setCommunity(''); // We don't fetch credentials back from the API for security
     setUsername('');
     setAuthPassword('');
@@ -339,9 +341,11 @@ export function DeviceConfigPanel({
     const hasSnmpChanges = isV3 ? username.trim() !== '' : community.trim() !== '';
     try {
       const effectiveLabelValue = prometheusLabelValue.trim() || trimmedIP;
+      const normalizedNotes = notes.trim() === '' ? null : notes.trim();
       const updated = await updateDevice(device.id, {
         hostname: device.hostname,
         ip: trimmedIP,
+        notes: normalizedNotes,
         ...(hasSnmpChanges
           ? {
               snmp: isV3
@@ -548,6 +552,29 @@ export function DeviceConfigPanel({
         {fieldErrors['ip'] && (
           <p className="mt-1 text-xs text-status-down">{fieldErrors['ip']}</p>
         )}
+
+        <div className="space-y-2 rounded-lg bg-surface-high p-3">
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Saved Notes
+          </p>
+          <p className="whitespace-pre-wrap text-sm text-on-bg">
+            {device.notes?.trim() ? device.notes : 'No notes saved.'}
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <label htmlFor="device-notes" className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Device Notes
+          </label>
+          <textarea
+            id="device-notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={5}
+            placeholder="Add internal notes for this device (optional)"
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+          />
+        </div>
 
         <div className="space-y-1">
           <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Areas</label>

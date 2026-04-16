@@ -87,15 +87,15 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status,
 			sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-			poll_class, poll_interval_override)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			poll_class, poll_interval_override, notes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		device.ID.String(), device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
 		device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
 		device.SysObjectID, device.HardwareModel,
 		device.Vendor, managedValue, string(tagsJSON), device.CreatedAt, device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
-		string(pollClass), device.PollIntervalOverride,
+		string(pollClass), device.PollIntervalOverride, nullableStringValue(device.Notes),
 	)
 	if err != nil {
 		return fmt.Errorf("inserting device: %w", err)
@@ -152,7 +152,7 @@ func (r *DeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				poll_class, poll_interval_override
+				poll_class, poll_interval_override, notes
 			FROM devices WHERE id = ?`, id.String(),
 		),
 	)
@@ -185,7 +185,7 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				poll_class, poll_interval_override
+				poll_class, poll_interval_override, notes
 			FROM devices WHERE ip = ?`, ip,
 		),
 	)
@@ -225,7 +225,7 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				poll_class, poll_interval_override
+				poll_class, poll_interval_override, notes
 			FROM devices
 			WHERE sys_name_lookup = ?
 			ORDER BY updated_at DESC, created_at DESC
@@ -271,7 +271,7 @@ func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 		`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 			sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-			poll_class, poll_interval_override
+			poll_class, poll_interval_override, notes
 		FROM devices ORDER BY hostname`,
 	)
 	if err != nil {
@@ -367,7 +367,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 			status=?, sys_name=?, sys_name_lookup=?, sys_descr=?, sys_object_id=?, hardware_model=?,
 			vendor=?, managed=?, tags_json=?, updated_at=?,
 			metrics_source=?, prometheus_label_name=?, prometheus_label_value=?,
-			poll_class=?, poll_interval_override=?
+			poll_class=?, poll_interval_override=?, notes=?
 		WHERE id = ?`,
 		device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
@@ -375,7 +375,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		device.SysObjectID, device.HardwareModel,
 		device.Vendor, managedValue, string(tagsJSON), device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
-		string(pollClass), device.PollIntervalOverride,
+		string(pollClass), device.PollIntervalOverride, nullableStringValue(device.Notes),
 		device.ID.String(),
 	)
 	if err != nil {
@@ -467,6 +467,13 @@ func boolToDBInt(value bool) int {
 	return 0
 }
 
+func nullableStringValue(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 // scanDevice scans a single device row from a *sql.Row.
 func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	var d domain.Device
@@ -475,13 +482,14 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	var metricsSource, prometheusLabelName, prometheusLabelValue string
 	var pollClass string
 	var pollIntervalOverride sql.NullInt64
+	var notes sql.NullString
 
 	err := row.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
 		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel,
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
-		&pollClass, &pollIntervalOverride,
+		&pollClass, &pollIntervalOverride, &notes,
 	)
 	if err != nil {
 		return nil, err
@@ -498,6 +506,10 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	if pollIntervalOverride.Valid {
 		v := int(pollIntervalOverride.Int64)
 		d.PollIntervalOverride = &v
+	}
+	if notes.Valid {
+		v := notes.String
+		d.Notes = &v
 	}
 
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
@@ -519,13 +531,14 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	var metricsSource, prometheusLabelName, prometheusLabelValue string
 	var pollClass string
 	var pollIntervalOverride sql.NullInt64
+	var notes sql.NullString
 
 	err := rows.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
 		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel,
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
-		&pollClass, &pollIntervalOverride,
+		&pollClass, &pollIntervalOverride, &notes,
 	)
 	if err != nil {
 		return nil, err
@@ -542,6 +555,10 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	if pollIntervalOverride.Valid {
 		v := int(pollIntervalOverride.Int64)
 		d.PollIntervalOverride = &v
+	}
+	if notes.Valid {
+		v := notes.String
+		d.Notes = &v
 	}
 
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {

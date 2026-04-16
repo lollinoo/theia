@@ -475,6 +475,27 @@ func TestDeviceHandlerCreate_HappyPath(t *testing.T) {
 	}
 }
 
+func TestDeviceHandlerCreate_NotesRoundTrip(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.0.0.9","hostname":"notes-router","notes":"Installed in row B","snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data.Attributes["notes"]; got != "Installed in row B" {
+		t.Fatalf("expected notes to round-trip, got %#v", got)
+	}
+}
+
 func TestDeviceHandlerCreate_MalformedJSON(t *testing.T) {
 	handler, _, _ := newTestDeviceHandler(t)
 
@@ -692,6 +713,92 @@ func TestDeviceHandlerUpdate_PollIntervalOverrideRejectsOutOfRange(t *testing.T)
 	}
 	if updated.PollIntervalOverride == nil || *updated.PollIntervalOverride != 45 {
 		t.Fatalf("expected override to remain 45 after rejection, got %#v", updated.PollIntervalOverride)
+	}
+}
+
+func TestDeviceHandlerUpdate_NotesTriState(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, deviceRepo)
+	initialNotes := "Before change"
+	device.Notes = &initialNotes
+	if err := deviceRepo.Update(device); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	setReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/"+device.ID.String(),
+		strings.NewReader(`{"notes":"  Replaced SFP on 2026-04-16  "}`),
+	)
+	setRec := httptest.NewRecorder()
+	handler.HandleUpdate(setRec, setReq)
+	if setRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on set, got %d; body=%s", setRec.Code, setRec.Body.String())
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after set failed: %v", err)
+	}
+	if updated.Notes == nil || *updated.Notes != "Replaced SFP on 2026-04-16" {
+		t.Fatalf("expected trimmed notes after set, got %#v", updated.Notes)
+	}
+
+	keepReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/"+device.ID.String(),
+		strings.NewReader(`{"hostname":"renamed-router"}`),
+	)
+	keepRec := httptest.NewRecorder()
+	handler.HandleUpdate(keepRec, keepReq)
+	if keepRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on keep, got %d; body=%s", keepRec.Code, keepRec.Body.String())
+	}
+
+	kept, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after keep failed: %v", err)
+	}
+	if kept.Notes == nil || *kept.Notes != "Replaced SFP on 2026-04-16" {
+		t.Fatalf("expected notes to stay unchanged, got %#v", kept.Notes)
+	}
+
+	clearReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/"+device.ID.String(),
+		strings.NewReader(`{"notes":"   "}`),
+	)
+	clearRec := httptest.NewRecorder()
+	handler.HandleUpdate(clearRec, clearReq)
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on blank clear, got %d; body=%s", clearRec.Code, clearRec.Body.String())
+	}
+
+	cleared, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after blank clear failed: %v", err)
+	}
+	if cleared.Notes != nil {
+		t.Fatalf("expected blank notes to clear field, got %#v", cleared.Notes)
+	}
+
+	nullReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/"+device.ID.String(),
+		strings.NewReader(`{"notes":null}`),
+	)
+	nullRec := httptest.NewRecorder()
+	handler.HandleUpdate(nullRec, nullReq)
+	if nullRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on null clear, got %d; body=%s", nullRec.Code, nullRec.Body.String())
+	}
+
+	clearedAgain, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after null clear failed: %v", err)
+	}
+	if clearedAgain.Notes != nil {
+		t.Fatalf("expected null notes to remain cleared, got %#v", clearedAgain.Notes)
 	}
 }
 

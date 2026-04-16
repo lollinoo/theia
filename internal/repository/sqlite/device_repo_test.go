@@ -219,13 +219,13 @@ func TestDeviceRepo_PollIntervalOverrideRoundTrip(t *testing.T) {
 	repo := NewDeviceRepo(db, testKey, nil)
 
 	device := &domain.Device{
-		ID:                  uuid.New(),
-		Hostname:            "standard-ap-01",
-		IP:                  "10.1.0.2",
-		PollClass:           domain.PollClassStandard,
+		ID:                   uuid.New(),
+		Hostname:             "standard-ap-01",
+		IP:                   "10.1.0.2",
+		PollClass:            domain.PollClassStandard,
 		PollIntervalOverride: intPtr(15),
-		Status:              domain.DeviceStatusUnknown,
-		Tags:                map[string]string{},
+		Status:               domain.DeviceStatusUnknown,
+		Tags:                 map[string]string{},
 		SNMPCredentials: domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -293,5 +293,49 @@ func TestDeviceRepo_PollClassEmptyDefaultsToStandard(t *testing.T) {
 	}
 	if got.PollClass != domain.PollClassStandard {
 		t.Errorf("PollClass: got %q, want %q (empty should default to standard)", got.PollClass, domain.PollClassStandard)
+	}
+}
+
+func TestDeviceRepo_NotesRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+
+	notes := "Installed in rack A3"
+	device := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "notes-router",
+		IP:       "10.1.0.4",
+		Notes:    &notes,
+		Status:   domain.DeviceStatusUnknown,
+		Tags:     map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	got, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if got.Notes == nil || *got.Notes != notes {
+		t.Fatalf("Notes after Create: got %#v, want %q", got.Notes, notes)
+	}
+
+	got.Notes = nil
+	if err := repo.Update(got); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after Update failed: %v", err)
+	}
+	if updated.Notes != nil {
+		t.Fatalf("Notes after clear: got %#v, want nil", updated.Notes)
 	}
 }
