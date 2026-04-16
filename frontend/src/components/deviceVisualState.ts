@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import type { Device, DeviceStatus } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 
@@ -22,6 +23,25 @@ export interface DeviceOperationalReadouts {
   memPercent: number | null;
   uptimeSecs: number | null;
   isDeviceDown: boolean;
+}
+
+export interface DeviceNodeStatusStyles {
+  badgeClass: string;
+  badgeStyle?: CSSProperties;
+  panelClass: string;
+  panelStyle?: CSSProperties;
+  frameStyle: CSSProperties;
+}
+
+export interface DeviceStatusDotStyles {
+  className: string;
+  style: CSSProperties;
+}
+
+interface DeviceFrameTone {
+  borderColor?: string;
+  shadowLayers: string[];
+  focusRingSize: number;
 }
 
 export function resolveDeviceMonitoringState(device: DeviceMonitoringInput): DeviceMonitoringState {
@@ -89,6 +109,190 @@ function statusLabelClass(status: DeviceStatus): string {
 
 function unmonitoredLabelClass(): string {
   return 'text-[12px] font-semibold text-on-bg-secondary';
+}
+
+function badgeClassForStatus(status: DeviceVisualStatus): string {
+  switch (status) {
+    case 'up':
+      return 'border-status-up/30 bg-status-up/10 text-status-up';
+    case 'critical':
+      return 'text-status-critical';
+    case 'down':
+      return 'text-status-down';
+    case 'degraded':
+    case 'probing':
+      return 'border-warning/30 bg-warning/10 text-warning';
+    case 'unmonitored':
+      return 'border-outline-strong bg-surface-container text-on-bg-secondary';
+    default:
+      return 'border-outline bg-surface-container text-on-bg-secondary';
+  }
+}
+
+function badgeStyleForStatus(status: DeviceVisualStatus): CSSProperties | undefined {
+  switch (status) {
+    case 'critical':
+      return {
+        borderColor: 'var(--nt-node-critical-badge-border)',
+        backgroundColor: 'var(--nt-node-critical-badge-bg)',
+      };
+    case 'down':
+      return {
+        borderColor: 'var(--nt-node-down-badge-border)',
+        backgroundColor: 'var(--nt-node-down-badge-bg)',
+      };
+    default:
+      return undefined;
+  }
+}
+
+function panelClassForStatus(status: DeviceVisualStatus): string {
+  switch (status) {
+    case 'up':
+      return 'border-status-up/30 bg-status-up/10';
+    case 'critical':
+      return '';
+    case 'down':
+      return '';
+    case 'degraded':
+    case 'probing':
+      return 'border-warning/30 bg-warning/10';
+    default:
+      return 'border-outline bg-surface-container';
+  }
+}
+
+function panelStyleForStatus(status: DeviceVisualStatus): CSSProperties | undefined {
+  switch (status) {
+    case 'critical':
+      return {
+        borderColor: 'var(--nt-node-critical-panel-border)',
+        backgroundColor: 'var(--nt-node-critical-panel-bg)',
+      };
+    case 'down':
+      return {
+        borderColor: 'var(--nt-node-down-panel-border)',
+        backgroundColor: 'var(--nt-node-down-panel-bg)',
+      };
+    default:
+      return undefined;
+  }
+}
+
+function frameToneForStatus(status: DeviceVisualStatus): DeviceFrameTone {
+  switch (status) {
+    case 'down':
+      return {
+        borderColor: 'var(--nt-node-down-border)',
+        shadowLayers: [
+          '0 0 0 1px var(--nt-node-down-border)',
+          '0 0 0 6px var(--nt-node-down-ring)',
+          '0 0 28px var(--nt-node-down-glow)',
+        ],
+        focusRingSize: 8,
+      };
+    case 'critical':
+      return {
+        borderColor: 'var(--nt-node-critical-border)',
+        shadowLayers: ['0 0 0 1px var(--nt-node-critical-border)'],
+        focusRingSize: 4,
+      };
+    case 'degraded':
+    case 'probing':
+      return {
+        borderColor: 'var(--color-status-warning)',
+        shadowLayers: ['0 0 0 1px var(--color-status-warning)'],
+        focusRingSize: 4,
+      };
+    default:
+      return {
+        shadowLayers: [],
+        focusRingSize: 4,
+      };
+  }
+}
+
+export function resolveDeviceNodeStatusStyles({
+  status,
+  selected = false,
+  highlighted = false,
+}: {
+  status: DeviceVisualStatus;
+  selected?: boolean;
+  highlighted?: boolean;
+}): DeviceNodeStatusStyles {
+  const tone = frameToneForStatus(status);
+  const focusVisible = selected || highlighted;
+  const shadowLayers = [...tone.shadowLayers];
+
+  if (focusVisible && !tone.borderColor) {
+    shadowLayers.unshift('0 0 0 1px var(--color-node-selected)');
+  }
+
+  if (focusVisible) {
+    shadowLayers.push(`0 0 0 ${tone.focusRingSize}px var(--color-focus-ring)`);
+  }
+
+  shadowLayers.push('var(--nt-node-shadow)');
+
+  return {
+    badgeClass: badgeClassForStatus(status),
+    badgeStyle: badgeStyleForStatus(status),
+    panelClass: panelClassForStatus(status),
+    panelStyle: panelStyleForStatus(status),
+    frameStyle: {
+      ...(tone.borderColor
+        ? { borderColor: tone.borderColor }
+        : focusVisible
+          ? { borderColor: 'var(--color-node-selected)' }
+          : {}),
+      boxShadow: shadowLayers.join(', '),
+    },
+  };
+}
+
+function dotClassForStatus(status: DeviceVisualStatus): string {
+  switch (status) {
+    case 'up':
+      return 'bg-status-up';
+    case 'critical':
+      return 'bg-status-critical';
+    case 'down':
+      return 'bg-status-down motion-reduce:animate-none animate-pulse';
+    case 'degraded':
+      return 'bg-warning motion-reduce:animate-none animate-pulse';
+    case 'probing':
+      return 'bg-status-probing motion-reduce:animate-none animate-pulse';
+    case 'unknown':
+      return 'bg-status-unknown';
+    case 'unmonitored':
+      return 'border border-outline-strong bg-surface-container-high';
+  }
+}
+
+function dotStyleForStatus(status: DeviceVisualStatus): CSSProperties {
+  switch (status) {
+    case 'up':
+      return { boxShadow: 'var(--nt-glow-status-ok)' };
+    case 'critical':
+      return { boxShadow: '0 0 0 1px var(--nt-node-critical-badge-border)' };
+    case 'down':
+      return { boxShadow: 'var(--nt-glow-status-down)' };
+    case 'degraded':
+    case 'probing':
+      return { boxShadow: 'var(--nt-glow-status-warning)' };
+    case 'unknown':
+      return { boxShadow: 'var(--nt-glow-status-unknown)' };
+    case 'unmonitored':
+      return { boxShadow: 'none' };
+  }
+}
+
+export function resolveDeviceStatusDotStyles(status: DeviceVisualStatus): DeviceStatusDotStyles {
+  return {
+    className: dotClassForStatus(status),
+    style: dotStyleForStatus(status),
+  };
 }
 
 export function resolveDeviceVisualState(

@@ -226,7 +226,8 @@ describe('DeviceCard', () => {
     });
 
     expect(screen.getByText('Critical')).toBeInTheDocument();
-    expect(criticalCard.container.innerHTML).toContain('border-status-critical/30');
+    expect(criticalCard.container.innerHTML).toContain('var(--nt-node-critical-badge-border)');
+    expect(criticalCard.container.innerHTML).not.toContain('var(--nt-node-down-glow)');
 
     criticalCard.unmount();
 
@@ -236,7 +237,9 @@ describe('DeviceCard', () => {
     });
 
     expect(screen.getByText('Down')).toBeInTheDocument();
-    expect(downCard.container.innerHTML).toContain('border-status-down/30');
+    expect(downCard.container.innerHTML).toContain('var(--nt-node-down-badge-border)');
+    expect(downCard.container.innerHTML).toContain('var(--nt-node-down-ring)');
+    expect(downCard.container.innerHTML).toContain('var(--nt-node-down-glow)');
   });
 
   it('renders unmonitored virtual nodes with neutral semantics instead of failure UI', () => {
@@ -262,11 +265,14 @@ describe('DeviceCard', () => {
     expect(screen.getByText('Unmonitored')).toBeInTheDocument();
     expect(screen.getByText('Virtual node')).toBeInTheDocument();
     expect(screen.queryByText('No IP')).toBeNull();
+    expect(screen.queryByText('CPU')).toBeNull();
+    expect(screen.queryByText('MEM')).toBeNull();
+    expect(screen.queryByText('UP')).toBeNull();
     expect(screen.queryByText(/Fresh ·/)).toBeNull();
     expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
-  it('renders virtual nodes with IP chip and keeps compact readouts', () => {
+  it('renders monitorable virtual nodes with status-first layout and IP chip', () => {
     renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
@@ -283,8 +289,13 @@ describe('DeviceCard', () => {
       }),
     });
 
+    expect(screen.getByText('Virtual node')).toBeInTheDocument();
+    expect(screen.getByText('Status')).toBeInTheDocument();
+    expect(screen.getByText('Up')).toBeInTheDocument();
     expect(screen.getByText('IP 192.168.1.1')).toBeInTheDocument();
-    expect(screen.getByText('UP')).toBeInTheDocument();
+    expect(screen.queryByText('CPU')).toBeNull();
+    expect(screen.queryByText('MEM')).toBeNull();
+    expect(screen.queryByText('UP')).toBeNull();
     expect(screen.queryByText('TEMP')).toBeNull();
   });
 
@@ -311,8 +322,8 @@ describe('DeviceCard', () => {
       metrics: mockMetrics({ health: 'critical' }),
     });
 
-    expect(container.innerHTML).not.toContain('var(--color-status-down)');
-    expect(container.innerHTML).not.toContain('border-status-down/30');
-    expect(container.innerHTML).not.toContain('border-status-critical/30');
+    expect(container.innerHTML).not.toContain('var(--nt-node-down-glow)');
+    expect(container.innerHTML).not.toContain('var(--nt-node-down-badge-border)');
+    expect(container.innerHTML).not.toContain('var(--nt-node-critical-badge-border)');
   });
 });

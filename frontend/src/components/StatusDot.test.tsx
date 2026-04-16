@@ -14,12 +14,15 @@ describe('StatusDot (COMP-11)', () => {
     const { container } = render(<StatusDot status="down" />);
     const dot = container.querySelector('span');
     expect(dot?.className).toContain('animate-pulse');
+    expect(dot?.getAttribute('style')).toContain('var(--nt-glow-status-down)');
   });
 
-  it('status critical renders with the dedicated critical token', () => {
+  it('status critical renders with a dedicated static token', () => {
     const { container } = render(<StatusDot status="critical" />);
     const dot = container.querySelector('span');
     expect(dot?.className).toContain('bg-status-critical');
+    expect(dot?.className).not.toContain('animate-pulse');
+    expect(dot?.getAttribute('style')).toContain('var(--nt-node-critical-badge-border)');
   });
 
   it('status up does NOT have animate-pulse class', () => {

@@ -40,6 +40,18 @@
   --nt-status-probing: var(--nt-status-warning);
   --nt-warning: var(--nt-status-warning);
   --nt-critical: var(--nt-status-critical);
+  --nt-node-critical-border: rgba(255, 118, 136, 0.78);
+  --nt-node-critical-badge-border: rgba(255, 118, 136, 0.34);
+  --nt-node-critical-badge-bg: rgba(255, 118, 136, 0.12);
+  --nt-node-critical-panel-border: rgba(255, 118, 136, 0.24);
+  --nt-node-critical-panel-bg: rgba(255, 118, 136, 0.08);
+  --nt-node-down-border: rgba(255, 79, 100, 0.92);
+  --nt-node-down-badge-border: rgba(255, 79, 100, 0.44);
+  --nt-node-down-badge-bg: rgba(255, 79, 100, 0.18);
+  --nt-node-down-panel-border: rgba(255, 79, 100, 0.3);
+  --nt-node-down-panel-bg: rgba(255, 79, 100, 0.1);
+  --nt-node-down-ring: rgba(255, 79, 100, 0.1);
+  --nt-node-down-glow: rgba(255, 79, 100, 0.24);
 
   --nt-edge-default: #64758d;
   --nt-edge-muted: #4e5f79;
@@ -109,6 +121,18 @@
   --nt-status-probing: var(--nt-status-warning);
   --nt-warning: var(--nt-status-warning);
   --nt-critical: var(--nt-status-critical);
+  --nt-node-critical-border: rgba(184, 66, 82, 0.74);
+  --nt-node-critical-badge-border: rgba(184, 66, 82, 0.32);
+  --nt-node-critical-badge-bg: rgba(184, 66, 82, 0.1);
+  --nt-node-critical-panel-border: rgba(184, 66, 82, 0.22);
+  --nt-node-critical-panel-bg: rgba(184, 66, 82, 0.07);
+  --nt-node-down-border: rgba(193, 63, 50, 0.88);
+  --nt-node-down-badge-border: rgba(193, 63, 50, 0.4);
+  --nt-node-down-badge-bg: rgba(193, 63, 50, 0.14);
+  --nt-node-down-panel-border: rgba(193, 63, 50, 0.28);
+  --nt-node-down-panel-bg: rgba(193, 63, 50, 0.08);
+  --nt-node-down-ring: rgba(193, 63, 50, 0.08);
+  --nt-node-down-glow: rgba(193, 63, 50, 0.14);
 
   --nt-edge-default: #7d8ea6;
   --nt-edge-muted: #b8c4d2;
