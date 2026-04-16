@@ -19,7 +19,7 @@ vi.mock('../MaterialIcon', () => ({
 describe('THEME-05 Component smoke tests', () => {
   describe('StatusDot', () => {
     it('renders without error for all statuses', () => {
-      const statuses = ['up', 'down', 'critical', 'probing', 'unknown', 'degraded'] as const;
+      const statuses = ['up', 'down', 'critical', 'probing', 'unknown', 'degraded', 'unmonitored'] as const;
       for (const status of statuses) {
         const { container } = render(<StatusDot status={status} />);
         expect(container.firstChild).toBeTruthy();

@@ -2,6 +2,10 @@ import type { Device } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 import { alertStatusForDevice } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
+import {
+  resolveDeviceMonitoringState,
+  sanitizeDeviceMetricsForDisplay,
+} from '../deviceVisualState';
 
 export function buildTopologyNodes(
   devices: Device[],
@@ -32,10 +36,14 @@ export function buildTopologyNodes(
       }
     }
 
-    const nodeMetrics = pendingSnapshot?.device_metrics[device.id] ?? null;
+    const nodeMetrics = sanitizeDeviceMetricsForDisplay(
+      deviceData,
+      pendingSnapshot?.device_metrics[device.id] ?? null,
+    );
 
     // Virtual devices have no SNMP metrics; detect and propagate flags
     const isVirtual = device.device_type === 'virtual';
+    const monitoringState = resolveDeviceMonitoringState(deviceData);
 
     return {
       id: device.id,
@@ -55,6 +63,7 @@ export function buildTopologyNodes(
           ? alertStatusForDevice(device.id, pendingSnapshot.alerts)
           : undefined,
         isVirtual,
+        monitoringState,
         subtype: isVirtual ? (deviceData.tags?.virtual_subtype ?? 'generic') : undefined,
       },
     };

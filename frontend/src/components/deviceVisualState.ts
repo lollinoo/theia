@@ -1,17 +1,51 @@
 import type { Device, DeviceStatus } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 
-export type DeviceVisualStatus = DeviceStatus | 'degraded' | 'critical';
+export type DeviceMonitoringState = 'monitorable' | 'unmonitored';
+export type DeviceVisualStatus = DeviceStatus | 'degraded' | 'critical' | 'unmonitored';
 
-type DeviceVisualLabel = 'Up' | 'Down' | 'Probing' | 'Unknown' | 'Warning' | 'Critical';
+type DeviceVisualLabel = 'Up' | 'Down' | 'Probing' | 'Unknown' | 'Warning' | 'Critical' | 'Unmonitored';
 
+type DeviceMonitoringInput = Pick<Device, 'device_type' | 'ip'>;
 type DeviceVisualInput = Pick<Device, 'device_type' | 'ip' | 'status'>;
-type DeviceVisualMetrics = Pick<DeviceMetricsDTO, 'health'> | null | undefined;
+type DeviceVisualMetrics = DeviceMetricsDTO | null | undefined;
+export type DeviceAddressState = 'address' | 'missing' | 'unmonitored';
 
 export interface DeviceVisualState {
   dotStatus: DeviceVisualStatus;
   label: DeviceVisualLabel;
   labelClass: string;
+}
+
+export interface DeviceOperationalReadouts {
+  cpuPercent: number | null;
+  memPercent: number | null;
+  uptimeSecs: number | null;
+  isDeviceDown: boolean;
+}
+
+export function resolveDeviceMonitoringState(device: DeviceMonitoringInput): DeviceMonitoringState {
+  const hasIp = device.ip.trim().length > 0;
+  return device.device_type === 'virtual' && !hasIp ? 'unmonitored' : 'monitorable';
+}
+
+export function isDeviceMonitorable(device: DeviceMonitoringInput): boolean {
+  return resolveDeviceMonitoringState(device) === 'monitorable';
+}
+
+export function sanitizeDeviceMetricsForDisplay(
+  device: DeviceMonitoringInput,
+  metrics?: DeviceVisualMetrics,
+): DeviceMetricsDTO | null {
+  return isDeviceMonitorable(device) ? metrics ?? null : null;
+}
+
+export function resolveDeviceAddressState(device: DeviceMonitoringInput): DeviceAddressState {
+  if (device.ip.trim().length > 0) {
+    return 'address';
+  }
+
+  return isDeviceMonitorable(device) ? 'missing' : 'unmonitored';
 }
 
 function healthLabelClass(health: string | undefined): string {
@@ -53,15 +87,19 @@ function statusLabelClass(status: DeviceStatus): string {
   }
 }
 
+function unmonitoredLabelClass(): string {
+  return 'text-[12px] font-semibold text-on-bg-secondary';
+}
+
 export function resolveDeviceVisualState(
   device: DeviceVisualInput,
   metrics?: DeviceVisualMetrics,
 ): DeviceVisualState {
-  if (device.device_type === 'virtual' && device.ip.trim().length === 0) {
+  if (!isDeviceMonitorable(device)) {
     return {
-      dotStatus: 'unknown',
-      label: 'Unknown',
-      labelClass: statusLabelClass('unknown'),
+      dotStatus: 'unmonitored',
+      label: 'Unmonitored',
+      labelClass: unmonitoredLabelClass(),
     };
   }
 
@@ -101,6 +139,21 @@ export function resolveDeviceVisualState(
   }
 }
 
+export function resolveDeviceOperationalReadouts(
+  device: DeviceVisualInput,
+  metrics?: DeviceVisualMetrics,
+): DeviceOperationalReadouts {
+  const sanitizedMetrics = sanitizeDeviceMetricsForDisplay(device, metrics);
+  const isDeviceDown = isDeviceMonitorable(device) && device.status === 'down';
+
+  return {
+    cpuPercent: isDeviceDown ? null : sanitizedMetrics?.cpu_percent ?? null,
+    memPercent: isDeviceDown ? null : sanitizedMetrics?.mem_percent ?? null,
+    uptimeSecs: isDeviceDown ? null : sanitizedMetrics?.uptime_secs ?? null,
+    isDeviceDown,
+  };
+}
+
 export function minimapColorForDevice({
   device,
   metrics,
@@ -125,6 +178,8 @@ export function minimapColorForDevice({
       return 'var(--color-status-probing)';
     case 'degraded':
       return 'var(--color-status-probing)';
+    case 'unmonitored':
+      return 'var(--nt-on-bg-muted)';
     default:
       return 'var(--color-status-unknown)';
   }

@@ -1,7 +1,7 @@
 import type { DeviceStatus } from '../types/api';
 import type { CSSProperties } from 'react';
 
-type StatusDotStatus = DeviceStatus | 'degraded' | 'critical';
+type StatusDotStatus = DeviceStatus | 'degraded' | 'critical' | 'unmonitored';
 
 interface StatusDotProps {
   status: StatusDotStatus;
@@ -14,6 +14,7 @@ const statusClassNames: Record<StatusDotStatus, string> = {
   degraded: 'bg-warning motion-reduce:animate-none animate-pulse',
   probing: 'bg-status-probing motion-reduce:animate-none animate-pulse',
   unknown: 'bg-status-unknown',
+  unmonitored: 'border border-outline-strong bg-surface-container-high',
 };
 
 const statusStyles: Record<StatusDotStatus, CSSProperties> = {
@@ -23,6 +24,7 @@ const statusStyles: Record<StatusDotStatus, CSSProperties> = {
   degraded: { boxShadow: 'var(--nt-glow-status-warning)' },
   probing: { boxShadow: 'var(--nt-glow-status-warning)' },
   unknown: { boxShadow: 'var(--nt-glow-status-unknown)' },
+  unmonitored: { boxShadow: 'none' },
 };
 
 export function StatusDot({ status }: StatusDotProps) {

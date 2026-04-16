@@ -13,7 +13,14 @@ import { useDocumentVisibility } from '../hooks/useDocumentVisibility';
 import { useFreshnessClock } from '../hooks/useFreshnessClock';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
 import { StatusDot } from './StatusDot';
-import { resolveDeviceVisualState } from './deviceVisualState';
+import {
+  type DeviceMonitoringState,
+  resolveDeviceAddressState,
+  resolveDeviceMonitoringState,
+  resolveDeviceOperationalReadouts,
+  resolveDeviceVisualState,
+  sanitizeDeviceMetricsForDisplay,
+} from './deviceVisualState';
 import { VendorIcon } from './icons/VendorIcon';
 
 export interface DeviceNodeData {
@@ -28,6 +35,7 @@ export interface DeviceNodeData {
   isGhost?: boolean;
   onGhostClick?: (deviceId: string) => void;
   isVirtual?: boolean;
+  monitoringState?: DeviceMonitoringState;
   subtype?: string;
   [key: string]: unknown;
 }
@@ -118,6 +126,8 @@ function statusBadgeClass(dotStatus: ReturnType<typeof resolveDeviceVisualState>
     case 'degraded':
     case 'probing':
       return 'border-warning/30 bg-warning/10 text-warning';
+    case 'unmonitored':
+      return 'border-outline-strong bg-surface-container text-on-bg-secondary';
     default:
       return 'border-outline bg-surface-container text-on-bg-secondary';
   }
@@ -156,17 +166,11 @@ function buildReadouts({
 function frameStyle({
   selected,
   highlighted,
-  isDown,
-  isCritical,
-  isWarning,
-  isProbing,
+  status,
 }: {
   selected: boolean;
   highlighted: boolean;
-  isDown: boolean;
-  isCritical: boolean;
-  isWarning: boolean;
-  isProbing: boolean;
+  status: ReturnType<typeof resolveDeviceVisualState>['dotStatus'];
 }): CSSProperties {
   if (selected || highlighted) {
     return {
@@ -174,27 +178,28 @@ function frameStyle({
       boxShadow: '0 0 0 1px var(--color-node-selected), 0 0 0 4px var(--color-focus-ring), var(--nt-node-shadow)',
     };
   }
-  if (isDown) {
-    return {
-      borderColor: 'var(--color-status-down)',
-      boxShadow: '0 0 0 1px var(--color-status-down), var(--nt-node-shadow)',
-    };
+  switch (status) {
+    case 'down':
+      return {
+        borderColor: 'var(--color-status-down)',
+        boxShadow: '0 0 0 1px var(--color-status-down), var(--nt-node-shadow)',
+      };
+    case 'critical':
+      return {
+        borderColor: 'var(--color-status-critical)',
+        boxShadow: '0 0 0 1px var(--color-status-critical), var(--nt-node-shadow)',
+      };
+    case 'degraded':
+    case 'probing':
+      return {
+        borderColor: 'var(--color-status-warning)',
+        boxShadow: '0 0 0 1px var(--color-status-warning), var(--nt-node-shadow)',
+      };
+    default:
+      return {
+        boxShadow: 'var(--nt-node-shadow)',
+      };
   }
-  if (isCritical) {
-    return {
-      borderColor: 'var(--color-status-critical)',
-      boxShadow: '0 0 0 1px var(--color-status-critical), var(--nt-node-shadow)',
-    };
-  }
-  if (isWarning || isProbing) {
-    return {
-      borderColor: 'var(--color-status-warning)',
-      boxShadow: '0 0 0 1px var(--color-status-warning), var(--nt-node-shadow)',
-    };
-  }
-  return {
-    boxShadow: 'var(--nt-node-shadow)',
-  };
 }
 
 function ghostFrameStyle(color?: string): CSSProperties | undefined {
@@ -213,7 +218,8 @@ function DeviceCardInner({
   positionAbsoluteY,
   selected,
 }: NodeProps<DeviceNode>) {
-  const metrics = data.metrics ?? null;
+  const monitoringState = data.monitoringState ?? resolveDeviceMonitoringState(data.device);
+  const metrics = sanitizeDeviceMetricsForDisplay(data.device, data.metrics);
   const transform = useStore((state) => state.transform);
   const viewportWidth = useStore((state) => state.width);
   const viewportHeight = useStore((state) => state.height);
@@ -236,14 +242,14 @@ function DeviceCardInner({
     freshnessActive,
   );
   const headerState = resolveDeviceVisualState(data.device, metrics);
-  const freshness = metrics
+  const freshness = monitoringState === 'monitorable' && metrics
     ? formatFreshness(
         metrics.last_polled_at,
         metrics.expected_poll_interval_seconds,
         nowMs,
       )
     : null;
-  const pollingEvery = metrics
+  const pollingEvery = monitoringState === 'monitorable' && metrics
     ? formatPollingEvery(
         metrics.expected_poll_interval_seconds ?? getEffectivePollingIntervalSeconds(data.device),
       )
@@ -256,13 +262,13 @@ function DeviceCardInner({
     ? `linear-gradient(90deg, ${colors.join(', ')})`
     : firstColor;
   const addressLabel = isMacAddress(data.device.ip) ? 'MAC' : 'IP';
-  const isDeviceDown = data.device.status === 'down';
-  const cpuPercent = isDeviceDown ? null : metrics?.cpu_percent ?? null;
-  const memPercent = isDeviceDown ? null : metrics?.mem_percent ?? null;
-  const uptimeSecs = isDeviceDown ? null : metrics?.uptime_secs ?? null;
-  const isCriticalHealth = data.device.status === 'up' && metrics?.health === 'critical';
-  const isWarningHealth = data.device.status === 'up' && metrics?.health === 'warning';
-  const isProbing = data.device.status === 'probing';
+  const addressState = resolveDeviceAddressState(data.device);
+  const {
+    cpuPercent,
+    memPercent,
+    uptimeSecs,
+    isDeviceDown,
+  } = resolveDeviceOperationalReadouts(data.device, metrics);
   const readouts = buildReadouts({
     cpuPercent,
     memPercent,
@@ -272,10 +278,7 @@ function DeviceCardInner({
   const panelFrameStyle = frameStyle({
     selected,
     highlighted: data.highlighted === true,
-    isDown: isDeviceDown,
-    isCritical: isCriticalHealth,
-    isWarning: isWarningHealth,
-    isProbing,
+    status: headerState.dotStatus,
   });
 
   if (data.isGhost) {
@@ -375,9 +378,13 @@ function DeviceCardInner({
           </div>
 
           <div className="mt-3 flex items-center justify-between gap-3">
-            {data.device.ip ? (
+            {addressState === 'address' ? (
               <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 font-mono text-[11px] text-on-bg">
                 {addressLabel} {data.device.ip}
+              </span>
+            ) : addressState === 'unmonitored' ? (
+              <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
+                Virtual node
               </span>
             ) : (
               <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
@@ -438,6 +445,7 @@ const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: Nod
     pd.areaColors?.length === nd.areaColors?.length && (pd.areaColors ?? []).every((c, i) => c === nd.areaColors?.[i]) &&
     pd.isGhost === nd.isGhost &&
     pd.isVirtual === nd.isVirtual &&
+    pd.monitoringState === nd.monitoringState &&
     pd.subtype === nd.subtype &&
     pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
     pd.metrics?.mem_percent === nd.metrics?.mem_percent &&

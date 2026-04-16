@@ -175,6 +175,35 @@ describe('useCanvasData', () => {
     });
   });
 
+  it('snapshot application keeps no-ip virtual placeholders unmonitored and metric-free', async () => {
+    vi.mocked(fetchDevices).mockResolvedValue([
+      mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        status: 'down',
+        tags: { display_name: 'Internet', virtual_subtype: 'internet' },
+      }),
+    ]);
+
+    const { result } = renderUseCanvasData(
+      mockSnapshot({
+        device_statuses: {
+          'dev-1': 'down',
+        },
+      }),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.nodes[0].data.monitoringState).toBe('unmonitored');
+    expect(result.current.nodes[0].data.metrics).toBeNull();
+  });
+
   it('stale fallback blanks numeric metrics but preserves health freshness and cadence metadata', async () => {
     const { result } = renderUseCanvasData(mockSnapshot());
 

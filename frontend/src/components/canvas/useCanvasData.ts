@@ -14,6 +14,10 @@ import {
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import {
+  resolveDeviceMonitoringState,
+  sanitizeDeviceMetricsForDisplay,
+} from '../deviceVisualState';
+import {
   buildPositionPayload,
   buildThroughputLabel,
   findLinkMetrics,
@@ -423,7 +427,10 @@ export function useCanvasData({
 
         // Preserve overview metadata like health, last_polled_at, and
         // expected_poll_interval_seconds even when device status is down.
-        const nodeMetrics = snapshot.device_metrics[node.id] ?? null;
+        const nodeMetrics = sanitizeDeviceMetricsForDisplay(
+          updatedDevice,
+          snapshot.device_metrics[node.id] ?? null,
+        );
 
         return {
           ...node,
@@ -431,6 +438,7 @@ export function useCanvasData({
             ...node.data,
             alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
             device: updatedDevice,
+            monitoringState: resolveDeviceMonitoringState(updatedDevice),
             metrics: nodeMetrics,
           },
         };

@@ -39,4 +39,11 @@ describe('StatusDot (COMP-11)', () => {
     const dot = container.querySelector('span');
     expect(dot?.className).toContain('transition-[box-shadow]');
   });
+
+  it('status unmonitored renders with a neutral outlined token', () => {
+    const { container } = render(<StatusDot status="unmonitored" />);
+    const dot = container.querySelector('span');
+    expect(dot?.className).toContain('border-outline-strong');
+    expect(dot?.className).toContain('bg-surface-container-high');
+  });
 });
