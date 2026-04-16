@@ -186,6 +186,7 @@ export interface SNMPPayload {
 export interface CreateDevicePayload {
   hostname: string;
   ip?: string;
+  notes?: string | null;
   device_type?: string;
   snmp?: SNMPPayload;
   tags?: Record<string, string>;
@@ -215,6 +216,7 @@ export async function updateDevice(
   payload: Partial<{
     hostname: string;
     ip: string;
+    notes: string | null;
     snmp: SNMPPayload;
     tags: Record<string, string>;
     vendor: string;

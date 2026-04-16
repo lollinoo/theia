@@ -37,6 +37,7 @@ export interface Device {
   id: string;
   hostname: string;
   ip: string;
+  notes?: string | null;
   device_type: DeviceType;
   poll_class: DevicePollClass;
   poll_interval_override: number | null;
@@ -109,6 +110,11 @@ function readNumber(record: APIRecord, key: string, fallback = 0): number {
 function readNullableNumber(record: APIRecord, key: string): number | null {
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readNullableString(record: APIRecord, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' ? value : null;
 }
 
 function readBoolean(record: APIRecord, key: string, fallback = false): boolean {
@@ -202,6 +208,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       id: readString(resource, 'id'),
       hostname: readString(attributes, 'hostname'),
       ip: readString(attributes, 'ip'),
+      notes: readNullableString(attributes, 'notes'),
       device_type: parseDeviceType(attributes.device_type),
       poll_class: parseDevicePollClass(attributes.poll_class),
       poll_interval_override: readNullableNumber(attributes, 'poll_interval_override'),

@@ -446,10 +446,29 @@ func TestPostgresMigrations_AddPollClassificationColumns(t *testing.T) {
 	wants := []string{
 		"ADD COLUMN IF NOT EXISTS poll_class TEXT NOT NULL DEFAULT 'standard'",
 		"ADD COLUMN IF NOT EXISTS poll_interval_override INTEGER",
+		"ADD COLUMN IF NOT EXISTS notes TEXT",
 	}
 	for _, want := range wants {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("expected postgres migrations to contain %q", want)
 		}
+	}
+}
+
+func TestMigration000017_AddsDeviceNotesColumn(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='notes'`,
+	).Scan(&count); err != nil {
+		t.Fatalf("querying devices columns: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected notes column to exist, got count %d", count)
 	}
 }

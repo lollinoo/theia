@@ -867,6 +867,80 @@ func TestUpdateDevice_PollIntervalOverrideTriState(t *testing.T) {
 	}
 }
 
+func TestUpdateDevice_NotesTriState(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+
+	initialNotes := "Primary uplink near MDF"
+	device := &domain.Device{
+		ID:       uuid.New(),
+		IP:       "10.0.0.11",
+		Hostname: "router-notes",
+		Notes:    &initialNotes,
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{}); err != nil {
+		t.Fatalf("UpdateDevice keep failed: %v", err)
+	}
+	unchanged, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed after keep: %v", err)
+	}
+	if unchanged.Notes == nil || *unchanged.Notes != initialNotes {
+		t.Fatalf("expected keep to preserve notes, got %#v", unchanged.Notes)
+	}
+
+	updatedNotes := strPtr("  Replace PSU during next visit  ")
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		Notes: &updatedNotes,
+	}); err != nil {
+		t.Fatalf("UpdateDevice set failed: %v", err)
+	}
+	stored, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed after set: %v", err)
+	}
+	if stored.Notes == nil || *stored.Notes != "Replace PSU during next visit" {
+		t.Fatalf("expected trimmed notes after set, got %#v", stored.Notes)
+	}
+
+	blankNotes := strPtr("   ")
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		Notes: &blankNotes,
+	}); err != nil {
+		t.Fatalf("UpdateDevice blank failed: %v", err)
+	}
+	cleared, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed after blank clear: %v", err)
+	}
+	if cleared.Notes != nil {
+		t.Fatalf("expected blank notes to clear field, got %#v", cleared.Notes)
+	}
+
+	var nilNotes *string
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		Notes: &nilNotes,
+	}); err != nil {
+		t.Fatalf("UpdateDevice nil clear failed: %v", err)
+	}
+	clearedAgain, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed after nil clear: %v", err)
+	}
+	if clearedAgain.Notes != nil {
+		t.Fatalf("expected nil notes to remain cleared, got %#v", clearedAgain.Notes)
+	}
+}
+
 func TestUpdateDevice_PollIntervalOverrideTriggersSchedulerRedueOnChange(t *testing.T) {
 	t.Run("set from nil", func(t *testing.T) {
 		svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)

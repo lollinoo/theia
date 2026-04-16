@@ -65,6 +65,7 @@ var primaryDataCopySpecs = []tableCopySpec{
 			{name: "sys_name_lookup", kind: columnKindText},
 			{name: "poll_class", kind: columnKindText},
 			{name: "poll_interval_override", kind: columnKindInt64},
+			{name: "notes", kind: columnKindText},
 		},
 		keyColumns: []string{"id"},
 	},

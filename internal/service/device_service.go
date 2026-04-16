@@ -31,6 +31,7 @@ type pollRescheduler interface {
 type DeviceUpdate struct {
 	Hostname             *string
 	IP                   *string
+	Notes                **string
 	Tags                 *map[string]string
 	SNMPCredentials      *domain.SNMPCredentials
 	Vendor               *string
@@ -91,6 +92,7 @@ func (s *DeviceService) AddDevice(
 	prometheusLabelName string,
 	prometheusLabelValue string,
 	areaIDs []uuid.UUID,
+	notes ...*string,
 ) (*domain.Device, error) {
 	if tags == nil {
 		tags = map[string]string{}
@@ -115,6 +117,11 @@ func (s *DeviceService) AddDevice(
 		metricsSource = domain.MetricsSourceNone
 	}
 
+	var normalizedNotes *string
+	if len(notes) > 0 {
+		normalizedNotes = domain.NormalizeDeviceNotes(notes[0])
+	}
+
 	initialStatus := domain.DeviceStatusProbing
 	if deviceType == domain.DeviceTypeVirtual {
 		initialStatus = domain.DeviceStatusUnknown
@@ -124,6 +131,7 @@ func (s *DeviceService) AddDevice(
 		ID:                   uuid.New(),
 		Hostname:             hostname,
 		IP:                   ip,
+		Notes:                normalizedNotes,
 		SNMPCredentials:      creds,
 		DeviceType:           deviceType,
 		PollClass:            domain.ClassifyPollClass(deviceType),
@@ -268,6 +276,9 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 	}
 	if update.IP != nil {
 		device.IP = *update.IP
+	}
+	if update.Notes != nil {
+		device.Notes = domain.NormalizeDeviceNotes(*update.Notes)
 	}
 	if update.Tags != nil {
 		device.Tags = *update.Tags

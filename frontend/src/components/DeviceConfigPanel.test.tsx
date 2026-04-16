@@ -30,6 +30,7 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     id: 'dev-1',
     hostname: 'router-01',
     ip: '10.0.0.1',
+    notes: null,
     device_type: 'router',
     poll_class: 'core',
     poll_interval_override: null,
@@ -247,6 +248,72 @@ describe('DeviceConfigPanel', () => {
     expect(screen.getByText('Edit Device')).toBeInTheDocument();
     // Should show Save Changes button
     expect(screen.getByText('Save Changes')).toBeInTheDocument();
+  });
+
+  it('renders saved notes preview and editable textarea', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({ notes: 'Check transceiver levels weekly' })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    const savedNotesHeader = screen.getByText('Saved Notes');
+    expect(savedNotesHeader).toBeInTheDocument();
+    const savedNotesSection = savedNotesHeader.parentElement;
+    expect(savedNotesSection).not.toBeNull();
+    expect(within(savedNotesSection as HTMLElement).getByText('Check transceiver levels weekly')).toBeInTheDocument();
+    expect(screen.getByLabelText('Device Notes')).toHaveValue('Check transceiver levels weekly');
+  });
+
+  it('submits trimmed notes and clears blank notes as null', async () => {
+    const { updateDevice } = await import('../api/client');
+    (updateDevice as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(mockDevice({ notes: 'Move to UPS-backed PDU' }))
+      .mockResolvedValueOnce(mockDevice({ notes: null }));
+
+    const onDeviceUpdated = vi.fn();
+
+    const { rerender } = render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={onDeviceUpdated}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Device Notes'), {
+      target: { value: '  Move to UPS-backed PDU  ' },
+    });
+    fireEvent.click(screen.getByText('Save Changes'));
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith(
+        'dev-1',
+        expect.objectContaining({ notes: 'Move to UPS-backed PDU' }),
+      );
+    });
+
+    rerender(
+      <DeviceConfigPanel
+        device={mockDevice({ notes: 'Move to UPS-backed PDU' })}
+        onDeviceUpdated={onDeviceUpdated}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Device Notes'), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByText('Save Changes'));
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith(
+        'dev-1',
+        expect.objectContaining({ notes: null }),
+      );
+    });
   });
 
   it('renders Grafana dashboard URL field', () => {

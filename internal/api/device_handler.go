@@ -52,11 +52,11 @@ var validDeviceTypes = map[string]bool{
 }
 
 var validMetricsSources = map[string]bool{
-	"prometheus": true,
-	"snmp": true,
+	"prometheus":               true,
+	"snmp":                     true,
 	"prometheus_snmp_fallback": true,
-	"none": true,
-	"": true,
+	"none":                     true,
+	"":                         true,
 }
 
 var validSNMPv3AuthProtocols = map[string]bool{
@@ -77,6 +77,7 @@ var validSNMPv3SecurityLevels = map[string]bool{
 type createDeviceRequest struct {
 	IP                   string            `json:"ip"`
 	Hostname             string            `json:"hostname"`
+	Notes                *string           `json:"notes"`
 	DeviceType           string            `json:"device_type,omitempty"`
 	SNMP                 snmpCredsRequest  `json:"snmp"`
 	Tags                 map[string]string `json:"tags"`
@@ -120,9 +121,31 @@ func (o *optionalPollIntervalOverride) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type optionalNullableString struct {
+	Set   bool
+	Value *string
+}
+
+func (o *optionalNullableString) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+
+	o.Value = &value
+	return nil
+}
+
 type updateDeviceRequest struct {
 	Hostname             *string                      `json:"hostname,omitempty"`
 	IP                   *string                      `json:"ip,omitempty"`
+	Notes                optionalNullableString       `json:"notes"`
 	Tags                 *map[string]string           `json:"tags,omitempty"`
 	SNMP                 *snmpCredsRequest            `json:"snmp,omitempty"`
 	Vendor               *string                      `json:"vendor,omitempty"`
@@ -187,7 +210,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 
 		device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
 			domain.DeviceTypeVirtual,
-			domain.SNMPCredentials{}, req.Tags, "", "", "", "", areaIDs)
+			domain.SNMPCredentials{}, req.Tags, "", "", "", "", areaIDs, req.Notes)
 		if err != nil {
 			if isDeviceIPConflict(err) {
 				writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(req.IP))
@@ -278,7 +301,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
 		deviceType,
 		creds, req.Tags, req.Vendor, metricsSource,
-		prometheusLabelName, prometheusLabelValue, areaIDs)
+		prometheusLabelName, prometheusLabelValue, areaIDs, req.Notes)
 	if err != nil {
 		if isDeviceIPConflict(err) {
 			writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(req.IP))
@@ -394,6 +417,9 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		Hostname: req.Hostname,
 		IP:       req.IP,
 		Tags:     req.Tags,
+	}
+	if req.Notes.Set {
+		update.Notes = &req.Notes.Value
 	}
 	if req.PollIntervalOverride.Set {
 		update.PollIntervalOverride = &req.PollIntervalOverride.Value
@@ -562,7 +588,7 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.svc.AddDevice(r.Context(), d.IP, d.Hostname,
 			batchDeviceType,
 			creds, d.Tags, d.Vendor, ms,
-			d.PrometheusLabelName, d.PrometheusLabelValue, nil); err != nil {
+			d.PrometheusLabelName, d.PrometheusLabelValue, nil, d.Notes); err != nil {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 		}
 	}
@@ -586,6 +612,7 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 	attrs := map[string]interface{}{
 		"hostname":               d.Hostname,
 		"ip":                     d.IP,
+		"notes":                  d.Notes,
 		"device_type":            string(d.DeviceType),
 		"poll_class":             string(d.PollClass),
 		"poll_interval_override": d.PollIntervalOverride,

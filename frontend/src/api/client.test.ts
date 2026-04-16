@@ -31,6 +31,7 @@ function deviceResource(id: string, hostname: string, ip: string) {
     attributes: {
       hostname,
       ip,
+      notes: null,
       device_type: 'router',
       status: 'up',
       sys_name: hostname,
@@ -117,6 +118,25 @@ describe('fetchDevices', () => {
 
     expect(result[0].poll_class).toBe('core');
     expect(result[0].poll_interval_override).toBe(30);
+  });
+
+  it('parses nullable notes from the API resource', async () => {
+    const payload = {
+      data: [
+        {
+          ...deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+          attributes: {
+            ...deviceResource('uuid-1', 'router-01', '10.0.0.1').attributes,
+            notes: 'Installed in rack 7',
+          },
+        },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(payload)));
+
+    const result = await fetchDevices();
+
+    expect(result[0].notes).toBe('Installed in rack 7');
   });
 });
 
@@ -248,6 +268,19 @@ describe('updateDevice', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, options] = fetchMock.mock.calls[0];
     expect(JSON.parse(options.body)).toEqual({ poll_interval_override: 30 });
+  });
+
+  it('sends nullable notes unchanged', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateDevice('uuid-1', { notes: null });
+    await updateDevice('uuid-1', { notes: 'Needs maintenance window' });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ notes: null });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ notes: 'Needs maintenance window' });
   });
 });
 
