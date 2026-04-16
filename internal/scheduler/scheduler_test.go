@@ -102,6 +102,40 @@ func TestRefreshDevices_SkipsUnmanagedDevices(t *testing.T) {
 	}
 }
 
+func TestRefreshDevices_SkipsVirtualNoIPDevices(t *testing.T) {
+	physical := domain.Device{
+		ID:        uuid.MustParse("20000000-0000-0000-0000-000000000011"),
+		Hostname:  "core-edge",
+		Managed:   true,
+		PollClass: domain.PollClassStandard,
+		IP:        "192.0.2.10",
+	}
+	virtualNoIP := domain.Device{
+		ID:         uuid.MustParse("20000000-0000-0000-0000-000000000012"),
+		Hostname:   "internet-placeholder",
+		Managed:    true,
+		PollClass:  domain.PollClassCore,
+		DeviceType: domain.DeviceTypeVirtual,
+		IP:         "",
+	}
+	source := &fakeDeviceSource{devices: []domain.Device{physical, virtualNoIP}}
+	scheduler := NewScheduler(source, nil)
+
+	if err := scheduler.refreshDevices(time.Unix(1_700_000_000, 0)); err != nil {
+		t.Fatalf("refreshDevices() error = %v", err)
+	}
+
+	if got := len(scheduler.items); got != 3 {
+		t.Fatalf("len(items) = %d, want only 3 physical tasks", got)
+	}
+
+	for _, volatility := range allVolatilityClasses() {
+		if _, ok := scheduler.items[NewTaskKey(virtualNoIP.ID, volatility)]; ok {
+			t.Fatalf("virtual no-IP key %v unexpectedly scheduled", NewTaskKey(virtualNoIP.ID, volatility))
+		}
+	}
+}
+
 func TestRefreshDevices_RemovesMissingOrUnmanagedKeys(t *testing.T) {
 	deviceA := domain.Device{
 		ID:        uuid.MustParse("30000000-0000-0000-0000-000000000001"),
