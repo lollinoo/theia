@@ -155,10 +155,6 @@ function ghostFrameStyle(color?: string): CSSProperties | undefined {
   };
 }
 
-function categoryBadgeClass(): string {
-  return 'border-outline-strong bg-surface-container-high text-on-bg-secondary';
-}
-
 function DeviceCardInner({
   data,
   width,
@@ -174,8 +170,8 @@ function DeviceCardInner({
   const viewportHeight = useStore((state) => state.height);
   const documentVisible = useDocumentVisibility();
   const isVirtual = data.isVirtual === true;
-  const fallbackWidth = data.isGhost ? 132 : isVirtual ? 208 : 236;
-  const fallbackHeight = data.isGhost ? 52 : 156;
+  const fallbackWidth = data.isGhost ? 132 : isVirtual ? 200 : 236;
+  const fallbackHeight = data.isGhost ? 52 : isVirtual ? 160 : 156;
   const freshnessActive = documentVisible && isNodeVisibleInViewport({
     nodeX: positionAbsoluteX,
     nodeY: positionAbsoluteY,
@@ -224,6 +220,7 @@ function DeviceCardInner({
     addressState,
     hasFreshnessMeta: freshness !== null && pollingEvery !== null,
   });
+  const isVirtualUnmonitored = renderModel.variant === 'virtual-unmonitored';
   const readouts = buildReadouts({
     cpuPercent,
     memPercent,
@@ -266,7 +263,7 @@ function DeviceCardInner({
 
   return (
     <div
-      className={`group relative w-full rounded-[20px] border border-outline bg-surface transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-outline-strong ${statusStyles.frameClass ?? ''}`}
+      className={`group relative w-full rounded-[20px] border border-outline bg-surface transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-outline-strong ${isVirtual ? 'min-h-[160px] min-w-[200px] max-h-[235px] max-w-[285px]' : ''} ${statusStyles.frameClass ?? ''}`}
       style={statusStyles.frameStyle}
       onContextMenu={(event) => {
         if (!data.onContextMenu) return;
@@ -381,80 +378,49 @@ function DeviceCardInner({
             ) : null}
           </div>
         ) : (
-          <div className="px-4 pb-4 pt-3.5">
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-outline bg-surface-container-high text-on-bg">
-                <VendorIcon vendor={data.device.vendor} size={18} />
-              </div>
-
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-on-bg-secondary">
-                      {deviceTypeLabel(data.device, isVirtual, data.subtype)}
-                    </div>
-                    <div className="mt-1.5 min-w-0 text-[16px] font-semibold leading-tight tracking-tight text-on-bg">
-                      <span className="line-clamp-2 break-words">{label}</span>
-                    </div>
-                  </div>
-
-                  {renderModel.showVirtualCategoryBadge ? (
-                    <div className={`inline-flex shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${categoryBadgeClass()}`}>
-                      <span>Virtual node</span>
-                    </div>
-                  ) : (
-                    <div
-                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
-                      style={statusStyles.badgeStyle}
-                    >
-                      <StatusDot status={headerState.dotStatus} />
-                      <span>{headerState.label}</span>
-                    </div>
-                  )}
-                </div>
-
-                {renderModel.showVirtualStatusPanel ? (
+          <div className={`px-3.5 text-center ${isVirtualUnmonitored ? 'pb-4 pt-3.5' : 'pb-3 pt-2.5'}`}>
+            <div className="flex flex-col items-center">
+              {renderModel.showVirtualStatusBadge ? (
+                <div className="mb-1.5 flex w-full justify-end">
                   <div
-                    className={`mt-4 rounded-2xl border px-3.5 py-3 ${statusStyles.panelClass}`}
-                    style={statusStyles.panelStyle}
+                    className={`inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
+                    style={statusStyles.badgeStyle}
                   >
-                    <div className="text-[9px] uppercase tracking-[0.16em] text-on-bg-secondary">
-                      Status
-                    </div>
-                    <div className="mt-1.5 flex items-center gap-2.5">
-                      <StatusDot status={headerState.dotStatus} />
-                      <span className={`text-[15px] font-semibold tracking-tight ${headerState.labelClass}`}>
-                        {headerState.label}
-                      </span>
-                    </div>
+                    <StatusDot status={headerState.dotStatus} />
+                    <span className="truncate">{headerState.label}</span>
                   </div>
-                ) : null}
-
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  {renderModel.showVirtualIdentityTag ? (
-                    <span className="rounded-full border border-outline bg-surface-container px-3 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
-                      Virtual node
-                    </span>
-                  ) : null}
-
-                  {renderModel.showVirtualAddressChip ? (
-                    <span className="rounded-full border border-outline bg-surface-container-high px-3 py-1 font-mono text-[11px] text-on-bg">
-                      {addressLabel} {data.device.ip}
-                    </span>
-                  ) : null}
                 </div>
+              ) : null}
 
-                {renderModel.showFreshnessMeta ? (
-                  <div className="mt-3 flex items-center justify-between gap-3 text-[10px]">
-                    <div className={`font-medium ${readoutToneClass(freshnessTone(freshness!.tier))}`}>
-                      {freshness!.text}
-                    </div>
-                    <div className="text-on-bg-secondary">
-                      {pollingEvery}
-                    </div>
-                  </div>
+              <div className="flex h-[56px] w-[56px] items-center justify-center rounded-[22px] border border-outline bg-surface-container-high text-on-bg shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
+                <VendorIcon vendor={data.device.vendor} size={20} />
+              </div>
+
+              <div className="mt-2.5 max-w-full truncate text-[10px] uppercase tracking-[0.22em] text-on-bg-secondary">
+                {deviceTypeLabel(data.device, isVirtual, data.subtype)}
+              </div>
+              <div className="mt-1.5 w-full max-w-full text-[17px] font-semibold leading-tight tracking-tight text-on-bg">
+                <span className="block w-full truncate">{label}</span>
+              </div>
+
+              <div className="mt-3 flex w-full flex-col items-center gap-1.5">
+                {renderModel.showVirtualAddressChip ? (
+                  <span className="inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-3 py-1 font-mono text-[11px] text-on-bg">
+                    {addressLabel} {data.device.ip}
+                  </span>
                 ) : null}
               </div>
+
+              {renderModel.showFreshnessMeta ? (
+                <div className="mt-3 flex w-full items-center justify-between gap-2 text-[10px]">
+                  <div className={`min-w-0 truncate font-medium ${readoutToneClass(freshnessTone(freshness!.tier))}`}>
+                    {freshness!.text}
+                  </div>
+                  <div className="min-w-0 truncate text-on-bg-secondary">
+                    {pollingEvery}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
         )}

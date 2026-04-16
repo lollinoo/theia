@@ -264,8 +264,9 @@ describe('DeviceCard', () => {
 
     expect(screen.getByText('AWS Cloud')).toBeInTheDocument();
     expect(screen.getByText('Cloud')).toBeInTheDocument();
-    expect(screen.getByText('Unmonitored')).toBeInTheDocument();
-    expect(screen.getByText('Virtual node')).toBeInTheDocument();
+    expect(screen.queryByText('Unmonitored')).toBeNull();
+    expect(screen.queryByText('Virtual node')).toBeNull();
+    expect(screen.queryByText('Status')).toBeNull();
     expect(screen.queryByText('No IP')).toBeNull();
     expect(screen.queryByText('CPU')).toBeNull();
     expect(screen.queryByText('MEM')).toBeNull();
@@ -274,7 +275,7 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
-  it('renders monitorable virtual nodes with status-first layout and IP chip', () => {
+  it('renders monitorable virtual nodes with top-right status badge, IP chip, and footer meta', () => {
     renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
@@ -291,14 +292,67 @@ describe('DeviceCard', () => {
       }),
     });
 
-    expect(screen.getByText('Virtual node')).toBeInTheDocument();
-    expect(screen.getByText('Status')).toBeInTheDocument();
-    expect(screen.getByText('Up')).toBeInTheDocument();
+    expect(screen.queryByText('Virtual node')).toBeNull();
+    expect(screen.queryByText('Status')).toBeNull();
+    expect(screen.getAllByText('Up')).toHaveLength(1);
     expect(screen.getByText('IP 192.168.1.1')).toBeInTheDocument();
+    expect(screen.getByText('Fresh · 30s ago')).toBeInTheDocument();
+    expect(screen.getByText('Polling every 30s')).toBeInTheDocument();
     expect(screen.queryByText('CPU')).toBeNull();
     expect(screen.queryByText('MEM')).toBeNull();
     expect(screen.queryByText('UP')).toBeNull();
     expect(screen.queryByText('TEMP')).toBeNull();
+  });
+
+  it('enforces a 200x160 minimum size and 285x235 maximum size for virtual nodes', () => {
+    const unmonitored = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+      }),
+      isVirtual: true,
+    });
+
+    const unmonitoredCard = unmonitored.container.querySelector('.group');
+    expect(unmonitoredCard?.className).toContain('min-w-[200px]');
+    expect(unmonitoredCard?.className).toContain('min-h-[160px]');
+    expect(unmonitoredCard?.className).toContain('max-w-[285px]');
+    expect(unmonitoredCard?.className).toContain('max-h-[235px]');
+
+    unmonitored.unmount();
+
+    const monitorable = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '192.168.1.1',
+      }),
+      isVirtual: true,
+    });
+
+    const monitorableCard = monitorable.container.querySelector('.group');
+    expect(monitorableCard?.className).toContain('min-w-[200px]');
+    expect(monitorableCard?.className).toContain('min-h-[160px]');
+    expect(monitorableCard?.className).toContain('max-w-[285px]');
+    expect(monitorableCard?.className).toContain('max-h-[235px]');
+  });
+
+  it('truncates long virtual node text inside the size-capped card', () => {
+    const longName = 'Virtual node with an intentionally very long display name for truncation checks';
+    const longAddress = 'edge-gateway-with-an-extremely-long-hostname.example.internal';
+
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: longAddress,
+        sys_name: '',
+        tags: { display_name: longName, virtual_subtype: 'cloud' },
+      }),
+      isVirtual: true,
+      subtype: 'cloud',
+    });
+
+    expect(screen.getByText(longName).className).toContain('truncate');
+    expect(screen.getByText(`IP ${longAddress}`).className).toContain('truncate');
   });
 
   it('uses monospace for technical readouts and address chips', () => {

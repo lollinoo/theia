@@ -25,7 +25,13 @@ import {
   updateSetting,
 } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
-import { validateIPOrHostname, validateMaxLength, validateURL, MAX_STRING_LENGTH } from '../utils/validation';
+import {
+  validateIPOrHostname,
+  validateMaxLength,
+  validateRequired,
+  validateURL,
+  MAX_STRING_LENGTH,
+} from '../utils/validation';
 import { MaterialIcon } from './MaterialIcon';
 
 const POLLING_PRESETS = [
@@ -153,6 +159,11 @@ export function DeviceConfigPanel({
       const err = validator();
       setFieldError(field, err);
     };
+  }
+
+  function validateDisplayNameField(value: string): string | null {
+    return (isVirtual ? validateRequired(value, 'Display Name') : null)
+      ?? validateMaxLength(value, MAX_STRING_LENGTH, 'Display name');
   }
 
   async function loadAssignments() {
@@ -313,7 +324,8 @@ export function DeviceConfigPanel({
       const ipErr = validateIPOrHostname(trimmedIP);
       if (ipErr) errors['ip'] = ipErr;
     }
-    const displayNameErr = validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name');
+    const trimmedDisplayName = displayName.trim();
+    const displayNameErr = validateDisplayNameField(displayName);
     if (displayNameErr) errors['displayName'] = displayNameErr;
     const usesPrometheus = metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback';
     if (usesPrometheus) {
@@ -359,7 +371,9 @@ export function DeviceConfigPanel({
                 : { version: '2c', community: community.trim() },
             }
           : {}),
-        tags: { ...device.tags, ...(displayName.trim() ? { display_name: displayName.trim() } : {}) },
+        tags: isVirtual
+          ? { ...device.tags, display_name: trimmedDisplayName }
+          : { ...device.tags, ...(trimmedDisplayName ? { display_name: trimmedDisplayName } : {}) },
         vendor: vendorOverride || undefined,
         area_ids: areaIds,
         metrics_source: metricsSource,
@@ -510,7 +524,7 @@ export function DeviceConfigPanel({
       )}
 
       {/* Edit Device */}
-      <form onSubmit={(e) => { void handleEditSave(e); }} className="space-y-3">
+      <form noValidate onSubmit={(e) => { void handleEditSave(e); }} className="space-y-3">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Edit Device
@@ -533,8 +547,9 @@ export function DeviceConfigPanel({
           type="text"
           value={displayName}
           onChange={(e) => { setDisplayName(e.target.value); setFieldError('displayName', null); }}
-          onBlur={handleBlur('displayName', () => validateMaxLength(displayName, MAX_STRING_LENGTH, 'Display name'))}
-          placeholder={device.sys_name ? `Override "${device.sys_name}"` : 'Custom name (optional)'}
+          onBlur={handleBlur('displayName', () => validateDisplayNameField(displayName))}
+          placeholder={isVirtual ? 'e.g. ISP Gateway' : (device.sys_name ? `Override "${device.sys_name}"` : 'Custom name (optional)')}
+          required={isVirtual}
           className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['displayName'] ? ' border-status-down' : ' border-outline-subtle'}`}
         />
         {fieldErrors['displayName'] && (
