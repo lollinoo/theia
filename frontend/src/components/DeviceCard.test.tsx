@@ -228,6 +228,7 @@ describe('DeviceCard', () => {
     expect(screen.getByText('Critical')).toBeInTheDocument();
     expect(criticalCard.container.innerHTML).toContain('var(--nt-node-critical-badge-border)');
     expect(criticalCard.container.innerHTML).not.toContain('var(--nt-node-down-glow)');
+    expect(criticalCard.container.innerHTML).not.toContain('topology-node-down-fade');
 
     criticalCard.unmount();
 
@@ -240,6 +241,7 @@ describe('DeviceCard', () => {
     expect(downCard.container.innerHTML).toContain('var(--nt-node-down-badge-border)');
     expect(downCard.container.innerHTML).toContain('var(--nt-node-down-ring)');
     expect(downCard.container.innerHTML).toContain('var(--nt-node-down-glow)');
+    expect(downCard.container.innerHTML).toContain('topology-node-down-fade');
   });
 
   it('renders unmonitored virtual nodes with neutral semantics instead of failure UI', () => {

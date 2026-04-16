@@ -264,6 +264,16 @@
 }
 
 @layer utilities {
+  @keyframes topology-node-down-fade {
+    0%, 100% {
+      opacity: 1;
+    }
+
+    38%, 62% {
+      opacity: 0.5;
+    }
+  }
+
   .topology-backdrop {
     background: var(--nt-canvas-backdrop);
   }
@@ -291,6 +301,17 @@
 
   .topology-node-shadow {
     box-shadow: var(--nt-node-shadow);
+  }
+
+  .topology-node-down-fade {
+    animation: topology-node-down-fade 1.35s ease-in-out infinite;
+    will-change: opacity;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topology-node-down-fade {
+    animation: none;
   }
 }
 

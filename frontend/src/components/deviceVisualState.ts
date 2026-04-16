@@ -30,6 +30,7 @@ export interface DeviceNodeStatusStyles {
   badgeStyle?: CSSProperties;
   panelClass: string;
   panelStyle?: CSSProperties;
+  frameClass?: string;
   frameStyle: CSSProperties;
 }
 
@@ -258,6 +259,7 @@ export function resolveDeviceNodeStatusStyles({
     badgeStyle: badgeStyleForStatus(status),
     panelClass: panelClassForStatus(status),
     panelStyle: panelStyleForStatus(status),
+    frameClass: status === 'down' ? 'topology-node-down-fade' : undefined,
     frameStyle: {
       ...(tone.borderColor
         ? { borderColor: tone.borderColor }
