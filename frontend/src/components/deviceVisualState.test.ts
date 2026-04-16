@@ -88,8 +88,10 @@ describe('deviceVisualState', () => {
   it('gives down nodes a dedicated frame glow without reusing it for critical', () => {
     expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain('var(--nt-node-down-ring)');
     expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain('var(--nt-node-down-glow)');
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameClass).toBe('topology-node-down-fade');
     expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow).not.toContain('var(--nt-node-down-ring)');
     expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow).not.toContain('var(--nt-node-down-glow)');
+    expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameClass).toBeUndefined();
   });
 
   it('preserves the down glow when selected so failure semantics stay visible', () => {
