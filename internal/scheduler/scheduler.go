@@ -184,6 +184,9 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 		if !device.Managed {
 			continue
 		}
+		if domain.IsVirtualNoIPDevice(device) {
+			continue
+		}
 
 		for _, volatility := range scheduledVolatilityClasses() {
 			key := NewTaskKey(device.ID, volatility)

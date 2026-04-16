@@ -199,6 +199,33 @@ func TestBuildPipelineSnapshotMapsReachabilityToExistingStatusStrings(t *testing
 	}
 }
 
+func TestBuildPipelineSnapshot_VirtualNoIPIgnoresReachabilityOverride(t *testing.T) {
+	deviceID := uuid.New()
+
+	snapshot := buildPipelineSnapshot(
+		[]domain.Device{
+			{
+				ID:         deviceID,
+				DeviceType: domain.DeviceTypeVirtual,
+				IP:         "",
+				Status:     domain.DeviceStatusUnknown,
+			},
+		},
+		nil,
+		map[uuid.UUID]state.DeviceState{
+			deviceID: {
+				Reachability: state.ReachabilityHardDown,
+			},
+		},
+		nil,
+		nil,
+	)
+
+	if got := snapshot.DeviceStatuses[deviceID.String()]; got != string(domain.DeviceStatusUnknown) {
+		t.Fatalf("expected virtual no-IP status unknown, got %q", got)
+	}
+}
+
 func TestBuildPipelineSnapshot_FallsBackToPollOverrideAndUnknownHealthBeforeFirstPoll(t *testing.T) {
 	deviceID := uuid.New()
 

@@ -56,7 +56,7 @@ func buildPipelineSnapshot(
 		metric.DeviceID = device.ID
 		deviceMetrics[deviceKey] = metric
 		linkMetrics[deviceKey] = buildDeviceLinkMetrics(device, linksByDevice[device.ID], deviceState.LinkMetrics)
-		statuses[deviceKey] = mapDeviceStatus(device.Status, deviceState.Reachability)
+		statuses[deviceKey] = effectiveSnapshotDeviceStatus(device, deviceState)
 
 		if hostname := strings.TrimSpace(device.SysName); hostname != "" {
 			hostnames[deviceKey] = hostname
@@ -133,7 +133,7 @@ func buildDeviceDetailDelta(device domain.Device, deviceState state.DeviceState)
 	}
 
 	delta.DeviceMetrics[deviceID] = dto
-	delta.DeviceStatuses[deviceID] = mapDeviceStatus(device.Status, deviceState.Reachability)
+	delta.DeviceStatuses[deviceID] = effectiveSnapshotDeviceStatus(device, deviceState)
 	if len(deviceState.LinkMetrics) > 0 {
 		copiedLinkMetrics := make([]domain.LinkMetrics, 0, len(deviceState.LinkMetrics))
 		for _, metric := range deviceState.LinkMetrics {
@@ -209,6 +209,14 @@ func mapDeviceStatus(fallback domain.DeviceStatus, reachability state.Reachabili
 	default:
 		return string(fallback)
 	}
+}
+
+func effectiveSnapshotDeviceStatus(device domain.Device, deviceState state.DeviceState) string {
+	if domain.IsVirtualNoIPDevice(device) {
+		return string(domain.DeviceStatusUnknown)
+	}
+
+	return mapDeviceStatus(device.Status, deviceState.Reachability)
 }
 
 func matchLinkID(device domain.Device, links []domain.Link, metricIfName string) string {
