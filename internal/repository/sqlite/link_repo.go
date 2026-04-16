@@ -265,6 +265,24 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (bool, error) {
 		return false, fmt.Errorf("checking reverse link: %w", err)
 	}
 	if reverse != nil {
+		if shouldReorientReverseLink(reverse, link) {
+			if _, err = tx.Exec(
+				`UPDATE links SET source_device_id = ?, source_if_name = ?,
+				 target_device_id = ?, target_if_name = ?,
+				 discovery_protocol = ?, updated_at = ? WHERE id = ?`,
+				link.SourceDeviceID.String(), link.SourceIfName,
+				link.TargetDeviceID.String(), link.TargetIfName,
+				string(link.DiscoveryProtocol), link.UpdatedAt, reverse.ID,
+			); err != nil {
+				return false, fmt.Errorf("reorienting reverse link: %w", err)
+			}
+			if err = tx.Commit(); err != nil {
+				return false, fmt.Errorf("committing reverse link reorientation: %w", err)
+			}
+			r.notify()
+			return false, nil
+		}
+
 		// Reverse-direction match found (B→A record exists). Enrich it:
 		// The incoming link knows its own local port (link.SourceIfName) and the
 		// remote's port (link.TargetIfName). The existing record's SourceIfName
@@ -417,6 +435,10 @@ func compatibleInterfaceScore(existing, incoming string) (int, bool) {
 	}
 
 	return 0, false
+}
+
+func shouldReorientReverseLink(reverse *reverseLinkMatch, link *domain.Link) bool {
+	return reverse.SourceIfName == "" && link.SourceIfName != "" && link.TargetIfName == ""
 }
 
 func normalizeInterfaceName(name string) string {
