@@ -33,23 +33,45 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          ZERO_SHA='0000000000000000000000000000000000000000'
+
+          # Grandfather legacy commits that predate the first introduction of
+          # conventional-commit enforcement in this repository.
+          ENFORCEMENT_SHA=$(git log --diff-filter=A --format=%H --reverse HEAD -- .github/workflows/commit-messages.yml | head -n1)
+
+          if [ -z "${ENFORCEMENT_SHA}" ]; then
+            echo "Unable to determine the conventional-commit enforcement baseline."
+            exit 1
+          fi
 
           if [ "${EVENT_NAME}" = "pull_request" ]; then
-            RANGE="${PR_BASE_SHA}..${PR_HEAD_SHA}"
-          elif [ -n "${BEFORE_SHA}" ] && [ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]; then
-            RANGE="${BEFORE_SHA}..${AFTER_SHA}"
+            RANGE_START="${PR_BASE_SHA}"
+            RANGE_END="${PR_HEAD_SHA}"
+          elif [ -n "${BEFORE_SHA}" ] && [ "${BEFORE_SHA}" != "${ZERO_SHA}" ]; then
+            RANGE_START="${BEFORE_SHA}"
+            RANGE_END="${AFTER_SHA}"
           else
             git fetch --no-tags --prune origin "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
 
             if MERGE_BASE=$(git merge-base "${AFTER_SHA}" "origin/${DEFAULT_BRANCH}" 2>/dev/null); then
-              if [ "${MERGE_BASE}" = "${AFTER_SHA}" ]; then
-                RANGE="${AFTER_SHA}"
-              else
-                RANGE="${MERGE_BASE}..${AFTER_SHA}"
-              fi
+              RANGE_START="${MERGE_BASE}"
             else
-              RANGE="${AFTER_SHA}"
+              RANGE_START=""
             fi
+
+            RANGE_END="${AFTER_SHA}"
+          fi
+
+          if git merge-base --is-ancestor "${ENFORCEMENT_SHA}" "${RANGE_END}"; then
+            if [ -z "${RANGE_START}" ] || ! git merge-base --is-ancestor "${ENFORCEMENT_SHA}" "${RANGE_START}"; then
+              RANGE_START="${ENFORCEMENT_SHA}^"
+            fi
+          fi
+
+          if [ -n "${RANGE_START}" ]; then
+            RANGE="${RANGE_START}..${RANGE_END}"
+          else
+            RANGE="${RANGE_END}"
           fi
 
           echo "Validating commits in range: ${RANGE}"
