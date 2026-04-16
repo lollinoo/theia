@@ -107,6 +107,15 @@ describe('DeviceRow', () => {
     expect(dot.getAttribute('data-status')).toBe('up');
   });
 
+  it('renders no-ip virtual nodes as unmonitored instead of down', () => {
+    renderRow({ device_type: 'virtual', ip: '', status: 'down' });
+
+    const dot = screen.getByTestId('status-dot');
+    expect(dot.getAttribute('data-status')).toBe('unmonitored');
+    expect(screen.getByText('Unmonitored')).toBeInTheDocument();
+    expect(screen.queryByText(/^down$/i)).not.toBeInTheDocument();
+  });
+
   it('renders area color dot when device has area_ids and area is in areaMap', () => {
     const area: Area = {
       id: 'area-1',

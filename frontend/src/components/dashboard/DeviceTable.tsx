@@ -3,6 +3,7 @@ import type { Device, Area } from '../../types/api';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import type { SnapshotPayload } from '../../types/metrics';
 import { DeviceRow } from './DeviceRow';
+import { resolveDeviceOperationalStatusState } from '../deviceVisualState';
 import { parseOsVersion } from './parseOsVersion';
 
 type SortKey = 'hostname' | 'ip' | 'status' | 'area' | 'hardware_model' | 'vendor' | 'uptime' | 'os_version';
@@ -47,6 +48,9 @@ export function DeviceTable({
     if (sortKey === 'area') {
       aVal = (a.area_ids?.[0] ? areaMap.get(a.area_ids[0])?.name : '') ?? '';
       bVal = (b.area_ids?.[0] ? areaMap.get(b.area_ids[0])?.name : '') ?? '';
+    } else if (sortKey === 'status') {
+      aVal = resolveDeviceOperationalStatusState(a).label.toLowerCase();
+      bVal = resolveDeviceOperationalStatusState(b).label.toLowerCase();
     } else if (sortKey === 'uptime') {
       // Numeric sort by uptime seconds (null = -1 so they sort last)
       aVal = snapshot?.device_metrics[a.id]?.uptime_secs ?? -1;

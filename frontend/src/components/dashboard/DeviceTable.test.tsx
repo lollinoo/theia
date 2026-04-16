@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { DeviceTable } from './DeviceTable';
 import type { Device, Area } from '../../types/api';
 
@@ -128,6 +128,21 @@ describe('DeviceTable', () => {
     renderTable();
 
     expect(screen.getByText('OS Version')).toBeInTheDocument();
+  });
+
+  it('sorts unmonitored no-ip virtual nodes separately from down nodes', () => {
+    const devices = [
+      mockDevice({ id: 'dev-virtual', hostname: 'virtual-cloud', device_type: 'virtual', ip: '', status: 'down' }),
+      mockDevice({ id: 'dev-down', hostname: 'router-down', status: 'down' }),
+    ];
+
+    const { container } = renderTable(devices);
+
+    fireEvent.click(screen.getByText('Status'));
+
+    const rows = Array.from(container.querySelectorAll('tbody tr'));
+    expect(rows[0]?.textContent).toContain('router-down');
+    expect(rows[1]?.textContent).toContain('virtual-cloud');
   });
 
 

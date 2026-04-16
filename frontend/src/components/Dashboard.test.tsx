@@ -21,9 +21,24 @@ vi.mock('./dashboard/DeviceTable', () => ({
 }));
 
 vi.mock('./dashboard/FilterSelect', () => ({
-  FilterSelect: ({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) => (
+  FilterSelect: ({
+    label,
+    value,
+    onChange,
+    options,
+  }: {
+    label: string;
+    value: string;
+    onChange: (v: string) => void;
+    options: Array<{ value: string; label: string }>;
+  }) => (
     <div data-testid={`filter-select-${label.toLowerCase()}`} data-value={value}>
-      <button onClick={() => onChange('test')}>{label}: {value}</button>
+      <button type="button">{label}: {value}</button>
+      {options.map((option) => (
+        <button key={`${label}-${option.value}`} type="button" onClick={() => onChange(option.value)}>
+          {label} option {option.label}
+        </button>
+      ))}
     </div>
   ),
 }));
@@ -207,5 +222,19 @@ describe('Dashboard', () => {
     const { container } = render(<Dashboard devices={devices} areas={[]} snapshot={null} />);
     expect(container.firstChild).toBeTruthy();
     expect(container.querySelector('.transition-colors')).toBeTruthy();
+  });
+
+  it('does not keep no-ip virtual nodes in the down filter bucket', () => {
+    const devices = [
+      mockDevice({ id: 'dev-down', hostname: 'router-down', status: 'down' }),
+      mockDevice({ id: 'dev-virtual', hostname: 'virtual-cloud', device_type: 'virtual', ip: '', status: 'down' }),
+    ];
+
+    render(<Dashboard devices={devices} areas={[]} snapshot={null} />);
+
+    fireEvent.click(screen.getByText('Status option Down'));
+
+    expect(screen.getByText('router-down')).toBeInTheDocument();
+    expect(screen.queryByText('virtual-cloud')).toBeNull();
   });
 });
