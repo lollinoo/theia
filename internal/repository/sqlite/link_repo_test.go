@@ -558,6 +558,65 @@ func TestLinkRepo_Upsert_BidirectionalDedup_EnrichesEmptyReverseInterface(t *tes
 	}
 }
 
+func TestLinkRepo_Upsert_BidirectionalDedup_ReorientsWhenIncomingOnlyKnowsNewSourcePort(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	// Existing reverse-direction record from the neighbor's perspective.
+	// It only knows the newly added device's port, so the saved source side is empty.
+	fromNeighbor := &domain.Link{
+		SourceDeviceID:    d2ID,
+		SourceIfName:      "",
+		TargetDeviceID:    d1ID,
+		TargetIfName:      "ether4",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(fromNeighbor); err != nil {
+		t.Fatalf("Upsert from neighbor: %v", err)
+	}
+	firstID := fromNeighbor.ID
+
+	// The newly added device then discovers the same link and only knows its
+	// own local port. The saved link should reorient so the known port stays on
+	// the source side of the newly added device.
+	fromNewDevice := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether4",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if _, err := linkRepo.Upsert(fromNewDevice); err != nil {
+		t.Fatalf("Upsert from new device: %v", err)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link after reverse reorientation, got %d", len(all))
+	}
+	if all[0].ID != firstID {
+		t.Errorf("link ID changed: got %s, want %s", all[0].ID, firstID)
+	}
+	if all[0].SourceDeviceID != d1ID {
+		t.Errorf("SourceDeviceID = %s, want %s", all[0].SourceDeviceID, d1ID)
+	}
+	if all[0].TargetDeviceID != d2ID {
+		t.Errorf("TargetDeviceID = %s, want %s", all[0].TargetDeviceID, d2ID)
+	}
+	if all[0].SourceIfName != "ether4" {
+		t.Errorf("SourceIfName = %q, want %q", all[0].SourceIfName, "ether4")
+	}
+	if all[0].TargetIfName != "" {
+		t.Errorf("TargetIfName = %q, want empty string", all[0].TargetIfName)
+	}
+}
+
 func TestLinkRepo_Upsert_RetriesAfterBusyLock(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "busy-retry.db")
 	dsn := fmt.Sprintf(
