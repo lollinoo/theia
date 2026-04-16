@@ -13,6 +13,7 @@ import { BulkBackupPanel } from './dashboard/BulkBackupPanel';
 import { ConfigViewer } from './dashboard/ConfigViewer';
 import { VendorSettingsPanel } from './dashboard/VendorSettingsPanel';
 import { SidePanel } from './SidePanel';
+import { resolveDeviceOperationalStatusState } from './deviceVisualState';
 
 type PanelType =
   | { kind: 'ssh-credentials'; device: Device }
@@ -50,7 +51,7 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
   }, [areas]);
 
   const filteredDevices = devices.filter((d) => {
-    if (statusFilter !== 'all' && d.status !== statusFilter) return false;
+    if (statusFilter !== 'all' && resolveDeviceOperationalStatusState(d).dotStatus !== statusFilter) return false;
     if (typeFilter !== 'all' && d.device_type !== typeFilter) return false;
     if (areaFilter !== 'all') {
       if (areaFilter === 'unassigned') {
@@ -81,6 +82,7 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
     { value: 'down', label: 'Down' },
     { value: 'probing', label: 'Probing' },
     { value: 'unknown', label: 'Unknown' },
+    { value: 'unmonitored', label: 'Unmonitored' },
   ];
 
   const typeOptions: FilterOption[] = [

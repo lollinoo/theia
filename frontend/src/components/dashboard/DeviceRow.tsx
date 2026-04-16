@@ -5,6 +5,7 @@ import type { DeviceMetricsDTO } from '../../types/metrics';
 import { formatUptime } from '../../types/metrics';
 import { StatusDot } from '../StatusDot';
 import { MaterialIcon } from '../MaterialIcon';
+import { resolveDeviceOperationalStatusState } from '../deviceVisualState';
 import { parseOsVersion } from './parseOsVersion';
 
 
@@ -27,6 +28,7 @@ export function DeviceRow({
   const deviceAreas = (device.area_ids ?? []).map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
   const uptimeSecs = deviceMetrics?.uptime_secs ?? null;
   const osVersion = parseOsVersion(device.sys_descr);
+  const statusState = resolveDeviceOperationalStatusState(device);
 
   return (
     <tr className="[&:nth-child(even)]:bg-surface-high/30 hover:bg-elevated/50 transition-colors duration-150">
@@ -42,8 +44,8 @@ export function DeviceRow({
       {/* Status -- StatusDot component per D-02 */}
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-1.5">
-          <StatusDot status={device.status} />
-          <span className="text-on-bg-secondary capitalize text-[11px]">{device.status}</span>
+          <StatusDot status={statusState.dotStatus} />
+          <span className="text-on-bg-secondary text-[11px]">{statusState.label}</span>
         </div>
       </td>
       {/* Area -- color dot(s) + name per D-02/D-11 */}

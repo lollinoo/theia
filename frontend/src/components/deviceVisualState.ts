@@ -111,6 +111,24 @@ function unmonitoredLabelClass(): string {
   return 'text-[12px] font-semibold text-on-bg-secondary';
 }
 
+export function resolveDeviceOperationalStatusState(
+  device: DeviceVisualInput,
+): DeviceVisualState {
+  if (!isDeviceMonitorable(device)) {
+    return {
+      dotStatus: 'unmonitored',
+      label: 'Unmonitored',
+      labelClass: unmonitoredLabelClass(),
+    };
+  }
+
+  return {
+    dotStatus: device.status,
+    label: statusLabel(device.status),
+    labelClass: statusLabelClass(device.status),
+  };
+}
+
 function badgeClassForStatus(status: DeviceVisualStatus): string {
   switch (status) {
     case 'up':
@@ -299,20 +317,10 @@ export function resolveDeviceVisualState(
   device: DeviceVisualInput,
   metrics?: DeviceVisualMetrics,
 ): DeviceVisualState {
-  if (!isDeviceMonitorable(device)) {
-    return {
-      dotStatus: 'unmonitored',
-      label: 'Unmonitored',
-      labelClass: unmonitoredLabelClass(),
-    };
-  }
+  const operationalStatus = resolveDeviceOperationalStatusState(device);
 
-  if (device.status !== 'up') {
-    return {
-      dotStatus: device.status,
-      label: statusLabel(device.status),
-      labelClass: statusLabelClass(device.status),
-    };
+  if (operationalStatus.dotStatus === 'unmonitored' || device.status !== 'up') {
+    return operationalStatus;
   }
 
   switch (metrics?.health) {
