@@ -122,4 +122,18 @@ describe('deviceVisualState', () => {
     expect(sanitizeDeviceMetricsForDisplay(device, metrics)).toBeNull();
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--nt-on-bg-muted)');
   });
+
+  it('uses operational status directly for virtual nodes with IP even without health metrics', () => {
+    const device = mockDevice({
+      device_type: 'virtual',
+      ip: '127.0.0.1',
+      status: 'up',
+    });
+    const metrics = mockMetrics({ health: undefined });
+
+    expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
+      dotStatus: 'up',
+      label: 'Up',
+    });
+  });
 });

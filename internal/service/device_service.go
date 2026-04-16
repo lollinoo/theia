@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -403,10 +402,6 @@ func (s *DeviceService) ReprobeDevice(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// virtualPingPorts is the set of TCP ports attempted when ping-probing a
-// virtual device. The probe succeeds if ANY port accepts a connection.
-var virtualPingPorts = []string{"80", "443", "22"}
-
 // PingVirtualDevice performs a lightweight TCP reachability check for a
 // virtual device that has an IP address. It tries common TCP ports and
 // marks the device as "up" if any port is reachable, or "down" if all
@@ -425,22 +420,8 @@ func (s *DeviceService) PingVirtualDevice(ctx context.Context, id uuid.UUID, tim
 		return nil
 	}
 
-	reachable := false
-	for _, port := range virtualPingPorts {
-		if ctx.Err() != nil {
-			break
-		}
-		addr := net.JoinHostPort(device.IP, port)
-		conn, dialErr := net.DialTimeout("tcp", addr, timeout)
-		if dialErr == nil {
-			conn.Close()
-			reachable = true
-			break
-		}
-	}
-
 	newStatus := domain.DeviceStatusDown
-	if reachable {
+	if err := ProbeVirtualReachability(ctx, device.IP, timeout); err == nil {
 		newStatus = domain.DeviceStatusUp
 	}
 

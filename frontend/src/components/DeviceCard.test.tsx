@@ -304,6 +304,28 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('TEMP')).toBeNull();
   });
 
+  it('renders monitorable virtual nodes as up even when health is absent', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '127.0.0.1',
+        sys_name: '',
+        tags: { display_name: 'Loopback', virtual_subtype: 'server' },
+      }),
+      isVirtual: true,
+      subtype: 'server',
+      metrics: mockMetrics({
+        health: undefined,
+        cpu_percent: null,
+        mem_percent: null,
+        uptime_secs: null,
+      }),
+    });
+
+    expect(screen.getAllByText('Up')).toHaveLength(1);
+    expect(screen.queryByText('Unknown')).toBeNull();
+  });
+
   it('enforces a 200x160 minimum size and 285x235 maximum size for virtual nodes', () => {
     const unmonitored = renderDeviceCard({
       device: mockDevice({
