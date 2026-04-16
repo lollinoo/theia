@@ -239,21 +239,31 @@ describe('DeviceCard', () => {
     expect(downCard.container.innerHTML).toContain('border-status-down/30');
   });
 
-  it('renders virtual nodes with subtype label and optional no-ip chip', () => {
+  it('renders unmonitored virtual nodes with neutral semantics instead of failure UI', () => {
     renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
         ip: '',
+        status: 'down',
         sys_name: '',
         tags: { display_name: 'AWS Cloud', virtual_subtype: 'cloud' },
       }),
       isVirtual: true,
       subtype: 'cloud',
+      metrics: mockMetrics({
+        health: 'critical',
+        last_polled_at: '2026-04-13T11:59:20Z',
+        expected_poll_interval_seconds: 300,
+      }),
     });
 
     expect(screen.getByText('AWS Cloud')).toBeInTheDocument();
     expect(screen.getByText('Cloud')).toBeInTheDocument();
-    expect(screen.getByText('No IP')).toBeInTheDocument();
+    expect(screen.getByText('Unmonitored')).toBeInTheDocument();
+    expect(screen.getByText('Virtual node')).toBeInTheDocument();
+    expect(screen.queryByText('No IP')).toBeNull();
+    expect(screen.queryByText(/Fresh ·/)).toBeNull();
+    expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
   it('renders virtual nodes with IP chip and keeps compact readouts', () => {
@@ -288,5 +298,21 @@ describe('DeviceCard', () => {
     });
 
     expect(container.querySelectorAll('.font-mono').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('keeps unmonitored virtual nodes off failure borders even if raw device data is down', () => {
+    const { container } = renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        status: 'down',
+      }),
+      isVirtual: true,
+      metrics: mockMetrics({ health: 'critical' }),
+    });
+
+    expect(container.innerHTML).not.toContain('var(--color-status-down)');
+    expect(container.innerHTML).not.toContain('border-status-down/30');
+    expect(container.innerHTML).not.toContain('border-status-critical/30');
   });
 });

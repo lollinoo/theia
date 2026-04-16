@@ -15,6 +15,10 @@ import { LinkCreatePanel } from '../LinkCreatePanel';
 import { LinkDetailsPanel } from '../LinkDetailsPanel';
 import { viewportSize } from './canvasHelpers';
 import { getEffectivePollingIntervalSeconds } from '../../utils/polling';
+import {
+  resolveDeviceMonitoringState,
+  sanitizeDeviceMetricsForDisplay,
+} from '../deviceVisualState';
 
 interface CanvasPanelsProps {
   panelContent: { type: string; data?: unknown } | null;
@@ -150,12 +154,20 @@ export function CanvasPanels({
                       data: {
                         ...n.data,
                         device: updated,
-                        metrics: n.data.metrics
-                          ? {
-                              ...n.data.metrics,
-                              expected_poll_interval_seconds: getEffectivePollingIntervalSeconds(updated),
-                            }
-                          : n.data.metrics,
+                        isVirtual: updated.device_type === 'virtual',
+                        monitoringState: resolveDeviceMonitoringState(updated),
+                        subtype: updated.device_type === 'virtual'
+                          ? (updated.tags?.virtual_subtype ?? 'generic')
+                          : undefined,
+                        metrics: sanitizeDeviceMetricsForDisplay(
+                          updated,
+                          n.data.metrics
+                            ? {
+                                ...n.data.metrics,
+                                expected_poll_interval_seconds: getEffectivePollingIntervalSeconds(updated),
+                              }
+                            : n.data.metrics,
+                        ),
                       },
                     }
                   : n,

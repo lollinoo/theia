@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
-import { minimapColorForDevice, resolveDeviceVisualState } from './deviceVisualState';
+import {
+  minimapColorForDevice,
+  resolveDeviceMonitoringState,
+  resolveDeviceVisualState,
+  sanitizeDeviceMetricsForDisplay,
+} from './deviceVisualState';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -87,9 +92,11 @@ describe('deviceVisualState', () => {
     const metrics = mockMetrics({ health: 'critical' });
 
     expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
-      dotStatus: 'unknown',
-      label: 'Unknown',
+      dotStatus: 'unmonitored',
+      label: 'Unmonitored',
     });
-    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-unknown)');
+    expect(resolveDeviceMonitoringState(device)).toBe('unmonitored');
+    expect(sanitizeDeviceMetricsForDisplay(device, metrics)).toBeNull();
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--nt-on-bg-muted)');
   });
 });

@@ -103,4 +103,27 @@ describe('buildTopologyNodes', () => {
       expected_poll_interval_seconds: 30,
     });
   });
+
+  it('sanitizes no-ip virtual placeholders into unmonitored nodes during mapping', () => {
+    const nodes = buildTopologyNodes(
+      [
+        mockDevice({
+          device_type: 'virtual',
+          ip: '',
+          status: 'down',
+          tags: { display_name: 'Internet', virtual_subtype: 'internet' },
+        }),
+      ],
+      new Map(),
+      new Map(),
+      { x: 120, y: 180 },
+      false,
+      vi.fn(),
+      mockSnapshot(),
+    );
+
+    expect(nodes[0].data.monitoringState).toBe('unmonitored');
+    expect(nodes[0].data.metrics).toBeNull();
+    expect(nodes[0].data.device.status).toBe('down');
+  });
 });
