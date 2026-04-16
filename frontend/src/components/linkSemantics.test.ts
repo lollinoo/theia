@@ -92,6 +92,37 @@ describe('linkSemantics', () => {
     });
   });
 
+  it('keeps inert virtual links green below the 75% utilization warning threshold', () => {
+    expect(resolveEdgeTone({
+      inertVirtualLink: true,
+      sourceIfStatus: 'up',
+      utilization: 0.74,
+    })).toMatchObject({
+      color: 'var(--color-status-up)',
+      semanticState: 'up',
+    });
+  });
+
+  it('turns inert virtual links warning once utilization reaches 75%', () => {
+    expect(resolveEdgeTone({
+      inertVirtualLink: true,
+      utilization: 0.76,
+    })).toMatchObject({
+      color: 'var(--color-edge-warning)',
+      semanticState: 'warning',
+    });
+  });
+
+  it('turns inert virtual links critical above the high-utilization ceiling', () => {
+    expect(resolveEdgeTone({
+      inertVirtualLink: true,
+      utilization: 0.81,
+    })).toMatchObject({
+      color: 'var(--color-edge-critical)',
+      semanticState: 'critical',
+    });
+  });
+
   it('keeps inline badges aligned with warning and critical edge states', () => {
     expect(resolveInlineBadgeTone('warning', 'rate', { negotiationState: 'matched' })).toBe('warning');
     expect(resolveInlineBadgeTone('critical', 'throughput', { throughputLabel: 'TX: 500M / RX: 300M' })).toBe('critical');

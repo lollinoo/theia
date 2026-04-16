@@ -1,6 +1,6 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { Link } from '../types/api';
-import { utilizationColor, type AlertStatus, type LinkMetricsDTO } from '../types/metrics';
+import { type AlertStatus, type LinkMetricsDTO } from '../types/metrics';
 import {
   computeLinkBadgeAnchor,
   measureEdgePathLength,
@@ -107,6 +107,8 @@ const LINK_BADGE_MIN_SCREEN_LENGTH = {
   low: 120,
   medium: 96,
 } as const;
+const INERT_VIRTUAL_UTIL_WARNING_THRESHOLD = 0.75;
+const INERT_VIRTUAL_UTIL_CRITICAL_THRESHOLD = 0.8;
 
 // Centralized zoom matrix for link telemetry badges.
 // Low: keep the rate badge always, and keep TX/RX visible while the edge still spans 120px on screen.
@@ -283,8 +285,13 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   const singleKnownIfDown = singleKnownIf && !singleKnownIfUp;
   const oneIfDown = (sourceIfKnown || targetIfKnown) && ((sourceUp && !targetUp) || (!sourceUp && targetUp));
   const bothIfDown = sourceIfKnown && targetIfKnown && !sourceUp && !targetUp;
-  const inertUtilDown = inertVirtualLink && utilization !== null && utilization > 0.8;
-  const inertUtilWarn = inertVirtualLink && utilization !== null && utilization >= 0.5 && utilization <= 0.8;
+  const inertUtilDown = inertVirtualLink &&
+    utilization !== null &&
+    utilization > INERT_VIRTUAL_UTIL_CRITICAL_THRESHOLD;
+  const inertUtilWarn = inertVirtualLink &&
+    utilization !== null &&
+    utilization >= INERT_VIRTUAL_UTIL_WARNING_THRESHOLD &&
+    utilization <= INERT_VIRTUAL_UTIL_CRITICAL_THRESHOLD;
   const devicesHealthy = (!sourceDeviceStatus || sourceDeviceStatus === 'up') && (!targetDeviceStatus || targetDeviceStatus === 'up');
   const hasOperationalTelemetry =
     sourceIfKnown ||
@@ -300,7 +307,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
     !speedMismatch;
   const healthyInertVirtualLink =
     inertVirtualLink &&
-    (singleKnownIfUp || (utilization !== null && utilization < 0.5));
+    singleKnownIfUp;
 
   if (
     alertStatus === 'down' ||
@@ -348,11 +355,11 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
 
   if (inertVirtualLink && utilization !== null) {
     return {
-      color: utilizationColor(utilization),
-      width: 2.2,
-      haloColor: utilizationColor(utilization),
-      labelClassName: 'border-outline text-on-bg-secondary',
-      semanticState: utilization < 0.5 ? 'up' : 'neutral',
+      color: 'var(--color-status-up)',
+      width: 2.05,
+      haloColor: data?.areaColor ?? 'var(--color-edge-active)',
+      labelClassName: 'border-status-up/35 text-status-up',
+      semanticState: 'up',
     };
   }
 
