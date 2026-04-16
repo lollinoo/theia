@@ -188,7 +188,7 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 			continue
 		}
 
-		for _, volatility := range scheduledVolatilityClasses() {
+		for _, volatility := range scheduledVolatilityClassesForDevice(device) {
 			key := NewTaskKey(device.ID, volatility)
 			seen[key] = struct{}{}
 
@@ -349,6 +349,9 @@ func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskReque
 	if !device.Managed {
 		return
 	}
+	if device.DeviceType == domain.DeviceTypeVirtual {
+		return
+	}
 
 	changedAt := request.changedAt
 	if changedAt.IsZero() {
@@ -503,6 +506,13 @@ func scheduledVolatilityClasses() []domain.VolatilityClass {
 		domain.VolatilityClassOperational,
 		domain.VolatilityClassStatic,
 	}
+}
+
+func scheduledVolatilityClassesForDevice(device domain.Device) []domain.VolatilityClass {
+	if device.DeviceType == domain.DeviceTypeVirtual {
+		return []domain.VolatilityClass{domain.VolatilityClassOperational}
+	}
+	return scheduledVolatilityClasses()
 }
 
 func resetSchedulerTimer(timer *time.Timer, delay time.Duration) {

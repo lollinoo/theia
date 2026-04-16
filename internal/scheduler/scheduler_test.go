@@ -136,6 +136,41 @@ func TestRefreshDevices_SkipsVirtualNoIPDevices(t *testing.T) {
 	}
 }
 
+func TestRefreshDevices_SchedulesOperationalOnlyForVirtualIPDevices(t *testing.T) {
+	virtualWithIP := domain.Device{
+		ID:         uuid.MustParse("20000000-0000-0000-0000-000000000013"),
+		Hostname:   "cloud-vpn",
+		Managed:    true,
+		PollClass:  domain.PollClassLow,
+		DeviceType: domain.DeviceTypeVirtual,
+		IP:         "192.0.2.30",
+	}
+	source := &fakeDeviceSource{devices: []domain.Device{virtualWithIP}}
+	scheduler := NewScheduler(source, nil)
+	now := time.Unix(1_700_000_000, 0)
+
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("refreshDevices() error = %v", err)
+	}
+
+	if got := len(scheduler.items); got != 1 {
+		t.Fatalf("len(items) = %d, want only 1 operational task", got)
+	}
+
+	operationalKey := NewTaskKey(virtualWithIP.ID, domain.VolatilityClassOperational)
+	item := mustSchedulerItem(t, scheduler, operationalKey)
+	wantDueAt := now.Add(initialOffset(virtualWithIP.ID, domain.OperationalClassInterval))
+	if item.task.ExpectedInterval != domain.OperationalClassInterval {
+		t.Fatalf("operational expected interval = %v, want %v", item.task.ExpectedInterval, domain.OperationalClassInterval)
+	}
+	if !item.dueAt.Equal(wantDueAt) {
+		t.Fatalf("operational dueAt = %v, want %v", item.dueAt, wantDueAt)
+	}
+
+	assertSchedulerKeyMissing(t, scheduler, NewTaskKey(virtualWithIP.ID, domain.VolatilityClassPerformance))
+	assertSchedulerKeyMissing(t, scheduler, NewTaskKey(virtualWithIP.ID, domain.VolatilityClassStatic))
+}
+
 func TestRefreshDevices_RemovesMissingOrUnmanagedKeys(t *testing.T) {
 	deviceA := domain.Device{
 		ID:        uuid.MustParse("30000000-0000-0000-0000-000000000001"),

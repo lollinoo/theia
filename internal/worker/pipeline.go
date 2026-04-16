@@ -238,6 +238,11 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 		}
 	}()
 
+	if task.Device.DeviceType == domain.DeviceTypeVirtual {
+		finishedAt = p.runVirtualTask(ctx, task)
+		return
+	}
+
 	switch task.VolatilityClass {
 	case domain.VolatilityClassPerformance:
 		if p.performance == nil || p.stateStore == nil {
@@ -323,6 +328,80 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 			}
 		}
 	}
+}
+
+func (p *PipelineOrchestrator) runVirtualTask(ctx context.Context, task scheduler.PollTask) time.Time {
+	if domain.IsVirtualNoIPDevice(task.Device) {
+		return time.Now().UTC()
+	}
+
+	switch task.VolatilityClass {
+	case domain.VolatilityClassOperational:
+		return p.runVirtualOperationalTask(ctx, task)
+	case domain.VolatilityClassPerformance, domain.VolatilityClassStatic:
+		return time.Now().UTC()
+	default:
+		return time.Now().UTC()
+	}
+}
+
+func (p *PipelineOrchestrator) runVirtualOperationalTask(ctx context.Context, task scheduler.PollTask) time.Time {
+	collectedAt := time.Now().UTC()
+	if p.stateStore == nil {
+		return collectedAt
+	}
+
+	result := collector.OperationalResult{
+		DeviceID:    task.Device.ID,
+		CollectedAt: collectedAt,
+	}
+
+	if p.prometheus != nil && p.GetPrometheusStatus().Enabled {
+		enrichment, err := p.prometheus.CollectDeviceEnrichment(ctx, task.Device)
+		if err != nil {
+			log.Printf("pipeline: virtual enrichment failed for %s: %v", task.Device.ID, err)
+		} else {
+			if enrichment.Hostname != "" {
+				p.snapshotMu.Lock()
+				p.hostnames[task.Device.ID] = enrichment.Hostname
+				p.snapshotMu.Unlock()
+			}
+			if enrichment.ProbeReachable != nil {
+				result.Reachable = *enrichment.ProbeReachable
+				completedAt := completionTime(result.CollectedAt)
+				p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))
+				p.stateStore.Update(state.StateUpdate{
+					DeviceID:         task.Device.ID,
+					VolatilityClass:  domain.VolatilityClassPerformance,
+					PollSuccess:      true,
+					ExpectedInterval: task.ExpectedInterval,
+					Timestamp:        completedAt,
+				})
+				p.publishSubscribedDetailDelta(task.Device)
+				return completedAt
+			}
+		}
+	}
+
+	if err := service.ProbeVirtualReachability(ctx, task.Device.IP, p.snmpTimeout()); err != nil {
+		result.Err = err
+	} else {
+		result.Reachable = true
+	}
+
+	completedAt := completionTime(result.CollectedAt)
+	p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))
+	// Virtual nodes only run the operational tier, so stamp freshness metadata
+	// explicitly to keep the UI footer out of the "waiting for first poll" state.
+	p.stateStore.Update(state.StateUpdate{
+		DeviceID:         task.Device.ID,
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		PollSuccess:      result.Err == nil,
+		ExpectedInterval: task.ExpectedInterval,
+		Timestamp:        completedAt,
+	})
+	p.publishSubscribedDetailDelta(task.Device)
+	return completedAt
 }
 
 func (p *PipelineOrchestrator) publishSubscribedDetailDelta(device domain.Device) {

@@ -553,6 +553,94 @@ func TestPipelineOrchestratorStatusReflectsLifecycle(t *testing.T) {
 	}
 }
 
+func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachability(t *testing.T) {
+	deviceID := uuid.New()
+	task := scheduler.PollTask{
+		RunID:            91,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassOperational),
+		VolatilityClass:  domain.VolatilityClassOperational,
+		ExpectedInterval: domain.OperationalClassInterval,
+		Device: domain.Device{
+			ID:                   deviceID,
+			DeviceType:           domain.DeviceTypeVirtual,
+			IP:                   "192.0.2.90",
+			Status:               domain.DeviceStatusUnknown,
+			PrometheusLabelName:  "instance",
+			PrometheusLabelValue: "192.0.2.90",
+		},
+	}
+
+	sched := newPipelineTestScheduler()
+	store := state.NewStore()
+	promClient := &fakePrometheusClient{
+		hostnames:     map[string]string{"192.0.2.90": "cloud-vpn"},
+		probeStatuses: map[string]bool{"192.0.2.90": true},
+	}
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingPrometheusURL, "http://prometheus.test"); err != nil {
+		t.Fatalf("set prometheus_url: %v", err)
+	}
+
+	var snmpCalls int
+	operational := collector.NewOperationalCollector(
+		buildEmptyVendorRegistry(),
+		func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+			snmpCalls++
+			return nil, errors.New("virtual operational task should not create an SNMP client")
+		},
+	)
+
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		newPipelineTestCache([]domain.Device{task.Device}, nil),
+		ws.NewHub(),
+		newPerformanceTestCollector(t),
+		operational,
+		newStaticTestCollector(t),
+		collector.NewPrometheusCollector(promClient),
+		&fakeTopologyService{},
+		settingsRepo,
+		make(chan struct{}, 1),
+	)
+	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
+		Enabled:   true,
+		Available: true,
+	})
+
+	pipeline.runTask(context.Background(), task)
+
+	deviceState, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected virtual operational task to update state store")
+	}
+	if deviceState.Reachability != state.ReachabilityUp {
+		t.Fatalf("Reachability = %q, want %q", deviceState.Reachability, state.ReachabilityUp)
+	}
+	if deviceState.LastPolledAt.IsZero() {
+		t.Fatal("expected virtual operational task to stamp last poll time")
+	}
+	if deviceState.ExpectedInterval != domain.OperationalClassInterval {
+		t.Fatalf("ExpectedInterval = %v, want %v", deviceState.ExpectedInterval, domain.OperationalClassInterval)
+	}
+	if snmpCalls != 0 {
+		t.Fatalf("expected virtual operational task to bypass SNMP collector, got %d SNMP call(s)", snmpCalls)
+	}
+
+	pipeline.snapshotMu.RLock()
+	hostname := pipeline.hostnames[deviceID]
+	pipeline.snapshotMu.RUnlock()
+	if hostname != "cloud-vpn" {
+		t.Fatalf("hostname override = %q, want %q", hostname, "cloud-vpn")
+	}
+
+	sched.mu.Lock()
+	defer sched.mu.Unlock()
+	if len(sched.completions) != 1 {
+		t.Fatalf("expected one scheduler completion, got %d", len(sched.completions))
+	}
+}
+
 func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *state.Store, chan struct{}, uuid.UUID) {
 	t.Helper()
 

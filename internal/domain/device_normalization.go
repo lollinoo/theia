@@ -2,6 +2,13 @@ package domain
 
 import "strings"
 
+// IsVirtualWithIPDevice reports whether the device is virtual and has an IP
+// address, which means it participates only in lightweight reachability
+// probing rather than SNMP collection.
+func IsVirtualWithIPDevice(device Device) bool {
+	return device.DeviceType == DeviceTypeVirtual && strings.TrimSpace(device.IP) != ""
+}
+
 // IsVirtualNoIPDevice reports whether the device is a virtual placeholder
 // without an IP address and therefore must stay unmonitored.
 func IsVirtualNoIPDevice(device Device) bool {
