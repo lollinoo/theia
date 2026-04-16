@@ -28,8 +28,7 @@ describe('deviceCardVariant', () => {
       variant: 'virtual-unmonitored',
       showOperationalReadouts: false,
       showFreshnessMeta: false,
-      showVirtualIdentityTag: true,
-      showVirtualStatusPanel: false,
+      showVirtualStatusBadge: false,
     });
   });
 
@@ -43,9 +42,8 @@ describe('deviceCardVariant', () => {
       variant: 'virtual-monitorable',
       showOperationalReadouts: false,
       showFreshnessMeta: true,
-      showVirtualCategoryBadge: true,
       showVirtualAddressChip: true,
-      showVirtualStatusPanel: true,
+      showVirtualStatusBadge: true,
     });
   });
 });

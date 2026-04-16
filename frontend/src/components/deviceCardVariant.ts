@@ -16,10 +16,8 @@ export interface DeviceCardRenderModel {
   variant: DeviceCardVariant;
   showFreshnessMeta: boolean;
   showOperationalReadouts: boolean;
-  showVirtualStatusPanel: boolean;
-  showVirtualIdentityTag: boolean;
+  showVirtualStatusBadge: boolean;
   showVirtualAddressChip: boolean;
-  showVirtualCategoryBadge: boolean;
 }
 
 export function resolveDeviceCardVariant(
@@ -55,30 +53,24 @@ export function resolveDeviceCardRenderModel({
         variant,
         showFreshnessMeta: hasFreshnessMeta,
         showOperationalReadouts: true,
-        showVirtualStatusPanel: false,
-        showVirtualIdentityTag: false,
+        showVirtualStatusBadge: false,
         showVirtualAddressChip: false,
-        showVirtualCategoryBadge: false,
       };
     case 'virtual-monitorable':
       return {
         variant,
         showFreshnessMeta: hasFreshnessMeta,
         showOperationalReadouts: false,
-        showVirtualStatusPanel: true,
-        showVirtualIdentityTag: false,
+        showVirtualStatusBadge: true,
         showVirtualAddressChip: addressState === 'address',
-        showVirtualCategoryBadge: true,
       };
     case 'virtual-unmonitored':
       return {
         variant,
         showFreshnessMeta: false,
         showOperationalReadouts: false,
-        showVirtualStatusPanel: false,
-        showVirtualIdentityTag: true,
+        showVirtualStatusBadge: false,
         showVirtualAddressChip: false,
-        showVirtualCategoryBadge: false,
       };
   }
 }

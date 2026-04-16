@@ -230,6 +230,85 @@ describe('DeviceConfigPanel — polling override', () => {
       expect(onDeviceUpdated).toHaveBeenCalled();
     });
   });
+
+  it('requires a display name when editing virtual devices', async () => {
+    const { updateDevice } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({
+          device_type: 'virtual',
+          ip: '',
+          sys_name: '',
+          metrics_source: 'none',
+          tags: { virtual_subtype: 'cloud' },
+        })}
+        isVirtual
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    const displayNameInput = screen.getByPlaceholderText('e.g. ISP Gateway');
+    expect(displayNameInput).toHaveAttribute('required');
+
+    fireEvent.click(screen.getByText('Save Changes'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Display Name is required')).toBeInTheDocument();
+    });
+    expect(updateDevice).not.toHaveBeenCalled();
+  });
+
+  it('persists a trimmed display name for virtual devices', async () => {
+    const { updateDevice } = await import('../api/client');
+    const onDeviceUpdated = vi.fn();
+    (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        metrics_source: 'none',
+        tags: { display_name: 'ISP Gateway', virtual_subtype: 'internet' },
+      }),
+    );
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({
+          device_type: 'virtual',
+          ip: '',
+          sys_name: '',
+          metrics_source: 'none',
+          tags: { virtual_subtype: 'internet' },
+        })}
+        isVirtual
+        onDeviceUpdated={onDeviceUpdated}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. ISP Gateway'), {
+      target: { value: '  ISP Gateway  ' },
+    });
+    fireEvent.click(screen.getByText('Save Changes'));
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith(
+        'dev-1',
+        expect.objectContaining({
+          ip: '',
+          tags: expect.objectContaining({
+            display_name: 'ISP Gateway',
+            virtual_subtype: 'internet',
+          }),
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(onDeviceUpdated).toHaveBeenCalled();
+    });
+  });
 });
 
 describe('DeviceConfigPanel', () => {
