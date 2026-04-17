@@ -339,6 +339,33 @@ describe('buildTopologyEdges', () => {
     expect(edges[0].data.parallelIndex).toBe(0);
   });
 
+  it('routes self-links through opposing handles so the renderer can draw a loop outside the card', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+    ]);
+    const nodes = [mockNode('dev-1', 120, 180)];
+    const links = [
+      mockLink({
+        id: 'link-self',
+        target_device_id: 'dev-1',
+        target_if_name: 'ether9',
+      }),
+    ];
+
+    const edges = buildTopologyEdges(links, devicesByID, nodes);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      id: 'link-self',
+      source: 'dev-1',
+      target: 'dev-1',
+      sourceHandle: 'right',
+      targetHandle: 'left',
+    });
+    expect(edges[0].data.parallelIndex).toBe(0);
+  });
+
   it('drops incomplete same-pair edges when a richer edge already provides link speed metadata', () => {
     const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
     const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });

@@ -558,6 +558,7 @@ func shouldDropPreferredNeighbor(candidate NeighborInfo, neighbors []NeighborInf
 	}
 
 	candidateIsCompletePhysical := isCompletePhysicalNeighbor(candidate)
+	candidateHasPhysicalRemotePort := isLikelyPhysicalInterface(candidate.RemotePortID)
 	for _, other := range neighbors {
 		otherRemote := normalizeNeighborIdentity(other.RemoteSysName)
 		if otherRemote == "" {
@@ -566,16 +567,21 @@ func shouldDropPreferredNeighbor(candidate NeighborInfo, neighbors []NeighborInf
 		if otherRemote != candidateRemote {
 			continue
 		}
-		if !isCompletePhysicalNeighbor(other) {
-			continue
-		}
 		if compareNeighborPreference(other, candidate) <= 0 {
 			continue
 		}
-		if candidateIsCompletePhysical {
+		if isCompletePhysicalNeighbor(other) {
+			if candidateIsCompletePhysical {
+				continue
+			}
+			return true
+		}
+		if candidateHasPhysicalRemotePort {
 			continue
 		}
-		return true
+		if isLikelyPhysicalInterface(other.RemotePortID) {
+			return true
+		}
 	}
 	return false
 }

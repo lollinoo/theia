@@ -176,7 +176,12 @@ export function buildEdgeData(
 export function getHandleSide(
   sourcePosition: { x: number; y: number },
   targetPosition: { x: number; y: number },
+  isSelfLoop = false,
 ): { sourceHandle: HandleSide; targetHandle: HandleSide } {
+  if (isSelfLoop) {
+    return { sourceHandle: 'right', targetHandle: 'left' };
+  }
+
   const dx = targetPosition.x - sourcePosition.x;
   const dy = targetPosition.y - sourcePosition.y;
 
@@ -227,6 +232,7 @@ export function buildTopologyEdges(
       const { sourceHandle, targetHandle } = getHandleSide(
         sourceNode.position,
         targetNode.position,
+        link.source_device_id === link.target_device_id,
       );
 
       const data = buildEdgeData(
