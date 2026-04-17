@@ -23,6 +23,7 @@ import (
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/metrics"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
@@ -512,11 +513,18 @@ func main() {
 
 	// Create HTTP router with all /api/v1/ routes
 	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, cfg.BridgeBinariesDir, wsHandler)
+	metricsHandler := observability.Handler()
 
 	// Create HTTP server
 	server := &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: router,
+		Addr: cfg.ListenAddr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/metrics" {
+				metricsHandler.ServeHTTP(w, r)
+				return
+			}
+			router.ServeHTTP(w, r)
+		}),
 	}
 
 	// Graceful shutdown on SIGINT/SIGTERM

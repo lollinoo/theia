@@ -1,12 +1,32 @@
 package service
 
 import (
+	"bytes"
+	"log"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/snmp"
 )
+
+func captureLogs(t *testing.T, fn func()) string {
+	t.Helper()
+
+	var buffer bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&buffer)
+	log.SetFlags(0)
+	defer log.SetOutput(previousWriter)
+	defer log.SetFlags(previousFlags)
+
+	fn()
+	return buffer.String()
+}
 
 func newStaticPersistenceService(topologyNotify chan struct{}) (*DeviceService, *mockDeviceRepo, *mockLinkRepo) {
 	deviceRepo := newMockDeviceRepo()
@@ -417,5 +437,158 @@ func TestProbeDeviceUsesApplyStaticDiscoveryAndSignalsTopologyNotify(t *testing.
 	case <-topologyNotify:
 	default:
 		t.Fatal("expected probeDevice to signal topology changes after shared persistence")
+	}
+}
+
+func TestApplyStaticDiscoveryDoesNotLogNoopAutolinkTwice(t *testing.T) {
+	observability.ResetDefaultForTest()
+
+	svc, deviceRepo, _ := newStaticPersistenceService(nil)
+	device := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch1",
+		IP:       "192.0.2.31",
+		SysName:  "switch1",
+		Status:   domain.DeviceStatusUp,
+	}
+	remote := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch2",
+		IP:       "192.0.2.32",
+		SysName:  "switch2",
+		Status:   domain.DeviceStatusUp,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("Create remote failed: %v", err)
+	}
+
+	input := StaticDiscoveryInput{
+		SysName: "switch1",
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: "switch2",
+			RemotePortID:  "ether9",
+			LocalIfName:   "ether3",
+			Protocol:      domain.DiscoveryProtocolLLDP,
+		}},
+	}
+
+	firstLogs := captureLogs(t, func() {
+		if _, err := svc.ApplyStaticDiscovery(device.ID, input); err != nil {
+			t.Fatalf("first ApplyStaticDiscovery failed: %v", err)
+		}
+	})
+	secondLogs := captureLogs(t, func() {
+		if _, err := svc.ApplyStaticDiscovery(device.ID, input); err != nil {
+			t.Fatalf("second ApplyStaticDiscovery failed: %v", err)
+		}
+	})
+
+	if !strings.Contains(firstLogs, "Auto-linked switch1:ether3 <-> switch2:ether9 via lldp (created)") {
+		t.Fatalf("expected create log, got %q", firstLogs)
+	}
+	if strings.Contains(secondLogs, "Auto-linked") {
+		t.Fatalf("expected noop rediscovery to avoid info log, got %q", secondLogs)
+	}
+}
+
+func TestApplyStaticDiscoveryAggregatesUnknownNeighborLogsAndMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+
+	svc, deviceRepo, _ := newStaticPersistenceService(nil)
+	device := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch1",
+		IP:       "192.0.2.41",
+		SysName:  "switch1",
+		Status:   domain.DeviceStatusUp,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	logs := captureLogs(t, func() {
+		if _, err := svc.ApplyStaticDiscovery(device.ID, StaticDiscoveryInput{
+			SysName: "switch1",
+			Neighbors: []snmp.NeighborInfo{
+				{RemoteSysName: "missing-a", RemotePortID: "ether1", LocalIfName: "ether7", Protocol: domain.DiscoveryProtocolLLDP},
+				{RemoteSysName: "missing-a", RemotePortID: "ether1", LocalIfName: "ether7", Protocol: domain.DiscoveryProtocolLLDP},
+				{RemoteSysName: "missing-b", RemotePortID: "ether2", LocalIfName: "ether8", Protocol: domain.DiscoveryProtocolLLDP},
+			},
+		}); err != nil {
+			t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+		}
+	})
+
+	if strings.Contains(logs, "Skipping neighbor") {
+		t.Fatalf("expected aggregated unknown-neighbor log, got %q", logs)
+	}
+	if !strings.Contains(logs, "Static discovery for switch1 skipped unresolved neighbors [lldp=3]") {
+		t.Fatalf("expected aggregated summary log, got %q", logs)
+	}
+	if !strings.Contains(logs, "missing-a(lldp)x2") || !strings.Contains(logs, "missing-b(lldp)x1") {
+		t.Fatalf("expected summarized neighbor names, got %q", logs)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	registry.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `theia_unknown_neighbors_total{device_id="`+device.ID.String()+`",protocol="lldp"} 3`) {
+		t.Fatalf("expected unknown-neighbor counter in metrics output, got %s", body)
+	}
+}
+
+func TestApplyStaticDiscoveryEmitsObservabilityMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+
+	svc, deviceRepo, _ := newStaticPersistenceService(nil)
+	device := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch1",
+		IP:       "192.0.2.51",
+		SysName:  "switch1",
+		Status:   domain.DeviceStatusUp,
+	}
+	remote := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch2",
+		IP:       "192.0.2.52",
+		SysName:  "switch2",
+		Status:   domain.DeviceStatusUp,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("Create remote failed: %v", err)
+	}
+
+	if _, err := svc.ApplyStaticDiscovery(device.ID, StaticDiscoveryInput{
+		SysName: "switch1",
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: "switch2",
+			RemotePortID:  "ether2",
+			LocalIfName:   "ether1",
+			Protocol:      domain.DiscoveryProtocolLLDP,
+		}},
+	}); err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	registry.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `theia_discovery_neighbors{device_id="`+device.ID.String()+`",protocol="lldp"} 1`) {
+		t.Fatalf("expected neighbor gauge in metrics output, got %s", body)
+	}
+	if !strings.Contains(body, `theia_link_upserts_total{protocol="lldp",result="created"} 1`) {
+		t.Fatalf("expected link upsert counter in metrics output, got %s", body)
+	}
+	if !strings.Contains(body, `theia_topology_materialization_seconds_count{result="success"} 1`) {
+		t.Fatalf("expected topology materialization metric in output, got %s", body)
 	}
 }

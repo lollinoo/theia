@@ -16,6 +16,7 @@ import (
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/metrics"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -251,6 +252,7 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 
 		result := p.performance.Poll(ctx, task.Device, p.snmpTimeout(), p.snmpRetries())
 		finishedAt = completionTime(result.CollectedAt)
+		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 
 		update := result.ToStoreUpdate(task.ExpectedInterval)
 		if result.Err == nil {
@@ -285,6 +287,7 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 
 		result := p.operational.Poll(ctx, task.Device, p.snmpTimeout(), p.snmpRetries())
 		finishedAt = completionTime(result.CollectedAt)
+		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 		p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))
 		p.publishSubscribedDetailDelta(task.Device)
 
@@ -295,6 +298,7 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 
 		result := p.staticCollector.Poll(ctx, task.Device, p.snmpTimeout(), p.snmpRetries())
 		finishedAt = completionTime(result.CollectedAt)
+		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 		p.stateStore.Update(state.StateUpdate{
 			DeviceID:         task.Device.ID,
 			VolatilityClass:  domain.VolatilityClassStatic,
@@ -388,6 +392,7 @@ func (p *PipelineOrchestrator) runVirtualOperationalTask(ctx context.Context, ta
 	} else {
 		result.Reachable = true
 	}
+	observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 
 	completedAt := completionTime(result.CollectedAt)
 	p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))

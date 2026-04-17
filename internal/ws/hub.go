@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 const (
@@ -80,6 +81,7 @@ func (h *Hub) Broadcast(msg Message) {
 		log.Printf("WebSocket hub: failed to marshal broadcast message: %v", err)
 		return
 	}
+	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
 	h.broadcast <- payload
 }
 
@@ -90,6 +92,7 @@ func (h *Hub) SendTo(client *Client, msg Message) {
 		log.Printf("WebSocket hub: failed to marshal client message: %v", err)
 		return
 	}
+	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
 	if !h.enqueue(client, payload) {
 		h.removeClient(client)
 	}

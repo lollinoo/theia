@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 const defaultInventoryRefreshInterval = 30 * time.Second
@@ -93,6 +94,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	if err := s.refreshDevices(s.now().UTC()); err != nil {
 		log.Printf("scheduler: initial refresh failed: %v", err)
 	}
+	s.recordMetrics()
 
 	go s.run(derived)
 }
@@ -154,6 +156,7 @@ func (s *Scheduler) run(ctx context.Context) {
 		now := s.now().UTC()
 		s.moveDueTasksToReady(now)
 		s.dispatchReady(ctx, now)
+		s.recordMetrics()
 		resetSchedulerTimer(timer, s.nextWakeDelay(now))
 
 		select {
@@ -164,10 +167,13 @@ func (s *Scheduler) run(ctx context.Context) {
 			if err := s.refreshDevices(s.now().UTC()); err != nil {
 				log.Printf("scheduler: refresh failed: %v", err)
 			}
+			s.recordMetrics()
 		case request := <-s.redueRequests:
 			s.handleReduePerformanceTask(request)
+			s.recordMetrics()
 		case completion := <-s.completions:
 			s.handleCompletion(completion)
+			s.recordMetrics()
 		}
 	}
 }
@@ -268,6 +274,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 			item.task.RunID = s.runID
 			item.task.DueAt = item.dueAt
 			s.inFlight++
+			observability.Default().IncSchedulerTaskDispatch(task.VolatilityClass)
 		case <-ctx.Done():
 			s.pushReadyFront(item)
 			return
@@ -442,6 +449,9 @@ func (s *Scheduler) handleCompletion(c Completion) {
 	if c.RunID != item.runID {
 		return
 	}
+	if !item.dispatchedAt.IsZero() {
+		observability.Default().ObserveSchedulerTaskDuration(item.task.VolatilityClass, finishedAt.Sub(item.dispatchedAt))
+	}
 
 	s.inFlight--
 	item.inFlight = false
@@ -569,7 +579,20 @@ drainRedueRequests:
 		select {
 		case <-s.redueRequests:
 		default:
+			s.recordMetrics()
 			return
 		}
+	}
+}
+
+func (s *Scheduler) recordMetrics() {
+	observability.Default().SetSchedulerInFlight(s.inFlight)
+	for _, volatility := range scheduledVolatilityClasses() {
+		priority := VolatilityPriority(volatility)
+		depth := 0
+		if priority >= 0 && priority < len(s.ready) {
+			depth = len(s.ready[priority])
+		}
+		observability.Default().SetSchedulerReadyDepth(volatility, depth)
 	}
 }

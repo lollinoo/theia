@@ -181,6 +181,67 @@ func TestLinkRepo_Upsert_UpdateExisting(t *testing.T) {
 	}
 }
 
+func TestLinkRepo_UpsertDetailed_NoopDoesNotUpdateTimestampOrNotify(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	changes := make(chan struct{}, 1)
+	linkRepo := NewLinkRepo(db, changes)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	link := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether3",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether9",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(link); err != nil {
+		t.Fatalf("Create link: %v", err)
+	}
+	original, err := linkRepo.GetByID(link.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	select {
+	case <-changes:
+	default:
+	}
+
+	result, err := linkRepo.UpsertDetailed(&domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether3",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether9",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	})
+	if err != nil {
+		t.Fatalf("UpsertDetailed: %v", err)
+	}
+	if result.Created {
+		t.Fatal("expected no-op upsert not to create a row")
+	}
+	if result.Changed {
+		t.Fatal("expected no-op upsert not to mark change")
+	}
+	if result.Kind != domain.LinkUpsertKindNoop {
+		t.Fatalf("Kind = %q, want %q", result.Kind, domain.LinkUpsertKindNoop)
+	}
+
+	stored, err := linkRepo.GetByID(link.ID)
+	if err != nil {
+		t.Fatalf("GetByID after noop: %v", err)
+	}
+	if !stored.UpdatedAt.Equal(original.UpdatedAt) {
+		t.Fatalf("UpdatedAt changed on no-op upsert: before=%s after=%s", original.UpdatedAt, stored.UpdatedAt)
+	}
+	select {
+	case <-changes:
+		t.Fatal("expected no invalidation signal on no-op upsert")
+	default:
+	}
+}
+
 func TestLinkRepo_Delete(t *testing.T) {
 	db := setupTestDB(t)
 	deviceRepo := NewDeviceRepo(db, testKey, nil)

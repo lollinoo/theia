@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/snmp"
 )
 
@@ -30,7 +33,12 @@ type linkUpsertReporter interface {
 	UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error)
 }
 
-func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDiscoveryInput) (StaticPersistenceResult, error) {
+func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDiscoveryInput) (result StaticPersistenceResult, err error) {
+	startedAt := time.Now()
+	defer func() {
+		observability.Default().ObserveTopologyMaterialization(time.Since(startedAt), err == nil)
+	}()
+
 	fresh, err := s.deviceRepo.GetByID(deviceID)
 	if err != nil {
 		return StaticPersistenceResult{}, fmt.Errorf("re-fetch device: %w", err)
@@ -55,8 +63,13 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		return StaticPersistenceResult{}, fmt.Errorf("update device: %w", err)
 	}
 
-	result := StaticPersistenceResult{TopologyChanged: interfaceChanged}
-	for _, neighbor := range dedupePreferredDiscoveredNeighbors(input.Neighbors) {
+	neighbors := dedupePreferredDiscoveredNeighbors(input.Neighbors)
+	observability.Default().SetDiscoveryNeighborCounts(fresh.ID, countNeighborsByProtocol(neighbors))
+
+	result = StaticPersistenceResult{TopologyChanged: interfaceChanged}
+	unknownNeighbors := make(map[unknownNeighborKey]int)
+	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
+	for _, neighbor := range neighbors {
 		if neighbor.RemoteSysName == "" {
 			continue
 		}
@@ -67,7 +80,11 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 			continue
 		}
 		if remoteDevice == nil {
-			log.Printf("Skipping neighbor %s: device not found in system", neighbor.RemoteSysName)
+			unknownNeighbors[unknownNeighborKey{
+				RemoteSysName: neighbor.RemoteSysName,
+				Protocol:      neighbor.Protocol,
+			}]++
+			unknownByProtocol[neighbor.Protocol]++
 			continue
 		}
 
@@ -84,7 +101,11 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		} else {
 			var created bool
 			created, err = s.linkRepo.Upsert(link)
-			upsertResult = domain.LinkUpsertResult{Created: created, Changed: created}
+			kind := domain.LinkUpsertKindNoop
+			if created {
+				kind = domain.LinkUpsertKindCreated
+			}
+			upsertResult = domain.LinkUpsertResult{Created: created, Changed: created, Kind: kind}
 		}
 		if err != nil {
 			log.Printf("Failed to upsert link %s:%s <-> %s:%s: %v",
@@ -98,13 +119,83 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		if upsertResult.Changed {
 			result.TopologyChanged = true
 		}
-		log.Printf("Auto-linked %s:%s <-> %s:%s via %s",
-			fresh.SysName, neighbor.LocalIfName,
-			neighbor.RemoteSysName, neighbor.RemotePortID,
-			string(neighbor.Protocol))
+		if shouldLogAutoLink(upsertResult, fresh.ID == remoteDevice.ID) {
+			log.Printf("Auto-linked %s:%s <-> %s:%s via %s (%s)",
+				fresh.SysName, neighbor.LocalIfName,
+				neighbor.RemoteSysName, neighbor.RemotePortID,
+				string(neighbor.Protocol), upsertResult.Kind)
+		}
 	}
+	logUnknownNeighborSummary(fresh.ID, fresh.SysName, unknownNeighbors, unknownByProtocol)
 
 	return result, nil
+}
+
+type unknownNeighborKey struct {
+	RemoteSysName string
+	Protocol      domain.DiscoveryProtocol
+}
+
+func countNeighborsByProtocol(neighbors []snmp.NeighborInfo) map[domain.DiscoveryProtocol]int {
+	counts := make(map[domain.DiscoveryProtocol]int)
+	for _, neighbor := range neighbors {
+		if neighbor.RemoteSysName == "" {
+			continue
+		}
+		counts[neighbor.Protocol]++
+	}
+	return counts
+}
+
+func shouldLogAutoLink(result domain.LinkUpsertResult, selfLink bool) bool {
+	switch result.Kind {
+	case domain.LinkUpsertKindCreated, domain.LinkUpsertKindEnriched, domain.LinkUpsertKindReoriented:
+		return true
+	case domain.LinkUpsertKindUpdated:
+		return selfLink
+	default:
+		return false
+	}
+}
+
+func logUnknownNeighborSummary(deviceID uuid.UUID, localSysName string, unknowns map[unknownNeighborKey]int, totals map[domain.DiscoveryProtocol]int) {
+	if len(unknowns) == 0 {
+		return
+	}
+
+	var protocolTotals []string
+	for protocol, count := range totals {
+		observability.Default().AddUnknownNeighbors(deviceID, protocol, count)
+		protocolTotals = append(protocolTotals, fmt.Sprintf("%s=%d", protocol, count))
+	}
+	sort.Strings(protocolTotals)
+
+	type detail struct {
+		key   unknownNeighborKey
+		count int
+	}
+	var details []detail
+	for key, count := range unknowns {
+		details = append(details, detail{key: key, count: count})
+	}
+	sort.Slice(details, func(i, j int) bool {
+		if details[i].key.Protocol != details[j].key.Protocol {
+			return details[i].key.Protocol < details[j].key.Protocol
+		}
+		return details[i].key.RemoteSysName < details[j].key.RemoteSysName
+	})
+
+	parts := make([]string, 0, len(details))
+	for index, item := range details {
+		if index == 5 {
+			parts = append(parts, fmt.Sprintf("... +%d more", len(details)-index))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s(%s)x%d", item.key.RemoteSysName, item.key.Protocol, item.count))
+	}
+
+	log.Printf("Static discovery for %s skipped unresolved neighbors [%s]: %s",
+		localSysName, strings.Join(protocolTotals, ", "), strings.Join(parts, ", "))
 }
 
 type interfaceMaterialSignature struct {
