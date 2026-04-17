@@ -12,7 +12,7 @@ func TestDefaultPostgresPlanChecks_CoverScaleCriticalLookups(t *testing.T) {
 		"device-by-sysname":                     "idx_devices_sys_name_lookup",
 		"link-pair-lookup":                      "idx_links_pair_lookup",
 		"observation-ingest-lookup":             "idx_topology_observations_ingest_lookup",
-		"unresolved-neighbor-resolution-lookup": "idx_unresolved_neighbors_resolution_lookup",
+		"unresolved-neighbor-resolution-lookup": "idx_unresolved_neighbors_active_lookup",
 	}
 
 	for _, check := range checks {

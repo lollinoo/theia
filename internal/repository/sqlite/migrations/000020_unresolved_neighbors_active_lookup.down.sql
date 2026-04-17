@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_unresolved_neighbors_active_lookup;

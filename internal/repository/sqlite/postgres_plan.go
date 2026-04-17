@@ -38,7 +38,7 @@ func DefaultPostgresPlanChecks() []PostgresPlanCheck {
 			Name:          "unresolved-neighbor-resolution-lookup",
 			Query:         `SELECT id FROM unresolved_neighbors WHERE local_device_id = $1 AND remote_identity = $2 AND protocol = $3 AND resolved_at IS NULL`,
 			Args:          []any{"device-a", "unknown-neighbor", "lldp"},
-			ExpectedIndex: "idx_unresolved_neighbors_resolution_lookup",
+			ExpectedIndex: "idx_unresolved_neighbors_active_lookup",
 		},
 	}
 }

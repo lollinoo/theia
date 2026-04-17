@@ -34,7 +34,7 @@ The validator checks the scale-critical queries against the expected indexes:
 - `idx_devices_sys_name_lookup`
 - `idx_links_pair_lookup`
 - `idx_topology_observations_ingest_lookup`
-- `idx_unresolved_neighbors_resolution_lookup`
+- `idx_unresolved_neighbors_active_lookup`
 
 ## Rollback
 1. Stop writes to the old backend.

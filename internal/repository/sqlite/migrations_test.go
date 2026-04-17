@@ -494,6 +494,7 @@ func TestPostgresMigrations_ContainScaleLookupIndexes(t *testing.T) {
 		"idx_links_pair_lookup",
 		"idx_topology_observations_ingest_lookup",
 		"idx_unresolved_neighbors_resolution_lookup",
+		"idx_unresolved_neighbors_active_lookup",
 	}
 	for _, want := range wants {
 		if !strings.Contains(sql, want) {
@@ -530,6 +531,7 @@ func TestMigration000019_AddsScaleLookupIndexes(t *testing.T) {
 	for _, indexName := range []string{
 		"idx_topology_observations_ingest_lookup",
 		"idx_unresolved_neighbors_resolution_lookup",
+		"idx_unresolved_neighbors_active_lookup",
 	} {
 		var count int
 		if err := db.QueryRow(
