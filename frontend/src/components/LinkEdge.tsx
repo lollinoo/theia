@@ -12,11 +12,14 @@ import {
   resolveLinkBadgePresentation,
   type LinkEdgeData,
 } from './linkSemantics';
+import { buildSelfLoopPathModel } from './linkEdgeGeometry';
 
 export type LinkEdgeType = Edge<LinkEdgeData>;
 
 function LinkEdgeInner({
   id,
+  source,
+  target,
   sourceX,
   sourceY,
   targetX,
@@ -31,16 +34,33 @@ function LinkEdgeInner({
   const isActive = selected || hovered;
   const isConnected = data?.emphasis === 'connected';
   const isMuted = data?.emphasis === 'muted';
-  const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-  });
-
   const index = data?.parallelIndex || 0;
+  const isSelfLoop = source === target || data?.link?.source_device_id === data?.link?.target_device_id;
+  const { edgePath, labelX, labelY } = isSelfLoop
+    ? buildSelfLoopPathModel({
+        sourceX,
+        sourceY,
+        targetX,
+        targetY,
+        parallelIndex: index,
+      })
+    : (() => {
+        const [path, x, y] = getBezierPath({
+          sourceX,
+          sourceY,
+          targetX,
+          targetY,
+          sourcePosition,
+          targetPosition,
+        });
+
+        return {
+          edgePath: path,
+          labelX: x,
+          labelY: y,
+        };
+      })();
+
   const sign = index % 2 === 0 ? 1 : -1;
   const magnitude = Math.ceil(index / 2) * 20;
   const labelOffsetY = sign * magnitude;
@@ -172,6 +192,8 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.data?.targetDeviceStatus === next.data?.targetDeviceStatus &&
     prev.data?.areaColor === next.data?.areaColor &&
     prev.data?.emphasis === next.data?.emphasis &&
+    prev.source === next.source &&
+    prev.target === next.target &&
     prev.sourceX === next.sourceX &&
     prev.sourceY === next.sourceY &&
     prev.targetX === next.targetX &&

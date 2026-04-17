@@ -513,6 +513,7 @@ func shouldDropDiscoveredNeighbor(candidate snmp.NeighborInfo, neighbors []snmp.
 	}
 
 	candidateIsCompletePhysical := isCompletePhysicalDiscoveredNeighbor(candidate)
+	candidateHasPhysicalRemotePort := isLikelyPhysicalDiscoveredInterface(candidate.RemotePortID)
 	for _, other := range neighbors {
 		otherRemote := normalizeDiscoveredNeighborIdentity(other.RemoteSysName)
 		if otherRemote == "" {
@@ -521,16 +522,21 @@ func shouldDropDiscoveredNeighbor(candidate snmp.NeighborInfo, neighbors []snmp.
 		if otherRemote != candidateRemote {
 			continue
 		}
-		if !isCompletePhysicalDiscoveredNeighbor(other) {
-			continue
-		}
 		if compareDiscoveredNeighborPreference(other, candidate) <= 0 {
 			continue
 		}
-		if candidateIsCompletePhysical {
+		if isCompletePhysicalDiscoveredNeighbor(other) {
+			if candidateIsCompletePhysical {
+				continue
+			}
+			return true
+		}
+		if candidateHasPhysicalRemotePort {
 			continue
 		}
-		return true
+		if isLikelyPhysicalDiscoveredInterface(other.RemotePortID) {
+			return true
+		}
 	}
 	return false
 }

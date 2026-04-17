@@ -605,6 +605,33 @@ func TestDiscoverNeighbors_PrefersPhysicalInterfacesWhenVirtualVariantsExist(t *
 	}
 }
 
+func TestDiscoverNeighbors_PrefersPhysicalRemotePortWhenLocalInterfaceIsMissingOnAllVariants(t *testing.T) {
+	neighbors := dedupePreferredNeighbors([]NeighborInfo{
+		{
+			RemoteSysName:   "gallitello",
+			RemotePortID:    "br_eoip_radius_vlan/eoip_gallitello_uff",
+			LocalIfName:     "",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+		},
+		{
+			RemoteSysName:   "gallitello",
+			RemotePortID:    "ether6-Link_Ufficio",
+			LocalIfName:     "",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+		},
+	})
+
+	if len(neighbors) != 1 {
+		t.Fatalf("expected only the physical variant to remain, got %d neighbors", len(neighbors))
+	}
+
+	if neighbors[0].RemotePortID != "ether6-Link_Ufficio" {
+		t.Fatalf("expected physical remote port to survive, got %q", neighbors[0].RemotePortID)
+	}
+}
+
 // TestDiscoverDevice_LLDPLocPortIfIndex verifies that when lldpLocPortIfIndex maps
 // lldpPortNum 3 to ifIndex 5, and ifIndex 5 has ifName "ether5", the discovered
 // neighbor gets LocalIfName == "ether5" and LocalIfIndex == 5.
