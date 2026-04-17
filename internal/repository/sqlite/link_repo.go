@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,7 +17,8 @@ import (
 type LinkRepo struct {
 	db            *DB
 	onChange      chan<- struct{}
-	changeEvents  chan domain.LinkChangeEvent
+	subscribersMu sync.RWMutex
+	subscribers   map[chan domain.LinkChangeEvent]struct{}
 	repairPending atomic.Bool
 }
 
@@ -25,14 +27,26 @@ type LinkRepo struct {
 // every successful Create, Update, Delete, or Upsert operation.
 func NewLinkRepo(db *sql.DB, onChange chan<- struct{}) *LinkRepo {
 	return &LinkRepo{
-		db:           wrapDB(db),
-		onChange:     onChange,
-		changeEvents: make(chan domain.LinkChangeEvent, 256),
+		db:          wrapDB(db),
+		onChange:    onChange,
+		subscribers: make(map[chan domain.LinkChangeEvent]struct{}),
 	}
 }
 
 func (r *LinkRepo) LinkChanges() <-chan domain.LinkChangeEvent {
-	return r.changeEvents
+	return r.SubscribeLinkChanges(256)
+}
+
+func (r *LinkRepo) SubscribeLinkChanges(buffer int) <-chan domain.LinkChangeEvent {
+	if buffer <= 0 {
+		buffer = 256
+	}
+
+	ch := make(chan domain.LinkChangeEvent, buffer)
+	r.subscribersMu.Lock()
+	r.subscribers[ch] = struct{}{}
+	r.subscribersMu.Unlock()
+	return ch
 }
 
 func (r *LinkRepo) DrainLinkRepair() bool {
@@ -53,18 +67,19 @@ func (r *LinkRepo) notify() {
 }
 
 func (r *LinkRepo) publishChange(kind domain.ChangeKind, linkID uuid.UUID) {
-	if r.changeEvents == nil {
-		return
-	}
-
 	event := domain.LinkChangeEvent{
 		Kind:   kind,
 		LinkID: linkID,
 	}
-	select {
-	case r.changeEvents <- event:
-	default:
-		r.repairPending.Store(true)
+
+	r.subscribersMu.RLock()
+	defer r.subscribersMu.RUnlock()
+	for subscriber := range r.subscribers {
+		select {
+		case subscriber <- event:
+		default:
+			r.repairPending.Store(true)
+		}
 	}
 }
 

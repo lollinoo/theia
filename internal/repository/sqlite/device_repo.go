@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,7 +19,8 @@ type DeviceRepo struct {
 	db            *DB
 	encryptionKey []byte
 	onChange      chan<- struct{}
-	changeEvents  chan domain.DeviceChangeEvent
+	subscribersMu sync.RWMutex
+	subscribers   map[chan domain.DeviceChangeEvent]struct{}
 	repairPending atomic.Bool
 }
 
@@ -30,12 +32,24 @@ func NewDeviceRepo(db *sql.DB, encryptionKey []byte, onChange chan<- struct{}) *
 		db:            wrapDB(db),
 		encryptionKey: encryptionKey,
 		onChange:      onChange,
-		changeEvents:  make(chan domain.DeviceChangeEvent, 256),
+		subscribers:   make(map[chan domain.DeviceChangeEvent]struct{}),
 	}
 }
 
 func (r *DeviceRepo) DeviceChanges() <-chan domain.DeviceChangeEvent {
-	return r.changeEvents
+	return r.SubscribeDeviceChanges(256)
+}
+
+func (r *DeviceRepo) SubscribeDeviceChanges(buffer int) <-chan domain.DeviceChangeEvent {
+	if buffer <= 0 {
+		buffer = 256
+	}
+
+	ch := make(chan domain.DeviceChangeEvent, buffer)
+	r.subscribersMu.Lock()
+	r.subscribers[ch] = struct{}{}
+	r.subscribersMu.Unlock()
+	return ch
 }
 
 func (r *DeviceRepo) DrainDeviceRepair() bool {
@@ -56,18 +70,19 @@ func (r *DeviceRepo) notify() {
 }
 
 func (r *DeviceRepo) publishChange(kind domain.ChangeKind, deviceID uuid.UUID) {
-	if r.changeEvents == nil {
-		return
-	}
-
 	event := domain.DeviceChangeEvent{
 		Kind:     kind,
 		DeviceID: deviceID,
 	}
-	select {
-	case r.changeEvents <- event:
-	default:
-		r.repairPending.Store(true)
+
+	r.subscribersMu.RLock()
+	defer r.subscribersMu.RUnlock()
+	for subscriber := range r.subscribers {
+		select {
+		case subscriber <- event:
+		default:
+			r.repairPending.Store(true)
+		}
 	}
 }
 

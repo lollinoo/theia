@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,7 +26,10 @@ import (
 	"github.com/lollinoo/theia/internal/ws"
 )
 
-const pipelineBroadcastInterval = 5 * time.Second
+const (
+	pipelineBroadcastCoalesceWindow = 250 * time.Millisecond
+	pipelineFullResyncInterval      = 60 * time.Second
+)
 
 type pipelineScheduler interface {
 	Start(context.Context)
@@ -47,19 +51,24 @@ type PipelineOrchestrator struct {
 	topologyService interface {
 		ApplyStaticDiscovery(uuid.UUID, service.StaticDiscoveryInput) (service.StaticPersistenceResult, error)
 	}
-	settingsRepo   domain.SettingsRepository
-	topologyNotify chan struct{}
-	running        atomic.Bool
-	cancel         context.CancelFunc
-	done           chan struct{}
-	healthDone     chan struct{}
-	snapshotMu     sync.RWMutex
-	lastSnapshot   *ws.SnapshotPayload
-	promStatus     ws.PrometheusStatusPayload
-	hostnames      map[uuid.UUID]string
-	alerts         map[uuid.UUID][]domain.AlertState
-	prevCounters   map[uuid.UUID]map[string]collector.CounterBaseline
-	prevHashes     *sectionHashes
+	settingsRepo            domain.SettingsRepository
+	topologyNotify          chan struct{}
+	deviceChangeNotify      <-chan domain.DeviceChangeEvent
+	linkChangeNotify        <-chan domain.LinkChangeEvent
+	alertNotify             chan struct{}
+	broadcastCoalesceWindow time.Duration
+	fullResyncInterval      time.Duration
+	running                 atomic.Bool
+	cancel                  context.CancelFunc
+	done                    chan struct{}
+	healthDone              chan struct{}
+	snapshotMu              sync.RWMutex
+	lastSnapshot            *ws.SnapshotPayload
+	promStatus              ws.PrometheusStatusPayload
+	hostnames               map[uuid.UUID]string
+	alerts                  map[uuid.UUID][]domain.AlertState
+	prevCounters            map[uuid.UUID]map[string]collector.CounterBaseline
+	prevHashes              *sectionHashes
 }
 
 func NewPipelineOrchestrator(
@@ -76,26 +85,33 @@ func NewPipelineOrchestrator(
 	},
 	settingsRepo domain.SettingsRepository,
 	topologyNotify chan struct{},
+	deviceChangeNotify <-chan domain.DeviceChangeEvent,
+	linkChangeNotify <-chan domain.LinkChangeEvent,
 ) *PipelineOrchestrator {
 	return &PipelineOrchestrator{
-		scheduler:       sched,
-		stateStore:      stateStore,
-		cache:           cache,
-		hub:             hub,
-		performance:     performance,
-		operational:     operational,
-		staticCollector: staticCollector,
-		prometheus:      prometheus,
-		topologyService: topologyService,
-		settingsRepo:    settingsRepo,
-		topologyNotify:  topologyNotify,
-		done:            make(chan struct{}),
-		healthDone:      make(chan struct{}),
-		lastSnapshot:    ws.EmptySnapshot(),
-		promStatus:      initialPrometheusStatus(settingsRepo),
-		hostnames:       make(map[uuid.UUID]string),
-		alerts:          make(map[uuid.UUID][]domain.AlertState),
-		prevCounters:    make(map[uuid.UUID]map[string]collector.CounterBaseline),
+		scheduler:               sched,
+		stateStore:              stateStore,
+		cache:                   cache,
+		hub:                     hub,
+		performance:             performance,
+		operational:             operational,
+		staticCollector:         staticCollector,
+		prometheus:              prometheus,
+		topologyService:         topologyService,
+		settingsRepo:            settingsRepo,
+		topologyNotify:          topologyNotify,
+		deviceChangeNotify:      deviceChangeNotify,
+		linkChangeNotify:        linkChangeNotify,
+		alertNotify:             make(chan struct{}, 1),
+		broadcastCoalesceWindow: pipelineBroadcastCoalesceWindow,
+		fullResyncInterval:      pipelineFullResyncInterval,
+		done:                    make(chan struct{}),
+		healthDone:              make(chan struct{}),
+		lastSnapshot:            ws.EmptySnapshot(),
+		promStatus:              initialPrometheusStatus(settingsRepo),
+		hostnames:               make(map[uuid.UUID]string),
+		alerts:                  make(map[uuid.UUID][]domain.AlertState),
+		prevCounters:            make(map[uuid.UUID]map[string]collector.CounterBaseline),
 	}
 }
 
@@ -450,9 +466,7 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 	promURL := p.prometheusURL()
 	if promURL == "" {
 		p.prometheus.SetClient(nil)
-		p.snapshotMu.Lock()
-		p.alerts = make(map[uuid.UUID][]domain.AlertState)
-		p.snapshotMu.Unlock()
+		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
 		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
 			Enabled:   false,
 			Available: false,
@@ -464,9 +478,7 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 
 	devices, err := p.cache.GetDevices()
 	if err != nil {
-		p.snapshotMu.Lock()
-		p.alerts = make(map[uuid.UUID][]domain.AlertState)
-		p.snapshotMu.Unlock()
+		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
 		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
 			Enabled:   true,
 			Available: false,
@@ -477,9 +489,7 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 
 	alerts, err := p.prometheus.CollectAlerts(ctx, devices)
 	if err != nil {
-		p.snapshotMu.Lock()
-		p.alerts = make(map[uuid.UUID][]domain.AlertState)
-		p.snapshotMu.Unlock()
+		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
 		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
 			Enabled:   true,
 			Available: false,
@@ -488,9 +498,7 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 		return
 	}
 
-	p.snapshotMu.Lock()
-	p.alerts = alerts
-	p.snapshotMu.Unlock()
+	p.setAlerts(alerts)
 	p.publishPrometheusStatus(ws.PrometheusStatusPayload{
 		Enabled:   true,
 		Available: true,
@@ -498,15 +506,96 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 }
 
 func (p *PipelineOrchestrator) broadcastLoop(ctx context.Context) {
-	ticker := time.NewTicker(pipelineBroadcastInterval)
-	defer ticker.Stop()
+	if p.cache == nil || p.stateStore == nil || p.hub == nil {
+		<-ctx.Done()
+		return
+	}
+
+	stateChanges := p.stateStore.Changes()
+	p.broadcastOnce(ctx)
+	drainBroadcastLoopInputs(stateChanges, p.deviceChangeNotify, p.linkChangeNotify, p.topologyNotify, p.alertNotify)
+
+	flushTimer := time.NewTimer(time.Hour)
+	if !flushTimer.Stop() {
+		select {
+		case <-flushTimer.C:
+		default:
+		}
+	}
+	defer flushTimer.Stop()
+
+	fullResyncTicker := time.NewTicker(p.fullResyncInterval)
+	defer fullResyncTicker.Stop()
+
+	flushScheduled := false
+	dirtyDevices := make(map[uuid.UUID]struct{})
+	topologyDirty := false
+	alertsDirty := false
+	forceFull := false
+
+	scheduleFlush := func() {
+		if flushScheduled {
+			return
+		}
+		flushTimer.Reset(p.broadcastCoalesceWindow)
+		flushScheduled = true
+	}
+
+	resetDirtyState := func() {
+		clear(dirtyDevices)
+		topologyDirty = false
+		alertsDirty = false
+		forceFull = false
+		flushScheduled = false
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			p.broadcastOnce(ctx)
+		case ids, ok := <-stateChanges:
+			if !ok {
+				stateChanges = nil
+				continue
+			}
+			addDirtyDeviceIDs(dirtyDevices, ids)
+			scheduleFlush()
+		case change, ok := <-p.deviceChangeNotify:
+			if !ok {
+				p.deviceChangeNotify = nil
+				continue
+			}
+			switch change.Kind {
+			case domain.ChangeKindCreated, domain.ChangeKindDeleted:
+				topologyDirty = true
+			case domain.ChangeKindUpdated:
+				if change.DeviceID != uuid.Nil {
+					dirtyDevices[change.DeviceID] = struct{}{}
+				}
+			}
+			scheduleFlush()
+		case _, ok := <-p.linkChangeNotify:
+			if !ok {
+				p.linkChangeNotify = nil
+				continue
+			}
+			topologyDirty = true
+			scheduleFlush()
+		case <-p.topologyNotify:
+			topologyDirty = true
+			scheduleFlush()
+		case <-p.alertNotify:
+			alertsDirty = true
+			scheduleFlush()
+		case <-fullResyncTicker.C:
+			forceFull = true
+			scheduleFlush()
+		case <-flushTimer.C:
+			flushScheduled = false
+			if err := p.broadcastDirty(ctx, dirtyDevices, alertsDirty, topologyDirty, forceFull); err != nil {
+				log.Printf("pipeline: event-driven broadcast failed: %v", err)
+			}
+			resetDirtyState()
 		}
 	}
 }
@@ -569,6 +658,168 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 			Type:    ws.MessageTypeTopologyChanged,
 			Payload: nil,
 		})
+	}
+}
+
+func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices map[uuid.UUID]struct{}, alertsDirty bool, topologyDirty bool, forceFull bool) error {
+	if p.cache == nil || p.stateStore == nil || p.hub == nil {
+		return nil
+	}
+
+	if forceFull || topologyDirty {
+		return p.broadcastFullSnapshot(ctx, topologyDirty)
+	}
+
+	delta, requireFullSnapshot, err := p.buildDirtyOverviewDelta(dirtyDevices, alertsDirty)
+	if err != nil {
+		return err
+	}
+	if requireFullSnapshot {
+		return p.broadcastFullSnapshot(ctx, false)
+	}
+	if delta == nil {
+		return nil
+	}
+
+	p.snapshotMu.Lock()
+	merged := mergeSnapshotPayload(p.lastSnapshot, delta)
+	p.lastSnapshot = merged
+	p.prevHashes = computeSnapshotHashes(merged)
+	p.snapshotMu.Unlock()
+
+	p.hub.Broadcast(ws.Message{
+		Type:    ws.MessageTypeSnapshotDelta,
+		Payload: delta,
+	})
+
+	return nil
+}
+
+func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, topologyChanged bool) error {
+	snapshot, err := p.buildFullOverviewSnapshot()
+	if err != nil {
+		return err
+	}
+
+	p.snapshotMu.Lock()
+	p.lastSnapshot = snapshot
+	p.prevHashes = computeSnapshotHashes(snapshot)
+	p.snapshotMu.Unlock()
+
+	p.hub.Broadcast(ws.Message{
+		Type:    ws.MessageTypeSnapshot,
+		Payload: snapshot,
+	})
+
+	if topologyChanged {
+		p.hub.Broadcast(ws.Message{
+			Type:    ws.MessageTypeTopologyChanged,
+			Payload: nil,
+		})
+	}
+
+	return nil
+}
+
+func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (*ws.SnapshotPayload, error) {
+	devices, err := p.cache.GetDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	links, err := p.cache.GetLinks()
+	if err != nil {
+		return nil, err
+	}
+
+	p.snapshotMu.RLock()
+	hostnames := cloneHostnameOverrides(p.hostnames)
+	alerts := cloneAlertGroups(p.alerts)
+	p.snapshotMu.RUnlock()
+
+	return buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, hostnames), nil
+}
+
+func (p *PipelineOrchestrator) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUID]struct{}, alertsDirty bool) (*ws.SnapshotPayload, bool, error) {
+	if len(dirtyDevices) == 0 && !alertsDirty {
+		return nil, false, nil
+	}
+
+	delta := ws.EmptySnapshot()
+	if len(dirtyDevices) > 0 {
+		devices, err := p.cache.GetDevices()
+		if err != nil {
+			return nil, false, err
+		}
+
+		links, err := p.cache.GetLinks()
+		if err != nil {
+			return nil, false, err
+		}
+
+		p.snapshotMu.RLock()
+		hostnames := cloneHostnameOverrides(p.hostnames)
+		p.snapshotMu.RUnlock()
+
+		filteredDevices := filterDevicesByID(devices, dirtyDevices)
+		filteredLinks := filterLinksByDeviceID(links, dirtyDevices)
+		if len(filteredDevices) > 0 {
+			partial := buildPipelineSnapshot(filteredDevices, filteredLinks, p.stateStore.Snapshot(), nil, hostnames)
+			delta.DeviceMetrics = partial.DeviceMetrics
+			delta.LinkMetrics = partial.LinkMetrics
+			delta.DeviceStatuses = partial.DeviceStatuses
+
+			for _, device := range filteredDevices {
+				deviceKey := device.ID.String()
+
+				hostname, ok := partial.DeviceHostnames[deviceKey]
+				if !ok {
+					hostname = ""
+				}
+				delta.DeviceHostnames[deviceKey] = hostname
+
+				model, ok := partial.DeviceModels[deviceKey]
+				if !ok {
+					model = ""
+				}
+				delta.DeviceModels[deviceKey] = model
+			}
+		}
+	}
+
+	if alertsDirty {
+		p.snapshotMu.RLock()
+		alerts := cloneAlertGroups(p.alerts)
+		previousAlerts := append([]ws.AlertDTO(nil), p.lastSnapshot.Alerts...)
+		p.snapshotMu.RUnlock()
+
+		currentAlerts := ws.AlertsToDTOs(flattenAlerts(alerts))
+		if len(currentAlerts) == 0 && len(previousAlerts) > 0 {
+			return nil, true, nil
+		}
+		delta.Alerts = currentAlerts
+	}
+
+	if snapshotPayloadEmpty(delta) {
+		return nil, false, nil
+	}
+
+	return delta, false, nil
+}
+
+func (p *PipelineOrchestrator) setAlerts(next map[uuid.UUID][]domain.AlertState) {
+	p.snapshotMu.Lock()
+	previous := ws.AlertsToDTOs(flattenAlerts(cloneAlertGroups(p.alerts)))
+	current := ws.AlertsToDTOs(flattenAlerts(cloneAlertGroups(next)))
+	changed := !reflect.DeepEqual(previous, current)
+	p.alerts = next
+	p.snapshotMu.Unlock()
+
+	if changed {
+		select {
+		case p.alertNotify <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -683,6 +934,129 @@ func cloneAlertGroups(in map[uuid.UUID][]domain.AlertState) map[uuid.UUID][]doma
 		out[deviceID] = append([]domain.AlertState(nil), alerts...)
 	}
 	return out
+}
+
+func addDirtyDeviceIDs(target map[uuid.UUID]struct{}, ids []uuid.UUID) {
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		target[id] = struct{}{}
+	}
+}
+
+func filterDevicesByID(devices []domain.Device, ids map[uuid.UUID]struct{}) []domain.Device {
+	filtered := make([]domain.Device, 0, len(ids))
+	for _, device := range devices {
+		if _, ok := ids[device.ID]; ok {
+			filtered = append(filtered, device)
+		}
+	}
+	return filtered
+}
+
+func filterLinksByDeviceID(links []domain.Link, ids map[uuid.UUID]struct{}) []domain.Link {
+	filtered := make([]domain.Link, 0, len(links))
+	for _, link := range links {
+		if _, ok := ids[link.SourceDeviceID]; ok {
+			filtered = append(filtered, link)
+			continue
+		}
+		if _, ok := ids[link.TargetDeviceID]; ok {
+			filtered = append(filtered, link)
+		}
+	}
+	return filtered
+}
+
+func snapshotPayloadEmpty(payload *ws.SnapshotPayload) bool {
+	if payload == nil {
+		return true
+	}
+
+	return len(payload.DeviceMetrics) == 0 &&
+		len(payload.LinkMetrics) == 0 &&
+		len(payload.Alerts) == 0 &&
+		len(payload.DeviceStatuses) == 0 &&
+		len(payload.DeviceHostnames) == 0 &&
+		len(payload.DeviceModels) == 0
+}
+
+func mergeSnapshotPayload(base *ws.SnapshotPayload, delta *ws.SnapshotPayload) *ws.SnapshotPayload {
+	merged := ws.CloneSnapshot(base)
+	if merged == nil {
+		merged = ws.EmptySnapshot()
+	}
+	if delta == nil {
+		return merged
+	}
+
+	for key, value := range delta.DeviceMetrics {
+		merged.DeviceMetrics[key] = value
+	}
+	for key, value := range delta.LinkMetrics {
+		merged.LinkMetrics[key] = append([]ws.LinkMetricsDTO(nil), value...)
+	}
+	for key, value := range delta.DeviceStatuses {
+		merged.DeviceStatuses[key] = value
+	}
+	for key, value := range delta.DeviceHostnames {
+		merged.DeviceHostnames[key] = value
+	}
+	for key, value := range delta.DeviceModels {
+		merged.DeviceModels[key] = value
+	}
+	if delta.Alerts != nil {
+		merged.Alerts = append([]ws.AlertDTO(nil), delta.Alerts...)
+	}
+
+	return merged
+}
+
+func drainBroadcastLoopInputs(
+	stateChanges <-chan []uuid.UUID,
+	deviceChanges <-chan domain.DeviceChangeEvent,
+	linkChanges <-chan domain.LinkChangeEvent,
+	topologyNotify <-chan struct{},
+	alertNotify <-chan struct{},
+) {
+	for {
+		drained := false
+
+		select {
+		case <-stateChanges:
+			drained = true
+		default:
+		}
+
+		select {
+		case <-deviceChanges:
+			drained = true
+		default:
+		}
+
+		select {
+		case <-linkChanges:
+			drained = true
+		default:
+		}
+
+		select {
+		case <-topologyNotify:
+			drained = true
+		default:
+		}
+
+		select {
+		case <-alertNotify:
+			drained = true
+		default:
+		}
+
+		if !drained {
+			return
+		}
+	}
 }
 
 func drainTopologyNotify(topologyNotify chan struct{}) bool {
