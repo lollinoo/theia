@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 // LinkRepo implements domain.LinkRepository using SQLite.
@@ -31,6 +32,7 @@ func (r *LinkRepo) notify() {
 	}
 	select {
 	case r.onChange <- struct{}{}:
+		observability.Default().IncCacheInvalidation("link_repo")
 	default:
 	}
 }
@@ -222,18 +224,19 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 	// interface pair. Empty source interface names are treated as incomplete data
 	// that can match and be enriched in place.
 	var existingID string
-	var existingSrcIf, existingTgtIf string
+	var existingSrcIf, existingTgtIf, existingProtocol string
 	err = tx.QueryRow(
-		`SELECT id, source_if_name, target_if_name FROM links
+		`SELECT id, source_if_name, target_if_name, discovery_protocol FROM links
 		 WHERE source_device_id = ? AND target_device_id = ?
 		   AND target_if_name = ?
 		   AND (source_if_name = ? OR source_if_name = '' OR ? = '')`,
 		link.SourceDeviceID.String(), link.TargetDeviceID.String(),
 		link.TargetIfName, link.SourceIfName, link.SourceIfName,
-	).Scan(&existingID, &existingSrcIf, &existingTgtIf)
+	).Scan(&existingID, &existingSrcIf, &existingTgtIf, &existingProtocol)
 
 	if err == nil {
-		// Same-direction match: refresh protocol/timestamp and fill any empty port names.
+		// Same-direction match: fill any empty port names and update protocol only
+		// when the stored row materially changes. Identical rediscovery is a no-op.
 		link.ID = uuid.MustParse(existingID)
 		newSrcIf := existingSrcIf
 		if newSrcIf == "" && link.SourceIfName != "" {
@@ -243,7 +246,20 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 		if newTgtIf == "" && link.TargetIfName != "" {
 			newTgtIf = link.TargetIfName
 		}
-		changed := newSrcIf != existingSrcIf || newTgtIf != existingTgtIf
+		link.SourceIfName = newSrcIf
+		link.TargetIfName = newTgtIf
+
+		portsChanged := newSrcIf != existingSrcIf || newTgtIf != existingTgtIf
+		protocolChanged := existingProtocol != string(link.DiscoveryProtocol)
+		if !portsChanged && !protocolChanged {
+			result := domain.LinkUpsertResult{
+				Created: false,
+				Changed: false,
+				Kind:    domain.LinkUpsertKindNoop,
+			}
+			r.recordUpsert(result, link.DiscoveryProtocol)
+			return result, nil
+		}
 		if _, err = tx.Exec(
 			`UPDATE links SET source_if_name = ?, target_if_name = ?,
 			 discovery_protocol = ?, updated_at = ? WHERE id = ?`,
@@ -256,7 +272,13 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 			return domain.LinkUpsertResult{}, fmt.Errorf("committing link update: %w", err)
 		}
 		r.notify()
-		return domain.LinkUpsertResult{Created: false, Changed: changed}, nil
+		kind := domain.LinkUpsertKindUpdated
+		if portsChanged {
+			kind = domain.LinkUpsertKindEnriched
+		}
+		result := domain.LinkUpsertResult{Created: false, Changed: true, Kind: kind}
+		r.recordUpsert(result, link.DiscoveryProtocol)
+		return result, nil
 	}
 	if err != sql.ErrNoRows {
 		return domain.LinkUpsertResult{}, fmt.Errorf("checking existing link: %w", err)
@@ -286,7 +308,9 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 				return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link reorientation: %w", err)
 			}
 			r.notify()
-			return domain.LinkUpsertResult{Created: false, Changed: true}, nil
+			result := domain.LinkUpsertResult{Created: false, Changed: true, Kind: domain.LinkUpsertKindReoriented}
+			r.recordUpsert(result, link.DiscoveryProtocol)
+			return result, nil
 		}
 
 		// Reverse-direction match found (B→A record exists). Enrich it:
@@ -304,7 +328,18 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 		if newTgtIf == "" && link.SourceIfName != "" {
 			newTgtIf = link.SourceIfName
 		}
-		changed := newSrcIf != reverse.SourceIfName || newTgtIf != reverse.TargetIfName
+		portsChanged := newSrcIf != reverse.SourceIfName || newTgtIf != reverse.TargetIfName
+		protocolChanged := reverse.Protocol != string(link.DiscoveryProtocol)
+		if !portsChanged && !protocolChanged {
+			link.ID = uuid.MustParse(reverse.ID)
+			result := domain.LinkUpsertResult{
+				Created: false,
+				Changed: false,
+				Kind:    domain.LinkUpsertKindNoop,
+			}
+			r.recordUpsert(result, link.DiscoveryProtocol)
+			return result, nil
+		}
 		if _, err = tx.Exec(
 			`UPDATE links SET source_if_name = ?, target_if_name = ?,
 			 discovery_protocol = ?, updated_at = ? WHERE id = ?`,
@@ -317,7 +352,13 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 			return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link update: %w", err)
 		}
 		r.notify()
-		return domain.LinkUpsertResult{Created: false, Changed: changed}, nil
+		kind := domain.LinkUpsertKindUpdated
+		if portsChanged {
+			kind = domain.LinkUpsertKindEnriched
+		}
+		result := domain.LinkUpsertResult{Created: false, Changed: true, Kind: kind}
+		r.recordUpsert(result, link.DiscoveryProtocol)
+		return result, nil
 	}
 
 	// No existing record in either direction — insert new.
@@ -337,7 +378,13 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 		return domain.LinkUpsertResult{}, fmt.Errorf("committing link insert: %w", err)
 	}
 	r.notify()
-	return domain.LinkUpsertResult{Created: true, Changed: true}, nil
+	result := domain.LinkUpsertResult{Created: true, Changed: true, Kind: domain.LinkUpsertKindCreated}
+	r.recordUpsert(result, link.DiscoveryProtocol)
+	return result, nil
+}
+
+func (r *LinkRepo) recordUpsert(result domain.LinkUpsertResult, protocol domain.DiscoveryProtocol) {
+	observability.Default().IncLinkUpsert(protocol, result.Kind)
 }
 
 // scanLinks scans multiple link rows.
@@ -370,12 +417,13 @@ type reverseLinkMatch struct {
 	ID           string
 	SourceIfName string
 	TargetIfName string
+	Protocol     string
 	score        int
 }
 
 func findBestReverseLinkMatch(tx *Tx, link *domain.Link) (*reverseLinkMatch, error) {
 	rows, err := tx.Query(
-		`SELECT id, source_if_name, target_if_name FROM links
+		`SELECT id, source_if_name, target_if_name, discovery_protocol FROM links
 		 WHERE source_device_id = ? AND target_device_id = ?
 		 ORDER BY created_at`,
 		link.TargetDeviceID.String(), link.SourceDeviceID.String(),
@@ -390,7 +438,7 @@ func findBestReverseLinkMatch(tx *Tx, link *domain.Link) (*reverseLinkMatch, err
 
 	for rows.Next() {
 		var candidate reverseLinkMatch
-		if err := rows.Scan(&candidate.ID, &candidate.SourceIfName, &candidate.TargetIfName); err != nil {
+		if err := rows.Scan(&candidate.ID, &candidate.SourceIfName, &candidate.TargetIfName, &candidate.Protocol); err != nil {
 			return nil, fmt.Errorf("scanning reverse link candidate: %w", err)
 		}
 

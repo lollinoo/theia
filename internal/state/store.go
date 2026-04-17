@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 // stalenessTickInterval is how often the background goroutine checks all
@@ -328,6 +329,7 @@ func (s *Store) emitChanges(ids []uuid.UUID) {
 	select {
 	case s.changes <- ids:
 	default:
+		observability.Default().AddDroppedStateChanges(len(ids))
 		log.Printf("state: changes channel full, %d device change(s) dropped", len(ids))
 	}
 }

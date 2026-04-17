@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/snmp"
 )
@@ -209,14 +210,33 @@ func (r *mockLinkRepo) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResul
 			if updated.TargetIfName == "" && link.TargetIfName != "" {
 				updated.TargetIfName = link.TargetIfName
 			}
+			portsChanged := updated.SourceIfName != existing.SourceIfName || updated.TargetIfName != existing.TargetIfName
+			protocolChanged := updated.DiscoveryProtocol != link.DiscoveryProtocol
+			if !portsChanged && !protocolChanged {
+				*link = updated
+				result := domain.LinkUpsertResult{
+					Created: false,
+					Changed: false,
+					Kind:    domain.LinkUpsertKindNoop,
+				}
+				observability.Default().IncLinkUpsert(link.DiscoveryProtocol, result.Kind)
+				return result, nil
+			}
 			updated.DiscoveryProtocol = link.DiscoveryProtocol
 			updated.UpdatedAt = time.Now().UTC()
 			r.links[id] = &updated
 			*link = updated
-			return domain.LinkUpsertResult{
+			kind := domain.LinkUpsertKindUpdated
+			if portsChanged {
+				kind = domain.LinkUpsertKindEnriched
+			}
+			result := domain.LinkUpsertResult{
 				Created: false,
-				Changed: updated.SourceIfName != existing.SourceIfName || updated.TargetIfName != existing.TargetIfName,
-			}, nil
+				Changed: true,
+				Kind:    kind,
+			}
+			observability.Default().IncLinkUpsert(link.DiscoveryProtocol, result.Kind)
+			return result, nil
 		}
 	}
 	if link.ID == uuid.Nil {
@@ -226,7 +246,9 @@ func (r *mockLinkRepo) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResul
 	link.CreatedAt = now
 	link.UpdatedAt = now
 	r.links[link.ID] = link
-	return domain.LinkUpsertResult{Created: true, Changed: true}, nil
+	result := domain.LinkUpsertResult{Created: true, Changed: true, Kind: domain.LinkUpsertKindCreated}
+	observability.Default().IncLinkUpsert(link.DiscoveryProtocol, result.Kind)
+	return result, nil
 }
 
 // --- Mock Settings Repository ---

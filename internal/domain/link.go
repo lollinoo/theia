@@ -27,11 +27,22 @@ type Link struct {
 	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
+type LinkUpsertKind string
+
+const (
+	LinkUpsertKindCreated    LinkUpsertKind = "created"
+	LinkUpsertKindEnriched   LinkUpsertKind = "enriched"
+	LinkUpsertKindReoriented LinkUpsertKind = "reoriented"
+	LinkUpsertKindUpdated    LinkUpsertKind = "updated"
+	LinkUpsertKindNoop       LinkUpsertKind = "noop"
+)
+
 // LinkUpsertResult reports whether an upsert inserted a new row and whether it
 // changed any topology-visible fields of an existing row.
 type LinkUpsertResult struct {
 	Created bool
 	Changed bool
+	Kind    LinkUpsertKind
 }
 
 // LinkRepository defines persistence operations for links.

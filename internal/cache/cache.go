@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 // DeviceLinkCache provides a lazily-loaded, invalidation-driven cache for
@@ -93,6 +94,7 @@ func (c *DeviceLinkCache) reload() error {
 	c.devices = devices
 	c.links = links
 	c.valid = true
+	observability.Default().IncCacheReload()
 
 	return nil
 }

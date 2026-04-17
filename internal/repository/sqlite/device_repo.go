@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 // DeviceRepo implements domain.DeviceRepository using SQLite.
@@ -33,6 +34,7 @@ func (r *DeviceRepo) notify() {
 	}
 	select {
 	case r.onChange <- struct{}{}:
+		observability.Default().IncCacheInvalidation("device_repo")
 	default:
 	}
 }
