@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"database/sql"
 	"log"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
+	sqliterepo "github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/snmp"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func captureLogs(t *testing.T, fn func()) string {
@@ -590,5 +593,85 @@ func TestApplyStaticDiscoveryEmitsObservabilityMetrics(t *testing.T) {
 	}
 	if !strings.Contains(body, `theia_topology_materialization_seconds_count{result="success"} 1`) {
 		t.Fatalf("expected topology materialization metric in output, got %s", body)
+	}
+}
+
+func TestApplyStaticDiscoveryWithObservationStore_PersistsObservationsAndUnresolvedNeighbors(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
+	if err != nil {
+		t.Fatalf("opening sqlite db: %v", err)
+	}
+	defer db.Close()
+	if err := sqliterepo.RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	deviceRepo := sqliterepo.NewDeviceRepo(db, nil, nil)
+	linkRepo := sqliterepo.NewLinkRepo(db, nil)
+	observationRepo := sqliterepo.NewTopologyObservationRepo(db)
+	settingsRepo := newMockSettingsRepo()
+	svc := NewDeviceService(
+		deviceRepo,
+		linkRepo,
+		settingsRepo,
+		func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) { return nil, nil },
+		nil,
+		WithTopologyObservationStore(observationRepo),
+	)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.51", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	remote := &domain.Device{ID: uuid.New(), Hostname: "remote", IP: "192.0.2.52", SysName: "remote", Managed: true, Status: domain.DeviceStatusUp}
+	if err := deviceRepo.Create(local); err != nil {
+		t.Fatalf("Create local failed: %v", err)
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("Create remote failed: %v", err)
+	}
+
+	persisted, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName: "local",
+		Neighbors: []snmp.NeighborInfo{
+			{RemoteSysName: "remote", RemotePortID: "ether2", LocalIfName: "ether1", Protocol: domain.DiscoveryProtocolLLDP},
+			{RemoteSysName: "missing-edge", RemotePortID: "ether9", LocalIfName: "ether8", Protocol: domain.DiscoveryProtocolLLDP},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if !persisted.TopologyChanged {
+		t.Fatal("expected topology change through observation materialization")
+	}
+	if persisted.LinksCreated != 1 {
+		t.Fatalf("LinksCreated = %d, want 1", persisted.LinksCreated)
+	}
+
+	observations, err := observationRepo.ListObservationsForDevices([]uuid.UUID{local.ID, remote.ID})
+	if err != nil {
+		t.Fatalf("ListObservationsForDevices failed: %v", err)
+	}
+	if len(observations) != 2 {
+		t.Fatalf("expected 2 persisted observations, got %d", len(observations))
+	}
+
+	unresolved, err := observationRepo.GetUnresolvedNeighborsByDeviceID(local.ID)
+	if err != nil {
+		t.Fatalf("GetUnresolvedNeighborsByDeviceID failed: %v", err)
+	}
+	if len(unresolved) != 1 {
+		t.Fatalf("expected 1 unresolved neighbor, got %d", len(unresolved))
+	}
+	if unresolved[0].RemoteIdentity != "missing-edge" {
+		t.Fatalf("RemoteIdentity = %q, want missing-edge", unresolved[0].RemoteIdentity)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected 1 canonical link, got %d", len(links))
+	}
+	if links[0].SourceIfName != "ether1" || links[0].TargetIfName != "ether2" {
+		t.Fatalf("unexpected link after materialization: %+v", links[0])
 	}
 }

@@ -5,13 +5,13 @@ import (
 	"context"
 	"log"
 	"math/rand"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
+	"github.com/lollinoo/theia/internal/pollingbudget"
 )
 
 const defaultInventoryRefreshInterval = 30 * time.Second
@@ -34,12 +34,13 @@ type Scheduler struct {
 	heap            taskHeap
 	ready           [3][]*heapItem
 
-	running     atomic.Bool
-	lifecycleMu sync.Mutex
-	cancel      context.CancelFunc
-	done        chan struct{}
-	inFlight    int
-	runID       uint64
+	running         atomic.Bool
+	lifecycleMu     sync.Mutex
+	cancel          context.CancelFunc
+	done            chan struct{}
+	inFlight        int
+	inFlightByClass map[domain.VolatilityClass]int
+	runID           uint64
 }
 
 type reduePerformanceTaskRequest struct {
@@ -59,6 +60,7 @@ func NewScheduler(source DeviceSource, settingsRepo domain.SettingsRepository) *
 		rnd:             rand.New(rand.NewSource(1)),
 		items:           make(map[TaskKey]*heapItem),
 		done:            make(chan struct{}),
+		inFlightByClass: make(map[domain.VolatilityClass]int),
 	}
 	heap.Init(&scheduler.heap)
 	return scheduler
@@ -252,8 +254,13 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 }
 
 func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
-	for s.inFlight < s.maxInFlight() {
-		item := s.popReady()
+	for {
+		if s.inFlight >= s.maxInFlight() {
+			s.recordBackpressure("global_limit")
+			return
+		}
+
+		item := s.popReadyEligible()
 		if item == nil {
 			return
 		}
@@ -274,6 +281,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 			item.task.RunID = s.runID
 			item.task.DueAt = item.dueAt
 			s.inFlight++
+			s.inFlightByClass[item.task.VolatilityClass]++
 			observability.Default().IncSchedulerTaskDispatch(task.VolatilityClass)
 		case <-ctx.Done():
 			s.pushReadyFront(item)
@@ -348,6 +356,35 @@ func (s *Scheduler) popReady() *heapItem {
 		return item
 	}
 
+	return nil
+}
+
+func (s *Scheduler) popReadyEligible() *heapItem {
+	budgets := s.classBudgets()
+	blocked := make(map[domain.VolatilityClass]struct{})
+
+	for priority := range s.ready {
+		if len(s.ready[priority]) == 0 {
+			continue
+		}
+
+		item := s.ready[priority][0]
+		if s.inFlightByClass[item.task.VolatilityClass] >= budgets[item.task.VolatilityClass] {
+			blocked[item.task.VolatilityClass] = struct{}{}
+			continue
+		}
+
+		s.ready[priority] = s.ready[priority][1:]
+		item.queued = false
+		return item
+	}
+
+	for volatility := range blocked {
+		observability.Default().IncSchedulerBackpressure(volatility, "class_limit")
+	}
+	if len(blocked) > 0 {
+		return s.popReady()
+	}
 	return nil
 }
 
@@ -454,6 +491,9 @@ func (s *Scheduler) handleCompletion(c Completion) {
 	}
 
 	s.inFlight--
+	if s.inFlightByClass[item.task.VolatilityClass] > 0 {
+		s.inFlightByClass[item.task.VolatilityClass]--
+	}
 	item.inFlight = false
 	item.dispatchedAt = time.Time{}
 	item.runID = 0
@@ -478,24 +518,7 @@ func (s *Scheduler) handleCompletion(c Completion) {
 }
 
 func (s *Scheduler) maxInFlight() int {
-	if s.settingsRepo == nil {
-		return 5
-	}
-
-	value, err := s.settingsRepo.Get(domain.SettingSNMPWorkerPoolSize)
-	if err != nil {
-		return 5
-	}
-
-	size, err := strconv.Atoi(value)
-	if err != nil || size <= 0 {
-		return 5
-	}
-	if limit := s.bufferLimit(); limit > 0 && size > limit {
-		return limit
-	}
-
-	return size
+	return pollingbudget.Sum(s.classBudgets())
 }
 
 func (s *Scheduler) nextWakeDelay(now time.Time) time.Duration {
@@ -556,6 +579,7 @@ func (s *Scheduler) resetRuntimeState() {
 	heap.Init(&s.heap)
 	s.ready = [3][]*heapItem{}
 	s.inFlight = 0
+	s.inFlightByClass = make(map[domain.VolatilityClass]int)
 
 	for {
 		select {
@@ -594,5 +618,41 @@ func (s *Scheduler) recordMetrics() {
 			depth = len(s.ready[priority])
 		}
 		observability.Default().SetSchedulerReadyDepth(volatility, depth)
+		observability.Default().SetSchedulerQueueLag(volatility, s.queueLag(volatility, s.now().UTC()))
+	}
+}
+
+func (s *Scheduler) classBudgets() map[domain.VolatilityClass]int {
+	budgets := pollingbudget.Resolve(s.settingsRepo)
+	if limit := s.bufferLimit(); limit > 0 {
+		budgets = pollingbudget.Clamp(budgets, limit)
+	}
+	return budgets
+}
+
+func (s *Scheduler) queueLag(volatility domain.VolatilityClass, now time.Time) time.Duration {
+	priority := VolatilityPriority(volatility)
+	if priority < 0 || priority >= len(s.ready) || len(s.ready[priority]) == 0 {
+		return 0
+	}
+
+	oldestDue := s.ready[priority][0].dueAt
+	for _, item := range s.ready[priority][1:] {
+		if item.dueAt.Before(oldestDue) {
+			oldestDue = item.dueAt
+		}
+	}
+	if oldestDue.After(now) {
+		return 0
+	}
+	return now.Sub(oldestDue)
+}
+
+func (s *Scheduler) recordBackpressure(reason string) {
+	for _, volatility := range scheduledVolatilityClasses() {
+		if len(s.ready[VolatilityPriority(volatility)]) == 0 {
+			continue
+		}
+		observability.Default().IncSchedulerBackpressure(volatility, reason)
 	}
 }

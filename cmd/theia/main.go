@@ -392,6 +392,7 @@ func main() {
 	// Create repositories
 	deviceRepo := sqlite.NewDeviceRepo(db, encryptionKey, cacheInvalidate)
 	linkRepo := sqlite.NewLinkRepo(db, cacheInvalidate)
+	topologyObservationRepo := sqlite.NewTopologyObservationRepo(db)
 	deviceLinkCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, cacheInvalidate)
 	positionRepo := sqlite.NewPositionRepo(db)
 	settingsRepo := sqlite.NewSettingsRepo(db)
@@ -410,7 +411,14 @@ func main() {
 	topologyNotify := make(chan struct{}, 1)
 
 	// Create service layer
-	deviceService := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFunc, topologyNotify)
+	deviceService := service.NewDeviceService(
+		deviceRepo,
+		linkRepo,
+		settingsRepo,
+		discoverFunc,
+		topologyNotify,
+		service.WithTopologyObservationStore(topologyObservationRepo),
+	)
 
 	// Create backup service
 	sshDialer := &ssh.DefaultDialer{}

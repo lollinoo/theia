@@ -17,6 +17,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/observability"
+	"github.com/lollinoo/theia/internal/pollingbudget"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -191,20 +192,10 @@ func (p *PipelineOrchestrator) Status() string {
 }
 
 func (p *PipelineOrchestrator) workerCount() int {
-	if p.settingsRepo == nil {
+	count := pollingbudget.Total(p.settingsRepo)
+	if count <= 0 {
 		return 5
 	}
-
-	value, err := p.settingsRepo.Get(domain.SettingSNMPWorkerPoolSize)
-	if err != nil {
-		return 5
-	}
-
-	count, err := strconv.Atoi(value)
-	if err != nil || count <= 0 {
-		return 5
-	}
-
 	return count
 }
 

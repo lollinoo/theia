@@ -680,6 +680,78 @@ func TestSchedulerDispatchesPriorityOrder(t *testing.T) {
 	}
 }
 
+func TestSchedulerDispatchReady_RespectsPerClassBudgets(t *testing.T) {
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance: "1",
+			domain.SettingSNMPWorkerPoolOperational: "1",
+			domain.SettingSNMPWorkerPoolStatic:      "1",
+		}},
+	)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	deviceA := uuid.MustParse("51000000-0000-0000-0000-000000000001")
+	deviceB := uuid.MustParse("51000000-0000-0000-0000-000000000002")
+	deviceC := uuid.MustParse("51000000-0000-0000-0000-000000000003")
+	deviceD := uuid.MustParse("51000000-0000-0000-0000-000000000004")
+
+	perfOne := &heapItem{task: PollTask{Key: NewTaskKey(deviceA, domain.VolatilityClassPerformance), Device: domain.Device{ID: deviceA}, VolatilityClass: domain.VolatilityClassPerformance}, index: -1}
+	perfTwo := &heapItem{task: PollTask{Key: NewTaskKey(deviceB, domain.VolatilityClassPerformance), Device: domain.Device{ID: deviceB}, VolatilityClass: domain.VolatilityClassPerformance}, index: -1}
+	operational := &heapItem{task: PollTask{Key: NewTaskKey(deviceC, domain.VolatilityClassOperational), Device: domain.Device{ID: deviceC}, VolatilityClass: domain.VolatilityClassOperational}, index: -1}
+	static := &heapItem{task: PollTask{Key: NewTaskKey(deviceD, domain.VolatilityClassStatic), Device: domain.Device{ID: deviceD}, VolatilityClass: domain.VolatilityClassStatic}, index: -1}
+
+	scheduler.tasks = make(chan PollTask, 4)
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)] = []*heapItem{perfOne, perfTwo}
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassOperational)] = []*heapItem{operational}
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassStatic)] = []*heapItem{static}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	if scheduler.inFlight != 3 {
+		t.Fatalf("inFlight = %d, want 3", scheduler.inFlight)
+	}
+	if !perfOne.inFlight || !operational.inFlight || !static.inFlight {
+		t.Fatalf("expected one task per class in flight")
+	}
+	if perfTwo.inFlight {
+		t.Fatalf("second performance task should remain queued once performance budget is exhausted")
+	}
+	if got := len(scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)]); got != 1 {
+		t.Fatalf("performance ready queue len = %d, want 1", got)
+	}
+}
+
+func TestSchedulerDispatchReady_AllowsLowerPriorityWhenHigherPriorityAtClassLimit(t *testing.T) {
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance: "1",
+			domain.SettingSNMPWorkerPoolOperational: "1",
+			domain.SettingSNMPWorkerPoolStatic:      "1",
+		}},
+	)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	perfKey := NewTaskKey(uuid.MustParse("52000000-0000-0000-0000-000000000001"), domain.VolatilityClassPerformance)
+	operationalKey := NewTaskKey(uuid.MustParse("52000000-0000-0000-0000-000000000002"), domain.VolatilityClassOperational)
+	perf := &heapItem{task: PollTask{Key: perfKey, VolatilityClass: domain.VolatilityClassPerformance}, queued: true, index: -1}
+	operational := &heapItem{task: PollTask{Key: operationalKey, VolatilityClass: domain.VolatilityClassOperational}, queued: true, index: -1}
+
+	scheduler.tasks = make(chan PollTask, 2)
+	scheduler.inFlight = 1
+	scheduler.inFlightByClass[domain.VolatilityClassPerformance] = 1
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)] = []*heapItem{perf}
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassOperational)] = []*heapItem{operational}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	if !operational.inFlight {
+		t.Fatal("operational task should dispatch when performance class is already at its ceiling")
+	}
+	if perf.inFlight {
+		t.Fatal("performance task should remain queued when class ceiling is reached")
+	}
+}
+
 func TestSchedulerMaxInFlight_DefaultAndConfigured(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -719,6 +791,22 @@ func TestSchedulerMaxInFlight_DefaultAndConfigured(t *testing.T) {
 				t.Fatalf("maxInFlight() = %d, want %d", got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestSchedulerMaxInFlight_UsesVolatilityBudgetSum(t *testing.T) {
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolSize:        "9",
+			domain.SettingSNMPWorkerPoolPerformance: "4",
+			domain.SettingSNMPWorkerPoolOperational: "2",
+			domain.SettingSNMPWorkerPoolStatic:      "1",
+		}},
+	)
+
+	if got := scheduler.maxInFlight(); got != 7 {
+		t.Fatalf("maxInFlight() = %d, want 7", got)
 	}
 }
 

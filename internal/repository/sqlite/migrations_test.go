@@ -262,6 +262,23 @@ func TestMigration000015_AddsScaleIndexes(t *testing.T) {
 	}
 }
 
+func TestMigration000018_AddsTopologyObservationTables(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	for _, query := range []string{
+		`SELECT id, local_device_id, remote_identity, remote_device_id, local_port, remote_port, protocol, is_self_neighbor, first_observed_at, last_observed_at, created_at, updated_at FROM topology_observations LIMIT 0`,
+		`SELECT id, local_device_id, remote_identity, protocol, occurrences, first_observed_at, last_observed_at, resolved_at, created_at, updated_at FROM unresolved_neighbors LIMIT 0`,
+	} {
+		if _, err := db.Exec(query); err != nil {
+			t.Fatalf("expected topology observation schema to exist for query %q: %v", query, err)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestVerifyLegacyTablesMigrated_PostMigration000014 (Phase 27 Gap 3)
 // ---------------------------------------------------------------------------
