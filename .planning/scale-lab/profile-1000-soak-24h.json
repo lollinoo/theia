@@ -1,0 +1,45 @@
+{
+  "profile": {
+    "name": "1000",
+    "device_count": 1000,
+    "performance_interval": 30000000000,
+    "operational_interval": 60000000000,
+    "static_interval": 300000000000,
+    "default_replay_passes": 2,
+    "default_burst_adds": 50,
+    "default_unresolved_add": 200
+  },
+  "scenario": {
+    "name": "soak-24h",
+    "duration": 86400000000000,
+    "replay_passes": 4,
+    "database_slowdown": 25000000,
+    "snmp_timeout_rate": 0.05,
+    "burst_adds": 50,
+    "burst_unresolved_neighbors": 200
+  },
+  "workload": {
+    "performance_tasks_per_minute": 2100,
+    "operational_tasks_per_minute": 1050,
+    "static_tasks_per_minute": 200,
+    "burst_adds": 50,
+    "burst_unresolved_neighbors": 200
+  },
+  "replay": {
+    "fixture_name": "synthetic-1000-soak-24h",
+    "observation_count": 2298,
+    "resolved_count": 2098,
+    "unresolved_count": 200,
+    "self_neighbor_count": 0,
+    "link_events": {
+      "created": 1049,
+      "noop": 7343
+    },
+    "latency": {
+      "p50_ms": 97.137395,
+      "p95_ms": 150.2231683,
+      "p99_ms": 156.52527526,
+      "max_ms": 158.10080200000002
+    }
+  }
+}
