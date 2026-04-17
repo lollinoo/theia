@@ -16,8 +16,18 @@ type deviceChangeSource interface {
 	DrainDeviceRepair() bool
 }
 
+type deviceChangeSubscriber interface {
+	SubscribeDeviceChanges(buffer int) <-chan domain.DeviceChangeEvent
+	DrainDeviceRepair() bool
+}
+
 type linkChangeSource interface {
 	LinkChanges() <-chan domain.LinkChangeEvent
+	DrainLinkRepair() bool
+}
+
+type linkChangeSubscriber interface {
+	SubscribeLinkChanges(buffer int) <-chan domain.LinkChangeEvent
 	DrainLinkRepair() bool
 }
 
@@ -74,12 +84,20 @@ func NewDeviceLinkCache(deviceRepo domain.DeviceRepository, linkRepo domain.Link
 		needsFullReload:  true,
 	}
 
-	if source, ok := deviceRepo.(deviceChangeSource); ok {
+	if source, ok := deviceRepo.(deviceChangeSubscriber); ok {
+		cache.deviceChanges = source.SubscribeDeviceChanges(256)
+		cache.deviceRepair = source.DrainDeviceRepair
+		cache.useIncremental = true
+	} else if source, ok := deviceRepo.(deviceChangeSource); ok {
 		cache.deviceChanges = source.DeviceChanges()
 		cache.deviceRepair = source.DrainDeviceRepair
 		cache.useIncremental = true
 	}
-	if source, ok := linkRepo.(linkChangeSource); ok {
+	if source, ok := linkRepo.(linkChangeSubscriber); ok {
+		cache.linkChanges = source.SubscribeLinkChanges(256)
+		cache.linkRepair = source.DrainLinkRepair
+		cache.useIncremental = true
+	} else if source, ok := linkRepo.(linkChangeSource); ok {
 		cache.linkChanges = source.LinkChanges()
 		cache.linkRepair = source.DrainLinkRepair
 		cache.useIncremental = true

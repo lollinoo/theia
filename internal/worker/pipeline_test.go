@@ -323,6 +323,8 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 		&fakeTopologyService{},
 		settingsRepo,
 		make(chan struct{}, 1),
+		nil,
+		nil,
 	)
 	pipeline.prevCounters[deviceID] = map[string]collector.CounterBaseline{
 		"ether1": {
@@ -414,6 +416,8 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 		topologyService,
 		newMockWorkerSettingsRepo(),
 		topologyNotify,
+		nil,
+		nil,
 	)
 
 	pipeline.runTask(context.Background(), task)
@@ -493,6 +497,8 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		&fakeTopologyService{},
 		settingsRepo,
 		make(chan struct{}, 1),
+		nil,
+		nil,
 	)
 
 	pipeline.refreshPrometheusOnce(context.Background())
@@ -544,6 +550,8 @@ func TestPipelineOrchestratorWorkerCount_UsesVolatilityBudgets(t *testing.T) {
 		&fakeTopologyService{},
 		settingsRepo,
 		make(chan struct{}, 1),
+		nil,
+		nil,
 	)
 
 	if got := pipeline.workerCount(); got != 7 {
@@ -565,6 +573,8 @@ func TestPipelineOrchestratorStatusReflectsLifecycle(t *testing.T) {
 		&fakeTopologyService{},
 		newMockWorkerSettingsRepo(),
 		make(chan struct{}, 1),
+		nil,
+		nil,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -633,6 +643,8 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 		&fakeTopologyService{},
 		settingsRepo,
 		make(chan struct{}, 1),
+		nil,
+		nil,
 	)
 	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
 		Enabled:   true,
@@ -736,6 +748,8 @@ func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *st
 		&fakeTopologyService{},
 		newMockWorkerSettingsRepo(),
 		topologyNotify,
+		nil,
+		nil,
 	)
 
 	return pipeline, hub, store, topologyNotify, deviceID
@@ -789,6 +803,8 @@ func newDetailSubscriptionTestPipeline(t *testing.T, hub *ws.Hub) *PipelineOrche
 		&fakeTopologyService{},
 		newMockWorkerSettingsRepo(),
 		make(chan struct{}, 1),
+		nil,
+		nil,
 	)
 }
 
@@ -911,6 +927,21 @@ func assertNoWebSocketMessage(t *testing.T, conn *websocket.Conn) {
 	}
 }
 
+func waitForBroadcastMessages(t *testing.T, hub *ws.Hub, timeout time.Duration) [][]byte {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if messages := drainBroadcastCh(hub); len(messages) > 0 {
+			return messages
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatal("timed out waiting for broadcast message")
+	return nil
+}
+
 func TestPipelineOrchestratorBroadcastLoopSendsSnapshotThenDelta(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
@@ -939,6 +970,123 @@ func TestPipelineOrchestratorBroadcastLoopSendsSnapshotThenDelta(t *testing.T) {
 	secondTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
 	if len(secondTypes) == 0 || secondTypes[0] != ws.MessageTypeSnapshotDelta {
 		t.Fatalf("expected second broadcast to be snapshot_delta, got %v", secondTypes)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastLoop_EventDrivenStateChangeSendsDelta(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
+	pipeline.fullResyncInterval = time.Hour
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pipeline.broadcastLoop(ctx)
+
+	initialTypes := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(initialTypes) == 0 || initialTypes[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected initial event-driven broadcast to be snapshot, got %v", initialTypes)
+	}
+
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  floatPtr(61),
+			CollectedAt: time.Date(2026, 4, 13, 12, 0, 8, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 0, 8, 0, time.UTC),
+	})
+
+	types := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(types) == 0 || types[0] != ws.MessageTypeSnapshotDelta {
+		t.Fatalf("expected state change to broadcast snapshot_delta, got %v", types)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastLoop_LinkChangeForcesFullSnapshotAndTopologyChanged(t *testing.T) {
+	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
+	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
+	pipeline.fullResyncInterval = time.Hour
+	linkChanges := make(chan domain.LinkChangeEvent, 1)
+	pipeline.linkChangeNotify = linkChanges
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pipeline.broadcastLoop(ctx)
+
+	_ = waitForBroadcastMessages(t, hub, time.Second)
+
+	linkChanges <- domain.LinkChangeEvent{
+		Kind:   domain.ChangeKindCreated,
+		LinkID: uuid.New(),
+	}
+
+	types := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(types) < 2 {
+		t.Fatalf("expected snapshot and topology_changed after link change, got %v", types)
+	}
+	if types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected full snapshot then topology_changed, got %v", types)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastLoop_AlertRefreshSendsSnapshotDelta(t *testing.T) {
+	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
+	pipeline.fullResyncInterval = time.Hour
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pipeline.broadcastLoop(ctx)
+
+	_ = waitForBroadcastMessages(t, hub, time.Second)
+
+	pipeline.setAlerts(map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+			Summary:   "device down",
+		}},
+	})
+
+	var message wsSnapshotMessage
+	for _, raw := range waitForBroadcastMessages(t, hub, time.Second) {
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatalf("failed to decode alert broadcast: %v", err)
+		}
+		if message.Type == ws.MessageTypeSnapshotDelta {
+			if len(message.Payload.Alerts) != 1 {
+				t.Fatalf("expected 1 alert in snapshot_delta, got %d", len(message.Payload.Alerts))
+			}
+			return
+		}
+	}
+
+	t.Fatal("expected snapshot_delta for alert refresh")
+}
+
+func TestPipelineOrchestratorBroadcastLoop_PeriodicFullResyncSendsSnapshot(t *testing.T) {
+	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
+	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
+	pipeline.fullResyncInterval = 40 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pipeline.broadcastLoop(ctx)
+
+	initialTypes := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(initialTypes) == 0 || initialTypes[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected initial snapshot, got %v", initialTypes)
+	}
+
+	types := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(types) == 0 || types[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected periodic full resync snapshot, got %v", types)
 	}
 }
 
@@ -977,6 +1125,8 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 		&fakeTopologyService{},
 		newMockWorkerSettingsRepo(),
 		make(chan struct{}, 1),
+		nil,
+		nil,
 	)
 
 	pipeline.runTask(context.Background(), scheduler.PollTask{

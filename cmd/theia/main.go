@@ -394,6 +394,8 @@ func main() {
 	linkRepo := sqlite.NewLinkRepo(db, cacheInvalidate)
 	topologyObservationRepo := sqlite.NewTopologyObservationRepo(db)
 	deviceLinkCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, cacheInvalidate)
+	deviceChangeNotify := deviceRepo.SubscribeDeviceChanges(256)
+	linkChangeNotify := linkRepo.SubscribeLinkChanges(256)
 	positionRepo := sqlite.NewPositionRepo(db)
 	settingsRepo := sqlite.NewSettingsRepo(db)
 	snmpProfileRepo := sqlite.NewSNMPProfileRepo(db, encryptionKey)
@@ -510,6 +512,8 @@ func main() {
 		deviceService,
 		settingsRepo,
 		topologyNotify,
+		deviceChangeNotify,
+		linkChangeNotify,
 	)
 	pipeline.Start(ctx)
 	if backupScheduler != nil {
