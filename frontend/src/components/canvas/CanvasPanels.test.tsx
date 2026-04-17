@@ -12,8 +12,10 @@ vi.mock('../DeviceConfigPanel', () => ({
 }));
 
 vi.mock('../LinkDetailsPanel', () => ({
-  LinkDetailsPanel: (props: { readOnly?: boolean }) => (
-    <div>{props.readOnly ? 'Link Details Read Only' : 'Link Details Editable'}</div>
+  LinkDetailsPanel: (props: { readOnly?: boolean; link: { target_if_name: string } }) => (
+    <div>
+      {props.readOnly ? 'Link Details Read Only' : 'Link Details Editable'}:{props.link.target_if_name}
+    </div>
   ),
 }));
 
@@ -68,6 +70,7 @@ describe('CanvasPanels', () => {
         setPanelContent={vi.fn()}
         snapshot={null}
         devices={[device]}
+        topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
@@ -97,6 +100,7 @@ describe('CanvasPanels', () => {
         setPanelContent={vi.fn()}
         snapshot={null}
         devices={[sourceDevice, targetDevice]}
+        topologyLinks={[mockLink()]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
@@ -105,6 +109,33 @@ describe('CanvasPanels', () => {
       />,
     );
 
-    expect(screen.getByText('Link Details Read Only')).toBeInTheDocument();
+    expect(screen.getByText('Link Details Read Only:ether2')).toBeInTheDocument();
+  });
+
+  it('prefers the live topology link over stale panel data for link details', () => {
+    const sourceDevice = mockDevice();
+    const targetDevice = mockDevice({
+      id: 'dev-2',
+      hostname: 'router-02',
+      ip: '10.0.0.2',
+      sys_name: 'router-02',
+    });
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'link-details', data: { link: mockLink({ target_if_name: '' }), readOnly: true } }}
+        setPanelContent={vi.fn()}
+        snapshot={null}
+        devices={[sourceDevice, targetDevice]}
+        topologyLinks={[mockLink({ target_if_name: 'ether2' })]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        prometheusStatus={null}
+      />,
+    );
+
+    expect(screen.getByText('Link Details Read Only:ether2')).toBeInTheDocument();
   });
 });

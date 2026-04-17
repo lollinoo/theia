@@ -27,6 +27,13 @@ type Link struct {
 	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
+// LinkUpsertResult reports whether an upsert inserted a new row and whether it
+// changed any topology-visible fields of an existing row.
+type LinkUpsertResult struct {
+	Created bool
+	Changed bool
+}
+
 // LinkRepository defines persistence operations for links.
 type LinkRepository interface {
 	Create(link *Link) error

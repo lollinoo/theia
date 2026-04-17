@@ -190,18 +190,33 @@ func (r *mockLinkRepo) Delete(id uuid.UUID) error {
 }
 
 func (r *mockLinkRepo) Upsert(link *domain.Link) (bool, error) {
+	result, err := r.UpsertDetailed(link)
+	return result.Created, err
+}
+
+func (r *mockLinkRepo) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Check for existing match
 	for id, existing := range r.links {
 		if existing.SourceDeviceID == link.SourceDeviceID &&
-			existing.SourceIfName == link.SourceIfName &&
 			existing.TargetDeviceID == link.TargetDeviceID &&
-			existing.TargetIfName == link.TargetIfName {
-			link.ID = id
-			link.UpdatedAt = time.Now().UTC()
-			r.links[id] = link
-			return false, nil
+			(existing.SourceIfName == link.SourceIfName || existing.SourceIfName == "" || link.SourceIfName == "") &&
+			(existing.TargetIfName == link.TargetIfName || existing.TargetIfName == "" || link.TargetIfName == "") {
+			updated := *existing
+			if updated.SourceIfName == "" && link.SourceIfName != "" {
+				updated.SourceIfName = link.SourceIfName
+			}
+			if updated.TargetIfName == "" && link.TargetIfName != "" {
+				updated.TargetIfName = link.TargetIfName
+			}
+			updated.DiscoveryProtocol = link.DiscoveryProtocol
+			updated.UpdatedAt = time.Now().UTC()
+			r.links[id] = &updated
+			*link = updated
+			return domain.LinkUpsertResult{
+				Created: false,
+				Changed: updated.SourceIfName != existing.SourceIfName || updated.TargetIfName != existing.TargetIfName,
+			}, nil
 		}
 	}
 	if link.ID == uuid.Nil {
@@ -211,7 +226,7 @@ func (r *mockLinkRepo) Upsert(link *domain.Link) (bool, error) {
 	link.CreatedAt = now
 	link.UpdatedAt = now
 	r.links[link.ID] = link
-	return true, nil
+	return domain.LinkUpsertResult{Created: true, Changed: true}, nil
 }
 
 // --- Mock Settings Repository ---
@@ -422,6 +437,176 @@ func TestProbeFails_DeviceStatusDown(t *testing.T) {
 	}
 	if updated.Status != domain.DeviceStatusDown {
 		t.Errorf("expected status down, got %s", updated.Status)
+	}
+}
+
+func TestProbeDevice_SchedulesDelayedLLDPReprobeForIncompleteNewLinks(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	remoteDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "distribution-01",
+		IP:            "192.0.2.60",
+		SysName:       "distribution-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		MetricsSource: domain.MetricsSourceSNMP,
+	}
+	if err := deviceRepo.Create(remoteDevice); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+
+	probeTarget := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "edge-01",
+		IP:            "192.0.2.50",
+		Status:        domain.DeviceStatusProbing,
+		Managed:       true,
+		MetricsSource: domain.MetricsSourceSNMP,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(probeTarget); err != nil {
+		t.Fatalf("Create probe target failed: %v", err)
+	}
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		return &snmp.DiscoveryResult{
+			SysName:       "edge-01",
+			SysDescr:      "RouterOS",
+			SysObjectID:   ".1.3.6.1.4.1.14988.1",
+			HardwareModel: "RB5009",
+			Vendor:        "mikrotik",
+			DeviceType:    domain.DeviceTypeRouter,
+			Neighbors: []snmp.NeighborInfo{
+				{
+					RemoteSysName: remoteDevice.SysName,
+					RemotePortID:  "ether8",
+					LocalIfName:   "",
+					Protocol:      domain.DiscoveryProtocolLLDP,
+				},
+			},
+		}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	var scheduledDelays []time.Duration
+	reprobeCalls := make(map[uuid.UUID]int)
+	svc.scheduleFunc = func(delay time.Duration, fn func()) {
+		scheduledDelays = append(scheduledDelays, delay)
+		fn()
+	}
+	svc.delayedReprobe = func(ctx context.Context, id uuid.UUID) error {
+		reprobeCalls[id]++
+		return nil
+	}
+
+	svc.probeDevice(probeTarget)
+
+	if len(scheduledDelays) != 2 {
+		t.Fatalf("expected delayed reprobes for local device and peer, got %d schedules", len(scheduledDelays))
+	}
+	for _, delay := range scheduledDelays {
+		if delay != svc.reprobeDelay {
+			t.Fatalf("scheduled delay = %v, want %v", delay, svc.reprobeDelay)
+		}
+	}
+	if reprobeCalls[probeTarget.ID] != 1 {
+		t.Fatalf("expected one delayed reprobe for probe target, got %d", reprobeCalls[probeTarget.ID])
+	}
+	if reprobeCalls[remoteDevice.ID] != 1 {
+		t.Fatalf("expected one delayed reprobe for remote device, got %d", reprobeCalls[remoteDevice.ID])
+	}
+
+	updated, err := deviceRepo.GetByID(probeTarget.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.Status != domain.DeviceStatusUp {
+		t.Fatalf("expected probe target status up, got %s", updated.Status)
+	}
+}
+
+func TestProbeDevice_DoesNotScheduleDelayedLLDPReprobeForOlderDevices(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	remoteDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "distribution-01",
+		IP:            "192.0.2.61",
+		SysName:       "distribution-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		MetricsSource: domain.MetricsSourceSNMP,
+	}
+	if err := deviceRepo.Create(remoteDevice); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+
+	probeTarget := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "edge-01",
+		IP:            "192.0.2.51",
+		Status:        domain.DeviceStatusProbing,
+		Managed:       true,
+		MetricsSource: domain.MetricsSourceSNMP,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(probeTarget); err != nil {
+		t.Fatalf("Create probe target failed: %v", err)
+	}
+
+	stored, err := deviceRepo.GetByID(probeTarget.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	stored.CreatedAt = time.Now().Add(-(incompleteLinkReprobeWindow + time.Minute))
+	if err := deviceRepo.Update(stored); err != nil {
+		t.Fatalf("Update older probe target failed: %v", err)
+	}
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		return &snmp.DiscoveryResult{
+			SysName:       "edge-01",
+			SysDescr:      "RouterOS",
+			SysObjectID:   ".1.3.6.1.4.1.14988.1",
+			HardwareModel: "RB5009",
+			Vendor:        "mikrotik",
+			DeviceType:    domain.DeviceTypeRouter,
+			Neighbors: []snmp.NeighborInfo{
+				{
+					RemoteSysName: remoteDevice.SysName,
+					RemotePortID:  "ether8",
+					LocalIfName:   "",
+					Protocol:      domain.DiscoveryProtocolLLDP,
+				},
+			},
+		}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	scheduled := false
+	svc.scheduleFunc = func(delay time.Duration, fn func()) {
+		scheduled = true
+	}
+	svc.delayedReprobe = func(ctx context.Context, id uuid.UUID) error {
+		t.Fatal("delayed reprobe should not run for older devices")
+		return nil
+	}
+
+	svc.probeDevice(probeTarget)
+
+	if scheduled {
+		t.Fatal("expected no delayed LLDP reprobe to be scheduled for older devices")
 	}
 }
 

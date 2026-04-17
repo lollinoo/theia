@@ -86,8 +86,8 @@ function resolveIfName(value: string, ifaces: InterfaceLabelInfo[]): string {
   return byDescr ? byDescr.if_name : value;
 }
 
-function displayIfName(value: string, ifaces: InterfaceLabelInfo[]): string {
-  return resolveIfName(value, ifaces) || '—';
+function displayIfName(value: string, ifaces: InterfaceLabelInfo[], pending = false): string {
+  return resolveIfName(value, ifaces) || (pending ? 'Pending discovery' : '—');
 }
 
 export function LinkDetailsPanel({
@@ -104,12 +104,15 @@ export function LinkDetailsPanel({
 
   const sourceIsVirtual = sourceDevice?.device_type === 'virtual';
   const targetIsVirtual = targetDevice?.device_type === 'virtual';
+  const autoDiscoveryPending =
+    (link.discovery_protocol === 'lldp' || link.discovery_protocol === 'cdp') &&
+    (!link.source_if_name || !link.target_if_name);
   const sourceDeviceLabel =
     sourceDevice?.tags?.display_name || sourceDevice?.sys_name || sourceDevice?.hostname || link.source_device_id;
   const targetDeviceLabel =
     targetDevice?.tags?.display_name || targetDevice?.sys_name || targetDevice?.hostname || link.target_device_id;
-  const sourceSummaryIfName = displayIfName(link.source_if_name, sourceDevice?.interfaces ?? []);
-  const targetSummaryIfName = displayIfName(link.target_if_name, targetDevice?.interfaces ?? []);
+  const sourceSummaryIfName = displayIfName(link.source_if_name, sourceDevice?.interfaces ?? [], autoDiscoveryPending && !link.source_if_name);
+  const targetSummaryIfName = displayIfName(link.target_if_name, targetDevice?.interfaces ?? [], autoDiscoveryPending && !link.target_if_name);
   const sourceSpeedLabel = sourceIsVirtual ? 'Virtual link' : formatBandwidth(link.source_if_speed);
   const targetSpeedLabel = targetIsVirtual ? 'Virtual link' : formatBandwidth(link.target_if_speed);
   const sourceStatusLabel = sourceIsVirtual ? 'virtual' : (link.source_if_oper_status || 'unknown');
@@ -205,6 +208,11 @@ export function LinkDetailsPanel({
       : link.discovery_protocol === 'cdp'
         ? 'bg-status-up/20 text-status-up border-status-up/30'
         : 'bg-elevated text-on-bg-secondary border-outline-subtle';
+  const pendingDiscoveryNotice = (
+    <p className="rounded-lg border border-status-probing/30 bg-status-probing/10 px-3 py-2 text-xs text-status-probing">
+      Port assignments are still resolving while probing completes. Missing ports will refresh automatically.
+    </p>
+  );
 
   return (
     <div className="space-y-5 p-4 transition-colors duration-200">
@@ -277,19 +285,26 @@ export function LinkDetailsPanel({
             </div>
           </div>
 
-          <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs text-on-bg-secondary">
-            Enter edit mode to change ports or delete this link.
-          </p>
+          {autoDiscoveryPending ? (
+            pendingDiscoveryNotice
+          ) : (
+            <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs text-on-bg-secondary">
+              Enter edit mode to change ports or delete this link.
+            </p>
+          )}
         </div>
       ) : !isEditing ? (
         /* View mode */
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated"
-        >
-          Edit Ports
-        </button>
+        <>
+          {autoDiscoveryPending && pendingDiscoveryNotice}
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated"
+          >
+            Edit Ports
+          </button>
+        </>
       ) : (
         /* Edit mode */
         <form
@@ -298,6 +313,7 @@ export function LinkDetailsPanel({
           }}
           className="space-y-4"
         >
+          {autoDiscoveryPending && pendingDiscoveryNotice}
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Edit Port Assignments
           </p>

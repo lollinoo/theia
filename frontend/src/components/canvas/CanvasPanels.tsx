@@ -25,6 +25,7 @@ interface CanvasPanelsProps {
   setPanelContent: (content: { type: string; data?: unknown } | null) => void;
   snapshot: SnapshotPayload | null;
   devices: Device[];
+  topologyLinks: Link[];
   loadTopology: (silent?: boolean, pos?: { x: number; y: number }) => Promise<void>;
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
@@ -40,6 +41,7 @@ export function CanvasPanels({
   setPanelContent,
   snapshot,
   devices,
+  topologyLinks,
   loadTopology,
   setDevices,
   setNodes,
@@ -119,9 +121,10 @@ export function CanvasPanels({
       {panelContent?.type === 'link-details' && (() => {
         const data = panelContent.data as { link?: Link; readOnly?: boolean } | undefined;
         if (data?.link) {
+          const liveLink = topologyLinks.find((candidate) => candidate.id === data.link!.id) ?? data.link;
           return (
             <LinkDetailsPanel
-              link={data.link}
+              link={liveLink}
               readOnly={data.readOnly === true}
               devices={devices}
               onUpdated={() => {

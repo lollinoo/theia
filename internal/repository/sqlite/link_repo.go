@@ -191,16 +191,21 @@ func (r *LinkRepo) deleteOnce(id uuid.UUID) error {
 // All operations run inside a single transaction to prevent duplicate rows under
 // concurrent SNMP discovery.
 func (r *LinkRepo) Upsert(link *domain.Link) (bool, error) {
-	var created bool
-	err := withSQLiteBusyRetry(func() error {
-		var innerErr error
-		created, innerErr = r.upsertOnce(link)
-		return innerErr
-	})
-	return created, err
+	result, err := r.UpsertDetailed(link)
+	return result.Created, err
 }
 
-func (r *LinkRepo) upsertOnce(link *domain.Link) (bool, error) {
+func (r *LinkRepo) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error) {
+	var result domain.LinkUpsertResult
+	err := withSQLiteBusyRetry(func() error {
+		var innerErr error
+		result, innerErr = r.upsertOnce(link)
+		return innerErr
+	})
+	return result, err
+}
+
+func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error) {
 	now := time.Now().UTC()
 	link.UpdatedAt = now
 	if link.ID == uuid.Nil {
@@ -209,7 +214,7 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (bool, error) {
 
 	tx, err := r.db.Begin()
 	if err != nil {
-		return false, fmt.Errorf("beginning upsert transaction: %w", err)
+		return domain.LinkUpsertResult{}, fmt.Errorf("beginning upsert transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -238,22 +243,23 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (bool, error) {
 		if newTgtIf == "" && link.TargetIfName != "" {
 			newTgtIf = link.TargetIfName
 		}
+		changed := newSrcIf != existingSrcIf || newTgtIf != existingTgtIf
 		if _, err = tx.Exec(
 			`UPDATE links SET source_if_name = ?, target_if_name = ?,
 			 discovery_protocol = ?, updated_at = ? WHERE id = ?`,
 			newSrcIf, newTgtIf,
 			string(link.DiscoveryProtocol), link.UpdatedAt, existingID,
 		); err != nil {
-			return false, fmt.Errorf("updating link: %w", err)
+			return domain.LinkUpsertResult{}, fmt.Errorf("updating link: %w", err)
 		}
 		if err = tx.Commit(); err != nil {
-			return false, fmt.Errorf("committing link update: %w", err)
+			return domain.LinkUpsertResult{}, fmt.Errorf("committing link update: %w", err)
 		}
 		r.notify()
-		return false, nil
+		return domain.LinkUpsertResult{Created: false, Changed: changed}, nil
 	}
 	if err != sql.ErrNoRows {
-		return false, fmt.Errorf("checking existing link: %w", err)
+		return domain.LinkUpsertResult{}, fmt.Errorf("checking existing link: %w", err)
 	}
 
 	// Check for a reverse-direction record (B→A) for the same physical cable.
@@ -262,7 +268,7 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (bool, error) {
 	// interface compatibility rather than exact SQL equality.
 	reverse, err := findBestReverseLinkMatch(tx, link)
 	if err != nil {
-		return false, fmt.Errorf("checking reverse link: %w", err)
+		return domain.LinkUpsertResult{}, fmt.Errorf("checking reverse link: %w", err)
 	}
 	if reverse != nil {
 		if shouldReorientReverseLink(reverse, link) {
@@ -274,13 +280,13 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (bool, error) {
 				link.TargetDeviceID.String(), link.TargetIfName,
 				string(link.DiscoveryProtocol), link.UpdatedAt, reverse.ID,
 			); err != nil {
-				return false, fmt.Errorf("reorienting reverse link: %w", err)
+				return domain.LinkUpsertResult{}, fmt.Errorf("reorienting reverse link: %w", err)
 			}
 			if err = tx.Commit(); err != nil {
-				return false, fmt.Errorf("committing reverse link reorientation: %w", err)
+				return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link reorientation: %w", err)
 			}
 			r.notify()
-			return false, nil
+			return domain.LinkUpsertResult{Created: false, Changed: true}, nil
 		}
 
 		// Reverse-direction match found (B→A record exists). Enrich it:
@@ -298,19 +304,20 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (bool, error) {
 		if newTgtIf == "" && link.SourceIfName != "" {
 			newTgtIf = link.SourceIfName
 		}
+		changed := newSrcIf != reverse.SourceIfName || newTgtIf != reverse.TargetIfName
 		if _, err = tx.Exec(
 			`UPDATE links SET source_if_name = ?, target_if_name = ?,
 			 discovery_protocol = ?, updated_at = ? WHERE id = ?`,
 			newSrcIf, newTgtIf,
 			string(link.DiscoveryProtocol), link.UpdatedAt, reverse.ID,
 		); err != nil {
-			return false, fmt.Errorf("enriching reverse link: %w", err)
+			return domain.LinkUpsertResult{}, fmt.Errorf("enriching reverse link: %w", err)
 		}
 		if err = tx.Commit(); err != nil {
-			return false, fmt.Errorf("committing reverse link update: %w", err)
+			return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link update: %w", err)
 		}
 		r.notify()
-		return false, nil
+		return domain.LinkUpsertResult{Created: false, Changed: changed}, nil
 	}
 
 	// No existing record in either direction — insert new.
@@ -324,13 +331,13 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (bool, error) {
 		link.TargetDeviceID.String(), link.TargetIfName,
 		string(link.DiscoveryProtocol), link.CreatedAt, link.UpdatedAt,
 	); err != nil {
-		return false, fmt.Errorf("inserting link: %w", err)
+		return domain.LinkUpsertResult{}, fmt.Errorf("inserting link: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("committing link insert: %w", err)
+		return domain.LinkUpsertResult{}, fmt.Errorf("committing link insert: %w", err)
 	}
 	r.notify()
-	return true, nil
+	return domain.LinkUpsertResult{Created: true, Changed: true}, nil
 }
 
 // scanLinks scans multiple link rows.

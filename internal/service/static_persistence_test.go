@@ -197,6 +197,69 @@ func TestApplyStaticDiscoveryCreatesLinksAndReturnsTopologyChanged(t *testing.T)
 	}
 }
 
+func TestApplyStaticDiscoveryMarksTopologyChangedWhenExistingLinkIsEnriched(t *testing.T) {
+	svc, deviceRepo, linkRepo := newStaticPersistenceService(nil)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "switch1",
+		IP:         "192.0.2.21",
+		SysName:    "switch1",
+		Status:     domain.DeviceStatusUp,
+		Vendor:     "mikrotik",
+		DeviceType: domain.DeviceTypeSwitch,
+		PollClass:  domain.PollClassCore,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	remote := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch2",
+		IP:       "192.0.2.22",
+		SysName:  "switch2",
+		Status:   domain.DeviceStatusUp,
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+
+	if err := linkRepo.Create(&domain.Link{
+		SourceDeviceID:    device.ID,
+		SourceIfName:      "",
+		TargetDeviceID:    remote.ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("Create incomplete link failed: %v", err)
+	}
+
+	persisted, err := svc.ApplyStaticDiscovery(device.ID, StaticDiscoveryInput{
+		SysName:    "switch1",
+		DeviceType: domain.DeviceTypeSwitch,
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName:   "switch2",
+				RemotePortID:    "ether2",
+				LocalIfName:     "ether1",
+				Protocol:        domain.DiscoveryProtocolLLDP,
+				RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+
+	if !persisted.TopologyChanged {
+		t.Fatal("expected TopologyChanged when an existing link is enriched")
+	}
+	if persisted.LinksCreated != 0 {
+		t.Fatalf("expected no new links created, got %d", persisted.LinksCreated)
+	}
+}
+
 func TestApplyStaticDiscoveryRespectsPollIntervalOverride(t *testing.T) {
 	svc, deviceRepo, _ := newStaticPersistenceService(nil)
 
@@ -287,13 +350,13 @@ func TestProbeDeviceUsesApplyStaticDiscoveryAndSignalsTopologyNotify(t *testing.
 	}
 
 	probeTarget := &domain.Device{
-		ID:            uuid.New(),
-		Hostname:      "probe-switch",
-		IP:            "192.0.2.21",
-		Status:        domain.DeviceStatusProbing,
-		Vendor:        "default",
-		DeviceType:    domain.DeviceTypeUnknown,
-		PollClass:     domain.PollClassStandard,
+		ID:         uuid.New(),
+		Hostname:   "probe-switch",
+		IP:         "192.0.2.21",
+		Status:     domain.DeviceStatusProbing,
+		Vendor:     "default",
+		DeviceType: domain.DeviceTypeUnknown,
+		PollClass:  domain.PollClassStandard,
 		Interfaces: []domain.Interface{
 			{IfIndex: 1, IfName: "ether1", IfDescr: "old-uplink", Speed: 100_000_000},
 		},
