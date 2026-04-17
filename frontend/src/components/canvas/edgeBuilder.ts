@@ -209,6 +209,9 @@ export function buildTopologyEdges(
 
   const candidateEdges = visibleLinks
     .filter((link) => {
+      if (link.source_device_id === link.target_device_id) {
+        return false;
+      }
       if (!nodesByID.has(link.source_device_id) || !nodesByID.has(link.target_device_id)) {
         return false;
       }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildTopologyNodes } from './nodeBuilder';
-import type { Device } from '../../types/api';
+import type { Device, Link } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -51,6 +51,22 @@ function mockSnapshot(): SnapshotPayload {
     },
     device_hostnames: {},
     device_models: {},
+  };
+}
+
+function mockLink(overrides: Partial<Link> = {}): Link {
+  return {
+    id: 'link-1',
+    source_device_id: 'dev-1',
+    source_if_name: 'ether1',
+    target_device_id: 'dev-1',
+    target_if_name: 'ether9',
+    discovery_protocol: 'lldp',
+    source_if_speed: 0,
+    source_if_oper_status: 'up',
+    target_if_speed: 0,
+    target_if_oper_status: 'up',
+    ...overrides,
   };
 }
 
@@ -125,5 +141,40 @@ describe('buildTopologyNodes', () => {
     expect(nodes[0].data.monitoringState).toBe('unmonitored');
     expect(nodes[0].data.metrics).toBeNull();
     expect(nodes[0].data.device.status).toBe('down');
+  });
+
+  it('attaches visible self-links to matching device nodes', () => {
+    const onSelfLinkClick = vi.fn();
+    const nodes = buildTopologyNodes(
+      [
+        mockDevice(),
+        mockDevice({
+          id: 'dev-2',
+          hostname: 'router-02',
+          ip: '10.0.0.2',
+          sys_name: 'router-02',
+        }),
+      ],
+      new Map(),
+      new Map(),
+      { x: 120, y: 180 },
+      false,
+      vi.fn(),
+      mockSnapshot(),
+      [
+        mockLink(),
+        mockLink({
+          id: 'link-2',
+          source_device_id: 'dev-1',
+          target_device_id: 'dev-2',
+          target_if_name: 'ether2',
+        }),
+      ],
+      onSelfLinkClick,
+    );
+
+    expect(nodes[0].data.selfLinks?.map((link) => link.id)).toEqual(['link-1']);
+    expect(nodes[0].data.onSelfLinkClick).toBe(onSelfLinkClick);
+    expect(nodes[1].data.selfLinks).toBeUndefined();
   });
 });

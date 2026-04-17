@@ -339,7 +339,7 @@ describe('buildTopologyEdges', () => {
     expect(edges[0].data.parallelIndex).toBe(0);
   });
 
-  it('routes self-links through opposing handles so the renderer can draw a loop outside the card', () => {
+  it('omits self-links from edge rendering so they can be shown as node annotations', () => {
     const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
     const devicesByID = new Map([
       ['dev-1', dev1],
@@ -355,15 +355,7 @@ describe('buildTopologyEdges', () => {
 
     const edges = buildTopologyEdges(links, devicesByID, nodes);
 
-    expect(edges).toHaveLength(1);
-    expect(edges[0]).toMatchObject({
-      id: 'link-self',
-      source: 'dev-1',
-      target: 'dev-1',
-      sourceHandle: 'right',
-      targetHandle: 'left',
-    });
-    expect(edges[0].data.parallelIndex).toBe(0);
+    expect(edges).toHaveLength(0);
   });
 
   it('drops incomplete same-pair edges when a richer edge already provides link speed metadata', () => {

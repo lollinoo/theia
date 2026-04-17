@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import DeviceCard from './DeviceCard';
-import type { Device } from '../types/api';
+import type { Device, Link } from '../types/api';
 import type { DeviceNodeData, DeviceNode } from './DeviceCard';
 import type { NodeProps } from '@xyflow/react';
 import type { DeviceMetricsDTO } from '../types/metrics';
@@ -43,6 +43,22 @@ function mockMetrics(overrides: Partial<DeviceMetricsDTO> = {}): DeviceMetricsDT
     stale: false,
     last_polled_at: '2026-04-13T11:59:30Z',
     expected_poll_interval_seconds: 30,
+    ...overrides,
+  };
+}
+
+function mockLink(overrides: Partial<Link> = {}): Link {
+  return {
+    id: 'link-1',
+    source_device_id: 'dev-1',
+    source_if_name: 'ether1',
+    target_device_id: 'dev-1',
+    target_if_name: 'ether9',
+    discovery_protocol: 'lldp',
+    source_if_speed: 0,
+    source_if_oper_status: 'up',
+    target_if_speed: 0,
+    target_if_oper_status: 'up',
     ...overrides,
   };
 }
@@ -403,5 +419,24 @@ describe('DeviceCard', () => {
     expect(container.innerHTML).not.toContain('var(--nt-node-down-glow)');
     expect(container.innerHTML).not.toContain('var(--nt-node-down-badge-border)');
     expect(container.innerHTML).not.toContain('var(--nt-node-critical-badge-border)');
+  });
+
+  it('renders a self-link badge and opens link details from the node annotation', () => {
+    const selfLink = mockLink();
+    const onSelfLinkClick = vi.fn();
+
+    renderDeviceCard({
+      selfLinks: [selfLink],
+      onSelfLinkClick,
+    });
+
+    expect(screen.getByText('Self LLDP')).toBeInTheDocument();
+    expect(screen.getByText('ether1 -> ether9')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'View details for self link ether1 -> ether9',
+    }));
+
+    expect(onSelfLinkClick).toHaveBeenCalledWith(selfLink);
   });
 });
