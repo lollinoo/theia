@@ -11,6 +11,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/snmp"
+	"github.com/lollinoo/theia/internal/topology"
 )
 
 type StaticDiscoveryInput struct {
@@ -69,66 +70,210 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	result = StaticPersistenceResult{TopologyChanged: interfaceChanged}
 	unknownNeighbors := make(map[unknownNeighborKey]int)
 	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
+	if s.topologyStore != nil {
+		materialized, currentUnknowns, currentTotals, materializeErr := s.applyDiscoveryViaObservationStore(*fresh, neighbors)
+		if materializeErr != nil {
+			return StaticPersistenceResult{}, materializeErr
+		}
+		result.TopologyChanged = result.TopologyChanged || materialized.TopologyChanged
+		result.LinksCreated += materialized.LinksCreated
+		unknownNeighbors = currentUnknowns
+		unknownByProtocol = currentTotals
+	} else {
+		for _, neighbor := range neighbors {
+			if neighbor.RemoteSysName == "" {
+				continue
+			}
+
+			remoteDevice, err := s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
+			if err != nil {
+				log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, err)
+				continue
+			}
+			if remoteDevice == nil {
+				unknownNeighbors[unknownNeighborKey{
+					RemoteSysName: neighbor.RemoteSysName,
+					Protocol:      neighbor.Protocol,
+				}]++
+				unknownByProtocol[neighbor.Protocol]++
+				continue
+			}
+
+			link := &domain.Link{
+				SourceDeviceID:    fresh.ID,
+				SourceIfName:      neighbor.LocalIfName,
+				TargetDeviceID:    remoteDevice.ID,
+				TargetIfName:      neighbor.RemotePortID,
+				DiscoveryProtocol: neighbor.Protocol,
+			}
+			upsertResult, upsertErr := upsertLinkDetailed(s.linkRepo, link)
+			if upsertErr != nil {
+				log.Printf("Failed to upsert link %s:%s <-> %s:%s: %v",
+					fresh.SysName, neighbor.LocalIfName,
+					neighbor.RemoteSysName, neighbor.RemotePortID, upsertErr)
+				continue
+			}
+			if upsertResult.Created {
+				result.LinksCreated++
+			}
+			if upsertResult.Changed {
+				result.TopologyChanged = true
+			}
+			if shouldLogAutoLink(upsertResult, fresh.ID == remoteDevice.ID) {
+				log.Printf("Auto-linked %s:%s <-> %s:%s via %s (%s)",
+					fresh.SysName, neighbor.LocalIfName,
+					neighbor.RemoteSysName, neighbor.RemotePortID,
+					string(neighbor.Protocol), upsertResult.Kind)
+			}
+		}
+	}
+	logUnknownNeighborSummary(fresh.ID, fresh.SysName, unknownNeighbors, unknownByProtocol)
+
+	return result, nil
+}
+
+func (s *DeviceService) applyDiscoveryViaObservationStore(
+	fresh domain.Device,
+	neighbors []snmp.NeighborInfo,
+) (StaticPersistenceResult, map[unknownNeighborKey]int, map[domain.DiscoveryProtocol]int, error) {
+	if s.topologyStore == nil {
+		return StaticPersistenceResult{}, nil, nil, nil
+	}
+
+	now := time.Now().UTC()
+	affectedDeviceIDs := map[uuid.UUID]struct{}{
+		fresh.ID: {},
+	}
+	unknownNeighbors := make(map[unknownNeighborKey]int)
+	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
+
 	for _, neighbor := range neighbors {
 		if neighbor.RemoteSysName == "" {
 			continue
 		}
 
+		normalizedIdentity := topology.NormalizeRemoteIdentity(neighbor.RemoteSysName)
 		remoteDevice, err := s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
 		if err != nil {
 			log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, err)
 			continue
 		}
+
+		observation := &topology.Observation{
+			LocalDeviceID:  fresh.ID,
+			RemoteIdentity: normalizedIdentity,
+			LocalPort:      neighbor.LocalIfName,
+			RemotePort:     neighbor.RemotePortID,
+			Protocol:       neighbor.Protocol,
+			LastObservedAt: now,
+			SelfNeighbor:   remoteDevice != nil && remoteDevice.ID == fresh.ID,
+		}
+		if remoteDevice != nil {
+			observation.RemoteDeviceID = remoteDevice.ID
+		}
+		if err := s.topologyStore.UpsertObservation(observation); err != nil {
+			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("upserting topology observation: %w", err)
+		}
+
 		if remoteDevice == nil {
 			unknownNeighbors[unknownNeighborKey{
 				RemoteSysName: neighbor.RemoteSysName,
 				Protocol:      neighbor.Protocol,
 			}]++
 			unknownByProtocol[neighbor.Protocol]++
+			if err := s.topologyStore.UpsertUnresolvedNeighbor(&topology.UnresolvedNeighbor{
+				LocalDeviceID:   fresh.ID,
+				RemoteIdentity:  normalizedIdentity,
+				Protocol:        neighbor.Protocol,
+				Occurrences:     1,
+				LastObservedAt:  now,
+				FirstObservedAt: now,
+			}); err != nil {
+				return StaticPersistenceResult{}, nil, nil, fmt.Errorf("upserting unresolved neighbor: %w", err)
+			}
 			continue
 		}
 
-		link := &domain.Link{
-			SourceDeviceID:    fresh.ID,
-			SourceIfName:      neighbor.LocalIfName,
-			TargetDeviceID:    remoteDevice.ID,
-			TargetIfName:      neighbor.RemotePortID,
-			DiscoveryProtocol: neighbor.Protocol,
-		}
-		upsertResult := domain.LinkUpsertResult{}
-		if reporter, ok := s.linkRepo.(linkUpsertReporter); ok {
-			upsertResult, err = reporter.UpsertDetailed(link)
-		} else {
-			var created bool
-			created, err = s.linkRepo.Upsert(link)
-			kind := domain.LinkUpsertKindNoop
-			if created {
-				kind = domain.LinkUpsertKindCreated
-			}
-			upsertResult = domain.LinkUpsertResult{Created: created, Changed: created, Kind: kind}
-		}
-		if err != nil {
-			log.Printf("Failed to upsert link %s:%s <-> %s:%s: %v",
-				fresh.SysName, neighbor.LocalIfName,
-				neighbor.RemoteSysName, neighbor.RemotePortID, err)
-			continue
-		}
-		if upsertResult.Created {
-			result.LinksCreated++
-		}
-		if upsertResult.Changed {
-			result.TopologyChanged = true
-		}
-		if shouldLogAutoLink(upsertResult, fresh.ID == remoteDevice.ID) {
-			log.Printf("Auto-linked %s:%s <-> %s:%s via %s (%s)",
-				fresh.SysName, neighbor.LocalIfName,
-				neighbor.RemoteSysName, neighbor.RemotePortID,
-				string(neighbor.Protocol), upsertResult.Kind)
+		affectedDeviceIDs[remoteDevice.ID] = struct{}{}
+		if err := s.topologyStore.ResolveUnresolvedNeighbor(fresh.ID, normalizedIdentity, neighbor.Protocol, now); err != nil {
+			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("resolving unresolved neighbor: %w", err)
 		}
 	}
-	logUnknownNeighborSummary(fresh.ID, fresh.SysName, unknownNeighbors, unknownByProtocol)
 
-	return result, nil
+	deviceIDs := make([]uuid.UUID, 0, len(affectedDeviceIDs))
+	for deviceID := range affectedDeviceIDs {
+		deviceIDs = append(deviceIDs, deviceID)
+	}
+
+	observations, err := s.topologyStore.ListObservationsForDevices(deviceIDs)
+	if err != nil {
+		return StaticPersistenceResult{}, nil, nil, fmt.Errorf("listing topology observations: %w", err)
+	}
+
+	applied, err := topology.ApplyObservations(observations, linkWriterAdapter{repo: s.linkRepo})
+	if err != nil {
+		return StaticPersistenceResult{}, nil, nil, fmt.Errorf("materializing canonical links: %w", err)
+	}
+
+	nameCache := map[uuid.UUID]string{
+		fresh.ID: fresh.SysName,
+	}
+	for _, event := range applied.Events {
+		if !shouldLogAutoLink(event.Result, event.Link.SourceDeviceID == event.Link.TargetDeviceID) {
+			continue
+		}
+		sourceName := s.lookupDeviceLabel(event.Link.SourceDeviceID, nameCache)
+		targetName := s.lookupDeviceLabel(event.Link.TargetDeviceID, nameCache)
+		log.Printf("Auto-linked %s:%s <-> %s:%s via %s (%s)",
+			sourceName, event.Link.SourceIfName,
+			targetName, event.Link.TargetIfName,
+			string(event.Link.DiscoveryProtocol), event.Result.Kind)
+	}
+
+	return StaticPersistenceResult{
+		TopologyChanged: applied.TopologyChanged,
+		LinksCreated:    applied.LinksCreated,
+	}, unknownNeighbors, unknownByProtocol, nil
+}
+
+func (s *DeviceService) lookupDeviceLabel(deviceID uuid.UUID, cache map[uuid.UUID]string) string {
+	if value := strings.TrimSpace(cache[deviceID]); value != "" {
+		return value
+	}
+	device, err := s.deviceRepo.GetByID(deviceID)
+	if err != nil || device == nil {
+		return deviceID.String()
+	}
+	label := strings.TrimSpace(device.SysName)
+	if label == "" {
+		label = strings.TrimSpace(device.Hostname)
+	}
+	if label == "" {
+		label = deviceID.String()
+	}
+	cache[deviceID] = label
+	return label
+}
+
+type linkWriterAdapter struct {
+	repo domain.LinkRepository
+}
+
+func (a linkWriterAdapter) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error) {
+	return upsertLinkDetailed(a.repo, link)
+}
+
+func upsertLinkDetailed(repo domain.LinkRepository, link *domain.Link) (domain.LinkUpsertResult, error) {
+	if reporter, ok := repo.(linkUpsertReporter); ok {
+		return reporter.UpsertDetailed(link)
+	}
+
+	created, err := repo.Upsert(link)
+	kind := domain.LinkUpsertKindNoop
+	if created {
+		kind = domain.LinkUpsertKindCreated
+	}
+	return domain.LinkUpsertResult{Created: created, Changed: created, Kind: kind}, err
 }
 
 type unknownNeighborKey struct {

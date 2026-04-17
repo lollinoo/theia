@@ -38,6 +38,11 @@ type linkUpsertKey struct {
 	Result   string
 }
 
+type schedulerBackpressureKey struct {
+	VolatilityClass string
+	Reason          string
+}
+
 type wsMetricKey struct {
 	Scope string
 	Type  string
@@ -61,8 +66,10 @@ type Registry struct {
 	mu sync.RWMutex
 
 	schedulerReadyDepth        map[domain.VolatilityClass]float64
+	schedulerQueueLagSeconds   map[domain.VolatilityClass]float64
 	schedulerInFlight          float64
 	schedulerTaskDispatchTotal map[domain.VolatilityClass]uint64
+	schedulerBackpressureTotal map[schedulerBackpressureKey]uint64
 	schedulerTaskDuration      map[domain.VolatilityClass]*histogram
 	pollResultsTotal           map[taskResultKey]uint64
 	discoveryNeighbors         map[deviceProtocolKey]float64
@@ -83,11 +90,17 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassOperational: 0,
 			domain.VolatilityClassStatic:      0,
 		},
+		schedulerQueueLagSeconds: map[domain.VolatilityClass]float64{
+			domain.VolatilityClassPerformance: 0,
+			domain.VolatilityClassOperational: 0,
+			domain.VolatilityClassStatic:      0,
+		},
 		schedulerTaskDispatchTotal: map[domain.VolatilityClass]uint64{
 			domain.VolatilityClassPerformance: 0,
 			domain.VolatilityClassOperational: 0,
 			domain.VolatilityClassStatic:      0,
 		},
+		schedulerBackpressureTotal: make(map[schedulerBackpressureKey]uint64),
 		schedulerTaskDuration: map[domain.VolatilityClass]*histogram{
 			domain.VolatilityClassPerformance: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassOperational: newHistogram(durationBucketsSeconds),
@@ -145,10 +158,20 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"Current number of scheduler tasks in flight.",
 		r.schedulerInFlight,
 	)
+	writeGaugeVec(&b,
+		"theia_scheduler_queue_lag_seconds",
+		"Current overdue queue lag by volatility class.",
+		sortedVolatilityGaugeRows(r.schedulerQueueLagSeconds),
+	)
 	writeCounterVec(&b,
 		"theia_scheduler_task_dispatch_total",
 		"Total scheduled tasks dispatched by volatility class.",
 		sortedDispatchRows(r.schedulerTaskDispatchTotal),
+	)
+	writeCounterVec(&b,
+		"theia_scheduler_backpressure_total",
+		"Scheduler backpressure events by volatility class and reason.",
+		sortedSchedulerBackpressureRows(r.schedulerBackpressureTotal),
 	)
 	writeHistogramVec(&b,
 		"theia_scheduler_task_duration_seconds",
@@ -221,10 +244,28 @@ func (r *Registry) SetSchedulerInFlight(count int) {
 	r.schedulerInFlight = float64(count)
 }
 
+func (r *Registry) SetSchedulerQueueLag(volatility domain.VolatilityClass, lag time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if lag < 0 {
+		lag = 0
+	}
+	r.schedulerQueueLagSeconds[volatility] = lag.Seconds()
+}
+
 func (r *Registry) IncSchedulerTaskDispatch(volatility domain.VolatilityClass) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.schedulerTaskDispatchTotal[volatility]++
+}
+
+func (r *Registry) IncSchedulerBackpressure(volatility domain.VolatilityClass, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.schedulerBackpressureTotal[schedulerBackpressureKey{
+		VolatilityClass: string(volatility),
+		Reason:          reason,
+	}]++
 }
 
 func (r *Registry) ObserveSchedulerTaskDuration(volatility domain.VolatilityClass, duration time.Duration) {
@@ -414,6 +455,31 @@ func sortedDispatchRows(values map[domain.VolatilityClass]uint64) []counterRow {
 		rows = append(rows, counterRow{
 			labels: map[string]string{"volatility_class": string(volatility)},
 			value:  values[volatility],
+		})
+	}
+	return rows
+}
+
+func sortedSchedulerBackpressureRows(values map[schedulerBackpressureKey]uint64) []counterRow {
+	keys := make([]schedulerBackpressureKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].VolatilityClass != keys[j].VolatilityClass {
+			return keys[i].VolatilityClass < keys[j].VolatilityClass
+		}
+		return keys[i].Reason < keys[j].Reason
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"volatility_class": key.VolatilityClass,
+				"reason":           key.Reason,
+			},
+			value: values[key],
 		})
 	}
 	return rows

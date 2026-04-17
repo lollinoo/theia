@@ -520,6 +520,37 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 	}
 }
 
+func TestPipelineOrchestratorWorkerCount_UsesVolatilityBudgets(t *testing.T) {
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingSNMPWorkerPoolPerformance, "4"); err != nil {
+		t.Fatalf("set performance workers: %v", err)
+	}
+	if err := settingsRepo.Set(domain.SettingSNMPWorkerPoolOperational, "2"); err != nil {
+		t.Fatalf("set operational workers: %v", err)
+	}
+	if err := settingsRepo.Set(domain.SettingSNMPWorkerPoolStatic, "1"); err != nil {
+		t.Fatalf("set static workers: %v", err)
+	}
+
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		state.NewStore(),
+		nil,
+		ws.NewHub(),
+		newPerformanceTestCollector(t),
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		collector.NewPrometheusCollector(&fakePrometheusClient{}),
+		&fakeTopologyService{},
+		settingsRepo,
+		make(chan struct{}, 1),
+	)
+
+	if got := pipeline.workerCount(); got != 7 {
+		t.Fatalf("workerCount() = %d, want 7", got)
+	}
+}
+
 func TestPipelineOrchestratorStatusReflectsLifecycle(t *testing.T) {
 	sched := newPipelineTestScheduler()
 	pipeline := NewPipelineOrchestrator(

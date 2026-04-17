@@ -6,11 +6,14 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/pollingbudget"
 	"github.com/lollinoo/theia/internal/snmp"
+	"github.com/lollinoo/theia/internal/topology"
 )
 
 // DiscoverFunc performs SNMP discovery on a target device and returns the result.
@@ -46,6 +49,7 @@ type DeviceUpdate struct {
 type DeviceService struct {
 	deviceRepo      domain.DeviceRepository
 	linkRepo        domain.LinkRepository
+	topologyStore   topology.ObservationStore
 	settingsRepo    domain.SettingsRepository
 	discoverFunc    DiscoverFunc
 	pollRescheduler pollRescheduler
@@ -57,10 +61,13 @@ type DeviceService struct {
 	reprobeWindow   time.Duration
 	reprobeMu       sync.Mutex
 	reprobeBooked   map[uuid.UUID]time.Time
+	reprobeInFlight atomic.Int32
 
 	probeWg        sync.WaitGroup
 	TopologyNotify chan struct{} // signaled when probeDevice creates new links
 }
+
+type DeviceServiceOption func(*DeviceService)
 
 const (
 	incompleteLinkReprobeDelay    = 20 * time.Second
@@ -77,6 +84,7 @@ func NewDeviceService(
 	settingsRepo domain.SettingsRepository,
 	discoverFunc DiscoverFunc,
 	topologyNotify chan struct{},
+	options ...DeviceServiceOption,
 ) *DeviceService {
 	svc := &DeviceService{
 		deviceRepo:      deviceRepo,
@@ -92,7 +100,18 @@ func NewDeviceService(
 		TopologyNotify:  topologyNotify,
 	}
 	svc.delayedReprobe = svc.ReprobeDevice
+	for _, option := range options {
+		if option != nil {
+			option(svc)
+		}
+	}
 	return svc
+}
+
+func WithTopologyObservationStore(store topology.ObservationStore) DeviceServiceOption {
+	return func(s *DeviceService) {
+		s.topologyStore = store
+	}
 }
 
 func (s *DeviceService) SetPollRescheduler(rescheduler pollRescheduler) {
@@ -330,11 +349,26 @@ func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, device
 			if !s.hasIncompleteLLDPLinks(targetID) {
 				return
 			}
+			limit := s.staticReprobeBudget()
+			if limit <= 0 {
+				return
+			}
+			if int(s.reprobeInFlight.Add(1)) > limit {
+				s.reprobeInFlight.Add(-1)
+				log.Printf("Skipping delayed LLDP re-probe for %s: static reprobe budget exhausted", targetLabel)
+				return
+			}
+			defer s.reprobeInFlight.Add(-1)
 			if err := s.delayedReprobe(context.Background(), targetID); err != nil {
 				log.Printf("Delayed LLDP re-probe failed for %s: %v", targetLabel, err)
 			}
 		})
 	}
+}
+
+func (s *DeviceService) staticReprobeBudget() int {
+	budgets := pollingbudget.Resolve(s.settingsRepo)
+	return budgets[domain.VolatilityClassStatic]
 }
 
 func (s *DeviceService) probeDevice(device *domain.Device) {

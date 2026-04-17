@@ -6,6 +6,9 @@ const (
 	SettingGrafanaURL                   = "grafana_url"
 	SettingPollingInterval              = "polling_interval_seconds"
 	SettingSNMPWorkerPoolSize           = "snmp_worker_pool_size"
+	SettingSNMPWorkerPoolPerformance    = "snmp_worker_pool_performance_size"
+	SettingSNMPWorkerPoolOperational    = "snmp_worker_pool_operational_size"
+	SettingSNMPWorkerPoolStatic         = "snmp_worker_pool_static_size"
 	SettingSNMPTimeout                  = "snmp_timeout_seconds"
 	SettingSNMPRetries                  = "snmp_retries"
 	SettingTimezone                     = "timezone"
@@ -30,6 +33,9 @@ func DefaultSettings() map[string]string {
 		SettingGrafanaURL:                   "",
 		SettingPollingInterval:              "60",
 		SettingSNMPWorkerPoolSize:           "5",
+		SettingSNMPWorkerPoolPerformance:    "3",
+		SettingSNMPWorkerPoolOperational:    "1",
+		SettingSNMPWorkerPoolStatic:         "1",
 		SettingSNMPTimeout:                  "10",
 		SettingSNMPRetries:                  "2",
 		SettingTimezone:                     "UTC",
