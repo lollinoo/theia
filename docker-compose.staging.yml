@@ -4,13 +4,11 @@
 # Auto-updates via Watchtower: new :staging images are pulled every 30 seconds.
 #
 # Profiles:
-#   (default) -- Backend + frontend + watchtower
-#   postgres  -- Also starts a local PostgreSQL container for the backend
+#   (default) -- Backend + PostgreSQL + frontend + watchtower
 #
 # Usage:
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 #   IMAGE_TAG=fix-links docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
-#   docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d postgres
 #
 # First-time setup:
 #   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
@@ -44,13 +42,16 @@ services:
     volumes:
       - theia-staging-data:/data
     environment:
-      - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-sqlite}
+      - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-postgres}
       - THEIA_DB_PATH=${THEIA_DB_PATH:-/data/theia.db}
-      - THEIA_DB_DSN=${THEIA_DB_DSN:-}
+      - THEIA_DB_DSN=${THEIA_DB_DSN:-postgres://theia:${POSTGRES_PASSWORD:-theia}@postgres:5432/${POSTGRES_DB:-theia}?sslmode=disable}
       - THEIA_DATA_DIR=${THEIA_DATA_DIR:-/data}
       - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8081}
       - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
       - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:${BACKEND_PORT:-8081}/api/v1/health"]
       interval: 15s
@@ -62,7 +63,6 @@ services:
 
   postgres:
     image: postgres:17
-    profiles: ["postgres"]
     container_name: theia-staging-postgres
     restart: unless-stopped
     networks:

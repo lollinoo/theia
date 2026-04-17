@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/version"
 )
 
@@ -49,6 +50,7 @@ func (h *HealthHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		},
 		"components": map[string]string{
 			"db":          dbStatus,
+			"db_dialect":  string(sqlite.DetectDialect(h.db)),
 			"snmp_poller": pollerStatus,
 		},
 	})

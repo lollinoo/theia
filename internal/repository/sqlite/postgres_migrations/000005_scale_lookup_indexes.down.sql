@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_unresolved_neighbors_resolution_lookup;
+DROP INDEX IF EXISTS idx_topology_observations_ingest_lookup;
