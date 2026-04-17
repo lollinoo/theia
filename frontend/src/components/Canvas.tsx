@@ -446,7 +446,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
 
       <SidePanel open={!!panelContent} onClose={() => setPanelContent(null)} title={getPanelTitle()}>
         <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} snapshot={snapshot}
-          devices={devices} loadTopology={loadTopology}
+          devices={devices} topologyLinks={topologyLinks} loadTopology={loadTopology}
           setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus}
           onAreasChange={onAreasChange} onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {

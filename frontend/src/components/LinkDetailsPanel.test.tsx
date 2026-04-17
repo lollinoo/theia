@@ -94,4 +94,22 @@ describe('LinkDetailsPanel', () => {
     expect(screen.getByRole('button', { name: 'Edit Ports' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete Link' })).toBeInTheDocument();
   });
+
+  it('shows pending discovery copy while auto-discovered ports are still resolving', () => {
+    render(
+      <LinkDetailsPanel
+        link={mockLink({ source_if_name: '' })}
+        devices={[mockDevice({ status: 'probing' }), devices[1]]}
+        readOnly
+        onUpdated={vi.fn()}
+        onDeleted={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText('Pending discovery').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText('Port assignments are still resolving while probing completes. Missing ports will refresh automatically.'),
+    ).toBeInTheDocument();
+  });
 });

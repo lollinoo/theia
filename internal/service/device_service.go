@@ -49,10 +49,24 @@ type DeviceService struct {
 	settingsRepo    domain.SettingsRepository
 	discoverFunc    DiscoverFunc
 	pollRescheduler pollRescheduler
+	now             func() time.Time
+	scheduleFunc    func(time.Duration, func())
+	delayedReprobe  func(context.Context, uuid.UUID) error
+	reprobeDelay    time.Duration
+	reprobeCooldown time.Duration
+	reprobeWindow   time.Duration
+	reprobeMu       sync.Mutex
+	reprobeBooked   map[uuid.UUID]time.Time
 
 	probeWg        sync.WaitGroup
 	TopologyNotify chan struct{} // signaled when probeDevice creates new links
 }
+
+const (
+	incompleteLinkReprobeDelay    = 20 * time.Second
+	incompleteLinkReprobeCooldown = 45 * time.Second
+	incompleteLinkReprobeWindow   = 5 * time.Minute
+)
 
 // NewDeviceService creates a new DeviceService with the given dependencies.
 // topologyNotify is an optional buffered channel signaled when probeDevice creates
@@ -64,13 +78,21 @@ func NewDeviceService(
 	discoverFunc DiscoverFunc,
 	topologyNotify chan struct{},
 ) *DeviceService {
-	return &DeviceService{
-		deviceRepo:     deviceRepo,
-		linkRepo:       linkRepo,
-		settingsRepo:   settingsRepo,
-		discoverFunc:   discoverFunc,
-		TopologyNotify: topologyNotify,
+	svc := &DeviceService{
+		deviceRepo:      deviceRepo,
+		linkRepo:        linkRepo,
+		settingsRepo:    settingsRepo,
+		discoverFunc:    discoverFunc,
+		now:             time.Now,
+		scheduleFunc:    func(delay time.Duration, fn func()) { time.AfterFunc(delay, fn) },
+		reprobeDelay:    incompleteLinkReprobeDelay,
+		reprobeCooldown: incompleteLinkReprobeCooldown,
+		reprobeWindow:   incompleteLinkReprobeWindow,
+		reprobeBooked:   make(map[uuid.UUID]time.Time),
+		TopologyNotify:  topologyNotify,
 	}
+	svc.delayedReprobe = svc.ReprobeDevice
+	return svc
 }
 
 func (s *DeviceService) SetPollRescheduler(rescheduler pollRescheduler) {
@@ -185,6 +207,136 @@ func (s *DeviceService) markDeviceStatus(deviceID uuid.UUID, deviceIP string, st
 	}
 }
 
+func (s *DeviceService) hasIncompleteLLDPLinks(deviceID uuid.UUID) bool {
+	links, err := s.linkRepo.GetByDeviceID(deviceID)
+	if err != nil {
+		log.Printf("Failed to inspect links for delayed LLDP re-probe on %s: %v", deviceID, err)
+		return false
+	}
+
+	for _, link := range links {
+		if link.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+			continue
+		}
+		if strings.TrimSpace(link.SourceIfName) == "" || strings.TrimSpace(link.TargetIfName) == "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (s *DeviceService) incompleteLLDPPeerIDs(deviceID uuid.UUID) []uuid.UUID {
+	links, err := s.linkRepo.GetByDeviceID(deviceID)
+	if err != nil {
+		log.Printf("Failed to inspect LLDP peers for delayed re-probe on %s: %v", deviceID, err)
+		return nil
+	}
+
+	seen := make(map[uuid.UUID]struct{})
+	peerIDs := make([]uuid.UUID, 0, len(links))
+	for _, link := range links {
+		if link.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+			continue
+		}
+		if strings.TrimSpace(link.SourceIfName) != "" && strings.TrimSpace(link.TargetIfName) != "" {
+			continue
+		}
+
+		peerID := link.SourceDeviceID
+		if peerID == deviceID {
+			peerID = link.TargetDeviceID
+		}
+		if peerID == uuid.Nil || peerID == deviceID {
+			continue
+		}
+		if _, exists := seen[peerID]; exists {
+			continue
+		}
+		seen[peerID] = struct{}{}
+		peerIDs = append(peerIDs, peerID)
+	}
+
+	return peerIDs
+}
+
+func (s *DeviceService) shouldScheduleIncompleteLinkReprobe(deviceID uuid.UUID) bool {
+	device, err := s.deviceRepo.GetByID(deviceID)
+	if err != nil {
+		log.Printf("Failed to inspect device %s for delayed LLDP re-probe: %v", deviceID, err)
+		return false
+	}
+	if device.Status != domain.DeviceStatusProbing {
+		return false
+	}
+	if device.CreatedAt.IsZero() {
+		return false
+	}
+	age := s.now().Sub(device.CreatedAt)
+	if age < 0 || age > s.reprobeWindow {
+		return false
+	}
+
+	return s.hasIncompleteLLDPLinks(deviceID)
+}
+
+func (s *DeviceService) reserveIncompleteLinkReprobe(deviceID uuid.UUID) bool {
+	s.reprobeMu.Lock()
+	defer s.reprobeMu.Unlock()
+
+	last, ok := s.reprobeBooked[deviceID]
+	if ok && s.now().Sub(last) < s.reprobeCooldown {
+		return false
+	}
+	s.reprobeBooked[deviceID] = s.now()
+	return true
+}
+
+func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, deviceIP string) {
+	type reprobeTarget struct {
+		id    uuid.UUID
+		label string
+	}
+
+	targets := []reprobeTarget{{id: deviceID, label: deviceIP}}
+	for _, peerID := range s.incompleteLLDPPeerIDs(deviceID) {
+		peer, err := s.deviceRepo.GetByID(peerID)
+		if err != nil {
+			log.Printf("Failed to inspect LLDP peer %s for delayed re-probe: %v", peerID, err)
+			continue
+		}
+		if !peer.Managed || peer.IP == "" || peer.DeviceType == domain.DeviceTypeVirtual {
+			continue
+		}
+		if peer.MetricsSource == domain.MetricsSourcePrometheus || peer.MetricsSource == domain.MetricsSourceNone {
+			continue
+		}
+		label := peer.IP
+		if label == "" {
+			label = peer.Hostname
+		}
+		targets = append(targets, reprobeTarget{id: peerID, label: label})
+	}
+
+	for _, target := range targets {
+		if !s.reserveIncompleteLinkReprobe(target.id) {
+			continue
+		}
+
+		targetID := target.id
+		targetLabel := target.label
+		log.Printf("Scheduling delayed LLDP re-probe for %s in %s to resolve incomplete ports", targetLabel, s.reprobeDelay)
+		s.scheduleFunc(s.reprobeDelay, func() {
+			if !s.hasIncompleteLLDPLinks(targetID) {
+				return
+			}
+			if err := s.delayedReprobe(context.Background(), targetID); err != nil {
+				log.Printf("Delayed LLDP re-probe failed for %s: %v", targetLabel, err)
+			}
+		})
+	}
+}
+
 func (s *DeviceService) probeDevice(device *domain.Device) {
 	deviceID := device.ID
 	deviceIP := device.IP
@@ -243,6 +395,9 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		}
 		log.Printf("Failed to persist static discovery for %s: %v", deviceIP, err)
 		return
+	}
+	if s.shouldScheduleIncompleteLinkReprobe(deviceID) {
+		s.scheduleIncompleteLinkReprobe(deviceID, deviceIP)
 	}
 
 	if err := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); err != nil {

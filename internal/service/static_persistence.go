@@ -26,6 +26,10 @@ type StaticPersistenceResult struct {
 	LinksCreated    int
 }
 
+type linkUpsertReporter interface {
+	UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error)
+}
+
 func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDiscoveryInput) (StaticPersistenceResult, error) {
 	fresh, err := s.deviceRepo.GetByID(deviceID)
 	if err != nil {
@@ -74,15 +78,24 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 			TargetIfName:      neighbor.RemotePortID,
 			DiscoveryProtocol: neighbor.Protocol,
 		}
-		created, err := s.linkRepo.Upsert(link)
+		upsertResult := domain.LinkUpsertResult{}
+		if reporter, ok := s.linkRepo.(linkUpsertReporter); ok {
+			upsertResult, err = reporter.UpsertDetailed(link)
+		} else {
+			var created bool
+			created, err = s.linkRepo.Upsert(link)
+			upsertResult = domain.LinkUpsertResult{Created: created, Changed: created}
+		}
 		if err != nil {
 			log.Printf("Failed to upsert link %s:%s <-> %s:%s: %v",
 				fresh.SysName, neighbor.LocalIfName,
 				neighbor.RemoteSysName, neighbor.RemotePortID, err)
 			continue
 		}
-		if created {
+		if upsertResult.Created {
 			result.LinksCreated++
+		}
+		if upsertResult.Changed {
 			result.TopologyChanged = true
 		}
 		log.Printf("Auto-linked %s:%s <-> %s:%s via %s",
