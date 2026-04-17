@@ -51,6 +51,9 @@ func TestHealthHandlerHealth(t *testing.T) {
 	if resp.Components["db"] != "ok" {
 		t.Fatalf("expected db=ok, got %s", resp.Components["db"])
 	}
+	if resp.Components["db_dialect"] != "sqlite" {
+		t.Fatalf("expected db_dialect=sqlite, got %s", resp.Components["db_dialect"])
+	}
 	if resp.Components["snmp_poller"] != "running" {
 		t.Fatalf("expected snmp_poller=running, got %s", resp.Components["snmp_poller"])
 	}
@@ -91,6 +94,9 @@ func TestHealthHandlerHealth_DBDown(t *testing.T) {
 	if resp.Components["db"] != "error" {
 		t.Fatalf("expected db=error, got %s", resp.Components["db"])
 	}
+	if resp.Components["db_dialect"] != "sqlite" {
+		t.Fatalf("expected db_dialect=sqlite, got %s", resp.Components["db_dialect"])
+	}
 }
 
 func TestHealthHandlerHealth_NilPoller(t *testing.T) {
@@ -122,5 +128,8 @@ func TestHealthHandlerHealth_NilPoller(t *testing.T) {
 
 	if resp.Components["snmp_poller"] != "stopped" {
 		t.Fatalf("expected snmp_poller=stopped when poller is nil, got %s", resp.Components["snmp_poller"])
+	}
+	if resp.Components["db_dialect"] != "sqlite" {
+		t.Fatalf("expected db_dialect=sqlite, got %s", resp.Components["db_dialect"])
 	}
 }

@@ -334,6 +334,12 @@ func main() {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	sqlite.ConfigureDB(db)
+	switch dialect {
+	case sqlite.DialectPostgres:
+		log.Printf("Database dialect: %s (production reference path)", dialect)
+	default:
+		log.Printf("Database dialect: %s (development/small-install path; PostgreSQL is the production reference)", dialect)
+	}
 	defer db.Close()
 
 	if err := db.Ping(); err != nil {

@@ -10,7 +10,8 @@
 #   THEIA_DATA_DIR, THEIA_LOG_LEVEL
 # =============================================================================
 
-# Database driver: sqlite or postgres
+# Database driver: sqlite or postgres.
+# Use postgres for production and staging; sqlite remains the dev/small-install path.
 # Default: "sqlite"
 db_driver: "sqlite"
 
@@ -24,6 +25,8 @@ listen_addr: ":8080"
 db_path: "./data/theia.db"
 
 # PostgreSQL DSN. Required when db_driver=postgres.
+# Production reference example:
+# "postgres://theia:change-me@postgres:5432/theia?sslmode=disable"
 # Example: "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
 # db_dsn: ""
 

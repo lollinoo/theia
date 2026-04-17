@@ -54,3 +54,7 @@ func detectDialectFromDB(db *sql.DB) Dialect {
 		return DialectSQLite
 	}
 }
+
+func DetectDialect(db *sql.DB) Dialect {
+	return detectDialectFromDB(db)
+}

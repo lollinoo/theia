@@ -472,6 +472,36 @@ func TestPostgresMigrations_AddPollClassificationColumns(t *testing.T) {
 	}
 }
 
+func TestPostgresMigrations_ContainScaleLookupIndexes(t *testing.T) {
+	files, err := fs.Glob(postgresMigrationsFS, "postgres_migrations/*.up.sql")
+	if err != nil {
+		t.Fatalf("globbing postgres migrations: %v", err)
+	}
+
+	var combined strings.Builder
+	for _, name := range files {
+		content, err := postgresMigrationsFS.ReadFile(name)
+		if err != nil {
+			t.Fatalf("reading postgres migration %s: %v", name, err)
+		}
+		combined.Write(content)
+		combined.WriteByte('\n')
+	}
+
+	sql := combined.String()
+	wants := []string{
+		"idx_devices_sys_name_lookup",
+		"idx_links_pair_lookup",
+		"idx_topology_observations_ingest_lookup",
+		"idx_unresolved_neighbors_resolution_lookup",
+	}
+	for _, want := range wants {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("expected postgres migrations to contain %q", want)
+		}
+	}
+}
+
 func TestMigration000017_AddsDeviceNotesColumn(t *testing.T) {
 	db := openTestDB(t)
 
@@ -487,5 +517,29 @@ func TestMigration000017_AddsDeviceNotesColumn(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected notes column to exist, got count %d", count)
+	}
+}
+
+func TestMigration000019_AddsScaleLookupIndexes(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	for _, indexName := range []string{
+		"idx_topology_observations_ingest_lookup",
+		"idx_unresolved_neighbors_resolution_lookup",
+	} {
+		var count int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`,
+			indexName,
+		).Scan(&count); err != nil {
+			t.Fatalf("querying sqlite_master for %s: %v", indexName, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected index %s to exist, got count %d", indexName, count)
+		}
 	}
 }

@@ -9,7 +9,7 @@ import (
 
 // Config holds bootstrap configuration loaded from YAML / environment.
 // Runtime settings (Prometheus URL, polling interval, etc.) are stored
-// in the SQLite settings table and managed via the API.
+// in the primary database settings table and managed via the API.
 type Config struct {
 	DBDriver          string `yaml:"db_driver"`
 	ListenAddr        string `yaml:"listen_addr"`
