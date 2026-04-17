@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,13 +18,28 @@ type DeviceRepo struct {
 	db            *DB
 	encryptionKey []byte
 	onChange      chan<- struct{}
+	changeEvents  chan domain.DeviceChangeEvent
+	repairPending atomic.Bool
 }
 
 // NewDeviceRepo creates a new SQLite-backed device repository.
 // The onChange channel, if non-nil, receives a non-blocking signal after
 // every successful Create, Update, or Delete operation.
 func NewDeviceRepo(db *sql.DB, encryptionKey []byte, onChange chan<- struct{}) *DeviceRepo {
-	return &DeviceRepo{db: wrapDB(db), encryptionKey: encryptionKey, onChange: onChange}
+	return &DeviceRepo{
+		db:            wrapDB(db),
+		encryptionKey: encryptionKey,
+		onChange:      onChange,
+		changeEvents:  make(chan domain.DeviceChangeEvent, 256),
+	}
+}
+
+func (r *DeviceRepo) DeviceChanges() <-chan domain.DeviceChangeEvent {
+	return r.changeEvents
+}
+
+func (r *DeviceRepo) DrainDeviceRepair() bool {
+	return r.repairPending.Swap(false)
 }
 
 // notify sends a non-blocking signal on the onChange channel to indicate
@@ -36,6 +52,22 @@ func (r *DeviceRepo) notify() {
 	case r.onChange <- struct{}{}:
 		observability.Default().IncCacheInvalidation("device_repo")
 	default:
+	}
+}
+
+func (r *DeviceRepo) publishChange(kind domain.ChangeKind, deviceID uuid.UUID) {
+	if r.changeEvents == nil {
+		return
+	}
+
+	event := domain.DeviceChangeEvent{
+		Kind:     kind,
+		DeviceID: deviceID,
+	}
+	select {
+	case r.changeEvents <- event:
+	default:
+		r.repairPending.Store(true)
 	}
 }
 
@@ -144,6 +176,7 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 		return err
 	}
 	r.notify()
+	r.publishChange(domain.ChangeKindCreated, device.ID)
 	return nil
 }
 
@@ -439,6 +472,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		return err
 	}
 	r.notify()
+	r.publishChange(domain.ChangeKindUpdated, device.ID)
 	return nil
 }
 
@@ -459,6 +493,7 @@ func (r *DeviceRepo) deleteOnce(id uuid.UUID) error {
 		return fmt.Errorf("device not found: %s", id)
 	}
 	r.notify()
+	r.publishChange(domain.ChangeKindDeleted, id)
 	return nil
 }
 

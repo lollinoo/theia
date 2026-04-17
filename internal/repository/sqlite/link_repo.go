@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,15 +14,29 @@ import (
 
 // LinkRepo implements domain.LinkRepository using SQLite.
 type LinkRepo struct {
-	db       *DB
-	onChange chan<- struct{}
+	db            *DB
+	onChange      chan<- struct{}
+	changeEvents  chan domain.LinkChangeEvent
+	repairPending atomic.Bool
 }
 
 // NewLinkRepo creates a new SQLite-backed link repository.
 // The onChange channel, if non-nil, receives a non-blocking signal after
 // every successful Create, Update, Delete, or Upsert operation.
 func NewLinkRepo(db *sql.DB, onChange chan<- struct{}) *LinkRepo {
-	return &LinkRepo{db: wrapDB(db), onChange: onChange}
+	return &LinkRepo{
+		db:           wrapDB(db),
+		onChange:     onChange,
+		changeEvents: make(chan domain.LinkChangeEvent, 256),
+	}
+}
+
+func (r *LinkRepo) LinkChanges() <-chan domain.LinkChangeEvent {
+	return r.changeEvents
+}
+
+func (r *LinkRepo) DrainLinkRepair() bool {
+	return r.repairPending.Swap(false)
 }
 
 // notify sends a non-blocking signal on the onChange channel to indicate
@@ -34,6 +49,22 @@ func (r *LinkRepo) notify() {
 	case r.onChange <- struct{}{}:
 		observability.Default().IncCacheInvalidation("link_repo")
 	default:
+	}
+}
+
+func (r *LinkRepo) publishChange(kind domain.ChangeKind, linkID uuid.UUID) {
+	if r.changeEvents == nil {
+		return
+	}
+
+	event := domain.LinkChangeEvent{
+		Kind:   kind,
+		LinkID: linkID,
+	}
+	select {
+	case r.changeEvents <- event:
+	default:
+		r.repairPending.Store(true)
 	}
 }
 
@@ -65,6 +96,7 @@ func (r *LinkRepo) createOnce(link *domain.Link) error {
 		return fmt.Errorf("inserting link: %w", err)
 	}
 	r.notify()
+	r.publishChange(domain.ChangeKindCreated, link.ID)
 	return nil
 }
 
@@ -122,6 +154,7 @@ func (r *LinkRepo) updateOnce(link *domain.Link) error {
 		return fmt.Errorf("link not found: %s", link.ID)
 	}
 	r.notify()
+	r.publishChange(domain.ChangeKindUpdated, link.ID)
 	return nil
 }
 
@@ -177,6 +210,7 @@ func (r *LinkRepo) deleteOnce(id uuid.UUID) error {
 		return fmt.Errorf("link not found: %s", id)
 	}
 	r.notify()
+	r.publishChange(domain.ChangeKindDeleted, id)
 	return nil
 }
 
@@ -272,6 +306,7 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 			return domain.LinkUpsertResult{}, fmt.Errorf("committing link update: %w", err)
 		}
 		r.notify()
+		r.publishChange(domain.ChangeKindUpdated, link.ID)
 		kind := domain.LinkUpsertKindUpdated
 		if portsChanged {
 			kind = domain.LinkUpsertKindEnriched
@@ -308,6 +343,7 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 				return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link reorientation: %w", err)
 			}
 			r.notify()
+			r.publishChange(domain.ChangeKindUpdated, uuid.MustParse(reverse.ID))
 			result := domain.LinkUpsertResult{Created: false, Changed: true, Kind: domain.LinkUpsertKindReoriented}
 			r.recordUpsert(result, link.DiscoveryProtocol)
 			return result, nil
@@ -352,6 +388,7 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 			return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link update: %w", err)
 		}
 		r.notify()
+		r.publishChange(domain.ChangeKindUpdated, link.ID)
 		kind := domain.LinkUpsertKindUpdated
 		if portsChanged {
 			kind = domain.LinkUpsertKindEnriched
@@ -378,6 +415,7 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 		return domain.LinkUpsertResult{}, fmt.Errorf("committing link insert: %w", err)
 	}
 	r.notify()
+	r.publishChange(domain.ChangeKindCreated, link.ID)
 	result := domain.LinkUpsertResult{Created: true, Changed: true, Kind: domain.LinkUpsertKindCreated}
 	r.recordUpsert(result, link.DiscoveryProtocol)
 	return result, nil
