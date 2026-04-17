@@ -1,4 +1,4 @@
-import type { Device } from '../../types/api';
+import type { Device, Link } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 import { alertStatusForDevice } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
@@ -6,6 +6,15 @@ import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
 } from '../deviceVisualState';
+import { preferVisibleLinks } from './edgeBuilder';
+
+function selfLinkScore(link: Link): number {
+  let score = 0;
+  if (link.discovery_protocol === 'lldp') score += 4;
+  if (link.source_if_name) score += 2;
+  if (link.target_if_name) score += 2;
+  return score;
+}
 
 export function buildTopologyNodes(
   devices: Device[],
@@ -15,10 +24,29 @@ export function buildTopologyNodes(
   editMode: boolean,
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void,
   pendingSnapshot: SnapshotPayload | null,
+  links: Link[] = [],
+  onSelfLinkClick?: (link: Link) => void,
 ): DeviceNode[] {
+  const selfLinksByDeviceId = new Map<string, Link[]>();
+  for (const link of preferVisibleLinks(links)) {
+    if (link.source_device_id !== link.target_device_id) continue;
+    const deviceLinks = selfLinksByDeviceId.get(link.source_device_id) ?? [];
+    deviceLinks.push(link);
+    selfLinksByDeviceId.set(link.source_device_id, deviceLinks);
+  }
+
+  for (const deviceLinks of selfLinksByDeviceId.values()) {
+    deviceLinks.sort((left, right) => {
+      const scoreDelta = selfLinkScore(right) - selfLinkScore(left);
+      if (scoreDelta !== 0) return scoreDelta;
+      return left.id.localeCompare(right.id);
+    });
+  }
+
   return devices.map((device) => {
     const saved = savedPositions.get(device.id);
     const position = saved ?? defaultPosition ?? computedPositions.get(device.id) ?? { x: 0, y: 0 };
+    const selfLinks = selfLinksByDeviceId.get(device.id);
 
     // Merge snapshot status/hostname/model into device if available
     let deviceData = device;
@@ -65,6 +93,8 @@ export function buildTopologyNodes(
         isVirtual,
         monitoringState,
         subtype: isVirtual ? (deviceData.tags?.virtual_subtype ?? 'generic') : undefined,
+        selfLinks,
+        onSelfLinkClick,
       },
     };
   });

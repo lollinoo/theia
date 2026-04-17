@@ -35,6 +35,7 @@ interface UseCanvasDataParams {
   editMode: boolean;
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void;
   openEdgeMenu: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
+  openSelfLinkDetails?: (link: Link) => void;
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   nodes: DeviceNode[];
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
@@ -65,6 +66,7 @@ export function useCanvasData({
   editMode,
   openDeviceMenu,
   openEdgeMenu,
+  openSelfLinkDetails,
   reactFlow,
   nodes: _nodes,
   setNodes,
@@ -182,6 +184,8 @@ export function useCanvasData({
           editMode,
           openDeviceMenu,
           effectiveSnapshot,
+          fetchedLinks,
+          openSelfLinkDetails,
         );
 
         // Migrate localStorage manual edges to backend on first load (best-effort)
@@ -293,7 +297,7 @@ export function useCanvasData({
         }
       }
     },
-    [editMode, openDeviceMenu, openEdgeMenu, reactFlow, setNodes, setEdges, fetchPositions, savePositions],
+    [editMode, openDeviceMenu, openEdgeMenu, openSelfLinkDetails, reactFlow, setNodes, setEdges, fetchPositions, savePositions],
   );
 
   // Initial load

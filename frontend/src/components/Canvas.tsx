@@ -111,6 +111,12 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
       setEdgeMenu({ edgeID, x: event.clientX, y: event.clientY });
     }, [setEdgeMenu],
   );
+  const openSelfLinkDetails = useCallback(
+    (link: Link) => {
+      setPanelContent({ type: 'link-details', data: { link, readOnly: true } });
+    },
+    [setPanelContent],
+  );
   const openDeviceMenu = useCallback(
     (event: React.MouseEvent, deviceId: string) => {
       checkBridgeHealth();
@@ -126,7 +132,8 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     showRecoveryToast, setShowRecoveryToast,
   } = useCanvasData({
     snapshot, reconnecting, prometheusStatus, editMode,
-    openDeviceMenu, openEdgeMenu, reactFlow, nodes, setNodes, setEdges, onDevicesChange, onLinksChange,
+    openDeviceMenu, openEdgeMenu, openSelfLinkDetails,
+    reactFlow, nodes, setNodes, setEdges, onDevicesChange, onLinksChange,
   });
 
   // Area filtering: derive filtered devices/links and ghost devices

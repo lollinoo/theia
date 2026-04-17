@@ -1,6 +1,6 @@
 import { memo, type CSSProperties } from 'react';
 import { Handle, Position, useStore, type Node, type NodeProps } from '@xyflow/react';
-import type { Device } from '../types/api';
+import type { Device, Link } from '../types/api';
 import {
   formatUptime,
   metricColor,
@@ -39,6 +39,8 @@ export interface DeviceNodeData {
   isVirtual?: boolean;
   monitoringState?: DeviceMonitoringState;
   subtype?: string;
+  selfLinks?: Link[];
+  onSelfLinkClick?: (link: Link) => void;
   [key: string]: unknown;
 }
 
@@ -89,6 +91,32 @@ function deviceTypeLabel(device: Device, isVirtual: boolean, subtype?: string): 
     return subtypeLabels[subtype ?? 'generic'] ?? 'Virtual';
   }
   return deviceTypeLabels[device.device_type] ?? 'Node';
+}
+
+function formatSelfLinkLabel(link: Link): string {
+  const protocol = link.discovery_protocol.trim().toUpperCase();
+  return protocol ? `Self ${protocol}` : 'Self link';
+}
+
+function formatSelfLinkSummary(link: Link): string {
+  const source = link.source_if_name.trim() || '?';
+  const target = link.target_if_name.trim() || '?';
+  return `${source} -> ${target}`;
+}
+
+function sameSelfLinks(previous: Link[] | undefined, next: Link[] | undefined): boolean {
+  if (previous?.length !== next?.length) {
+    return false;
+  }
+
+  return (previous ?? []).every((link, index) => {
+    const candidate = next?.[index];
+    return !!candidate &&
+      link.id === candidate.id &&
+      link.source_if_name === candidate.source_if_name &&
+      link.target_if_name === candidate.target_if_name &&
+      link.discovery_protocol === candidate.discovery_protocol;
+  });
 }
 
 function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): Readout['tone'] {
@@ -227,6 +255,8 @@ function DeviceCardInner({
     uptimeSecs,
     isDeviceDown,
   });
+  const selfLinks = data.selfLinks ?? [];
+  const primarySelfLink = selfLinks[0];
   const statusStyles = resolveDeviceNodeStatusStyles({
     status: headerState.dotStatus,
     selected,
@@ -272,6 +302,32 @@ function DeviceCardInner({
         data.onContextMenu(event, data.device.id);
       }}
     >
+      {primarySelfLink ? (
+        <button
+          type="button"
+          className="absolute left-1/2 top-0 z-20 flex max-w-[calc(100%-1rem)] -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full border border-primary/25 bg-surface-container-high/95 px-3 py-1.5 text-left shadow-floating backdrop-blur-sm transition-[border-color,transform] duration-150 hover:-translate-y-[55%] hover:border-primary/45"
+          onMouseDown={(event) => {
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onSelfLinkClick?.(primarySelfLink);
+          }}
+          aria-label={`View details for self link ${formatSelfLinkSummary(primarySelfLink)}`}
+        >
+          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
+            {formatSelfLinkLabel(primarySelfLink)}
+          </span>
+          <span className="min-w-0 truncate font-mono text-[10px] text-on-bg-secondary">
+            {formatSelfLinkSummary(primarySelfLink)}
+          </span>
+          {selfLinks.length > 1 ? (
+            <span className="shrink-0 rounded-full border border-outline px-1.5 py-0.5 text-[9px] font-semibold text-on-bg-secondary">
+              +{selfLinks.length - 1}
+            </span>
+          ) : null}
+        </button>
+      ) : null}
       <Handle
         id="top"
         type="source"
@@ -448,6 +504,7 @@ const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: Nod
     pd.isVirtual === nd.isVirtual &&
     pd.monitoringState === nd.monitoringState &&
     pd.subtype === nd.subtype &&
+    sameSelfLinks(pd.selfLinks, nd.selfLinks) &&
     pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
     pd.metrics?.mem_percent === nd.metrics?.mem_percent &&
     pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
