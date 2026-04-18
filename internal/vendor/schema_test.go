@@ -40,7 +40,8 @@ metrics:
     uptime: "mtxrHlUpTime{%label%} / 100"
 
 snmp:
-  static: {}
+  static:
+    software_version_oid: ".1.3.6.1.4.1.14988.1.1.4.4"
   operational: {}
   performance:
     temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
@@ -76,6 +77,9 @@ snmp:
 		t.Errorf("unexpected cpu query: %s", cfg.Metrics.Prometheus.CPU)
 	}
 	// New nested shape assertions (replaces the old flat field assertions)
+	if cfg.SNMP.Static.SoftwareVersionOID != ".1.3.6.1.4.1.14988.1.1.4.4" {
+		t.Errorf("expected software version OID, got %q", cfg.SNMP.Static.SoftwareVersionOID)
+	}
 	if cfg.SNMP.Performance.TemperatureOID != ".1.3.6.1.4.1.14988.1.1.3.10.0" {
 		t.Errorf("expected temp OID, got %q", cfg.SNMP.Performance.TemperatureOID)
 	}

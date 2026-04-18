@@ -590,26 +590,70 @@ func seedVendorConfigs(yamlRegistry *vendor.Registry, repo *sqlite.VendorConfigR
 			log.Printf("Warning: failed to check vendor %s in DB: %v", name, err)
 			continue
 		}
-		if existing != nil {
-			continue // already seeded
-		}
-
 		displayName := yamlRegistry.GetDisplayName(name)
 		if name == "default" {
 			displayName = "Generic / Default"
 		}
 
-		record := &domain.VendorConfigRecord{
-			Name:        name,
-			DisplayName: displayName,
-			ConfigJSON:  string(configJSON),
+		record := &domain.VendorConfigRecord{Name: name, DisplayName: displayName, ConfigJSON: string(configJSON)}
+		if existing != nil {
+			mergedJSON, changed, mergeErr := mergeVendorConfigDefaults([]byte(existing.ConfigJSON), configJSON)
+			if mergeErr != nil {
+				log.Printf("Warning: failed to merge vendor %s defaults from YAML: %v", name, mergeErr)
+				continue
+			}
+			if !changed {
+				continue
+			}
+			record.CreatedAt = existing.CreatedAt
+			record.ConfigJSON = string(mergedJSON)
 		}
+
 		if err := repo.Upsert(record); err != nil {
 			log.Printf("Warning: failed to seed vendor %s: %v", name, err)
+		} else if existing != nil {
+			log.Printf("Synced vendor config defaults: %s", name)
 		} else {
 			log.Printf("Seeded vendor config: %s", name)
 		}
 	}
+}
+
+func mergeVendorConfigDefaults(existingJSON, defaultsJSON []byte) ([]byte, bool, error) {
+	var existingCfg vendor.VendorConfig
+	if err := json.Unmarshal(existingJSON, &existingCfg); err != nil {
+		return nil, false, fmt.Errorf("unmarshal existing config: %w", err)
+	}
+
+	var defaultCfg vendor.VendorConfig
+	if err := json.Unmarshal(defaultsJSON, &defaultCfg); err != nil {
+		return nil, false, fmt.Errorf("unmarshal default config: %w", err)
+	}
+
+	changed := mergeMissingVendorConfigFields(&existingCfg, defaultCfg)
+	if !changed {
+		return existingJSON, false, nil
+	}
+
+	mergedJSON, err := json.Marshal(existingCfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal merged config: %w", err)
+	}
+	return mergedJSON, true, nil
+}
+
+func mergeMissingVendorConfigFields(dst *vendor.VendorConfig, defaults vendor.VendorConfig) bool {
+	if dst == nil {
+		return false
+	}
+
+	changed := false
+	if dst.SNMP.Static.SoftwareVersionOID == "" && defaults.SNMP.Static.SoftwareVersionOID != "" {
+		dst.SNMP.Static.SoftwareVersionOID = defaults.SNMP.Static.SoftwareVersionOID
+		changed = true
+	}
+
+	return changed
 }
 
 // loadRegistryFromDB builds a vendor registry from DB records.

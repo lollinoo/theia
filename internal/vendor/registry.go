@@ -292,17 +292,15 @@ func (r *Registry) ResolveSNMPConfig(vendorName string) SNMPConfig {
 
 // ResolveStaticOIDs returns merged StaticOIDs for a vendor.
 // Vendor-specific values override default tier-by-tier; missing values
-// fall back to default. Phase 39 leaves StaticOIDs as an empty
-// placeholder per D-12, so this method returns the zero struct unless
-// a future YAML populates fields.
+// fall back to default.
 func (r *Registry) ResolveStaticOIDs(vendorName string) StaticOIDs {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := r.fallback.SNMP.Static
-	// No fields defined on StaticOIDs in Phase 39; vendor overrides
-	// become a no-op until Phase 40 populates the struct.
 	if cfg := r.getByName(vendorName); cfg != nil {
-		_ = cfg // placeholder; future fields merge here
+		if cfg.SNMP.Static.SoftwareVersionOID != "" {
+			result.SoftwareVersionOID = cfg.SNMP.Static.SoftwareVersionOID
+		}
 	}
 	return result
 }

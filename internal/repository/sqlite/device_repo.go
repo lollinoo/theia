@@ -142,15 +142,15 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 
 	_, err = tx.Exec(
 		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status,
-			sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
+			sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 			poll_class, poll_interval_override, notes,
 			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		device.ID.String(), device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
 		device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
-		device.SysObjectID, device.HardwareModel,
+		device.SysObjectID, device.HardwareModel, device.OSVersion,
 		device.Vendor, managedValue, string(tagsJSON), device.CreatedAt, device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
 		string(pollClass), device.PollIntervalOverride, nullableStringValue(device.Notes),
@@ -212,7 +212,7 @@ func (r *DeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 	device, err := r.scanDevice(
 		r.db.QueryRow(
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
-				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
+				sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 				poll_class, poll_interval_override, notes,
 				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
@@ -246,7 +246,7 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 	device, err := r.scanDevice(
 		r.db.QueryRow(
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
-				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
+				sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 				poll_class, poll_interval_override, notes,
 				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
@@ -287,7 +287,7 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 	device, err := r.scanDevice(
 		r.db.QueryRow(
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
-				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
+				sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 				poll_class, poll_interval_override, notes,
 				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
@@ -334,7 +334,7 @@ func normalizeDeviceSysNameLookup(sysName string) string {
 func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 	rows, err := r.db.Query(
 		`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
-			sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
+			sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 			poll_class, poll_interval_override, notes,
 			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
@@ -438,7 +438,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 
 	result, err := tx.Exec(
 		`UPDATE devices SET hostname=?, ip=?, snmp_credentials_json=?, device_type=?,
-			status=?, sys_name=?, sys_name_lookup=?, sys_descr=?, sys_object_id=?, hardware_model=?,
+			status=?, sys_name=?, sys_name_lookup=?, sys_descr=?, sys_object_id=?, hardware_model=?, os_version=?,
 			vendor=?, managed=?, tags_json=?, updated_at=?,
 			metrics_source=?, prometheus_label_name=?, prometheus_label_value=?,
 			poll_class=?, poll_interval_override=?, notes=?,
@@ -447,7 +447,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
 		device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
-		device.SysObjectID, device.HardwareModel,
+		device.SysObjectID, device.HardwareModel, device.OSVersion,
 		device.Vendor, managedValue, string(tagsJSON), device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
 		string(pollClass), device.PollIntervalOverride, nullableStringValue(device.Notes),
@@ -575,7 +575,7 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 
 	err := row.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
-		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel,
+		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel, &d.OSVersion,
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
 		&pollClass, &pollIntervalOverride, &notes,
@@ -634,7 +634,7 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 
 	err := rows.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
-		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel,
+		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel, &d.OSVersion,
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
 		&pollClass, &pollIntervalOverride, &notes,

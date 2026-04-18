@@ -661,6 +661,7 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		SysDescr:      result.SysDescr,
 		SysObjectID:   result.SysObjectID,
 		HardwareModel: result.HardwareModel,
+		OSVersion:     result.OSVersion,
 		Vendor:        result.Vendor,
 		DeviceType:    result.DeviceType,
 		Interfaces:    result.Interfaces,

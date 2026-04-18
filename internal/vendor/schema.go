@@ -70,7 +70,9 @@ type SNMPConfig struct {
 // CDP walks remain in internal/snmp/discovery.go. Phase 40 may migrate
 // them here when wiring StaticCollector.
 type StaticOIDs struct {
-	// Reserved for future use. Intentionally empty in Phase 39.
+	// SoftwareVersionOID is an optional scalar OID for the device software /
+	// operating system version (for example MikroTik mtxrLicVersion).
+	SoftwareVersionOID string `yaml:"software_version_oid" json:"software_version_oid"`
 }
 
 // OperationalOIDs holds reachability and link-state OIDs polled on a

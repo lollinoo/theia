@@ -79,8 +79,11 @@ metrics:
     cpu: 'mtxrHlCpuLoad{%[1]s=~"%[2]s"}'
 
 snmp:
-  temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
-  temperature_scale: 0.1
+  static:
+    software_version_oid: ".1.3.6.1.4.1.14988.1.1.4.4.0"
+  performance:
+    temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
+    temperature_scale: 0.1
 `
 	ubiquitiYAML := `
 vendor:

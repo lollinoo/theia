@@ -230,6 +230,8 @@ func TestDiscoverDevice(t *testing.T) {
 					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS RB5009")})
 				case OidSysObjectID:
 					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				case ".1.3.6.1.4.1.14988.1.1.4.4.0":
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: ".1.3.6.1.4.1.14988.1.1.4.4.0", Type: gosnmp.OctetString, Value: []byte("7.22.1")})
 				}
 			}
 			return pdus, nil
@@ -282,6 +284,9 @@ func TestDiscoverDevice(t *testing.T) {
 	if res.HardwareModel != "RB5009" {
 		t.Errorf("expected model RB5009, got %s", res.HardwareModel)
 	}
+	if res.OSVersion != "7.22.1" {
+		t.Errorf("expected OSVersion 7.22.1, got %s", res.OSVersion)
+	}
 
 	// Interfaces check
 	if len(res.Interfaces) != 1 {
@@ -318,6 +323,36 @@ func TestDiscoverDevice(t *testing.T) {
 	}
 	if nbr.LocalIfName != "eth1" { // Mapping should work via interfaces check
 		t.Errorf("expected localIfName eth1, got %s", nbr.LocalIfName)
+	}
+}
+
+func TestDiscoverSoftwareVersion_AppendsScalarInstanceSuffix(t *testing.T) {
+	t.Parallel()
+
+	var getCalls []string
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			if len(oids) != 1 {
+				t.Fatalf("Get oids len = %d, want 1", len(oids))
+			}
+			getCalls = append(getCalls, oids[0])
+			if oids[0] == ".1.3.6.1.4.1.14988.1.1.4.4.0" {
+				return []gosnmp.SnmpPDU{
+					{Name: ".1.3.6.1.4.1.14988.1.1.4.4.0", Type: gosnmp.OctetString, Value: []byte("7.22.1")},
+				}, nil
+			}
+			return nil, assertiveError("no such object")
+		},
+	}
+
+	got := discoverSoftwareVersion(client, vendor.StaticOIDs{
+		SoftwareVersionOID: ".1.3.6.1.4.1.14988.1.1.4.4",
+	})
+	if got != "7.22.1" {
+		t.Fatalf("discoverSoftwareVersion() = %q, want %q", got, "7.22.1")
+	}
+	if len(getCalls) != 2 || getCalls[0] != ".1.3.6.1.4.1.14988.1.1.4.4" || getCalls[1] != ".1.3.6.1.4.1.14988.1.1.4.4.0" {
+		t.Fatalf("Get calls = %v, want fallback to scalar instance OID", getCalls)
 	}
 }
 

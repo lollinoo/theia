@@ -56,6 +56,7 @@ export interface Device {
   sys_name: string;
   sys_descr: string;
   hardware_model: string;
+  os_version?: string;
   vendor: string;
   managed: boolean;
   tags?: Record<string, string>;
@@ -259,6 +260,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       sys_name: readString(attributes, 'sys_name'),
       sys_descr: readString(attributes, 'sys_descr'),
       hardware_model: readString(attributes, 'hardware_model'),
+      os_version: readString(attributes, 'os_version'),
       vendor: readString(attributes, 'vendor', 'default'),
       managed: readBoolean(attributes, 'managed', true),
       tags,

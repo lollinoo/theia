@@ -4,7 +4,7 @@ import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import type { SnapshotPayload } from '../../types/metrics';
 import { DeviceRow } from './DeviceRow';
 import { resolveDeviceOperationalStatusState } from '../deviceVisualState';
-import { parseOsVersion } from './parseOsVersion';
+import { resolveOsVersion } from './parseOsVersion';
 
 type SortKey = 'hostname' | 'ip' | 'status' | 'area' | 'hardware_model' | 'vendor' | 'uptime' | 'os_version';
 type SortDir = 'asc' | 'desc';
@@ -58,8 +58,8 @@ export function DeviceTable({
       const cmp = (aVal as number) - (bVal as number);
       return sortDir === 'asc' ? cmp : -cmp;
     } else if (sortKey === 'os_version') {
-      aVal = parseOsVersion(a.sys_descr);
-      bVal = parseOsVersion(b.sys_descr);
+      aVal = resolveOsVersion(a.os_version, a.sys_descr);
+      bVal = resolveOsVersion(b.os_version, b.sys_descr);
     } else {
       aVal = (a[sortKey] ?? '').toString().toLowerCase();
       bVal = (b[sortKey] ?? '').toString().toLowerCase();

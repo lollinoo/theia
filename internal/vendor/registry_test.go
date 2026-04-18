@@ -65,7 +65,8 @@ metrics:
     cpu: "mtxrHlCpuLoad{%label%}"
 
 snmp:
-  static: {}
+  static:
+    software_version_oid: ".1.3.6.1.4.1.14988.1.1.4.4"
   operational: {}
   performance:
     temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
@@ -274,7 +275,8 @@ detection:
     - "1.3.6.1.4.1.14988"
 
 snmp:
-  static: {}
+  static:
+    software_version_oid: ".1.3.6.1.4.1.14988.1.1.4.4"
   operational: {}
   performance:
     temperature_oid: ".1.3.6.1.4.1.14988.1.1.3.10.0"
@@ -289,6 +291,9 @@ snmp:
 	}
 
 	s := reg.ResolveSNMPConfig("mikrotik")
+	if s.Static.SoftwareVersionOID != ".1.3.6.1.4.1.14988.1.1.4.4" {
+		t.Errorf("expected mikrotik software version OID, got %q", s.Static.SoftwareVersionOID)
+	}
 	if s.Performance.TemperatureOID != ".1.3.6.1.4.1.14988.1.1.3.10.0" {
 		t.Errorf("expected mikrotik temp OID, got %q", s.Performance.TemperatureOID)
 	}

@@ -186,6 +186,7 @@ type DiscoveryResult struct {
 	SysDescr      string
 	SysObjectID   string
 	HardwareModel string
+	OSVersion     string
 	Vendor        string
 	DeviceType    domain.DeviceType
 	Interfaces    []domain.Interface
@@ -260,6 +261,7 @@ func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry,
 
 	// Use vendor registry for detection
 	res.Vendor, res.DeviceType, res.HardwareModel = DetectVendor(registry, res.SysObjectID, res.SysDescr)
+	res.OSVersion = discoverSoftwareVersion(client, registry.ResolveStaticOIDs(res.Vendor))
 
 	// 2. Walk ifTable & ifXTable to populate Interfaces
 	res.Interfaces = discoverInterfaces(client)
@@ -274,6 +276,36 @@ func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry,
 	res.Neighbors = discoverNeighbors(client, ifIndexToName, policy)
 
 	return res, nil
+}
+
+func discoverSoftwareVersion(client ClientInterface, staticOIDs vendor.StaticOIDs) string {
+	oid := strings.TrimSpace(staticOIDs.SoftwareVersionOID)
+	if oid == "" {
+		return ""
+	}
+
+	candidates := []string{oid}
+	if !strings.HasSuffix(strings.TrimPrefix(oid, "."), ".0") {
+		candidates = append(candidates, oid+".0")
+	}
+
+	for _, candidate := range candidates {
+		pdus, err := client.Get([]string{candidate})
+		if err != nil {
+			continue
+		}
+		normalizedOID := strings.TrimPrefix(candidate, ".")
+		for _, pdu := range pdus {
+			if strings.TrimPrefix(pdu.Name, ".") == normalizedOID {
+				return strings.TrimSpace(stringFromPDU(pdu))
+			}
+		}
+		if len(pdus) == 1 {
+			return strings.TrimSpace(stringFromPDU(pdus[0]))
+		}
+	}
+
+	return ""
 }
 
 // discoverInterfaces fetches basic ifTable and ifXTable metrics and merges them.

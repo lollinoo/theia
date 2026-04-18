@@ -6,7 +6,7 @@ import { formatUptime } from '../../types/metrics';
 import { StatusDot } from '../StatusDot';
 import { MaterialIcon } from '../MaterialIcon';
 import { resolveDeviceOperationalStatusState } from '../deviceVisualState';
-import { parseOsVersion } from './parseOsVersion';
+import { resolveOsVersion } from './parseOsVersion';
 
 
 interface DeviceRowProps {
@@ -27,7 +27,7 @@ export function DeviceRow({
   const displayName = device.tags?.display_name || device.sys_name || device.hostname || device.ip;
   const deviceAreas = (device.area_ids ?? []).map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
   const uptimeSecs = deviceMetrics?.uptime_secs ?? null;
-  const osVersion = parseOsVersion(device.sys_descr);
+  const osVersion = resolveOsVersion(device.os_version, device.sys_descr);
   const statusState = resolveDeviceOperationalStatusState(device);
 
   return (

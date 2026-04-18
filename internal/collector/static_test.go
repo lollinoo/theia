@@ -59,6 +59,9 @@ func TestStaticCollectorPoll(t *testing.T) {
 						snmp.OidSysObjectID: {
 							{Name: snmp.OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"},
 						},
+						".1.3.6.1.4.1.14988.1.1.4.4.0": {
+							{Name: ".1.3.6.1.4.1.14988.1.1.4.4.0", Type: gosnmp.OctetString, Value: []byte("7.22.1")},
+						},
 					},
 					bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
 						snmp.OidIfTable: {
@@ -113,6 +116,9 @@ func TestStaticCollectorPoll(t *testing.T) {
 				}
 				if result.HardwareModel != "RB5009" {
 					t.Fatalf("HardwareModel = %q, want %q", result.HardwareModel, "RB5009")
+				}
+				if result.OSVersion != "7.22.1" {
+					t.Fatalf("OSVersion = %q, want %q", result.OSVersion, "7.22.1")
 				}
 				if result.Vendor != "mikrotik" {
 					t.Fatalf("Vendor = %q, want %q", result.Vendor, "mikrotik")

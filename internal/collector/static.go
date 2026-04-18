@@ -99,6 +99,7 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 	result.SysDescr = discovery.SysDescr
 	result.SysObjectID = discovery.SysObjectID
 	result.HardwareModel = discovery.HardwareModel
+	result.OSVersion = discovery.OSVersion
 	result.Vendor = discovery.Vendor
 	result.DeviceType = discovery.DeviceType
 	result.Interfaces = append([]domain.Interface(nil), discovery.Interfaces...)

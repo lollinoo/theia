@@ -68,6 +68,7 @@ func TestApplyStaticDiscoveryUpdatesPersistedDeviceMetadataAndInterfaces(t *test
 		SysDescr:      "MikroTik CRS",
 		SysObjectID:   ".1.3.6.1.4.1.14988.1",
 		HardwareModel: "CRS326-24G-2S+",
+		OSVersion:     "7.22.1",
 		Vendor:        "mikrotik",
 		DeviceType:    domain.DeviceTypeSwitch,
 		Interfaces: []domain.Interface{
@@ -104,6 +105,9 @@ func TestApplyStaticDiscoveryUpdatesPersistedDeviceMetadataAndInterfaces(t *test
 	}
 	if updated.HardwareModel != "CRS326-24G-2S+" {
 		t.Fatalf("expected HardwareModel updated, got %q", updated.HardwareModel)
+	}
+	if updated.OSVersion != "7.22.1" {
+		t.Fatalf("expected OSVersion updated, got %q", updated.OSVersion)
 	}
 	if updated.Vendor != "mikrotik" {
 		t.Fatalf("expected Vendor mikrotik, got %q", updated.Vendor)

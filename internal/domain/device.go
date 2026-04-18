@@ -171,6 +171,7 @@ type Device struct {
 	SysDescr                       string                 `json:"sys_descr"`
 	SysObjectID                    string                 `json:"sys_object_id"`
 	HardwareModel                  string                 `json:"hardware_model"`
+	OSVersion                      string                 `json:"os_version"`
 	Vendor                         string                 `json:"vendor"`  // vendor name from vendor registry (e.g. "mikrotik", "default")
 	Managed                        bool                   `json:"managed"` // true=user-added, false=discovered placeholder
 	Tags                           map[string]string      `json:"tags"`
