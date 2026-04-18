@@ -13,6 +13,7 @@ import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
+import type { CanvasMeasurementRecord } from './canvasInstrumentation';
 import { manualEdgeStorageKey, staleThresholdMs } from './canvasHelpers';
 import { useCanvasData } from './useCanvasData';
 
@@ -130,6 +131,10 @@ function renderUseCanvasData(snapshot: SnapshotPayload | null, prometheusStatus:
   };
 }
 
+function canvasMetrics(): CanvasMeasurementRecord[] {
+  return window.__THEIA_CANVAS_METRICS__ ?? [];
+}
+
 describe('useCanvasData', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -144,6 +149,7 @@ describe('useCanvasData', () => {
       return 1;
     });
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    window.__THEIA_CANVAS_METRICS__ = [];
     window.localStorage.clear();
   });
 
@@ -330,5 +336,49 @@ describe('useCanvasData', () => {
 
     expect(result.current.nodes).toHaveLength(1);
     expect(result.current.nodes[0].position).toEqual({ x: 400, y: 500 });
+  });
+
+  it('records stable topology, layout, and snapshot measurements for live refresh work', async () => {
+    const { rerender } = renderUseCanvasData(mockSnapshot());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(canvasMetrics()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'theia:canvas:topology-load', trigger: 'initial_load' }),
+      expect.objectContaining({ name: 'theia:canvas:layout', trigger: 'initial_load' }),
+      expect.objectContaining({ name: 'theia:canvas:snapshot-apply', trigger: 'snapshot' }),
+    ]));
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(canvasMetrics()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'theia:canvas:topology-load', trigger: 'backend_reconnected' }),
+      expect.objectContaining({ name: 'theia:canvas:layout', trigger: 'backend_reconnected' }),
+    ]));
+
+    rerender({
+      currentSnapshot: mockSnapshot({
+        device_statuses: {
+          'dev-1': 'down',
+        },
+      }),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(canvasMetrics()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'theia:canvas:snapshot-apply', trigger: 'snapshot' }),
+    ]));
+    expect(canvasMetrics().every((measurement) => typeof measurement.durationMs === 'number')).toBe(true);
   });
 });

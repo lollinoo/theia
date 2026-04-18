@@ -25,6 +25,7 @@ import {
   staleThresholdMs,
   viewportSize,
 } from './canvasHelpers';
+import { measureCanvasAsyncWork, measureCanvasWork, type CanvasMeasurementTrigger } from './canvasInstrumentation';
 import { alertStatusForLink, buildTopologyEdges } from './edgeBuilder';
 import { buildTopologyNodes } from './nodeBuilder';
 
@@ -50,7 +51,11 @@ interface UseCanvasDataReturn {
   topologyLinks: Link[];
   loading: boolean;
   error: string | null;
-  loadTopology: (isSilentRefresh?: boolean, defaultPosition?: { x: number; y: number }) => Promise<void>;
+  loadTopology: (
+    isSilentRefresh?: boolean,
+    defaultPosition?: { x: number; y: number },
+    trigger?: CanvasMeasurementTrigger,
+  ) => Promise<void>;
   grafanaUrlRef: React.MutableRefObject<string>;
   deviceGrafanaUrlsRef: React.MutableRefObject<Map<string, string>>;
   refreshSettings: () => void;
@@ -130,7 +135,11 @@ export function useCanvasData({
   devicesLengthRef.current = devices.length;
 
   const loadTopology = useCallback(
-    async (isSilentRefresh = false, defaultPosition?: { x: number; y: number }) => {
+    async (
+      isSilentRefresh = false,
+      defaultPosition?: { x: number; y: number },
+      trigger: CanvasMeasurementTrigger = 'manual_refresh',
+    ) => measureCanvasAsyncWork('theia:canvas:topology-load', trigger, async () => {
       if (!isSilentRefresh) {
         setLoading(true);
       }
@@ -153,22 +162,24 @@ export function useCanvasData({
 
         const { width, height } = viewportSize();
 
-        const computedPositions = computeForceLayout(
-          fetchedDevices.map((device) => {
-            const saved = effectivePositions.get(device.id);
-            return {
-              id: device.id,
-              x: saved?.x,
-              y: saved?.y,
-              pinned: saved?.pinned,
-            };
-          }),
-          fetchedLinks.map((link) => ({
-            source: link.source_device_id,
-            target: link.target_device_id,
-          })),
-          width,
-          height,
+        const computedPositions = measureCanvasWork('theia:canvas:layout', trigger, () =>
+          computeForceLayout(
+            fetchedDevices.map((device) => {
+              const saved = effectivePositions.get(device.id);
+              return {
+                id: device.id,
+                x: saved?.x,
+                y: saved?.y,
+                pinned: saved?.pinned,
+              };
+            }),
+            fetchedLinks.map((link) => ({
+              source: link.source_device_id,
+              target: link.target_device_id,
+            })),
+            width,
+            height,
+          ),
         );
 
         // Read any pending snapshot so first-load metrics are included in the
@@ -313,19 +324,19 @@ export function useCanvasData({
           setLoading(false);
         }
       }
-    },
+    }),
     [editMode, openDeviceMenu, openEdgeMenu, openSelfLinkDetails, reactFlow, setNodes, setEdges, fetchPositions, savePositions],
   );
 
   // Initial load
   useEffect(() => {
-    void loadTopology();
+    void loadTopology(false, undefined, 'initial_load');
   }, []);
 
   // Re-fetch topology when backend reconnects (e.g. after restore restart)
   useEffect(() => {
     const handleReconnect = () => {
-      void loadTopology(true);
+      void loadTopology(true, undefined, 'backend_reconnected');
     };
     window.addEventListener('backend-reconnected', handleReconnect);
     return () => window.removeEventListener('backend-reconnected', handleReconnect);
@@ -334,7 +345,7 @@ export function useCanvasData({
   // Re-fetch topology when backend signals new LLDP links were discovered (D-03)
   useEffect(() => {
     const handleTopologyChanged = () => {
-      void loadTopology(true);
+      void loadTopology(true, undefined, 'topology_changed');
     };
     window.addEventListener('topology-changed', handleTopologyChanged);
     return () => window.removeEventListener('topology-changed', handleTopologyChanged);
@@ -408,109 +419,111 @@ export function useCanvasData({
       return;
     }
 
-    lastSnapshotTimeRef.current = Date.now();
-    staleAppliedRef.current = false;
+    measureCanvasWork('theia:canvas:snapshot-apply', 'snapshot', () => {
+      lastSnapshotTimeRef.current = Date.now();
+      staleAppliedRef.current = false;
 
-    // Compute effective device statuses: override prometheus-only devices to 'down'
-    // when Prometheus is unreachable (no probe_success data available).
-    const promDown = isPrometheusUnavailable(prometheusStatus);
-    const effectiveStatuses = { ...snapshot.device_statuses };
+      // Compute effective device statuses: override prometheus-only devices to 'down'
+      // when Prometheus is unreachable (no probe_success data available).
+      const promDown = isPrometheusUnavailable(prometheusStatus);
+      const effectiveStatuses = { ...snapshot.device_statuses };
 
-    if (promDown) {
-      // Use ref to always read the latest devices without adding devices.length
-      // to the dependency array (which would cause redundant re-triggers after
-      // loadTopology).
-      for (const d of devicesRef.current) {
-        const src = d.metrics_source || 'prometheus';
-        if (src === 'prometheus' || src === 'prometheus_snmp_fallback') {
-          effectiveStatuses[d.id] = 'down';
+      if (promDown) {
+        // Use ref to always read the latest devices without adding devices.length
+        // to the dependency array (which would cause redundant re-triggers after
+        // loadTopology).
+        for (const d of devicesRef.current) {
+          const src = d.metrics_source || 'prometheus';
+          if (src === 'prometheus' || src === 'prometheus_snmp_fallback') {
+            effectiveStatuses[d.id] = 'down';
+          }
+          // 'none' and 'snmp' sources are unaffected by Prometheus availability
         }
-        // 'none' and 'snmp' sources are unaffected by Prometheus availability
       }
-    }
 
-    // Apply all snapshot data (status, hostname, alerts, metrics) in a single
-    // urgent update so the first snapshot on page load renders immediately
-    // instead of being split across an urgent + deferred transition pass.
-    setNodes((currentNodes) =>
-      currentNodes.map((node) => {
-        const newStatus = effectiveStatuses[node.id];
-        const newHostname = snapshot.device_hostnames[node.id];
-        const newModel = snapshot.device_models?.[node.id];
-        const updatedDevice = newStatus || newHostname || newModel
-          ? {
-              ...node.data.device,
-              ...(newStatus ? { status: newStatus as Device['status'] } : {}),
-              ...(newHostname ? { sys_name: newHostname } : {}),
-              ...(newModel ? { hardware_model: newModel } : {}),
-            }
-          : node.data.device;
+      // Apply all snapshot data (status, hostname, alerts, metrics) in a single
+      // urgent update so the first snapshot on page load renders immediately
+      // instead of being split across an urgent + deferred transition pass.
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          const newStatus = effectiveStatuses[node.id];
+          const newHostname = snapshot.device_hostnames[node.id];
+          const newModel = snapshot.device_models?.[node.id];
+          const updatedDevice = newStatus || newHostname || newModel
+            ? {
+                ...node.data.device,
+                ...(newStatus ? { status: newStatus as Device['status'] } : {}),
+                ...(newHostname ? { sys_name: newHostname } : {}),
+                ...(newModel ? { hardware_model: newModel } : {}),
+              }
+            : node.data.device;
 
-        // Preserve overview metadata like health, last_polled_at, and
-        // expected_poll_interval_seconds even when device status is down.
-        const nodeMetrics = sanitizeDeviceMetricsForDisplay(
-          updatedDevice,
-          snapshot.device_metrics[node.id] ?? null,
-        );
+          // Preserve overview metadata like health, last_polled_at, and
+          // expected_poll_interval_seconds even when device status is down.
+          const nodeMetrics = sanitizeDeviceMetricsForDisplay(
+            updatedDevice,
+            snapshot.device_metrics[node.id] ?? null,
+          );
 
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
-            device: updatedDevice,
-            monitoringState: resolveDeviceMonitoringState(updatedDevice),
-            metrics: nodeMetrics,
-          },
-        };
-      }),
-    );
-
-    // Sync devices state with hostnames/statuses/models so panels (e.g. LinkCreatePanel) see them
-    if (Object.keys(snapshot.device_hostnames).length > 0 || Object.keys(effectiveStatuses).length > 0 || Object.keys(snapshot.device_models ?? {}).length > 0) {
-      setDevices((prev) =>
-        prev.map((d) => {
-          const newHostname = snapshot.device_hostnames[d.id];
-          const newStatus = effectiveStatuses[d.id];
-          const newModel = snapshot.device_models?.[d.id];
-          if (!newHostname && !newStatus && !newModel) return d;
           return {
-            ...d,
-            ...(newHostname ? { sys_name: newHostname } : {}),
-            ...(newStatus ? { status: newStatus as Device['status'] } : {}),
-            ...(newModel ? { hardware_model: newModel } : {}),
+            ...node,
+            data: {
+              ...node.data,
+              alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
+              device: updatedDevice,
+              monitoringState: resolveDeviceMonitoringState(updatedDevice),
+              metrics: nodeMetrics,
+            },
           };
         }),
       );
-    }
 
-    setEdges((currentEdges) =>
-      currentEdges.map((edge) => {
-        const link = edge.data?.link;
-        if (!link) return edge;
-        const linkAlertStatus = alertStatusForLink(link, snapshot.alerts);
-        const srcStatus = effectiveStatuses[link.source_device_id];
-        const tgtStatus = effectiveStatuses[link.target_device_id];
+      // Sync devices state with hostnames/statuses/models so panels (e.g. LinkCreatePanel) see them
+      if (Object.keys(snapshot.device_hostnames).length > 0 || Object.keys(effectiveStatuses).length > 0 || Object.keys(snapshot.device_models ?? {}).length > 0) {
+        setDevices((prev) =>
+          prev.map((d) => {
+            const newHostname = snapshot.device_hostnames[d.id];
+            const newStatus = effectiveStatuses[d.id];
+            const newModel = snapshot.device_models?.[d.id];
+            if (!newHostname && !newStatus && !newModel) return d;
+            return {
+              ...d,
+              ...(newHostname ? { sys_name: newHostname } : {}),
+              ...(newStatus ? { status: newStatus as Device['status'] } : {}),
+              ...(newModel ? { hardware_model: newModel } : {}),
+            };
+          }),
+        );
+      }
 
-        // When both link endpoints are down, null out link metrics so throughput
-        // labels don't show stale last-known values.
-        const bothDown = srcStatus === 'down' && tgtStatus === 'down';
-        const metrics = bothDown ? null : findLinkMetrics(snapshot.link_metrics, link);
+      setEdges((currentEdges) =>
+        currentEdges.map((edge) => {
+          const link = edge.data?.link;
+          if (!link) return edge;
+          const linkAlertStatus = alertStatusForLink(link, snapshot.alerts);
+          const srcStatus = effectiveStatuses[link.source_device_id];
+          const tgtStatus = effectiveStatuses[link.target_device_id];
 
-        return {
-          ...edge,
-          data: {
-            ...edge.data,
-            alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
-            sourceDeviceStatus: srcStatus,
-            targetDeviceStatus: tgtStatus,
-            metrics: metrics,
-            throughputLabel: metrics ? buildThroughputLabel(metrics) : undefined,
-            utilization: metrics?.utilization ?? null,
-          },
-        };
-      }),
-    );
+          // When both link endpoints are down, null out link metrics so throughput
+          // labels don't show stale last-known values.
+          const bothDown = srcStatus === 'down' && tgtStatus === 'down';
+          const metrics = bothDown ? null : findLinkMetrics(snapshot.link_metrics, link);
+
+          return {
+            ...edge,
+            data: {
+              ...edge.data,
+              alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
+              sourceDeviceStatus: srcStatus,
+              targetDeviceStatus: tgtStatus,
+              metrics: metrics,
+              throughputLabel: metrics ? buildThroughputLabel(metrics) : undefined,
+              utilization: metrics?.utilization ?? null,
+            },
+          };
+        }),
+      );
+    });
   }, [snapshot, setNodes, prometheusStatus?.available]);
 
   // Stale data timer
