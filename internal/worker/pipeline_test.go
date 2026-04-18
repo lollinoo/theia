@@ -1424,6 +1424,42 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredT
 	}
 }
 
+func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreservesOrdering(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	pipeline.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	for i := 0; i < 40; i++ {
+		cpu := float64(90 + i)
+		at := time.Date(2026, 4, 18, 12, 10, i, 0, time.UTC)
+		store.Update(state.StateUpdate{
+			DeviceID:        deviceID,
+			VolatilityClass: domain.VolatilityClassPerformance,
+			Metrics: &domain.DeviceMetrics{
+				DeviceID:    deviceID,
+				CPUPercent:  &cpu,
+				CollectedAt: at,
+			},
+			PollSuccess:      true,
+			ExpectedInterval: 30 * time.Second,
+			Timestamp:        at,
+		})
+	}
+
+	if err := pipeline.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, true, false); err != nil {
+		t.Fatalf("broadcastDirty overflow + topology recovery: %v", err)
+	}
+
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) < 3 {
+		t.Fatalf("expected resync_required, snapshot, and topology_changed, got %v", types)
+	}
+	if types[0] != ws.MessageTypeResyncRequired || types[1] != ws.MessageTypeSnapshot || types[2] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected resync_required before snapshot before topology_changed, got %v", types)
+	}
+}
+
 func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 

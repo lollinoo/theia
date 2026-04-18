@@ -466,6 +466,8 @@ describe('useWebSocket', () => {
       });
     });
 
+    expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(50);
+
     act(() => {
       mockInstance.simulateMessage({
         type: 'snapshot',
