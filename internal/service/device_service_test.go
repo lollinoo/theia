@@ -289,7 +289,7 @@ func newTestService(snmpResult *snmp.DiscoveryResult, snmpErr error) (*DeviceSer
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		return snmpResult, snmpErr
 	}
 
@@ -360,7 +360,7 @@ func TestAddDevice_DerivesPollClassFromDeviceType(t *testing.T) {
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		snmpCalled = true
 		return nil, fmt.Errorf("should not be called")
 	}
@@ -404,7 +404,7 @@ func TestAddDevice_BootstrapOnceStartsPendingAndEffectiveModeFollowsDefault(t *t
 		t.Fatalf("Set setting failed: %v", err)
 	}
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		return nil, fmt.Errorf("should not be called")
 	}
 
@@ -428,6 +428,51 @@ func TestAddDevice_BootstrapOnceStartsPendingAndEffectiveModeFollowsDefault(t *t
 	}
 	if device.TopologyDiscoveryMode != domain.TopologyDiscoveryModeInherit {
 		t.Fatalf("expected persisted topology mode inherit, got %s", device.TopologyDiscoveryMode)
+	}
+}
+
+func TestProbeDevice_UsesResolvedTopologyDiscoveryMode(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeLLDP)); err != nil {
+		t.Fatalf("Set setting failed: %v", err)
+	}
+
+	var seenMode domain.TopologyDiscoveryMode
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		seenMode = mode
+		return &snmp.DiscoveryResult{SysName: "edge-sw-1"}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	device := &domain.Device{
+		ID:                    uuid.New(),
+		IP:                    "10.0.0.8",
+		Hostname:              "edge-sw-1",
+		Managed:               true,
+		Status:                domain.DeviceStatusProbing,
+		DeviceType:            domain.DeviceTypeSwitch,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeInherit,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	svc.probeWg.Add(1)
+	go func() {
+		defer svc.probeWg.Done()
+		svc.probeDevice(device)
+	}()
+	svc.WaitForProbes()
+
+	if seenMode != domain.TopologyDiscoveryModeLLDP {
+		t.Fatalf("expected resolved topology mode lldp, got %s", seenMode)
 	}
 }
 
@@ -531,7 +576,7 @@ func TestProbeDevice_SchedulesDelayedLLDPReprobeForIncompleteNewLinks(t *testing
 		t.Fatalf("Create probe target failed: %v", err)
 	}
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		return &snmp.DiscoveryResult{
 			SysName:       "edge-01",
 			SysDescr:      "RouterOS",
@@ -631,7 +676,7 @@ func TestProbeDevice_DoesNotScheduleDelayedLLDPReprobeForOlderDevices(t *testing
 		t.Fatalf("Update older probe target failed: %v", err)
 	}
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		return &snmp.DiscoveryResult{
 			SysName:       "edge-01",
 			SysDescr:      "RouterOS",
@@ -1591,7 +1636,7 @@ func TestPrometheusDevice_SkipsSNMPProbe(t *testing.T) {
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		snmpCalled = true
 		return nil, fmt.Errorf("should not be called")
 	}
@@ -1633,7 +1678,7 @@ func TestPrometheusDevice_SNMPv3WithPrivProtocol(t *testing.T) {
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		snmpCalled = true
 		return nil, fmt.Errorf("securityParameters.PrivacyPassphrase is required when a privacy protocol is specified")
 	}
@@ -1680,7 +1725,7 @@ func TestProbeDevice_PrometheusReclassifiesPollClassWithoutOverride(t *testing.T
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		snmpCalled = true
 		return nil, fmt.Errorf("should not be called")
 	}
@@ -1740,7 +1785,7 @@ func TestAddDevice_VirtualNoIP(t *testing.T) {
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		snmpCalled = true
 		return nil, fmt.Errorf("should not be called")
 	}
@@ -1779,7 +1824,7 @@ func TestAddDevice_VirtualWithIP(t *testing.T) {
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		snmpCalled = true
 		return nil, fmt.Errorf("should not be called")
 	}
@@ -1861,7 +1906,7 @@ func TestAddDevice_RegularStillRequiresProbe(t *testing.T) {
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		snmpCalled = true
 		return &snmp.DiscoveryResult{SysName: "test-router"}, nil
 	}

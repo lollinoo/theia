@@ -58,6 +58,60 @@ const (
 	TopologyBootstrapStateCompleted         TopologyBootstrapState = "completed"
 )
 
+func NormalizeTopologyDiscoveryMode(mode TopologyDiscoveryMode, fallback TopologyDiscoveryMode) TopologyDiscoveryMode {
+	switch mode {
+	case TopologyDiscoveryModeInherit,
+		TopologyDiscoveryModeOff,
+		TopologyDiscoveryModeLLDP,
+		TopologyDiscoveryModeLLDPCDP,
+		TopologyDiscoveryModeBootstrapOnce:
+		return mode
+	case "":
+		if fallback != "" {
+			return fallback
+		}
+		return TopologyDiscoveryModeInherit
+	default:
+		if fallback != "" {
+			return fallback
+		}
+		return TopologyDiscoveryModeInherit
+	}
+}
+
+func NormalizeTopologyBootstrapState(state TopologyBootstrapState) TopologyBootstrapState {
+	switch state {
+	case TopologyBootstrapStateIdle,
+		TopologyBootstrapStatePending,
+		TopologyBootstrapStateFollowupScheduled,
+		TopologyBootstrapStateCompleted:
+		return state
+	default:
+		return TopologyBootstrapStateIdle
+	}
+}
+
+func ResolveTopologyDiscoveryMode(device *Device, defaultMode TopologyDiscoveryMode) TopologyDiscoveryMode {
+	defaultMode = NormalizeTopologyDiscoveryMode(defaultMode, TopologyDiscoveryModeLLDPCDP)
+	if device == nil {
+		return defaultMode
+	}
+	switch NormalizeTopologyBootstrapState(device.TopologyBootstrapState) {
+	case TopologyBootstrapStatePending, TopologyBootstrapStateFollowupScheduled:
+		return TopologyDiscoveryModeBootstrapOnce
+	}
+
+	mode := NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, TopologyDiscoveryModeInherit)
+	if mode == TopologyDiscoveryModeInherit {
+		mode = defaultMode
+	}
+	if mode == TopologyDiscoveryModeBootstrapOnce &&
+		NormalizeTopologyBootstrapState(device.TopologyBootstrapState) == TopologyBootstrapStateCompleted {
+		return TopologyDiscoveryModeOff
+	}
+	return mode
+}
+
 // SNMPVersion indicates which SNMP version is configured.
 type SNMPVersion string
 

@@ -349,7 +349,7 @@ func newTestDeviceHandler(t *testing.T) (*DeviceHandler, *mockDeviceRepo, *mockL
 	settingsRepo := newMockSettingsRepo()
 	credentialProfileRepo := newMockCredentialProfileRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		return &snmp.DiscoveryResult{}, nil
 	}
 

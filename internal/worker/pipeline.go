@@ -303,7 +303,7 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 			return
 		}
 
-		result := p.staticCollector.Poll(ctx, task.Device, p.snmpTimeout(), p.snmpRetries())
+		result := p.staticCollector.Poll(ctx, task.Device, p.snmpTimeout(), p.snmpRetries(), p.topologyDiscoveryMode(task.Device))
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 		p.stateStore.Update(state.StateUpdate{
@@ -903,6 +903,16 @@ func (p *PipelineOrchestrator) snmpRetries() int {
 	}
 
 	return retries
+}
+
+func (p *PipelineOrchestrator) topologyDiscoveryMode(device domain.Device) domain.TopologyDiscoveryMode {
+	defaultMode := domain.TopologyDiscoveryModeLLDPCDP
+	if p.settingsRepo != nil {
+		if value, err := p.settingsRepo.Get(domain.SettingTopologyDiscoveryDefaultMode); err == nil {
+			defaultMode = domain.NormalizeTopologyDiscoveryMode(domain.TopologyDiscoveryMode(value), domain.TopologyDiscoveryModeLLDPCDP)
+		}
+	}
+	return domain.ResolveTopologyDiscoveryMode(&device, defaultMode)
 }
 
 func completionTime(collectedAt time.Time) time.Time {

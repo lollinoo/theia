@@ -193,7 +193,7 @@ func TestPollAllDevices_SkipsVirtualDevices(t *testing.T) {
 	settingsRepo := newMockWorkerSettingsRepo()
 
 	var discoverCalls int32
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		atomic.AddInt32(&discoverCalls, 1)
 		return &snmp.DiscoveryResult{}, nil
 	}

@@ -36,7 +36,7 @@ func newStaticPersistenceService(topologyNotify chan struct{}) (*DeviceService, 
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		return nil, nil
 	}
 
@@ -350,7 +350,7 @@ func TestProbeDeviceUsesApplyStaticDiscoveryAndSignalsTopologyNotify(t *testing.
 		},
 	}
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		return probeResult, nil
 	}
 
@@ -614,7 +614,9 @@ func TestApplyStaticDiscoveryWithObservationStore_PersistsObservationsAndUnresol
 		deviceRepo,
 		linkRepo,
 		settingsRepo,
-		func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) { return nil, nil },
+		func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+			return nil, nil
+		},
 		nil,
 		WithTopologyObservationStore(observationRepo),
 	)

@@ -19,7 +19,7 @@ import (
 // DiscoverFunc performs SNMP discovery on a target device and returns the result.
 // This abstraction allows injecting mocks for testing.
 // The vendor registry is used for device detection, model extraction, and vendor identification.
-type DiscoverFunc func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error)
+type DiscoverFunc func(target string, creds domain.SNMPCredentials, topologyMode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error)
 
 // SNMPPollFunc polls a single device via SNMP for live metrics.
 // vendorName is used to resolve vendor-specific SNMP OIDs.
@@ -123,47 +123,16 @@ func (s *DeviceService) defaultTopologyDiscoveryMode() domain.TopologyDiscoveryM
 	if err != nil {
 		return domain.TopologyDiscoveryModeLLDPCDP
 	}
-	switch mode := domain.TopologyDiscoveryMode(value); mode {
-	case domain.TopologyDiscoveryModeOff,
-		domain.TopologyDiscoveryModeLLDP,
-		domain.TopologyDiscoveryModeLLDPCDP,
-		domain.TopologyDiscoveryModeBootstrapOnce:
-		return mode
-	default:
-		return domain.TopologyDiscoveryModeLLDPCDP
-	}
-}
-
-func (s *DeviceService) effectiveTopologyDiscoveryMode(device *domain.Device) domain.TopologyDiscoveryMode {
-	if device == nil {
-		return s.defaultTopologyDiscoveryMode()
-	}
-	switch device.TopologyBootstrapState {
-	case domain.TopologyBootstrapStatePending, domain.TopologyBootstrapStateFollowupScheduled:
-		return domain.TopologyDiscoveryModeBootstrapOnce
-	}
-
-	mode := device.TopologyDiscoveryMode
-	if mode == "" || mode == domain.TopologyDiscoveryModeInherit {
-		mode = s.defaultTopologyDiscoveryMode()
-	}
-	if mode == domain.TopologyDiscoveryModeBootstrapOnce && device.TopologyBootstrapState == domain.TopologyBootstrapStateCompleted {
-		return domain.TopologyDiscoveryModeOff
-	}
-	return mode
+	return domain.NormalizeTopologyDiscoveryMode(domain.TopologyDiscoveryMode(value), domain.TopologyDiscoveryModeLLDPCDP)
 }
 
 func (s *DeviceService) populateEffectiveTopologyDiscoveryMode(device *domain.Device) {
 	if device == nil {
 		return
 	}
-	if device.TopologyDiscoveryMode == "" {
-		device.TopologyDiscoveryMode = domain.TopologyDiscoveryModeInherit
-	}
-	if device.TopologyBootstrapState == "" {
-		device.TopologyBootstrapState = domain.TopologyBootstrapStateIdle
-	}
-	device.EffectiveTopologyDiscoveryMode = s.effectiveTopologyDiscoveryMode(device)
+	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+	device.TopologyBootstrapState = domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState)
+	device.EffectiveTopologyDiscoveryMode = domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
 }
 
 func (s *DeviceService) SetPollRescheduler(rescheduler pollRescheduler) {
@@ -239,10 +208,8 @@ func (s *DeviceService) AddDevice(
 		TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
 		AreaIDs:                areaIDs,
 	}
-	if device.TopologyDiscoveryMode == "" {
-		device.TopologyDiscoveryMode = domain.TopologyDiscoveryModeInherit
-	}
-	if s.effectiveTopologyDiscoveryMode(device) == domain.TopologyDiscoveryModeBootstrapOnce {
+	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+	if domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode()) == domain.TopologyDiscoveryModeBootstrapOnce {
 		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
 	}
 	domain.NormalizeVirtualNoIPDevice(device)
@@ -469,7 +436,9 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		return
 	}
 
-	result, err := s.discoverFunc(deviceIP, device.SNMPCredentials)
+	topologyMode := domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
+
+	result, err := s.discoverFunc(deviceIP, device.SNMPCredentials, topologyMode)
 	if err != nil {
 		log.Printf("SNMP discovery failed for %s: %v", deviceIP, err)
 		s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusDown)
@@ -724,7 +693,7 @@ func (s *DeviceService) TestSNMP(ctx context.Context, id uuid.UUID) (*SNMPTestRe
 		SNMPVersion: string(device.SNMPCredentials.Version),
 	}
 
-	discoveryResult, err := s.discoverFunc(device.IP, device.SNMPCredentials)
+	discoveryResult, err := s.discoverFunc(device.IP, device.SNMPCredentials, domain.TopologyDiscoveryModeOff)
 	if err != nil {
 		result.Error = err.Error()
 		return result, nil
