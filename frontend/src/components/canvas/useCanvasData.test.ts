@@ -37,6 +37,7 @@ vi.mock('../../hooks/useAutoLayout', () => ({
 vi.mock('./edgeBuilder', () => ({
   alertStatusForLink: vi.fn(() => 'normal'),
   buildTopologyEdges: vi.fn(() => []),
+  preferVisibleLinks: vi.fn((links) => links),
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
