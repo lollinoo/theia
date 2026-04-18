@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ func TestStaticCollectorPoll(t *testing.T) {
 	tests := []struct {
 		name      string
 		device    domain.Device
+		mode      domain.TopologyDiscoveryMode
 		newClient func() *scriptedCollectorClient
 		assert    func(t *testing.T, result StaticResult, client *scriptedCollectorClient, calls []collectorCtorCall)
 	}{
@@ -44,6 +46,7 @@ func TestStaticCollectorPoll(t *testing.T) {
 					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 				},
 			},
+			mode: domain.TopologyDiscoveryModeLLDPCDP,
 			newClient: func() *scriptedCollectorClient {
 				return &scriptedCollectorClient{
 					getResponses: map[string][]gosnmp.SnmpPDU{
@@ -129,6 +132,63 @@ func TestStaticCollectorPoll(t *testing.T) {
 				if result.Neighbors[0].RemoteSysName != "switch1" {
 					t.Fatalf("Neighbors[0].RemoteSysName = %q, want %q", result.Neighbors[0].RemoteSysName, "switch1")
 				}
+				if !slices.Contains(client.bulkWalkCalls, snmp.OidLLDPRemChassisId) {
+					t.Fatalf("expected LLDP walks when topology mode is enabled, got %v", client.bulkWalkCalls)
+				}
+				if !slices.Contains(client.bulkWalkCalls, snmp.OidCDPDeviceID) {
+					t.Fatalf("expected CDP walks when topology mode is lldp_cdp, got %v", client.bulkWalkCalls)
+				}
+			},
+		},
+		{
+			name: "off mode skips topology walks but still returns inventory",
+			device: domain.Device{
+				ID: uuid.New(),
+				IP: "192.0.2.33",
+				SNMPCredentials: domain.SNMPCredentials{
+					Version: domain.SNMPVersionV2c,
+					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+				},
+			},
+			mode: domain.TopologyDiscoveryModeOff,
+			newClient: func() *scriptedCollectorClient {
+				return &scriptedCollectorClient{
+					getResponses: map[string][]gosnmp.SnmpPDU{
+						snmp.OidSysName: {
+							{Name: snmp.OidSysName, Type: gosnmp.OctetString, Value: []byte("router-off")},
+						},
+						snmp.OidSysDescr: {
+							{Name: snmp.OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS")},
+						},
+						snmp.OidSysObjectID: {
+							{Name: snmp.OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"},
+						},
+					},
+					bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+						snmp.OidIfTable: {
+							{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+						},
+						snmp.OidIfXTable: {
+							{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+						},
+					},
+				}
+			},
+			assert: func(t *testing.T, result StaticResult, client *scriptedCollectorClient, _ []collectorCtorCall) {
+				t.Helper()
+
+				if result.Err != nil {
+					t.Fatalf("Err = %v, want nil", result.Err)
+				}
+				if result.SysName != "router-off" {
+					t.Fatalf("SysName = %q, want %q", result.SysName, "router-off")
+				}
+				if len(result.Neighbors) != 0 {
+					t.Fatalf("neighbor count = %d, want 0", len(result.Neighbors))
+				}
+				if slices.Contains(client.bulkWalkCalls, snmp.OidLLDPRemChassisId) || slices.Contains(client.bulkWalkCalls, snmp.OidCDPDeviceID) {
+					t.Fatalf("expected no LLDP/CDP walks when topology mode is off, got %v", client.bulkWalkCalls)
+				}
 			},
 		},
 		{
@@ -141,6 +201,7 @@ func TestStaticCollectorPoll(t *testing.T) {
 					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 				},
 			},
+			mode: domain.TopologyDiscoveryModeOff,
 			newClient: func() *scriptedCollectorClient {
 				return &scriptedCollectorClient{
 					getErrs: map[string]error{
@@ -189,7 +250,7 @@ func TestStaticCollectorPoll(t *testing.T) {
 			})
 			collector.now = func() time.Time { return collectedAt }
 
-			result := collector.Poll(context.Background(), tt.device, timeout, retries)
+			result := collector.Poll(context.Background(), tt.device, timeout, retries, tt.mode)
 
 			if result.DeviceID != tt.device.ID {
 				t.Fatalf("DeviceID = %s, want %s", result.DeviceID, tt.device.ID)

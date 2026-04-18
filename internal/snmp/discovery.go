@@ -202,6 +202,28 @@ type NeighborInfo struct {
 	Protocol        domain.DiscoveryProtocol
 }
 
+// NeighborDiscoveryPolicy controls whether LLDP/CDP walks are executed.
+type NeighborDiscoveryPolicy struct {
+	LLDP bool
+	CDP  bool
+}
+
+func NeighborDiscoveryPolicyFromMode(mode domain.TopologyDiscoveryMode) NeighborDiscoveryPolicy {
+	switch mode {
+	case domain.TopologyDiscoveryModeOff:
+		return NeighborDiscoveryPolicy{}
+	case domain.TopologyDiscoveryModeLLDP:
+		return NeighborDiscoveryPolicy{LLDP: true}
+	case domain.TopologyDiscoveryModeLLDPCDP,
+		domain.TopologyDiscoveryModeBootstrapOnce,
+		domain.TopologyDiscoveryModeInherit,
+		"":
+		return NeighborDiscoveryPolicy{LLDP: true, CDP: true}
+	default:
+		return NeighborDiscoveryPolicy{LLDP: true, CDP: true}
+	}
+}
+
 // ClientInterface masks the underlying Client for easier mocking in tests.
 type ClientInterface interface {
 	Get(oids []string) ([]gosnmp.SnmpPDU, error)
@@ -211,6 +233,12 @@ type ClientInterface interface {
 // DiscoverDevice gathers all required details from a network device via SNMP.
 // The vendor registry is used for device type detection, model extraction, and vendor identification.
 func DiscoverDevice(client ClientInterface, registry *vendor.Registry) (*DiscoveryResult, error) {
+	return DiscoverDeviceWithPolicy(client, registry, NeighborDiscoveryPolicy{LLDP: true, CDP: true})
+}
+
+// DiscoverDeviceWithPolicy gathers device details while allowing neighbor walks
+// to be disabled or protocol-limited.
+func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry, policy NeighborDiscoveryPolicy) (*DiscoveryResult, error) {
 	res := &DiscoveryResult{}
 
 	// 1. Get System Info
@@ -243,7 +271,7 @@ func DiscoverDevice(client ClientInterface, registry *vendor.Registry) (*Discove
 	}
 
 	// 3. Walk LLDP & CDP to discover neighbors
-	res.Neighbors = discoverNeighbors(client, ifIndexToName)
+	res.Neighbors = discoverNeighbors(client, ifIndexToName, policy)
 
 	return res, nil
 }
@@ -330,142 +358,128 @@ func discoverInterfaces(client ClientInterface) []domain.Interface {
 // LLDP is treated as canonical when both protocols describe the same physical
 // connection. CDP is only used to fill gaps when LLDP data is absent or
 // incomplete for a given local/remote interface pair.
-func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string) []NeighborInfo {
+func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, policy NeighborDiscoveryPolicy) []NeighborInfo {
 	var neighbors []NeighborInfo
 	lldpMap := make(map[string]*NeighborInfo)
 
-	// Build lldpPortNum -> IF-MIB ifIndex mapping from lldpLocPortIfIndex.
-	// On MikroTik (and most vendors), LLDP local port numbers differ from
-	// IF-MIB ifIndex values. This map bridges the two numbering schemes.
-	lldpPortNumToIfIndex := make(map[int]int)
-	lldpLocPortIfIndexPDUs, _ := client.BulkWalk(OidLLDPLocPortIfIndex)
-	for _, pdu := range lldpLocPortIfIndexPDUs {
-		// OID format: .1.0.8802.1.1.2.1.3.7.1.3.<lldpLocPortNum>
-		suffix := strings.TrimPrefix(pdu.Name, OidLLDPLocPortIfIndex+".")
-		if suffix == pdu.Name {
-			continue
+	if policy.LLDP {
+		// Build lldpPortNum -> IF-MIB ifIndex mapping from lldpLocPortIfIndex.
+		// On MikroTik (and most vendors), LLDP local port numbers differ from
+		// IF-MIB ifIndex values. This map bridges the two numbering schemes.
+		lldpPortNumToIfIndex := make(map[int]int)
+		lldpLocPortIfIndexPDUs, _ := client.BulkWalk(OidLLDPLocPortIfIndex)
+		for _, pdu := range lldpLocPortIfIndexPDUs {
+			suffix := strings.TrimPrefix(pdu.Name, OidLLDPLocPortIfIndex+".")
+			if suffix == pdu.Name {
+				continue
+			}
+			portNum, err := strconv.Atoi(suffix)
+			if err != nil {
+				continue
+			}
+			ifIndex := int(int64FromPDU(pdu))
+			if ifIndex > 0 {
+				lldpPortNumToIfIndex[portNum] = ifIndex
+			}
 		}
-		portNum, err := strconv.Atoi(suffix)
-		if err != nil {
-			continue
-		}
-		ifIndex := int(int64FromPDU(pdu))
-		if ifIndex > 0 {
-			lldpPortNumToIfIndex[portNum] = ifIndex
-		}
-	}
 
-	// Build lldpPortNum -> port ID string from lldpLocPortId.
-	// When lldpLocPortIdSubtype is interfaceName (7) or interfaceAlias (5),
-	// this directly contains the interface name — used as a last-resort fallback
-	// when the two-step ifIndex lookup above yields an empty result.
-	lldpPortNumToPortId := make(map[int]string)
-	lldpLocPortIdPDUs, _ := client.BulkWalk(OidLLDPLocPortId)
-	for _, pdu := range lldpLocPortIdPDUs {
-		// OID format: .1.0.8802.1.1.2.1.3.7.1.4.<lldpLocPortNum>
-		suffix := strings.TrimPrefix(pdu.Name, OidLLDPLocPortId+".")
-		if suffix == pdu.Name {
-			continue
+		lldpPortNumToPortId := make(map[int]string)
+		lldpLocPortIdPDUs, _ := client.BulkWalk(OidLLDPLocPortId)
+		for _, pdu := range lldpLocPortIdPDUs {
+			suffix := strings.TrimPrefix(pdu.Name, OidLLDPLocPortId+".")
+			if suffix == pdu.Name {
+				continue
+			}
+			portNum, err := strconv.Atoi(suffix)
+			if err != nil {
+				continue
+			}
+			if s := stringFromPDU(pdu); s != "" {
+				lldpPortNumToPortId[portNum] = s
+			}
 		}
-		portNum, err := strconv.Atoi(suffix)
-		if err != nil {
-			continue
-		}
-		if s := stringFromPDU(pdu); s != "" {
-			lldpPortNumToPortId[portNum] = s
-		}
-	}
 
-	// Fetch LLDP Neighbors
-	lldpRemChassisIdPDUs, _ := client.BulkWalk(OidLLDPRemChassisId)
-	for _, pdu := range lldpRemChassisIdPDUs {
-		indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemChassisId)
-		if indexStr == pdu.Name {
-			continue
-		}
-		if _, ok := lldpMap[indexStr]; !ok {
-			lldpMap[indexStr] = &NeighborInfo{Protocol: domain.DiscoveryProtocolLLDP}
-		}
-		lldpMap[indexStr].RemoteChassisID = stringFromPDU(pdu)
-		// Extract localPortNum from the LLDP index (format: timeMark.localPortNum.remIndex)
-		// then do a two-step resolution: lldpPortNum -> ifIndex -> ifName.
-		parts := strings.Split(indexStr, ".")
-		if len(parts) >= 2 {
-			if localPortNum, err := strconv.Atoi(parts[1]); err == nil {
-				lldpMap[indexStr].LocalIfIndex = localPortNum
-				// Two-step resolution: lldpPortNum -> ifIndex -> ifName
-				if ifIdx, ok := lldpPortNumToIfIndex[localPortNum]; ok {
-					lldpMap[indexStr].LocalIfIndex = ifIdx
-					lldpMap[indexStr].LocalIfName = ifIndexToName[ifIdx]
-				} else {
-					// Fallback: treat lldpPortNum as ifIndex directly
-					// (works on devices where the numbering happens to match)
-					lldpMap[indexStr].LocalIfName = ifIndexToName[localPortNum]
-				}
-				// Last-resort fallback: use lldpLocPortId string directly.
-				// On devices where lldpLocPortIdSubtype is interfaceName (7) or
-				// interfaceAlias (5), this OID holds the interface name verbatim
-				// and is mandatory per the LLDP MIB — so it is always present.
-				if lldpMap[indexStr].LocalIfName == "" {
-					if portIdStr, ok := lldpPortNumToPortId[localPortNum]; ok {
-						lldpMap[indexStr].LocalIfName = portIdStr
+		lldpRemChassisIdPDUs, _ := client.BulkWalk(OidLLDPRemChassisId)
+		for _, pdu := range lldpRemChassisIdPDUs {
+			indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemChassisId)
+			if indexStr == pdu.Name {
+				continue
+			}
+			if _, ok := lldpMap[indexStr]; !ok {
+				lldpMap[indexStr] = &NeighborInfo{Protocol: domain.DiscoveryProtocolLLDP}
+			}
+			lldpMap[indexStr].RemoteChassisID = stringFromPDU(pdu)
+			parts := strings.Split(indexStr, ".")
+			if len(parts) >= 2 {
+				if localPortNum, err := strconv.Atoi(parts[1]); err == nil {
+					lldpMap[indexStr].LocalIfIndex = localPortNum
+					if ifIdx, ok := lldpPortNumToIfIndex[localPortNum]; ok {
+						lldpMap[indexStr].LocalIfIndex = ifIdx
+						lldpMap[indexStr].LocalIfName = ifIndexToName[ifIdx]
+					} else {
+						lldpMap[indexStr].LocalIfName = ifIndexToName[localPortNum]
+					}
+					if lldpMap[indexStr].LocalIfName == "" {
+						if portIdStr, ok := lldpPortNumToPortId[localPortNum]; ok {
+							lldpMap[indexStr].LocalIfName = portIdStr
+						}
 					}
 				}
 			}
 		}
-	}
 
-	lldpRemPortIdPDUs, _ := client.BulkWalk(OidLLDPRemPortId)
-	for _, pdu := range lldpRemPortIdPDUs {
-		indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemPortId)
-		if indexStr == pdu.Name {
-			continue
+		lldpRemPortIdPDUs, _ := client.BulkWalk(OidLLDPRemPortId)
+		for _, pdu := range lldpRemPortIdPDUs {
+			indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemPortId)
+			if indexStr == pdu.Name {
+				continue
+			}
+			if n, ok := lldpMap[indexStr]; ok {
+				n.RemotePortID = stringFromPDU(pdu)
+			}
 		}
-		if n, ok := lldpMap[indexStr]; ok {
-			n.RemotePortID = stringFromPDU(pdu)
-		}
-	}
 
-	lldpRemSysNamePDUs, _ := client.BulkWalk(OidLLDPRemSysName)
-	for _, pdu := range lldpRemSysNamePDUs {
-		indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemSysName)
-		if indexStr == pdu.Name {
-			continue
-		}
-		if n, ok := lldpMap[indexStr]; ok {
-			n.RemoteSysName = stringFromPDU(pdu)
+		lldpRemSysNamePDUs, _ := client.BulkWalk(OidLLDPRemSysName)
+		for _, pdu := range lldpRemSysNamePDUs {
+			indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemSysName)
+			if indexStr == pdu.Name {
+				continue
+			}
+			if n, ok := lldpMap[indexStr]; ok {
+				n.RemoteSysName = stringFromPDU(pdu)
+			}
 		}
 	}
 
 	// CDP discovery could go here analogously, utilizing OidCDPDeviceID and OidCDPPortID
 	// Simplified CDP tracking:
 	cdpMap := make(map[string]*NeighborInfo)
-	cdpDeviceIDPDUs, _ := client.BulkWalk(OidCDPDeviceID)
-	for _, pdu := range cdpDeviceIDPDUs {
-		indexStr := extractCDPIndex(pdu.Name, OidCDPDeviceID)
-		if indexStr == pdu.Name {
-			continue
-		}
-		if _, ok := cdpMap[indexStr]; !ok {
-			cdpMap[indexStr] = &NeighborInfo{Protocol: domain.DiscoveryProtocolCDP}
-		}
-		cdpMap[indexStr].RemoteSysName = stringFromPDU(pdu)
-
-		// CDP index typically looks like localIfIndex.cdpCacheDeviceIndex
-		parts := strings.Split(indexStr, ".")
-		if len(parts) >= 1 {
-			if localIfIndex, err := strconv.Atoi(parts[0]); err == nil {
-				cdpMap[indexStr].LocalIfIndex = localIfIndex
-				cdpMap[indexStr].LocalIfName = ifIndexToName[localIfIndex]
+	if policy.CDP {
+		cdpDeviceIDPDUs, _ := client.BulkWalk(OidCDPDeviceID)
+		for _, pdu := range cdpDeviceIDPDUs {
+			indexStr := extractCDPIndex(pdu.Name, OidCDPDeviceID)
+			if indexStr == pdu.Name {
+				continue
+			}
+			if _, ok := cdpMap[indexStr]; !ok {
+				cdpMap[indexStr] = &NeighborInfo{Protocol: domain.DiscoveryProtocolCDP}
+			}
+			cdpMap[indexStr].RemoteSysName = stringFromPDU(pdu)
+			parts := strings.Split(indexStr, ".")
+			if len(parts) >= 1 {
+				if localIfIndex, err := strconv.Atoi(parts[0]); err == nil {
+					cdpMap[indexStr].LocalIfIndex = localIfIndex
+					cdpMap[indexStr].LocalIfName = ifIndexToName[localIfIndex]
+				}
 			}
 		}
-	}
 
-	cdpPortIDPDUs, _ := client.BulkWalk(OidCDPPortID)
-	for _, pdu := range cdpPortIDPDUs {
-		indexStr := extractCDPIndex(pdu.Name, OidCDPPortID)
-		if n, ok := cdpMap[indexStr]; ok {
-			n.RemotePortID = stringFromPDU(pdu)
+		cdpPortIDPDUs, _ := client.BulkWalk(OidCDPPortID)
+		for _, pdu := range cdpPortIDPDUs {
+			indexStr := extractCDPIndex(pdu.Name, OidCDPPortID)
+			if n, ok := cdpMap[indexStr]; ok {
+				n.RemotePortID = stringFromPDU(pdu)
+			}
 		}
 	}
 

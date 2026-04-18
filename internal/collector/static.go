@@ -31,7 +31,7 @@ func NewStaticCollector(registry *vendor.Registry, newClient NewSNMPClientFunc) 
 
 // Poll discovers static inventory and topology data using a single SNMP client
 // for the whole poll cycle.
-func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeout time.Duration, retries int) StaticResult {
+func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeout time.Duration, retries int, topologyMode domain.TopologyDiscoveryMode) StaticResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -85,7 +85,7 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 		return result
 	}
 
-	discovery, err := snmp.DiscoverDevice(client, c.registry)
+	discovery, err := snmp.DiscoverDeviceWithPolicy(client, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
 	if err != nil {
 		result.Err = fmt.Errorf("discover device: %w", err)
 		return result

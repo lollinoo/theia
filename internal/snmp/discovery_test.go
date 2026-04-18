@@ -511,7 +511,7 @@ func TestDiscoverNeighbors_PrefersLLDPOverCDPForSameConnection(t *testing.T) {
 				return nil, nil
 			}
 		},
-	}, map[int]string{1: "ether1"})
+	}, map[int]string{1: "ether1"}, NeighborDiscoveryPolicy{LLDP: true, CDP: true})
 
 	if len(neighbors) != 1 {
 		t.Fatalf("expected 1 merged neighbor, got %d", len(neighbors))
@@ -549,7 +549,7 @@ func TestDiscoverNeighbors_UsesCDPToFillMissingLLDPFields(t *testing.T) {
 				return nil, nil
 			}
 		},
-	}, map[int]string{1: "ether1"})
+	}, map[int]string{1: "ether1"}, NeighborDiscoveryPolicy{LLDP: true, CDP: true})
 
 	if len(neighbors) != 1 {
 		t.Fatalf("expected 1 merged neighbor, got %d", len(neighbors))

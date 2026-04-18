@@ -741,7 +741,7 @@ func newSNMPLinkPollFunc(settingsRepo domain.SettingsRepository) worker.SNMPLink
 // newSNMPDiscoverFunc creates a DiscoverFunc that uses real gosnmp clients.
 // It reads SNMP timeout and retries from the settings repository.
 func newSNMPDiscoverFunc(settingsRepo domain.SettingsRepository, vendorRegistry *vendor.Registry) service.DiscoverFunc {
-	return func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	return func(target string, creds domain.SNMPCredentials, topologyMode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		// Read timeout and retries from settings
 		timeout := 5 * time.Second
 		retries := 2
@@ -767,6 +767,6 @@ func newSNMPDiscoverFunc(settingsRepo domain.SettingsRepository, vendorRegistry 
 		}
 		defer client.Close()
 
-		return snmp.DiscoverDevice(client, vendorRegistry)
+		return snmp.DiscoverDeviceWithPolicy(client, vendorRegistry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
 	}
 }

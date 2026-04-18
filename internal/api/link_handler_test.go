@@ -21,7 +21,7 @@ func newTestLinkHandler(t *testing.T) (*LinkHandler, *mockLinkRepo, *mockDeviceR
 	linkRepo := newMockLinkRepo()
 	settingsRepo := newMockSettingsRepo()
 
-	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		return &snmp.DiscoveryResult{}, nil
 	}
 	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
