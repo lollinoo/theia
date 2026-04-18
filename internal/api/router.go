@@ -91,6 +91,11 @@ func NewRouter(
 			return
 		}
 
+		if strings.HasSuffix(r.URL.Path, "/topology-discovery") && r.Method == http.MethodPost {
+			deviceHandler.HandleRunTopologyDiscovery(w, r)
+			return
+		}
+
 		// SSH test route (resolves credentials via profile)
 		if strings.HasSuffix(r.URL.Path, "/ssh-credentials/test") && r.Method == http.MethodPost {
 			backupHandler.HandleTestSSH(w, r)

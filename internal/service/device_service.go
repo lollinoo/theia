@@ -256,6 +256,33 @@ func (s *DeviceService) markDeviceStatus(deviceID uuid.UUID, deviceIP string, st
 	}
 }
 
+func (s *DeviceService) updateTopologyDiscoveryState(deviceID uuid.UUID, mutate func(*domain.Device)) {
+	device, err := s.deviceRepo.GetByID(deviceID)
+	if err != nil {
+		log.Printf("Failed to load device %s for topology discovery state update: %v", deviceID, err)
+		return
+	}
+	if mutate != nil {
+		mutate(device)
+	}
+	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+	device.TopologyBootstrapState = domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState)
+	if err := s.deviceRepo.Update(device); err != nil {
+		log.Printf("Failed to update topology discovery state for %s: %v", deviceID, err)
+	}
+}
+
+func topologyDiscoveryResultLabel(neighborCount int, followupScheduled bool) string {
+	switch {
+	case followupScheduled:
+		return "ports_pending"
+	case neighborCount > 0:
+		return "neighbors_found"
+	default:
+		return "no_neighbors"
+	}
+}
+
 func (s *DeviceService) hasIncompleteLLDPLinks(deviceID uuid.UUID) bool {
 	links, err := s.linkRepo.GetByDeviceID(deviceID)
 	if err != nil {
@@ -315,14 +342,26 @@ func (s *DeviceService) shouldScheduleIncompleteLinkReprobe(deviceID uuid.UUID) 
 		log.Printf("Failed to inspect device %s for delayed LLDP re-probe: %v", deviceID, err)
 		return false
 	}
-	if device.Status != domain.DeviceStatusProbing {
-		return false
-	}
 	if device.CreatedAt.IsZero() {
 		return false
 	}
-	age := s.now().Sub(device.CreatedAt)
-	if age < 0 || age > s.reprobeWindow {
+	mode := domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
+	if mode == domain.TopologyDiscoveryModeOff {
+		return false
+	}
+	bootstrapPending := mode == domain.TopologyDiscoveryModeBootstrapOnce &&
+		device.TopologyBootstrapState == domain.TopologyBootstrapStatePending
+	if !bootstrapPending {
+		age := s.now().Sub(device.CreatedAt)
+		if age < 0 || age > s.reprobeWindow {
+			return false
+		}
+	}
+	if device.Status != domain.DeviceStatusProbing && !bootstrapPending {
+		return false
+	}
+	if mode == domain.TopologyDiscoveryModeBootstrapOnce &&
+		device.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
 		return false
 	}
 
@@ -462,8 +501,25 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		log.Printf("Failed to persist static discovery for %s: %v", deviceIP, err)
 		return
 	}
+	followupScheduled := false
 	if s.shouldScheduleIncompleteLinkReprobe(deviceID) {
+		followupScheduled = true
 		s.scheduleIncompleteLinkReprobe(deviceID, deviceIP)
+	}
+	if topologyMode != domain.TopologyDiscoveryModeOff {
+		recordedAt := s.now().UTC()
+		s.updateTopologyDiscoveryState(deviceID, func(fresh *domain.Device) {
+			fresh.LastTopologyDiscoveryAt = &recordedAt
+			fresh.LastTopologyDiscoveryResult = topologyDiscoveryResultLabel(len(result.Neighbors), followupScheduled)
+			if domain.ResolveTopologyDiscoveryMode(fresh, s.defaultTopologyDiscoveryMode()) != domain.TopologyDiscoveryModeBootstrapOnce {
+				return
+			}
+			if followupScheduled {
+				fresh.TopologyBootstrapState = domain.TopologyBootstrapStateFollowupScheduled
+				return
+			}
+			fresh.TopologyBootstrapState = domain.TopologyBootstrapStateCompleted
+		})
 	}
 
 	if err := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); err != nil {
@@ -632,6 +688,25 @@ func (s *DeviceService) ReprobeDevice(ctx context.Context, id uuid.UUID) error {
 	}()
 
 	return nil
+}
+
+func (s *DeviceService) RunTopologyDiscoveryNow(ctx context.Context, id uuid.UUID) error {
+	device, err := s.deviceRepo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("getting device: %w", err)
+	}
+	if device.DeviceType == domain.DeviceTypeVirtual || strings.TrimSpace(device.IP) == "" {
+		return fmt.Errorf("topology discovery requires a non-virtual device with an IP")
+	}
+	if device.MetricsSource == domain.MetricsSourcePrometheus {
+		return fmt.Errorf("topology discovery requires SNMP-capable metrics source")
+	}
+
+	device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
+	if err := s.deviceRepo.Update(device); err != nil {
+		return fmt.Errorf("updating topology discovery state: %w", err)
+	}
+	return s.ReprobeDevice(ctx, id)
 }
 
 // PingVirtualDevice performs a lightweight TCP reachability check for a
