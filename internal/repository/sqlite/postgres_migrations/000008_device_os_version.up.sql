@@ -1,0 +1,2 @@
+ALTER TABLE devices
+    ADD COLUMN IF NOT EXISTS os_version TEXT NOT NULL DEFAULT '';

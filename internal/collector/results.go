@@ -159,6 +159,7 @@ type StaticResult struct {
 	SysDescr      string
 	SysObjectID   string
 	HardwareModel string
+	OSVersion     string
 	Vendor        string
 	DeviceType    domain.DeviceType
 	Interfaces    []domain.Interface

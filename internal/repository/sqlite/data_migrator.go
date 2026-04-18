@@ -54,6 +54,7 @@ var primaryDataCopySpecs = []tableCopySpec{
 			{name: "sys_descr", kind: columnKindText},
 			{name: "sys_object_id", kind: columnKindText},
 			{name: "hardware_model", kind: columnKindText},
+			{name: "os_version", kind: columnKindText},
 			{name: "vendor", kind: columnKindText},
 			{name: "managed", kind: columnKindInt64},
 			{name: "tags_json", kind: columnKindText},

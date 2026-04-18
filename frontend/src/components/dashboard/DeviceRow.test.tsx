@@ -173,6 +173,18 @@ describe('DeviceRow', () => {
     expect(screen.getByText('RouterOS 7.13.5 (stable)')).toBeInTheDocument();
   });
 
+  it('renders trailing firmware version when sys_descr ends with a dotted version', () => {
+    renderRow({ sys_descr: 'airMAX Wireless Router CPE LiteBeam 5AC Gen2 8.7.4' });
+
+    expect(screen.getByText('8.7.4')).toBeInTheDocument();
+  });
+
+  it('prefers an explicit device os_version over parsing sys_descr', () => {
+    renderRow({ sys_descr: 'RouterOS RB1100x4', os_version: '7.22.1' });
+
+    expect(screen.getByText('7.22.1')).toBeInTheDocument();
+  });
+
   it('renders em dash for uptime when no metrics available', () => {
     renderRow({}, null);
 

@@ -68,7 +68,7 @@ export function useCanvasData({
   openEdgeMenu,
   openSelfLinkDetails,
   reactFlow,
-  nodes: _nodes,
+  nodes,
   setNodes,
   setEdges,
   onDevicesChange,
@@ -85,6 +85,7 @@ export function useCanvasData({
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
   const layoutInitializedRef = useRef(false);
+  const currentNodePositionsRef = useRef<Map<string, { x: number; y: number; pinned?: boolean }>>(new Map());
   const grafanaUrlRef = useRef<string>('');
   const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
   const [prometheusAlertDismissed, setPrometheusAlertDismissed] = useState(false);
@@ -103,6 +104,16 @@ export function useCanvasData({
     prometheusStatusRef.current = prometheusStatus;
   }, [prometheusStatus]);
   devicesRef.current = devices;
+  currentNodePositionsRef.current = new Map(
+    nodes.map((node) => [
+      node.id,
+      {
+        x: node.position.x,
+        y: node.position.y,
+        pinned: node.data.pinned,
+      },
+    ]),
+  );
 
   // Propagate device state changes to parent (for Dashboard view)
   useEffect(() => {
@@ -133,12 +144,18 @@ export function useCanvasData({
         ]);
 
         const devicesByID = new Map(fetchedDevices.map((device) => [device.id, device]));
+        const effectivePositions = new Map(savedPositions);
+        for (const [deviceId, position] of currentNodePositionsRef.current.entries()) {
+          if (!effectivePositions.has(deviceId)) {
+            effectivePositions.set(deviceId, position);
+          }
+        }
 
         const { width, height } = viewportSize();
 
         const computedPositions = computeForceLayout(
           fetchedDevices.map((device) => {
-            const saved = savedPositions.get(device.id);
+            const saved = effectivePositions.get(device.id);
             return {
               id: device.id,
               x: saved?.x,
@@ -178,7 +195,7 @@ export function useCanvasData({
 
         const nextNodes = buildTopologyNodes(
           fetchedDevices,
-          savedPositions,
+          effectivePositions,
           computedPositions,
           defaultPosition,
           editMode,

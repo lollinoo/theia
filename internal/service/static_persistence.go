@@ -19,6 +19,7 @@ type StaticDiscoveryInput struct {
 	SysDescr      string
 	SysObjectID   string
 	HardwareModel string
+	OSVersion     string
 	Vendor        string
 	DeviceType    domain.DeviceType
 	Interfaces    []domain.Interface
@@ -51,6 +52,9 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	fresh.SysDescr = input.SysDescr
 	fresh.SysObjectID = input.SysObjectID
 	fresh.HardwareModel = input.HardwareModel
+	if input.OSVersion != "" {
+		fresh.OSVersion = input.OSVersion
+	}
 	if fresh.Vendor == "" || fresh.Vendor == "default" {
 		fresh.Vendor = input.Vendor
 	}

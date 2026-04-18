@@ -669,6 +669,7 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 		"sys_descr":                         d.SysDescr,
 		"sys_object_id":                     d.SysObjectID,
 		"hardware_model":                    d.HardwareModel,
+		"os_version":                        d.OSVersion,
 		"vendor":                            d.Vendor,
 		"managed":                           d.Managed,
 		"tags":                              d.Tags,

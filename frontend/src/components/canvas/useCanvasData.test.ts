@@ -303,4 +303,32 @@ describe('useCanvasData', () => {
     expect(createLink).toHaveBeenCalledTimes(1);
     expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
   });
+
+  it('preserves an unsaved in-memory node position across silent refreshes', async () => {
+    vi.mocked(fetchDevices)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([mockDevice()])
+      .mockResolvedValueOnce([mockDevice()]);
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true, { x: 400, y: 500 });
+    });
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.nodes[0].position).toEqual({ x: 400, y: 500 });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.nodes[0].position).toEqual({ x: 400, y: 500 });
+  });
 });
