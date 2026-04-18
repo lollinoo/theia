@@ -550,6 +550,31 @@ func (h *DeviceHandler) HandleProbe(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "probing"})
 }
 
+// HandleRunTopologyDiscovery handles POST /api/v1/devices/{id}/topology-discovery.
+func (h *DeviceHandler) HandleRunTopologyDiscovery(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/topology-discovery")
+	id, err := extractIDFromPath(path, "/api/v1/devices/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid device ID")
+		return
+	}
+
+	if err := h.svc.RunTopologyDiscoveryNow(r.Context(), id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "requires") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to run topology discovery", err)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "topology_discovery_started"})
+}
+
 // HandleTestSNMP handles POST /api/v1/devices/{id}/snmp-test
 func (h *DeviceHandler) HandleTestSNMP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/snmp-test")

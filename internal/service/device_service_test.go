@@ -476,6 +476,116 @@ func TestProbeDevice_UsesResolvedTopologyDiscoveryMode(t *testing.T) {
 	}
 }
 
+func TestProbeDevice_BootstrapOnceCompletesWithoutNeighbors(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		if mode != domain.TopologyDiscoveryModeBootstrapOnce {
+			t.Fatalf("expected bootstrap_once mode, got %s", mode)
+		}
+		return &snmp.DiscoveryResult{
+			SysName:    "edge-sw-2",
+			DeviceType: domain.DeviceTypeSwitch,
+		}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	device := &domain.Device{
+		ID:                     uuid.New(),
+		IP:                     "10.0.0.9",
+		Hostname:               "edge-sw-2",
+		Managed:                true,
+		Status:                 domain.DeviceStatusProbing,
+		DeviceType:             domain.DeviceTypeSwitch,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	svc.probeWg.Add(1)
+	go func() {
+		defer svc.probeWg.Done()
+		svc.probeDevice(device)
+	}()
+	svc.WaitForProbes()
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("expected bootstrap state completed, got %s", updated.TopologyBootstrapState)
+	}
+	if updated.LastTopologyDiscoveryAt == nil {
+		t.Fatal("expected last_topology_discovery_at to be populated")
+	}
+	if updated.LastTopologyDiscoveryResult != "no_neighbors" {
+		t.Fatalf("expected last_topology_discovery_result no_neighbors, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
+func TestRunTopologyDiscoveryNow_SetsPendingAndTriggersReprobe(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	target := &domain.Device{
+		ID:                    uuid.New(),
+		IP:                    "10.0.0.20",
+		Hostname:              "agg-1",
+		Managed:               true,
+		Status:                domain.DeviceStatusUp,
+		DeviceType:            domain.DeviceTypeSwitch,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeOff,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(target); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	reprobeCalls := 0
+	svc.discoverFunc = func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		reprobeCalls++
+		if mode != domain.TopologyDiscoveryModeBootstrapOnce {
+			t.Fatalf("expected manual run to use bootstrap_once, got %s", mode)
+		}
+		return &snmp.DiscoveryResult{SysName: "agg-1", DeviceType: domain.DeviceTypeSwitch}, nil
+	}
+
+	if err := svc.RunTopologyDiscoveryNow(context.Background(), target.ID); err != nil {
+		t.Fatalf("RunTopologyDiscoveryNow failed: %v", err)
+	}
+	svc.WaitForProbes()
+
+	updated, err := deviceRepo.GetByID(target.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if reprobeCalls != 1 {
+		t.Fatalf("expected one reprobe call, got %d", reprobeCalls)
+	}
+	if updated.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("expected bootstrap state completed after manual run, got %s", updated.TopologyBootstrapState)
+	}
+	if updated.LastTopologyDiscoveryResult != "no_neighbors" {
+		t.Fatalf("expected manual discovery to record no_neighbors, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
 func TestProbeCompletes_DeviceStatusUp(t *testing.T) {
 	result := &snmp.DiscoveryResult{
 		SysName:       "core-router",
