@@ -37,6 +37,27 @@ const (
 	MetricsSourceNone                   MetricsSource = "none"
 )
 
+// TopologyDiscoveryMode controls whether static SNMP discovery should walk LLDP/CDP.
+type TopologyDiscoveryMode string
+
+const (
+	TopologyDiscoveryModeInherit       TopologyDiscoveryMode = "inherit"
+	TopologyDiscoveryModeOff           TopologyDiscoveryMode = "off"
+	TopologyDiscoveryModeLLDP          TopologyDiscoveryMode = "lldp"
+	TopologyDiscoveryModeLLDPCDP       TopologyDiscoveryMode = "lldp_cdp"
+	TopologyDiscoveryModeBootstrapOnce TopologyDiscoveryMode = "bootstrap_once"
+)
+
+// TopologyBootstrapState tracks a one-shot discovery window for bootstrap/manual runs.
+type TopologyBootstrapState string
+
+const (
+	TopologyBootstrapStateIdle              TopologyBootstrapState = "idle"
+	TopologyBootstrapStatePending           TopologyBootstrapState = "pending"
+	TopologyBootstrapStateFollowupScheduled TopologyBootstrapState = "followup_scheduled"
+	TopologyBootstrapStateCompleted         TopologyBootstrapState = "completed"
+)
+
 // SNMPVersion indicates which SNMP version is configured.
 type SNMPVersion string
 
@@ -83,29 +104,34 @@ type Interface struct {
 
 // Device represents a managed or discovered network device.
 type Device struct {
-	ID                   uuid.UUID         `json:"id"`
-	Hostname             string            `json:"hostname"`
-	IP                   string            `json:"ip"`
-	Notes                *string           `json:"notes"`
-	SNMPCredentials      SNMPCredentials   `json:"snmp_credentials"`
-	DeviceType           DeviceType        `json:"device_type"`
-	PollClass            PollClass         `json:"poll_class"`
-	PollIntervalOverride *int              `json:"poll_interval_override"`
-	Status               DeviceStatus      `json:"status"`
-	SysName              string            `json:"sys_name"`
-	SysDescr             string            `json:"sys_descr"`
-	SysObjectID          string            `json:"sys_object_id"`
-	HardwareModel        string            `json:"hardware_model"`
-	Vendor               string            `json:"vendor"`  // vendor name from vendor registry (e.g. "mikrotik", "default")
-	Managed              bool              `json:"managed"` // true=user-added, false=discovered placeholder
-	Tags                 map[string]string `json:"tags"`
-	Interfaces           []Interface       `json:"interfaces"`
-	AreaIDs              []uuid.UUID       `json:"area_ids"`
-	MetricsSource        MetricsSource     `json:"metrics_source"`
-	PrometheusLabelName  string            `json:"prometheus_label_name"`
-	PrometheusLabelValue string            `json:"prometheus_label_value"`
-	CreatedAt            time.Time         `json:"created_at"`
-	UpdatedAt            time.Time         `json:"updated_at"`
+	ID                             uuid.UUID              `json:"id"`
+	Hostname                       string                 `json:"hostname"`
+	IP                             string                 `json:"ip"`
+	Notes                          *string                `json:"notes"`
+	SNMPCredentials                SNMPCredentials        `json:"snmp_credentials"`
+	DeviceType                     DeviceType             `json:"device_type"`
+	PollClass                      PollClass              `json:"poll_class"`
+	PollIntervalOverride           *int                   `json:"poll_interval_override"`
+	Status                         DeviceStatus           `json:"status"`
+	SysName                        string                 `json:"sys_name"`
+	SysDescr                       string                 `json:"sys_descr"`
+	SysObjectID                    string                 `json:"sys_object_id"`
+	HardwareModel                  string                 `json:"hardware_model"`
+	Vendor                         string                 `json:"vendor"`  // vendor name from vendor registry (e.g. "mikrotik", "default")
+	Managed                        bool                   `json:"managed"` // true=user-added, false=discovered placeholder
+	Tags                           map[string]string      `json:"tags"`
+	Interfaces                     []Interface            `json:"interfaces"`
+	AreaIDs                        []uuid.UUID            `json:"area_ids"`
+	MetricsSource                  MetricsSource          `json:"metrics_source"`
+	PrometheusLabelName            string                 `json:"prometheus_label_name"`
+	PrometheusLabelValue           string                 `json:"prometheus_label_value"`
+	TopologyDiscoveryMode          TopologyDiscoveryMode  `json:"topology_discovery_mode"`
+	EffectiveTopologyDiscoveryMode TopologyDiscoveryMode  `json:"effective_topology_discovery_mode"`
+	TopologyBootstrapState         TopologyBootstrapState `json:"topology_bootstrap_state"`
+	LastTopologyDiscoveryAt        *time.Time             `json:"last_topology_discovery_at"`
+	LastTopologyDiscoveryResult    string                 `json:"last_topology_discovery_result"`
+	CreatedAt                      time.Time              `json:"created_at"`
+	UpdatedAt                      time.Time              `json:"updated_at"`
 }
 
 // DeviceRepository defines persistence operations for devices.

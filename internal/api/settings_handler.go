@@ -34,6 +34,7 @@ var validSettingKeys = map[string]bool{
 	domain.SettingSNMPTimeout:                  true,
 	domain.SettingSNMPRetries:                  true,
 	domain.SettingTimezone:                     true,
+	domain.SettingTopologyDiscoveryDefaultMode: true,
 	domain.SettingInstanceBackupIntervalHours:  true,
 	domain.SettingInstanceBackupRetentionCount: true,
 	domain.SettingDeviceBackupIntervalHours:    true,
@@ -91,6 +92,17 @@ func validateSetting(key, value string) error {
 	if key == domain.SettingTimezone && value != "" {
 		if _, err := time.LoadLocation(value); err != nil {
 			return fmt.Errorf("invalid timezone: %s", value)
+		}
+	}
+	if key == domain.SettingTopologyDiscoveryDefaultMode {
+		switch domain.TopologyDiscoveryMode(value) {
+		case domain.TopologyDiscoveryModeOff,
+			domain.TopologyDiscoveryModeLLDP,
+			domain.TopologyDiscoveryModeLLDPCDP,
+			domain.TopologyDiscoveryModeBootstrapOnce:
+			// valid
+		default:
+			return fmt.Errorf("%s must be one of: off, lldp, lldp_cdp, bootstrap_once", key)
 		}
 	}
 	if intervalSettings[key] {

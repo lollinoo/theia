@@ -333,7 +333,7 @@ func TestAddDevice_CreatesWithStatusProbing(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", "", "", "", nil)
+		}, nil, "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestAddDevice_DerivesPollClassFromDeviceType(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", nil)
+		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -396,6 +396,41 @@ func TestAddDevice_DerivesPollClassFromDeviceType(t *testing.T) {
 	}
 }
 
+func TestAddDevice_BootstrapOnceStartsPendingAndEffectiveModeFollowsDefault(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeBootstrapOnce)); err != nil {
+		t.Fatalf("Set setting failed: %v", err)
+	}
+
+	discoverFn := func(target string, creds domain.SNMPCredentials) (*snmp.DiscoveryResult, error) {
+		return nil, fmt.Errorf("should not be called")
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+
+	device, err := svc.AddDevice(context.Background(), "10.0.9.254", "router1",
+		domain.DeviceTypeRouter,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", "", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	if device.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+		t.Fatalf("expected bootstrap state pending, got %s", device.TopologyBootstrapState)
+	}
+	if device.EffectiveTopologyDiscoveryMode != domain.TopologyDiscoveryModeBootstrapOnce {
+		t.Fatalf("expected effective topology mode bootstrap_once, got %s", device.EffectiveTopologyDiscoveryMode)
+	}
+	if device.TopologyDiscoveryMode != domain.TopologyDiscoveryModeInherit {
+		t.Fatalf("expected persisted topology mode inherit, got %s", device.TopologyDiscoveryMode)
+	}
+}
+
 func TestProbeCompletes_DeviceStatusUp(t *testing.T) {
 	result := &snmp.DiscoveryResult{
 		SysName:       "core-router",
@@ -415,7 +450,7 @@ func TestProbeCompletes_DeviceStatusUp(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -446,7 +481,7 @@ func TestProbeFails_DeviceStatusDown(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -658,7 +693,7 @@ func TestProbeDiscoversNeighbors_SkipsUnmatchedNeighbors(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", "", "", "", nil)
+		}, nil, "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -720,7 +755,7 @@ func TestProbeDiscoversNeighbor_ExistingIP_NoDuplicate(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", "", "", "", nil)
+		}, nil, "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -780,7 +815,7 @@ func TestProbeDiscoversNeighbors_PrefersLLDPOverCDPForSameLink(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -842,7 +877,7 @@ func TestProbeDiscoversNeighbors_UsesCDPWhenLLDPFieldsAreMissing(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -916,7 +951,7 @@ func TestProbeDiscoversNeighbors_PrefersPhysicalLinkOverVirtualVariant(t *testin
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -1569,7 +1604,7 @@ func TestPrometheusDevice_SkipsSNMPProbe(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", nil)
+		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -1619,7 +1654,7 @@ func TestPrometheusDevice_SNMPv3WithPrivProtocol(t *testing.T) {
 				PrivPassword:  "", // empty — bug trigger
 				SecurityLevel: "authPriv",
 			},
-		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", nil)
+		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -1714,7 +1749,7 @@ func TestAddDevice_VirtualNoIP(t *testing.T) {
 
 	device, err := svc.AddDevice(context.Background(), "", "",
 		domain.DeviceTypeVirtual,
-		domain.SNMPCredentials{}, nil, "", "", "", "", nil)
+		domain.SNMPCredentials{}, nil, "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -1753,7 +1788,7 @@ func TestAddDevice_VirtualWithIP(t *testing.T) {
 
 	device, err := svc.AddDevice(context.Background(), "10.0.0.99", "",
 		domain.DeviceTypeVirtual,
-		domain.SNMPCredentials{}, nil, "", "", "", "", nil)
+		domain.SNMPCredentials{}, nil, "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}
@@ -1838,7 +1873,7 @@ func TestAddDevice_RegularStillRequiresProbe(t *testing.T) {
 		domain.SNMPCredentials{
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		}, nil, "", domain.MetricsSourceSNMP, "", "", nil)
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
 	if err != nil {
 		t.Fatalf("AddDevice failed: %v", err)
 	}

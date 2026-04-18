@@ -125,6 +125,14 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 	if pollClass == "" {
 		pollClass = domain.PollClassStandard
 	}
+	topologyMode := device.TopologyDiscoveryMode
+	if topologyMode == "" {
+		topologyMode = domain.TopologyDiscoveryModeInherit
+	}
+	bootstrapState := device.TopologyBootstrapState
+	if bootstrapState == "" {
+		bootstrapState = domain.TopologyBootstrapStateIdle
+	}
 
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -136,8 +144,9 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status,
 			sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-			poll_class, poll_interval_override, notes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			poll_class, poll_interval_override, notes,
+			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		device.ID.String(), device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
 		device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
@@ -145,6 +154,7 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 		device.Vendor, managedValue, string(tagsJSON), device.CreatedAt, device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
 		string(pollClass), device.PollIntervalOverride, nullableStringValue(device.Notes),
+		string(topologyMode), string(bootstrapState), nullableTimeValue(device.LastTopologyDiscoveryAt), device.LastTopologyDiscoveryResult,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting device: %w", err)
@@ -152,6 +162,8 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 
 	// Write canonicalized PollClass back so callers see the normalized value.
 	device.PollClass = pollClass
+	device.TopologyDiscoveryMode = topologyMode
+	device.TopologyBootstrapState = bootstrapState
 
 	// Insert area associations
 	for _, areaID := range device.AreaIDs {
@@ -202,7 +214,8 @@ func (r *DeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				poll_class, poll_interval_override, notes
+				poll_class, poll_interval_override, notes,
+				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 			FROM devices WHERE id = ?`, id.String(),
 		),
 	)
@@ -235,7 +248,8 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				poll_class, poll_interval_override, notes
+				poll_class, poll_interval_override, notes,
+				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 			FROM devices WHERE ip = ?`, ip,
 		),
 	)
@@ -275,7 +289,8 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-				poll_class, poll_interval_override, notes
+				poll_class, poll_interval_override, notes,
+				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 			FROM devices
 			WHERE sys_name_lookup = ?
 			ORDER BY updated_at DESC, created_at DESC
@@ -321,7 +336,8 @@ func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 		`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 			sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
-			poll_class, poll_interval_override, notes
+			poll_class, poll_interval_override, notes,
+			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 		FROM devices ORDER BY hostname`,
 	)
 	if err != nil {
@@ -405,6 +421,14 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 	if pollClass == "" {
 		pollClass = domain.PollClassStandard
 	}
+	topologyMode := device.TopologyDiscoveryMode
+	if topologyMode == "" {
+		topologyMode = domain.TopologyDiscoveryModeInherit
+	}
+	bootstrapState := device.TopologyBootstrapState
+	if bootstrapState == "" {
+		bootstrapState = domain.TopologyBootstrapStateIdle
+	}
 
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -417,7 +441,8 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 			status=?, sys_name=?, sys_name_lookup=?, sys_descr=?, sys_object_id=?, hardware_model=?,
 			vendor=?, managed=?, tags_json=?, updated_at=?,
 			metrics_source=?, prometheus_label_name=?, prometheus_label_value=?,
-			poll_class=?, poll_interval_override=?, notes=?
+			poll_class=?, poll_interval_override=?, notes=?,
+			topology_discovery_mode=?, topology_bootstrap_state=?, last_topology_discovery_at=?, last_topology_discovery_result=?
 		WHERE id = ?`,
 		device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
@@ -426,6 +451,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		device.Vendor, managedValue, string(tagsJSON), device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
 		string(pollClass), device.PollIntervalOverride, nullableStringValue(device.Notes),
+		string(topologyMode), string(bootstrapState), nullableTimeValue(device.LastTopologyDiscoveryAt), device.LastTopologyDiscoveryResult,
 		device.ID.String(),
 	)
 	if err != nil {
@@ -434,6 +460,8 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 
 	// Write canonicalized PollClass back so callers see the normalized value.
 	device.PollClass = pollClass
+	device.TopologyDiscoveryMode = topologyMode
+	device.TopologyBootstrapState = bootstrapState
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("device not found: %s", device.ID)
@@ -526,6 +554,13 @@ func nullableStringValue(value *string) any {
 	return *value
 }
 
+func nullableTimeValue(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 // scanDevice scans a single device row from a *sql.Row.
 func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	var d domain.Device
@@ -535,6 +570,8 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	var pollClass string
 	var pollIntervalOverride sql.NullInt64
 	var notes sql.NullString
+	var topologyMode, bootstrapState, lastTopologyResult string
+	var lastTopologyAt sql.NullTime
 
 	err := row.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
@@ -542,6 +579,7 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
 		&pollClass, &pollIntervalOverride, &notes,
+		&topologyMode, &bootstrapState, &lastTopologyAt, &lastTopologyResult,
 	)
 	if err != nil {
 		return nil, err
@@ -555,9 +593,16 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	d.PrometheusLabelName = prometheusLabelName
 	d.PrometheusLabelValue = prometheusLabelValue
 	d.PollClass = domain.PollClass(pollClass)
+	d.TopologyDiscoveryMode = domain.TopologyDiscoveryMode(topologyMode)
+	d.TopologyBootstrapState = domain.TopologyBootstrapState(bootstrapState)
+	d.LastTopologyDiscoveryResult = lastTopologyResult
 	if pollIntervalOverride.Valid {
 		v := int(pollIntervalOverride.Int64)
 		d.PollIntervalOverride = &v
+	}
+	if lastTopologyAt.Valid {
+		v := lastTopologyAt.Time
+		d.LastTopologyDiscoveryAt = &v
 	}
 	if notes.Valid {
 		v := notes.String
@@ -584,6 +629,8 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	var pollClass string
 	var pollIntervalOverride sql.NullInt64
 	var notes sql.NullString
+	var topologyMode, bootstrapState, lastTopologyResult string
+	var lastTopologyAt sql.NullTime
 
 	err := rows.Scan(
 		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
@@ -591,6 +638,7 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
 		&pollClass, &pollIntervalOverride, &notes,
+		&topologyMode, &bootstrapState, &lastTopologyAt, &lastTopologyResult,
 	)
 	if err != nil {
 		return nil, err
@@ -604,9 +652,16 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	d.PrometheusLabelName = prometheusLabelName
 	d.PrometheusLabelValue = prometheusLabelValue
 	d.PollClass = domain.PollClass(pollClass)
+	d.TopologyDiscoveryMode = domain.TopologyDiscoveryMode(topologyMode)
+	d.TopologyBootstrapState = domain.TopologyBootstrapState(bootstrapState)
+	d.LastTopologyDiscoveryResult = lastTopologyResult
 	if pollIntervalOverride.Valid {
 		v := int(pollIntervalOverride.Int64)
 		d.PollIntervalOverride = &v
+	}
+	if lastTopologyAt.Valid {
+		v := lastTopologyAt.Time
+		d.LastTopologyDiscoveryAt = &v
 	}
 	if notes.Valid {
 		v := notes.String

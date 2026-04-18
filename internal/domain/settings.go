@@ -12,6 +12,7 @@ const (
 	SettingSNMPTimeout                  = "snmp_timeout_seconds"
 	SettingSNMPRetries                  = "snmp_retries"
 	SettingTimezone                     = "timezone"
+	SettingTopologyDiscoveryDefaultMode = "topology_discovery_default_mode"
 	SettingInstanceBackupIntervalHours  = "instance_backup_interval_hours"
 	SettingInstanceBackupRetentionCount = "instance_backup_retention_count"
 	SettingDeviceBackupIntervalHours    = "device_backup_interval_hours"
@@ -39,6 +40,7 @@ func DefaultSettings() map[string]string {
 		SettingSNMPTimeout:                  "10",
 		SettingSNMPRetries:                  "2",
 		SettingTimezone:                     "UTC",
+		SettingTopologyDiscoveryDefaultMode: string(TopologyDiscoveryModeLLDPCDP),
 		SettingInstanceBackupIntervalHours:  "0",
 		SettingInstanceBackupRetentionCount: "5",
 		SettingDeviceBackupIntervalHours:    "0",

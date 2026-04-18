@@ -59,6 +59,15 @@ var validMetricsSources = map[string]bool{
 	"":                         true,
 }
 
+var validTopologyDiscoveryModes = map[string]bool{
+	"inherit":        true,
+	"off":            true,
+	"lldp":           true,
+	"lldp_cdp":       true,
+	"bootstrap_once": true,
+	"":               true,
+}
+
 var validSNMPv3AuthProtocols = map[string]bool{
 	"MD5": true, "SHA": true, "SHA-224": true,
 	"SHA-256": true, "SHA-384": true, "SHA-512": true,
@@ -75,17 +84,18 @@ var validSNMPv3SecurityLevels = map[string]bool{
 // --- Request types ---
 
 type createDeviceRequest struct {
-	IP                   string            `json:"ip"`
-	Hostname             string            `json:"hostname"`
-	Notes                *string           `json:"notes"`
-	DeviceType           string            `json:"device_type,omitempty"`
-	SNMP                 snmpCredsRequest  `json:"snmp"`
-	Tags                 map[string]string `json:"tags"`
-	Vendor               string            `json:"vendor,omitempty"`
-	MetricsSource        string            `json:"metrics_source,omitempty"`
-	PrometheusLabelName  string            `json:"prometheus_label_name,omitempty"`
-	PrometheusLabelValue string            `json:"prometheus_label_value,omitempty"`
-	AreaIDs              []string          `json:"area_ids,omitempty"`
+	IP                    string            `json:"ip"`
+	Hostname              string            `json:"hostname"`
+	Notes                 *string           `json:"notes"`
+	DeviceType            string            `json:"device_type,omitempty"`
+	SNMP                  snmpCredsRequest  `json:"snmp"`
+	Tags                  map[string]string `json:"tags"`
+	Vendor                string            `json:"vendor,omitempty"`
+	MetricsSource         string            `json:"metrics_source,omitempty"`
+	PrometheusLabelName   string            `json:"prometheus_label_name,omitempty"`
+	PrometheusLabelValue  string            `json:"prometheus_label_value,omitempty"`
+	TopologyDiscoveryMode string            `json:"topology_discovery_mode,omitempty"`
+	AreaIDs               []string          `json:"area_ids,omitempty"`
 }
 
 type snmpCredsRequest struct {
@@ -143,17 +153,18 @@ func (o *optionalNullableString) UnmarshalJSON(data []byte) error {
 }
 
 type updateDeviceRequest struct {
-	Hostname             *string                      `json:"hostname,omitempty"`
-	IP                   *string                      `json:"ip,omitempty"`
-	Notes                optionalNullableString       `json:"notes"`
-	Tags                 *map[string]string           `json:"tags,omitempty"`
-	SNMP                 *snmpCredsRequest            `json:"snmp,omitempty"`
-	Vendor               *string                      `json:"vendor,omitempty"`
-	MetricsSource        *string                      `json:"metrics_source,omitempty"`
-	PrometheusLabelName  *string                      `json:"prometheus_label_name,omitempty"`
-	PrometheusLabelValue *string                      `json:"prometheus_label_value,omitempty"`
-	PollIntervalOverride optionalPollIntervalOverride `json:"poll_interval_override"`
-	AreaIDs              *[]string                    `json:"area_ids,omitempty"`
+	Hostname              *string                      `json:"hostname,omitempty"`
+	IP                    *string                      `json:"ip,omitempty"`
+	Notes                 optionalNullableString       `json:"notes"`
+	Tags                  *map[string]string           `json:"tags,omitempty"`
+	SNMP                  *snmpCredsRequest            `json:"snmp,omitempty"`
+	Vendor                *string                      `json:"vendor,omitempty"`
+	MetricsSource         *string                      `json:"metrics_source,omitempty"`
+	PrometheusLabelName   *string                      `json:"prometheus_label_name,omitempty"`
+	PrometheusLabelValue  *string                      `json:"prometheus_label_value,omitempty"`
+	TopologyDiscoveryMode *string                      `json:"topology_discovery_mode,omitempty"`
+	PollIntervalOverride  optionalPollIntervalOverride `json:"poll_interval_override"`
+	AreaIDs               *[]string                    `json:"area_ids,omitempty"`
 }
 
 type batchAddRequest struct {
@@ -210,7 +221,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 
 		device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
 			domain.DeviceTypeVirtual,
-			domain.SNMPCredentials{}, req.Tags, "", "", "", "", areaIDs, req.Notes)
+			domain.SNMPCredentials{}, req.Tags, "", "", "", "", "", areaIDs, req.Notes)
 		if err != nil {
 			if isDeviceIPConflict(err) {
 				writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(req.IP))
@@ -247,6 +258,10 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validMetricsSources[req.MetricsSource] {
 		writeError(w, http.StatusBadRequest, "invalid metrics_source")
+		return
+	}
+	if !validTopologyDiscoveryModes[req.TopologyDiscoveryMode] {
+		writeError(w, http.StatusBadRequest, "invalid topology_discovery_mode")
 		return
 	}
 	if len(req.Vendor) > 255 {
@@ -301,7 +316,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
 		deviceType,
 		creds, req.Tags, req.Vendor, metricsSource,
-		prometheusLabelName, prometheusLabelValue, areaIDs, req.Notes)
+		prometheusLabelName, prometheusLabelValue, domain.TopologyDiscoveryMode(req.TopologyDiscoveryMode), areaIDs, req.Notes)
 	if err != nil {
 		if isDeviceIPConflict(err) {
 			writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(req.IP))
@@ -382,6 +397,10 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid metrics_source")
 		return
 	}
+	if req.TopologyDiscoveryMode != nil && !validTopologyDiscoveryModes[*req.TopologyDiscoveryMode] {
+		writeError(w, http.StatusBadRequest, "invalid topology_discovery_mode")
+		return
+	}
 	if req.Vendor != nil && len(*req.Vendor) > 255 {
 		writeError(w, http.StatusBadRequest, "vendor too long (max 255 characters)")
 		return
@@ -445,6 +464,10 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.PrometheusLabelValue != nil {
 		update.PrometheusLabelValue = req.PrometheusLabelValue
+	}
+	if req.TopologyDiscoveryMode != nil {
+		mode := domain.TopologyDiscoveryMode(*req.TopologyDiscoveryMode)
+		update.TopologyDiscoveryMode = &mode
 	}
 	if req.AreaIDs != nil {
 		var parsedIDs []uuid.UUID
@@ -588,7 +611,7 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.svc.AddDevice(r.Context(), d.IP, d.Hostname,
 			batchDeviceType,
 			creds, d.Tags, d.Vendor, ms,
-			d.PrometheusLabelName, d.PrometheusLabelValue, nil, d.Notes); err != nil {
+			d.PrometheusLabelName, d.PrometheusLabelValue, domain.TopologyDiscoveryMode(d.TopologyDiscoveryMode), nil, d.Notes); err != nil {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 		}
 	}
@@ -610,25 +633,30 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 
 func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 	attrs := map[string]interface{}{
-		"hostname":               d.Hostname,
-		"ip":                     d.IP,
-		"notes":                  d.Notes,
-		"device_type":            string(d.DeviceType),
-		"poll_class":             string(d.PollClass),
-		"poll_interval_override": d.PollIntervalOverride,
-		"status":                 string(d.Status),
-		"sys_name":               d.SysName,
-		"sys_descr":              d.SysDescr,
-		"sys_object_id":          d.SysObjectID,
-		"hardware_model":         d.HardwareModel,
-		"vendor":                 d.Vendor,
-		"managed":                d.Managed,
-		"tags":                   d.Tags,
-		"metrics_source":         string(d.MetricsSource),
-		"prometheus_label_name":  d.PrometheusLabelName,
-		"prometheus_label_value": d.PrometheusLabelValue,
-		"created_at":             d.CreatedAt,
-		"updated_at":             d.UpdatedAt,
+		"hostname":                          d.Hostname,
+		"ip":                                d.IP,
+		"notes":                             d.Notes,
+		"device_type":                       string(d.DeviceType),
+		"poll_class":                        string(d.PollClass),
+		"poll_interval_override":            d.PollIntervalOverride,
+		"status":                            string(d.Status),
+		"sys_name":                          d.SysName,
+		"sys_descr":                         d.SysDescr,
+		"sys_object_id":                     d.SysObjectID,
+		"hardware_model":                    d.HardwareModel,
+		"vendor":                            d.Vendor,
+		"managed":                           d.Managed,
+		"tags":                              d.Tags,
+		"metrics_source":                    string(d.MetricsSource),
+		"prometheus_label_name":             d.PrometheusLabelName,
+		"prometheus_label_value":            d.PrometheusLabelValue,
+		"topology_discovery_mode":           string(d.TopologyDiscoveryMode),
+		"effective_topology_discovery_mode": string(d.EffectiveTopologyDiscoveryMode),
+		"topology_bootstrap_state":          string(d.TopologyBootstrapState),
+		"last_topology_discovery_at":        d.LastTopologyDiscoveryAt,
+		"last_topology_discovery_result":    d.LastTopologyDiscoveryResult,
+		"created_at":                        d.CreatedAt,
+		"updated_at":                        d.UpdatedAt,
 	}
 
 	areaIDStrs := make([]string, 0, len(d.AreaIDs))

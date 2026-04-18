@@ -13,9 +13,9 @@ import (
 // failingSettingsRepo always returns an error for all operations.
 type failingSettingsRepo struct{}
 
-func (f *failingSettingsRepo) Get(key string) (string, error)         { return "", errMock }
-func (f *failingSettingsRepo) Set(key, value string) error            { return errMock }
-func (f *failingSettingsRepo) GetAll() (map[string]string, error)     { return nil, errMock }
+func (f *failingSettingsRepo) Get(key string) (string, error)     { return "", errMock }
+func (f *failingSettingsRepo) Set(key, value string) error        { return errMock }
+func (f *failingSettingsRepo) GetAll() (map[string]string, error) { return nil, errMock }
 
 func TestSettingsHandlerGetAll(t *testing.T) {
 	repo := newMockSettingsRepo()
@@ -185,6 +185,41 @@ func TestSettingsHandler_URLSetting_EmptyClears_200(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_TopologyDiscoveryMode_ValidValue_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"bootstrap_once"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingTopologyDiscoveryDefaultMode, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	got, _ := repo.Get(domain.SettingTopologyDiscoveryDefaultMode)
+	if got != "bootstrap_once" {
+		t.Fatalf("expected topology_discovery_default_mode=bootstrap_once, got %s", got)
+	}
+}
+
+func TestSettingsHandler_TopologyDiscoveryMode_InvalidValue_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"cdp_only"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingTopologyDiscoveryDefaultMode, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 }
 
