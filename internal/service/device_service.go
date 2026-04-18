@@ -72,6 +72,7 @@ type DeviceServiceOption func(*DeviceService)
 
 const (
 	incompleteLinkReprobeDelay    = 20 * time.Second
+	incompleteLinkReprobeRetry    = 5 * time.Second
 	incompleteLinkReprobeCooldown = 45 * time.Second
 	incompleteLinkReprobeWindow   = 5 * time.Minute
 )
@@ -100,7 +101,7 @@ func NewDeviceService(
 		reprobeBooked:   make(map[uuid.UUID]time.Time),
 		TopologyNotify:  topologyNotify,
 	}
-	svc.delayedReprobe = svc.ReprobeDevice
+	svc.delayedReprobe = svc.runDelayedReprobe
 	for _, option := range options {
 		if option != nil {
 			option(svc)
@@ -368,16 +369,102 @@ func (s *DeviceService) shouldScheduleIncompleteLinkReprobe(deviceID uuid.UUID) 
 	return s.hasIncompleteLLDPLinks(deviceID)
 }
 
-func (s *DeviceService) reserveIncompleteLinkReprobe(deviceID uuid.UUID) bool {
+func (s *DeviceService) reserveIncompleteLinkReprobe(deviceID uuid.UUID) (time.Time, bool) {
 	s.reprobeMu.Lock()
 	defer s.reprobeMu.Unlock()
 
 	last, ok := s.reprobeBooked[deviceID]
 	if ok && s.now().Sub(last) < s.reprobeCooldown {
-		return false
+		return last, false
 	}
-	s.reprobeBooked[deviceID] = s.now()
-	return true
+	bookedAt := s.now()
+	s.reprobeBooked[deviceID] = bookedAt
+	return bookedAt, true
+}
+
+func (s *DeviceService) syncTopologyDiscoveryMetadata(deviceID uuid.UUID, neighborCount int, followupScheduled bool) {
+	recordedAt := s.now().UTC()
+	hasIncomplete := s.hasIncompleteLLDPLinks(deviceID)
+
+	s.updateTopologyDiscoveryState(deviceID, func(fresh *domain.Device) {
+		mode := domain.ResolveTopologyDiscoveryMode(fresh, s.defaultTopologyDiscoveryMode())
+		if mode == domain.TopologyDiscoveryModeOff {
+			return
+		}
+
+		fresh.LastTopologyDiscoveryAt = &recordedAt
+		fresh.LastTopologyDiscoveryResult = topologyDiscoveryResultLabel(
+			neighborCount,
+			followupScheduled || hasIncomplete,
+		)
+
+		if mode != domain.TopologyDiscoveryModeBootstrapOnce {
+			return
+		}
+		if followupScheduled {
+			fresh.TopologyBootstrapState = domain.TopologyBootstrapStateFollowupScheduled
+			return
+		}
+		if hasIncomplete {
+			if fresh.TopologyBootstrapState == domain.TopologyBootstrapStateIdle {
+				fresh.TopologyBootstrapState = domain.TopologyBootstrapStatePending
+			}
+			return
+		}
+		fresh.TopologyBootstrapState = domain.TopologyBootstrapStateCompleted
+	})
+}
+
+func (s *DeviceService) runDelayedReprobe(_ context.Context, id uuid.UUID) error {
+	device, err := s.deviceRepo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("getting device: %w", err)
+	}
+
+	s.probeDevice(device)
+	return nil
+}
+
+func (s *DeviceService) scheduleIncompleteLinkReprobeAttempt(
+	targetID uuid.UUID,
+	targetLabel string,
+	bookedAt time.Time,
+	delay time.Duration,
+) {
+	s.scheduleFunc(delay, func() {
+		if !s.hasIncompleteLLDPLinks(targetID) {
+			return
+		}
+
+		limit := s.staticReprobeBudget()
+		if limit <= 0 {
+			return
+		}
+		if int(s.reprobeInFlight.Add(1)) > limit {
+			s.reprobeInFlight.Add(-1)
+			if s.now().Sub(bookedAt) < s.reprobeCooldown {
+				log.Printf(
+					"Retrying delayed LLDP re-probe for %s in %s: static reprobe budget exhausted",
+					targetLabel,
+					incompleteLinkReprobeRetry,
+				)
+				s.scheduleIncompleteLinkReprobeAttempt(
+					targetID,
+					targetLabel,
+					bookedAt,
+					incompleteLinkReprobeRetry,
+				)
+				return
+			}
+			log.Printf("Skipping delayed LLDP re-probe for %s: static reprobe budget exhausted", targetLabel)
+			return
+		}
+		defer s.reprobeInFlight.Add(-1)
+
+		if err := s.delayedReprobe(context.Background(), targetID); err != nil {
+			log.Printf("Delayed LLDP re-probe failed for %s: %v", targetLabel, err)
+		}
+	})
 }
 
 func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, deviceIP string) {
@@ -407,31 +494,14 @@ func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, device
 	}
 
 	for _, target := range targets {
-		if !s.reserveIncompleteLinkReprobe(target.id) {
+		bookedAt, reserved := s.reserveIncompleteLinkReprobe(target.id)
+		if !reserved {
 			continue
 		}
 
-		targetID := target.id
 		targetLabel := target.label
 		log.Printf("Scheduling delayed LLDP re-probe for %s in %s to resolve incomplete ports", targetLabel, s.reprobeDelay)
-		s.scheduleFunc(s.reprobeDelay, func() {
-			if !s.hasIncompleteLLDPLinks(targetID) {
-				return
-			}
-			limit := s.staticReprobeBudget()
-			if limit <= 0 {
-				return
-			}
-			if int(s.reprobeInFlight.Add(1)) > limit {
-				s.reprobeInFlight.Add(-1)
-				log.Printf("Skipping delayed LLDP re-probe for %s: static reprobe budget exhausted", targetLabel)
-				return
-			}
-			defer s.reprobeInFlight.Add(-1)
-			if err := s.delayedReprobe(context.Background(), targetID); err != nil {
-				log.Printf("Delayed LLDP re-probe failed for %s: %v", targetLabel, err)
-			}
-		})
+		s.scheduleIncompleteLinkReprobeAttempt(target.id, targetLabel, bookedAt, s.reprobeDelay)
 	}
 }
 
@@ -506,21 +576,7 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 		followupScheduled = true
 		s.scheduleIncompleteLinkReprobe(deviceID, deviceIP)
 	}
-	if topologyMode != domain.TopologyDiscoveryModeOff {
-		recordedAt := s.now().UTC()
-		s.updateTopologyDiscoveryState(deviceID, func(fresh *domain.Device) {
-			fresh.LastTopologyDiscoveryAt = &recordedAt
-			fresh.LastTopologyDiscoveryResult = topologyDiscoveryResultLabel(len(result.Neighbors), followupScheduled)
-			if domain.ResolveTopologyDiscoveryMode(fresh, s.defaultTopologyDiscoveryMode()) != domain.TopologyDiscoveryModeBootstrapOnce {
-				return
-			}
-			if followupScheduled {
-				fresh.TopologyBootstrapState = domain.TopologyBootstrapStateFollowupScheduled
-				return
-			}
-			fresh.TopologyBootstrapState = domain.TopologyBootstrapStateCompleted
-		})
-	}
+	s.syncTopologyDiscoveryMetadata(deviceID, len(result.Neighbors), followupScheduled)
 
 	if err := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); err != nil {
 		log.Printf("Failed to update device %s status to up: %v", deviceIP, err)

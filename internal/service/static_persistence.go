@@ -128,6 +128,7 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		}
 	}
 	logUnknownNeighborSummary(fresh.ID, fresh.SysName, unknownNeighbors, unknownByProtocol)
+	s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false)
 
 	return result, nil
 }
