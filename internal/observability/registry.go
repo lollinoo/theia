@@ -48,6 +48,11 @@ type wsMetricKey struct {
 	Type  string
 }
 
+type refreshSnapshotBuildKey struct {
+	Mode   string
+	Result string
+}
+
 type histogram struct {
 	buckets []float64
 	counts  []uint64
@@ -77,6 +82,8 @@ type Registry struct {
 	cacheInvalidationsTotal    map[string]uint64
 	cacheReloadTotal           uint64
 	topologyMaterialization    map[string]*histogram
+	refreshSnapshotBuild       map[refreshSnapshotBuildKey]*histogram
+	refreshTopologyReloadTotal map[string]uint64
 	wsMessagesTotal            map[wsMetricKey]uint64
 	wsPayloadBytes             map[wsMetricKey]*histogram
 	unknownNeighborsTotal      map[deviceProtocolKey]uint64
@@ -114,9 +121,16 @@ func NewRegistry() *Registry {
 			"success": newHistogram(durationBucketsSeconds),
 			"error":   newHistogram(durationBucketsSeconds),
 		},
-		wsMessagesTotal:       make(map[wsMetricKey]uint64),
-		wsPayloadBytes:        make(map[wsMetricKey]*histogram),
-		unknownNeighborsTotal: make(map[deviceProtocolKey]uint64),
+		refreshSnapshotBuild: map[refreshSnapshotBuildKey]*histogram{
+			{Mode: "dirty", Result: "error"}:   newHistogram(durationBucketsSeconds),
+			{Mode: "dirty", Result: "success"}: newHistogram(durationBucketsSeconds),
+			{Mode: "full", Result: "error"}:    newHistogram(durationBucketsSeconds),
+			{Mode: "full", Result: "success"}:  newHistogram(durationBucketsSeconds),
+		},
+		refreshTopologyReloadTotal: make(map[string]uint64),
+		wsMessagesTotal:            make(map[wsMetricKey]uint64),
+		wsPayloadBytes:             make(map[wsMetricKey]*histogram),
+		unknownNeighborsTotal:      make(map[deviceProtocolKey]uint64),
 	}
 }
 
@@ -207,6 +221,16 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_topology_materialization_seconds",
 		"Static discovery materialization latency.",
 		sortedStringHistogramRows("result", r.topologyMaterialization),
+	)
+	writeHistogramVec(&b,
+		"theia_refresh_snapshot_build_seconds",
+		"Refresh snapshot build latency by build mode and result.",
+		sortedRefreshSnapshotBuildRows(r.refreshSnapshotBuild),
+	)
+	writeCounterVec(&b,
+		"theia_refresh_topology_reload_total",
+		"Full topology reload decisions by reason.",
+		sortedStringCounterRows("reason", r.refreshTopologyReloadTotal),
 	)
 	writeCounterVec(&b,
 		"theia_ws_messages_total",
@@ -347,6 +371,29 @@ func (r *Registry) ObserveTopologyMaterialization(duration time.Duration, succes
 		r.topologyMaterialization[result] = h
 	}
 	h.observe(duration.Seconds())
+}
+
+func (r *Registry) ObserveRefreshSnapshotBuild(mode string, duration time.Duration, success bool) {
+	result := "error"
+	if success {
+		result = "success"
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := refreshSnapshotBuildKey{Mode: mode, Result: result}
+	h, ok := r.refreshSnapshotBuild[key]
+	if !ok {
+		h = newHistogram(durationBucketsSeconds)
+		r.refreshSnapshotBuild[key] = h
+	}
+	h.observe(duration.Seconds())
+}
+
+func (r *Registry) IncRefreshTopologyReload(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refreshTopologyReloadTotal[reason]++
 }
 
 func (r *Registry) ObserveWSMessage(scope, messageType string, payloadBytes int) {
@@ -608,6 +655,31 @@ func sortedStringHistogramRows(label string, values map[string]*histogram) []his
 		rows = append(rows, histogramRow{
 			labels: map[string]string{label: key},
 			value:  values[key].snapshot(),
+		})
+	}
+	return rows
+}
+
+func sortedRefreshSnapshotBuildRows(values map[refreshSnapshotBuildKey]*histogram) []histogramRow {
+	keys := make([]refreshSnapshotBuildKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Mode != keys[j].Mode {
+			return keys[i].Mode < keys[j].Mode
+		}
+		return keys[i].Result < keys[j].Result
+	})
+
+	rows := make([]histogramRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, histogramRow{
+			labels: map[string]string{
+				"mode":   key.Mode,
+				"result": key.Result,
+			},
+			value: values[key].snapshot(),
 		})
 	}
 	return rows
