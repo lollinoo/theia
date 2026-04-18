@@ -3,6 +3,8 @@ import type {
   TopologyDiscoveryMode,
 } from '../types/api';
 
+const TOPOLOGY_DISCOVERY_FOLLOWUP_DELAY_SECONDS = 20;
+
 export const TOPOLOGY_DISCOVERY_MODE_OPTIONS: Array<{
   value: TopologyDiscoveryMode;
   label: string;
@@ -74,4 +76,17 @@ export function formatTopologyDiscoveryTimestamp(value?: string | null): string 
     return value;
   }
   return parsed.toLocaleString();
+}
+
+export function formatTopologyFollowupExpectation(
+  state?: TopologyBootstrapState,
+  lastDiscoveryAt?: string | null,
+): string | null {
+  if (state !== 'followup_scheduled') {
+    return null;
+  }
+  if (!lastDiscoveryAt) {
+    return 'Queued shortly.';
+  }
+  return `About ${TOPOLOGY_DISCOVERY_FOLLOWUP_DELAY_SECONDS}s after last discovery.`;
 }

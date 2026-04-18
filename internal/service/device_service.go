@@ -284,6 +284,32 @@ func topologyDiscoveryResultLabel(neighborCount int, followupScheduled bool) str
 	}
 }
 
+func (s *DeviceService) canTemporarilyBootstrapPeer(device *domain.Device) bool {
+	if device == nil {
+		return false
+	}
+
+	configuredMode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+	if configuredMode == domain.TopologyDiscoveryModeOff {
+		return false
+	}
+
+	effectiveMode := domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
+	return effectiveMode == domain.TopologyDiscoveryModeOff
+}
+
+func (s *DeviceService) reopenBootstrapWindow(deviceID uuid.UUID) bool {
+	updated := false
+	s.updateTopologyDiscoveryState(deviceID, func(device *domain.Device) {
+		if !s.canTemporarilyBootstrapPeer(device) {
+			return
+		}
+		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
+		updated = true
+	})
+	return updated
+}
+
 func (s *DeviceService) hasIncompleteLLDPLinks(deviceID uuid.UUID) bool {
 	links, err := s.linkRepo.GetByDeviceID(deviceID)
 	if err != nil {
@@ -415,6 +441,24 @@ func (s *DeviceService) syncTopologyDiscoveryMetadata(deviceID uuid.UUID, neighb
 	})
 }
 
+func (s *DeviceService) finalizeBootstrapWindowIfExhausted(deviceID uuid.UUID, followupScheduled bool) {
+	if followupScheduled || !s.hasIncompleteLLDPLinks(deviceID) {
+		return
+	}
+
+	s.updateTopologyDiscoveryState(deviceID, func(device *domain.Device) {
+		mode := domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
+		if mode != domain.TopologyDiscoveryModeBootstrapOnce {
+			return
+		}
+
+		switch device.TopologyBootstrapState {
+		case domain.TopologyBootstrapStatePending, domain.TopologyBootstrapStateFollowupScheduled:
+			device.TopologyBootstrapState = domain.TopologyBootstrapStateCompleted
+		}
+	})
+}
+
 func (s *DeviceService) runDelayedReprobe(_ context.Context, id uuid.UUID) error {
 	device, err := s.deviceRepo.GetByID(id)
 	if err != nil {
@@ -467,7 +511,7 @@ func (s *DeviceService) scheduleIncompleteLinkReprobeAttempt(
 	})
 }
 
-func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, deviceIP string) {
+func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, deviceIP string) bool {
 	type reprobeTarget struct {
 		id    uuid.UUID
 		label string
@@ -486,6 +530,11 @@ func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, device
 		if peer.MetricsSource == domain.MetricsSourcePrometheus || peer.MetricsSource == domain.MetricsSourceNone {
 			continue
 		}
+		if domain.ResolveTopologyDiscoveryMode(peer, s.defaultTopologyDiscoveryMode()) == domain.TopologyDiscoveryModeOff {
+			if !s.reopenBootstrapWindow(peerID) {
+				continue
+			}
+		}
 		label := peer.IP
 		if label == "" {
 			label = peer.Hostname
@@ -493,16 +542,20 @@ func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, device
 		targets = append(targets, reprobeTarget{id: peerID, label: label})
 	}
 
+	scheduled := false
 	for _, target := range targets {
 		bookedAt, reserved := s.reserveIncompleteLinkReprobe(target.id)
 		if !reserved {
 			continue
 		}
 
+		scheduled = true
 		targetLabel := target.label
 		log.Printf("Scheduling delayed LLDP re-probe for %s in %s to resolve incomplete ports", targetLabel, s.reprobeDelay)
 		s.scheduleIncompleteLinkReprobeAttempt(target.id, targetLabel, bookedAt, s.reprobeDelay)
 	}
+
+	return scheduled
 }
 
 func (s *DeviceService) staticReprobeBudget() int {
@@ -573,10 +626,10 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 	}
 	followupScheduled := false
 	if s.shouldScheduleIncompleteLinkReprobe(deviceID) {
-		followupScheduled = true
-		s.scheduleIncompleteLinkReprobe(deviceID, deviceIP)
+		followupScheduled = s.scheduleIncompleteLinkReprobe(deviceID, deviceIP)
 	}
 	s.syncTopologyDiscoveryMetadata(deviceID, len(result.Neighbors), followupScheduled)
+	s.finalizeBootstrapWindowIfExhausted(deviceID, followupScheduled)
 
 	if err := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); err != nil {
 		log.Printf("Failed to update device %s status to up: %v", deviceIP, err)
