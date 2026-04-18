@@ -822,6 +822,153 @@ func TestProbeDevice_DoesNotScheduleDelayedLLDPReprobeForOlderDevices(t *testing
 	}
 }
 
+func TestScheduleIncompleteLinkReprobe_RetriesWhenStaticBudgetIsTemporarilyExhausted(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	localDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "edge-01",
+		IP:            "192.0.2.51",
+		SysName:       "edge-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+	}
+	if err := deviceRepo.Create(localDevice); err != nil {
+		t.Fatalf("Create local device failed: %v", err)
+	}
+
+	remoteDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "distribution-01",
+		IP:            "192.0.2.61",
+		SysName:       "distribution-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourcePrometheus,
+	}
+	if err := deviceRepo.Create(remoteDevice); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+
+	if err := linkRepo.Create(&domain.Link{
+		SourceDeviceID:    localDevice.ID,
+		SourceIfName:      "",
+		TargetDeviceID:    remoteDevice.ID,
+		TargetIfName:      "ether8",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("Create link failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	var scheduledDelays []time.Duration
+	reprobeCalls := 0
+	svc.scheduleFunc = func(delay time.Duration, fn func()) {
+		scheduledDelays = append(scheduledDelays, delay)
+		if len(scheduledDelays) == 1 {
+			svc.reprobeInFlight.Store(int32(svc.staticReprobeBudget()))
+		} else {
+			svc.reprobeInFlight.Store(0)
+		}
+		fn()
+	}
+	svc.delayedReprobe = func(ctx context.Context, id uuid.UUID) error {
+		reprobeCalls++
+		if id != localDevice.ID {
+			t.Fatalf("expected reprobe for %s, got %s", localDevice.ID, id)
+		}
+		return nil
+	}
+
+	svc.scheduleIncompleteLinkReprobe(localDevice.ID, localDevice.IP)
+
+	if len(scheduledDelays) != 2 {
+		t.Fatalf("expected initial schedule and retry, got %d schedules", len(scheduledDelays))
+	}
+	if scheduledDelays[0] != svc.reprobeDelay {
+		t.Fatalf("initial delayed reprobe = %v, want %v", scheduledDelays[0], svc.reprobeDelay)
+	}
+	if scheduledDelays[1] != incompleteLinkReprobeRetry {
+		t.Fatalf("retry delayed reprobe = %v, want %v", scheduledDelays[1], incompleteLinkReprobeRetry)
+	}
+	if reprobeCalls != 1 {
+		t.Fatalf("expected one delayed reprobe call after retry, got %d", reprobeCalls)
+	}
+}
+
+func TestApplyStaticDiscovery_CompletesBootstrapOnceDuringRegularStaticPersistence(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	localDevice := &domain.Device{
+		ID:                     uuid.New(),
+		Hostname:               "edge-01",
+		IP:                     "192.0.2.51",
+		SysName:                "edge-01",
+		Status:                 domain.DeviceStatusUp,
+		Managed:                true,
+		DeviceType:             domain.DeviceTypeSwitch,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+		TopologyBootstrapState: domain.TopologyBootstrapStateFollowupScheduled,
+	}
+	if err := deviceRepo.Create(localDevice); err != nil {
+		t.Fatalf("Create local device failed: %v", err)
+	}
+
+	remoteDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "distribution-01",
+		IP:            "192.0.2.61",
+		SysName:       "distribution-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+	}
+	if err := deviceRepo.Create(remoteDevice); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	if _, err := svc.ApplyStaticDiscovery(localDevice.ID, StaticDiscoveryInput{
+		SysName:    "edge-01",
+		DeviceType: domain.DeviceTypeSwitch,
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName: remoteDevice.SysName,
+				LocalIfName:   "ether1",
+				RemotePortID:  "ether8",
+				Protocol:      domain.DiscoveryProtocolLLDP,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+
+	updated, err := deviceRepo.GetByID(localDevice.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("expected bootstrap state completed, got %s", updated.TopologyBootstrapState)
+	}
+	if updated.LastTopologyDiscoveryAt == nil {
+		t.Fatal("expected last_topology_discovery_at to be populated")
+	}
+	if updated.LastTopologyDiscoveryResult != "neighbors_found" {
+		t.Fatalf("expected last_topology_discovery_result neighbors_found, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
 func TestProbeDiscoversNeighbors_SkipsUnmatchedNeighbors(t *testing.T) {
 	result := &snmp.DiscoveryResult{
 		SysName:    "switch1",
