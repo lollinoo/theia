@@ -18,6 +18,12 @@ const (
 	pingPeriod     = 54 * time.Second
 	maxMessageSize = 4096
 	sendBufferSize = 16
+
+	wsBackpressureScopeBroadcast  = "broadcast"
+	wsBackpressureScopeClientSend = "client_send"
+
+	wsBackpressureReasonHubBufferFull    = "hub_buffer_full"
+	wsBackpressureReasonClientBufferFull = "client_buffer_full"
 )
 
 // Hub manages all active WebSocket clients and server-side broadcasts.
@@ -82,7 +88,12 @@ func (h *Hub) Broadcast(msg Message) {
 		return
 	}
 	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
-	h.broadcast <- payload
+	select {
+	case h.broadcast <- payload:
+	default:
+		observability.Default().IncWSBackpressure(wsBackpressureScopeBroadcast, wsBackpressureReasonHubBufferFull)
+		h.broadcast <- payload
+	}
 }
 
 // SendTo serializes a message and queues it for a single client.
@@ -131,6 +142,7 @@ func (h *Hub) enqueue(client *Client, payload []byte) bool {
 	case client.send <- payload:
 		return true
 	default:
+		observability.Default().IncWSBackpressure(wsBackpressureScopeClientSend, wsBackpressureReasonClientBufferFull)
 		return false
 	}
 }

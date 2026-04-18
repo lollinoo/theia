@@ -48,6 +48,11 @@ type wsMetricKey struct {
 	Type  string
 }
 
+type wsBackpressureKey struct {
+	Scope  string
+	Reason string
+}
+
 type refreshSnapshotBuildKey struct {
 	Mode   string
 	Result string
@@ -85,6 +90,7 @@ type Registry struct {
 	refreshSnapshotBuild       map[refreshSnapshotBuildKey]*histogram
 	refreshTopologyReloadTotal map[string]uint64
 	wsMessagesTotal            map[wsMetricKey]uint64
+	wsBackpressureTotal        map[wsBackpressureKey]uint64
 	wsPayloadBytes             map[wsMetricKey]*histogram
 	unknownNeighborsTotal      map[deviceProtocolKey]uint64
 	stateChangesDroppedTotal   uint64
@@ -129,6 +135,7 @@ func NewRegistry() *Registry {
 		},
 		refreshTopologyReloadTotal: make(map[string]uint64),
 		wsMessagesTotal:            make(map[wsMetricKey]uint64),
+		wsBackpressureTotal:        make(map[wsBackpressureKey]uint64),
 		wsPayloadBytes:             make(map[wsMetricKey]*histogram),
 		unknownNeighborsTotal:      make(map[deviceProtocolKey]uint64),
 	}
@@ -236,6 +243,11 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_ws_messages_total",
 		"WebSocket messages emitted by scope and type.",
 		sortedWSRows(r.wsMessagesTotal),
+	)
+	writeCounterVec(&b,
+		"theia_ws_backpressure_total",
+		"WebSocket backpressure events by scope and reason.",
+		sortedWSBackpressureRows(r.wsBackpressureTotal),
 	)
 	writeHistogramVec(&b,
 		"theia_ws_message_payload_bytes",
@@ -408,6 +420,15 @@ func (r *Registry) ObserveWSMessage(scope, messageType string, payloadBytes int)
 		r.wsPayloadBytes[key] = h
 	}
 	h.observe(float64(payloadBytes))
+}
+
+func (r *Registry) IncWSBackpressure(scope, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsBackpressureTotal[wsBackpressureKey{
+		Scope:  scope,
+		Reason: reason,
+	}]++
 }
 
 func (r *Registry) AddUnknownNeighbors(deviceID uuid.UUID, protocol domain.DiscoveryProtocol, count int) {
@@ -703,6 +724,31 @@ func sortedWSRows(values map[wsMetricKey]uint64) []counterRow {
 			labels: map[string]string{
 				"scope": key.Scope,
 				"type":  key.Type,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedWSBackpressureRows(values map[wsBackpressureKey]uint64) []counterRow {
+	keys := make([]wsBackpressureKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Scope != keys[j].Scope {
+			return keys[i].Scope < keys[j].Scope
+		}
+		return keys[i].Reason < keys[j].Reason
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"scope":  key.Scope,
+				"reason": key.Reason,
 			},
 			value: values[key],
 		})

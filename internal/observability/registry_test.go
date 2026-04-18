@@ -32,6 +32,8 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.ObserveRefreshSnapshotBuild("dirty", 50*time.Millisecond, false)
 	registry.IncRefreshTopologyReload("topology_dirty")
 	registry.ObserveWSMessage("broadcast", "snapshot", 512)
+	registry.IncWSBackpressure("broadcast", "hub_buffer_full")
+	registry.IncWSBackpressure("client_send", "client_buffer_full")
 	registry.AddUnknownNeighbors(deviceID, domain.DiscoveryProtocolLLDP, 4)
 	registry.AddDroppedStateChanges(7)
 
@@ -58,6 +60,8 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_refresh_snapshot_build_seconds_count{mode="dirty",result="error"} 1`)
 	assertContainsMetric(t, body, `theia_refresh_topology_reload_total{reason="topology_dirty"} 1`)
 	assertContainsMetric(t, body, `theia_ws_messages_total{scope="broadcast",type="snapshot"} 1`)
+	assertContainsMetric(t, body, `theia_ws_backpressure_total{reason="hub_buffer_full",scope="broadcast"} 1`)
+	assertContainsMetric(t, body, `theia_ws_backpressure_total{reason="client_buffer_full",scope="client_send"} 1`)
 	assertContainsMetric(t, body, `theia_unknown_neighbors_total{device_id="`+deviceID.String()+`",protocol="lldp"} 4`)
 	assertContainsMetric(t, body, `theia_state_changes_dropped_total 7`)
 }
