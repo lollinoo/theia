@@ -133,6 +133,50 @@ func TestHubBroadcast_RecordsHubBufferBackpressure(t *testing.T) {
 	}
 }
 
+func TestHubConsumeBroadcastOverflow_IsStickyUntilConsumed(t *testing.T) {
+	hub := NewHub()
+	for i := 0; i < cap(hub.broadcast); i++ {
+		hub.broadcast <- []byte("prefill")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		hub.mu.RLock()
+		overflowed := hub.broadcastOverflow
+		hub.mu.RUnlock()
+		if overflowed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	<-hub.broadcast
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Broadcast did not unblock after draining the hub buffer")
+	}
+
+	if !hub.ConsumeBroadcastOverflow() {
+		t.Fatal("expected broadcast overflow marker after hub buffer backpressure")
+	}
+	if hub.ConsumeBroadcastOverflow() {
+		t.Fatal("expected broadcast overflow marker to clear after consumption")
+	}
+
+	client := registerTestClient(hub)
+	client.send <- []byte("occupied")
+	if ok := hub.enqueue(client, []byte("blocked")); ok {
+		t.Fatal("expected client-send backpressure to remain isolated")
+	}
+}
+
 func TestHubEnqueue_RecordsClientBufferBackpressure(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {

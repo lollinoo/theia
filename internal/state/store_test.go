@@ -98,6 +98,24 @@ func TestStore_SnapshotIsDeepCopy(t *testing.T) {
 	}
 }
 
+func TestStoreConsumeOverflowed_IsStickyUntilConsumed(t *testing.T) {
+	s := NewStore()
+
+	for i := 0; i < cap(s.changes); i++ {
+		s.changes <- []uuid.UUID{uuid.New()}
+	}
+
+	s.emitChanges([]uuid.UUID{uuid.New()})
+	s.emitChanges([]uuid.UUID{uuid.New()})
+
+	if !s.ConsumeOverflowed() {
+		t.Fatal("expected overflow marker after dropped state changes")
+	}
+	if s.ConsumeOverflowed() {
+		t.Fatal("expected overflow marker to clear after consumption")
+	}
+}
+
 func TestStoreUpdate_OperationalPollDoesNotOverwritePerformanceFreshnessMetadata(t *testing.T) {
 	t.Parallel()
 

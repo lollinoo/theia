@@ -1373,6 +1373,57 @@ func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing
 	})
 }
 
+func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredThenSnapshot(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	pipeline.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	for i := 0; i < 40; i++ {
+		cpu := float64(70 + i)
+		at := time.Date(2026, 4, 18, 12, 0, i, 0, time.UTC)
+		store.Update(state.StateUpdate{
+			DeviceID:        deviceID,
+			VolatilityClass: domain.VolatilityClassPerformance,
+			Metrics: &domain.DeviceMetrics{
+				DeviceID:    deviceID,
+				CPUPercent:  &cpu,
+				CollectedAt: at,
+			},
+			PollSuccess:      true,
+			ExpectedInterval: 30 * time.Second,
+			Timestamp:        at,
+		})
+	}
+
+	if err := pipeline.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty overflow recovery: %v", err)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) < 2 {
+		t.Fatalf("expected resync_required and snapshot, got %v", types)
+	}
+	if types[0] != ws.MessageTypeResyncRequired || types[1] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected resync_required before snapshot, got %v", types)
+	}
+
+	var message struct {
+		Type    string                   `json:"type"`
+		Payload ws.ResyncRequiredPayload `json:"payload"`
+	}
+	if err := json.Unmarshal(messages[0], &message); err != nil {
+		t.Fatalf("decode resync_required message: %v", err)
+	}
+	if message.Payload.Scope != ws.ResyncScopeOverview {
+		t.Fatalf("resync scope = %q, want %q", message.Payload.Scope, ws.ResyncScopeOverview)
+	}
+	if message.Payload.Reason != ws.ResyncReasonStateChangesDrop {
+		t.Fatalf("resync reason = %q, want %q", message.Payload.Reason, ws.ResyncReasonStateChangesDrop)
+	}
+}
+
 func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 

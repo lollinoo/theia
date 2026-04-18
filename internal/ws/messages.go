@@ -23,6 +23,8 @@ const (
 	MessageTypeAlert = "alert"
 	// MessageTypePrometheusStatus notifies clients of Prometheus availability changes.
 	MessageTypePrometheusStatus = "prometheus_status"
+	// MessageTypeResyncRequired tells overview clients to expect a full snapshot resync.
+	MessageTypeResyncRequired = "resync_required"
 	// MessageTypeTopologyChanged notifies clients that the topology has changed (new links discovered).
 	MessageTypeTopologyChanged = "topology_changed"
 	// MessageTypeSubscribeDetail registers a device-specific detail subscription for one client.
@@ -31,11 +33,23 @@ const (
 	MessageTypeUnsubscribeDetail = "unsubscribe_detail"
 )
 
+const (
+	ResyncScopeOverview          = "overview"
+	ResyncReasonStateChangesDrop = "state_changes_dropped"
+	ResyncReasonHubBufferFull    = "hub_buffer_full"
+)
+
 // PrometheusStatusPayload is sent when Prometheus availability changes.
 type PrometheusStatusPayload struct {
 	Enabled   bool   `json:"enabled"`
 	Available bool   `json:"available"`
 	Error     string `json:"error,omitempty"`
+}
+
+// ResyncRequiredPayload tells clients why the overview stream is degraded.
+type ResyncRequiredPayload struct {
+	Scope  string `json:"scope"`
+	Reason string `json:"reason"`
 }
 
 // Message is the WebSocket envelope used for all server pushes.

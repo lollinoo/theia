@@ -37,6 +37,8 @@ const (
 	refreshReloadReasonFullResync            = "full_resync"
 	refreshReloadReasonDirtyDeltaFallback    = "dirty_delta_fallback"
 	refreshReloadReasonTopologyDrainFallback = "topology_drain_fallback"
+	refreshReloadReasonStateChangesDropped   = ws.ResyncReasonStateChangesDrop
+	refreshReloadReasonHubBufferFull         = ws.ResyncReasonHubBufferFull
 )
 
 type pipelineScheduler interface {
@@ -681,6 +683,16 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 		return nil
 	}
 
+	if resyncReason, ok := p.consumeResyncRequired(); ok {
+		p.hub.Broadcast(ws.Message{
+			Type: ws.MessageTypeResyncRequired,
+			Payload: ws.ResyncRequiredPayload{
+				Scope:  ws.ResyncScopeOverview,
+				Reason: resyncReason,
+			},
+		})
+		return p.broadcastFullSnapshot(ctx, reloadReasonForResync(resyncReason), topologyDirty)
+	}
 	if topologyDirty {
 		return p.broadcastFullSnapshot(ctx, refreshReloadReasonTopologyDirty, true)
 	}
@@ -905,6 +917,27 @@ func (p *PipelineOrchestrator) clockNow() time.Time {
 		return p.now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (p *PipelineOrchestrator) consumeResyncRequired() (string, bool) {
+	if p.stateStore != nil && p.stateStore.ConsumeOverflowed() {
+		return ws.ResyncReasonStateChangesDrop, true
+	}
+	if p.hub != nil && p.hub.ConsumeBroadcastOverflow() {
+		return ws.ResyncReasonHubBufferFull, true
+	}
+	return "", false
+}
+
+func reloadReasonForResync(reason string) string {
+	switch reason {
+	case ws.ResyncReasonStateChangesDrop:
+		return refreshReloadReasonStateChangesDropped
+	case ws.ResyncReasonHubBufferFull:
+		return refreshReloadReasonHubBufferFull
+	default:
+		return refreshReloadReasonDirtyDeltaFallback
+	}
 }
 
 func (p *PipelineOrchestrator) prometheusURL() string {

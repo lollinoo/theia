@@ -1,4 +1,12 @@
-type WSMessageType = 'snapshot' | 'snapshot_delta' | 'metrics' | 'link_metrics' | 'alert' | 'prometheus_status' | 'topology_changed';
+export type WSMessageType =
+  'snapshot'
+  | 'snapshot_delta'
+  | 'metrics'
+  | 'link_metrics'
+  | 'alert'
+  | 'prometheus_status'
+  | 'resync_required'
+  | 'topology_changed';
 type APIRecord = Record<string, unknown>;
 
 export interface DeviceMetricsDTO {
@@ -49,6 +57,11 @@ export interface PrometheusStatusPayload {
   error?: string;
 }
 
+export interface ResyncRequiredPayload {
+  scope: 'overview';
+  reason: 'state_changes_dropped' | 'hub_buffer_full';
+}
+
 export interface WSMessage {
   type: WSMessageType;
   payload: unknown;
@@ -67,6 +80,11 @@ export interface SnapshotDeltaWSMessage extends Omit<WSMessage, 'type' | 'payloa
 export interface PrometheusStatusWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'prometheus_status';
   payload: PrometheusStatusPayload;
+}
+
+export interface ResyncRequiredWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'resync_required';
+  payload: ResyncRequiredPayload;
 }
 
 function isRecord(value: unknown): value is APIRecord {
@@ -219,7 +237,9 @@ export function mergeSnapshotDelta(
   };
 }
 
-export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | SnapshotDeltaWSMessage | PrometheusStatusWSMessage {
+export function parseWSMessage(
+  value: unknown,
+): WSMessage | SnapshotWSMessage | SnapshotDeltaWSMessage | PrometheusStatusWSMessage | ResyncRequiredWSMessage {
   if (!isRecord(value)) {
     throw new Error('invalid websocket message');
   }
@@ -232,6 +252,7 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | 
     type !== 'link_metrics' &&
     type !== 'alert' &&
     type !== 'prometheus_status' &&
+    type !== 'resync_required' &&
     type !== 'topology_changed'
   ) {
     throw new Error(`unsupported websocket message type: ${type}`);
@@ -261,6 +282,27 @@ export function parseWSMessage(value: unknown): WSMessage | SnapshotWSMessage | 
         error: typeof p.error === 'string' ? p.error : undefined,
       },
     };
+  }
+
+  if (type === 'resync_required') {
+    const payload = isRecord(value.payload) ? value.payload : {};
+    const scope = readString(payload, 'scope');
+    const reason = readString(payload, 'reason');
+
+    if (scope !== 'overview') {
+      throw new Error(`unsupported resync scope: ${scope}`);
+    }
+    if (reason !== 'state_changes_dropped' && reason !== 'hub_buffer_full') {
+      throw new Error(`unsupported resync reason: ${reason}`);
+    }
+
+    return {
+      type,
+      payload: {
+        scope,
+        reason,
+      },
+    } as ResyncRequiredWSMessage;
   }
 
   if (type === 'topology_changed') {

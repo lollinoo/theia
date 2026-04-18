@@ -28,11 +28,12 @@ const (
 
 // Hub manages all active WebSocket clients and server-side broadcasts.
 type Hub struct {
-	clients    map[*Client]bool
-	broadcast  chan []byte
-	register   chan *Client
-	unregister chan *Client
-	mu         sync.RWMutex
+	clients           map[*Client]bool
+	broadcast         chan []byte
+	register          chan *Client
+	unregister        chan *Client
+	mu                sync.RWMutex
+	broadcastOverflow bool
 }
 
 // Client is a single WebSocket connection.
@@ -91,6 +92,9 @@ func (h *Hub) Broadcast(msg Message) {
 	select {
 	case h.broadcast <- payload:
 	default:
+		h.mu.Lock()
+		h.broadcastOverflow = true
+		h.mu.Unlock()
 		observability.Default().IncWSBackpressure(wsBackpressureScopeBroadcast, wsBackpressureReasonHubBufferFull)
 		h.broadcast <- payload
 	}
@@ -135,6 +139,16 @@ func (h *Hub) DetailSubscribers(deviceID uuid.UUID) []*Client {
 	}
 
 	return subscribers
+}
+
+// ConsumeBroadcastOverflow reports whether a broadcast buffer overflow happened
+// since the last call and clears the sticky marker.
+func (h *Hub) ConsumeBroadcastOverflow() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	overflowed := h.broadcastOverflow
+	h.broadcastOverflow = false
+	return overflowed
 }
 
 func (h *Hub) enqueue(client *Client, payload []byte) bool {

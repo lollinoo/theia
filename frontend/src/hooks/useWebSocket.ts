@@ -3,6 +3,8 @@ import {
   mergeSnapshotDelta,
   parseWSMessage,
   type PrometheusStatusPayload,
+  type ResyncRequiredPayload,
+  type ResyncRequiredWSMessage,
   type SnapshotDeltaWSMessage,
   type SnapshotPayload,
   type SnapshotWSMessage,
@@ -136,6 +138,10 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
             });
           } else if (message.type === 'prometheus_status') {
             setPrometheusStatus(message.payload as PrometheusStatusPayload);
+          } else if (message.type === 'resync_required') {
+            window.dispatchEvent(new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
+              detail: (message as ResyncRequiredWSMessage).payload,
+            }));
           } else if (message.type === 'topology_changed') {
             window.dispatchEvent(new Event('topology-changed'));
           }
