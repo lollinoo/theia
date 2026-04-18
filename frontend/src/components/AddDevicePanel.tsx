@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { checkPrometheusHealth, createDevice, fetchAreas, fetchSNMPProfiles } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
-import type { Area, SNMPProfile } from '../types/api';
+import type { Area, SNMPProfile, TopologyDiscoveryMode } from '../types/api';
 import { validateIPOrHostname, validateMaxLength, validateRequired, MAX_STRING_LENGTH } from '../utils/validation';
+import {
+  TOPOLOGY_DISCOVERY_MODE_OPTIONS,
+  formatTopologyDiscoveryMode,
+} from '../utils/topologyDiscovery';
 import { MaterialIcon } from './MaterialIcon';
 
 interface AddDevicePanelProps {
@@ -28,6 +32,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [metricsMode, setMetricsMode] = useState<MetricsMode>('snmp');
   const [prometheusLabelName, setPrometheusLabelName] = useState('instance');
   const [prometheusLabelValue, setPrometheusLabelValue] = useState('');
+  const [topologyDiscoveryMode, setTopologyDiscoveryMode] = useState<TopologyDiscoveryMode>('inherit');
 
   // v2c
   const [community, setCommunity] = useState('public');
@@ -93,6 +98,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     setMetricsMode('snmp');
     setPrometheusLabelName('instance');
     setPrometheusLabelValue('');
+    setTopologyDiscoveryMode('inherit');
     setAreaIds([]);
     // Reset virtual fields
     setVirtualSubtype('internet');
@@ -214,9 +220,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     setError(null);
     try {
       const effectiveLabelValue = prometheusLabelValue.trim() || hostname.trim();
-      await createDevice({
-        hostname: hostname.trim(),
-        ip: hostname.trim(),
+        await createDevice({
+          hostname: hostname.trim(),
+          ip: hostname.trim(),
         snmp: isV3
           ? {
               version: '3',
@@ -234,6 +240,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         metrics_source: metricsMode,
         prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
         prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
+        topology_discovery_mode: topologyDiscoveryMode,
         area_ids: areaIds.length > 0 ? areaIds : undefined,
       });
       onDeviceAdded();
@@ -409,6 +416,30 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                 Metrics from Prometheus. Falls back to SNMP if Prometheus is unavailable or has no data.
               </p>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="topology-discovery-mode" className={labelClass}>
+              Topology Discovery
+            </label>
+            <select
+              id="topology-discovery-mode"
+              value={topologyDiscoveryMode}
+              onChange={(e) => setTopologyDiscoveryMode(e.target.value as TopologyDiscoveryMode)}
+              className={selectClass}
+            >
+              {TOPOLOGY_DISCOVERY_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-on-bg-secondary/70">
+              Selected mode: <span className="font-medium">{formatTopologyDiscoveryMode(topologyDiscoveryMode)}</span>.
+              {metricsMode === 'prometheus'
+                ? ' Prometheus-only devices skip SNMP topology discovery until SNMP or fallback mode is enabled.'
+                : ' Bootstrap once runs an initial discovery window and then auto-disables.'}
+            </p>
           </div>
 
           {/* Prometheus label config */}

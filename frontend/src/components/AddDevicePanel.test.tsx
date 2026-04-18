@@ -26,6 +26,11 @@ vi.mock('../api/client', () => ({
     metrics_source: 'snmp',
     prometheus_label_name: 'instance',
     prometheus_label_value: '',
+    topology_discovery_mode: 'inherit',
+    effective_topology_discovery_mode: 'off',
+    topology_bootstrap_state: 'idle',
+    last_topology_discovery_at: null,
+    last_topology_discovery_result: '',
   }),
 }));
 
@@ -68,6 +73,14 @@ describe('AddDevicePanel', () => {
 
     expect(screen.getByText('Metrics Source')).toBeInTheDocument();
     expect(screen.getByText('SNMP Direct')).toBeInTheDocument();
+  });
+
+  it('renders topology discovery selector', () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    const topologySelect = screen.getByLabelText('Topology Discovery');
+    expect(topologySelect).toBeInTheDocument();
+    expect(topologySelect).toHaveValue('inherit');
   });
 
   it('renders optional fields', () => {
@@ -160,6 +173,26 @@ describe('virtual mode', () => {
     await waitFor(() => {
       const callArg = (createDevice as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(callArg).not.toHaveProperty('snmp');
+    });
+  });
+
+  it('submits physical device with topology discovery mode override', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.change(screen.getByLabelText('Topology Discovery'), {
+      target: { value: 'bootstrap_once' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(createDevice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          topology_discovery_mode: 'bootstrap_once',
+        }),
+      );
     });
   });
 });

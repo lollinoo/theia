@@ -57,6 +57,23 @@ describe('SettingsPanel (COMP-05)', () => {
     expect(html).not.toContain('yellow-500');
     expect(html).not.toContain('yellow-400');
   });
+
+  it('renders topology discovery default selector and saves changes', async () => {
+    const { updateSetting } = await import('../api/client');
+
+    render(<SettingsPanel />);
+
+    fireEvent.change(screen.getByLabelText('Topology Discovery Default'), {
+      target: { value: 'bootstrap_once' },
+    });
+
+    await waitFor(() => {
+      expect(updateSetting).toHaveBeenCalledWith(
+        'topology_discovery_default_mode',
+        'bootstrap_once',
+      );
+    });
+  });
 });
 
 // --- Gap 7: SettingsPanel URL validation on blur ---

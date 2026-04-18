@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchSettings, updateSetting, fetchHealthVersion, type HealthVersion } from '../api/client';
+import type { TopologyDiscoveryMode } from '../types/api';
 import { validateURL, validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
+import {
+  TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS,
+  formatTopologyDiscoveryMode,
+} from '../utils/topologyDiscovery';
 import { AreaManager } from './AreaManager';
 import { SNMPProfileManager } from './SNMPProfileManager';
 import { CredentialProfileManager } from './CredentialProfileManager';
@@ -85,10 +90,13 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const [grafanaUrl, setGrafanaUrl] = useState('');
   const [prometheusUrl, setPrometheusUrl] = useState('');
   const [timezone, setTimezone] = useState('UTC');
+  const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] =
+    useState<TopologyDiscoveryMode>('lldp_cdp');
   const [savedPolling, setSavedPolling] = useState(false);
   const [savedGrafana, setSavedGrafana] = useState(false);
   const [savedPrometheus, setSavedPrometheus] = useState(false);
   const [savedTimezone, setSavedTimezone] = useState(false);
+  const [savedTopologyDiscovery, setSavedTopologyDiscovery] = useState(false);
   const [versionInfo, setVersionInfo] = useState<HealthVersion | null>(null);
   const [backupSectionOpen, setBackupSectionOpen] = useState(false);
   const [deviceBackupSectionOpen, setDeviceBackupSectionOpen] = useState(false);
@@ -109,6 +117,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const savedPrometheusTimerRef = useRef<number | null>(null);
   const savedTimezoneTimerRef = useRef<number | null>(null);
+  const savedTopologyDiscoveryTimerRef = useRef<number | null>(null);
   const deviceIntervalTimerRef = useRef<number | null>(null);
   const deviceRetentionTimerRef = useRef<number | null>(null);
   const savedDeviceIntervalTimerRef = useRef<number | null>(null);
@@ -131,6 +140,10 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         setGrafanaUrl(settings['grafana_url'] ?? '');
         setPrometheusUrl(settings['prometheus_url'] ?? '');
         setTimezone(settings['timezone'] || 'UTC');
+        setTopologyDiscoveryDefaultMode(
+          (settings['topology_discovery_default_mode'] as TopologyDiscoveryMode | undefined) ??
+            'lldp_cdp',
+        );
         setDeviceBackupInterval(settings['device_backup_interval_hours'] ?? '0');
         setDeviceBackupRetention(settings['device_backup_retention_count'] ?? '5');
         setBridgeSecret(settings['bridge_secret'] ?? '');
@@ -328,6 +341,44 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
             <span className="text-xs text-on-bg-secondary">sec</span>
           </div>
         )}
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label
+            htmlFor="topology-discovery-default"
+            className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
+          >
+            Topology Discovery Default
+          </label>
+          <SavedIndicator visible={savedTopologyDiscovery} />
+        </div>
+        <select
+          id="topology-discovery-default"
+          value={topologyDiscoveryDefaultMode}
+          onChange={(e) => {
+            const nextValue = e.target.value as TopologyDiscoveryMode;
+            setTopologyDiscoveryDefaultMode(nextValue);
+            void updateSetting('topology_discovery_default_mode', nextValue).then(() => {
+              showSaved(setSavedTopologyDiscovery, savedTopologyDiscoveryTimerRef);
+              onSettingsChange?.();
+            });
+          }}
+          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+        >
+          {TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-on-bg-secondary/70">
+          Applies to devices using the per-device <span className="font-medium">Use global default</span> mode.
+          Current default:{' '}
+          <span className="font-medium">
+            {formatTopologyDiscoveryMode(topologyDiscoveryDefaultMode)}
+          </span>.
+        </p>
       </div>
 
       <div className="space-y-2">

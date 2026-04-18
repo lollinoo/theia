@@ -22,6 +22,11 @@ function deviceResource(id: string, deviceType: string) {
       metrics_source: 'prometheus',
       prometheus_label_name: 'instance',
       prometheus_label_value: `${id}.example.test:9100`,
+      topology_discovery_mode: 'inherit',
+      effective_topology_discovery_mode: 'off',
+      topology_bootstrap_state: 'idle',
+      last_topology_discovery_at: null,
+      last_topology_discovery_result: '',
     },
     relationships: {
       interfaces: {
@@ -44,5 +49,29 @@ describe('parseDevicesResponse', () => {
     expect(devices[1].device_type).toBe('firewall');
     expect(devices[0].notes).toBe('Managed by NOC');
     expect(devices[1].notes).toBeNull();
+  });
+
+  it('parses topology discovery fields from the device payload', () => {
+    const devices = parseDevicesResponse({
+      data: [
+        {
+          ...deviceResource('router-1', 'router'),
+          attributes: {
+            ...deviceResource('router-1', 'router').attributes,
+            topology_discovery_mode: 'bootstrap_once',
+            effective_topology_discovery_mode: 'bootstrap_once',
+            topology_bootstrap_state: 'followup_scheduled',
+            last_topology_discovery_at: '2026-04-18T12:34:56Z',
+            last_topology_discovery_result: 'ports_pending',
+          },
+        },
+      ],
+    });
+
+    expect(devices[0].topology_discovery_mode).toBe('bootstrap_once');
+    expect(devices[0].effective_topology_discovery_mode).toBe('bootstrap_once');
+    expect(devices[0].topology_bootstrap_state).toBe('followup_scheduled');
+    expect(devices[0].last_topology_discovery_at).toBe('2026-04-18T12:34:56Z');
+    expect(devices[0].last_topology_discovery_result).toBe('ports_pending');
   });
 });

@@ -7,6 +7,7 @@ import {
   deleteDevice,
   fetchBackupJobs,
   restoreInstanceBackup,
+  runTopologyDiscovery,
   updateDevice,
   type CreateDevicePayload,
 } from './client';
@@ -45,6 +46,11 @@ function deviceResource(id: string, hostname: string, ip: string) {
       metrics_source: 'prometheus',
       prometheus_label_name: 'instance',
       prometheus_label_value: `${ip}:9100`,
+      topology_discovery_mode: 'inherit',
+      effective_topology_discovery_mode: 'off',
+      topology_bootstrap_state: 'idle',
+      last_topology_discovery_at: null,
+      last_topology_discovery_result: '',
     },
     relationships: {
       interfaces: { data: [] },
@@ -281,6 +287,35 @@ describe('updateDevice', () => {
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ notes: null });
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ notes: 'Needs maintenance window' });
+  });
+
+  it('passes topology discovery mode through unchanged', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateDevice('uuid-1', { topology_discovery_mode: 'bootstrap_once' });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      topology_discovery_mode: 'bootstrap_once',
+    });
+  });
+});
+
+describe('runTopologyDiscovery', () => {
+  it('posts to the device topology discovery endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({ status: 'topology_discovery_started' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await runTopologyDiscovery('uuid-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/devices/uuid-1/topology-discovery');
+    expect(options.method).toBe('POST');
   });
 });
 
