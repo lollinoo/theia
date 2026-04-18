@@ -7,6 +7,7 @@ import type {
   DeviceCredentialProfile,
   DevicePollClass,
   SNMPProfile,
+  TopologyDiscoveryMode,
 } from '../types/api';
 import {
   assignCredentialProfile,
@@ -18,6 +19,7 @@ import {
   fetchDeviceCredentialProfiles,
   fetchSettings,
   fetchSNMPProfiles,
+  runTopologyDiscovery,
   setWinBoxProfile,
   testSNMPConnection,
   unassignCredentialProfile,
@@ -32,6 +34,13 @@ import {
   validateURL,
   MAX_STRING_LENGTH,
 } from '../utils/validation';
+import {
+  TOPOLOGY_DISCOVERY_MODE_OPTIONS,
+  formatTopologyBootstrapState,
+  formatTopologyDiscoveryMode,
+  formatTopologyDiscoveryResult,
+  formatTopologyDiscoveryTimestamp,
+} from '../utils/topologyDiscovery';
 import { MaterialIcon } from './MaterialIcon';
 
 const POLLING_PRESETS = [
@@ -95,6 +104,9 @@ export function DeviceConfigPanel({
   const [metricsSource, setMetricsSource] = useState<MetricsSource>(
     device.metrics_source || 'snmp',
   );
+  const [topologyDiscoveryMode, setTopologyDiscoveryMode] = useState<TopologyDiscoveryMode>(
+    device.topology_discovery_mode || 'inherit',
+  );
   const [prometheusLabelName, setPrometheusLabelName] = useState(device.prometheus_label_name || 'instance');
   const [prometheusLabelValue, setPrometheusLabelValue] = useState(device.prometheus_label_value || '');
   const [vendorOverride, setVendorOverride] = useState(device.vendor || '');
@@ -117,6 +129,10 @@ export function DeviceConfigPanel({
 
   const [savedPolling, setSavedPolling] = useState(false);
   const [savedGrafana, setSavedGrafana] = useState(false);
+  const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] = useState<TopologyDiscoveryMode>('lldp_cdp');
+  const [topologyDiscoveryMessage, setTopologyDiscoveryMessage] = useState<string | null>(null);
+  const [topologyDiscoveryError, setTopologyDiscoveryError] = useState<string | null>(null);
+  const [topologyDiscoveryRunning, setTopologyDiscoveryRunning] = useState(false);
 
   // Field-level validation errors
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -197,6 +213,10 @@ export function DeviceConfigPanel({
     fetchSettings()
       .then((settings) => {
         setGrafanaUrl(settings[grafanaKey] ?? '');
+        setTopologyDiscoveryDefaultMode(
+          (settings['topology_discovery_default_mode'] as TopologyDiscoveryMode | undefined) ??
+            'lldp_cdp',
+        );
       })
       .catch(() => {/* non-fatal */ });
   }, [device.id, grafanaKey]);
@@ -213,9 +233,13 @@ export function DeviceConfigPanel({
     setVendorOverride(device.vendor || '');
     setAreaIds(device.area_ids ?? []);
     setMetricsSource(device.metrics_source || 'snmp');
+    setTopologyDiscoveryMode(device.topology_discovery_mode || 'inherit');
     setPrometheusLabelName(device.prometheus_label_name || 'instance');
     setPrometheusLabelValue(device.prometheus_label_value || '');
     syncPollingState(device.poll_interval_override);
+    setTopologyDiscoveryMessage(null);
+    setTopologyDiscoveryError(null);
+    setTopologyDiscoveryRunning(false);
     setFieldErrors({});
   }, [device]);
 
@@ -379,6 +403,7 @@ export function DeviceConfigPanel({
         metrics_source: metricsSource,
         prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
         prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
+        ...(!isVirtual ? { topology_discovery_mode: topologyDiscoveryMode } : {}),
       });
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated(updated);
@@ -405,6 +430,28 @@ export function DeviceConfigPanel({
     } catch {
       setDeleteLoading(false);
       setConfirmDelete(false);
+    }
+  }
+
+  async function handleRunTopologyDiscovery() {
+    setTopologyDiscoveryRunning(true);
+    setTopologyDiscoveryError(null);
+    setTopologyDiscoveryMessage(null);
+    try {
+      await runTopologyDiscovery(device.id);
+      setTopologyDiscoveryMessage(
+        'Topology discovery started. Links and ports will refresh when the SNMP pass completes.',
+      );
+    } catch (err) {
+      if (err instanceof ServerError || err instanceof ValidationError) {
+        setTopologyDiscoveryError(err.message);
+      } else {
+        setTopologyDiscoveryError(
+          err instanceof Error ? err.message : 'Failed to start topology discovery.',
+        );
+      }
+    } finally {
+      setTopologyDiscoveryRunning(false);
     }
   }
 
@@ -444,6 +491,19 @@ export function DeviceConfigPanel({
   const usesSNMP = metricsSource === 'snmp' || metricsSource === 'prometheus_snmp_fallback';
   const pollClass = device.poll_class || 'standard';
   const defaultPollingDuration = DEFAULT_POLLING_DURATION_BY_CLASS[pollClass];
+  const discoveryState = device.topology_bootstrap_state || 'idle';
+  const discoveryBusy =
+    topologyDiscoveryRunning ||
+    discoveryState === 'pending' ||
+    discoveryState === 'followup_scheduled';
+  const discoveryRunDisabled =
+    discoveryBusy || metricsSource === 'prometheus' || device.ip.trim() === '';
+  const effectiveTopologyDiscoveryMode =
+    device.effective_topology_discovery_mode || 'off';
+  const configuredTopologyDiscoveryMode =
+    topologyDiscoveryMode === 'inherit'
+      ? `Use global default (${formatTopologyDiscoveryMode(topologyDiscoveryDefaultMode)})`
+      : formatTopologyDiscoveryMode(topologyDiscoveryMode);
 
   return (
     <div className="space-y-6 p-4 transition-colors duration-200">
@@ -489,6 +549,89 @@ export function DeviceConfigPanel({
           )}
           {fieldErrors['polling'] && (
             <p className="text-xs text-status-down">{fieldErrors['polling']}</p>
+          )}
+        </div>
+      )}
+
+      {!isVirtual && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+              Topology Discovery
+            </p>
+            <span className="text-xs text-on-bg-secondary/70">
+              Effective: {formatTopologyDiscoveryMode(effectiveTopologyDiscoveryMode)}
+            </span>
+          </div>
+          <select
+            id="device-topology-discovery-mode"
+            aria-label="Topology Discovery"
+            value={topologyDiscoveryMode}
+            onChange={(e) => setTopologyDiscoveryMode(e.target.value as TopologyDiscoveryMode)}
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+          >
+            {TOPOLOGY_DISCOVERY_MODE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <div className="space-y-2 rounded-lg bg-surface-high p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                Device Setting
+              </span>
+              <span className="text-sm text-on-bg">{configuredTopologyDiscoveryMode}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                Bootstrap State
+              </span>
+              <span className="text-sm text-on-bg">
+                {formatTopologyBootstrapState(device.topology_bootstrap_state)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                Last Discovery
+              </span>
+              <span className="text-sm text-on-bg">
+                {formatTopologyDiscoveryTimestamp(device.last_topology_discovery_at)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                Last Result
+              </span>
+              <span className="text-sm text-on-bg">
+                {formatTopologyDiscoveryResult(device.last_topology_discovery_result)}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => { void handleRunTopologyDiscovery(); }}
+            disabled={discoveryRunDisabled}
+            className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {discoveryBusy ? 'Topology discovery running...' : 'Run Topology Discovery Now'}
+          </button>
+          <p className="text-xs text-on-bg-secondary/70">
+            {metricsSource === 'prometheus'
+              ? 'Prometheus-only devices cannot run SNMP topology discovery until SNMP or fallback mode is enabled.'
+              : device.ip.trim() === ''
+                ? 'Topology discovery requires a device IP.'
+                : 'Bootstrap once opens a short discovery window and then returns the device to Off.'}
+          </p>
+          {topologyDiscoveryMessage && (
+            <p className="rounded-lg border border-status-up/30 bg-status-up/10 px-3 py-2 text-xs text-status-up">
+              {topologyDiscoveryMessage}
+            </p>
+          )}
+          {topologyDiscoveryError && (
+            <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">
+              {topologyDiscoveryError}
+            </p>
           )}
         </div>
       )}

@@ -9,6 +9,7 @@ import {
   type Link,
   type RestoreReport,
   type SNMPProfile,
+  type TopologyDiscoveryMode,
   type BackupJob,
   type BackupFile,
   type BackupStatus,
@@ -194,6 +195,7 @@ export interface CreateDevicePayload {
   metrics_source?: string;
   prometheus_label_name?: string;
   prometheus_label_value?: string;
+  topology_discovery_mode?: TopologyDiscoveryMode;
   area_ids?: string[];
 }
 
@@ -223,6 +225,7 @@ export async function updateDevice(
     metrics_source: string;
     prometheus_label_name: string;
     prometheus_label_value: string;
+    topology_discovery_mode: TopologyDiscoveryMode;
     poll_interval_override: number | null;
     area_ids: string[];
   }>,
@@ -246,6 +249,13 @@ export async function updateDevice(
 
 export async function deleteDevice(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}`, 'DELETE');
+}
+
+export async function runTopologyDiscovery(id: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(id)}/topology-discovery`,
+    'POST',
+  );
 }
 
 export async function fetchDeviceInterfaces(deviceId: string): Promise<InterfaceInfo[]> {

@@ -21,6 +21,7 @@ vi.mock('../api/client', () => ({
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   updateSetting: vi.fn().mockResolvedValue(undefined),
   updateDevice: vi.fn().mockResolvedValue({}),
+  runTopologyDiscovery: vi.fn().mockResolvedValue(undefined),
   deleteDevice: vi.fn().mockResolvedValue(undefined),
   testSNMPConnection: vi.fn().mockResolvedValue({ success: true }),
 }));
@@ -45,6 +46,11 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     metrics_source: 'snmp',
     prometheus_label_name: 'instance',
     prometheus_label_value: '10.0.0.1:9100',
+    topology_discovery_mode: 'inherit',
+    effective_topology_discovery_mode: 'off',
+    topology_bootstrap_state: 'idle',
+    last_topology_discovery_at: null,
+    last_topology_discovery_result: '',
     area_ids: [],
     ...overrides,
   };
@@ -323,6 +329,7 @@ describe('DeviceConfigPanel', () => {
 
     // Should show Polling Override section
     expect(screen.getByText('Polling Override')).toBeInTheDocument();
+    expect(screen.getByText('Topology Discovery')).toBeInTheDocument();
     // Should show Edit Device section
     expect(screen.getByText('Edit Device')).toBeInTheDocument();
     // Should show Save Changes button
@@ -393,6 +400,80 @@ describe('DeviceConfigPanel', () => {
         expect.objectContaining({ notes: null }),
       );
     });
+  });
+
+  it('includes topology discovery mode when saving device changes', async () => {
+    const { updateDevice } = await import('../api/client');
+    (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockDevice({ topology_discovery_mode: 'bootstrap_once' }),
+    );
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Topology Discovery'), {
+      target: { value: 'bootstrap_once' },
+    });
+    fireEvent.click(screen.getByText('Save Changes'));
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith(
+        'dev-1',
+        expect.objectContaining({
+          topology_discovery_mode: 'bootstrap_once',
+        }),
+      );
+    });
+  });
+
+  it('runs topology discovery manually and shows feedback', async () => {
+    const { runTopologyDiscovery } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({
+          topology_discovery_mode: 'off',
+          effective_topology_discovery_mode: 'off',
+        })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Run Topology Discovery Now'));
+
+    await waitFor(() => {
+      expect(runTopologyDiscovery).toHaveBeenCalledWith('dev-1');
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Topology discovery started. Links and ports will refresh when the SNMP pass completes.',
+        ),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('disables manual topology discovery for Prometheus-only devices', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({ metrics_source: 'prometheus' })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Run Topology Discovery Now')).toBeDisabled();
+    expect(
+      screen.getByText(
+        'Prometheus-only devices cannot run SNMP topology discovery until SNMP or fallback mode is enabled.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('renders Grafana dashboard URL field', () => {

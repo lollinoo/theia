@@ -1,5 +1,16 @@
 export type DeviceType = 'router' | 'switch' | 'ap' | 'firewall' | 'virtual' | 'unknown';
 export type DevicePollClass = 'core' | 'standard' | 'low';
+export type TopologyDiscoveryMode =
+  | 'inherit'
+  | 'off'
+  | 'lldp'
+  | 'lldp_cdp'
+  | 'bootstrap_once';
+export type TopologyBootstrapState =
+  | 'idle'
+  | 'pending'
+  | 'followup_scheduled'
+  | 'completed';
 
 // SNMPProfile represents a reusable set of SNMP credentials.
 export interface SNMPProfile {
@@ -54,6 +65,11 @@ export interface Device {
   metrics_source: MetricsSource;
   prometheus_label_name: string;
   prometheus_label_value: string;
+  topology_discovery_mode?: TopologyDiscoveryMode;
+  effective_topology_discovery_mode?: TopologyDiscoveryMode;
+  topology_bootstrap_state?: TopologyBootstrapState;
+  last_topology_discovery_at?: string | null;
+  last_topology_discovery_result?: string;
 }
 
 export interface Link {
@@ -159,6 +175,33 @@ function parseDeviceStatus(value: unknown): DeviceStatus {
   }
 }
 
+function parseTopologyDiscoveryMode(
+  value: unknown,
+  fallback: TopologyDiscoveryMode = 'inherit',
+): TopologyDiscoveryMode {
+  switch (value) {
+    case 'inherit':
+    case 'off':
+    case 'lldp':
+    case 'lldp_cdp':
+    case 'bootstrap_once':
+      return value;
+    default:
+      return fallback;
+  }
+}
+
+function parseTopologyBootstrapState(value: unknown): TopologyBootstrapState {
+  switch (value) {
+    case 'pending':
+    case 'followup_scheduled':
+    case 'completed':
+      return value;
+    default:
+      return 'idle';
+  }
+}
+
 function parseDeviceInterface(value: unknown): DeviceInterface {
   if (!isRecord(value)) {
     throw new Error('invalid interface payload');
@@ -225,6 +268,25 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       metrics_source: metricsSource,
       prometheus_label_name: readString(attributes, 'prometheus_label_name', 'instance'),
       prometheus_label_value: readString(attributes, 'prometheus_label_value'),
+      topology_discovery_mode: parseTopologyDiscoveryMode(
+        attributes.topology_discovery_mode,
+        'inherit',
+      ),
+      effective_topology_discovery_mode: parseTopologyDiscoveryMode(
+        attributes.effective_topology_discovery_mode,
+        'off',
+      ),
+      topology_bootstrap_state: parseTopologyBootstrapState(
+        attributes.topology_bootstrap_state,
+      ),
+      last_topology_discovery_at: readNullableString(
+        attributes,
+        'last_topology_discovery_at',
+      ),
+      last_topology_discovery_result: readString(
+        attributes,
+        'last_topology_discovery_result',
+      ),
     };
   });
 }
