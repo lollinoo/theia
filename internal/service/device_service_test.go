@@ -902,6 +902,161 @@ func TestScheduleIncompleteLinkReprobe_RetriesWhenStaticBudgetIsTemporarilyExhau
 	}
 }
 
+func TestScheduleIncompleteLinkReprobe_ReopensEligiblePeerBootstrapWindow(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeBootstrapOnce)); err != nil {
+		t.Fatalf("Set setting failed: %v", err)
+	}
+
+	localDevice := &domain.Device{
+		ID:                     uuid.New(),
+		Hostname:               "edge-01",
+		IP:                     "192.0.2.51",
+		SysName:                "edge-01",
+		Status:                 domain.DeviceStatusUp,
+		Managed:                true,
+		DeviceType:             domain.DeviceTypeSwitch,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+	}
+	if err := deviceRepo.Create(localDevice); err != nil {
+		t.Fatalf("Create local device failed: %v", err)
+	}
+
+	peerDevice := &domain.Device{
+		ID:                     uuid.New(),
+		Hostname:               "distribution-01",
+		IP:                     "192.0.2.61",
+		SysName:                "distribution-01",
+		Status:                 domain.DeviceStatusUp,
+		Managed:                true,
+		DeviceType:             domain.DeviceTypeSwitch,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:  domain.TopologyDiscoveryModeInherit,
+		TopologyBootstrapState: domain.TopologyBootstrapStateCompleted,
+	}
+	if err := deviceRepo.Create(peerDevice); err != nil {
+		t.Fatalf("Create peer device failed: %v", err)
+	}
+
+	if err := linkRepo.Create(&domain.Link{
+		SourceDeviceID:    localDevice.ID,
+		SourceIfName:      "",
+		TargetDeviceID:    peerDevice.ID,
+		TargetIfName:      "ether8",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("Create link failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	svc.scheduleFunc = func(delay time.Duration, fn func()) { fn() }
+
+	peerModeSeen := domain.TopologyDiscoveryModeOff
+	svc.delayedReprobe = func(ctx context.Context, id uuid.UUID) error {
+		if id != peerDevice.ID {
+			return nil
+		}
+		device, err := deviceRepo.GetByID(id)
+		if err != nil {
+			return err
+		}
+		peerModeSeen = domain.ResolveTopologyDiscoveryMode(device, svc.defaultTopologyDiscoveryMode())
+		if device.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+			t.Fatalf("expected peer bootstrap state pending, got %s", device.TopologyBootstrapState)
+		}
+		return nil
+	}
+
+	if !svc.scheduleIncompleteLinkReprobe(localDevice.ID, localDevice.IP) {
+		t.Fatal("expected incomplete link reprobe to be scheduled")
+	}
+
+	if peerModeSeen != domain.TopologyDiscoveryModeBootstrapOnce {
+		t.Fatalf("expected peer delayed reprobe to run as bootstrap_once, got %s", peerModeSeen)
+	}
+}
+
+func TestScheduleIncompleteLinkReprobe_DoesNotReopenExplicitlyDisabledPeer(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeBootstrapOnce)); err != nil {
+		t.Fatalf("Set setting failed: %v", err)
+	}
+
+	localDevice := &domain.Device{
+		ID:                     uuid.New(),
+		Hostname:               "edge-01",
+		IP:                     "192.0.2.51",
+		SysName:                "edge-01",
+		Status:                 domain.DeviceStatusUp,
+		Managed:                true,
+		DeviceType:             domain.DeviceTypeSwitch,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+	}
+	if err := deviceRepo.Create(localDevice); err != nil {
+		t.Fatalf("Create local device failed: %v", err)
+	}
+
+	peerDevice := &domain.Device{
+		ID:                     uuid.New(),
+		Hostname:               "distribution-01",
+		IP:                     "192.0.2.61",
+		SysName:                "distribution-01",
+		Status:                 domain.DeviceStatusUp,
+		Managed:                true,
+		DeviceType:             domain.DeviceTypeSwitch,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:  domain.TopologyDiscoveryModeOff,
+		TopologyBootstrapState: domain.TopologyBootstrapStateCompleted,
+	}
+	if err := deviceRepo.Create(peerDevice); err != nil {
+		t.Fatalf("Create peer device failed: %v", err)
+	}
+
+	if err := linkRepo.Create(&domain.Link{
+		SourceDeviceID:    localDevice.ID,
+		SourceIfName:      "",
+		TargetDeviceID:    peerDevice.ID,
+		TargetIfName:      "ether8",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("Create link failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	svc.scheduleFunc = func(delay time.Duration, fn func()) { fn() }
+
+	peerCalls := 0
+	svc.delayedReprobe = func(ctx context.Context, id uuid.UUID) error {
+		if id == peerDevice.ID {
+			peerCalls++
+		}
+		return nil
+	}
+
+	if !svc.scheduleIncompleteLinkReprobe(localDevice.ID, localDevice.IP) {
+		t.Fatal("expected local incomplete link reprobe to be scheduled")
+	}
+	if peerCalls != 0 {
+		t.Fatalf("expected explicitly disabled peer to skip delayed reprobe, got %d calls", peerCalls)
+	}
+
+	updatedPeer, err := deviceRepo.GetByID(peerDevice.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updatedPeer.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("expected explicit-off peer bootstrap state to stay completed, got %s", updatedPeer.TopologyBootstrapState)
+	}
+}
+
 func TestApplyStaticDiscovery_CompletesBootstrapOnceDuringRegularStaticPersistence(t *testing.T) {
 	deviceRepo := newMockDeviceRepo()
 	linkRepo := newMockLinkRepo()
@@ -966,6 +1121,81 @@ func TestApplyStaticDiscovery_CompletesBootstrapOnceDuringRegularStaticPersisten
 	}
 	if updated.LastTopologyDiscoveryResult != "neighbors_found" {
 		t.Fatalf("expected last_topology_discovery_result neighbors_found, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
+func TestProbeDevice_CompletesBootstrapOnceAfterFollowupAttemptLeavesPortsUnresolved(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	remoteDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "distribution-01",
+		IP:            "192.0.2.61",
+		SysName:       "distribution-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+	}
+	if err := deviceRepo.Create(remoteDevice); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+
+	probeTarget := &domain.Device{
+		ID:                     uuid.New(),
+		Hostname:               "edge-01",
+		IP:                     "192.0.2.51",
+		Status:                 domain.DeviceStatusUp,
+		Managed:                true,
+		DeviceType:             domain.DeviceTypeSwitch,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+		TopologyBootstrapState: domain.TopologyBootstrapStateFollowupScheduled,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(probeTarget); err != nil {
+		t.Fatalf("Create probe target failed: %v", err)
+	}
+
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		if mode != domain.TopologyDiscoveryModeBootstrapOnce {
+			t.Fatalf("expected follow-up probe to keep bootstrap_once mode, got %s", mode)
+		}
+		return &snmp.DiscoveryResult{
+			SysName:       "edge-01",
+			SysDescr:      "RouterOS",
+			SysObjectID:   ".1.3.6.1.4.1.14988.1",
+			HardwareModel: "RB5009",
+			Vendor:        "mikrotik",
+			DeviceType:    domain.DeviceTypeRouter,
+			Neighbors: []snmp.NeighborInfo{
+				{
+					RemoteSysName: remoteDevice.SysName,
+					RemotePortID:  "ether8",
+					LocalIfName:   "",
+					Protocol:      domain.DiscoveryProtocolLLDP,
+				},
+			},
+		}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	svc.probeDevice(probeTarget)
+
+	updated, err := deviceRepo.GetByID(probeTarget.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("expected bootstrap state completed after unresolved follow-up, got %s", updated.TopologyBootstrapState)
+	}
+	if updated.LastTopologyDiscoveryResult != "ports_pending" {
+		t.Fatalf("expected last_topology_discovery_result ports_pending, got %q", updated.LastTopologyDiscoveryResult)
 	}
 }
 

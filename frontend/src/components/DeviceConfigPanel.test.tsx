@@ -459,6 +459,23 @@ describe('DeviceConfigPanel', () => {
     });
   });
 
+  it('shows the delayed topology follow-up expectation while bootstrap follow-up is queued', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({
+          topology_bootstrap_state: 'followup_scheduled',
+          last_topology_discovery_at: '2026-04-18T10:09:16Z',
+          last_topology_discovery_result: 'ports_pending',
+        })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Next Follow-up')).toBeInTheDocument();
+    expect(screen.getByText('About 20s after last discovery.')).toBeInTheDocument();
+  });
+
   it('disables manual topology discovery for Prometheus-only devices', () => {
     render(
       <DeviceConfigPanel

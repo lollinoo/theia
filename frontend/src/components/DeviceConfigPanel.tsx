@@ -38,6 +38,7 @@ import {
   TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyBootstrapState,
   formatTopologyDiscoveryMode,
+  formatTopologyFollowupExpectation,
   formatTopologyDiscoveryResult,
   formatTopologyDiscoveryTimestamp,
 } from '../utils/topologyDiscovery';
@@ -504,6 +505,10 @@ export function DeviceConfigPanel({
     topologyDiscoveryMode === 'inherit'
       ? `Use global default (${formatTopologyDiscoveryMode(topologyDiscoveryDefaultMode)})`
       : formatTopologyDiscoveryMode(topologyDiscoveryMode);
+  const nextTopologyFollowup = formatTopologyFollowupExpectation(
+    discoveryState,
+    device.last_topology_discovery_at,
+  );
 
   return (
     <div className="space-y-6 p-4 transition-colors duration-200">
@@ -607,6 +612,16 @@ export function DeviceConfigPanel({
                 {formatTopologyDiscoveryResult(device.last_topology_discovery_result)}
               </span>
             </div>
+            {nextTopologyFollowup && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                  Next Follow-up
+                </span>
+                <span className="text-sm text-on-bg">
+                  {nextTopologyFollowup}
+                </span>
+              </div>
+            )}
           </div>
           <button
             type="button"
