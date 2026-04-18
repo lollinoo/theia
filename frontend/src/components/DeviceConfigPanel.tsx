@@ -636,7 +636,7 @@ export function DeviceConfigPanel({
               ? 'Prometheus-only devices cannot run SNMP topology discovery until SNMP or fallback mode is enabled.'
               : device.ip.trim() === ''
                 ? 'Topology discovery requires a device IP.'
-                : 'Bootstrap once opens a short discovery window and then returns the device to Off.'}
+                : 'Bootstrap once opens a short discovery window, may queue one follow-up to fill missing ports, then returns the device to Off.'}
           </p>
           {topologyDiscoveryMessage && (
             <p className="rounded-lg border border-status-up/30 bg-status-up/10 px-3 py-2 text-xs text-status-up">

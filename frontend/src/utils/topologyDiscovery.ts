@@ -43,7 +43,7 @@ export function formatTopologyBootstrapState(state?: TopologyBootstrapState): st
     case 'pending':
       return 'Pending';
     case 'followup_scheduled':
-      return 'Follow-up scheduled';
+      return 'Follow-up queued';
     case 'completed':
       return 'Completed';
     default:
@@ -59,7 +59,7 @@ export function formatTopologyDiscoveryResult(result?: string): string {
     case 'neighbors_found':
       return 'Neighbors found';
     case 'ports_pending':
-      return 'Ports still resolving';
+      return 'Waiting for port details';
     case 'no_neighbors':
       return 'No neighbors found';
     default:
@@ -86,7 +86,7 @@ export function formatTopologyFollowupExpectation(
     return null;
   }
   if (!lastDiscoveryAt) {
-    return 'Queued shortly.';
+    return 'Automatic follow-up queued shortly.';
   }
-  return `About ${TOPOLOGY_DISCOVERY_FOLLOWUP_DELAY_SECONDS}s after last discovery.`;
+  return `Automatic follow-up runs about ${TOPOLOGY_DISCOVERY_FOLLOWUP_DELAY_SECONDS}s after last discovery.`;
 }

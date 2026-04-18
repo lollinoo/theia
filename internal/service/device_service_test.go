@@ -1565,6 +1565,74 @@ func TestUpdateDevice_ChangesFieldsWithoutReprobing(t *testing.T) {
 	}
 }
 
+func TestUpdateDevice_TopologyDiscoveryModeChangeTriggersReprobeWhenEligible(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverCalls := 0
+	seenMode := domain.TopologyDiscoveryModeOff
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		discoverCalls++
+		seenMode = mode
+		return &snmp.DiscoveryResult{
+			SysName:       "edge-01",
+			SysDescr:      "SwitchOS edge",
+			SysObjectID:   ".1.3.6.1.4.1.14988.1",
+			HardwareModel: "CRS326",
+			Vendor:        "mikrotik",
+			DeviceType:    domain.DeviceTypeSwitch,
+		}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+
+	device := &domain.Device{
+		ID:                    uuid.New(),
+		IP:                    "192.0.2.40",
+		Hostname:              "edge-01",
+		Managed:               true,
+		Status:                domain.DeviceStatusUp,
+		DeviceType:            domain.DeviceTypeSwitch,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeOff,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	mode := domain.TopologyDiscoveryModeBootstrapOnce
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		TopologyDiscoveryMode: &mode,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	svc.WaitForProbes()
+
+	if discoverCalls != 1 {
+		t.Fatalf("expected one bootstrap reprobe, got %d", discoverCalls)
+	}
+	if seenMode != domain.TopologyDiscoveryModeBootstrapOnce {
+		t.Fatalf("expected reprobe mode bootstrap_once, got %s", seenMode)
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("expected bootstrap state completed after reprobe, got %s", updated.TopologyBootstrapState)
+	}
+	if updated.LastTopologyDiscoveryResult != "no_neighbors" {
+		t.Fatalf("expected last_topology_discovery_result no_neighbors, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
 func TestUpdateDevice_VirtualNoIPNormalizesStatusAndMetricsSource(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
 

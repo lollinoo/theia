@@ -461,6 +461,60 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 	sched.mu.Unlock()
 }
 
+func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRegularPolls(t *testing.T) {
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeBootstrapOnce)); err != nil {
+		t.Fatalf("Set setting failed: %v", err)
+	}
+
+	pipeline := NewPipelineOrchestrator(nil, nil, nil, nil, nil, nil, nil, nil, nil, settingsRepo, nil, nil, nil)
+
+	tests := []struct {
+		name   string
+		device domain.Device
+		want   domain.TopologyDiscoveryMode
+	}{
+		{
+			name: "default bootstrap once is disabled for periodic polls",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeInherit,
+				TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+			},
+			want: domain.TopologyDiscoveryModeOff,
+		},
+		{
+			name: "explicit bootstrap once is disabled for periodic polls",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+				TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+			},
+			want: domain.TopologyDiscoveryModeOff,
+		},
+		{
+			name: "continuous lldp mode is preserved",
+			device: domain.Device{
+				TopologyDiscoveryMode: domain.TopologyDiscoveryModeLLDP,
+			},
+			want: domain.TopologyDiscoveryModeLLDP,
+		},
+		{
+			name: "continuous lldp cdp mode is preserved",
+			device: domain.Device{
+				TopologyDiscoveryMode: domain.TopologyDiscoveryModeLLDPCDP,
+			},
+			want: domain.TopologyDiscoveryModeLLDPCDP,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pipeline.topologyDiscoveryMode(tt.device); got != tt.want {
+				t.Fatalf("topologyDiscoveryMode() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.T) {
 	deviceID := uuid.New()
 	device := domain.Device{

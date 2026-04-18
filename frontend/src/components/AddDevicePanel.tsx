@@ -438,7 +438,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               Selected mode: <span className="font-medium">{formatTopologyDiscoveryMode(topologyDiscoveryMode)}</span>.
               {metricsMode === 'prometheus'
                 ? ' Prometheus-only devices skip SNMP topology discovery until SNMP or fallback mode is enabled.'
-                : ' Bootstrap once runs an initial discovery window and then auto-disables.'}
+                : ' Bootstrap once runs an initial discovery window, may queue one follow-up to fill missing ports, then auto-disables.'}
             </p>
           </div>
 
