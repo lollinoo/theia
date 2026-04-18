@@ -129,6 +129,7 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	}
 	logUnknownNeighborSummary(fresh.ID, fresh.SysName, unknownNeighbors, unknownByProtocol)
 	s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false)
+	s.reconcileResolvedBootstrapPeers(fresh.ID)
 
 	return result, nil
 }
@@ -340,7 +341,7 @@ func logUnknownNeighborSummary(deviceID uuid.UUID, localSysName string, unknowns
 		parts = append(parts, fmt.Sprintf("%s(%s)x%d", item.key.RemoteSysName, item.key.Protocol, item.count))
 	}
 
-	log.Printf("Static discovery for %s skipped unresolved neighbors [%s]: %s",
+	log.Printf("Static discovery for %s observed off-map neighbors [%s]: %s",
 		localSysName, strings.Join(protocolTotals, ", "), strings.Join(parts, ", "))
 }
 

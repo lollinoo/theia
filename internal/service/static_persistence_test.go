@@ -283,6 +283,115 @@ func TestApplyStaticDiscoveryMarksTopologyChangedWhenExistingLinkIsEnriched(t *t
 	}
 }
 
+func TestApplyStaticDiscovery_ReverseEnrichmentCompletesPeerBootstrapState(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
+	if err != nil {
+		t.Fatalf("opening sqlite db: %v", err)
+	}
+	defer db.Close()
+	if err := sqliterepo.RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	deviceRepo := sqliterepo.NewDeviceRepo(db, nil, nil)
+	linkRepo := sqliterepo.NewLinkRepo(db, nil)
+	settingsRepo := newMockSettingsRepo()
+	svc := NewDeviceService(
+		deviceRepo,
+		linkRepo,
+		settingsRepo,
+		func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+			return nil, nil
+		},
+		nil,
+	)
+
+	local := &domain.Device{
+		ID:                          uuid.New(),
+		Hostname:                    "switch1",
+		IP:                          "192.0.2.31",
+		SysName:                     "switch1",
+		Status:                      domain.DeviceStatusUp,
+		Managed:                     true,
+		DeviceType:                  domain.DeviceTypeSwitch,
+		MetricsSource:               domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:       domain.TopologyDiscoveryModeBootstrapOnce,
+		TopologyBootstrapState:      domain.TopologyBootstrapStateFollowupScheduled,
+		LastTopologyDiscoveryResult: "ports_pending",
+	}
+	remote := &domain.Device{
+		ID:                    uuid.New(),
+		Hostname:              "switch2",
+		IP:                    "192.0.2.32",
+		SysName:               "switch2",
+		Status:                domain.DeviceStatusUp,
+		Managed:               true,
+		DeviceType:            domain.DeviceTypeSwitch,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeBootstrapOnce,
+	}
+	if err := deviceRepo.Create(local); err != nil {
+		t.Fatalf("Create local failed: %v", err)
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("Create remote failed: %v", err)
+	}
+
+	if err := linkRepo.Create(&domain.Link{
+		SourceDeviceID:    local.ID,
+		SourceIfName:      "",
+		TargetDeviceID:    remote.ID,
+		TargetIfName:      "ether10",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("Create incomplete link failed: %v", err)
+	}
+
+	persisted, err := svc.ApplyStaticDiscovery(remote.ID, StaticDiscoveryInput{
+		SysName:    remote.SysName,
+		DeviceType: domain.DeviceTypeSwitch,
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName: local.SysName,
+				LocalIfName:   "",
+				RemotePortID:  "ether6-Link_Ufficio",
+				Protocol:      domain.DiscoveryProtocolLLDP,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if !persisted.TopologyChanged {
+		t.Fatal("expected reverse enrichment to report topology change")
+	}
+
+	updatedLocal, err := deviceRepo.GetByID(local.ID)
+	if err != nil {
+		t.Fatalf("GetByID local failed: %v", err)
+	}
+	if updatedLocal.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("expected local bootstrap state completed, got %s", updatedLocal.TopologyBootstrapState)
+	}
+	if updatedLocal.LastTopologyDiscoveryResult != "neighbors_found" {
+		t.Fatalf("expected local last_topology_discovery_result neighbors_found, got %q", updatedLocal.LastTopologyDiscoveryResult)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(links))
+	}
+	if links[0].SourceIfName != "ether6-Link_Ufficio" {
+		t.Fatalf("expected source interface to be backfilled, got %q", links[0].SourceIfName)
+	}
+	if links[0].TargetIfName != "ether10" {
+		t.Fatalf("expected target interface ether10, got %q", links[0].TargetIfName)
+	}
+}
+
 func TestApplyStaticDiscoveryRespectsPollIntervalOverride(t *testing.T) {
 	svc, deviceRepo, _ := newStaticPersistenceService(nil)
 
@@ -528,7 +637,7 @@ func TestApplyStaticDiscoveryAggregatesUnknownNeighborLogsAndMetrics(t *testing.
 	if strings.Contains(logs, "Skipping neighbor") {
 		t.Fatalf("expected aggregated unknown-neighbor log, got %q", logs)
 	}
-	if !strings.Contains(logs, "Static discovery for switch1 skipped unresolved neighbors [lldp=3]") {
+	if !strings.Contains(logs, "Static discovery for switch1 observed off-map neighbors [lldp=3]") {
 		t.Fatalf("expected aggregated summary log, got %q", logs)
 	}
 	if !strings.Contains(logs, "missing-a(lldp)x2") || !strings.Contains(logs, "missing-b(lldp)x1") {

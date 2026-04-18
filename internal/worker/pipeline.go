@@ -912,7 +912,18 @@ func (p *PipelineOrchestrator) topologyDiscoveryMode(device domain.Device) domai
 			defaultMode = domain.NormalizeTopologyDiscoveryMode(domain.TopologyDiscoveryMode(value), domain.TopologyDiscoveryModeLLDPCDP)
 		}
 	}
-	return domain.ResolveTopologyDiscoveryMode(&device, defaultMode)
+
+	// Regular static polling must never reopen bootstrap-once discovery windows.
+	// One-shot topology discovery is handled explicitly by DeviceService on add,
+	// manual runs, settings changes, and delayed reprobe follow-ups.
+	mode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+	if mode == domain.TopologyDiscoveryModeInherit {
+		mode = defaultMode
+	}
+	if mode == domain.TopologyDiscoveryModeBootstrapOnce {
+		return domain.TopologyDiscoveryModeOff
+	}
+	return mode
 }
 
 func completionTime(collectedAt time.Time) time.Time {

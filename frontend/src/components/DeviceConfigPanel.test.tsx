@@ -473,7 +473,7 @@ describe('DeviceConfigPanel', () => {
     );
 
     expect(screen.getByText('Next Follow-up')).toBeInTheDocument();
-    expect(screen.getByText('About 20s after last discovery.')).toBeInTheDocument();
+    expect(screen.getByText('Automatic follow-up runs about 20s after last discovery.')).toBeInTheDocument();
   });
 
   it('disables manual topology discovery for Prometheus-only devices', () => {

@@ -329,6 +329,37 @@ func (s *DeviceService) hasIncompleteLLDPLinks(deviceID uuid.UUID) bool {
 	return false
 }
 
+func (s *DeviceService) lldpPeerIDs(deviceID uuid.UUID) []uuid.UUID {
+	links, err := s.linkRepo.GetByDeviceID(deviceID)
+	if err != nil {
+		log.Printf("Failed to inspect LLDP peers for topology bootstrap reconciliation on %s: %v", deviceID, err)
+		return nil
+	}
+
+	seen := make(map[uuid.UUID]struct{})
+	peerIDs := make([]uuid.UUID, 0, len(links))
+	for _, link := range links {
+		if link.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+			continue
+		}
+
+		peerID := link.SourceDeviceID
+		if peerID == deviceID {
+			peerID = link.TargetDeviceID
+		}
+		if peerID == uuid.Nil || peerID == deviceID {
+			continue
+		}
+		if _, exists := seen[peerID]; exists {
+			continue
+		}
+		seen[peerID] = struct{}{}
+		peerIDs = append(peerIDs, peerID)
+	}
+
+	return peerIDs
+}
+
 func (s *DeviceService) incompleteLLDPPeerIDs(deviceID uuid.UUID) []uuid.UUID {
 	links, err := s.linkRepo.GetByDeviceID(deviceID)
 	if err != nil {
@@ -337,7 +368,7 @@ func (s *DeviceService) incompleteLLDPPeerIDs(deviceID uuid.UUID) []uuid.UUID {
 	}
 
 	seen := make(map[uuid.UUID]struct{})
-	peerIDs := make([]uuid.UUID, 0, len(links))
+	incomplete := make([]uuid.UUID, 0, len(links))
 	for _, link := range links {
 		if link.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
 			continue
@@ -357,10 +388,28 @@ func (s *DeviceService) incompleteLLDPPeerIDs(deviceID uuid.UUID) []uuid.UUID {
 			continue
 		}
 		seen[peerID] = struct{}{}
-		peerIDs = append(peerIDs, peerID)
+		incomplete = append(incomplete, peerID)
 	}
 
-	return peerIDs
+	return incomplete
+}
+
+func (s *DeviceService) reconcileResolvedBootstrapPeers(deviceID uuid.UUID) {
+	for _, peerID := range s.lldpPeerIDs(deviceID) {
+		if s.hasIncompleteLLDPLinks(peerID) {
+			continue
+		}
+
+		s.updateTopologyDiscoveryState(peerID, func(device *domain.Device) {
+			switch domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState) {
+			case domain.TopologyBootstrapStatePending, domain.TopologyBootstrapStateFollowupScheduled:
+				device.TopologyBootstrapState = domain.TopologyBootstrapStateCompleted
+				if device.LastTopologyDiscoveryResult == "ports_pending" {
+					device.LastTopologyDiscoveryResult = "neighbors_found"
+				}
+			}
+		})
+	}
 }
 
 func (s *DeviceService) shouldScheduleIncompleteLinkReprobe(deviceID uuid.UUID) bool {
@@ -655,6 +704,11 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 		return fmt.Errorf("getting device: %w", err)
 	}
 	previousOverride := clonePollIntervalOverride(device.PollIntervalOverride)
+	defaultTopologyMode := s.defaultTopologyDiscoveryMode()
+	previousConfiguredMode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+	previousEffectiveMode := domain.ResolveTopologyDiscoveryMode(device, defaultTopologyMode)
+	previousBootstrapState := domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState)
+	shouldTriggerTopologyProbe := false
 
 	if update.Hostname != nil {
 		device.Hostname = *update.Hostname
@@ -691,6 +745,22 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 		if device.TopologyDiscoveryMode == domain.TopologyDiscoveryModeBootstrapOnce {
 			device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
 		}
+
+		newConfiguredMode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+		newEffectiveMode := domain.ResolveTopologyDiscoveryMode(device, defaultTopologyMode)
+		newBootstrapState := domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState)
+		discoveryModeChanged :=
+			newConfiguredMode != previousConfiguredMode ||
+				newEffectiveMode != previousEffectiveMode ||
+				newBootstrapState != previousBootstrapState
+		if discoveryModeChanged &&
+			newEffectiveMode != domain.TopologyDiscoveryModeOff &&
+			strings.TrimSpace(device.IP) != "" &&
+			device.DeviceType != domain.DeviceTypeVirtual &&
+			device.MetricsSource != domain.MetricsSourcePrometheus &&
+			device.MetricsSource != domain.MetricsSourceNone {
+			shouldTriggerTopologyProbe = true
+		}
 	}
 	if update.PollIntervalOverride != nil {
 		device.PollIntervalOverride = *update.PollIntervalOverride
@@ -704,14 +774,23 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 		return err
 	}
 	if update.PollIntervalOverride == nil || s.pollRescheduler == nil {
-		return nil
+		if !shouldTriggerTopologyProbe {
+			return nil
+		}
+		return s.ReprobeDevice(ctx, id)
 	}
 	if pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride) {
-		return nil
+		if !shouldTriggerTopologyProbe {
+			return nil
+		}
+		return s.ReprobeDevice(ctx, id)
 	}
 
 	s.pollRescheduler.ReduePerformanceTask(*device, time.Now().UTC())
-	return nil
+	if !shouldTriggerTopologyProbe {
+		return nil
+	}
+	return s.ReprobeDevice(ctx, id)
 }
 
 // DeleteDevice removes a device and all associated links.
