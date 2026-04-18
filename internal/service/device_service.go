@@ -31,17 +31,18 @@ type pollRescheduler interface {
 
 // DeviceUpdate holds optional fields for partial device updates.
 type DeviceUpdate struct {
-	Hostname             *string
-	IP                   *string
-	Notes                **string
-	Tags                 *map[string]string
-	SNMPCredentials      *domain.SNMPCredentials
-	Vendor               *string
-	MetricsSource        *domain.MetricsSource
-	PrometheusLabelName  *string
-	PrometheusLabelValue *string
-	PollIntervalOverride **int        // nil=not set, *nil=clear, **value=set
-	AreaIDs              *[]uuid.UUID // nil=not set, non-nil=replace all area assignments
+	Hostname              *string
+	IP                    *string
+	Notes                 **string
+	Tags                  *map[string]string
+	SNMPCredentials       *domain.SNMPCredentials
+	Vendor                *string
+	MetricsSource         *domain.MetricsSource
+	PrometheusLabelName   *string
+	PrometheusLabelValue  *string
+	TopologyDiscoveryMode *domain.TopologyDiscoveryMode
+	PollIntervalOverride  **int        // nil=not set, *nil=clear, **value=set
+	AreaIDs               *[]uuid.UUID // nil=not set, non-nil=replace all area assignments
 }
 
 // DeviceService orchestrates device management, combining SNMP discovery
@@ -114,6 +115,57 @@ func WithTopologyObservationStore(store topology.ObservationStore) DeviceService
 	}
 }
 
+func (s *DeviceService) defaultTopologyDiscoveryMode() domain.TopologyDiscoveryMode {
+	if s.settingsRepo == nil {
+		return domain.TopologyDiscoveryModeLLDPCDP
+	}
+	value, err := s.settingsRepo.Get(domain.SettingTopologyDiscoveryDefaultMode)
+	if err != nil {
+		return domain.TopologyDiscoveryModeLLDPCDP
+	}
+	switch mode := domain.TopologyDiscoveryMode(value); mode {
+	case domain.TopologyDiscoveryModeOff,
+		domain.TopologyDiscoveryModeLLDP,
+		domain.TopologyDiscoveryModeLLDPCDP,
+		domain.TopologyDiscoveryModeBootstrapOnce:
+		return mode
+	default:
+		return domain.TopologyDiscoveryModeLLDPCDP
+	}
+}
+
+func (s *DeviceService) effectiveTopologyDiscoveryMode(device *domain.Device) domain.TopologyDiscoveryMode {
+	if device == nil {
+		return s.defaultTopologyDiscoveryMode()
+	}
+	switch device.TopologyBootstrapState {
+	case domain.TopologyBootstrapStatePending, domain.TopologyBootstrapStateFollowupScheduled:
+		return domain.TopologyDiscoveryModeBootstrapOnce
+	}
+
+	mode := device.TopologyDiscoveryMode
+	if mode == "" || mode == domain.TopologyDiscoveryModeInherit {
+		mode = s.defaultTopologyDiscoveryMode()
+	}
+	if mode == domain.TopologyDiscoveryModeBootstrapOnce && device.TopologyBootstrapState == domain.TopologyBootstrapStateCompleted {
+		return domain.TopologyDiscoveryModeOff
+	}
+	return mode
+}
+
+func (s *DeviceService) populateEffectiveTopologyDiscoveryMode(device *domain.Device) {
+	if device == nil {
+		return
+	}
+	if device.TopologyDiscoveryMode == "" {
+		device.TopologyDiscoveryMode = domain.TopologyDiscoveryModeInherit
+	}
+	if device.TopologyBootstrapState == "" {
+		device.TopologyBootstrapState = domain.TopologyBootstrapStateIdle
+	}
+	device.EffectiveTopologyDiscoveryMode = s.effectiveTopologyDiscoveryMode(device)
+}
+
 func (s *DeviceService) SetPollRescheduler(rescheduler pollRescheduler) {
 	s.pollRescheduler = rescheduler
 }
@@ -131,6 +183,7 @@ func (s *DeviceService) AddDevice(
 	metricsSource domain.MetricsSource,
 	prometheusLabelName string,
 	prometheusLabelValue string,
+	topologyDiscoveryMode domain.TopologyDiscoveryMode,
 	areaIDs []uuid.UUID,
 	notes ...*string,
 ) (*domain.Device, error) {
@@ -168,21 +221,29 @@ func (s *DeviceService) AddDevice(
 	}
 
 	device := &domain.Device{
-		ID:                   uuid.New(),
-		Hostname:             hostname,
-		IP:                   ip,
-		Notes:                normalizedNotes,
-		SNMPCredentials:      creds,
-		DeviceType:           deviceType,
-		PollClass:            domain.ClassifyPollClass(deviceType),
-		Status:               initialStatus,
-		Vendor:               vendor,
-		Managed:              true,
-		Tags:                 tags,
-		MetricsSource:        metricsSource,
-		PrometheusLabelName:  prometheusLabelName,
-		PrometheusLabelValue: prometheusLabelValue,
-		AreaIDs:              areaIDs,
+		ID:                     uuid.New(),
+		Hostname:               hostname,
+		IP:                     ip,
+		Notes:                  normalizedNotes,
+		SNMPCredentials:        creds,
+		DeviceType:             deviceType,
+		PollClass:              domain.ClassifyPollClass(deviceType),
+		Status:                 initialStatus,
+		Vendor:                 vendor,
+		Managed:                true,
+		Tags:                   tags,
+		MetricsSource:          metricsSource,
+		PrometheusLabelName:    prometheusLabelName,
+		PrometheusLabelValue:   prometheusLabelValue,
+		TopologyDiscoveryMode:  topologyDiscoveryMode,
+		TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
+		AreaIDs:                areaIDs,
+	}
+	if device.TopologyDiscoveryMode == "" {
+		device.TopologyDiscoveryMode = domain.TopologyDiscoveryModeInherit
+	}
+	if s.effectiveTopologyDiscoveryMode(device) == domain.TopologyDiscoveryModeBootstrapOnce {
+		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
 	}
 	domain.NormalizeVirtualNoIPDevice(device)
 
@@ -195,6 +256,7 @@ func (s *DeviceService) AddDevice(
 		// For virtual devices WITH an IP, the MetricsCollector will update
 		// status via probe_success on its next cycle (per D-05/D-07).
 		// For virtual devices WITHOUT an IP, status stays "unknown" permanently (per D-06).
+		s.populateEffectiveTopologyDiscoveryMode(device)
 		return device, nil
 	}
 
@@ -205,6 +267,7 @@ func (s *DeviceService) AddDevice(
 		s.probeDevice(device)
 	}()
 
+	s.populateEffectiveTopologyDiscoveryMode(device)
 	return device, nil
 }
 
@@ -486,6 +549,15 @@ func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update D
 	if update.PrometheusLabelValue != nil {
 		device.PrometheusLabelValue = *update.PrometheusLabelValue
 	}
+	if update.TopologyDiscoveryMode != nil {
+		device.TopologyDiscoveryMode = *update.TopologyDiscoveryMode
+		if device.TopologyDiscoveryMode == "" {
+			device.TopologyDiscoveryMode = domain.TopologyDiscoveryModeInherit
+		}
+		if device.TopologyDiscoveryMode == domain.TopologyDiscoveryModeBootstrapOnce {
+			device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
+		}
+	}
 	if update.PollIntervalOverride != nil {
 		device.PollIntervalOverride = *update.PollIntervalOverride
 	}
@@ -532,6 +604,7 @@ func (s *DeviceService) GetDevice(ctx context.Context, id uuid.UUID) (*domain.De
 		return nil, err
 	}
 	domain.NormalizeVirtualNoIPDevice(device)
+	s.populateEffectiveTopologyDiscoveryMode(device)
 	return device, nil
 }
 
@@ -543,6 +616,7 @@ func (s *DeviceService) GetAllDevices(ctx context.Context) ([]domain.Device, err
 	}
 	for i := range devices {
 		domain.NormalizeVirtualNoIPDevice(&devices[i])
+		s.populateEffectiveTopologyDiscoveryMode(&devices[i])
 	}
 	return devices, nil
 }

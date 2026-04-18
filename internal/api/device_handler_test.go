@@ -1122,6 +1122,57 @@ func TestHandleCreate_InvalidMetricsSource_400(t *testing.T) {
 	}
 }
 
+func TestHandleCreate_TopologyDiscoveryMode_PersistsToDevice(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.0.0.50","hostname":"sw-bootstrap","snmp":{"version":"2c","community":"public"},"topology_discovery_mode":"bootstrap_once"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	devices, err := repo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+	if devices[0].TopologyDiscoveryMode != domain.TopologyDiscoveryModeBootstrapOnce {
+		t.Fatalf("expected topology_discovery_mode bootstrap_once, got %s", devices[0].TopologyDiscoveryMode)
+	}
+	if devices[0].TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+		t.Fatalf("expected topology_bootstrap_state pending, got %s", devices[0].TopologyBootstrapState)
+	}
+}
+
+func TestHandleUpdate_TopologyDiscoveryMode_Invalid_400(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "switch-a",
+		IP:       "10.0.0.5",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(`{"topology_discovery_mode":"bogus"}`))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleUpdate_AllowsFrontendMetricsSources(t *testing.T) {
 	tests := []string{"prometheus_snmp_fallback", "none"}
 
