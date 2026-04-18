@@ -3,10 +3,12 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lollinoo/theia/internal/vendor"
 )
@@ -261,6 +263,50 @@ func TestQueryAlertsParsesFiringAlerts(t *testing.T) {
 	}
 	if alerts[0].Summary != "gw-core-01 is unreachable" {
 		t.Fatalf("expected summary to parse, got %s", alerts[0].Summary)
+	}
+}
+
+func TestQueryAlertsHonorsSharedHTTPClientTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(120 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewPromClient(server.URL, &http.Client{Timeout: 50 * time.Millisecond})
+	client.operationTimeout = 250 * time.Millisecond
+
+	_, err := client.QueryAlerts(context.Background())
+	if err == nil {
+		t.Fatal("expected QueryAlerts to time out")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "Client.Timeout") {
+		t.Fatalf("expected shared client timeout, got %v", err)
+	}
+}
+
+func TestQueryHostnamesHonorsOperationDeadline(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(120 * time.Millisecond)
+		writeVectorResponse(t, w, []map[string]any{
+			{"metric": map[string]string{"instance": "192.0.2.50", "sysName": "core-50"}, "value": []any{1741374000.0, "1"}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewPromClient(server.URL, &http.Client{Timeout: 250 * time.Millisecond})
+	client.operationTimeout = 50 * time.Millisecond
+
+	_, err := client.QueryHostnames(context.Background(), "instance", []string{"192.0.2.50"})
+	if err == nil {
+		t.Fatal("expected QueryHostnames to time out")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("expected operation deadline timeout, got %v", err)
 	}
 }
 

@@ -490,8 +490,9 @@ func main() {
 	}
 
 	var promClient collector.PrometheusEnrichmentClient
+	promHTTPClient := &http.Client{Timeout: 4 * time.Second}
 	if prometheusURL != "" {
-		promClient = metrics.NewPromClient(prometheusURL, http.DefaultClient)
+		promClient = metrics.NewPromClient(prometheusURL, promHTTPClient)
 	} else {
 		log.Println("Prometheus integration disabled: no prometheus_url configured")
 	}
@@ -506,6 +507,9 @@ func main() {
 	operationalCollector := collector.NewOperationalCollector(vendorRegistry, snmpClientFactory)
 	staticCollector := collector.NewStaticCollector(vendorRegistry, snmpClientFactory)
 	promCollector := collector.NewPrometheusCollector(promClient)
+	promCollector.SetClientFactory(func(baseURL string) collector.PrometheusEnrichmentClient {
+		return metrics.NewPromClient(baseURL, promHTTPClient)
+	})
 	pipeline := worker.NewPipelineOrchestrator(
 		sched,
 		stateStore,

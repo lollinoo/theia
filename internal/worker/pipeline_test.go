@@ -555,6 +555,8 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		nil,
 		nil,
 	)
+	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
+	pipeline.now = func() time.Time { return now }
 
 	pipeline.refreshPrometheusOnce(context.Background())
 
@@ -567,9 +569,15 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		t.Fatal("expected prometheus to remain available after successful refresh")
 	}
 
+	pipeline.snapshotMu.Lock()
+	pipeline.hostnames[deviceID] = "edge-prom-host"
+	pipeline.hostnameObservedAt[deviceID] = now.Add(-31 * time.Second)
+	pipeline.snapshotMu.Unlock()
+
 	promClient.mu.Lock()
 	promClient.alertsErr = errors.New("prometheus unavailable")
 	promClient.mu.Unlock()
+	now = now.Add(5 * time.Second)
 
 	pipeline.refreshPrometheusOnce(context.Background())
 
@@ -578,6 +586,15 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 	}
 	if pipeline.GetPrometheusStatus().Error == "" {
 		t.Fatal("expected prometheus error message to be recorded")
+	}
+
+	pipeline.snapshotMu.RLock()
+	defer pipeline.snapshotMu.RUnlock()
+	if alerts := pipeline.alerts[deviceID]; len(alerts) != 0 {
+		t.Fatalf("expected alerts to clear on refresh failure, got %d alert(s)", len(alerts))
+	}
+	if hostname := pipeline.hostnames[deviceID]; hostname != "" {
+		t.Fatalf("expected stale hostname override to expire, got %q", hostname)
 	}
 }
 

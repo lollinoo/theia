@@ -58,6 +58,11 @@ type refreshSnapshotBuildKey struct {
 	Result string
 }
 
+type prometheusRuntimeRequestKey struct {
+	Operation string
+	Result    string
+}
+
 type histogram struct {
 	buckets []float64
 	counts  []uint64
@@ -89,6 +94,8 @@ type Registry struct {
 	topologyMaterialization    map[string]*histogram
 	refreshSnapshotBuild       map[refreshSnapshotBuildKey]*histogram
 	refreshTopologyReloadTotal map[string]uint64
+	prometheusRuntimeRequests  map[prometheusRuntimeRequestKey]uint64
+	prometheusRuntimeDuration  map[prometheusRuntimeRequestKey]*histogram
 	wsMessagesTotal            map[wsMetricKey]uint64
 	wsBackpressureTotal        map[wsBackpressureKey]uint64
 	wsPayloadBytes             map[wsMetricKey]*histogram
@@ -134,6 +141,8 @@ func NewRegistry() *Registry {
 			{Mode: "full", Result: "success"}:  newHistogram(durationBucketsSeconds),
 		},
 		refreshTopologyReloadTotal: make(map[string]uint64),
+		prometheusRuntimeRequests:  make(map[prometheusRuntimeRequestKey]uint64),
+		prometheusRuntimeDuration:  make(map[prometheusRuntimeRequestKey]*histogram),
 		wsMessagesTotal:            make(map[wsMetricKey]uint64),
 		wsBackpressureTotal:        make(map[wsBackpressureKey]uint64),
 		wsPayloadBytes:             make(map[wsMetricKey]*histogram),
@@ -238,6 +247,16 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_refresh_topology_reload_total",
 		"Full topology reload decisions by reason.",
 		sortedStringCounterRows("reason", r.refreshTopologyReloadTotal),
+	)
+	writeCounterVec(&b,
+		"theia_prometheus_runtime_requests_total",
+		"Prometheus runtime requests by operation and result.",
+		sortedPrometheusRuntimeCounterRows(r.prometheusRuntimeRequests),
+	)
+	writeHistogramVec(&b,
+		"theia_prometheus_runtime_request_seconds",
+		"Prometheus runtime request latency by operation and result.",
+		sortedPrometheusRuntimeHistogramRows(r.prometheusRuntimeDuration),
 	)
 	writeCounterVec(&b,
 		"theia_ws_messages_total",
@@ -406,6 +425,27 @@ func (r *Registry) IncRefreshTopologyReload(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.refreshTopologyReloadTotal[reason]++
+}
+
+func (r *Registry) ObservePrometheusRuntimeRequest(operation, result string, duration time.Duration) {
+	if operation == "" || result == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := prometheusRuntimeRequestKey{
+		Operation: operation,
+		Result:    result,
+	}
+	r.prometheusRuntimeRequests[key]++
+	h, ok := r.prometheusRuntimeDuration[key]
+	if !ok {
+		h = newHistogram(durationBucketsSeconds)
+		r.prometheusRuntimeDuration[key] = h
+	}
+	h.observe(duration.Seconds())
 }
 
 func (r *Registry) ObserveWSMessage(scope, messageType string, payloadBytes int) {
@@ -699,6 +739,56 @@ func sortedRefreshSnapshotBuildRows(values map[refreshSnapshotBuildKey]*histogra
 			labels: map[string]string{
 				"mode":   key.Mode,
 				"result": key.Result,
+			},
+			value: values[key].snapshot(),
+		})
+	}
+	return rows
+}
+
+func sortedPrometheusRuntimeCounterRows(values map[prometheusRuntimeRequestKey]uint64) []counterRow {
+	keys := make([]prometheusRuntimeRequestKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		return keys[i].Result < keys[j].Result
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"result":    key.Result,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedPrometheusRuntimeHistogramRows(values map[prometheusRuntimeRequestKey]*histogram) []histogramRow {
+	keys := make([]prometheusRuntimeRequestKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		return keys[i].Result < keys[j].Result
+	})
+
+	rows := make([]histogramRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, histogramRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"result":    key.Result,
 			},
 			value: values[key].snapshot(),
 		})

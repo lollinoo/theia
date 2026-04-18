@@ -3,9 +3,11 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -15,13 +17,17 @@ import (
 	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
+const defaultPrometheusOperationTimeout = 3 * time.Second
+
 // PromClient queries the Prometheus HTTP API for live topology metrics.
 type PromClient struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL          string
+	httpClient       *http.Client
+	operationTimeout time.Duration
 }
 
 // NewPromClient creates a Prometheus HTTP API client.
@@ -32,14 +38,28 @@ func NewPromClient(baseURL string, httpClient *http.Client) *PromClient {
 	}
 
 	return &PromClient{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: client,
+		baseURL:          strings.TrimRight(baseURL, "/"),
+		httpClient:       client,
+		operationTimeout: defaultPrometheusOperationTimeout,
 	}
 }
 
 // BaseURL returns the current Prometheus base URL.
 func (c *PromClient) BaseURL() string {
 	return c.baseURL
+}
+
+// WithBaseURL clones the client configuration for a different Prometheus base URL.
+func (c *PromClient) WithBaseURL(baseURL string) *PromClient {
+	if c == nil {
+		return NewPromClient(baseURL, nil)
+	}
+
+	return &PromClient{
+		baseURL:          strings.TrimRight(baseURL, "/"),
+		httpClient:       c.httpClient,
+		operationTimeout: c.runtimeOperationTimeout(),
+	}
 }
 
 // QueryDeviceMetrics fetches CPU, memory, uptime, and temperature for the requested label values.
@@ -428,17 +448,25 @@ func (c *PromClient) CheckHealthFast(ctx context.Context) error {
 
 // QueryAlerts fetches currently firing alerts from the Prometheus HTTP API.
 func (c *PromClient) QueryAlerts(ctx context.Context) ([]domain.AlertState, error) {
+	ctx, cancel := c.withRuntimeTimeout(ctx)
+	defer cancel()
+
+	startedAt := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/alerts", nil)
 	if err != nil {
+		observability.Default().ObservePrometheusRuntimeRequest("alerts", classifyPrometheusRequestResult(err), time.Since(startedAt))
 		return nil, fmt.Errorf("build alerts request: %w", err)
 	}
 
 	var response promAlertsResponse
 	if err := c.do(req, &response); err != nil {
+		observability.Default().ObservePrometheusRuntimeRequest("alerts", classifyPrometheusRequestResult(err), time.Since(startedAt))
 		return nil, err
 	}
 	if response.Status != "success" {
-		return nil, fmt.Errorf("prometheus alerts returned status %q", response.Status)
+		err := fmt.Errorf("prometheus alerts returned status %q", response.Status)
+		observability.Default().ObservePrometheusRuntimeRequest("alerts", classifyPrometheusRequestResult(err), time.Since(startedAt))
+		return nil, err
 	}
 
 	alerts := make([]domain.AlertState, 0, len(response.Data.Alerts))
@@ -465,6 +493,7 @@ func (c *PromClient) QueryAlerts(ctx context.Context) ([]domain.AlertState, erro
 		return alerts[i].Summary < alerts[j].Summary
 	})
 
+	observability.Default().ObservePrometheusRuntimeRequest("alerts", classifyPrometheusRequestResult(nil), time.Since(startedAt))
 	return alerts, nil
 }
 
@@ -566,8 +595,13 @@ func floatPtr(value float64) *float64 {
 }
 
 func (c *PromClient) queryVector(ctx context.Context, promql string) ([]promVectorSample, error) {
+	ctx, cancel := c.withRuntimeTimeout(ctx)
+	defer cancel()
+
+	startedAt := time.Now()
 	endpoint, err := url.Parse(c.baseURL + "/api/v1/query")
 	if err != nil {
+		observability.Default().ObservePrometheusRuntimeRequest("query", classifyPrometheusRequestResult(err), time.Since(startedAt))
 		return nil, fmt.Errorf("parse prometheus URL: %w", err)
 	}
 
@@ -577,21 +611,56 @@ func (c *PromClient) queryVector(ctx context.Context, promql string) ([]promVect
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
+		observability.Default().ObservePrometheusRuntimeRequest("query", classifyPrometheusRequestResult(err), time.Since(startedAt))
 		return nil, fmt.Errorf("build query request: %w", err)
 	}
 
 	var response promQueryResponse
 	if err := c.do(req, &response); err != nil {
+		observability.Default().ObservePrometheusRuntimeRequest("query", classifyPrometheusRequestResult(err), time.Since(startedAt))
 		return nil, err
 	}
 	if response.Status != "success" {
-		return nil, fmt.Errorf("prometheus query returned status %q", response.Status)
+		err := fmt.Errorf("prometheus query returned status %q", response.Status)
+		observability.Default().ObservePrometheusRuntimeRequest("query", classifyPrometheusRequestResult(err), time.Since(startedAt))
+		return nil, err
 	}
 	if response.Data.ResultType != "vector" {
-		return nil, fmt.Errorf("unexpected prometheus result type %q", response.Data.ResultType)
+		err := fmt.Errorf("unexpected prometheus result type %q", response.Data.ResultType)
+		observability.Default().ObservePrometheusRuntimeRequest("query", classifyPrometheusRequestResult(err), time.Since(startedAt))
+		return nil, err
 	}
 
+	observability.Default().ObservePrometheusRuntimeRequest("query", classifyPrometheusRequestResult(nil), time.Since(startedAt))
 	return response.Data.Result, nil
+}
+
+func (c *PromClient) withRuntimeTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, c.runtimeOperationTimeout())
+}
+
+func (c *PromClient) runtimeOperationTimeout() time.Duration {
+	if c != nil && c.operationTimeout > 0 {
+		return c.operationTimeout
+	}
+	return defaultPrometheusOperationTimeout
+}
+
+func classifyPrometheusRequestResult(err error) string {
+	if err == nil {
+		return "success"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	return "error"
 }
 
 func (c *PromClient) do(req *http.Request, target any) error {
