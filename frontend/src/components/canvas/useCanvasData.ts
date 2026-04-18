@@ -3,7 +3,7 @@ import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices, fetchLinks, fetchSettings, createLink } from '../../api/client';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
-import { usePositions } from '../../hooks/usePositions';
+import { usePositions, type PositionState } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import {
   alertStatusForDevice,
@@ -85,7 +85,7 @@ export function useCanvasData({
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
   const layoutInitializedRef = useRef(false);
-  const currentNodePositionsRef = useRef<Map<string, { x: number; y: number; pinned?: boolean }>>(new Map());
+  const currentNodePositionsRef = useRef<Map<string, PositionState>>(new Map());
   const grafanaUrlRef = useRef<string>('');
   const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
   const [prometheusAlertDismissed, setPrometheusAlertDismissed] = useState(false);
@@ -110,7 +110,7 @@ export function useCanvasData({
       {
         x: node.position.x,
         y: node.position.y,
-        pinned: node.data.pinned,
+        pinned: node.data.pinned ?? false,
       },
     ]),
   );
