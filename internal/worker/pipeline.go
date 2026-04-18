@@ -29,6 +29,15 @@ import (
 const (
 	pipelineBroadcastCoalesceWindow = 250 * time.Millisecond
 	pipelineFullResyncInterval      = 60 * time.Second
+
+	refreshSnapshotModeDirty = "dirty"
+	refreshSnapshotModeFull  = "full"
+
+	refreshReloadReasonStartup               = "startup"
+	refreshReloadReasonTopologyDirty         = "topology_dirty"
+	refreshReloadReasonFullResync            = "full_resync"
+	refreshReloadReasonDirtyDeltaFallback    = "dirty_delta_fallback"
+	refreshReloadReasonTopologyDrainFallback = "topology_drain_fallback"
 )
 
 type pipelineScheduler interface {
@@ -623,7 +632,9 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 	previousHashes := p.prevHashes
 	p.snapshotMu.RUnlock()
 
+	startedAt := time.Now()
 	snapshot := buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, hostnames)
+	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeFull, time.Since(startedAt), true)
 	currentHashes := computeSnapshotHashes(snapshot)
 	drainedTopology := drainTopologyNotify(p.topologyNotify)
 
@@ -634,6 +645,7 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 
 	switch {
 	case previousHashes == nil:
+		observability.Default().IncRefreshTopologyReload(refreshReloadReasonStartup)
 		p.hub.Broadcast(ws.Message{
 			Type:    ws.MessageTypeSnapshot,
 			Payload: snapshot,
@@ -641,6 +653,7 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 	default:
 		delta := buildDelta(snapshot, currentHashes, previousHashes)
 		if delta == nil && drainedTopology {
+			observability.Default().IncRefreshTopologyReload(refreshReloadReasonTopologyDrainFallback)
 			p.hub.Broadcast(ws.Message{
 				Type:    ws.MessageTypeSnapshot,
 				Payload: snapshot,
@@ -666,16 +679,24 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 		return nil
 	}
 
-	if forceFull || topologyDirty {
-		return p.broadcastFullSnapshot(ctx, topologyDirty)
+	if topologyDirty {
+		return p.broadcastFullSnapshot(ctx, refreshReloadReasonTopologyDirty, true)
+	}
+	if forceFull {
+		return p.broadcastFullSnapshot(ctx, refreshReloadReasonFullResync, false)
+	}
+	if len(dirtyDevices) == 0 && !alertsDirty {
+		return nil
 	}
 
+	startedAt := time.Now()
 	delta, requireFullSnapshot, err := p.buildDirtyOverviewDelta(dirtyDevices, alertsDirty)
+	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeDirty, time.Since(startedAt), err == nil)
 	if err != nil {
 		return err
 	}
 	if requireFullSnapshot {
-		return p.broadcastFullSnapshot(ctx, false)
+		return p.broadcastFullSnapshot(ctx, refreshReloadReasonDirtyDeltaFallback, false)
 	}
 	if delta == nil {
 		return nil
@@ -695,7 +716,8 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 	return nil
 }
 
-func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, topologyChanged bool) error {
+func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, reason string, topologyChanged bool) error {
+	observability.Default().IncRefreshTopologyReload(reason)
 	snapshot, err := p.buildFullOverviewSnapshot()
 	if err != nil {
 		return err
@@ -721,7 +743,12 @@ func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, topology
 	return nil
 }
 
-func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (*ws.SnapshotPayload, error) {
+func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (_ *ws.SnapshotPayload, err error) {
+	startedAt := time.Now()
+	defer func() {
+		observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeFull, time.Since(startedAt), err == nil)
+	}()
+
 	devices, err := p.cache.GetDevices()
 	if err != nil {
 		return nil, err

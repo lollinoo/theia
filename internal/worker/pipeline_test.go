@@ -18,6 +18,7 @@ import (
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -1281,6 +1282,78 @@ func TestPipelineOrchestratorTopologyChangedForcesSnapshotWhenOverviewDeltaNil(t
 	if types[1] != ws.MessageTypeTopologyChanged {
 		t.Fatalf("expected topology_changed after forced snapshot, got %v", types)
 	}
+}
+
+func TestPipelineOrchestratorBroadcastOnceRecordsStartupReloadMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
+	pipeline.broadcastOnce(context.Background())
+
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) == 0 || types[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected startup snapshot broadcast, got %v", types)
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_refresh_snapshot_build_seconds_count{mode="full",result="success"} 1`) {
+		t.Fatalf("expected full snapshot build metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_refresh_topology_reload_total{reason="startup"} 1`) {
+		t.Fatalf("expected startup reload reason metric, got:\n%s", metrics)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing.T) {
+	pipeline, hub, _, topologyNotify, _ := newBroadcastTestPipeline(t)
+
+	pipeline.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	topologyRegistry := observability.ResetDefaultForTest()
+	topologyNotify <- struct{}{}
+	if err := pipeline.broadcastDirty(context.Background(), nil, false, true, false); err != nil {
+		t.Fatalf("broadcastDirty topology refresh: %v", err)
+	}
+
+	topologyTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(topologyTypes) < 2 {
+		t.Fatalf("expected topology refresh snapshot and topology_changed, got %v", topologyTypes)
+	}
+	if topologyTypes[0] != ws.MessageTypeSnapshot || topologyTypes[1] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology refresh snapshot before topology_changed, got %v", topologyTypes)
+	}
+	topologyMetrics := string(topologyRegistry.MarshalPrometheus())
+	if !strings.Contains(topologyMetrics, `theia_refresh_topology_reload_total{reason="topology_dirty"} 1`) {
+		t.Fatalf("expected topology_dirty reload reason metric, got:\n%s", topologyMetrics)
+	}
+	if !strings.Contains(topologyMetrics, `theia_refresh_snapshot_build_seconds_count{mode="full",result="success"} 1`) {
+		t.Fatalf("expected topology refresh full snapshot build metric, got:\n%s", topologyMetrics)
+	}
+
+	fullResyncRegistry := observability.ResetDefaultForTest()
+	if err := pipeline.broadcastDirty(context.Background(), nil, false, false, true); err != nil {
+		t.Fatalf("broadcastDirty forced refresh: %v", err)
+	}
+
+	fullResyncTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(fullResyncTypes) == 0 || fullResyncTypes[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected forced full resync snapshot, got %v", fullResyncTypes)
+	}
+	if len(fullResyncTypes) > 1 && fullResyncTypes[1] == ws.MessageTypeTopologyChanged {
+		t.Fatalf("forced full resync should not emit topology_changed, got %v", fullResyncTypes)
+	}
+	fullResyncMetrics := string(fullResyncRegistry.MarshalPrometheus())
+	if !strings.Contains(fullResyncMetrics, `theia_refresh_topology_reload_total{reason="full_resync"} 1`) {
+		t.Fatalf("expected full_resync reload reason metric, got:\n%s", fullResyncMetrics)
+	}
+
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 }
 
 func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testing.T) {
