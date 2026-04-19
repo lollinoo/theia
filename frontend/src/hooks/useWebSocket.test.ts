@@ -764,4 +764,118 @@ describe('useWebSocket', () => {
     expect(result.current.snapshot!.alerts).toHaveLength(1);
     expect(result.current.snapshot!.alerts[0].alert_name).toBe('HighCPU');
   });
+
+  it('applies versioned snapshot_delta only when base_version matches local version', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 10,
+          snapshot: {
+            device_metrics: {
+              'dev-1': {
+                device_id: 'dev-1',
+                cpu_percent: 50,
+                mem_percent: null,
+                temp_celsius: null,
+                uptime_secs: null,
+                collected_at: '2026-01-01T00:00:00Z',
+              },
+            },
+            link_metrics: {},
+            alerts: [],
+            device_statuses: {},
+            device_hostnames: {},
+            device_models: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'snapshot_delta',
+        payload: {
+          base_version: 10,
+          version: 11,
+          delta: {
+            device_metrics: {
+              'dev-1': {
+                device_id: 'dev-1',
+                cpu_percent: 90,
+                mem_percent: null,
+                temp_celsius: null,
+                uptime_secs: null,
+                collected_at: '2026-01-01T00:01:00Z',
+              },
+            },
+            link_metrics: {},
+            alerts: [],
+            device_statuses: {},
+            device_hostnames: {},
+            device_models: {},
+          },
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(90);
+  });
+
+  it('ignores versioned snapshot_delta when base_version does not match local version', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 3,
+          snapshot: {
+            device_metrics: {
+              'dev-1': {
+                device_id: 'dev-1',
+                cpu_percent: 50,
+                mem_percent: null,
+                temp_celsius: null,
+                uptime_secs: null,
+                collected_at: '2026-01-01T00:00:00Z',
+              },
+            },
+            link_metrics: {},
+            alerts: [],
+            device_statuses: {},
+            device_hostnames: {},
+            device_models: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'snapshot_delta',
+        payload: {
+          base_version: 2,
+          version: 4,
+          delta: {
+            device_metrics: {
+              'dev-1': {
+                device_id: 'dev-1',
+                cpu_percent: 99,
+                mem_percent: null,
+                temp_celsius: null,
+                uptime_secs: null,
+                collected_at: '2026-01-01T00:01:00Z',
+              },
+            },
+            link_metrics: {},
+            alerts: [],
+            device_statuses: {},
+            device_hostnames: {},
+            device_models: {},
+          },
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(50);
+  });
 });

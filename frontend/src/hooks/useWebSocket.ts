@@ -46,6 +46,8 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
   const socketRef = useRef<WebSocket | null>(null);
   const detailDeviceIdRef = useRef<string | null>(detailDeviceId);
   const lastSubscribedDeviceIdRef = useRef<string | null>(null);
+  const snapshotVersionRef = useRef<number | null>(null);
+  const awaitingResyncRef = useRef(false);
 
   const reconnectAttemptRef = useRef(0);
   const disposed = useRef(false);
@@ -127,18 +129,35 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
           const message = parseWSMessage(raw);
 
           if (message.type === 'snapshot') {
-            setSnapshot((message as SnapshotWSMessage).payload);
+            const payload = (message as SnapshotWSMessage).payload;
+            snapshotVersionRef.current = payload.version;
+            awaitingResyncRef.current = false;
+            setSnapshot(payload.snapshot);
           } else if (message.type === 'snapshot_delta') {
+            const payload = (message as SnapshotDeltaWSMessage).payload;
             setSnapshot((prev) => {
               if (prev === null) {
-                // No base snapshot yet — ignore delta (first message is always full snapshot)
+                // No base snapshot yet — ignore delta until a full snapshot arrives.
                 return null;
               }
-              return mergeSnapshotDelta(prev, (message as SnapshotDeltaWSMessage).payload);
+              if (awaitingResyncRef.current) {
+                return prev;
+              }
+
+              if (payload.version !== undefined || payload.base_version !== undefined) {
+                if (snapshotVersionRef.current !== payload.base_version || payload.version === undefined) {
+                  awaitingResyncRef.current = true;
+                  return prev;
+                }
+                snapshotVersionRef.current = payload.version;
+              }
+
+              return mergeSnapshotDelta(prev, payload.delta);
             });
           } else if (message.type === 'prometheus_status') {
             setPrometheusStatus(message.payload as PrometheusStatusPayload);
           } else if (message.type === 'resync_required') {
+            awaitingResyncRef.current = true;
             window.dispatchEvent(new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
               detail: (message as ResyncRequiredWSMessage).payload,
             }));
@@ -171,6 +190,8 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
       clearReconnectTimer();
       setConnected(false);
       setReconnecting(false);
+      snapshotVersionRef.current = null;
+      awaitingResyncRef.current = false;
 
       if (socketRef.current) {
         // Detach handlers so no callbacks fire after cleanup

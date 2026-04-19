@@ -59,7 +59,18 @@ export interface PrometheusStatusPayload {
 
 export interface ResyncRequiredPayload {
   scope: 'overview';
-  reason: 'state_changes_dropped' | 'hub_buffer_full';
+  reason: 'client_resync_scheduled' | 'state_changes_dropped' | 'hub_buffer_full';
+}
+
+export interface SnapshotEnvelopePayload {
+  version: number | null;
+  snapshot: SnapshotPayload;
+}
+
+export interface SnapshotDeltaEnvelopePayload {
+  base_version?: number;
+  version?: number;
+  delta: SnapshotPayload;
 }
 
 export interface WSMessage {
@@ -69,12 +80,12 @@ export interface WSMessage {
 
 export interface SnapshotWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'snapshot';
-  payload: SnapshotPayload;
+  payload: SnapshotEnvelopePayload;
 }
 
 export interface SnapshotDeltaWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'snapshot_delta';
-  payload: SnapshotPayload;
+  payload: SnapshotDeltaEnvelopePayload;
 }
 
 export interface PrometheusStatusWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
@@ -259,16 +270,51 @@ export function parseWSMessage(
   }
 
   if (type === 'snapshot') {
+    const payload = isRecord(value.payload) ? value.payload : {};
+    if ('version' in payload || 'snapshot' in payload) {
+      const version = typeof payload.version === 'number' && Number.isFinite(payload.version)
+        ? payload.version
+        : null;
+      return {
+        type,
+        payload: {
+          version,
+          snapshot: parseSnapshotPayload(payload.snapshot),
+        },
+      };
+    }
     return {
       type,
-      payload: parseSnapshotPayload(value.payload),
+      payload: {
+        version: null,
+        snapshot: parseSnapshotPayload(value.payload),
+      },
     };
   }
 
   if (type === 'snapshot_delta') {
+    const payload = isRecord(value.payload) ? value.payload : {};
+    if ('delta' in payload || 'version' in payload || 'base_version' in payload) {
+      const baseVersion = typeof payload.base_version === 'number' && Number.isFinite(payload.base_version)
+        ? payload.base_version
+        : undefined;
+      const version = typeof payload.version === 'number' && Number.isFinite(payload.version)
+        ? payload.version
+        : undefined;
+      return {
+        type,
+        payload: {
+          base_version: baseVersion,
+          version,
+          delta: parseSnapshotPayload(payload.delta),
+        },
+      } as SnapshotDeltaWSMessage;
+    }
     return {
       type,
-      payload: parseSnapshotPayload(value.payload),
+      payload: {
+        delta: parseSnapshotPayload(value.payload),
+      },
     } as SnapshotDeltaWSMessage;
   }
 
@@ -292,7 +338,7 @@ export function parseWSMessage(
     if (scope !== 'overview') {
       throw new Error(`unsupported resync scope: ${scope}`);
     }
-    if (reason !== 'state_changes_dropped' && reason !== 'hub_buffer_full') {
+    if (reason !== 'client_resync_scheduled' && reason !== 'state_changes_dropped' && reason !== 'hub_buffer_full') {
       throw new Error(`unsupported resync reason: ${reason}`);
     }
 

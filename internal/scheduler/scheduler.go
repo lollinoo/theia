@@ -3,6 +3,7 @@ package scheduler
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"log"
 	"math/rand"
 	"sync"
@@ -16,6 +17,8 @@ import (
 
 const defaultInventoryRefreshInterval = 30 * time.Second
 const defaultTaskBuffer = 128
+
+var ErrAlreadyStarted = errors.New("scheduler: already started")
 
 type DeviceSource interface {
 	GetDevices() ([]domain.Device, error)
@@ -77,12 +80,12 @@ func (s *Scheduler) Status() string {
 	return "stopped"
 }
 
-func (s *Scheduler) Start(ctx context.Context) {
+func (s *Scheduler) Start(ctx context.Context) error {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 
 	if s.cancel != nil {
-		panic("scheduler: Start called more than once")
+		return ErrAlreadyStarted
 	}
 
 	derived, cancel := context.WithCancel(ctx)
@@ -99,6 +102,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	s.recordMetrics()
 
 	go s.run(derived)
+	return nil
 }
 
 func (s *Scheduler) Stop() {

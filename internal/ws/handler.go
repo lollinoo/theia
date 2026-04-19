@@ -18,13 +18,13 @@ var upgrader = websocket.Upgrader{
 // Handler upgrades HTTP requests and binds them to the hub.
 type Handler struct {
 	hub            *Hub
-	snapshotFunc   func() *SnapshotPayload
+	snapshotFunc   func() (*SnapshotPayload, uint64)
 	promStatusFunc func() PrometheusStatusPayload
 }
 
 // NewHandler creates a WebSocket handler that serves initial snapshots on connect.
 // promStatusFunc returns the current Prometheus integration status.
-func NewHandler(hub *Hub, snapshotFunc func() *SnapshotPayload, promStatusFunc func() PrometheusStatusPayload) *Handler {
+func NewHandler(hub *Hub, snapshotFunc func() (*SnapshotPayload, uint64), promStatusFunc func() PrometheusStatusPayload) *Handler {
 	return &Handler{
 		hub:            hub,
 		snapshotFunc:   snapshotFunc,
@@ -46,21 +46,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		hub:  h.hub,
-		conn: conn,
-		send: make(chan []byte, sendBufferSize),
+		hub:          h.hub,
+		conn:         conn,
+		send:         make(chan []byte, sendBufferSize),
+		overviewSend: make(chan []byte, overviewBufferSize),
 	}
 
 	h.hub.register <- client
 
 	snapshot := EmptySnapshot()
+	version := uint64(0)
 	if h.snapshotFunc != nil {
-		snapshot = CloneSnapshot(h.snapshotFunc())
+		snapshot, version = h.snapshotFunc()
+		snapshot = CloneSnapshot(snapshot)
 	}
-	h.hub.SendTo(client, Message{
-		Type:    MessageTypeSnapshot,
-		Payload: snapshot,
-	})
+	h.hub.SendOverviewSnapshot(client, snapshot, version)
 
 	// Send current Prometheus status so the client doesn't have to wait for
 	// the next health-check transition to learn Prometheus is unreachable.

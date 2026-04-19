@@ -33,6 +33,7 @@ type pipelineTestScheduler struct {
 	completions []scheduler.Completion
 	startCalls  int
 	stopCalls   int
+	startErr    error
 }
 
 func newPipelineTestScheduler() *pipelineTestScheduler {
@@ -42,11 +43,15 @@ func newPipelineTestScheduler() *pipelineTestScheduler {
 	}
 }
 
-func (s *pipelineTestScheduler) Start(context.Context) {
+func (s *pipelineTestScheduler) Start(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.startErr != nil {
+		return s.startErr
+	}
 	s.status = "running"
 	s.startCalls++
+	return nil
 }
 
 func (s *pipelineTestScheduler) Stop() {
@@ -652,7 +657,9 @@ func TestPipelineOrchestratorStatusReflectsLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pipeline.Start(ctx)
+	if err := pipeline.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
 	t.Cleanup(pipeline.Stop)
 
 	if pipeline.Status() != "running" {
@@ -664,6 +671,72 @@ func TestPipelineOrchestratorStatusReflectsLifecycle(t *testing.T) {
 	if pipeline.Status() != "stopped" {
 		t.Fatalf("expected stopped status after Stop, got %q", pipeline.Status())
 	}
+}
+
+func TestPipelineOrchestratorStartReturnsErrAlreadyStarted(t *testing.T) {
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		state.NewStore(),
+		newPipelineTestCache(nil, nil),
+		ws.NewHub(),
+		newPerformanceTestCollector(t),
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		collector.NewPrometheusCollector(&fakePrometheusClient{}),
+		&fakeTopologyService{},
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := pipeline.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	defer pipeline.Stop()
+
+	if err := pipeline.Start(ctx); !errors.Is(err, ErrAlreadyStarted) {
+		t.Fatalf("second Start() error = %v, want ErrAlreadyStarted", err)
+	}
+}
+
+func TestPipelineOrchestratorStartRollsBackStoreWhenSchedulerStartFails(t *testing.T) {
+	sched := newPipelineTestScheduler()
+	sched.startErr = errors.New("boom")
+	store := state.NewStore()
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		newPipelineTestCache(nil, nil),
+		ws.NewHub(),
+		newPerformanceTestCollector(t),
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		collector.NewPrometheusCollector(&fakePrometheusClient{}),
+		&fakeTopologyService{},
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := pipeline.Start(ctx); err == nil {
+		t.Fatal("expected Start() to fail when scheduler start fails")
+	}
+	if pipeline.Status() != "stopped" {
+		t.Fatalf("pipeline status = %q, want stopped", pipeline.Status())
+	}
+	if err := store.Start(ctx); err != nil {
+		t.Fatalf("store should be restartable after rollback, got %v", err)
+	}
+	store.Stop()
 }
 
 func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachability(t *testing.T) {
@@ -848,6 +921,23 @@ type wsSnapshotMessage struct {
 	Payload ws.SnapshotPayload `json:"payload"`
 }
 
+type wsVersionedSnapshotMessage struct {
+	Type    string `json:"type"`
+	Payload struct {
+		Version  uint64              `json:"version"`
+		Snapshot *ws.SnapshotPayload `json:"snapshot"`
+	} `json:"payload"`
+}
+
+type wsVersionedSnapshotDeltaMessage struct {
+	Type    string `json:"type"`
+	Payload struct {
+		BaseVersion uint64              `json:"base_version"`
+		Version     uint64              `json:"version"`
+		Delta       *ws.SnapshotPayload `json:"delta"`
+	} `json:"payload"`
+}
+
 func newDetailSubscriptionTestDevice() domain.Device {
 	return domain.Device{
 		ID:     uuid.New(),
@@ -887,7 +977,7 @@ func newDetailSubscriptionTestServer(t *testing.T, hub *ws.Hub) string {
 
 	server := httptest.NewServer(ws.NewHandler(
 		hub,
-		func() *ws.SnapshotPayload { return ws.EmptySnapshot() },
+		func() (*ws.SnapshotPayload, uint64) { return ws.EmptySnapshot(), 0 },
 		func() ws.PrometheusStatusPayload {
 			return ws.PrometheusStatusPayload{Enabled: true, Available: true}
 		},
@@ -1019,9 +1109,14 @@ func TestPipelineOrchestratorBroadcastLoopSendsSnapshotThenDelta(t *testing.T) {
 
 	pipeline.broadcastOnce(context.Background())
 
-	firstTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	firstMessages := drainBroadcastCh(hub)
+	firstTypes := broadcastMessageTypes(t, firstMessages)
 	if len(firstTypes) == 0 || firstTypes[0] != ws.MessageTypeSnapshot {
 		t.Fatalf("expected first broadcast to be snapshot, got %v", firstTypes)
+	}
+	var firstSnapshot wsVersionedSnapshotMessage
+	if err := json.Unmarshal(firstMessages[0], &firstSnapshot); err != nil {
+		t.Fatalf("decode first snapshot: %v", err)
 	}
 
 	store.Update(state.StateUpdate{
@@ -1039,9 +1134,20 @@ func TestPipelineOrchestratorBroadcastLoopSendsSnapshotThenDelta(t *testing.T) {
 
 	pipeline.broadcastOnce(context.Background())
 
-	secondTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	secondMessages := drainBroadcastCh(hub)
+	secondTypes := broadcastMessageTypes(t, secondMessages)
 	if len(secondTypes) == 0 || secondTypes[0] != ws.MessageTypeSnapshotDelta {
 		t.Fatalf("expected second broadcast to be snapshot_delta, got %v", secondTypes)
+	}
+	var delta wsVersionedSnapshotDeltaMessage
+	if err := json.Unmarshal(secondMessages[0], &delta); err != nil {
+		t.Fatalf("decode second delta: %v", err)
+	}
+	if delta.Payload.BaseVersion != firstSnapshot.Payload.Version {
+		t.Fatalf("delta base_version = %d, want %d", delta.Payload.BaseVersion, firstSnapshot.Payload.Version)
+	}
+	if delta.Payload.Version != firstSnapshot.Payload.Version+1 {
+		t.Fatalf("delta version = %d, want %d", delta.Payload.Version, firstSnapshot.Payload.Version+1)
 	}
 }
 
@@ -1126,14 +1232,14 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshSendsSnapshotDelta(t *tes
 		}},
 	})
 
-	var message wsSnapshotMessage
+	var message wsVersionedSnapshotDeltaMessage
 	for _, raw := range waitForBroadcastMessages(t, hub, time.Second) {
 		if err := json.Unmarshal(raw, &message); err != nil {
 			t.Fatalf("failed to decode alert broadcast: %v", err)
 		}
 		if message.Type == ws.MessageTypeSnapshotDelta {
-			if len(message.Payload.Alerts) != 1 {
-				t.Fatalf("expected 1 alert in snapshot_delta, got %d", len(message.Payload.Alerts))
+			if message.Payload.Delta == nil || len(message.Payload.Delta.Alerts) != 1 {
+				t.Fatalf("expected 1 alert in snapshot_delta, got %#v", message.Payload.Delta)
 			}
 			return
 		}
@@ -1253,7 +1359,7 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 
 	pipeline.broadcastOnce(context.Background())
 
-	var snapshotMessage wsSnapshotMessage
+	var snapshotMessage wsVersionedSnapshotMessage
 	foundSnapshot := false
 	for _, raw := range drainBroadcastCh(hub) {
 		if err := json.Unmarshal(raw, &snapshotMessage); err != nil {
@@ -1268,7 +1374,10 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 		t.Fatal("expected mixed-tier broadcast to send snapshot payload")
 	}
 
-	metric, ok := snapshotMessage.Payload.DeviceMetrics[deviceID.String()]
+	if snapshotMessage.Payload.Snapshot == nil {
+		t.Fatal("expected versioned snapshot payload")
+	}
+	metric, ok := snapshotMessage.Payload.Snapshot.DeviceMetrics[deviceID.String()]
 	if !ok {
 		t.Fatalf("expected snapshot metric for device %s", deviceID)
 	}
@@ -1281,8 +1390,8 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 	if metric.Reachability != string(state.ReachabilityUp) {
 		t.Fatalf("Reachability = %q, want %q", metric.Reachability, state.ReachabilityUp)
 	}
-	if snapshotMessage.Payload.DeviceStatuses[deviceID.String()] != string(domain.DeviceStatusUp) {
-		t.Fatalf("DeviceStatus = %q, want %q", snapshotMessage.Payload.DeviceStatuses[deviceID.String()], domain.DeviceStatusUp)
+	if snapshotMessage.Payload.Snapshot.DeviceStatuses[deviceID.String()] != string(domain.DeviceStatusUp) {
+		t.Fatalf("DeviceStatus = %q, want %q", snapshotMessage.Payload.Snapshot.DeviceStatuses[deviceID.String()], domain.DeviceStatusUp)
 	}
 }
 

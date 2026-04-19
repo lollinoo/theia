@@ -13,34 +13,40 @@ import (
 )
 
 const (
-	writeWait      = 60 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = 54 * time.Second
-	maxMessageSize = 4096
-	sendBufferSize = 16
+	writeWait          = 60 * time.Second
+	pongWait           = 60 * time.Second
+	pingPeriod         = 54 * time.Second
+	maxMessageSize     = 4096
+	sendBufferSize     = 16
+	overviewBufferSize = 2
 
-	wsBackpressureScopeBroadcast  = "broadcast"
-	wsBackpressureScopeClientSend = "client_send"
+	wsBackpressureScopeBroadcast    = "broadcast"
+	wsBackpressureScopeClientSend   = "client_send"
+	wsBackpressureScopeOverviewSend = "overview_send"
 
-	wsBackpressureReasonHubBufferFull    = "hub_buffer_full"
-	wsBackpressureReasonClientBufferFull = "client_buffer_full"
+	wsBackpressureReasonHubBufferFull     = "hub_buffer_full"
+	wsBackpressureReasonClientBufferFull  = "client_buffer_full"
+	wsBackpressureReasonClientMailboxFull = "client_mailbox_full"
 )
 
 // Hub manages all active WebSocket clients and server-side broadcasts.
 type Hub struct {
-	clients           map[*Client]bool
-	broadcast         chan []byte
-	register          chan *Client
-	unregister        chan *Client
-	mu                sync.RWMutex
-	broadcastOverflow bool
+	clients    map[*Client]bool
+	broadcast  chan []byte
+	register   chan *Client
+	unregister chan *Client
+	mu         sync.RWMutex
 }
 
 // Client is a single WebSocket connection.
 type Client struct {
 	hub            *Hub
 	conn           *websocket.Conn
+	mu             sync.Mutex
+	closed         bool
 	send           chan []byte
+	overviewSend   chan []byte
+	needsResync    bool
 	detailDeviceID uuid.UUID
 }
 
@@ -64,19 +70,6 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 		case client := <-h.unregister:
 			h.removeClient(client)
-		case message := <-h.broadcast:
-			h.mu.RLock()
-			clients := make([]*Client, 0, len(h.clients))
-			for client := range h.clients {
-				clients = append(clients, client)
-			}
-			h.mu.RUnlock()
-
-			for _, client := range clients {
-				if !h.enqueue(client, message) {
-					h.removeClient(client)
-				}
-			}
 		}
 	}
 }
@@ -89,14 +82,9 @@ func (h *Hub) Broadcast(msg Message) {
 		return
 	}
 	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
-	select {
-	case h.broadcast <- payload:
-	default:
-		h.mu.Lock()
-		h.broadcastOverflow = true
-		h.mu.Unlock()
-		observability.Default().IncWSBackpressure(wsBackpressureScopeBroadcast, wsBackpressureReasonHubBufferFull)
-		h.broadcast <- payload
+	h.recordBroadcast(payload)
+	for _, client := range h.copyClients() {
+		h.enqueue(client, payload)
 	}
 }
 
@@ -108,8 +96,96 @@ func (h *Hub) SendTo(client *Client, msg Message) {
 		return
 	}
 	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
-	if !h.enqueue(client, payload) {
-		h.removeClient(client)
+	h.enqueue(client, payload)
+}
+
+// BroadcastOverviewSnapshot broadcasts a versioned full overview snapshot.
+func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint64) {
+	msg := NewSnapshotMessage(snapshot, version)
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview snapshot: %v", err)
+		return
+	}
+	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
+	h.recordBroadcast(payload)
+	for _, client := range h.copyClients() {
+		h.enqueueOverviewSnapshot(client, payload)
+	}
+}
+
+// BroadcastOverviewDelta broadcasts a versioned sparse overview delta.
+// If a client cannot keep up, it receives resync_required plus the supplied
+// fallback full snapshot instead of blocking the producer.
+func (h *Hub) BroadcastOverviewDelta(delta *SnapshotPayload, baseVersion, version uint64, fallbackSnapshot *SnapshotPayload) {
+	deltaMessage := NewSnapshotDeltaMessage(delta, baseVersion, version)
+	deltaPayload, err := json.Marshal(deltaMessage)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview delta: %v", err)
+		return
+	}
+	fallbackMessage := NewSnapshotMessage(fallbackSnapshot, version)
+	fallbackPayload, err := json.Marshal(fallbackMessage)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview fallback snapshot: %v", err)
+		return
+	}
+	resyncPayload, err := json.Marshal(Message{
+		Type: MessageTypeResyncRequired,
+		Payload: ResyncRequiredPayload{
+			Scope:  ResyncScopeOverview,
+			Reason: ResyncReasonClientResync,
+		},
+	})
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview resync marker: %v", err)
+		return
+	}
+	observability.Default().ObserveWSMessage("broadcast", deltaMessage.Type, len(deltaPayload))
+	h.recordBroadcast(deltaPayload)
+	for _, client := range h.copyClients() {
+		h.enqueueOverviewDelta(client, deltaPayload, resyncPayload, fallbackPayload)
+	}
+}
+
+// SendOverviewSnapshot sends a versioned full snapshot to one client.
+func (h *Hub) SendOverviewSnapshot(client *Client, snapshot *SnapshotPayload, version uint64) {
+	msg := NewSnapshotMessage(snapshot, version)
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview snapshot: %v", err)
+		return
+	}
+	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
+	h.enqueueOverviewSnapshot(client, payload)
+}
+
+// BroadcastOverviewResync broadcasts an explicit overview resync marker followed
+// by a full versioned snapshot to all connected clients.
+func (h *Hub) BroadcastOverviewResync(reason string, snapshot *SnapshotPayload, version uint64) {
+	resyncPayload, err := json.Marshal(Message{
+		Type: MessageTypeResyncRequired,
+		Payload: ResyncRequiredPayload{
+			Scope:  ResyncScopeOverview,
+			Reason: reason,
+		},
+	})
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview resync marker: %v", err)
+		return
+	}
+	snapshotMessage := NewSnapshotMessage(snapshot, version)
+	snapshotPayload, err := json.Marshal(snapshotMessage)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview resync snapshot: %v", err)
+		return
+	}
+	observability.Default().ObserveWSMessage("broadcast", MessageTypeResyncRequired, len(resyncPayload))
+	observability.Default().ObserveWSMessage("broadcast", snapshotMessage.Type, len(snapshotPayload))
+	h.recordBroadcast(resyncPayload)
+	h.recordBroadcast(snapshotPayload)
+	for _, client := range h.copyClients() {
+		h.enqueueOverviewResync(client, resyncPayload, snapshotPayload)
 	}
 }
 
@@ -141,17 +217,12 @@ func (h *Hub) DetailSubscribers(deviceID uuid.UUID) []*Client {
 	return subscribers
 }
 
-// ConsumeBroadcastOverflow reports whether a broadcast buffer overflow happened
-// since the last call and clears the sticky marker.
-func (h *Hub) ConsumeBroadcastOverflow() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	overflowed := h.broadcastOverflow
-	h.broadcastOverflow = false
-	return overflowed
-}
-
 func (h *Hub) enqueue(client *Client, payload []byte) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed {
+		return false
+	}
 	select {
 	case client.send <- payload:
 		return true
@@ -161,13 +232,82 @@ func (h *Hub) enqueue(client *Client, payload []byte) bool {
 	}
 }
 
+func (h *Hub) enqueueOverviewSnapshot(client *Client, payload []byte) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed {
+		return false
+	}
+	clearQueuedMessages(client.overviewSend)
+	client.needsResync = false
+	select {
+	case client.overviewSend <- payload:
+		return true
+	default:
+		observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
+		return false
+	}
+}
+
+func (h *Hub) enqueueOverviewDelta(client *Client, deltaPayload, resyncPayload, fallbackPayload []byte) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed {
+		return false
+	}
+	if !client.needsResync {
+		select {
+		case client.overviewSend <- deltaPayload:
+			return true
+		default:
+		}
+	}
+	observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
+	client.needsResync = true
+	clearQueuedMessages(client.overviewSend)
+	select {
+	case client.overviewSend <- resyncPayload:
+	default:
+	}
+	select {
+	case client.overviewSend <- fallbackPayload:
+		client.needsResync = false
+	default:
+	}
+	return true
+}
+
+func (h *Hub) enqueueOverviewResync(client *Client, resyncPayload, snapshotPayload []byte) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed {
+		return false
+	}
+	clearQueuedMessages(client.overviewSend)
+	client.needsResync = false
+	select {
+	case client.overviewSend <- resyncPayload:
+	default:
+	}
+	select {
+	case client.overviewSend <- snapshotPayload:
+	default:
+		observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
+	}
+	return true
+}
+
 func (h *Hub) removeClient(client *Client) {
 	h.mu.Lock()
 	_, ok := h.clients[client]
 	if ok {
+		client.mu.Lock()
 		client.detailDeviceID = uuid.Nil
+		client.closed = true
 		delete(h.clients, client)
 		close(client.send)
+		close(client.overviewSend)
+		client.mu.Unlock()
 	}
 	h.mu.Unlock()
 
@@ -224,22 +364,21 @@ func (c *Client) writePump() {
 
 	for {
 		select {
-		case message, ok := <-c.send:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+		case message, ok := <-c.overviewSend:
+			if !c.writePayload(message, ok) {
 				return
 			}
+			continue
+		default:
+		}
 
-			writer, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
+		select {
+		case message, ok := <-c.overviewSend:
+			if !c.writePayload(message, ok) {
 				return
 			}
-			if _, err := writer.Write(message); err != nil {
-				_ = writer.Close()
-				return
-			}
-			if err := writer.Close(); err != nil {
+		case message, ok := <-c.send:
+			if !c.writePayload(message, ok) {
 				return
 			}
 		case <-ticker.C:
@@ -250,6 +389,55 @@ func (c *Client) writePump() {
 				}
 				return
 			}
+		}
+	}
+}
+
+func (c *Client) writePayload(message []byte, ok bool) bool {
+	_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+	if !ok {
+		_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+		return false
+	}
+
+	writer, err := c.conn.NextWriter(websocket.TextMessage)
+	if err != nil {
+		return false
+	}
+	if _, err := writer.Write(message); err != nil {
+		_ = writer.Close()
+		return false
+	}
+	if err := writer.Close(); err != nil {
+		return false
+	}
+	return true
+}
+
+func (h *Hub) recordBroadcast(payload []byte) {
+	select {
+	case h.broadcast <- payload:
+	default:
+		observability.Default().IncWSBackpressure(wsBackpressureScopeBroadcast, wsBackpressureReasonHubBufferFull)
+	}
+}
+
+func (h *Hub) copyClients() []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	clients := make([]*Client, 0, len(h.clients))
+	for client := range h.clients {
+		clients = append(clients, client)
+	}
+	return clients
+}
+
+func clearQueuedMessages(ch chan []byte) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
 		}
 	}
 }
