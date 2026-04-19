@@ -182,6 +182,7 @@ wisp-lab: ## Start WISP lab with 10 routers, radio access overlay, OSPF, and SNM
 	@echo "WISP lab is running:"
 	@echo "  SNMP targets: 127.0.10.21-127.0.10.42"
 	@echo "  Prometheus:   http://localhost:9091"
+	@echo "  Dev Prometheus scrape view: http://localhost:9090/targets"
 	@echo ""
 	@echo "Run 'make wisp-seed-all' to add routers plus radio access nodes to Theia."
 

@@ -15,9 +15,33 @@ scrape_configs:
     metrics_path: /snmp
     static_configs:
       - targets:
+          # Base dev SNMP simulators.
           - 127.0.10.10
           - 127.0.10.11
           - 127.0.10.12
+          # Optional WISP lab targets. These resolve when `make wisp-lab` is running.
+          - 127.0.10.21
+          - 127.0.10.22
+          - 127.0.10.23
+          - 127.0.10.24
+          - 127.0.10.25
+          - 127.0.10.26
+          - 127.0.10.27
+          - 127.0.10.28
+          - 127.0.10.29
+          - 127.0.10.30
+          - 127.0.10.31
+          - 127.0.10.32
+          - 127.0.10.33
+          - 127.0.10.34
+          - 127.0.10.35
+          - 127.0.10.36
+          - 127.0.10.37
+          - 127.0.10.38
+          - 127.0.10.39
+          - 127.0.10.40
+          - 127.0.10.41
+          - 127.0.10.42
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
