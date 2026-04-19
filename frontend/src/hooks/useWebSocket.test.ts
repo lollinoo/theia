@@ -116,6 +116,32 @@ describe('useWebSocket', () => {
     });
   });
 
+  it('forwards hub_buffer_full resync detail unchanged', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'resync_required',
+        payload: {
+          scope: 'overview',
+          reason: 'hub_buffer_full',
+        },
+      });
+    });
+
+    const event = dispatchSpy.mock.calls[0]?.[0] as CustomEvent | undefined;
+    expect(event?.type).toBe('backend-resync-required');
+    expect(event?.detail).toEqual({
+      scope: 'overview',
+      reason: 'hub_buffer_full',
+    });
+  });
+
   it('handles snapshot message', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
