@@ -41,6 +41,17 @@ Relevant current files:
 - Changing deployment defaults for PostgreSQL or filesystem hardening.
 - Introducing a new external queue, broker, or pub/sub system.
 
+## Payload Size Expectations
+
+This slice is intentionally a runtime-stability change, not a payload-size optimization project.
+
+- The main expected gains are non-blocking delivery, bounded per-client backlog, explicit resync, and safer lifecycle behavior.
+- The initial full overview `snapshot` will remain in the same rough size class as today because the data model is largely unchanged.
+- `snapshot_delta` payloads remain sparse and keyed by changed device IDs, but their size still scales with the number of dirty devices and the data sections included for those devices.
+- Large reconnect or resync snapshots are still expected for larger fleets until the payload model itself is slimmed down in a later slice.
+
+In practical terms, this work should improve runtime stability much more than it improves wire size.
+
 ## Proposed Architecture
 
 The runtime hot path is split into three boundaries.
@@ -300,3 +311,26 @@ Deliberately deferred to later slices:
 - broader runtime/service refactors by capability;
 - server-side SNMP/Prometheus model normalization;
 - broader observability overhaul, frontend quality gates, and production-default database posture.
+
+### Dedicated Follow-On Slice: Overview Payload Slimming
+
+This is a separate slice from runtime-core hardening and should not be folded into the current implementation.
+
+Goals for the payload-slimming slice:
+
+- reduce full overview snapshot size at connect and resync time;
+- reduce average delta size for busy fleets;
+- keep overview payloads focused on topology and monitoring summary rather than detail-oriented fields.
+
+Likely scope for that slice:
+
+- split overview-safe fields from detail-only fields;
+- trim or re-encode `link_metrics` for overview use;
+- revisit whether some sections should move out of the overview snapshot entirely;
+- evaluate compression or transport-level optimizations only after the payload model is leaner.
+
+Expected outcome of that slice:
+
+- smaller full snapshots;
+- smaller resync cost;
+- lower browser parse/merge cost during reconnect and high-churn periods.
