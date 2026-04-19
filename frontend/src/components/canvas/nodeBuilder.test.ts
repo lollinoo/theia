@@ -177,4 +177,39 @@ describe('buildTopologyNodes', () => {
     expect(nodes[0].data.onSelfLinkClick).toBe(onSelfLinkClick);
     expect(nodes[1].data.selfLinks).toBeUndefined();
   });
+
+  it('prefers current positions and limits computed placement to placementDeviceIds', () => {
+    const nodes = buildTopologyNodes(
+      [
+        mockDevice(),
+        mockDevice({
+          id: 'dev-2',
+          hostname: 'router-02',
+          ip: '10.0.0.2',
+          sys_name: 'router-02',
+        }),
+      ],
+      new Map([
+        ['dev-1', { x: 120, y: 180, pinned: false }],
+      ]),
+      new Map([
+        ['dev-1', { x: 900, y: 910 }],
+        ['dev-2', { x: 320, y: 420 }],
+      ]),
+      { x: 50, y: 60 },
+      false,
+      vi.fn(),
+      null,
+      [],
+      undefined,
+      new Map([
+        ['dev-1', { x: 25, y: 35, pinned: true }],
+      ]),
+      new Set(['dev-2']),
+    );
+
+    expect(nodes[0].position).toEqual({ x: 25, y: 35 });
+    expect(nodes[0].data.pinned).toBe(true);
+    expect(nodes[1].position).toEqual({ x: 50, y: 60 });
+  });
 });
