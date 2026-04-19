@@ -1,0 +1,23 @@
+# Phase 4 Plan 02 Findings
+
+The first evidence pass from Plan `04-01` was reviewed before any in-scope code change. The current backend and frontend live-refresh seams do not show an evidence-backed defect that justifies hardening inside `internal/worker/pipeline.go`, `internal/ws/hub.go`, `internal/observability/registry.go`, `frontend/src/components/canvas/useCanvasData.ts`, or `frontend/src/hooks/useWebSocket.ts`.
+
+## Blocking Findings
+
+| id | scenario | symptom | evidence | severity | owner | resolution |
+| --- | --- | --- | --- | --- | --- | --- |
+| B-01 | Real browser proof for runtime-only updates | `window.__THEIA_CANVAS_METRICS__` proof was not captured during the first pass, so `SCAL-02` does not yet have the required live browser confirmation. | `.planning/phases/04-scale-validation-and-hardening/04-01-SUMMARY.md`; `.planning/phases/04-scale-validation-and-hardening/04-VALIDATION-RUNBOOK.md`; `.planning/phases/04-scale-validation-and-hardening/evidence/synthetic/README.md`; `.planning/phases/04-scale-validation-and-hardening/evidence/wisp/README.md` | high | Manual verification | Deferred in this terminal environment. Re-run documentation will carry the gap explicitly until a browser session can confirm `window.__THEIA_CANVAS_METRICS__`. |
+| B-02 | Live-stack fault coverage proof | The first pass captured baseline synthetic and WISP evidence, but it did not record live-stack traces for slow Prometheus responses, reconnect storms, topology-change storms, or slow-client/backpressure scenarios. | `.planning/phases/04-scale-validation-and-hardening/evidence/synthetic/metrics.prom`; `.planning/phases/04-scale-validation-and-hardening/evidence/wisp/metrics.prom`; `.planning/phases/04-scale-validation-and-hardening/04-01-SUMMARY.md` | medium | Verification | Use the final verification record to combine the rerun evidence with the targeted automated tests from Phases 2 and 3. No seam-local code defect is identified from the first-pass artifacts alone. |
+
+## High-Leverage Fixes
+
+| id | scenario | symptom | evidence | severity | owner | resolution |
+| --- | --- | --- | --- | --- | --- | --- |
+| H-00 | Evidence triage decision | The first-pass JSON and `/metrics` outputs do not show dropped state changes, WebSocket backpressure, unexpected reload reasons, or other refresh-path failures that map to an in-scope backend or frontend hardening fix. | `.planning/phases/04-scale-validation-and-hardening/evidence/synthetic/scale-300-baseline.json`; `.planning/phases/04-scale-validation-and-hardening/evidence/synthetic/scale-300-burst-adds.json`; `.planning/phases/04-scale-validation-and-hardening/evidence/synthetic/metrics.prom`; `.planning/phases/04-scale-validation-and-hardening/evidence/wisp/scale-wisp-hybrid.json`; `.planning/phases/04-scale-validation-and-hardening/evidence/wisp/metrics.prom` | none | Plan 04-02 | No code change approved. Keep the refresh-path code unchanged unless rerun validation produces a concrete defect inside the allowed seams. |
+
+## Deferred Follow-Ups
+
+| id | scenario | symptom | evidence | severity | owner | resolution |
+| --- | --- | --- | --- | --- | --- | --- |
+| D-01 | Runtime-only dirty snapshot exercise | Both first-pass `metrics.prom` captures show only full snapshot success counts and `startup` plus `topology_dirty` reload reasons, so the evidence set does not yet demonstrate runtime-only dirty snapshot activity in the live stack. | `.planning/phases/04-scale-validation-and-hardening/evidence/synthetic/metrics.prom`; `.planning/phases/04-scale-validation-and-hardening/evidence/wisp/metrics.prom` | medium | Verification | Document as an evidence limitation, not a code bug. Final verification should cite this and the manual browser-proof gap instead of claiming the live stack exercised every runtime-only path. |
+| D-02 | Fault injection depth in live stack | The committed validation workflow is sufficient for repeatable baseline evidence, but it does not inject live slow-Prometheus, reconnect-storm, or slow-client pressure scenarios by itself. | `.planning/phases/04-scale-validation-and-hardening/04-VALIDATION-RUNBOOK.md`; `.planning/phases/04-scale-validation-and-hardening/04-01-SUMMARY.md` | low | Future validation follow-up | Keep out of this plan because the allowed 04-02 scope is hardening inside existing refresh seams, not expanding the validation harness. |
