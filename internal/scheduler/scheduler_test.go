@@ -843,7 +843,9 @@ func TestSchedulerStartStop_ReusableWithoutLeak(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	scheduler.Start(parent)
+	if err := scheduler.Start(parent); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
 
 	if !scheduler.running.Load() {
 		t.Fatalf("running = false after Start(), want true")
@@ -869,7 +871,9 @@ func TestSchedulerStartStop_ReusableWithoutLeak(t *testing.T) {
 	}
 
 	secondDone := scheduler.done
-	scheduler.Start(parent)
+	if err := scheduler.Start(parent); err != nil {
+		t.Fatalf("restart Start() error = %v", err)
+	}
 
 	if scheduler.done != secondDone {
 		t.Fatalf("Start() replaced the recreated done channel unexpectedly")
@@ -880,6 +884,21 @@ func TestSchedulerStartStop_ReusableWithoutLeak(t *testing.T) {
 
 	scheduler.Stop()
 	scheduler.Stop()
+}
+
+func TestSchedulerStartReturnsErrAlreadyStarted(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := scheduler.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	defer scheduler.Stop()
+
+	if err := scheduler.Start(ctx); !errors.Is(err, ErrAlreadyStarted) {
+		t.Fatalf("second Start() error = %v, want ErrAlreadyStarted", err)
+	}
 }
 
 func TestSchedulerCoalescesInFlightDueEventsToSinglePendingRerun(t *testing.T) {

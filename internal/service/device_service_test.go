@@ -2026,7 +2026,9 @@ func TestUpdateDevice_PollIntervalOverrideReduesNextPerformanceTask(t *testing.T
 	sched := scheduler.NewScheduler(schedulerDeviceSource{repo: deviceRepo}, settingsRepo)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sched.Start(ctx)
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
 	defer sched.Stop()
 	svc.SetPollRescheduler(sched)
 

@@ -104,11 +104,7 @@ func TestHubBroadcast_RecordsHubBufferBackpressure(t *testing.T) {
 		hub.broadcast <- []byte("prefill")
 	}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
-	}()
+	hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -119,61 +115,34 @@ func TestHubBroadcast_RecordsHubBufferBackpressure(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	<-hub.broadcast
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Broadcast did not unblock after draining the hub buffer")
-	}
-
 	metrics := string(registry.MarshalPrometheus())
 	if !strings.Contains(metrics, `theia_ws_backpressure_total{reason="hub_buffer_full",scope="broadcast"} 1`) {
 		t.Fatalf("expected hub buffer backpressure metric, got:\n%s", metrics)
 	}
 }
 
-func TestHubConsumeBroadcastOverflow_IsStickyUntilConsumed(t *testing.T) {
+func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshot(t *testing.T) {
 	hub := NewHub()
-	for i := 0; i < cap(hub.broadcast); i++ {
-		hub.broadcast <- []byte("prefill")
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
-	}()
-
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		hub.mu.RLock()
-		overflowed := hub.broadcastOverflow
-		hub.mu.RUnlock()
-		if overflowed {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	<-hub.broadcast
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Broadcast did not unblock after draining the hub buffer")
-	}
-
-	if !hub.ConsumeBroadcastOverflow() {
-		t.Fatal("expected broadcast overflow marker after hub buffer backpressure")
-	}
-	if hub.ConsumeBroadcastOverflow() {
-		t.Fatal("expected broadcast overflow marker to clear after consumption")
-	}
-
 	client := registerTestClient(hub)
-	client.send <- []byte("occupied")
-	if ok := hub.enqueue(client, []byte("blocked")); ok {
-		t.Fatal("expected client-send backpressure to remain isolated")
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	fallback := EmptySnapshot()
+	fallback.DeviceStatuses["dev-1"] = "up"
+	hub.BroadcastOverviewDelta(EmptySnapshot(), 1, 2, fallback)
+
+	first := <-client.overviewSend
+	second := <-client.overviewSend
+
+	if !strings.Contains(string(first), MessageTypeResyncRequired) {
+		t.Fatalf("expected first overview message to be resync_required, got %s", string(first))
+	}
+	if !strings.Contains(string(second), MessageTypeSnapshot) {
+		t.Fatalf("expected second overview message to be snapshot, got %s", string(second))
+	}
+	if client.needsResync {
+		t.Fatal("expected client resync flag to clear after fallback snapshot")
 	}
 }
 
@@ -199,8 +168,9 @@ func TestHubEnqueue_RecordsClientBufferBackpressure(t *testing.T) {
 
 func registerTestClient(hub *Hub) *Client {
 	client := &Client{
-		hub:  hub,
-		send: make(chan []byte, 1),
+		hub:          hub,
+		send:         make(chan []byte, 1),
+		overviewSend: make(chan []byte, overviewBufferSize),
 	}
 
 	hub.mu.Lock()

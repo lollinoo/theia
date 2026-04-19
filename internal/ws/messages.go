@@ -35,6 +35,7 @@ const (
 
 const (
 	ResyncScopeOverview          = "overview"
+	ResyncReasonClientResync     = "client_resync_scheduled"
 	ResyncReasonStateChangesDrop = "state_changes_dropped"
 	ResyncReasonHubBufferFull    = "hub_buffer_full"
 )
@@ -52,10 +53,44 @@ type ResyncRequiredPayload struct {
 	Reason string `json:"reason"`
 }
 
+// SnapshotMessagePayload is the versioned full overview payload sent to clients.
+type SnapshotMessagePayload struct {
+	Version  uint64           `json:"version"`
+	Snapshot *SnapshotPayload `json:"snapshot"`
+}
+
+// SnapshotDeltaMessagePayload is the versioned sparse overview delta payload.
+type SnapshotDeltaMessagePayload struct {
+	BaseVersion uint64           `json:"base_version"`
+	Version     uint64           `json:"version"`
+	Delta       *SnapshotPayload `json:"delta"`
+}
+
 // Message is the WebSocket envelope used for all server pushes.
 type Message struct {
 	Type    string `json:"type"`
 	Payload any    `json:"payload"`
+}
+
+func NewSnapshotMessage(snapshot *SnapshotPayload, version uint64) Message {
+	return Message{
+		Type: MessageTypeSnapshot,
+		Payload: SnapshotMessagePayload{
+			Version:  version,
+			Snapshot: CloneSnapshot(snapshot),
+		},
+	}
+}
+
+func NewSnapshotDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64) Message {
+	return Message{
+		Type: MessageTypeSnapshotDelta,
+		Payload: SnapshotDeltaMessagePayload{
+			BaseVersion: baseVersion,
+			Version:     version,
+			Delta:       CloneSnapshot(delta),
+		},
+	}
 }
 
 type clientControlMessage struct {

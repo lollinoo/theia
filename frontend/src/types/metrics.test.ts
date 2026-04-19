@@ -4,6 +4,8 @@ import {
   mergeSnapshotDelta,
   parseDeviceMetrics,
   type SnapshotPayload,
+  type SnapshotEnvelopePayload,
+  type SnapshotDeltaEnvelopePayload,
 } from './metrics';
 
 // Helper to build a minimal SnapshotPayload
@@ -20,6 +22,38 @@ function makeSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
 }
 
 describe('parseWSMessage — snapshot_delta', () => {
+  it('parses a versioned snapshot_delta envelope', () => {
+    const message = parseWSMessage({
+      type: 'snapshot_delta',
+      payload: {
+        base_version: 10,
+        version: 11,
+        delta: {
+          device_metrics: {
+            'dev-1': {
+              device_id: 'dev-1',
+              cpu_percent: 90,
+              mem_percent: null,
+              temp_celsius: null,
+              uptime_secs: null,
+              collected_at: '2026-01-01T00:00:00Z',
+            },
+          },
+          link_metrics: {},
+          alerts: [],
+          device_statuses: {},
+          device_hostnames: {},
+          device_models: {},
+        },
+      },
+    });
+
+    const payload = (message as { type: 'snapshot_delta'; payload: SnapshotDeltaEnvelopePayload }).payload;
+    expect(payload.base_version).toBe(10);
+    expect(payload.version).toBe(11);
+    expect(payload.delta.device_metrics['dev-1'].cpu_percent).toBe(90);
+  });
+
   it('parses a snapshot_delta message with a valid sparse payload', () => {
     const message = parseWSMessage({
       type: 'snapshot_delta',
@@ -44,8 +78,8 @@ describe('parseWSMessage — snapshot_delta', () => {
 
     expect(message.type).toBe('snapshot_delta');
     // payload should be parsed as SnapshotPayload
-    const payload = (message as { type: 'snapshot_delta'; payload: SnapshotPayload }).payload;
-    expect(payload.device_metrics['dev-1'].cpu_percent).toBe(90);
+    const payload = (message as { type: 'snapshot_delta'; payload: SnapshotDeltaEnvelopePayload }).payload;
+    expect(payload.delta.device_metrics['dev-1'].cpu_percent).toBe(90);
   });
 
   it('parses a snapshot_delta message with empty sections without error', () => {
@@ -87,8 +121,29 @@ describe('parseWSMessage — snapshot_delta', () => {
     });
 
     expect(message.type).toBe('snapshot');
-    const payload = (message as { type: 'snapshot'; payload: SnapshotPayload }).payload;
-    expect(payload.device_metrics['dev-1'].cpu_percent).toBe(50);
+    const payload = (message as { type: 'snapshot'; payload: SnapshotEnvelopePayload }).payload;
+    expect(payload.snapshot.device_metrics['dev-1'].cpu_percent).toBe(50);
+  });
+
+  it('parses a versioned snapshot message envelope', () => {
+    const message = parseWSMessage({
+      type: 'snapshot',
+      payload: {
+        version: 7,
+        snapshot: {
+          device_metrics: {},
+          link_metrics: {},
+          alerts: [],
+          device_statuses: {},
+          device_hostnames: {},
+          device_models: {},
+        },
+      },
+    });
+
+    const payload = (message as { type: 'snapshot'; payload: SnapshotEnvelopePayload }).payload;
+    expect(payload.version).toBe(7);
+    expect(payload.snapshot.device_metrics).toEqual({});
   });
 });
 

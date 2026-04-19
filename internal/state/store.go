@@ -14,6 +14,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sort"
 	"sync"
@@ -30,6 +31,8 @@ import (
 // user-facing freshness indicators without dominating CPU (Claude's
 // discretion per CONTEXT.md).
 const stalenessTickInterval = 5 * time.Second
+
+var ErrAlreadyStarted = errors.New("state store: already started")
 
 // HealthStatus is the overall metric health of a device, computed by the
 // state engine from per-metric severities using worst-of semantics (D-03).
@@ -254,15 +257,16 @@ func (s *Store) ConsumeOverflowed() bool {
 // the second call will panic to surface the misuse early. Start/Stop are
 // safe to call concurrently from multiple goroutines; transitions are
 // serialized by s.lifecycleMu.
-func (s *Store) Start(ctx context.Context) {
+func (s *Store) Start(ctx context.Context) error {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	if s.cancel != nil {
-		panic("state.Store: Start called more than once")
+		return ErrAlreadyStarted
 	}
 	derived, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	go s.runStaleness(derived)
+	return nil
 }
 
 // Stop cancels the staleness goroutine and waits for it to exit. Safe to

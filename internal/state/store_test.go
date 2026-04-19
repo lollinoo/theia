@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +18,9 @@ import (
 
 func TestStore_ConcurrentUpdateAndSnapshot(t *testing.T) {
 	s := NewStore()
-	s.Start(context.Background())
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
 	defer s.Stop()
 
 	// Drain changes channel in a goroutine so Update's emitChanges does not
@@ -909,7 +912,9 @@ func TestStore_StartStopIsCleanShutdown(t *testing.T) {
 	s := NewStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s.Start(ctx)
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
 
 	stopReturned := make(chan struct{})
 	go func() {
@@ -927,6 +932,21 @@ func TestStore_StartStopIsCleanShutdown(t *testing.T) {
 func TestStore_StopWithoutStartIsNoOp(t *testing.T) {
 	s := NewStore()
 	s.Stop() // must not panic or hang
+}
+
+func TestStore_StartReturnsErrAlreadyStarted(t *testing.T) {
+	s := NewStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	defer s.Stop()
+
+	if err := s.Start(ctx); !errors.Is(err, ErrAlreadyStarted) {
+		t.Fatalf("second Start() error = %v, want ErrAlreadyStarted", err)
+	}
 }
 
 func TestStore_UpdateDropsChangesWhenChannelFull(t *testing.T) {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log"
 	"reflect"
 	"strconv"
@@ -44,12 +45,14 @@ const (
 )
 
 type pipelineScheduler interface {
-	Start(context.Context)
+	Start(context.Context) error
 	Stop()
 	Tasks() <-chan scheduler.PollTask
 	Complete(scheduler.Completion)
 	Status() string
 }
+
+var ErrAlreadyStarted = errors.New("pipeline orchestrator: already started")
 
 type PipelineOrchestrator struct {
 	scheduler       pipelineScheduler
@@ -70,12 +73,14 @@ type PipelineOrchestrator struct {
 	alertNotify             chan struct{}
 	broadcastCoalesceWindow time.Duration
 	fullResyncInterval      time.Duration
+	lifecycleMu             sync.Mutex
 	running                 atomic.Bool
 	cancel                  context.CancelFunc
 	done                    chan struct{}
 	healthDone              chan struct{}
 	snapshotMu              sync.RWMutex
 	lastSnapshot            *ws.SnapshotPayload
+	overviewVersion         uint64
 	promStatus              ws.PrometheusStatusPayload
 	hostnames               map[uuid.UUID]string
 	hostnameObservedAt      map[uuid.UUID]time.Time
@@ -131,25 +136,46 @@ func NewPipelineOrchestrator(
 	}
 }
 
-func (p *PipelineOrchestrator) Start(ctx context.Context) {
-	if !p.running.CompareAndSwap(false, true) {
-		panic("pipeline orchestrator: Start called more than once")
+func (p *PipelineOrchestrator) Start(ctx context.Context) error {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	if p.cancel != nil {
+		return ErrAlreadyStarted
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	healthDone := make(chan struct{})
+
 	p.cancel = cancel
-	p.done = make(chan struct{})
-	p.healthDone = make(chan struct{})
+	p.done = done
+	p.healthDone = healthDone
 
 	if p.stateStore != nil {
-		p.stateStore.Start(runCtx)
+		if err := p.stateStore.Start(runCtx); err != nil {
+			cancel()
+			p.cancel = nil
+			p.done = make(chan struct{})
+			p.healthDone = make(chan struct{})
+			return err
+		}
 	}
 	if p.scheduler != nil {
-		p.scheduler.Start(runCtx)
+		if err := p.scheduler.Start(runCtx); err != nil {
+			if p.stateStore != nil {
+				p.stateStore.Stop()
+			}
+			cancel()
+			p.cancel = nil
+			p.done = make(chan struct{})
+			p.healthDone = make(chan struct{})
+			return err
+		}
 	}
+	p.running.Store(true)
 
 	go func() {
-		defer close(p.done)
+		defer close(done)
 		var wg sync.WaitGroup
 
 		for i := 0; i < p.workerCount(); i++ {
@@ -181,27 +207,35 @@ func (p *PipelineOrchestrator) Start(ctx context.Context) {
 		}
 		wg.Wait()
 
-		p.snapshotMu.Lock()
+		p.lifecycleMu.Lock()
 		p.cancel = nil
-		p.snapshotMu.Unlock()
+		p.lifecycleMu.Unlock()
 		p.running.Store(false)
 	}()
+
+	return nil
 }
 
 func (p *PipelineOrchestrator) Stop() {
+	p.lifecycleMu.Lock()
 	if p.cancel == nil {
+		p.lifecycleMu.Unlock()
 		return
 	}
+	cancel := p.cancel
+	done := p.done
+	healthDone := p.healthDone
+	p.lifecycleMu.Unlock()
 
-	p.cancel()
-	<-p.done
-	<-p.healthDone
+	cancel()
+	<-done
+	<-healthDone
 }
 
-func (p *PipelineOrchestrator) GetSnapshot() *ws.SnapshotPayload {
+func (p *PipelineOrchestrator) GetOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
 	p.snapshotMu.RLock()
 	defer p.snapshotMu.RUnlock()
-	return ws.CloneSnapshot(p.lastSnapshot)
+	return ws.CloneSnapshot(p.lastSnapshot), p.overviewVersion
 }
 
 func (p *PipelineOrchestrator) IsPromAvailable() bool {
@@ -652,28 +686,33 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 	p.snapshotMu.Lock()
 	p.lastSnapshot = snapshot
 	p.prevHashes = currentHashes
+	currentVersion := p.overviewVersion
 	p.snapshotMu.Unlock()
 
 	switch {
 	case previousHashes == nil:
+		p.snapshotMu.Lock()
+		p.overviewVersion = currentVersion + 1
+		version := p.overviewVersion
+		p.snapshotMu.Unlock()
 		observability.Default().IncRefreshTopologyReload(refreshReloadReasonStartup)
-		p.hub.Broadcast(ws.Message{
-			Type:    ws.MessageTypeSnapshot,
-			Payload: snapshot,
-		})
+		p.hub.BroadcastOverviewSnapshot(snapshot, version)
 	default:
 		delta := buildDelta(snapshot, currentHashes, previousHashes)
 		if delta == nil && drainedTopology {
+			p.snapshotMu.Lock()
+			p.overviewVersion = currentVersion + 1
+			version := p.overviewVersion
+			p.snapshotMu.Unlock()
 			observability.Default().IncRefreshTopologyReload(refreshReloadReasonTopologyDrainFallback)
-			p.hub.Broadcast(ws.Message{
-				Type:    ws.MessageTypeSnapshot,
-				Payload: snapshot,
-			})
+			p.hub.BroadcastOverviewSnapshot(snapshot, version)
 		} else if delta != nil {
-			p.hub.Broadcast(ws.Message{
-				Type:    ws.MessageTypeSnapshotDelta,
-				Payload: delta,
-			})
+			p.snapshotMu.Lock()
+			baseVersion := p.overviewVersion
+			p.overviewVersion = baseVersion + 1
+			version := p.overviewVersion
+			p.snapshotMu.Unlock()
+			p.hub.BroadcastOverviewDelta(delta, baseVersion, version, snapshot)
 		}
 	}
 
@@ -691,14 +730,7 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 	}
 
 	if resyncReason, ok := p.consumeResyncRequired(); ok {
-		p.hub.Broadcast(ws.Message{
-			Type: ws.MessageTypeResyncRequired,
-			Payload: ws.ResyncRequiredPayload{
-				Scope:  ws.ResyncScopeOverview,
-				Reason: resyncReason,
-			},
-		})
-		return p.broadcastFullSnapshot(ctx, reloadReasonForResync(resyncReason), topologyDirty)
+		return p.broadcastFullSnapshotWithResync(ctx, reloadReasonForResync(resyncReason), resyncReason, topologyDirty)
 	}
 	if topologyDirty {
 		return p.broadcastFullSnapshot(ctx, refreshReloadReasonTopologyDirty, true)
@@ -724,15 +756,15 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 	}
 
 	p.snapshotMu.Lock()
+	baseVersion := p.overviewVersion
 	merged := mergeSnapshotPayload(p.lastSnapshot, delta)
 	p.lastSnapshot = merged
 	p.prevHashes = computeSnapshotHashes(merged)
+	p.overviewVersion++
+	version := p.overviewVersion
 	p.snapshotMu.Unlock()
 
-	p.hub.Broadcast(ws.Message{
-		Type:    ws.MessageTypeSnapshotDelta,
-		Payload: delta,
-	})
+	p.hub.BroadcastOverviewDelta(delta, baseVersion, version, merged)
 
 	return nil
 }
@@ -747,12 +779,37 @@ func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, reason s
 	p.snapshotMu.Lock()
 	p.lastSnapshot = snapshot
 	p.prevHashes = computeSnapshotHashes(snapshot)
+	p.overviewVersion++
+	version := p.overviewVersion
 	p.snapshotMu.Unlock()
 
-	p.hub.Broadcast(ws.Message{
-		Type:    ws.MessageTypeSnapshot,
-		Payload: snapshot,
-	})
+	p.hub.BroadcastOverviewSnapshot(snapshot, version)
+
+	if topologyChanged {
+		p.hub.Broadcast(ws.Message{
+			Type:    ws.MessageTypeTopologyChanged,
+			Payload: nil,
+		})
+	}
+
+	return nil
+}
+
+func (p *PipelineOrchestrator) broadcastFullSnapshotWithResync(_ context.Context, reason string, resyncReason string, topologyChanged bool) error {
+	observability.Default().IncRefreshTopologyReload(reason)
+	snapshot, err := p.buildFullOverviewSnapshot()
+	if err != nil {
+		return err
+	}
+
+	p.snapshotMu.Lock()
+	p.lastSnapshot = snapshot
+	p.prevHashes = computeSnapshotHashes(snapshot)
+	p.overviewVersion++
+	version := p.overviewVersion
+	p.snapshotMu.Unlock()
+
+	p.hub.BroadcastOverviewResync(resyncReason, snapshot, version)
 
 	if topologyChanged {
 		p.hub.Broadcast(ws.Message{
@@ -929,9 +986,6 @@ func (p *PipelineOrchestrator) consumeResyncRequired() (string, bool) {
 	if p.stateStore != nil && p.stateStore.ConsumeOverflowed() {
 		return ws.ResyncReasonStateChangesDrop, true
 	}
-	if p.hub != nil && p.hub.ConsumeBroadcastOverflow() {
-		return ws.ResyncReasonHubBufferFull, true
-	}
 	return "", false
 }
 
@@ -939,8 +993,6 @@ func reloadReasonForResync(reason string) string {
 	switch reason {
 	case ws.ResyncReasonStateChangesDrop:
 		return refreshReloadReasonStateChangesDropped
-	case ws.ResyncReasonHubBufferFull:
-		return refreshReloadReasonHubBufferFull
 	default:
 		return refreshReloadReasonDirtyDeltaFallback
 	}

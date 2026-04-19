@@ -525,13 +525,15 @@ func main() {
 		deviceChangeNotify,
 		linkChangeNotify,
 	)
-	pipeline.Start(ctx)
+	if err := pipeline.Start(ctx); err != nil {
+		log.Fatalf("Failed to start runtime pipeline: %v", err)
+	}
 	if backupScheduler != nil {
 		backupScheduler.Start(ctx)
 	}
 	deviceBackupScheduler.Start(ctx)
 
-	wsHandler := ws.NewHandler(hub, pipeline.GetSnapshot, pipeline.GetPrometheusStatus)
+	wsHandler := ws.NewHandler(hub, pipeline.GetOverviewSnapshot, pipeline.GetPrometheusStatus)
 
 	// Create HTTP router with all /api/v1/ routes
 	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, cfg.BridgeBinariesDir, wsHandler)
