@@ -80,7 +80,7 @@ for metric in \
   theia_refresh_topology_reload_total \
   theia_state_changes_dropped_total
 do
-  if ! rg -q "^${metric}" "${OUTPUT_DIR}/metrics.prom"; then
+  if ! grep -q "^${metric}" "${OUTPUT_DIR}/metrics.prom"; then
     echo "Missing required metric family: ${metric}" >&2
     exit 1
   fi
