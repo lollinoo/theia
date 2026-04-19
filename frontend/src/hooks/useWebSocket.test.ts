@@ -89,6 +89,59 @@ describe('useWebSocket', () => {
     });
   });
 
+  it('dispatches backend-resync-required when resync_required arrives', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'resync_required',
+        payload: {
+          scope: 'overview',
+          reason: 'state_changes_dropped',
+        },
+      });
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const event = dispatchSpy.mock.calls[0]?.[0];
+    expect(event?.type).toBe('backend-resync-required');
+    expect((event as CustomEvent).detail).toEqual({
+      scope: 'overview',
+      reason: 'state_changes_dropped',
+    });
+  });
+
+  it('forwards hub_buffer_full resync detail unchanged', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'resync_required',
+        payload: {
+          scope: 'overview',
+          reason: 'hub_buffer_full',
+        },
+      });
+    });
+
+    const event = dispatchSpy.mock.calls[0]?.[0] as CustomEvent | undefined;
+    expect(event?.type).toBe('backend-resync-required');
+    expect(event?.detail).toEqual({
+      scope: 'overview',
+      reason: 'hub_buffer_full',
+    });
+  });
+
   it('handles snapshot message', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
@@ -371,6 +424,100 @@ describe('useWebSocket', () => {
       type: 'subscribe_detail',
       payload: { device_id: 'dev-1' },
     }));
+  });
+
+  it('dispatches backend-reconnected after reconnect', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderHook(() => useWebSocket('ws://localhost:8080/ws', 'dev-1'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    const firstSocket = mockInstance;
+
+    act(() => {
+      firstSocket.simulateClose();
+      vi.advanceTimersByTime(1000);
+    });
+
+    const secondSocket = mockInstances[1];
+    if (!secondSocket) {
+      throw new Error('expected reconnect socket instance');
+    }
+
+    act(() => {
+      secondSocket.simulateOpen();
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'backend-reconnected' }));
+  });
+
+  it('full snapshot replaces state after resync_required', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          device_metrics: {
+            'dev-1': {
+              device_id: 'dev-1',
+              cpu_percent: 50,
+              mem_percent: null,
+              temp_celsius: null,
+              uptime_secs: null,
+              collected_at: '2026-01-01T00:00:00Z',
+            },
+          },
+          link_metrics: {},
+          alerts: [],
+          device_statuses: {},
+          device_hostnames: {},
+        },
+      });
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'resync_required',
+        payload: {
+          scope: 'overview',
+          reason: 'hub_buffer_full',
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(50);
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          device_metrics: {
+            'dev-2': {
+              device_id: 'dev-2',
+              cpu_percent: 10,
+              mem_percent: null,
+              temp_celsius: null,
+              uptime_secs: null,
+              collected_at: '2026-01-01T00:02:00Z',
+            },
+          },
+          link_metrics: {},
+          alerts: [],
+          device_statuses: {},
+          device_hostnames: {},
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.device_metrics['dev-2'].cpu_percent).toBe(10);
+    expect(result.current.snapshot!.device_metrics['dev-1']).toBeUndefined();
   });
 
   it('ignores snapshot_delta when no base snapshot exists', () => {

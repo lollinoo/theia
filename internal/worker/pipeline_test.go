@@ -18,6 +18,7 @@ import (
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -554,6 +555,8 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		nil,
 		nil,
 	)
+	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
+	pipeline.now = func() time.Time { return now }
 
 	pipeline.refreshPrometheusOnce(context.Background())
 
@@ -566,9 +569,15 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		t.Fatal("expected prometheus to remain available after successful refresh")
 	}
 
+	pipeline.snapshotMu.Lock()
+	pipeline.hostnames[deviceID] = "edge-prom-host"
+	pipeline.hostnameObservedAt[deviceID] = now.Add(-31 * time.Second)
+	pipeline.snapshotMu.Unlock()
+
 	promClient.mu.Lock()
 	promClient.alertsErr = errors.New("prometheus unavailable")
 	promClient.mu.Unlock()
+	now = now.Add(5 * time.Second)
 
 	pipeline.refreshPrometheusOnce(context.Background())
 
@@ -577,6 +586,15 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 	}
 	if pipeline.GetPrometheusStatus().Error == "" {
 		t.Fatal("expected prometheus error message to be recorded")
+	}
+
+	pipeline.snapshotMu.RLock()
+	defer pipeline.snapshotMu.RUnlock()
+	if alerts := pipeline.alerts[deviceID]; len(alerts) != 0 {
+		t.Fatalf("expected alerts to clear on refresh failure, got %d alert(s)", len(alerts))
+	}
+	if hostname := pipeline.hostnames[deviceID]; hostname != "" {
+		t.Fatalf("expected stale hostname override to expire, got %q", hostname)
 	}
 }
 
@@ -1124,6 +1142,27 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshSendsSnapshotDelta(t *tes
 	t.Fatal("expected snapshot_delta for alert refresh")
 }
 
+func TestPipelineOrchestratorBroadcastLoop_DisabledFullResyncDoesNotSendSnapshot(t *testing.T) {
+	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
+	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
+	pipeline.fullResyncInterval = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pipeline.broadcastLoop(ctx)
+
+	initialTypes := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(initialTypes) == 0 || initialTypes[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected initial snapshot, got %v", initialTypes)
+	}
+
+	time.Sleep(80 * time.Millisecond)
+
+	if messages := drainBroadcastCh(hub); len(messages) != 0 {
+		t.Fatalf("expected no periodic full resync snapshot when interval disabled, got %v", broadcastMessageTypes(t, messages))
+	}
+}
+
 func TestPipelineOrchestratorBroadcastLoop_PeriodicFullResyncSendsSnapshot(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
@@ -1280,6 +1319,165 @@ func TestPipelineOrchestratorTopologyChangedForcesSnapshotWhenOverviewDeltaNil(t
 	}
 	if types[1] != ws.MessageTypeTopologyChanged {
 		t.Fatalf("expected topology_changed after forced snapshot, got %v", types)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastOnceRecordsStartupReloadMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
+	pipeline.broadcastOnce(context.Background())
+
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) == 0 || types[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected startup snapshot broadcast, got %v", types)
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_refresh_snapshot_build_seconds_count{mode="full",result="success"} 1`) {
+		t.Fatalf("expected full snapshot build metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_refresh_topology_reload_total{reason="startup"} 1`) {
+		t.Fatalf("expected startup reload reason metric, got:\n%s", metrics)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing.T) {
+	pipeline, hub, _, topologyNotify, _ := newBroadcastTestPipeline(t)
+
+	pipeline.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	topologyRegistry := observability.ResetDefaultForTest()
+	topologyNotify <- struct{}{}
+	if err := pipeline.broadcastDirty(context.Background(), nil, false, true, false); err != nil {
+		t.Fatalf("broadcastDirty topology refresh: %v", err)
+	}
+
+	topologyTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(topologyTypes) < 2 {
+		t.Fatalf("expected topology refresh snapshot and topology_changed, got %v", topologyTypes)
+	}
+	if topologyTypes[0] != ws.MessageTypeSnapshot || topologyTypes[1] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology refresh snapshot before topology_changed, got %v", topologyTypes)
+	}
+	topologyMetrics := string(topologyRegistry.MarshalPrometheus())
+	if !strings.Contains(topologyMetrics, `theia_refresh_topology_reload_total{reason="topology_dirty"} 1`) {
+		t.Fatalf("expected topology_dirty reload reason metric, got:\n%s", topologyMetrics)
+	}
+	if !strings.Contains(topologyMetrics, `theia_refresh_snapshot_build_seconds_count{mode="full",result="success"} 1`) {
+		t.Fatalf("expected topology refresh full snapshot build metric, got:\n%s", topologyMetrics)
+	}
+
+	fullResyncRegistry := observability.ResetDefaultForTest()
+	if err := pipeline.broadcastDirty(context.Background(), nil, false, false, true); err != nil {
+		t.Fatalf("broadcastDirty forced refresh: %v", err)
+	}
+
+	fullResyncTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(fullResyncTypes) == 0 || fullResyncTypes[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected forced full resync snapshot, got %v", fullResyncTypes)
+	}
+	if len(fullResyncTypes) > 1 && fullResyncTypes[1] == ws.MessageTypeTopologyChanged {
+		t.Fatalf("forced full resync should not emit topology_changed, got %v", fullResyncTypes)
+	}
+	fullResyncMetrics := string(fullResyncRegistry.MarshalPrometheus())
+	if !strings.Contains(fullResyncMetrics, `theia_refresh_topology_reload_total{reason="full_resync"} 1`) {
+		t.Fatalf("expected full_resync reload reason metric, got:\n%s", fullResyncMetrics)
+	}
+
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+}
+
+func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredThenSnapshot(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	pipeline.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	for i := 0; i < 40; i++ {
+		cpu := float64(70 + i)
+		at := time.Date(2026, 4, 18, 12, 0, i, 0, time.UTC)
+		store.Update(state.StateUpdate{
+			DeviceID:        deviceID,
+			VolatilityClass: domain.VolatilityClassPerformance,
+			Metrics: &domain.DeviceMetrics{
+				DeviceID:    deviceID,
+				CPUPercent:  &cpu,
+				CollectedAt: at,
+			},
+			PollSuccess:      true,
+			ExpectedInterval: 30 * time.Second,
+			Timestamp:        at,
+		})
+	}
+
+	if err := pipeline.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty overflow recovery: %v", err)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) < 2 {
+		t.Fatalf("expected resync_required and snapshot, got %v", types)
+	}
+	if types[0] != ws.MessageTypeResyncRequired || types[1] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected resync_required before snapshot, got %v", types)
+	}
+
+	var message struct {
+		Type    string                   `json:"type"`
+		Payload ws.ResyncRequiredPayload `json:"payload"`
+	}
+	if err := json.Unmarshal(messages[0], &message); err != nil {
+		t.Fatalf("decode resync_required message: %v", err)
+	}
+	if message.Payload.Scope != ws.ResyncScopeOverview {
+		t.Fatalf("resync scope = %q, want %q", message.Payload.Scope, ws.ResyncScopeOverview)
+	}
+	if message.Payload.Reason != ws.ResyncReasonStateChangesDrop {
+		t.Fatalf("resync reason = %q, want %q", message.Payload.Reason, ws.ResyncReasonStateChangesDrop)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreservesOrdering(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	pipeline.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	for i := 0; i < 40; i++ {
+		cpu := float64(90 + i)
+		at := time.Date(2026, 4, 18, 12, 10, i, 0, time.UTC)
+		store.Update(state.StateUpdate{
+			DeviceID:        deviceID,
+			VolatilityClass: domain.VolatilityClassPerformance,
+			Metrics: &domain.DeviceMetrics{
+				DeviceID:    deviceID,
+				CPUPercent:  &cpu,
+				CollectedAt: at,
+			},
+			PollSuccess:      true,
+			ExpectedInterval: 30 * time.Second,
+			Timestamp:        at,
+		})
+	}
+
+	if err := pipeline.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, true, false); err != nil {
+		t.Fatalf("broadcastDirty overflow + topology recovery: %v", err)
+	}
+
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) < 3 {
+		t.Fatalf("expected resync_required, snapshot, and topology_changed, got %v", types)
+	}
+	if types[0] != ws.MessageTypeResyncRequired || types[1] != ws.MessageTypeSnapshot || types[2] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected resync_required before snapshot before topology_changed, got %v", types)
 	}
 }
 

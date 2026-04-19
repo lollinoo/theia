@@ -107,9 +107,10 @@ type StateUpdate struct {
 // sync.RWMutex per D-11. Consumers read changed device IDs from Changes()
 // and rebuild WS delta payloads via Snapshot() per D-04, D-05, D-06.
 type Store struct {
-	mu      sync.RWMutex
-	devices map[uuid.UUID]DeviceState
-	changes chan []uuid.UUID
+	mu         sync.RWMutex
+	devices    map[uuid.UUID]DeviceState
+	changes    chan []uuid.UUID
+	overflowed bool
 
 	// Staleness goroutine lifecycle managed by Start/Stop.
 	// lifecycleMu guards concurrent Start/Stop calls. Do not hold
@@ -237,6 +238,16 @@ func (s *Store) Changes() <-chan []uuid.UUID {
 	return s.changes
 }
 
+// ConsumeOverflowed reports whether change batches were dropped since the
+// last call and clears the sticky overflow marker.
+func (s *Store) ConsumeOverflowed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	overflowed := s.overflowed
+	s.overflowed = false
+	return overflowed
+}
+
 // Start launches the background staleness tick goroutine. The goroutine
 // runs until Stop() is called or the provided parent context is cancelled.
 // Calling Start more than once on the same running Store is not supported —
@@ -329,6 +340,9 @@ func (s *Store) emitChanges(ids []uuid.UUID) {
 	select {
 	case s.changes <- ids:
 	default:
+		s.mu.Lock()
+		s.overflowed = true
+		s.mu.Unlock()
 		observability.Default().AddDroppedStateChanges(len(ids))
 		log.Printf("state: changes channel full, %d device change(s) dropped", len(ids))
 	}

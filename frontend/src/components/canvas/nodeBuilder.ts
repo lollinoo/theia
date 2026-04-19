@@ -8,6 +8,13 @@ import {
 } from '../deviceVisualState';
 import { preferVisibleLinks } from './edgeBuilder';
 
+function hasUsablePosition(
+  position: { x: number; y: number; pinned?: boolean } | undefined,
+): boolean {
+  return position !== undefined
+    && Number.isFinite(position.x)
+    && Number.isFinite(position.y);
+}
 function selfLinkScore(link: Link): number {
   let score = 0;
   if (link.discovery_protocol === 'lldp') score += 4;
@@ -26,6 +33,8 @@ export function buildTopologyNodes(
   pendingSnapshot: SnapshotPayload | null,
   links: Link[] = [],
   onSelfLinkClick?: (link: Link) => void,
+  currentPositions: Map<string, { x: number; y: number; pinned?: boolean }> = new Map(),
+  placementDeviceIds: Set<string> = new Set(devices.map((device) => device.id)),
 ): DeviceNode[] {
   const selfLinksByDeviceId = new Map<string, Link[]>();
   for (const link of preferVisibleLinks(links)) {
@@ -44,8 +53,18 @@ export function buildTopologyNodes(
   }
 
   return devices.map((device) => {
+    const current = currentPositions.get(device.id);
     const saved = savedPositions.get(device.id);
-    const position = saved ?? defaultPosition ?? computedPositions.get(device.id) ?? { x: 0, y: 0 };
+    const canPlaceDevice = placementDeviceIds.has(device.id);
+    const placementPosition = canPlaceDevice
+      ? defaultPosition ?? computedPositions.get(device.id)
+      : undefined;
+    const position = hasUsablePosition(current)
+      ? current
+      : hasUsablePosition(saved)
+        ? saved
+        : placementPosition;
+    const resolvedPosition = position ?? { x: 0, y: 0 };
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
     // Merge snapshot status/hostname/model into device if available
@@ -77,12 +96,12 @@ export function buildTopologyNodes(
       id: device.id,
       type: 'device',
       position: {
-        x: position.x,
-        y: position.y,
+        x: resolvedPosition.x,
+        y: resolvedPosition.y,
       },
       data: {
         device: deviceData,
-        pinned: saved?.pinned ?? false,
+        pinned: current?.pinned ?? saved?.pinned ?? false,
         highlighted: false,
         editMode,
         onContextMenu: openDeviceMenu,

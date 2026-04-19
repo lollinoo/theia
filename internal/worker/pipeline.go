@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"log"
-	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/pollingbudget"
 	"github.com/lollinoo/theia/internal/scheduler"
@@ -28,7 +26,21 @@ import (
 
 const (
 	pipelineBroadcastCoalesceWindow = 250 * time.Millisecond
-	pipelineFullResyncInterval      = 60 * time.Second
+	// Disabled by default: overview clients now resync on connect or explicit
+	// degradation signals instead of periodic forced full snapshots.
+	pipelineFullResyncInterval    = 0 * time.Second
+	prometheusEnrichmentRetention = 30 * time.Second
+
+	refreshSnapshotModeDirty = "dirty"
+	refreshSnapshotModeFull  = "full"
+
+	refreshReloadReasonStartup               = "startup"
+	refreshReloadReasonTopologyDirty         = "topology_dirty"
+	refreshReloadReasonFullResync            = "full_resync"
+	refreshReloadReasonDirtyDeltaFallback    = "dirty_delta_fallback"
+	refreshReloadReasonTopologyDrainFallback = "topology_drain_fallback"
+	refreshReloadReasonStateChangesDropped   = ws.ResyncReasonStateChangesDrop
+	refreshReloadReasonHubBufferFull         = ws.ResyncReasonHubBufferFull
 )
 
 type pipelineScheduler interface {
@@ -66,9 +78,11 @@ type PipelineOrchestrator struct {
 	lastSnapshot            *ws.SnapshotPayload
 	promStatus              ws.PrometheusStatusPayload
 	hostnames               map[uuid.UUID]string
+	hostnameObservedAt      map[uuid.UUID]time.Time
 	alerts                  map[uuid.UUID][]domain.AlertState
 	prevCounters            map[uuid.UUID]map[string]collector.CounterBaseline
 	prevHashes              *sectionHashes
+	now                     func() time.Time
 }
 
 func NewPipelineOrchestrator(
@@ -110,8 +124,10 @@ func NewPipelineOrchestrator(
 		lastSnapshot:            ws.EmptySnapshot(),
 		promStatus:              initialPrometheusStatus(settingsRepo),
 		hostnames:               make(map[uuid.UUID]string),
+		hostnameObservedAt:      make(map[uuid.UUID]time.Time),
 		alerts:                  make(map[uuid.UUID][]domain.AlertState),
 		prevCounters:            make(map[uuid.UUID]map[string]collector.CounterBaseline),
+		now:                     time.Now,
 	}
 }
 
@@ -266,9 +282,7 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 			if p.prometheus != nil && p.GetPrometheusStatus().Enabled {
 				enrichment, err := p.prometheus.CollectDeviceEnrichment(ctx, task.Device)
 				if err == nil && enrichment.Hostname != "" {
-					p.snapshotMu.Lock()
-					p.hostnames[task.Device.ID] = enrichment.Hostname
-					p.snapshotMu.Unlock()
+					p.recordPrometheusHostname(task.Device.ID, enrichment.Hostname)
 				}
 			}
 
@@ -373,9 +387,7 @@ func (p *PipelineOrchestrator) runVirtualOperationalTask(ctx context.Context, ta
 			log.Printf("pipeline: virtual enrichment failed for %s: %v", task.Device.ID, err)
 		} else {
 			if enrichment.Hostname != "" {
-				p.snapshotMu.Lock()
-				p.hostnames[task.Device.ID] = enrichment.Hostname
-				p.snapshotMu.Unlock()
+				p.recordPrometheusHostname(task.Device.ID, enrichment.Hostname)
 			}
 			if enrichment.ProbeReachable != nil {
 				result.Reachable = *enrichment.ProbeReachable
@@ -465,8 +477,9 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 
 	promURL := p.prometheusURL()
 	if promURL == "" {
-		p.prometheus.SetClient(nil)
+		p.prometheus.SetPrometheusURL("")
 		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
+		p.clearPrometheusHostnames()
 		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
 			Enabled:   false,
 			Available: false,
@@ -474,11 +487,12 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 		return
 	}
 
-	p.prometheus.SetClient(metrics.NewPromClient(promURL, http.DefaultClient))
+	p.prometheus.SetPrometheusURL(promURL)
 
 	devices, err := p.cache.GetDevices()
 	if err != nil {
 		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
+		p.prunePrometheusHostnames()
 		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
 			Enabled:   true,
 			Available: false,
@@ -490,6 +504,7 @@ func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
 	alerts, err := p.prometheus.CollectAlerts(ctx, devices)
 	if err != nil {
 		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
+		p.prunePrometheusHostnames()
 		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
 			Enabled:   true,
 			Available: false,
@@ -524,8 +539,13 @@ func (p *PipelineOrchestrator) broadcastLoop(ctx context.Context) {
 	}
 	defer flushTimer.Stop()
 
-	fullResyncTicker := time.NewTicker(p.fullResyncInterval)
-	defer fullResyncTicker.Stop()
+	var fullResyncTicker *time.Ticker
+	var fullResyncC <-chan time.Time
+	if p.fullResyncInterval > 0 {
+		fullResyncTicker = time.NewTicker(p.fullResyncInterval)
+		fullResyncC = fullResyncTicker.C
+		defer fullResyncTicker.Stop()
+	}
 
 	flushScheduled := false
 	dirtyDevices := make(map[uuid.UUID]struct{})
@@ -587,7 +607,7 @@ func (p *PipelineOrchestrator) broadcastLoop(ctx context.Context) {
 		case <-p.alertNotify:
 			alertsDirty = true
 			scheduleFlush()
-		case <-fullResyncTicker.C:
+		case <-fullResyncC:
 			forceFull = true
 			scheduleFlush()
 		case <-flushTimer.C:
@@ -623,7 +643,9 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 	previousHashes := p.prevHashes
 	p.snapshotMu.RUnlock()
 
+	startedAt := time.Now()
 	snapshot := buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, hostnames)
+	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeFull, time.Since(startedAt), true)
 	currentHashes := computeSnapshotHashes(snapshot)
 	drainedTopology := drainTopologyNotify(p.topologyNotify)
 
@@ -634,6 +656,7 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 
 	switch {
 	case previousHashes == nil:
+		observability.Default().IncRefreshTopologyReload(refreshReloadReasonStartup)
 		p.hub.Broadcast(ws.Message{
 			Type:    ws.MessageTypeSnapshot,
 			Payload: snapshot,
@@ -641,6 +664,7 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 	default:
 		delta := buildDelta(snapshot, currentHashes, previousHashes)
 		if delta == nil && drainedTopology {
+			observability.Default().IncRefreshTopologyReload(refreshReloadReasonTopologyDrainFallback)
 			p.hub.Broadcast(ws.Message{
 				Type:    ws.MessageTypeSnapshot,
 				Payload: snapshot,
@@ -666,16 +690,34 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 		return nil
 	}
 
-	if forceFull || topologyDirty {
-		return p.broadcastFullSnapshot(ctx, topologyDirty)
+	if resyncReason, ok := p.consumeResyncRequired(); ok {
+		p.hub.Broadcast(ws.Message{
+			Type: ws.MessageTypeResyncRequired,
+			Payload: ws.ResyncRequiredPayload{
+				Scope:  ws.ResyncScopeOverview,
+				Reason: resyncReason,
+			},
+		})
+		return p.broadcastFullSnapshot(ctx, reloadReasonForResync(resyncReason), topologyDirty)
+	}
+	if topologyDirty {
+		return p.broadcastFullSnapshot(ctx, refreshReloadReasonTopologyDirty, true)
+	}
+	if forceFull {
+		return p.broadcastFullSnapshot(ctx, refreshReloadReasonFullResync, false)
+	}
+	if len(dirtyDevices) == 0 && !alertsDirty {
+		return nil
 	}
 
+	startedAt := time.Now()
 	delta, requireFullSnapshot, err := p.buildDirtyOverviewDelta(dirtyDevices, alertsDirty)
+	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeDirty, time.Since(startedAt), err == nil)
 	if err != nil {
 		return err
 	}
 	if requireFullSnapshot {
-		return p.broadcastFullSnapshot(ctx, false)
+		return p.broadcastFullSnapshot(ctx, refreshReloadReasonDirtyDeltaFallback, false)
 	}
 	if delta == nil {
 		return nil
@@ -695,7 +737,8 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 	return nil
 }
 
-func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, topologyChanged bool) error {
+func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, reason string, topologyChanged bool) error {
+	observability.Default().IncRefreshTopologyReload(reason)
 	snapshot, err := p.buildFullOverviewSnapshot()
 	if err != nil {
 		return err
@@ -721,7 +764,11 @@ func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, topology
 	return nil
 }
 
-func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (*ws.SnapshotPayload, error) {
+func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (_ *ws.SnapshotPayload, err error) {
+	startedAt := time.Now()
+	defer func() {
+		observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeFull, time.Since(startedAt), err == nil)
+	}()
 	devices, err := p.cache.GetDevices()
 	if err != nil {
 		return nil, err
@@ -837,6 +884,66 @@ func (p *PipelineOrchestrator) publishPrometheusStatus(status ws.PrometheusStatu
 		Type:    ws.MessageTypePrometheusStatus,
 		Payload: status,
 	})
+}
+
+func (p *PipelineOrchestrator) recordPrometheusHostname(deviceID uuid.UUID, hostname string) {
+	if hostname == "" {
+		return
+	}
+
+	p.snapshotMu.Lock()
+	defer p.snapshotMu.Unlock()
+	p.hostnames[deviceID] = hostname
+	p.hostnameObservedAt[deviceID] = p.clockNow()
+}
+
+func (p *PipelineOrchestrator) clearPrometheusHostnames() {
+	p.snapshotMu.Lock()
+	defer p.snapshotMu.Unlock()
+	clear(p.hostnames)
+	clear(p.hostnameObservedAt)
+}
+
+func (p *PipelineOrchestrator) prunePrometheusHostnames() {
+	cutoff := p.clockNow().Add(-prometheusEnrichmentRetention)
+
+	p.snapshotMu.Lock()
+	defer p.snapshotMu.Unlock()
+	for deviceID, observedAt := range p.hostnameObservedAt {
+		if observedAt.After(cutoff) {
+			continue
+		}
+		delete(p.hostnameObservedAt, deviceID)
+		delete(p.hostnames, deviceID)
+	}
+}
+
+func (p *PipelineOrchestrator) clockNow() time.Time {
+	if p != nil && p.now != nil {
+		return p.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (p *PipelineOrchestrator) consumeResyncRequired() (string, bool) {
+	if p.stateStore != nil && p.stateStore.ConsumeOverflowed() {
+		return ws.ResyncReasonStateChangesDrop, true
+	}
+	if p.hub != nil && p.hub.ConsumeBroadcastOverflow() {
+		return ws.ResyncReasonHubBufferFull, true
+	}
+	return "", false
+}
+
+func reloadReasonForResync(reason string) string {
+	switch reason {
+	case ws.ResyncReasonStateChangesDrop:
+		return refreshReloadReasonStateChangesDropped
+	case ws.ResyncReasonHubBufferFull:
+		return refreshReloadReasonHubBufferFull
+	default:
+		return refreshReloadReasonDirtyDeltaFallback
+	}
 }
 
 func (p *PipelineOrchestrator) prometheusURL() string {

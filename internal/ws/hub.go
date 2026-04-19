@@ -18,15 +18,22 @@ const (
 	pingPeriod     = 54 * time.Second
 	maxMessageSize = 4096
 	sendBufferSize = 16
+
+	wsBackpressureScopeBroadcast  = "broadcast"
+	wsBackpressureScopeClientSend = "client_send"
+
+	wsBackpressureReasonHubBufferFull    = "hub_buffer_full"
+	wsBackpressureReasonClientBufferFull = "client_buffer_full"
 )
 
 // Hub manages all active WebSocket clients and server-side broadcasts.
 type Hub struct {
-	clients    map[*Client]bool
-	broadcast  chan []byte
-	register   chan *Client
-	unregister chan *Client
-	mu         sync.RWMutex
+	clients           map[*Client]bool
+	broadcast         chan []byte
+	register          chan *Client
+	unregister        chan *Client
+	mu                sync.RWMutex
+	broadcastOverflow bool
 }
 
 // Client is a single WebSocket connection.
@@ -82,7 +89,15 @@ func (h *Hub) Broadcast(msg Message) {
 		return
 	}
 	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
-	h.broadcast <- payload
+	select {
+	case h.broadcast <- payload:
+	default:
+		h.mu.Lock()
+		h.broadcastOverflow = true
+		h.mu.Unlock()
+		observability.Default().IncWSBackpressure(wsBackpressureScopeBroadcast, wsBackpressureReasonHubBufferFull)
+		h.broadcast <- payload
+	}
 }
 
 // SendTo serializes a message and queues it for a single client.
@@ -126,11 +141,22 @@ func (h *Hub) DetailSubscribers(deviceID uuid.UUID) []*Client {
 	return subscribers
 }
 
+// ConsumeBroadcastOverflow reports whether a broadcast buffer overflow happened
+// since the last call and clears the sticky marker.
+func (h *Hub) ConsumeBroadcastOverflow() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	overflowed := h.broadcastOverflow
+	h.broadcastOverflow = false
+	return overflowed
+}
+
 func (h *Hub) enqueue(client *Client, payload []byte) bool {
 	select {
 	case client.send <- payload:
 		return true
 	default:
+		observability.Default().IncWSBackpressure(wsBackpressureScopeClientSend, wsBackpressureReasonClientBufferFull)
 		return false
 	}
 }

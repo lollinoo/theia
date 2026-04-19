@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 // --- Concurrent access tests (STATE-01, T-38-01) ---
@@ -93,6 +95,24 @@ func TestStore_SnapshotIsDeepCopy(t *testing.T) {
 	ds2 := snap2[id]
 	if ds2.Metrics.CPUPercent == nil || *ds2.Metrics.CPUPercent != 42.0 {
 		t.Errorf("mutating snapshot corrupted store: got %v, want 42", ds2.Metrics.CPUPercent)
+	}
+}
+
+func TestStoreConsumeOverflowed_IsStickyUntilConsumed(t *testing.T) {
+	s := NewStore()
+
+	for i := 0; i < cap(s.changes); i++ {
+		s.changes <- []uuid.UUID{uuid.New()}
+	}
+
+	s.emitChanges([]uuid.UUID{uuid.New()})
+	s.emitChanges([]uuid.UUID{uuid.New()})
+
+	if !s.ConsumeOverflowed() {
+		t.Fatal("expected overflow marker after dropped state changes")
+	}
+	if s.ConsumeOverflowed() {
+		t.Fatal("expected overflow marker to clear after consumption")
 	}
 }
 
@@ -907,6 +927,37 @@ func TestStore_StartStopIsCleanShutdown(t *testing.T) {
 func TestStore_StopWithoutStartIsNoOp(t *testing.T) {
 	s := NewStore()
 	s.Stop() // must not panic or hang
+}
+
+func TestStore_UpdateDropsChangesWhenChannelFull(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	s := NewStore()
+	for i := 0; i < cap(s.changes); i++ {
+		s.changes <- []uuid.UUID{uuid.New()}
+	}
+
+	id := uuid.New()
+	cpu := 50.0
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		Metrics:          &domain.DeviceMetrics{CPUPercent: &cpu},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+	})
+
+	if _, ok := s.GetDevice(id); !ok {
+		t.Fatal("device state was not persisted when changes channel overflowed")
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_state_changes_dropped_total 1`) {
+		t.Fatalf("expected dropped state change metric, got:\n%s", metrics)
+	}
 }
 
 // --- Remove test ---

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ type PrometheusEnrichmentClient interface {
 type PrometheusCollector struct {
 	mu        sync.RWMutex
 	client    PrometheusEnrichmentClient
+	factory   func(string) PrometheusEnrichmentClient
 	now       func() time.Time
 	swappable bool
 }
@@ -35,8 +37,19 @@ type PrometheusCollector struct {
 // NewPrometheusCollector constructs a stateless Prometheus enrichment collector.
 func NewPrometheusCollector(client PrometheusEnrichmentClient) *PrometheusCollector {
 	_, swappable := client.(*metrics.PromClient)
+	if client == nil {
+		swappable = true
+	}
+
+	var factory func(string) PrometheusEnrichmentClient
+	if promClient, ok := client.(*metrics.PromClient); ok {
+		factory = func(baseURL string) PrometheusEnrichmentClient {
+			return promClient.WithBaseURL(baseURL)
+		}
+	}
 	return &PrometheusCollector{
 		client:    client,
+		factory:   factory,
 		now:       time.Now,
 		swappable: swappable,
 	}
@@ -54,7 +67,52 @@ func (c *PrometheusCollector) SetClient(client PrometheusEnrichmentClient) {
 		return
 	}
 	c.client = client
+	if promClient, ok := client.(*metrics.PromClient); ok {
+		c.factory = func(baseURL string) PrometheusEnrichmentClient {
+			return promClient.WithBaseURL(baseURL)
+		}
+	}
 	c.mu.Unlock()
+}
+
+// SetClientFactory overrides how runtime Prometheus URL swaps create clients.
+func (c *PrometheusCollector) SetClientFactory(factory func(string) PrometheusEnrichmentClient) {
+	if c == nil || factory == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.swappable {
+		return
+	}
+	c.factory = factory
+}
+
+// SetPrometheusURL swaps the Prometheus client while preserving its shared HTTP config.
+func (c *PrometheusCollector) SetPrometheusURL(baseURL string) {
+	if c == nil {
+		return
+	}
+
+	baseURL = strings.TrimSpace(baseURL)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if baseURL == "" {
+		c.client = nil
+		return
+	}
+	if !c.swappable {
+		return
+	}
+	if c.factory == nil {
+		c.factory = func(url string) PrometheusEnrichmentClient {
+			return metrics.NewPromClient(url, &http.Client{Timeout: 4 * time.Second})
+		}
+	}
+	c.client = c.factory(baseURL)
 }
 
 // Enabled reports whether Prometheus queries are currently configured.

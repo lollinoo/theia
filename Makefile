@@ -2,6 +2,7 @@
        postgres-up postgres-down dev-postgres migrate-postgres \
        prod-postgres prod-postgres-metrics staging-postgres \
        wisp-lab wisp-lab-down wisp-seed wisp-radio-seed wisp-seed-all wisp-ospf wisp-bgp \
+       phase4-scale-lab phase4-validate \
        prod prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
        snmpwalk-router snmpwalk-switch snmpwalk-ap \
@@ -14,6 +15,9 @@ VERSION    := $(shell git describe --tags --always 2>/dev/null || echo dev)
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_DATE := $(shell date -u +%FT%TZ)
 DEV_COMPOSE_PROFILES := --profile dev --profile test --profile postgres
+PHASE4_API_BASE ?= http://localhost:8080
+PHASE4_OUT ?= .planning/phases/04-scale-validation-and-hardening/evidence/synthetic
+PHASE4_MODE ?= synthetic
 
 # Default target
 help: ## Show this help
@@ -163,12 +167,22 @@ clean: ## Stop containers, remove volumes, and prune build cache
 seed: ## Add SNMP simulator devices via the API
 	@bash scripts/seed.sh http://localhost:8080
 
+phase4-scale-lab: ## Write Phase 4 synthetic scale-lab evidence files
+	@mkdir -p "$(PHASE4_OUT)"
+	go run ./cmd/theia-scale-lab -profile 300 -scenario baseline -out "$(PHASE4_OUT)/scale-300-baseline.json" >/dev/null
+	go run ./cmd/theia-scale-lab -profile 300 -scenario burst-adds -out "$(PHASE4_OUT)/scale-300-burst-adds.json" >/dev/null
+	@echo "Wrote scale-lab evidence to $(PHASE4_OUT)"
+
+phase4-validate: ## Run the Phase 4 validation workflow and capture evidence
+	@bash scripts/phase4-validate.sh "$(PHASE4_MODE)" "$(PHASE4_API_BASE)" "$(PHASE4_OUT)"
+
 wisp-lab: ## Start WISP lab with 10 routers, radio access overlay, OSPF, and SNMP
 	docker compose -f docker-compose.wisp-lab.yml up --build -d
 	@echo ""
 	@echo "WISP lab is running:"
 	@echo "  SNMP targets: 127.0.10.21-127.0.10.42"
 	@echo "  Prometheus:   http://localhost:9091"
+	@echo "  Dev Prometheus scrape view: http://localhost:9090/targets"
 	@echo ""
 	@echo "Run 'make wisp-seed-all' to add routers plus radio access nodes to Theia."
 

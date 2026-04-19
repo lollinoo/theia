@@ -130,6 +130,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     grafanaUrlRef, deviceGrafanaUrlsRef, refreshSettings,
     prometheusAlertDismissed, setPrometheusAlertDismissed,
     showRecoveryToast, setShowRecoveryToast,
+    topologyRecoveryNotice, dismissTopologyRecoveryNotice, retryTopologyRefresh,
   } = useCanvasData({
     snapshot, reconnecting, prometheusStatus, editMode,
     openDeviceMenu, openEdgeMenu, openSelfLinkDetails,
@@ -464,6 +465,9 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <CanvasOverlays editMode={editMode} reconnecting={reconnecting}
         showRecoveryToast={showRecoveryToast} setShowRecoveryToast={setShowRecoveryToast}
+        topologyRecoveryNotice={topologyRecoveryNotice}
+        dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
+        retryTopologyRefresh={retryTopologyRefresh}
         prometheusStatus={prometheusStatus} prometheusAlertDismissed={prometheusAlertDismissed}
         setPrometheusAlertDismissed={setPrometheusAlertDismissed} setPanelContent={setPanelContent}
         selectedNodeCount={selectedNodeCount}

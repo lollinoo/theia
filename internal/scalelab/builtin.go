@@ -19,6 +19,17 @@ func BuiltinProfile(name string) (Profile, error) {
 			DefaultBurstAdds:     10,
 			DefaultUnresolvedAdd: 20,
 		}, nil
+	case "300":
+		return Profile{
+			Name:                 "300",
+			DeviceCount:          300,
+			PerformanceInterval:  30 * time.Second,
+			OperationalInterval:  60 * time.Second,
+			StaticInterval:       5 * time.Minute,
+			DefaultReplayPasses:  2,
+			DefaultBurstAdds:     15,
+			DefaultUnresolvedAdd: 60,
+		}, nil
 	case "500":
 		return Profile{
 			Name:                 "500",

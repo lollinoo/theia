@@ -199,6 +199,9 @@ vi.mock('./canvas/useCanvasData', () => ({
       setPrometheusAlertDismissed: vi.fn(),
       showRecoveryToast: false,
       setShowRecoveryToast: vi.fn(),
+      topologyRecoveryNotice: null,
+      dismissTopologyRecoveryNotice: vi.fn(),
+      retryTopologyRefresh: vi.fn(),
     };
   },
 }));

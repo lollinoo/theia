@@ -1,0 +1,147 @@
+{
+  "name": "wisp-hybrid",
+  "observations": [
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000001",
+      "remote_identity": "dist-west",
+      "remote_device_id": "10000000-0000-0000-0000-000000000002",
+      "local_port": "sfp-sfpplus1",
+      "remote_port": "sfp-sfpplus1",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000002",
+      "remote_identity": "core-hub",
+      "remote_device_id": "10000000-0000-0000-0000-000000000001",
+      "local_port": "sfp-sfpplus1",
+      "remote_port": "sfp-sfpplus1",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000001",
+      "remote_identity": "dist-east",
+      "remote_device_id": "10000000-0000-0000-0000-000000000003",
+      "local_port": "sfp-sfpplus2",
+      "remote_port": "sfp-sfpplus1",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000003",
+      "remote_identity": "core-hub",
+      "remote_device_id": "10000000-0000-0000-0000-000000000001",
+      "local_port": "sfp-sfpplus1",
+      "remote_port": "sfp-sfpplus2",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000002",
+      "remote_identity": "ring-a",
+      "remote_device_id": "10000000-0000-0000-0000-000000000004",
+      "local_port": "ether5",
+      "remote_port": "ether1",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000004",
+      "remote_identity": "dist-west",
+      "remote_device_id": "10000000-0000-0000-0000-000000000002",
+      "local_port": "ether1",
+      "remote_port": "ether5",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000004",
+      "remote_identity": "ring-b",
+      "remote_device_id": "10000000-0000-0000-0000-000000000005",
+      "local_port": "ether2",
+      "remote_port": "ether1",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000005",
+      "remote_identity": "ring-a",
+      "remote_device_id": "10000000-0000-0000-0000-000000000004",
+      "local_port": "ether1",
+      "remote_port": "ether2",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000005",
+      "remote_identity": "ring-c",
+      "remote_device_id": "10000000-0000-0000-0000-000000000006",
+      "local_port": "ether2",
+      "remote_port": "ether1",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000006",
+      "remote_identity": "ring-b",
+      "remote_device_id": "10000000-0000-0000-0000-000000000005",
+      "local_port": "ether1",
+      "remote_port": "ether2",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000006",
+      "remote_identity": "dist-east",
+      "remote_device_id": "10000000-0000-0000-0000-000000000003",
+      "local_port": "ether2",
+      "remote_port": "ether6",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000003",
+      "remote_identity": "ring-c",
+      "remote_device_id": "10000000-0000-0000-0000-000000000006",
+      "local_port": "ether6",
+      "remote_port": "ether2",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000002",
+      "remote_identity": "access-west-1",
+      "remote_device_id": "10000000-0000-0000-0000-000000000007",
+      "local_port": "ether10",
+      "remote_port": "ether1",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000007",
+      "remote_identity": "dist-west",
+      "remote_device_id": "10000000-0000-0000-0000-000000000002",
+      "local_port": "ether1",
+      "remote_port": "ether10",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000003",
+      "remote_identity": "access-east-1",
+      "remote_device_id": "10000000-0000-0000-0000-000000000008",
+      "local_port": "ether10",
+      "remote_port": "ether1",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000008",
+      "remote_identity": "dist-east",
+      "remote_device_id": "10000000-0000-0000-0000-000000000003",
+      "local_port": "ether1",
+      "remote_port": "ether10",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000007",
+      "remote_identity": "unknown-radio-cpe-1",
+      "local_port": "wlan1",
+      "remote_port": "",
+      "protocol": "lldp"
+    },
+    {
+      "local_device_id": "10000000-0000-0000-0000-000000000006",
+      "remote_identity": "future-pop-extension",
+      "local_port": "ether24",
+      "remote_port": "",
+      "protocol": "lldp"
+    }
+  ]
+}

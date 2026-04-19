@@ -48,6 +48,21 @@ type wsMetricKey struct {
 	Type  string
 }
 
+type wsBackpressureKey struct {
+	Scope  string
+	Reason string
+}
+
+type refreshSnapshotBuildKey struct {
+	Mode   string
+	Result string
+}
+
+type prometheusRuntimeRequestKey struct {
+	Operation string
+	Result    string
+}
+
 type histogram struct {
 	buckets []float64
 	counts  []uint64
@@ -77,7 +92,12 @@ type Registry struct {
 	cacheInvalidationsTotal    map[string]uint64
 	cacheReloadTotal           uint64
 	topologyMaterialization    map[string]*histogram
+	refreshSnapshotBuild       map[refreshSnapshotBuildKey]*histogram
+	refreshTopologyReloadTotal map[string]uint64
+	prometheusRuntimeRequests  map[prometheusRuntimeRequestKey]uint64
+	prometheusRuntimeDuration  map[prometheusRuntimeRequestKey]*histogram
 	wsMessagesTotal            map[wsMetricKey]uint64
+	wsBackpressureTotal        map[wsBackpressureKey]uint64
 	wsPayloadBytes             map[wsMetricKey]*histogram
 	unknownNeighborsTotal      map[deviceProtocolKey]uint64
 	stateChangesDroppedTotal   uint64
@@ -114,9 +134,19 @@ func NewRegistry() *Registry {
 			"success": newHistogram(durationBucketsSeconds),
 			"error":   newHistogram(durationBucketsSeconds),
 		},
-		wsMessagesTotal:       make(map[wsMetricKey]uint64),
-		wsPayloadBytes:        make(map[wsMetricKey]*histogram),
-		unknownNeighborsTotal: make(map[deviceProtocolKey]uint64),
+		refreshSnapshotBuild: map[refreshSnapshotBuildKey]*histogram{
+			{Mode: "dirty", Result: "error"}:   newHistogram(durationBucketsSeconds),
+			{Mode: "dirty", Result: "success"}: newHistogram(durationBucketsSeconds),
+			{Mode: "full", Result: "error"}:    newHistogram(durationBucketsSeconds),
+			{Mode: "full", Result: "success"}:  newHistogram(durationBucketsSeconds),
+		},
+		refreshTopologyReloadTotal: make(map[string]uint64),
+		prometheusRuntimeRequests:  make(map[prometheusRuntimeRequestKey]uint64),
+		prometheusRuntimeDuration:  make(map[prometheusRuntimeRequestKey]*histogram),
+		wsMessagesTotal:            make(map[wsMetricKey]uint64),
+		wsBackpressureTotal:        make(map[wsBackpressureKey]uint64),
+		wsPayloadBytes:             make(map[wsMetricKey]*histogram),
+		unknownNeighborsTotal:      make(map[deviceProtocolKey]uint64),
 	}
 }
 
@@ -208,10 +238,35 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"Static discovery materialization latency.",
 		sortedStringHistogramRows("result", r.topologyMaterialization),
 	)
+	writeHistogramVec(&b,
+		"theia_refresh_snapshot_build_seconds",
+		"Refresh snapshot build latency by build mode and result.",
+		sortedRefreshSnapshotBuildRows(r.refreshSnapshotBuild),
+	)
+	writeCounterVec(&b,
+		"theia_refresh_topology_reload_total",
+		"Full topology reload decisions by reason.",
+		sortedStringCounterRows("reason", r.refreshTopologyReloadTotal),
+	)
+	writeCounterVec(&b,
+		"theia_prometheus_runtime_requests_total",
+		"Prometheus runtime requests by operation and result.",
+		sortedPrometheusRuntimeCounterRows(r.prometheusRuntimeRequests),
+	)
+	writeHistogramVec(&b,
+		"theia_prometheus_runtime_request_seconds",
+		"Prometheus runtime request latency by operation and result.",
+		sortedPrometheusRuntimeHistogramRows(r.prometheusRuntimeDuration),
+	)
 	writeCounterVec(&b,
 		"theia_ws_messages_total",
 		"WebSocket messages emitted by scope and type.",
 		sortedWSRows(r.wsMessagesTotal),
+	)
+	writeCounterVec(&b,
+		"theia_ws_backpressure_total",
+		"WebSocket backpressure events by scope and reason.",
+		sortedWSBackpressureRows(r.wsBackpressureTotal),
 	)
 	writeHistogramVec(&b,
 		"theia_ws_message_payload_bytes",
@@ -349,6 +404,49 @@ func (r *Registry) ObserveTopologyMaterialization(duration time.Duration, succes
 	h.observe(duration.Seconds())
 }
 
+func (r *Registry) ObserveRefreshSnapshotBuild(mode string, duration time.Duration, success bool) {
+	result := "error"
+	if success {
+		result = "success"
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := refreshSnapshotBuildKey{Mode: mode, Result: result}
+	h, ok := r.refreshSnapshotBuild[key]
+	if !ok {
+		h = newHistogram(durationBucketsSeconds)
+		r.refreshSnapshotBuild[key] = h
+	}
+	h.observe(duration.Seconds())
+}
+
+func (r *Registry) IncRefreshTopologyReload(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refreshTopologyReloadTotal[reason]++
+}
+
+func (r *Registry) ObservePrometheusRuntimeRequest(operation, result string, duration time.Duration) {
+	if operation == "" || result == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := prometheusRuntimeRequestKey{
+		Operation: operation,
+		Result:    result,
+	}
+	r.prometheusRuntimeRequests[key]++
+	h, ok := r.prometheusRuntimeDuration[key]
+	if !ok {
+		h = newHistogram(durationBucketsSeconds)
+		r.prometheusRuntimeDuration[key] = h
+	}
+	h.observe(duration.Seconds())
+}
 func (r *Registry) ObserveWSMessage(scope, messageType string, payloadBytes int) {
 	key := wsMetricKey{Scope: scope, Type: messageType}
 
@@ -363,6 +461,14 @@ func (r *Registry) ObserveWSMessage(scope, messageType string, payloadBytes int)
 	h.observe(float64(payloadBytes))
 }
 
+func (r *Registry) IncWSBackpressure(scope, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsBackpressureTotal[wsBackpressureKey{
+		Scope:  scope,
+		Reason: reason,
+	}]++
+}
 func (r *Registry) AddUnknownNeighbors(deviceID uuid.UUID, protocol domain.DiscoveryProtocol, count int) {
 	if count <= 0 {
 		return
@@ -613,6 +719,80 @@ func sortedStringHistogramRows(label string, values map[string]*histogram) []his
 	return rows
 }
 
+func sortedRefreshSnapshotBuildRows(values map[refreshSnapshotBuildKey]*histogram) []histogramRow {
+	keys := make([]refreshSnapshotBuildKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Mode != keys[j].Mode {
+			return keys[i].Mode < keys[j].Mode
+		}
+		return keys[i].Result < keys[j].Result
+	})
+
+	rows := make([]histogramRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, histogramRow{
+			labels: map[string]string{
+				"mode":   key.Mode,
+				"result": key.Result,
+			},
+			value: values[key].snapshot(),
+		})
+	}
+	return rows
+}
+
+func sortedPrometheusRuntimeCounterRows(values map[prometheusRuntimeRequestKey]uint64) []counterRow {
+	keys := make([]prometheusRuntimeRequestKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		return keys[i].Result < keys[j].Result
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"result":    key.Result,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedPrometheusRuntimeHistogramRows(values map[prometheusRuntimeRequestKey]*histogram) []histogramRow {
+	keys := make([]prometheusRuntimeRequestKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		return keys[i].Result < keys[j].Result
+	})
+
+	rows := make([]histogramRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, histogramRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"result":    key.Result,
+			},
+			value: values[key].snapshot(),
+		})
+	}
+	return rows
+}
 func sortedWSRows(values map[wsMetricKey]uint64) []counterRow {
 	keys := make([]wsMetricKey, 0, len(values))
 	for key := range values {
@@ -638,6 +818,30 @@ func sortedWSRows(values map[wsMetricKey]uint64) []counterRow {
 	return rows
 }
 
+func sortedWSBackpressureRows(values map[wsBackpressureKey]uint64) []counterRow {
+	keys := make([]wsBackpressureKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Scope != keys[j].Scope {
+			return keys[i].Scope < keys[j].Scope
+		}
+		return keys[i].Reason < keys[j].Reason
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"scope":  key.Scope,
+				"reason": key.Reason,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
 func sortedWSHistogramRows(values map[wsMetricKey]*histogram) []histogramRow {
 	keys := make([]wsMetricKey, 0, len(values))
 	for key := range values {
