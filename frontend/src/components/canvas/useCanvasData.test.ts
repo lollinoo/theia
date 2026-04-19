@@ -338,8 +338,8 @@ describe('useCanvasData', () => {
     expect(result.current.nodes[0].position).toEqual({ x: 400, y: 500 });
   });
 
-  it('records stable topology, layout, and snapshot measurements for live refresh work', async () => {
-    const { rerender } = renderUseCanvasData(mockSnapshot());
+  it('records stable topology and snapshot measurements without relayout on unchanged reconnects', async () => {
+    const { rerender, reactFlow } = renderUseCanvasData(mockSnapshot());
 
     await act(async () => {
       await Promise.resolve();
@@ -360,8 +360,11 @@ describe('useCanvasData', () => {
 
     expect(canvasMetrics()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'theia:canvas:topology-load', trigger: 'backend_reconnected' }),
+    ]));
+    expect(canvasMetrics()).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'theia:canvas:layout', trigger: 'backend_reconnected' }),
     ]));
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(1);
 
     rerender({
       currentSnapshot: mockSnapshot({

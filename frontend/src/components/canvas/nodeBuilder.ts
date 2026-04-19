@@ -64,7 +64,8 @@ export function buildTopologyNodes(
       ? current
       : hasUsablePosition(saved)
         ? saved
-        : placementPosition ?? { x: 0, y: 0 };
+        : placementPosition;
+    const resolvedPosition = position ?? { x: 0, y: 0 };
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
     // Merge snapshot status/hostname/model into device if available
@@ -96,8 +97,8 @@ export function buildTopologyNodes(
       id: device.id,
       type: 'device',
       position: {
-        x: position.x,
-        y: position.y,
+        x: resolvedPosition.x,
+        y: resolvedPosition.y,
       },
       data: {
         device: deviceData,

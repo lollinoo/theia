@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices, fetchLinks, fetchSettings, createLink } from '../../api/client';
-import { computeForceLayout } from '../../hooks/useAutoLayout';
+import { computeForceLayout, type AutoLayoutEdge, type AutoLayoutNode } from '../../hooks/useAutoLayout';
 import { usePositions, type PositionState } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import {
@@ -28,6 +28,7 @@ import {
 import { measureCanvasAsyncWork, measureCanvasWork, type CanvasMeasurementTrigger } from './canvasInstrumentation';
 import { alertStatusForLink, buildTopologyEdges } from './edgeBuilder';
 import { buildTopologyNodes } from './nodeBuilder';
+import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
 
 interface UseCanvasDataParams {
   snapshot: SnapshotPayload | null;
@@ -65,6 +66,173 @@ interface UseCanvasDataReturn {
   setShowRecoveryToast: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
+function hasUsablePosition(position: PositionState | undefined): position is PositionState {
+  return position !== undefined
+    && Number.isFinite(position.x)
+    && Number.isFinite(position.y);
+}
+
+function buildEffectiveSnapshot(
+  fetchedDevices: Device[],
+  pendingSnapshot: SnapshotPayload | null,
+  prometheusStatus: PrometheusStatusPayload | null,
+): SnapshotPayload | null {
+  if (!pendingSnapshot) {
+    return null;
+  }
+
+  if (!isPrometheusUnavailable(prometheusStatus)) {
+    return pendingSnapshot;
+  }
+
+  const effectiveStatuses = { ...pendingSnapshot.device_statuses };
+  for (const device of fetchedDevices) {
+    const source = device.metrics_source || 'prometheus';
+    if (source === 'prometheus' || source === 'prometheus_snmp_fallback') {
+      effectiveStatuses[device.id] = 'down';
+    }
+  }
+
+  return {
+    ...pendingSnapshot,
+    device_statuses: effectiveStatuses,
+  };
+}
+
+function mergeRuntimeDeviceFields(
+  device: Device,
+  currentDevice: Device | undefined,
+  effectiveSnapshot: SnapshotPayload | null,
+): Device {
+  const baseDevice = currentDevice
+    ? {
+        ...device,
+        status: currentDevice.status,
+        sys_name: currentDevice.sys_name,
+        hardware_model: currentDevice.hardware_model,
+      }
+    : device;
+
+  if (!effectiveSnapshot) {
+    return baseDevice;
+  }
+
+  const snapshotStatus = effectiveSnapshot.device_statuses[device.id];
+  const snapshotHostname = effectiveSnapshot.device_hostnames[device.id];
+  const snapshotModel = effectiveSnapshot.device_models?.[device.id];
+
+  if (!snapshotStatus && !snapshotHostname && !snapshotModel) {
+    return baseDevice;
+  }
+
+  return {
+    ...baseDevice,
+    ...(snapshotStatus ? { status: snapshotStatus as Device['status'] } : {}),
+    ...(snapshotHostname ? { sys_name: snapshotHostname } : {}),
+    ...(snapshotModel ? { hardware_model: snapshotModel } : {}),
+  };
+}
+
+function buildUsablePositionState(
+  devices: Device[],
+  currentPositions: Map<string, PositionState>,
+  savedPositions: Map<string, PositionState>,
+): string {
+  return devices
+    .map((device) => {
+      const currentPosition = currentPositions.get(device.id);
+      const savedPosition = savedPositions.get(device.id);
+
+      if (hasUsablePosition(currentPosition) || hasUsablePosition(savedPosition)) {
+        return device.id;
+      }
+
+      return null;
+    })
+    .filter((deviceId): deviceId is string => deviceId !== null)
+    .sort()
+    .join('|');
+}
+
+function positionsChanged(
+  nextPositions: ReturnType<typeof buildPositionPayload>,
+  savedPositions: Map<string, PositionState>,
+): boolean {
+  if (nextPositions.length !== savedPositions.size) {
+    return true;
+  }
+
+  for (const position of nextPositions) {
+    const savedPosition = savedPositions.get(position.device_id);
+    if (
+      !savedPosition
+      || savedPosition.x !== position.x
+      || savedPosition.y !== position.y
+      || savedPosition.pinned !== position.pinned
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function buildLayoutInputs(
+  devices: Device[],
+  links: Link[],
+  placementDeviceIds: Set<string>,
+  effectivePositions: Map<string, PositionState>,
+): { layoutNodes: AutoLayoutNode[]; layoutEdges: AutoLayoutEdge[] } {
+  if (placementDeviceIds.size === 0) {
+    return {
+      layoutNodes: [],
+      layoutEdges: [],
+    };
+  }
+
+  const layoutDeviceIds = new Set(placementDeviceIds);
+
+  for (const link of links) {
+    const sourceNeedsPlacement = placementDeviceIds.has(link.source_device_id);
+    const targetNeedsPlacement = placementDeviceIds.has(link.target_device_id);
+
+    if (sourceNeedsPlacement === targetNeedsPlacement) {
+      continue;
+    }
+
+    const anchorDeviceId = sourceNeedsPlacement
+      ? link.target_device_id
+      : link.source_device_id;
+    const anchorPosition = effectivePositions.get(anchorDeviceId);
+
+    if (hasUsablePosition(anchorPosition)) {
+      layoutDeviceIds.add(anchorDeviceId);
+    }
+  }
+
+  return {
+    layoutNodes: devices
+      .filter((device) => layoutDeviceIds.has(device.id))
+      .map((device) => {
+        const position = effectivePositions.get(device.id);
+        const needsPlacement = placementDeviceIds.has(device.id);
+
+        return {
+          id: device.id,
+          x: position?.x,
+          y: position?.y,
+          pinned: !needsPlacement && hasUsablePosition(position),
+        };
+      }),
+    layoutEdges: links
+      .filter((link) => layoutDeviceIds.has(link.source_device_id) && layoutDeviceIds.has(link.target_device_id))
+      .map((link) => ({
+        source: link.source_device_id,
+        target: link.target_device_id,
+      })),
+  };
+}
+
 export function useCanvasData({
   snapshot,
   prometheusStatus,
@@ -89,7 +257,8 @@ export function useCanvasData({
   const devicesRef = useRef<Device[]>([]);
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
-  const layoutInitializedRef = useRef(false);
+  const lastTopologyIdentityRef = useRef<string | null>(null);
+  const lastUsablePositionStateRef = useRef('');
   const currentNodePositionsRef = useRef<Map<string, PositionState>>(new Map());
   const grafanaUrlRef = useRef<string>('');
   const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
@@ -130,10 +299,6 @@ export function useCanvasData({
     onLinksChange?.(topologyLinks);
   }, [topologyLinks, onLinksChange]);
 
-  // Stable reference to devices.length for loadTopology closure
-  const devicesLengthRef = useRef(0);
-  devicesLengthRef.current = devices.length;
-
   const loadTopology = useCallback(
     async (
       isSilentRefresh = false,
@@ -153,6 +318,9 @@ export function useCanvasData({
         ]);
 
         const devicesByID = new Map(fetchedDevices.map((device) => [device.id, device]));
+        const linksByID = new Map(fetchedLinks.map((link) => [link.id, link]));
+        const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
+        const structureChanged = lastTopologyIdentityRef.current !== topologyIdentity.signature;
         const effectivePositions = new Map(savedPositions);
         for (const [deviceId, position] of currentNodePositionsRef.current.entries()) {
           if (!effectivePositions.has(deviceId)) {
@@ -160,60 +328,21 @@ export function useCanvasData({
           }
         }
 
-        const { width, height } = viewportSize();
-
-        const computedPositions = measureCanvasWork('theia:canvas:layout', trigger, () =>
-          computeForceLayout(
-            fetchedDevices.map((device) => {
-              const saved = effectivePositions.get(device.id);
-              return {
-                id: device.id,
-                x: saved?.x,
-                y: saved?.y,
-                pinned: saved?.pinned,
-              };
-            }),
-            fetchedLinks.map((link) => ({
-              source: link.source_device_id,
-              target: link.target_device_id,
-            })),
-            width,
-            height,
-          ),
+        const usablePositionState = buildUsablePositionState(
+          fetchedDevices,
+          currentNodePositionsRef.current,
+          savedPositions,
         );
+        const shouldAutoFitView = usablePositionState.length === 0;
 
         // Read any pending snapshot so first-load metrics are included in the
         // initial node/edge data -- eliminates the race where the WS snapshot
         // arrives before loadTopology resolves and the snapshot effect maps over
         // an empty node array.
-        const pendingSnapshot = snapshotRef.current;
-
-        // When Prometheus is down, override prometheus-sourced devices to 'down'
-        // so the initial render shows error styling immediately (without waiting
-        // for the snapshot effect to re-apply the override).
-        let effectiveSnapshot = pendingSnapshot;
-        const promStatus = prometheusStatusRef.current;
-        if (pendingSnapshot && isPrometheusUnavailable(promStatus)) {
-          const effectiveStatuses = { ...pendingSnapshot.device_statuses };
-          for (const d of fetchedDevices) {
-            const src = d.metrics_source || 'prometheus';
-            if (src === 'prometheus' || src === 'prometheus_snmp_fallback') {
-              effectiveStatuses[d.id] = 'down';
-            }
-          }
-          effectiveSnapshot = { ...pendingSnapshot, device_statuses: effectiveStatuses };
-        }
-
-        const nextNodes = buildTopologyNodes(
+        const effectiveSnapshot = buildEffectiveSnapshot(
           fetchedDevices,
-          effectivePositions,
-          computedPositions,
-          defaultPosition,
-          editMode,
-          openDeviceMenu,
-          effectiveSnapshot,
-          fetchedLinks,
-          openSelfLinkDetails,
+          snapshotRef.current,
+          prometheusStatusRef.current,
         );
 
         // Migrate localStorage manual edges to backend on first load (best-effort)
@@ -253,6 +382,130 @@ export function useCanvasData({
           }
         }
 
+        if (!structureChanged) {
+          setDevices(fetchedDevices);
+          setTopologyLinks(fetchedLinks);
+          setNodes((currentNodes) =>
+            currentNodes.map((node) => {
+              const fetchedDevice = devicesByID.get(node.id);
+              if (!fetchedDevice) {
+                return node;
+              }
+
+              const nextDevice = mergeRuntimeDeviceFields(
+                fetchedDevice,
+                node.data.device,
+                effectiveSnapshot,
+              );
+              const nextMetrics = effectiveSnapshot
+                ? sanitizeDeviceMetricsForDisplay(
+                    nextDevice,
+                    effectiveSnapshot.device_metrics[node.id] ?? null,
+                  )
+                : node.data.metrics;
+
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  device: nextDevice,
+                  editMode,
+                  onContextMenu: openDeviceMenu,
+                  alertStatus: effectiveSnapshot
+                    ? alertStatusForDevice(node.id, effectiveSnapshot.alerts)
+                    : node.data.alertStatus,
+                  metrics: nextMetrics,
+                  monitoringState: resolveDeviceMonitoringState(nextDevice),
+                  isVirtual: fetchedDevice.device_type === 'virtual',
+                  subtype: fetchedDevice.device_type === 'virtual'
+                    ? (nextDevice.tags?.virtual_subtype ?? 'generic')
+                    : undefined,
+                },
+              };
+            }),
+          );
+          setEdges((currentEdges) =>
+            currentEdges.map((edge) => {
+              const fetchedLink = linksByID.get(edge.id);
+              if (!fetchedLink) {
+                return edge;
+              }
+
+              if (!effectiveSnapshot) {
+                return {
+                  ...edge,
+                  data: edge.data
+                    ? {
+                        ...edge.data,
+                        link: fetchedLink,
+                      }
+                    : edge.data,
+                };
+              }
+
+              const sourceDeviceStatus = effectiveSnapshot.device_statuses[fetchedLink.source_device_id];
+              const targetDeviceStatus = effectiveSnapshot.device_statuses[fetchedLink.target_device_id];
+              const linkAlertStatus = alertStatusForLink(fetchedLink, effectiveSnapshot.alerts);
+              const bothDown = sourceDeviceStatus === 'down' && targetDeviceStatus === 'down';
+              const metrics = bothDown
+                ? null
+                : findLinkMetrics(effectiveSnapshot.link_metrics, fetchedLink);
+
+              return {
+                ...edge,
+                data: edge.data
+                  ? {
+                      ...edge.data,
+                      link: fetchedLink,
+                      alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
+                      sourceDeviceStatus,
+                      targetDeviceStatus,
+                      metrics,
+                      throughputLabel: metrics ? buildThroughputLabel(metrics) : undefined,
+                      utilization: metrics?.utilization ?? null,
+                    }
+                  : edge.data,
+              };
+            }),
+          );
+          lastTopologyIdentityRef.current = topologyIdentity.signature;
+          lastUsablePositionStateRef.current = usablePositionState;
+          return;
+        }
+
+        const placementDeviceIds = collectPlacementDeviceIds(
+          fetchedDevices,
+          currentNodePositionsRef.current,
+          savedPositions,
+          currentNodePositionsRef.current.keys(),
+        );
+        const { width, height } = viewportSize();
+        const { layoutNodes, layoutEdges } = buildLayoutInputs(
+          fetchedDevices,
+          fetchedLinks,
+          placementDeviceIds,
+          effectivePositions,
+        );
+        const computedPositions = layoutNodes.length > 0
+          ? measureCanvasWork('theia:canvas:layout', trigger, () =>
+              computeForceLayout(layoutNodes, layoutEdges, width, height),
+            )
+          : new Map();
+
+        const nextNodes = buildTopologyNodes(
+          fetchedDevices,
+          effectivePositions,
+          computedPositions,
+          defaultPosition,
+          editMode,
+          openDeviceMenu,
+          effectiveSnapshot,
+          fetchedLinks,
+          openSelfLinkDetails,
+          currentNodePositionsRef.current,
+          placementDeviceIds,
+        );
+
         let nextEdges = buildTopologyEdges(fetchedLinks, devicesByID, nextNodes, undefined, openEdgeMenu);
 
         // Merge pending snapshot link metrics into edges and mark snapshot time
@@ -289,34 +542,43 @@ export function useCanvasData({
         // sometimes causing all canvas nodes to vanish after a device delete.
         setDevices(fetchedDevices);
         setTopologyLinks(fetchedLinks);
-        if (isSilentRefresh) {
-          // Preserve alertStatus so a topology refresh doesn't momentarily clear
-          // alert rings while the next snapshot hasn't yet re-applied them.
-          setNodes((currentNodes) => {
-            const prevDataByID = new Map(currentNodes.map((n) => [n.id, n.data]));
-            return nextNodes.map((n) => ({
-              ...n,
+        setNodes((currentNodes) => {
+          const prevNodesByID = new Map(currentNodes.map((node) => [node.id, node]));
+          return nextNodes.map((node) => {
+            const previousNode = prevNodesByID.get(node.id);
+            if (!previousNode) {
+              return node;
+            }
+
+            return {
+              ...node,
+              selected: previousNode.selected,
+              dragging: previousNode.dragging,
               data: {
-                ...n.data,
-                alertStatus: prevDataByID.get(n.id)?.alertStatus,
+                ...node.data,
+                highlighted: previousNode.data.highlighted,
+                alertStatus: isSilentRefresh
+                  ? previousNode.data.alertStatus
+                  : node.data.alertStatus,
               },
-            }));
+            };
           });
-        } else {
-          setNodes(nextNodes);
-        }
+        });
         setEdges(nextEdges);
 
-        if (!layoutInitializedRef.current || fetchedDevices.length !== devicesLengthRef.current) {
-          layoutInitializedRef.current = true;
-          void savePositions(buildPositionPayload(nextNodes));
+        const nextPositionPayload = buildPositionPayload(nextNodes);
+        if (positionsChanged(nextPositionPayload, savedPositions)) {
+          void savePositions(nextPositionPayload);
         }
 
-        if (!isSilentRefresh) {
+        if (trigger === 'initial_load' || shouldAutoFitView) {
           window.requestAnimationFrame(() => {
             reactFlow.fitView({ padding: 0.18, duration: 320 });
           });
         }
+
+        lastTopologyIdentityRef.current = topologyIdentity.signature;
+        lastUsablePositionStateRef.current = usablePositionState;
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Failed to load topology');
       } finally {
