@@ -75,4 +75,15 @@ esac
 
 curl -fsS "${API_BASE}/metrics" -o "${OUTPUT_DIR}/metrics.prom"
 
+for metric in \
+  theia_refresh_snapshot_build_seconds \
+  theia_refresh_topology_reload_total \
+  theia_state_changes_dropped_total
+do
+  if ! rg -q "^${metric}" "${OUTPUT_DIR}/metrics.prom"; then
+    echo "Missing required metric family: ${metric}" >&2
+    exit 1
+  fi
+done
+
 echo "Saved Phase 4 ${MODE} evidence to ${OUTPUT_DIR}"
