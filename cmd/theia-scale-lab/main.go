@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	profileFlag := flag.String("profile", "100", "Built-in profile: 100, 500, or 1000")
+	profileFlag := flag.String("profile", "100", "Built-in profile: 100, 300, 500, or 1000")
 	scenarioFlag := flag.String("scenario", "baseline", "Built-in scenario: baseline, db-slowdown, snmp-timeout-spike, burst-adds, burst-unresolved-neighbors, soak-24h")
 	fixtureFlag := flag.String("fixture", "", "Optional replay fixture JSON path")
 	outFlag := flag.String("out", "", "Optional output file path for the JSON report")

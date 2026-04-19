@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestBuiltinProfiles_Cover1005001000(t *testing.T) {
-	for _, name := range []string{"100", "500", "1000"} {
+func TestBuiltinProfiles_Cover1003005001000(t *testing.T) {
+	for _, name := range []string{"100", "300", "500", "1000"} {
 		profile, err := BuiltinProfile(name)
 		if err != nil {
 			t.Fatalf("BuiltinProfile(%q): %v", name, err)
@@ -91,5 +91,41 @@ func TestSampleFixture_TracksUnresolvedNeighbors(t *testing.T) {
 	}
 	if unresolved != 1 {
 		t.Fatalf("unresolved = %d, want 1", unresolved)
+	}
+}
+
+func TestWISPHybridFixture_ReplayProducesResolvedAndUnresolvedObservations(t *testing.T) {
+	raw, err := os.ReadFile("testdata/wisp-hybrid.json")
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	var fixture ReplayFixture
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	profile, err := BuiltinProfile("300")
+	if err != nil {
+		t.Fatalf("BuiltinProfile: %v", err)
+	}
+	scenario, err := BuiltinScenario("baseline", profile)
+	if err != nil {
+		t.Fatalf("BuiltinScenario: %v", err)
+	}
+
+	report, err := Run(profile, scenario, fixture)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if report.Replay.FixtureName != "wisp-hybrid" {
+		t.Fatalf("fixture name = %q, want %q", report.Replay.FixtureName, "wisp-hybrid")
+	}
+	if report.Replay.ResolvedCount == 0 {
+		t.Fatal("expected resolved observations in replay report")
+	}
+	if report.Replay.UnresolvedCount == 0 {
+		t.Fatal("expected unresolved observations in replay report")
 	}
 }
