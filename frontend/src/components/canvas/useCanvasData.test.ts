@@ -338,6 +338,61 @@ describe('useCanvasData', () => {
     expect(result.current.nodes[0].position).toEqual({ x: 400, y: 500 });
   });
 
+  it('coalesces reconnect, resync, and topology-changed events into one structural refresh pass', async () => {
+    const { result } = renderUseCanvasData(mockSnapshot());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    vi.mocked(fetchDevices).mockClear();
+    vi.mocked(fetchLinks).mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      window.dispatchEvent(new Event('backend-resync-required'));
+      window.dispatchEvent(new Event('topology-changed'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchDevices).toHaveBeenCalledTimes(1);
+    expect(fetchLinks).toHaveBeenCalledTimes(1);
+    expect(result.current.topologyRecoveryNotice).toMatchObject({
+      tone: 'success',
+      message: 'Topology refreshed',
+    });
+  });
+
+  it('keeps the current graph visible and shows a retry notice when structural refresh fails', async () => {
+    const { result } = renderUseCanvasData(mockSnapshot());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes).toHaveLength(1);
+    vi.mocked(fetchDevices).mockRejectedValueOnce(new Error('backend unavailable') as never);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.error).toBeNull();
+    expect(result.current.topologyRecoveryNotice).toMatchObject({
+      tone: 'warning',
+      message: 'Live topology refresh delayed',
+      actionLabel: 'Retry topology refresh',
+    });
+  });
+
   it('records stable topology and snapshot measurements without relayout on unchanged reconnects', async () => {
     const { rerender, reactFlow } = renderUseCanvasData(mockSnapshot());
 
@@ -354,6 +409,7 @@ describe('useCanvasData', () => {
 
     await act(async () => {
       window.dispatchEvent(new Event('backend-reconnected'));
+      await vi.advanceTimersByTimeAsync(250);
       await Promise.resolve();
       await Promise.resolve();
     });

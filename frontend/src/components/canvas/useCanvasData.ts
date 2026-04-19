@@ -64,6 +64,73 @@ interface UseCanvasDataReturn {
   setPrometheusAlertDismissed: React.Dispatch<React.SetStateAction<boolean>>;
   showRecoveryToast: boolean;
   setShowRecoveryToast: React.Dispatch<React.SetStateAction<boolean>>;
+  topologyRecoveryNotice: TopologyRecoveryNotice | null;
+  dismissTopologyRecoveryNotice: () => void;
+  retryTopologyRefresh: () => void;
+}
+
+type StructuralRefreshCause =
+  | 'backend-reconnected'
+  | 'backend-resync-required'
+  | 'topology-changed';
+
+export interface TopologyRecoveryNotice {
+  tone: 'success' | 'warning';
+  message: string;
+  actionLabel?: string;
+}
+
+interface LoadTopologyOptions {
+  suppressBlockingError?: boolean;
+  rethrowOnError?: boolean;
+}
+
+const structuralRefreshDebounceMs = 250;
+const topologyRefreshRetryActionLabel = 'Retry topology refresh';
+const topologyRefreshDelayedMessage = 'Live topology refresh delayed';
+
+function measurementTriggerForCauses(
+  causes: Set<StructuralRefreshCause>,
+): CanvasMeasurementTrigger {
+  if (
+    causes.has('backend-reconnected')
+    || causes.has('backend-resync-required')
+  ) {
+    return 'backend_reconnected';
+  }
+
+  return 'topology_changed';
+}
+
+function buildTopologyRecoveryNotice(
+  causes: Set<StructuralRefreshCause>,
+): TopologyRecoveryNotice | null {
+  const hasReconnect = causes.has('backend-reconnected');
+  const hasResync = causes.has('backend-resync-required');
+  const hasTopologyChanged = causes.has('topology-changed');
+
+  if (!hasReconnect && !hasResync) {
+    return null;
+  }
+
+  if ((hasReconnect && hasResync) || hasTopologyChanged) {
+    return {
+      tone: 'success',
+      message: 'Topology refreshed',
+    };
+  }
+
+  if (hasResync) {
+    return {
+      tone: 'success',
+      message: 'Live topology resynced',
+    };
+  }
+
+  return {
+    tone: 'success',
+    message: 'Topology refreshed after reconnect',
+  };
 }
 
 function hasUsablePosition(position: PositionState | undefined): position is PositionState {
@@ -269,6 +336,10 @@ export function useCanvasData({
   // Track Prometheus recovery transition and auto-dismiss recovery toast.
   const prevPromDownRef = useRef<boolean | null>(null);
   const [showRecoveryToast, setShowRecoveryToast] = useState(false);
+  const [topologyRecoveryNotice, setTopologyRecoveryNotice] = useState<TopologyRecoveryNotice | null>(null);
+  const structuralRefreshTimerRef = useRef<number | null>(null);
+  const pendingStructuralRefreshCausesRef = useRef<Set<StructuralRefreshCause>>(new Set());
+  const lastStructuralRefreshCausesRef = useRef<Set<StructuralRefreshCause>>(new Set());
 
   // Keep refs in sync so async loadTopology and snapshot effect can read the latest state
   useEffect(() => {
@@ -304,6 +375,7 @@ export function useCanvasData({
       isSilentRefresh = false,
       defaultPosition?: { x: number; y: number },
       trigger: CanvasMeasurementTrigger = 'manual_refresh',
+      options: LoadTopologyOptions = {},
     ) => measureCanvasAsyncWork('theia:canvas:topology-load', trigger, async () => {
       if (!isSilentRefresh) {
         setLoading(true);
@@ -580,7 +652,17 @@ export function useCanvasData({
         lastTopologyIdentityRef.current = topologyIdentity.signature;
         lastUsablePositionStateRef.current = usablePositionState;
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : 'Failed to load topology');
+        const topologyError = loadError instanceof Error
+          ? loadError
+          : new Error('Failed to load topology');
+
+        if (!options.suppressBlockingError) {
+          setError(topologyError.message);
+        }
+
+        if (options.rethrowOnError) {
+          throw topologyError;
+        }
       } finally {
         if (!isSilentRefresh) {
           setLoading(false);
@@ -590,28 +672,96 @@ export function useCanvasData({
     [editMode, openDeviceMenu, openEdgeMenu, openSelfLinkDetails, reactFlow, setNodes, setEdges, fetchPositions, savePositions],
   );
 
+  const dismissTopologyRecoveryNotice = useCallback(() => {
+    setTopologyRecoveryNotice(null);
+  }, []);
+
+  const runStructuralRefresh = useCallback(
+    async (causes: Set<StructuralRefreshCause>) => {
+      const refreshCauses = new Set(causes);
+      lastStructuralRefreshCausesRef.current = refreshCauses;
+      setTopologyRecoveryNotice(null);
+
+      try {
+        await loadTopology(
+          true,
+          undefined,
+          measurementTriggerForCauses(refreshCauses),
+          {
+            suppressBlockingError: true,
+            rethrowOnError: true,
+          },
+        );
+        setTopologyRecoveryNotice(buildTopologyRecoveryNotice(refreshCauses));
+      } catch {
+        setTopologyRecoveryNotice({
+          tone: 'warning',
+          message: topologyRefreshDelayedMessage,
+          actionLabel: topologyRefreshRetryActionLabel,
+        });
+      }
+    },
+    [loadTopology],
+  );
+
+  const retryTopologyRefresh = useCallback(() => {
+    const retryCauses = lastStructuralRefreshCausesRef.current.size > 0
+      ? new Set(lastStructuralRefreshCausesRef.current)
+      : new Set<StructuralRefreshCause>(['topology-changed']);
+    void runStructuralRefresh(retryCauses);
+  }, [runStructuralRefresh]);
+
+  const queueStructuralRefresh = useCallback(
+    (cause: StructuralRefreshCause) => {
+      pendingStructuralRefreshCausesRef.current.add(cause);
+
+      if (structuralRefreshTimerRef.current !== null) {
+        return;
+      }
+
+      structuralRefreshTimerRef.current = window.setTimeout(() => {
+        structuralRefreshTimerRef.current = null;
+        const refreshCauses = new Set(pendingStructuralRefreshCausesRef.current);
+        pendingStructuralRefreshCausesRef.current.clear();
+        void runStructuralRefresh(refreshCauses);
+      }, structuralRefreshDebounceMs);
+    },
+    [runStructuralRefresh],
+  );
+
   // Initial load
   useEffect(() => {
     void loadTopology(false, undefined, 'initial_load');
   }, []);
 
-  // Re-fetch topology when backend reconnects (e.g. after restore restart)
+  // Route reconnect, resync, and topology notifications through one structural
+  // refresh scheduler so clustered events produce a single revalidation pass.
   useEffect(() => {
     const handleReconnect = () => {
-      void loadTopology(true, undefined, 'backend_reconnected');
+      queueStructuralRefresh('backend-reconnected');
     };
-    window.addEventListener('backend-reconnected', handleReconnect);
-    return () => window.removeEventListener('backend-reconnected', handleReconnect);
-  }, [loadTopology]);
-
-  // Re-fetch topology when backend signals new LLDP links were discovered (D-03)
-  useEffect(() => {
+    const handleResyncRequired = () => {
+      queueStructuralRefresh('backend-resync-required');
+    };
     const handleTopologyChanged = () => {
-      void loadTopology(true, undefined, 'topology_changed');
+      queueStructuralRefresh('topology-changed');
     };
+
+    window.addEventListener('backend-reconnected', handleReconnect);
+    window.addEventListener('backend-resync-required', handleResyncRequired);
     window.addEventListener('topology-changed', handleTopologyChanged);
-    return () => window.removeEventListener('topology-changed', handleTopologyChanged);
-  }, [loadTopology]);
+
+    return () => {
+      if (structuralRefreshTimerRef.current !== null) {
+        window.clearTimeout(structuralRefreshTimerRef.current);
+        structuralRefreshTimerRef.current = null;
+      }
+      pendingStructuralRefreshCausesRef.current.clear();
+      window.removeEventListener('backend-reconnected', handleReconnect);
+      window.removeEventListener('backend-resync-required', handleResyncRequired);
+      window.removeEventListener('topology-changed', handleTopologyChanged);
+    };
+  }, [queueStructuralRefresh]);
 
   // Re-fetch settings (Grafana URLs) on demand; called on mount and after
   // any settings panel or device config panel saves Grafana URL changes.
@@ -660,6 +810,24 @@ export function useCanvasData({
 
     prevPromDownRef.current = promDown;
   }, [prometheusStatus?.enabled, prometheusStatus?.available]);
+
+  useEffect(() => {
+    if (topologyRecoveryNotice?.tone !== 'success') {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setTopologyRecoveryNotice((current) => (
+        current?.tone === 'success'
+          ? null
+          : current
+      ));
+    }, 4000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [topologyRecoveryNotice]);
 
   // Apply snapshot data to nodes and edges.
   //
@@ -855,5 +1023,8 @@ export function useCanvasData({
     setPrometheusAlertDismissed,
     showRecoveryToast,
     setShowRecoveryToast,
+    topologyRecoveryNotice,
+    dismissTopologyRecoveryNotice,
+    retryTopologyRefresh,
   };
 }
