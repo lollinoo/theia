@@ -1,11 +1,15 @@
 import { isPrometheusUnavailable, type PrometheusStatusPayload } from '../../types/metrics';
 import { ReconnectBanner } from '../ReconnectBanner';
+import type { TopologyRecoveryNotice } from './useCanvasData';
 
 interface CanvasOverlaysProps {
   editMode: boolean;
   reconnecting: boolean;
   showRecoveryToast: boolean;
   setShowRecoveryToast: (v: boolean) => void;
+  topologyRecoveryNotice: TopologyRecoveryNotice | null;
+  dismissTopologyRecoveryNotice: () => void;
+  retryTopologyRefresh: () => void;
   prometheusStatus: PrometheusStatusPayload | null;
   prometheusAlertDismissed: boolean;
   setPrometheusAlertDismissed: (v: boolean) => void;
@@ -19,6 +23,9 @@ export function CanvasOverlays({
   reconnecting,
   showRecoveryToast,
   setShowRecoveryToast,
+  topologyRecoveryNotice,
+  dismissTopologyRecoveryNotice,
+  retryTopologyRefresh,
   prometheusStatus,
   prometheusAlertDismissed,
   setPrometheusAlertDismissed,
@@ -80,6 +87,48 @@ export function CanvasOverlays({
             <button
               type="button"
               onClick={() => setShowRecoveryToast(false)}
+              className="text-on-bg-secondary hover:text-on-bg"
+              title="Dismiss"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+        {topologyRecoveryNotice && (
+          <div className={`pointer-events-auto flex items-center gap-2.5 rounded-full px-4 py-2.5 shadow-floating backdrop-blur-sm ${
+            topologyRecoveryNotice.tone === 'warning'
+              ? 'border border-warning/30 bg-surface-container-high/95'
+              : 'border border-status-up/30 bg-surface-container-high/95'
+          }`}
+          >
+            <span className={`h-2 w-2 flex-none rounded-full ${
+              topologyRecoveryNotice.tone === 'warning'
+                ? 'bg-warning animate-pulse'
+                : 'bg-status-up'
+            }`}
+            />
+            <p className={`text-sm ${
+              topologyRecoveryNotice.tone === 'warning'
+                ? 'text-warning'
+                : 'text-status-up'
+            }`}
+            >
+              {topologyRecoveryNotice.message}
+            </p>
+            {topologyRecoveryNotice.tone === 'warning' && topologyRecoveryNotice.actionLabel && (
+              <button
+                type="button"
+                onClick={retryTopologyRefresh}
+                className="text-xs font-medium text-warning hover:text-warning/80"
+              >
+                {topologyRecoveryNotice.actionLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={dismissTopologyRecoveryNotice}
               className="text-on-bg-secondary hover:text-on-bg"
               title="Dismiss"
             >
