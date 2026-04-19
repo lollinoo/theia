@@ -447,7 +447,6 @@ func (r *Registry) ObservePrometheusRuntimeRequest(operation, result string, dur
 	}
 	h.observe(duration.Seconds())
 }
-
 func (r *Registry) ObserveWSMessage(scope, messageType string, payloadBytes int) {
 	key := wsMetricKey{Scope: scope, Type: messageType}
 
@@ -470,7 +469,6 @@ func (r *Registry) IncWSBackpressure(scope, reason string) {
 		Reason: reason,
 	}]++
 }
-
 func (r *Registry) AddUnknownNeighbors(deviceID uuid.UUID, protocol domain.DiscoveryProtocol, count int) {
 	if count <= 0 {
 		return
@@ -795,7 +793,6 @@ func sortedPrometheusRuntimeHistogramRows(values map[prometheusRuntimeRequestKey
 	}
 	return rows
 }
-
 func sortedWSRows(values map[wsMetricKey]uint64) []counterRow {
 	keys := make([]wsMetricKey, 0, len(values))
 	for key := range values {
@@ -845,7 +842,6 @@ func sortedWSBackpressureRows(values map[wsBackpressureKey]uint64) []counterRow 
 	}
 	return rows
 }
-
 func sortedWSHistogramRows(values map[wsMetricKey]*histogram) []histogramRow {
 	keys := make([]wsMetricKey, 0, len(values))
 	for key := range values {

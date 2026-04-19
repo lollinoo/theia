@@ -15,7 +15,6 @@ function hasUsablePosition(
     && Number.isFinite(position.x)
     && Number.isFinite(position.y);
 }
-
 function selfLinkScore(link: Link): number {
   let score = 0;
   if (link.discovery_protocol === 'lldp') score += 4;

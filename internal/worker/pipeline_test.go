@@ -1163,6 +1163,26 @@ func TestPipelineOrchestratorBroadcastLoop_DisabledFullResyncDoesNotSendSnapshot
 	}
 }
 
+func TestPipelineOrchestratorBroadcastLoop_PeriodicFullResyncSendsSnapshot(t *testing.T) {
+	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
+	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
+	pipeline.fullResyncInterval = 40 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pipeline.broadcastLoop(ctx)
+
+	initialTypes := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(initialTypes) == 0 || initialTypes[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected initial snapshot, got %v", initialTypes)
+	}
+
+	types := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(types) == 0 || types[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected periodic full resync snapshot, got %v", types)
+	}
+}
+
 func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnessMetadata(t *testing.T) {
 	deviceID := uuid.New()
 	device := domain.Device{

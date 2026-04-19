@@ -769,7 +769,6 @@ func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (_ *ws.SnapshotPayloa
 	defer func() {
 		observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeFull, time.Since(startedAt), err == nil)
 	}()
-
 	devices, err := p.cache.GetDevices()
 	if err != nil {
 		return nil, err
