@@ -26,8 +26,10 @@ import (
 
 const (
 	pipelineBroadcastCoalesceWindow = 250 * time.Millisecond
-	pipelineFullResyncInterval      = 60 * time.Second
-	prometheusEnrichmentRetention   = 30 * time.Second
+	// Disabled by default: overview clients now resync on connect or explicit
+	// degradation signals instead of periodic forced full snapshots.
+	pipelineFullResyncInterval    = 0 * time.Second
+	prometheusEnrichmentRetention = 30 * time.Second
 
 	refreshSnapshotModeDirty = "dirty"
 	refreshSnapshotModeFull  = "full"
@@ -537,8 +539,13 @@ func (p *PipelineOrchestrator) broadcastLoop(ctx context.Context) {
 	}
 	defer flushTimer.Stop()
 
-	fullResyncTicker := time.NewTicker(p.fullResyncInterval)
-	defer fullResyncTicker.Stop()
+	var fullResyncTicker *time.Ticker
+	var fullResyncC <-chan time.Time
+	if p.fullResyncInterval > 0 {
+		fullResyncTicker = time.NewTicker(p.fullResyncInterval)
+		fullResyncC = fullResyncTicker.C
+		defer fullResyncTicker.Stop()
+	}
 
 	flushScheduled := false
 	dirtyDevices := make(map[uuid.UUID]struct{})
@@ -600,7 +607,7 @@ func (p *PipelineOrchestrator) broadcastLoop(ctx context.Context) {
 		case <-p.alertNotify:
 			alertsDirty = true
 			scheduleFlush()
-		case <-fullResyncTicker.C:
+		case <-fullResyncC:
 			forceFull = true
 			scheduleFlush()
 		case <-flushTimer.C:

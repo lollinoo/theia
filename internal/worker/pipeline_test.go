@@ -1142,10 +1142,10 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshSendsSnapshotDelta(t *tes
 	t.Fatal("expected snapshot_delta for alert refresh")
 }
 
-func TestPipelineOrchestratorBroadcastLoop_PeriodicFullResyncSendsSnapshot(t *testing.T) {
+func TestPipelineOrchestratorBroadcastLoop_DisabledFullResyncDoesNotSendSnapshot(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
-	pipeline.fullResyncInterval = 40 * time.Millisecond
+	pipeline.fullResyncInterval = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1156,9 +1156,10 @@ func TestPipelineOrchestratorBroadcastLoop_PeriodicFullResyncSendsSnapshot(t *te
 		t.Fatalf("expected initial snapshot, got %v", initialTypes)
 	}
 
-	types := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
-	if len(types) == 0 || types[0] != ws.MessageTypeSnapshot {
-		t.Fatalf("expected periodic full resync snapshot, got %v", types)
+	time.Sleep(80 * time.Millisecond)
+
+	if messages := drainBroadcastCh(hub); len(messages) != 0 {
+		t.Fatalf("expected no periodic full resync snapshot when interval disabled, got %v", broadcastMessageTypes(t, messages))
 	}
 }
 
