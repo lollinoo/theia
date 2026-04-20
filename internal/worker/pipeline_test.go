@@ -1740,7 +1740,7 @@ func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkM
 	subscribeDetail(t, subscriber, device.ID)
 	waitForDetailSubscribers(t, hub, device.ID, 1)
 
-	pipeline.runTask(context.Background(), scheduler.PollTask{
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
 		RunID:            1,
 		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
 		VolatilityClass:  domain.VolatilityClassPerformance,
@@ -1809,7 +1809,7 @@ func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 	subscribeDetail(t, subscriber, device.ID)
 	waitForDetailSubscribers(t, hub, device.ID, 1)
 
-	pipeline.runTask(context.Background(), scheduler.PollTask{
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
 		RunID:            20,
 		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
 		VolatilityClass:  domain.VolatilityClassPerformance,
@@ -1832,7 +1832,7 @@ func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 		t.Fatal("expected performance detail delta to include collected_at")
 	}
 
-	pipeline.runTask(context.Background(), scheduler.PollTask{
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
 		RunID:            21,
 		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassOperational),
 		VolatilityClass:  domain.VolatilityClassOperational,
@@ -1904,7 +1904,7 @@ func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t
 	subscribeDetail(t, subscriber, device.ID)
 	waitForDetailSubscribers(t, hub, device.ID, 1)
 
-	pipeline.runTask(context.Background(), scheduler.PollTask{
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
 		RunID:            3,
 		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
 		VolatilityClass:  domain.VolatilityClassPerformance,
