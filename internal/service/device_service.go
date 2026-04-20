@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -53,6 +52,7 @@ type DeviceService struct {
 	topologyStore   topology.ObservationStore
 	settingsRepo    domain.SettingsRepository
 	mutation        *deviceMutationService
+	discovery       *deviceDiscoveryCoordinator
 	discoverFunc    DiscoverFunc
 	pollRescheduler pollRescheduler
 	now             func() time.Time
@@ -102,13 +102,16 @@ func NewDeviceService(
 		reprobeBooked:   make(map[uuid.UUID]time.Time),
 		TopologyNotify:  topologyNotify,
 	}
-	svc.delayedReprobe = svc.runDelayedReprobe
 	for _, option := range options {
 		if option != nil {
 			option(svc)
 		}
 	}
 	svc.mutation = newDeviceMutationService(svc)
+	svc.discovery = newDeviceDiscoveryCoordinator(svc)
+	if svc.delayedReprobe == nil {
+		svc.delayedReprobe = svc.discovery.runDelayedReprobe
+	}
 	return svc
 }
 
@@ -431,194 +434,13 @@ func (s *DeviceService) finalizeBootstrapWindowIfExhausted(deviceID uuid.UUID, f
 	})
 }
 
-func (s *DeviceService) runDelayedReprobe(_ context.Context, id uuid.UUID) error {
-	device, err := s.deviceRepo.GetByID(id)
-	if err != nil {
-		return fmt.Errorf("getting device: %w", err)
-	}
-
-	s.probeDevice(device)
-	return nil
-}
-
-func (s *DeviceService) scheduleIncompleteLinkReprobeAttempt(
-	targetID uuid.UUID,
-	targetLabel string,
-	bookedAt time.Time,
-	delay time.Duration,
-) {
-	s.scheduleFunc(delay, func() {
-		if !s.hasIncompleteLLDPLinks(targetID) {
-			return
-		}
-
-		limit := s.staticReprobeBudget()
-		if limit <= 0 {
-			return
-		}
-		if int(s.reprobeInFlight.Add(1)) > limit {
-			s.reprobeInFlight.Add(-1)
-			if s.now().Sub(bookedAt) < s.reprobeCooldown {
-				log.Printf(
-					"Retrying delayed LLDP re-probe for %s in %s: static reprobe budget exhausted",
-					targetLabel,
-					incompleteLinkReprobeRetry,
-				)
-				s.scheduleIncompleteLinkReprobeAttempt(
-					targetID,
-					targetLabel,
-					bookedAt,
-					incompleteLinkReprobeRetry,
-				)
-				return
-			}
-			log.Printf("Skipping delayed LLDP re-probe for %s: static reprobe budget exhausted", targetLabel)
-			return
-		}
-		defer s.reprobeInFlight.Add(-1)
-
-		if err := s.delayedReprobe(context.Background(), targetID); err != nil {
-			log.Printf("Delayed LLDP re-probe failed for %s: %v", targetLabel, err)
-		}
-	})
-}
-
-func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, deviceIP string) bool {
-	type reprobeTarget struct {
-		id    uuid.UUID
-		label string
-	}
-
-	targets := []reprobeTarget{{id: deviceID, label: deviceIP}}
-	for _, peerID := range s.incompleteLLDPPeerIDs(deviceID) {
-		peer, err := s.deviceRepo.GetByID(peerID)
-		if err != nil {
-			log.Printf("Failed to inspect LLDP peer %s for delayed re-probe: %v", peerID, err)
-			continue
-		}
-		if !peer.Managed || peer.IP == "" || peer.DeviceType == domain.DeviceTypeVirtual {
-			continue
-		}
-		if peer.MetricsSource == domain.MetricsSourcePrometheus || peer.MetricsSource == domain.MetricsSourceNone {
-			continue
-		}
-		if domain.ResolveTopologyDiscoveryMode(peer, s.defaultTopologyDiscoveryMode()) == domain.TopologyDiscoveryModeOff {
-			if !s.reopenBootstrapWindow(peerID) {
-				continue
-			}
-		}
-		label := peer.IP
-		if label == "" {
-			label = peer.Hostname
-		}
-		targets = append(targets, reprobeTarget{id: peerID, label: label})
-	}
-
-	scheduled := false
-	for _, target := range targets {
-		bookedAt, reserved := s.reserveIncompleteLinkReprobe(target.id)
-		if !reserved {
-			continue
-		}
-
-		scheduled = true
-		targetLabel := target.label
-		log.Printf("Scheduling delayed LLDP re-probe for %s in %s to resolve incomplete ports", targetLabel, s.reprobeDelay)
-		s.scheduleIncompleteLinkReprobeAttempt(target.id, targetLabel, bookedAt, s.reprobeDelay)
-	}
-
-	return scheduled
-}
-
 func (s *DeviceService) staticReprobeBudget() int {
 	budgets := pollingbudget.Resolve(s.settingsRepo)
 	return budgets[domain.VolatilityClassStatic]
 }
 
 func (s *DeviceService) probeDevice(device *domain.Device) {
-	deviceID := device.ID
-	deviceIP := device.IP
-
-	// Virtual devices are never SNMP-probed.
-	if device.DeviceType == domain.DeviceTypeVirtual {
-		if device.IP != "" {
-			s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusUp)
-			log.Printf("Virtual device %s has IP; marked up (probe_success will refine)", deviceIP)
-		} else {
-			s.markDeviceStatus(deviceID, "(virtual-no-ip)", domain.DeviceStatusUnknown)
-			log.Printf("Virtual device %s has no IP; status remains unknown", deviceID)
-		}
-		return
-	}
-
-	// Prometheus-only devices never touch gosnmp — mark up and return.
-	if device.MetricsSource == domain.MetricsSourcePrometheus {
-		fresh, err := s.deviceRepo.GetByID(deviceID)
-		if err != nil {
-			log.Printf("Failed to re-fetch device %s for prometheus probe: %v", deviceIP, err)
-			return
-		}
-		fresh.Status = domain.DeviceStatusUp
-		if fresh.PollIntervalOverride == nil {
-			fresh.PollClass = domain.ClassifyPollClass(fresh.DeviceType)
-		}
-		if err := s.deviceRepo.Update(fresh); err != nil {
-			log.Printf("Failed to update device %s status to up: %v", deviceIP, err)
-			return
-		}
-		log.Printf("Skipped SNMP probe for %s (metrics_source=prometheus); marked up", deviceIP)
-		return
-	}
-
-	topologyMode := domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
-
-	result, err := s.discoverFunc(deviceIP, device.SNMPCredentials, topologyMode)
-	if err != nil {
-		log.Printf("SNMP discovery failed for %s: %v", deviceIP, err)
-		s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusDown)
-		return
-	}
-
-	persisted, err := s.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
-		SysName:       result.SysName,
-		SysDescr:      result.SysDescr,
-		SysObjectID:   result.SysObjectID,
-		HardwareModel: result.HardwareModel,
-		OSVersion:     result.OSVersion,
-		Vendor:        result.Vendor,
-		DeviceType:    result.DeviceType,
-		Interfaces:    result.Interfaces,
-		Neighbors:     result.Neighbors,
-	})
-	if err != nil {
-		if statusErr := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); statusErr != nil {
-			log.Printf("Failed to update device %s status to up after discovery persistence failure: %v", deviceIP, statusErr)
-		}
-		log.Printf("Failed to persist static discovery for %s: %v", deviceIP, err)
-		return
-	}
-	followupScheduled := false
-	if s.shouldScheduleIncompleteLinkReprobe(deviceID) {
-		followupScheduled = s.scheduleIncompleteLinkReprobe(deviceID, deviceIP)
-	}
-	s.syncTopologyDiscoveryMetadata(deviceID, len(result.Neighbors), followupScheduled)
-	s.finalizeBootstrapWindowIfExhausted(deviceID, followupScheduled)
-
-	if err := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); err != nil {
-		log.Printf("Failed to update device %s status to up: %v", deviceIP, err)
-		return
-	}
-
-	// Signal topology change when persisted topology changed.
-	// Non-blocking send: if the channel is full the next collection cycle will
-	// pick up the topology change, so dropping the signal is safe (T-33-02).
-	if persisted.TopologyChanged && s.TopologyNotify != nil {
-		select {
-		case s.TopologyNotify <- struct{}{}:
-		default:
-			// Channel full — skip; MetricsCollector will pick up change next cycle
-		}
-	}
+	s.discovery.probeDevice(device)
 }
 
 // UpdateDevice applies partial updates to an existing device without re-probing.
@@ -643,23 +465,7 @@ func (s *DeviceService) GetAllDevices(ctx context.Context) ([]domain.Device, err
 
 // ProbeDevice triggers a re-probe of an existing device.
 func (s *DeviceService) ProbeDevice(ctx context.Context, id uuid.UUID) error {
-	device, err := s.deviceRepo.GetByID(id)
-	if err != nil {
-		return fmt.Errorf("getting device: %w", err)
-	}
-
-	device.Status = domain.DeviceStatusProbing
-	if err := s.deviceRepo.Update(device); err != nil {
-		return fmt.Errorf("updating device status: %w", err)
-	}
-
-	s.probeWg.Add(1)
-	go func() {
-		defer s.probeWg.Done()
-		s.probeDevice(device)
-	}()
-
-	return nil
+	return s.discovery.ProbeDevice(ctx, id)
 }
 
 // ReprobeDevice triggers a re-probe of an existing device without
@@ -667,41 +473,11 @@ func (s *DeviceService) ProbeDevice(ctx context.Context, id uuid.UUID) error {
 // when the Poller re-probes all devices every cycle -- the current status
 // (up/down) is kept until the probe result is known.
 func (s *DeviceService) ReprobeDevice(ctx context.Context, id uuid.UUID) error {
-	device, err := s.deviceRepo.GetByID(id)
-	if err != nil {
-		return fmt.Errorf("getting device: %w", err)
-	}
-
-	// Do NOT set device.Status = "probing" or update the repo here.
-	// The existing status stays visible until probeDevice() completes
-	// and writes the final up/down result.
-
-	s.probeWg.Add(1)
-	go func() {
-		defer s.probeWg.Done()
-		s.probeDevice(device)
-	}()
-
-	return nil
+	return s.discovery.ReprobeDevice(ctx, id)
 }
 
 func (s *DeviceService) RunTopologyDiscoveryNow(ctx context.Context, id uuid.UUID) error {
-	device, err := s.deviceRepo.GetByID(id)
-	if err != nil {
-		return fmt.Errorf("getting device: %w", err)
-	}
-	if device.DeviceType == domain.DeviceTypeVirtual || strings.TrimSpace(device.IP) == "" {
-		return fmt.Errorf("topology discovery requires a non-virtual device with an IP")
-	}
-	if device.MetricsSource == domain.MetricsSourcePrometheus {
-		return fmt.Errorf("topology discovery requires SNMP-capable metrics source")
-	}
-
-	device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
-	if err := s.deviceRepo.Update(device); err != nil {
-		return fmt.Errorf("updating topology discovery state: %w", err)
-	}
-	return s.ReprobeDevice(ctx, id)
+	return s.discovery.RunTopologyDiscoveryNow(ctx, id)
 }
 
 // PingVirtualDevice performs a lightweight TCP reachability check for a
@@ -709,36 +485,13 @@ func (s *DeviceService) RunTopologyDiscoveryNow(ctx context.Context, id uuid.UUI
 // marks the device as "up" if any port is reachable, or "down" if all
 // fail. Virtual devices without an IP are left at "unknown".
 func (s *DeviceService) PingVirtualDevice(ctx context.Context, id uuid.UUID, timeout time.Duration) error {
-	device, err := s.deviceRepo.GetByID(id)
-	if err != nil {
-		return fmt.Errorf("getting device: %w", err)
-	}
-
-	if device.IP == "" {
-		// No IP — keep the virtual node inert/unknown.
-		if domain.NormalizeVirtualNoIPDevice(device) {
-			return s.deviceRepo.Update(device)
-		}
-		return nil
-	}
-
-	newStatus := domain.DeviceStatusDown
-	if err := ProbeVirtualReachability(ctx, device.IP, timeout); err == nil {
-		newStatus = domain.DeviceStatusUp
-	}
-
-	// Only update if status actually changed, to avoid unnecessary DB writes.
-	if device.Status != newStatus {
-		s.markDeviceStatus(device.ID, device.IP, newStatus)
-	}
-
-	return nil
+	return s.discovery.PingVirtualDevice(ctx, id, timeout)
 }
 
 // WaitForProbes blocks until all in-flight probes complete.
 // Useful for testing to ensure async operations finish.
 func (s *DeviceService) WaitForProbes() {
-	s.probeWg.Wait()
+	s.discovery.WaitForProbes()
 }
 
 // SNMPTestResult holds diagnostic info from an SNMP connectivity test.
@@ -753,26 +506,7 @@ type SNMPTestResult struct {
 
 // TestSNMP attempts an SNMP connection to a device and returns diagnostic info.
 func (s *DeviceService) TestSNMP(ctx context.Context, id uuid.UUID) (*SNMPTestResult, error) {
-	device, err := s.deviceRepo.GetByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("getting device: %w", err)
-	}
-
-	result := &SNMPTestResult{
-		TargetIP:    device.IP,
-		SNMPVersion: string(device.SNMPCredentials.Version),
-	}
-
-	discoveryResult, err := s.discoverFunc(device.IP, device.SNMPCredentials, domain.TopologyDiscoveryModeOff)
-	if err != nil {
-		result.Error = err.Error()
-		return result, nil
-	}
-
-	result.Success = true
-	result.SysName = discoveryResult.SysName
-	result.SysDescr = discoveryResult.SysDescr
-	return result, nil
+	return s.discovery.TestSNMP(ctx, id)
 }
 
 func clonePollIntervalOverride(override *int) *int {
@@ -794,164 +528,6 @@ func pollIntervalOverridesEqual(left, right *int) bool {
 	}
 }
 
-func dedupePreferredDiscoveredNeighbors(neighbors []snmp.NeighborInfo) []snmp.NeighborInfo {
-	result := make([]snmp.NeighborInfo, 0, len(neighbors))
-	for _, candidate := range neighbors {
-		if shouldDropDiscoveredNeighbor(candidate, neighbors) {
-			continue
-		}
-		result = append(result, candidate)
-	}
-	return result
-}
-
-func shouldDropDiscoveredNeighbor(candidate snmp.NeighborInfo, neighbors []snmp.NeighborInfo) bool {
-	candidateRemote := normalizeDiscoveredNeighborIdentity(candidate.RemoteSysName)
-	if candidateRemote == "" {
-		candidateRemote = normalizeDiscoveredNeighborIdentity(candidate.RemoteChassisID)
-	}
-	if candidateRemote == "" {
-		return false
-	}
-
-	candidateIsCompletePhysical := isCompletePhysicalDiscoveredNeighbor(candidate)
-	candidateHasPhysicalRemotePort := isLikelyPhysicalDiscoveredInterface(candidate.RemotePortID)
-	for _, other := range neighbors {
-		otherRemote := normalizeDiscoveredNeighborIdentity(other.RemoteSysName)
-		if otherRemote == "" {
-			otherRemote = normalizeDiscoveredNeighborIdentity(other.RemoteChassisID)
-		}
-		if otherRemote != candidateRemote {
-			continue
-		}
-		if compareDiscoveredNeighborPreference(other, candidate) <= 0 {
-			continue
-		}
-		if isCompletePhysicalDiscoveredNeighbor(other) {
-			if candidateIsCompletePhysical {
-				continue
-			}
-			return true
-		}
-		if candidateHasPhysicalRemotePort {
-			continue
-		}
-		if isLikelyPhysicalDiscoveredInterface(other.RemotePortID) {
-			return true
-		}
-	}
-	return false
-}
-
-func isCompletePhysicalDiscoveredNeighbor(neighbor snmp.NeighborInfo) bool {
-	return discoveredPhysicalInterfaceAnchor(neighbor.LocalIfName) != "" && discoveredPhysicalInterfaceAnchor(neighbor.RemotePortID) != ""
-}
-
-func compareDiscoveredNeighborPreference(candidate, existing snmp.NeighborInfo) int {
-	candidateScore := discoveredNeighborPreferenceScore(candidate)
-	existingScore := discoveredNeighborPreferenceScore(existing)
-	if candidateScore > existingScore {
-		return 1
-	}
-	if candidateScore < existingScore {
-		return -1
-	}
-	return 0
-}
-
-func discoveredNeighborPreferenceScore(neighbor snmp.NeighborInfo) int {
-	score := 0
-	if neighbor.Protocol == domain.DiscoveryProtocolLLDP {
-		score += 100
-	}
-	if isLikelyPhysicalDiscoveredInterface(neighbor.LocalIfName) {
-		score += 50
-	}
-	if isLikelyPhysicalDiscoveredInterface(neighbor.RemotePortID) {
-		score += 40
-	}
-	if neighbor.LocalIfName != "" {
-		score += 20
-	}
-	if neighbor.RemotePortID != "" {
-		score += 20
-	}
-	if neighbor.RemoteSysName != "" {
-		score += 10
-	}
-	if neighbor.RemoteChassisID != "" {
-		score += 5
-	}
-	return score
-}
-
-func discoveredPhysicalInterfaceAnchor(name string) string {
-	normalized := normalizeDiscoveredNeighborIdentity(name)
-	if normalized == "" {
-		return ""
-	}
-	return extractDiscoveredPhysicalInterfaceAnchor(normalized)
-}
-
-func isLikelyPhysicalDiscoveredInterface(name string) bool {
-	normalized := normalizeDiscoveredNeighborIdentity(name)
-	if normalized == "" {
-		return false
-	}
-	return extractDiscoveredPhysicalInterfaceAnchor(normalized) != ""
-}
-
-func extractDiscoveredPhysicalInterfaceAnchor(normalized string) string {
-	virtualHints := []string{
-		"vlan", "vrf", "vpn", "bridge", "br-", "bond", "loopback", "lo",
-		"gre", "eoip", "wg", "wireguard", "pppoe", "ppp", "sstp", "ovpn",
-		"l2tp", "vxlan", "veth", "tap", "tun",
-	}
-	for _, hint := range virtualHints {
-		if strings.Contains(normalized, hint) {
-			return ""
-		}
-	}
-
-	physicalPatterns := []string{
-		"ether", "eth", "sfp-sfpplus", "sfp", "qsfp", "ens", "eno", "enp",
-		"gigabitethernet", "tengigabitethernet", "fastethernet", "ge-", "xe-", "et-",
-	}
-	for _, pattern := range physicalPatterns {
-		if idx := strings.Index(normalized, pattern); idx >= 0 {
-			anchor := normalized[idx:]
-			for i, r := range anchor {
-				if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '/') {
-					anchor = anchor[:i]
-					break
-				}
-			}
-			anchor = strings.Trim(anchor, "- /")
-			if discoveredHasDigit(anchor) {
-				return anchor
-			}
-		}
-	}
-
-	shortPrefixes := []string{"gi", "te", "fo", "port"}
-	for _, prefix := range shortPrefixes {
-		if strings.HasPrefix(normalized, prefix) && discoveredHasDigit(normalized) {
-			return normalized
-		}
-	}
-
-	return ""
-}
-
-func discoveredHasDigit(value string) bool {
-	for _, r := range value {
-		if r >= '0' && r <= '9' {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeDiscoveredNeighborIdentity(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
+func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, deviceIP string) bool {
+	return s.discovery.scheduleIncompleteLinkReprobe(deviceID, deviceIP)
 }
