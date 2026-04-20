@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,17 +77,7 @@ type PipelineOrchestrator struct {
 	cancel                  context.CancelFunc
 	done                    chan struct{}
 	healthDone              chan struct{}
-	snapshotMu              sync.RWMutex
-	lastSnapshot            *ws.SnapshotPayload
-	overviewVersion         uint64
-	alertVersion            uint64
-	promStatus              ws.PrometheusStatusPayload
-	hostnames               map[uuid.UUID]string
-	hostnameObservedAt      map[uuid.UUID]time.Time
-	alerts                  map[uuid.UUID][]domain.AlertState
-	prevCounters            map[uuid.UUID]map[string]collector.CounterBaseline
-	prevHashes              *sectionHashes
-	now                     func() time.Time
+	runtime                 *pipelineRuntimeState
 }
 
 func NewPipelineOrchestrator(
@@ -127,13 +116,7 @@ func NewPipelineOrchestrator(
 		fullResyncInterval:      pipelineFullResyncInterval,
 		done:                    make(chan struct{}),
 		healthDone:              make(chan struct{}),
-		lastSnapshot:            ws.EmptySnapshot(),
-		promStatus:              initialPrometheusStatus(settingsRepo),
-		hostnames:               make(map[uuid.UUID]string),
-		hostnameObservedAt:      make(map[uuid.UUID]time.Time),
-		alerts:                  make(map[uuid.UUID][]domain.AlertState),
-		prevCounters:            make(map[uuid.UUID]map[string]collector.CounterBaseline),
-		now:                     time.Now,
+		runtime:                 newPipelineRuntimeState(initialPrometheusStatus(settingsRepo)),
 	}
 }
 
@@ -234,30 +217,19 @@ func (p *PipelineOrchestrator) Stop() {
 }
 
 func (p *PipelineOrchestrator) GetOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
-	p.snapshotMu.RLock()
-	defer p.snapshotMu.RUnlock()
-	return ws.CloneSnapshot(p.lastSnapshot), p.overviewVersion
+	return p.runtime.getOverviewSnapshot()
 }
 
 func (p *PipelineOrchestrator) IsPromAvailable() bool {
-	p.snapshotMu.RLock()
-	defer p.snapshotMu.RUnlock()
-	return p.promStatus.Enabled && p.promStatus.Available
+	return p.runtime.isPromAvailable()
 }
 
 func (p *PipelineOrchestrator) GetPrometheusStatus() ws.PrometheusStatusPayload {
-	p.snapshotMu.RLock()
-	defer p.snapshotMu.RUnlock()
-	return p.promStatus
+	return p.runtime.getPrometheusStatus()
 }
 
 func (p *PipelineOrchestrator) GetAlerts() ws.AlertMessagePayload {
-	p.snapshotMu.RLock()
-	defer p.snapshotMu.RUnlock()
-	return ws.AlertMessagePayload{
-		Version: p.alertVersion,
-		Alerts:  ws.AlertsToDTOs(flattenAlerts(cloneAlertGroups(p.alerts))),
-	}
+	return p.runtime.getAlerts()
 }
 
 func (p *PipelineOrchestrator) Status() string {
@@ -330,15 +302,15 @@ func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollT
 				}
 			}
 
-			p.snapshotMu.Lock()
+			p.runtime.mu.Lock()
 			linkMetrics, next := collector.ComputeCounterRates(
 				result.Counters,
-				p.prevCounters[task.Device.ID],
+				p.runtime.prevCounters[task.Device.ID],
 				completionTime(result.CollectedAt),
 				task.ExpectedInterval,
 			)
-			p.prevCounters[task.Device.ID] = next
-			p.snapshotMu.Unlock()
+			p.runtime.prevCounters[task.Device.ID] = next
+			p.runtime.mu.Unlock()
 			update.LinkMetrics = linkMetrics
 		}
 
@@ -681,11 +653,11 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 		links = nil
 	}
 
-	p.snapshotMu.RLock()
-	hostnames := cloneHostnameOverrides(p.hostnames)
-	alerts := cloneAlertGroups(p.alerts)
-	previousHashes := p.prevHashes
-	p.snapshotMu.RUnlock()
+	p.runtime.mu.RLock()
+	hostnames := cloneHostnameOverrides(p.runtime.hostnames)
+	alerts := cloneAlertGroups(p.runtime.alerts)
+	previousHashes := p.runtime.prevHashes
+	p.runtime.mu.RUnlock()
 
 	startedAt := time.Now()
 	snapshot := buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, hostnames)
@@ -693,35 +665,35 @@ func (p *PipelineOrchestrator) broadcastOnce(context.Context) {
 	currentHashes := computeSnapshotHashes(snapshot)
 	drainedTopology := drainTopologyNotify(p.topologyNotify)
 
-	p.snapshotMu.Lock()
-	p.lastSnapshot = snapshot
-	p.prevHashes = currentHashes
-	currentVersion := p.overviewVersion
-	p.snapshotMu.Unlock()
+	p.runtime.mu.Lock()
+	p.runtime.lastSnapshot = snapshot
+	p.runtime.prevHashes = currentHashes
+	currentVersion := p.runtime.overviewVersion
+	p.runtime.mu.Unlock()
 
 	switch {
 	case previousHashes == nil:
-		p.snapshotMu.Lock()
-		p.overviewVersion = currentVersion + 1
-		version := p.overviewVersion
-		p.snapshotMu.Unlock()
+		p.runtime.mu.Lock()
+		p.runtime.overviewVersion = currentVersion + 1
+		version := p.runtime.overviewVersion
+		p.runtime.mu.Unlock()
 		observability.Default().IncRefreshTopologyReload(refreshReloadReasonStartup)
 		p.hub.BroadcastOverviewSnapshot(snapshot, version)
 	default:
 		delta := buildDelta(snapshot, currentHashes, previousHashes)
 		if delta == nil && drainedTopology {
-			p.snapshotMu.Lock()
-			p.overviewVersion = currentVersion + 1
-			version := p.overviewVersion
-			p.snapshotMu.Unlock()
+			p.runtime.mu.Lock()
+			p.runtime.overviewVersion = currentVersion + 1
+			version := p.runtime.overviewVersion
+			p.runtime.mu.Unlock()
 			observability.Default().IncRefreshTopologyReload(refreshReloadReasonTopologyDrainFallback)
 			p.hub.BroadcastOverviewSnapshot(snapshot, version)
 		} else if delta != nil {
-			p.snapshotMu.Lock()
-			baseVersion := p.overviewVersion
-			p.overviewVersion = baseVersion + 1
-			version := p.overviewVersion
-			p.snapshotMu.Unlock()
+			p.runtime.mu.Lock()
+			baseVersion := p.runtime.overviewVersion
+			p.runtime.overviewVersion = baseVersion + 1
+			version := p.runtime.overviewVersion
+			p.runtime.mu.Unlock()
 			p.hub.BroadcastOverviewDelta(delta, baseVersion, version, snapshot)
 		}
 	}
@@ -782,14 +754,14 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 		return nil
 	}
 
-	p.snapshotMu.Lock()
-	baseVersion := p.overviewVersion
-	merged := mergeSnapshotPayload(p.lastSnapshot, delta)
-	p.lastSnapshot = merged
-	p.prevHashes = computeSnapshotHashes(merged)
-	p.overviewVersion++
-	version := p.overviewVersion
-	p.snapshotMu.Unlock()
+	p.runtime.mu.Lock()
+	baseVersion := p.runtime.overviewVersion
+	merged := mergeSnapshotPayload(p.runtime.lastSnapshot, delta)
+	p.runtime.lastSnapshot = merged
+	p.runtime.prevHashes = computeSnapshotHashes(merged)
+	p.runtime.overviewVersion++
+	version := p.runtime.overviewVersion
+	p.runtime.mu.Unlock()
 
 	p.hub.BroadcastOverviewDelta(delta, baseVersion, version, merged)
 	p.broadcastAlertsIfDirty(alertsDirty)
@@ -815,12 +787,12 @@ func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, reason s
 		return err
 	}
 
-	p.snapshotMu.Lock()
-	p.lastSnapshot = snapshot
-	p.prevHashes = computeSnapshotHashes(snapshot)
-	p.overviewVersion++
-	version := p.overviewVersion
-	p.snapshotMu.Unlock()
+	p.runtime.mu.Lock()
+	p.runtime.lastSnapshot = snapshot
+	p.runtime.prevHashes = computeSnapshotHashes(snapshot)
+	p.runtime.overviewVersion++
+	version := p.runtime.overviewVersion
+	p.runtime.mu.Unlock()
 
 	p.hub.BroadcastOverviewSnapshot(snapshot, version)
 
@@ -841,12 +813,12 @@ func (p *PipelineOrchestrator) broadcastFullSnapshotWithResync(_ context.Context
 		return err
 	}
 
-	p.snapshotMu.Lock()
-	p.lastSnapshot = snapshot
-	p.prevHashes = computeSnapshotHashes(snapshot)
-	p.overviewVersion++
-	version := p.overviewVersion
-	p.snapshotMu.Unlock()
+	p.runtime.mu.Lock()
+	p.runtime.lastSnapshot = snapshot
+	p.runtime.prevHashes = computeSnapshotHashes(snapshot)
+	p.runtime.overviewVersion++
+	version := p.runtime.overviewVersion
+	p.runtime.mu.Unlock()
 
 	p.hub.BroadcastOverviewResync(resyncReason, snapshot, version)
 
@@ -875,10 +847,10 @@ func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (_ *ws.SnapshotPayloa
 		return nil, err
 	}
 
-	p.snapshotMu.RLock()
-	hostnames := cloneHostnameOverrides(p.hostnames)
-	alerts := cloneAlertGroups(p.alerts)
-	p.snapshotMu.RUnlock()
+	p.runtime.mu.RLock()
+	hostnames := cloneHostnameOverrides(p.runtime.hostnames)
+	alerts := cloneAlertGroups(p.runtime.alerts)
+	p.runtime.mu.RUnlock()
 
 	return buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, hostnames), nil
 }
@@ -900,9 +872,9 @@ func (p *PipelineOrchestrator) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUI
 			return nil, false, err
 		}
 
-		p.snapshotMu.RLock()
-		hostnames := cloneHostnameOverrides(p.hostnames)
-		p.snapshotMu.RUnlock()
+		p.runtime.mu.RLock()
+		hostnames := cloneHostnameOverrides(p.runtime.hostnames)
+		p.runtime.mu.RUnlock()
 
 		filteredDevices := filterDevicesByID(devices, dirtyDevices)
 		filteredLinks := filterLinksByDeviceID(links, dirtyDevices)
@@ -922,15 +894,7 @@ func (p *PipelineOrchestrator) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUI
 }
 
 func (p *PipelineOrchestrator) setAlerts(next map[uuid.UUID][]domain.AlertState) {
-	p.snapshotMu.Lock()
-	previous := ws.AlertsToDTOs(flattenAlerts(cloneAlertGroups(p.alerts)))
-	current := ws.AlertsToDTOs(flattenAlerts(cloneAlertGroups(next)))
-	changed := !reflect.DeepEqual(previous, current)
-	p.alerts = next
-	if changed {
-		p.alertVersion++
-	}
-	p.snapshotMu.Unlock()
+	changed := p.runtime.setAlerts(next)
 
 	if changed {
 		select {
@@ -941,10 +905,7 @@ func (p *PipelineOrchestrator) setAlerts(next map[uuid.UUID][]domain.AlertState)
 }
 
 func (p *PipelineOrchestrator) publishPrometheusStatus(status ws.PrometheusStatusPayload) {
-	p.snapshotMu.Lock()
-	changed := p.promStatus != status
-	p.promStatus = status
-	p.snapshotMu.Unlock()
+	changed := p.runtime.setPrometheusStatus(status)
 
 	if !changed || p.hub == nil {
 		return
@@ -957,40 +918,20 @@ func (p *PipelineOrchestrator) publishPrometheusStatus(status ws.PrometheusStatu
 }
 
 func (p *PipelineOrchestrator) recordPrometheusHostname(deviceID uuid.UUID, hostname string) {
-	if hostname == "" {
-		return
-	}
-
-	p.snapshotMu.Lock()
-	defer p.snapshotMu.Unlock()
-	p.hostnames[deviceID] = hostname
-	p.hostnameObservedAt[deviceID] = p.clockNow()
+	p.runtime.recordPrometheusHostname(deviceID, hostname)
 }
 
 func (p *PipelineOrchestrator) clearPrometheusHostnames() {
-	p.snapshotMu.Lock()
-	defer p.snapshotMu.Unlock()
-	clear(p.hostnames)
-	clear(p.hostnameObservedAt)
+	p.runtime.clearPrometheusHostnames()
 }
 
 func (p *PipelineOrchestrator) prunePrometheusHostnames() {
-	cutoff := p.clockNow().Add(-prometheusEnrichmentRetention)
-
-	p.snapshotMu.Lock()
-	defer p.snapshotMu.Unlock()
-	for deviceID, observedAt := range p.hostnameObservedAt {
-		if observedAt.After(cutoff) {
-			continue
-		}
-		delete(p.hostnameObservedAt, deviceID)
-		delete(p.hostnames, deviceID)
-	}
+	p.runtime.prunePrometheusHostnames()
 }
 
 func (p *PipelineOrchestrator) clockNow() time.Time {
-	if p != nil && p.now != nil {
-		return p.now().UTC()
+	if p != nil && p.runtime != nil {
+		return p.runtime.clockNow()
 	}
 	return time.Now().UTC()
 }
