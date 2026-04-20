@@ -340,7 +340,7 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 		},
 	}
 
-	pipeline.runTask(context.Background(), task)
+	pipeline.taskRunner.runTask(context.Background(), task)
 
 	deviceState, ok := store.GetDevice(deviceID)
 	if !ok {
@@ -426,7 +426,7 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 		nil,
 	)
 
-	pipeline.runTask(context.Background(), task)
+	pipeline.taskRunner.runTask(context.Background(), task)
 
 	deviceState, ok := store.GetDevice(deviceID)
 	if !ok {
@@ -514,7 +514,7 @@ func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRe
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := pipeline.topologyDiscoveryMode(tt.device); got != tt.want {
+			if got := pipeline.taskRunner.topologyDiscoveryMode(tt.device); got != tt.want {
 				t.Fatalf("topologyDiscoveryMode() = %s, want %s", got, tt.want)
 			}
 		})
@@ -843,7 +843,7 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 		Available: true,
 	})
 
-	pipeline.runTask(context.Background(), task)
+	pipeline.taskRunner.runTask(context.Background(), task)
 
 	deviceState, ok := store.GetDevice(deviceID)
 	if !ok {
@@ -1390,7 +1390,7 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 		nil,
 	)
 
-	pipeline.runTask(context.Background(), scheduler.PollTask{
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
 		RunID:            10,
 		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassPerformance),
 		VolatilityClass:  domain.VolatilityClassPerformance,
@@ -1404,14 +1404,14 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 	}
 	performanceCollectedAt := performanceState.Metrics.CollectedAt.UTC().Format(time.RFC3339)
 
-	pipeline.runTask(context.Background(), scheduler.PollTask{
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
 		RunID:            11,
 		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassOperational),
 		VolatilityClass:  domain.VolatilityClassOperational,
 		ExpectedInterval: 60 * time.Second,
 		Device:           device,
 	})
-	pipeline.runTask(context.Background(), scheduler.PollTask{
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
 		RunID:            12,
 		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassStatic),
 		VolatilityClass:  domain.VolatilityClassStatic,
