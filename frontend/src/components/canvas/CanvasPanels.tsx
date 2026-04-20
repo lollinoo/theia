@@ -2,10 +2,9 @@ import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices } from '../../api/client';
 import type { Device, Link } from '../../types/api';
-import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
+import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { InterfaceStatsPanel, DeviceInterfaceStatsPanel } from '../InterfaceStatsPanel';
 import { AlertsPanel } from '../AlertsPanel';
 import { SettingsPanel } from '../SettingsPanel';
 import { AddDevicePanel } from '../AddDevicePanel';
@@ -13,18 +12,25 @@ import { DeviceConfigPanel } from '../DeviceConfigPanel';
 import { BulkEditPanel } from '../BulkEditPanel';
 import { LinkCreatePanel } from '../LinkCreatePanel';
 import { LinkDetailsPanel } from '../LinkDetailsPanel';
+import {
+  DeviceInterfaceStatsPanelRoute,
+  LinkInterfaceStatsPanelRoute,
+} from './InterfaceStatsPanelRoutes';
 import { viewportSize } from './canvasHelpers';
+import type { RuntimeState } from './runtimeAdapters';
 import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
 } from '../deviceVisualState';
+import {
+  buildAlertsPanelModel,
+} from './panelAdapters';
 
 const emptyAlerts: AlertDTO[] = [];
 
 interface CanvasPanelsProps {
   panelContent: { type: string; data?: unknown } | null;
   setPanelContent: (content: { type: string; data?: unknown } | null) => void;
-  snapshot: SnapshotPayload | null;
   alerts?: AlertDTO[];
   devices: Device[];
   topologyLinks: Link[];
@@ -32,7 +38,7 @@ interface CanvasPanelsProps {
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
-  prometheusStatus: PrometheusStatusPayload | null;
+  runtimeState: RuntimeState;
   onAreasChange?: () => void;
   onSettingsChange?: () => void;
   onWinBoxAvailabilityChange?: (deviceId: string, hasWinboxProfile: boolean) => void;
@@ -41,7 +47,6 @@ interface CanvasPanelsProps {
 export function CanvasPanels({
   panelContent,
   setPanelContent,
-  snapshot,
   alerts = emptyAlerts,
   devices,
   topologyLinks,
@@ -49,7 +54,7 @@ export function CanvasPanels({
   setDevices,
   setNodes,
   reactFlow,
-  prometheusStatus,
+  runtimeState,
   onAreasChange,
   onSettingsChange,
   onWinBoxAvailabilityChange,
@@ -57,28 +62,31 @@ export function CanvasPanels({
   return (
     <>
       {panelContent?.type === 'interfaceStats' && (() => {
-        const data = panelContent.data as { link?: Link; sourceDevice?: Device; targetDevice?: Device; device?: Device } | undefined;
-        if (data?.link && data.sourceDevice && data.targetDevice) {
-          // Look up live device state so promDown overrides are reflected
-          const currentSource = devices.find((d) => d.id === data.sourceDevice!.id) ?? data.sourceDevice;
-          const currentTarget = devices.find((d) => d.id === data.targetDevice!.id) ?? data.targetDevice;
+        const data = panelContent.data as { linkId?: string; deviceId?: string } | undefined;
+        const link = data?.linkId
+          ? topologyLinks.find((candidate) => candidate.id === data.linkId)
+          : undefined;
+        if (link) {
+          const currentSource = devices.find((d) => d.id === link.source_device_id);
+          const currentTarget = devices.find((d) => d.id === link.target_device_id);
+          if (!currentSource || !currentTarget) return <div className="text-on-bg-secondary text-sm">No data available.</div>;
           return (
-            <InterfaceStatsPanel
-              link={data.link}
+            <LinkInterfaceStatsPanelRoute
+              link={link}
               sourceDevice={currentSource}
               targetDevice={currentTarget}
-              snapshot={snapshot as SnapshotPayload | null}
-              prometheusStatus={prometheusStatus}
+              runtimeState={runtimeState}
             />
           );
         }
-        if (data?.device) {
-          const currentDevice = devices.find((d) => d.id === data.device!.id) ?? data.device;
+        const currentDevice = data?.deviceId
+          ? devices.find((d) => d.id === data.deviceId)
+          : undefined;
+        if (currentDevice) {
           return (
-            <DeviceInterfaceStatsPanel
+            <DeviceInterfaceStatsPanelRoute
               device={currentDevice}
-              snapshot={snapshot as SnapshotPayload | null}
-              prometheusStatus={prometheusStatus}
+              runtimeState={runtimeState}
             />
           );
         }
@@ -86,9 +94,7 @@ export function CanvasPanels({
       })()}
       {panelContent?.type === 'alerts' && (
         <AlertsPanel
-          alerts={alerts}
-          devices={devices}
-          prometheusStatus={prometheusStatus}
+          model={buildAlertsPanelModel({ alerts, runtimeState })}
         />
       )}
       {panelContent?.type === 'settings' && <SettingsPanel onAreasChange={onAreasChange} onSettingsChange={onSettingsChange} />}
@@ -145,8 +151,10 @@ export function CanvasPanels({
         return null;
       })()}
       {panelContent?.type === 'deviceConfig' && (() => {
-        const data = panelContent.data as { device?: Device } | undefined;
-        const device = data?.device;
+        const data = panelContent.data as { deviceId?: string } | undefined;
+        const device = data?.deviceId
+          ? devices.find((candidate) => candidate.id === data.deviceId)
+          : undefined;
         if (device) {
           return (
             <DeviceConfigPanel
@@ -173,7 +181,7 @@ export function CanvasPanels({
                     }
                   : n,
                 ));
-                setPanelContent({ type: 'deviceConfig', data: { device: updated } });
+                setPanelContent({ type: 'deviceConfig', data: { deviceId: updated.id } });
               }}
               onDeviceDeleted={() => {
                 setPanelContent(null);

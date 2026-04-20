@@ -1,23 +1,11 @@
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 import Canvas from './Canvas';
-import type { Device, Link } from '../types/api';
+import type { Device } from '../types/api';
 
 const testState = vi.hoisted(() => ({
-  link: {
-    id: 'link-1',
-    source_device_id: 'dev-1',
-    source_if_name: 'ether1',
-    target_device_id: 'dev-2',
-    target_if_name: 'ether2',
-    discovery_protocol: 'lldp',
-    source_if_speed: 1_000_000_000,
-    source_if_oper_status: 'up',
-    target_if_speed: 1_000_000_000,
-    target_if_oper_status: 'up',
-  } satisfies Link,
   devices: [
     {
       id: 'dev-1',
@@ -39,26 +27,6 @@ const testState = vi.hoisted(() => ({
       prometheus_label_value: '10.0.0.1:9100',
       area_ids: [],
     },
-    {
-      id: 'dev-2',
-      hostname: 'switch-01',
-      ip: '10.0.0.2',
-      device_type: 'switch',
-      poll_class: 'core',
-      poll_interval_override: null,
-      status: 'up',
-      sys_name: 'switch-01',
-      sys_descr: 'RouterOS',
-      hardware_model: 'CRS326',
-      vendor: 'mikrotik',
-      managed: true,
-      interfaces: [],
-      backup_supported: true,
-      metrics_source: 'snmp',
-      prometheus_label_name: 'instance',
-      prometheus_label_value: '10.0.0.2:9100',
-      area_ids: [],
-    },
   ] satisfies Device[],
 }));
 
@@ -76,19 +44,19 @@ vi.mock('@xyflow/react', async () => {
     MiniMap: () => null,
     ReactFlow: ({
       children,
-      onEdgeClick,
+      onNodeClick,
       onPaneClick,
     }: {
       children: React.ReactNode;
-      onEdgeClick?: (event: unknown, edge: unknown) => void;
+      onNodeClick?: (event: unknown, node: { id: string; data: Record<string, never> }) => void;
       onPaneClick?: () => void;
     }) => (
       <div>
         <button
           type="button"
-          onClick={() => onEdgeClick?.({}, { id: 'edge-1', data: { link: testState.link } })}
+          onClick={() => onNodeClick?.({}, { id: 'dev-1', data: {} })}
         >
-          Trigger edge click
+          Trigger node click
         </button>
         <button type="button" onClick={() => onPaneClick?.()}>
           Trigger pane click
@@ -109,82 +77,33 @@ vi.mock('@xyflow/react', async () => {
   };
 });
 
-vi.mock('./DeviceCard', () => ({
-  default: () => null,
-}));
-
-vi.mock('./LinkEdge', () => ({
-  default: () => null,
-}));
-
-vi.mock('./SearchOverlay', () => ({
-  default: () => null,
-}));
-
-vi.mock('./ZoomControls', () => ({
-  default: () => null,
-}));
-
-vi.mock('./ContextMenu', () => ({
-  ContextMenu: () => null,
-}));
-
+vi.mock('./DeviceCard', () => ({ default: () => null }));
+vi.mock('./LinkEdge', () => ({ default: () => null }));
+vi.mock('./SearchOverlay', () => ({ default: () => null }));
+vi.mock('./ZoomControls', () => ({ default: () => null }));
+vi.mock('./ContextMenu', () => ({ ContextMenu: () => null }));
 vi.mock('./SidePanel', () => ({
   SidePanel: ({ children, open }: { children: React.ReactNode; open: boolean }) =>
     open ? <div>{children}</div> : null,
 }));
-
-vi.mock('./ShortcutHelp', () => ({
-  ShortcutHelp: () => null,
-}));
-
+vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
 vi.mock('./Toolbar', () => ({
-  Toolbar: ({
-    editMode,
-    onToggleEditMode,
-  }: {
-    editMode: boolean;
-    onToggleEditMode: () => void;
-  }) => (
-    <button type="button" onClick={onToggleEditMode}>
-      {editMode ? 'Disable edit mode' : 'Enable edit mode'}
-    </button>
+  Toolbar: ({ onAlerts }: { onAlerts: () => void }) => (
+    <button type="button" onClick={onAlerts}>Open alerts</button>
   ),
 }));
-
 vi.mock('./canvas/CanvasPanels', () => ({
-  CanvasPanels: ({
-    panelContent,
-  }: {
-    panelContent: { type: string; data?: { link?: { id?: string }; readOnly?: boolean } } | null;
-  }) => (
-    <div data-testid="panel-state">
-      {panelContent?.type}:{panelContent?.data?.readOnly === true ? 'view' : 'edit'}:{panelContent?.data?.link?.id}
-    </div>
+  CanvasPanels: ({ panelContent }: { panelContent: { type: string } | null }) => (
+    <div data-testid="panel-state">{panelContent?.type ?? 'none'}</div>
   ),
 }));
-
-vi.mock('./canvas/CanvasOverlays', () => ({
-  CanvasOverlays: () => null,
-}));
-
-vi.mock('./canvas/detailSubscription', () => ({
-  getCanvasDetailDeviceId: () => null,
-}));
-
-vi.mock('../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: () => undefined,
-}));
-
-vi.mock('../hooks/usePositions', () => ({
-  usePositions: () => ({ savePositions: vi.fn() }),
-}));
-
+vi.mock('./canvas/CanvasOverlays', () => ({ CanvasOverlays: () => null }));
+vi.mock('../hooks/useKeyboardShortcuts', () => ({ useKeyboardShortcuts: () => undefined }));
+vi.mock('../hooks/usePositions', () => ({ usePositions: () => ({ savePositions: vi.fn() }) }));
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({ resolvedTheme: 'dark' as const }),
   adaptAreaColor: (color: string) => color,
 }));
-
 vi.mock('../hooks/useBridgeHealth', () => ({
   useBridgeHealth: () => ({
     bridgeRunning: false,
@@ -193,7 +112,6 @@ vi.mock('../hooks/useBridgeHealth', () => ({
     checkBridgeHealth: vi.fn(),
   }),
 }));
-
 vi.mock('../hooks/useDeviceWinboxAvailability', () => ({
   useDeviceWinboxAvailability: () => ({
     deviceWinboxState: {},
@@ -201,7 +119,6 @@ vi.mock('../hooks/useDeviceWinboxAvailability', () => ({
     setDeviceWinboxAvailability: vi.fn(),
   }),
 }));
-
 vi.mock('./canvas/useCanvasData', () => ({
   useCanvasData: () => ({
     devices: testState.devices,
@@ -223,7 +140,6 @@ vi.mock('./canvas/useCanvasData', () => ({
     retryTopologyRefresh: vi.fn(),
   }),
 }));
-
 vi.mock('./canvas/useAreaFilteredTopology', () => ({
   useAreaFilteredTopology: (devices: Device[]) => ({
     filteredDevices: devices,
@@ -231,16 +147,17 @@ vi.mock('./canvas/useAreaFilteredTopology', () => ({
     ghostDevices: [],
   }),
 }));
-
 vi.mock('../api/client', () => apiMocks);
 
-describe('Canvas link details edge clicks', () => {
+describe('Canvas detail subscription', () => {
   beforeEach(() => {
     apiMocks.fetchSettings.mockReset();
     apiMocks.fetchSettings.mockResolvedValue({});
   });
 
-  it('opens link details when an edge is clicked in view mode', () => {
+  it('does not emit transient nulls when panel detail target changes', () => {
+    const onDetailDeviceChange = vi.fn();
+
     render(
       <Canvas
         snapshot={null}
@@ -248,31 +165,18 @@ describe('Canvas link details edge clicks', () => {
         prometheusStatus={null}
         selectedAreaId={null}
         areas={[]}
+        onDetailDeviceChange={onDetailDeviceChange}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Trigger edge click' }));
+    onDetailDeviceChange.mockClear();
 
-    expect(screen.getByTestId('panel-state')).toHaveTextContent('link-details:view:link-1');
-  });
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger node click' }));
+    expect(onDetailDeviceChange.mock.calls).toEqual([['dev-1']]);
 
-  it('opens link details as editable when edit mode is enabled', async () => {
-    render(
-      <Canvas
-        snapshot={null}
-        reconnecting={false}
-        prometheusStatus={null}
-        selectedAreaId={null}
-        areas={[]}
-      />,
-    );
+    onDetailDeviceChange.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enable edit mode' }));
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Disable edit mode' })).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Trigger edge click' }));
-
-    expect(screen.getByTestId('panel-state')).toHaveTextContent('link-details:edit:link-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Open alerts' }));
+    expect(onDetailDeviceChange.mock.calls).toEqual([[null]]);
   });
 });

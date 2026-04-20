@@ -80,7 +80,6 @@ function App() {
           devices={canvasDevices}
           areas={areas}
           links={canvasLinks}
-          snapshot={snapshot}
           onAreaSelect={handleAreaSelect}
           onOpenSettings={() => {
             setActiveView('canvas');

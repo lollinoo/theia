@@ -1,11 +1,8 @@
 import { MaterialIcon } from './MaterialIcon';
-import type { Device } from '../types/api';
-import { isPrometheusUnavailable, type AlertDTO, type PrometheusStatusPayload } from '../types/metrics';
+import type { AlertsPanelModel } from './panelModels';
 
 interface AlertsPanelProps {
-  alerts: AlertDTO[];
-  devices: Device[];
-  prometheusStatus: PrometheusStatusPayload | null;
+  model: AlertsPanelModel;
 }
 
 function severityBadge(severity: string) {
@@ -41,29 +38,11 @@ function stateBadge(state: string) {
   );
 }
 
-export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelProps) {
-  const deviceMap = new Map(devices.map((d) => [d.id, d]));
-
-  function deviceLabel(deviceId: string): string {
-    const d = deviceMap.get(deviceId);
-    if (!d) return deviceId.slice(0, 8);
-    return d.tags?.display_name || d.sys_name || d.ip;
-  }
-
-  const firingAlerts = alerts.filter((a) => a.state === 'firing');
-  const resolvedAlerts = alerts.filter((a) => a.state !== 'firing');
-  const promDown = isPrometheusUnavailable(prometheusStatus);
-
-  // Categorize devices affected by Prometheus outage
-  const promOnlyDevices = promDown
-    ? devices.filter((d) => {
-        const src = d.metrics_source || 'prometheus';
-        return src === 'prometheus';
-      })
-    : [];
-  const snmpFallbackDevices = promDown
-    ? devices.filter((d) => d.metrics_source === 'prometheus_snmp_fallback')
-    : [];
+export function AlertsPanel({ model }: AlertsPanelProps) {
+  const { firingAlerts, resolvedAlerts, prometheusOutage } = model;
+  const promDown = prometheusOutage !== null;
+  const promOnlyDevices = prometheusOutage?.offlineDevices ?? [];
+  const snmpFallbackDevices = prometheusOutage?.fallbackDevices ?? [];
 
   return (
     <div className="space-y-4">
@@ -86,12 +65,12 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
                 Offline — no fallback ({promOnlyDevices.length})
               </p>
               <div className="space-y-1">
-                {promOnlyDevices.map((d) => (
-                  <div key={d.id} className="flex items-center gap-2 text-xs text-red-300/80">
-                    <span className="h-1.5 w-1.5 flex-none rounded-full bg-red-400" />
-                    {d.tags?.display_name || d.sys_name || d.ip}
-                  </div>
-                ))}
+                 {promOnlyDevices.map((device) => (
+                   <div key={device.id} className="flex items-center gap-2 text-xs text-red-300/80">
+                     <span className="h-1.5 w-1.5 flex-none rounded-full bg-red-400" />
+                     {device.label}
+                   </div>
+                 ))}
               </div>
             </div>
           )}
@@ -105,12 +84,12 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
                 Metrics via SNMP. Probe status unavailable.
               </p>
               <div className="space-y-1">
-                {snmpFallbackDevices.map((d) => (
-                  <div key={d.id} className="flex items-center gap-2 text-xs text-yellow-300/80">
-                    <span className="h-1.5 w-1.5 flex-none rounded-full bg-yellow-400" />
-                    {d.tags?.display_name || d.sys_name || d.ip}
-                  </div>
-                ))}
+                 {snmpFallbackDevices.map((device) => (
+                   <div key={device.id} className="flex items-center gap-2 text-xs text-yellow-300/80">
+                     <span className="h-1.5 w-1.5 flex-none rounded-full bg-yellow-400" />
+                     {device.label}
+                   </div>
+                 ))}
               </div>
             </div>
           )}
@@ -125,21 +104,21 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
           </p>
           {firingAlerts.map((alert, i) => (
             <div
-              key={`${alert.device_id}-${alert.alert_name}-${i}`}
+              key={`${alert.deviceId}-${alert.alertName}-${i}`}
               className="rounded-lg bg-elevated shadow-panel p-3 space-y-1.5 transition-colors duration-200"
             >
               <div className="flex items-center gap-2">
                 {stateBadge(alert.state)}
                 <span className="text-sm font-medium text-on-bg truncate">
-                  {alert.alert_name}
+                  {alert.alertName}
                 </span>
                 {severityBadge(alert.severity)}
               </div>
               <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
               <p className="text-[11px] text-on-bg-secondary/70">
-                {deviceLabel(alert.device_id)}
-              </p>
-            </div>
+                 {alert.deviceLabel}
+               </p>
+             </div>
           ))}
         </div>
       ) : !promDown ? (
@@ -158,21 +137,21 @@ export function AlertsPanel({ alerts, devices, prometheusStatus }: AlertsPanelPr
           </p>
           {resolvedAlerts.map((alert, i) => (
             <div
-              key={`${alert.device_id}-${alert.alert_name}-resolved-${i}`}
+              key={`${alert.deviceId}-${alert.alertName}-resolved-${i}`}
               className="rounded-lg bg-surface-high p-3 space-y-1.5 opacity-60 transition-colors duration-200"
             >
               <div className="flex items-center gap-2">
                 {stateBadge(alert.state)}
                 <span className="text-sm font-medium text-on-bg truncate">
-                  {alert.alert_name}
+                  {alert.alertName}
                 </span>
                 {severityBadge(alert.severity)}
               </div>
               <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
               <p className="text-[11px] text-on-bg-secondary/70">
-                {deviceLabel(alert.device_id)}
-              </p>
-            </div>
+                 {alert.deviceLabel}
+               </p>
+             </div>
           ))}
         </div>
       )}

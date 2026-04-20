@@ -149,4 +149,20 @@ describe('useBridgeHealth', () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
+
+  it('allows overriding the bridgePort for a manual health check', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+    const { result } = renderHook(() => useBridgeHealth('1337'));
+
+    act(() => {
+      result.current.checkBridgeHealth('9000');
+    });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://localhost:9000/health',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
 });

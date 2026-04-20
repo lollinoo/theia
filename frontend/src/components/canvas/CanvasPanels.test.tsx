@@ -3,12 +3,20 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { CanvasPanels } from './CanvasPanels';
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
+import type { AlertsPanelModel } from '../panelModels';
+import { buildRuntimeState } from './runtimeAdapters';
 
 vi.mock('../DeviceConfigPanel', () => ({
-  DeviceConfigPanel: (props: { onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void }) => (
-    <button type="button" onClick={() => props.onWinBoxAvailabilityChange?.(true)}>
-      Notify WinBox
-    </button>
+  DeviceConfigPanel: (props: {
+    device: { hostname: string };
+    onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void;
+  }) => (
+    <div>
+      <div>Config device:{props.device.hostname}</div>
+      <button type="button" onClick={() => props.onWinBoxAvailabilityChange?.(true)}>
+        Notify WinBox
+      </button>
+    </div>
   ),
 }));
 
@@ -21,8 +29,20 @@ vi.mock('../LinkDetailsPanel', () => ({
 }));
 
 vi.mock('../AlertsPanel', () => ({
-  AlertsPanel: (props: { alerts: AlertDTO[] }) => (
-    <div>Alert count: {props.alerts.length}</div>
+  AlertsPanel: (props: { model: AlertsPanelModel }) => (
+    <div>
+      Alert count: {props.model.firingAlerts.length}
+      {props.model.firingAlerts[0] ? ` ${props.model.firingAlerts[0].deviceLabel} ${props.model.firingAlerts[0].alertName}` : ''}
+    </div>
+  ),
+}));
+
+vi.mock('./InterfaceStatsPanelRoutes', () => ({
+  LinkInterfaceStatsPanelRoute: (props: { link: { source_if_name: string } }) => (
+    <div>Link interface model:{props.link.source_if_name}</div>
+  ),
+  DeviceInterfaceStatsPanelRoute: (props: { device: { id: string } }) => (
+    <div>Device interface model:{props.device.id}</div>
   ),
 }));
 
@@ -81,19 +101,25 @@ describe('CanvasPanels', () => {
   it('forwards WinBox availability updates for the open device config panel', () => {
     const onWinBoxAvailabilityChange = vi.fn();
     const device = mockDevice();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
 
     render(
-      <CanvasPanels
-        panelContent={{ type: 'deviceConfig', data: { device } }}
-        setPanelContent={vi.fn()}
-        snapshot={null}
-        devices={[device]}
+        <CanvasPanels
+          panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+          setPanelContent={vi.fn()}
+          devices={[device]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
         reactFlow={{} as never}
-        prometheusStatus={null}
+        runtimeState={runtimeState}
         onWinBoxAvailabilityChange={onWinBoxAvailabilityChange}
       />,
     );
@@ -101,6 +127,34 @@ describe('CanvasPanels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Notify WinBox' }));
 
     expect(onWinBoxAvailabilityChange).toHaveBeenCalledWith(device.id, true);
+  });
+
+  it('looks up the live device for device config panels by device id', () => {
+    const staleDevice = mockDevice({ hostname: 'stale-router' });
+    const liveDevice = mockDevice({ hostname: 'live-router' });
+    const runtimeState = buildRuntimeState({
+      devices: [liveDevice],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+        <CanvasPanels
+          panelContent={{ type: 'deviceConfig', data: { deviceId: staleDevice.id, device: staleDevice } }}
+          setPanelContent={vi.fn()}
+          devices={[liveDevice]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+      />,
+    );
+
+    expect(screen.getByText('Config device:live-router')).toBeInTheDocument();
   });
 
   it('renders link details in read-only mode when requested by panel content', () => {
@@ -111,19 +165,25 @@ describe('CanvasPanels', () => {
       ip: '10.0.0.2',
       sys_name: 'router-02',
     });
+    const runtimeState = buildRuntimeState({
+      devices: [sourceDevice, targetDevice],
+      links: [mockLink()],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
 
     render(
-      <CanvasPanels
-        panelContent={{ type: 'link-details', data: { link: mockLink(), readOnly: true } }}
-        setPanelContent={vi.fn()}
-        snapshot={null}
-        devices={[sourceDevice, targetDevice]}
+        <CanvasPanels
+          panelContent={{ type: 'link-details', data: { link: mockLink(), readOnly: true } }}
+          setPanelContent={vi.fn()}
+          devices={[sourceDevice, targetDevice]}
         topologyLinks={[mockLink()]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
         reactFlow={{} as never}
-        prometheusStatus={null}
+        runtimeState={runtimeState}
       />,
     );
 
@@ -138,19 +198,25 @@ describe('CanvasPanels', () => {
       ip: '10.0.0.2',
       sys_name: 'router-02',
     });
+    const runtimeState = buildRuntimeState({
+      devices: [sourceDevice, targetDevice],
+      links: [mockLink({ target_if_name: 'ether2' })],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
 
     render(
-      <CanvasPanels
-        panelContent={{ type: 'link-details', data: { link: mockLink({ target_if_name: '' }), readOnly: true } }}
-        setPanelContent={vi.fn()}
-        snapshot={null}
-        devices={[sourceDevice, targetDevice]}
+        <CanvasPanels
+          panelContent={{ type: 'link-details', data: { link: mockLink({ target_if_name: '' }), readOnly: true } }}
+          setPanelContent={vi.fn()}
+          devices={[sourceDevice, targetDevice]}
         topologyLinks={[mockLink({ target_if_name: 'ether2' })]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
         reactFlow={{} as never}
-        prometheusStatus={null}
+        runtimeState={runtimeState}
       />,
     );
 
@@ -159,13 +225,19 @@ describe('CanvasPanels', () => {
 
   it('passes separate alert state through to the alerts panel', () => {
     const device = mockDevice();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [mockAlert()],
+      prometheusStatus: null,
+    });
 
     render(
       <CanvasPanels
         {...({
           panelContent: { type: 'alerts' },
           setPanelContent: vi.fn(),
-          snapshot: null,
           alerts: [mockAlert()],
           devices: [device],
           topologyLinks: [],
@@ -173,11 +245,77 @@ describe('CanvasPanels', () => {
           setDevices: vi.fn(),
           setNodes: vi.fn(),
           reactFlow: {} as never,
-          prometheusStatus: null,
+          runtimeState,
         } as const)}
       />,
     );
 
-    expect(screen.getByText('Alert count: 1')).toBeInTheDocument();
+    expect(screen.getByText('Alert count: 1 router-01 DeviceDown')).toBeInTheDocument();
+  });
+
+  it('routes link interface panels by link id against live topology state', () => {
+    const sourceDevice = mockDevice();
+    const targetDevice = mockDevice({
+      id: 'dev-2',
+      hostname: 'router-02',
+      ip: '10.0.0.2',
+      sys_name: 'router-02',
+    });
+    const staleLink = mockLink({ source_if_name: 'stale-ether1' });
+    const liveLink = mockLink({ source_if_name: 'ether1' });
+    const runtimeState = buildRuntimeState({
+      devices: [sourceDevice, targetDevice],
+      links: [liveLink],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+        <CanvasPanels
+          panelContent={{
+            type: 'interfaceStats',
+            data: { linkId: staleLink.id, link: staleLink, sourceDevice, targetDevice },
+          }}
+          setPanelContent={vi.fn()}
+          devices={[sourceDevice, targetDevice]}
+        topologyLinks={[liveLink]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+      />,
+    );
+
+    expect(screen.getByText('Link interface model:ether1')).toBeInTheDocument();
+  });
+
+  it('routes device interface panels by device id against live device state', () => {
+    const staleDevice = mockDevice({ id: 'dev-2' });
+    const liveDevice = mockDevice({ id: 'dev-2', hostname: 'live-router-02' });
+    const runtimeState = buildRuntimeState({
+      devices: [liveDevice],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+        <CanvasPanels
+          panelContent={{ type: 'interfaceStats', data: { deviceId: staleDevice.id, device: staleDevice } }}
+          setPanelContent={vi.fn()}
+          devices={[liveDevice]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+      />,
+    );
+
+    expect(screen.getByText('Device interface model:dev-2')).toBeInTheDocument();
   });
 });

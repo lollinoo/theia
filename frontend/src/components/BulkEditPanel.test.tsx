@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { BulkEditPanel } from './BulkEditPanel';
 import type { Device } from '../types/api';
 import { ValidationError, ServerError } from '../api/errors';
+import { fetchAreas, updateDevice } from '../api/client';
 
 // Mock API calls
 vi.mock('../api/client', () => ({
@@ -139,5 +140,119 @@ describe('BulkEditPanel — save button is disabled without changes', () => {
     // The apply button is disabled when hasChanges is false
     const applyBtn = screen.getByText('Apply to 1 Devices');
     expect(applyBtn).toBeDisabled();
+  });
+});
+
+describe('BulkEditPanel — bulk save behavior', () => {
+  it('preserves the current update payload shape for each selected device', async () => {
+    const updateDeviceMock = vi.mocked(updateDevice);
+    updateDeviceMock.mockImplementation(async (id, payload) => mockDevice({ id, ...payload }));
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+        ]}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={vi.fn()}
+      />,
+    );
+
+    const [vendorSelect, metricsSourceSelect] = screen.getAllByRole('combobox');
+
+    fireEvent.change(vendorSelect, { target: { value: '' } });
+    fireEvent.change(metricsSourceSelect, { target: { value: 'prometheus' } });
+    fireEvent.click(screen.getByText('Apply to 2 Devices'));
+
+    await waitFor(() => {
+      expect(updateDeviceMock).toHaveBeenCalledTimes(2);
+    });
+
+    expect(updateDeviceMock).toHaveBeenNthCalledWith('1', 'dev-1', {
+      hostname: 'router-01',
+      vendor: '',
+      metrics_source: 'prometheus',
+    });
+    expect(updateDeviceMock).toHaveBeenNthCalledWith('2', 'dev-2', {
+      hostname: 'router-02',
+      vendor: '',
+      metrics_source: 'prometheus',
+    });
+  });
+
+  it('restores keep-current metrics source to a no-op state for mixed devices', async () => {
+    const updateDeviceMock = vi.mocked(updateDevice);
+    updateDeviceMock.mockImplementation(async (id, payload) => mockDevice({ id, ...payload }));
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', metrics_source: 'snmp' }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2', metrics_source: 'prometheus' }),
+        ]}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={vi.fn()}
+      />,
+    );
+
+    const [, metricsSourceSelect] = screen.getAllByRole('combobox');
+    const applyButton = screen.getByText('Apply to 2 Devices');
+
+    fireEvent.change(metricsSourceSelect, { target: { value: 'snmp' } });
+    fireEvent.change(metricsSourceSelect, { target: { value: '' } });
+
+    await waitFor(() => {
+      expect(applyButton).toBeDisabled();
+    });
+
+    fireEvent.click(applyButton);
+
+    expect(updateDeviceMock).not.toHaveBeenCalled();
+  });
+
+  it('shows mixed areas without preselected chips and saves only the user-edited areas', async () => {
+    const updateDeviceMock = vi.mocked(updateDevice);
+    const fetchAreasMock = vi.mocked(fetchAreas);
+    updateDeviceMock.mockImplementation(async (id, payload) => mockDevice({ id, ...payload }));
+    fetchAreasMock.mockResolvedValue([
+      { id: 'area-1', name: 'Area 1', color: '#111111' },
+      { id: 'area-2', name: 'Area 2', color: '#222222' },
+      { id: 'area-3', name: 'Area 3', color: '#333333' },
+    ]);
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', area_ids: ['area-1'] }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2', area_ids: ['area-2'] }),
+        ]}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Mixed')).toBeInTheDocument();
+      expect(screen.queryByText('Area 1', { selector: 'span' })).not.toBeInTheDocument();
+      expect(screen.queryByText('Area 2', { selector: 'span' })).not.toBeInTheDocument();
+    });
+
+    const [areaSelect] = screen.getAllByRole('combobox');
+    fireEvent.change(areaSelect, { target: { value: 'area-3' } });
+    fireEvent.click(screen.getByText('Apply to 2 Devices'));
+
+    await waitFor(() => {
+      expect(updateDeviceMock).toHaveBeenCalledTimes(2);
+    });
+
+    expect(updateDeviceMock).toHaveBeenNthCalledWith('1', 'dev-1', {
+      hostname: 'router-01',
+      area_ids: ['area-3'],
+    });
+    expect(updateDeviceMock).toHaveBeenNthCalledWith('2', 'dev-2', {
+      hostname: 'router-02',
+      area_ids: ['area-3'],
+    });
   });
 });

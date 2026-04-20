@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Area, Device } from '../types/api';
 import { deleteDevice, fetchAreas, updateDevice } from '../api/client';
 import { ValidationError, ServerError } from '../api/errors';
+import { buildBulkUpdatePayload, createBulkEditModel, type BulkEditModel } from './forms/bulkEditModels';
 
 interface BulkEditPanelProps {
   devices: Device[];
@@ -9,24 +10,10 @@ interface BulkEditPanelProps {
   onDevicesDeleted: () => void;
 }
 
-/** Compute the common value across devices for a given key, or 'mixed' if they differ. */
-function commonValue<T>(devices: Device[], extract: (d: Device) => T): T | 'mixed' {
-  if (devices.length === 0) return 'mixed';
-  const first = extract(devices[0]);
-  const firstJSON = JSON.stringify(first);
-  for (let i = 1; i < devices.length; i++) {
-    if (JSON.stringify(extract(devices[i])) !== firstJSON) return 'mixed';
-  }
-  return first;
-}
-
 export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: BulkEditPanelProps) {
   const [areas, setAreas] = useState<Area[]>([]);
-
-  // Bulk field state -- undefined means "no change"
-  const [areaIds, setAreaIds] = useState<string[] | undefined>(undefined);
-  const [metricsSource, setMetricsSource] = useState<string | undefined>(undefined);
-  const [vendor, setVendor] = useState<string | undefined>(undefined);
+  const [model, setModel] = useState<BulkEditModel>(() => createBulkEditModel(devices));
+  const initialModel = createBulkEditModel(devices);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -41,17 +28,11 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
     fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
   }, []);
 
-  // Compute current common values for display
-  const commonAreaIds = commonValue(devices, (d) => [...(d.area_ids ?? [])].sort());
-  const commonMetricsSource = commonValue(devices, (d) => d.metrics_source || 'snmp');
-  const commonVendor = commonValue(devices, (d) => d.vendor || '');
+  useEffect(() => {
+    setModel(createBulkEditModel(devices));
+  }, [devices]);
 
-  // The effective values shown in the UI: user override or current common
-  const displayAreaIds = areaIds ?? (commonAreaIds === 'mixed' ? [] : commonAreaIds);
-  const displayMetricsSource = metricsSource ?? (commonMetricsSource === 'mixed' ? '' : commonMetricsSource);
-  const displayVendor = vendor ?? (commonVendor === 'mixed' ? '' : commonVendor);
-
-  const hasChanges = areaIds !== undefined || metricsSource !== undefined || vendor !== undefined;
+  const hasChanges = model.areaIds.dirty || model.metricsSource.dirty || model.vendor.dirty;
 
   async function handleSave() {
     if (!hasChanges) return;
@@ -61,14 +42,7 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
 
     try {
       const results = await Promise.allSettled(
-        devices.map((d) =>
-          updateDevice(d.id, {
-            hostname: d.hostname,
-            ...(areaIds !== undefined ? { area_ids: areaIds } : {}),
-            ...(metricsSource !== undefined ? { metrics_source: metricsSource } : {}),
-            ...(vendor !== undefined ? { vendor: vendor || undefined } : {}),
-          }),
-        ),
+        devices.map((device) => updateDevice(device.id, buildBulkUpdatePayload(device, model))),
       );
 
       const updatedDevices: Device[] = [];
@@ -100,10 +74,7 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       if (updatedDevices.length > 0) {
         onDevicesUpdated(updatedDevices);
         setSaved(true);
-        // Reset change tracking
-        setAreaIds(undefined);
-        setMetricsSource(undefined);
-        setVendor(undefined);
+        setModel(createBulkEditModel(devices));
         setTimeout(() => setSaved(false), 2000);
       }
     } catch (err) {
@@ -165,14 +136,14 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Areas</p>
-          {commonAreaIds === 'mixed' && areaIds === undefined && (
+          {model.areaIds.mixed && !model.areaIds.dirty && (
             <span className="text-xs text-on-bg-muted italic">Mixed</span>
           )}
         </div>
 
-        {displayAreaIds.length > 0 && (
+        {model.areaIds.value.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {displayAreaIds.map((id) => {
+            {model.areaIds.value.map((id) => {
               const area = areas.find((a) => a.id === id);
               if (!area) return null;
               return (
@@ -186,8 +157,14 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
                   <button
                     type="button"
                     onClick={() => {
-                      const next = (areaIds ?? (commonAreaIds === 'mixed' ? [] : commonAreaIds)).filter((a) => a !== id);
-                      setAreaIds(next);
+                      setModel((current) => ({
+                        ...current,
+                        areaIds: {
+                          value: current.areaIds.value.filter((areaId) => areaId !== id),
+                          mixed: false,
+                          dirty: true,
+                        },
+                      }));
                     }}
                     className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
                   >
@@ -200,19 +177,25 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
             })}
           </div>
         )}
-        {areas.filter((a) => !displayAreaIds.includes(a.id)).length > 0 && (
+        {areas.filter((a) => !model.areaIds.value.includes(a.id)).length > 0 && (
           <select
             value=""
             onChange={(e) => {
               if (e.target.value) {
-                const current = areaIds ?? (commonAreaIds === 'mixed' ? [] : commonAreaIds);
-                setAreaIds([...current, e.target.value]);
+                setModel((current) => ({
+                  ...current,
+                  areaIds: {
+                    value: [...current.areaIds.value, e.target.value],
+                    mixed: false,
+                    dirty: true,
+                  },
+                }));
               }
             }}
             className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
           >
-            <option value="">{displayAreaIds.length === 0 ? 'Unassigned - select area...' : 'Add another area...'}</option>
-            {areas.filter((a) => !displayAreaIds.includes(a.id)).map((a) => (
+            <option value="">{model.areaIds.value.length === 0 ? 'Unassigned - select area...' : 'Add another area...'}</option>
+            {areas.filter((a) => !model.areaIds.value.includes(a.id)).map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
           </select>
@@ -223,13 +206,22 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Vendor</p>
-          {commonVendor === 'mixed' && vendor === undefined && (
+          {model.vendor.mixed && !model.vendor.dirty && (
             <span className="text-xs text-on-bg-muted italic">Mixed</span>
           )}
         </div>
         <select
-          value={displayVendor}
-          onChange={(e) => setVendor(e.target.value)}
+          value={model.vendor.value}
+          onChange={(e) => {
+            setModel((current) => ({
+              ...current,
+              vendor: {
+                value: e.target.value,
+                mixed: false,
+                dirty: true,
+              },
+            }));
+          }}
           className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         >
           <option value="">-- Select vendor --</option>
@@ -241,13 +233,30 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Metrics Source</p>
-          {commonMetricsSource === 'mixed' && metricsSource === undefined && (
+          {model.metricsSource.mixed && !model.metricsSource.dirty && (
             <span className="text-xs text-on-bg-muted italic">Mixed</span>
           )}
         </div>
         <select
-          value={displayMetricsSource}
-          onChange={(e) => setMetricsSource(e.target.value)}
+          value={model.metricsSource.value}
+          onChange={(e) => {
+            if (e.target.value === '') {
+              setModel((current) => ({
+                ...current,
+                metricsSource: initialModel.metricsSource,
+              }));
+              return;
+            }
+
+            setModel((current) => ({
+              ...current,
+              metricsSource: {
+                value: e.target.value as BulkEditModel['metricsSource']['value'],
+                mixed: false,
+                dirty: true,
+              },
+            }));
+          }}
           className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
         >
           <option value="">-- Keep current --</option>

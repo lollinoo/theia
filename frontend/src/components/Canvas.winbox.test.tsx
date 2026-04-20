@@ -1,18 +1,20 @@
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import Canvas from './Canvas';
 import type { Device } from '../types/api';
-import {
-  BRIDGE_HEALTH_TIMEOUT_MESSAGE,
-  BRIDGE_LAUNCH_TIMEOUT_MESSAGE,
-  BRIDGE_REQUEST_TIMEOUT_MS,
-} from '../utils/bridgeRequests';
+import { BRIDGE_HEALTH_TIMEOUT_MESSAGE } from '../utils/bridgeRequests';
 
 const testState = vi.hoisted(() => ({
   openDeviceMenu: null as null | ((event: unknown, deviceId: string) => void),
-  bridgeRunningAfterCheck: true,
-  bridgeErrorAfterCheck: null as string | null,
+  bridgeChecked: false,
+  bridgeRunning: true,
+  deviceWinboxState: {} as Record<string, boolean>,
+  winboxError: null as string | null,
+  openDeviceMenuFlow: vi.fn(),
+  launchWinbox: vi.fn(),
+  clearWinboxError: vi.fn(),
+  setDeviceWinboxAvailability: vi.fn(),
   devices: [
     {
       id: 'dev-1',
@@ -37,15 +39,7 @@ const testState = vi.hoisted(() => ({
   ] as Device[],
 }));
 
-const apiMocks = vi.hoisted(() => ({
-  fetchDeviceCredentialProfiles: vi.fn(),
-  fetchSettings: vi.fn(),
-  fetchBridgeToken: vi.fn(),
-}));
-
 vi.mock('@xyflow/react', async () => {
-  const ReactModule = await import('react');
-
   return {
     ConnectionMode: { Loose: 'loose' },
     SelectionMode: { Partial: 'partial' },
@@ -128,27 +122,18 @@ vi.mock('../contexts/ThemeContext', () => ({
   adaptAreaColor: (color: string) => color,
 }));
 
-vi.mock('../hooks/useBridgeHealth', async () => {
-  const ReactModule = await import('react');
-
-  return {
-    useBridgeHealth: () => {
-      const [bridgeRunning, setBridgeRunning] = ReactModule.useState(false);
-      const [bridgeChecked, setBridgeChecked] = ReactModule.useState(false);
-      const [bridgeError, setBridgeError] = ReactModule.useState<string | null>(null);
-      return {
-        bridgeRunning,
-        bridgeChecked,
-        bridgeError,
-        checkBridgeHealth: () => {
-          setBridgeRunning(testState.bridgeRunningAfterCheck);
-          setBridgeChecked(true);
-          setBridgeError(testState.bridgeErrorAfterCheck);
-        },
-      };
-    },
-  };
-});
+vi.mock('../hooks/useWinboxFlow', () => ({
+  useWinboxFlow: () => ({
+    bridgeChecked: testState.bridgeChecked,
+    bridgeRunning: testState.bridgeRunning,
+    deviceWinboxState: testState.deviceWinboxState,
+    winboxError: testState.winboxError,
+    openDeviceMenu: testState.openDeviceMenuFlow,
+    launchWinbox: testState.launchWinbox,
+    clearWinboxError: testState.clearWinboxError,
+    setDeviceWinboxAvailability: testState.setDeviceWinboxAvailability,
+  }),
+}));
 
 vi.mock('./canvas/useCanvasMenus', async () => {
   const ReactModule = await import('react');
@@ -192,6 +177,7 @@ vi.mock('./canvas/useCanvasData', () => ({
       loading: false,
       error: null,
       loadTopology: vi.fn().mockResolvedValue(undefined),
+      runtimeSummary: { alertCount: 0, prometheusDown: false },
       grafanaUrlRef: { current: '' },
       deviceGrafanaUrlsRef: { current: new Map<string, string>() },
       refreshSettings: vi.fn(),
@@ -214,35 +200,24 @@ vi.mock('./canvas/useAreaFilteredTopology', () => ({
   }),
 }));
 
-vi.mock('../api/client', () => apiMocks);
-
 describe('Canvas WinBox gating', () => {
   beforeEach(() => {
     testState.openDeviceMenu = null;
-    testState.bridgeRunningAfterCheck = true;
-    testState.bridgeErrorAfterCheck = null;
-    apiMocks.fetchDeviceCredentialProfiles.mockReset();
-    apiMocks.fetchSettings.mockReset();
-    apiMocks.fetchBridgeToken.mockReset();
-    apiMocks.fetchSettings.mockResolvedValue({
-      bridge_port: '1337',
-      bridge_secret: 'secret',
-    });
-    vi.stubGlobal('fetch', vi.fn());
+    testState.bridgeChecked = false;
+    testState.bridgeRunning = true;
+    testState.deviceWinboxState = {};
+    testState.winboxError = null;
+    testState.openDeviceMenuFlow.mockReset();
+    testState.launchWinbox.mockReset();
+    testState.clearWinboxError.mockReset();
+    testState.setDeviceWinboxAvailability.mockReset();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
-  it('refreshes a stale false WinBox cache when reopening the same device menu', async () => {
-    apiMocks.fetchDeviceCredentialProfiles
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true },
-      ]);
-
+  it('refreshes WinBox flow state whenever the device menu opens', () => {
     render(
       <Canvas
         snapshot={null}
@@ -254,27 +229,14 @@ describe('Canvas WinBox gating', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
-
-    await waitFor(() => {
-      expect(apiMocks.fetchDeviceCredentialProfiles).toHaveBeenCalledTimes(1);
-    });
-    expect(await screen.findByRole('button', { name: 'Open in WinBox' })).toBeDisabled();
-
     fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
 
-    await waitFor(() => {
-      expect(apiMocks.fetchDeviceCredentialProfiles).toHaveBeenCalledTimes(2);
-    });
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Open in WinBox' })).not.toBeDisabled();
-    });
+    expect(testState.openDeviceMenuFlow).toHaveBeenCalledTimes(2);
+    expect(testState.openDeviceMenuFlow).toHaveBeenNthCalledWith(1, 'dev-1');
+    expect(testState.openDeviceMenuFlow).toHaveBeenNthCalledWith(2, 'dev-1');
   });
 
   it('does not keep WinBox disabled while profile availability is still unknown', async () => {
-    apiMocks.fetchDeviceCredentialProfiles.mockImplementation(
-      () => new Promise(() => {}),
-    );
-
     render(
       <Canvas
         snapshot={null}
@@ -287,16 +249,13 @@ describe('Canvas WinBox gating', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Open in WinBox' })).not.toBeDisabled();
-    });
+    expect(await screen.findByRole('button', { name: 'Open in WinBox' })).not.toBeDisabled();
   });
 
   it('keeps WinBox enabled when the bridge health check reports unavailable', async () => {
-    testState.bridgeRunningAfterCheck = false;
-    apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([
-      { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true },
-    ]);
+    testState.bridgeChecked = true;
+    testState.bridgeRunning = false;
+    testState.deviceWinboxState = { 'dev-1': true };
 
     render(
       <Canvas
@@ -310,21 +269,15 @@ describe('Canvas WinBox gating', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Open in WinBox' })).not.toBeDisabled();
-    });
+    expect(await screen.findByRole('button', { name: 'Open in WinBox' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Open in WinBox' })).toHaveAttribute(
       'title',
       'WinBox bridge appears unavailable - click to try launch anyway',
     );
   });
 
-  it('shows a toast when the bridge health check times out', async () => {
-    testState.bridgeRunningAfterCheck = false;
-    testState.bridgeErrorAfterCheck = BRIDGE_HEALTH_TIMEOUT_MESSAGE;
-    apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([
-      { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true },
-    ]);
+  it('shows a toast when the flow reports a bridge health timeout', async () => {
+    testState.winboxError = BRIDGE_HEALTH_TIMEOUT_MESSAGE;
 
     render(
       <Canvas
@@ -335,18 +288,12 @@ describe('Canvas WinBox gating', () => {
         areas={[]}
       />,
     );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
 
     expect(await screen.findByText(BRIDGE_HEALTH_TIMEOUT_MESSAGE)).toBeInTheDocument();
   });
 
-  it('shows a toast when the launch request times out', async () => {
-    apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([
-      { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true },
-    ]);
-    apiMocks.fetchBridgeToken.mockResolvedValue('bridge-token');
-    (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}));
+  it('launches WinBox through the flow hook from the menu action', async () => {
+    testState.deviceWinboxState = { 'dev-1': true };
 
     render(
       <Canvas
@@ -358,18 +305,9 @@ describe('Canvas WinBox gating', () => {
       />,
     );
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-
     fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
-    const winboxButton = await screen.findByRole('button', { name: 'Open in WinBox' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Open in WinBox' }));
 
-    vi.useFakeTimers();
-    fireEvent.click(winboxButton);
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(BRIDGE_REQUEST_TIMEOUT_MS); });
-
-    expect(screen.getByText(BRIDGE_LAUNCH_TIMEOUT_MESSAGE)).toBeInTheDocument();
+    expect(testState.launchWinbox).toHaveBeenCalledWith('dev-1');
   });
 });

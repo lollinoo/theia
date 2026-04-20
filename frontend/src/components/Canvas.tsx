@@ -5,7 +5,7 @@ import {
   type Connection, type EdgeChange,
 } from '@xyflow/react';
 import type { Area, Device, Link } from '../types/api';
-import { isPrometheusUnavailable, type AlertDTO, type PrometheusStatusPayload, type SnapshotPayload } from '../types/metrics';
+import { type AlertDTO, type PrometheusStatusPayload, type SnapshotPayload } from '../types/metrics';
 import DeviceCard, { type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import SearchOverlay from './SearchOverlay';
@@ -25,11 +25,9 @@ import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { usePositions } from '../hooks/usePositions';
 import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
-import { useBridgeHealth } from '../hooks/useBridgeHealth';
-import { useDeviceWinboxAvailability } from '../hooks/useDeviceWinboxAvailability';
+import { useWinboxFlow } from '../hooks/useWinboxFlow';
 import { minimapColorForDevice } from './deviceVisualState';
-import { fetchBridgeToken, fetchSettings } from '../api/client';
-import { fetchBridgeWithTimeout, getBridgeLaunchErrorMessage } from '../utils/bridgeRequests';
+import { buildRuntimeState } from './canvas/runtimeAdapters';
 
 const nodeTypes = { device: DeviceCard };
 const edgeTypes = { link: LinkEdge };
@@ -57,31 +55,16 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
   const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
-  const [bridgePort, setBridgePort] = useState('1337');
-  const { bridgeRunning, bridgeChecked, bridgeError, checkBridgeHealth } = useBridgeHealth(bridgePort);
   const {
+    bridgeChecked,
+    bridgeRunning,
     deviceWinboxState,
-    refreshDeviceWinboxAvailability,
+    winboxError,
+    openDeviceMenu: refreshWinboxFlow,
+    launchWinbox,
+    clearWinboxError,
     setDeviceWinboxAvailability,
-  } = useDeviceWinboxAvailability();
-  const [bridgeSecret, setBridgeSecret] = useState('');
-  const [winboxError, setWinboxError] = useState<string | null>(null);
-  useEffect(() => {
-    fetchSettings().then((s) => {
-      setBridgeSecret(s['bridge_secret'] ?? '');
-      setBridgePort(s['bridge_port'] ?? '1337');
-    }).catch(() => {});
-  }, []);
-  useEffect(() => {
-    if (!winboxError) return;
-    const t = window.setTimeout(() => setWinboxError(null), 5000);
-    return () => window.clearTimeout(t);
-  }, [winboxError]);
-  useEffect(() => {
-    if (bridgeError) {
-      setWinboxError(bridgeError);
-    }
-  }, [bridgeError]);
+  } = useWinboxFlow();
   const {
     deviceMenu, setDeviceMenu, edgeMenu, setEdgeMenu,
     panelContent, setPanelContent, showShortcuts, setShowShortcuts,
@@ -91,8 +74,9 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
 
   useEffect(() => {
     onDetailDeviceChange?.(getCanvasDetailDeviceId(panelContent));
-    return () => onDetailDeviceChange?.(null);
   }, [panelContent, onDetailDeviceChange]);
+
+  useEffect(() => () => onDetailDeviceChange?.(null), [onDetailDeviceChange]);
 
   const handleSelectionChange = useCallback(
     ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => {
@@ -121,14 +105,14 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
   );
   const openDeviceMenu = useCallback(
     (event: React.MouseEvent, deviceId: string) => {
-      checkBridgeHealth();
-      refreshDeviceWinboxAvailability(deviceId);
+      refreshWinboxFlow(deviceId);
       setDeviceMenu({ deviceId, x: event.clientX, y: event.clientY });
-    }, [checkBridgeHealth, refreshDeviceWinboxAvailability, setDeviceMenu],
+    }, [refreshWinboxFlow, setDeviceMenu],
   );
 
   const {
     devices, setDevices, topologyLinks, loading, error, loadTopology,
+    runtimeSummary,
     grafanaUrlRef, deviceGrafanaUrlsRef, refreshSettings,
     prometheusAlertDismissed, setPrometheusAlertDismissed,
     showRecoveryToast, setShowRecoveryToast,
@@ -139,13 +123,17 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
     reactFlow, nodes, setNodes, setEdges, onDevicesChange, onLinksChange,
   });
 
-  const alertCount = alerts.filter((alert) => alert.state === 'firing').length
-    + (isPrometheusUnavailable(prometheusStatus) ? 1 : 0);
-
   // Area filtering: derive filtered devices/links and ghost devices
   const { filteredDevices, filteredLinks, ghostDevices } = useAreaFilteredTopology(
     devices, topologyLinks, selectedAreaId,
   );
+  const runtimeState = useMemo(() => buildRuntimeState({
+    devices,
+    links: topologyLinks,
+    snapshot,
+    alerts,
+    prometheusStatus,
+  }), [devices, topologyLinks, snapshot, alerts, prometheusStatus]);
 
   // Build a lookup for area colors (adapted for current theme)
   const areaColorMap = useMemo(() => {
@@ -293,34 +281,6 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
   }, [editMode, setNodes]);
   useEffect(() => () => { if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current); }, []);
 
-  async function handleLaunchWinBox(deviceId: string) {
-    if (!bridgeSecret) {
-      setWinboxError('Bridge secret not configured');
-      return;
-    }
-    let token: string;
-    try {
-      token = await fetchBridgeToken(deviceId, bridgeSecret);
-    } catch (error) {
-      setWinboxError(error instanceof Error ? error.message : 'Failed to launch WinBox');
-      return;
-    }
-
-    try {
-      const res = await fetchBridgeWithTimeout(`http://localhost:${bridgePort}/launch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({})) as { error?: string };
-        setWinboxError(data.error ?? `Bridge error (${res.status})`);
-      }
-    } catch (error) {
-      setWinboxError(getBridgeLaunchErrorMessage(error));
-    }
-  }
-
   const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges((cur) => applyEdgeChanges(changes, cur));
   }, []);
@@ -401,7 +361,7 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
         onCreateLink={() => setPanelContent({ type: 'create-link' })} onAlerts={() => setPanelContent({ type: 'alerts' })}
         onSettings={() => setPanelContent({ type: 'settings' })} onToggleEditMode={() => setEditMode((m) => !m)}
         editMode={editMode}
-        alertCount={alertCount} />
+        alertCount={runtimeSummary.alertCount} />
 
       {deviceMenu && (() => {
         const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
@@ -420,7 +380,7 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
           winboxDisabled,
           winboxTitle,
           onOpenWinbox: () => {
-            if (d) void handleLaunchWinBox(d.id);
+            if (d) void launchWinbox(d.id);
             setDeviceMenu(null);
           },
           onOpenGrafana: () => {
@@ -428,11 +388,11 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
             setDeviceMenu(null);
           },
           onOpenInterfaceStats: () => {
-            if (d) setPanelContent({ type: 'interfaceStats', data: { device: d } });
+            if (d) setPanelContent({ type: 'interfaceStats', data: { deviceId: d.id } });
             setDeviceMenu(null);
           },
           onConfigure: () => {
-            if (d) setPanelContent({ type: 'deviceConfig', data: { device: d } });
+            if (d) setPanelContent({ type: 'deviceConfig', data: { deviceId: d.id } });
             setDeviceMenu(null);
           },
         });
@@ -446,11 +406,10 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
         const ml = me?.data?.link;
         const dMap = new Map(devices.map((d) => [d.id, d]));
         const sd = ml ? dMap.get(ml.source_device_id) : undefined;
-        const td = ml ? dMap.get(ml.target_device_id) : undefined;
         const gUrl = grafanaUrl(sd?.id);
         return (
           <ContextMenu position={{ x: edgeMenu.x, y: edgeMenu.y }} onClose={() => setEdgeMenu(null)} items={[
-            { label: 'Per-Interface Stats', icon: 'devices', onClick: () => { if (ml && sd && td) setPanelContent({ type: 'interfaceStats', data: { linkId: ml.id, link: ml, sourceDevice: sd, targetDevice: td } }); setEdgeMenu(null); } },
+            { label: 'Per-Interface Stats', icon: 'devices', onClick: () => { if (ml) setPanelContent({ type: 'interfaceStats', data: { linkId: ml.id } }); setEdgeMenu(null); } },
             { label: gUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)', icon: 'hub', onClick: () => { if (gUrl) window.open(gUrl, '_blank'); setEdgeMenu(null); } },
             { label: 'View Details', icon: 'search', onClick: () => { const el = edges.find((e) => e.id === edgeMenu.edgeID)?.data?.link; if (el) setPanelContent({ type: 'link-details', data: { link: el, readOnly: true } }); setEdgeMenu(null); } },
           ]} />
@@ -458,9 +417,10 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
       })()}
 
       <SidePanel open={!!panelContent} onClose={() => setPanelContent(null)} title={getPanelTitle()}>
-        <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} snapshot={snapshot} alerts={alerts}
+        <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} alerts={alerts}
           devices={devices} topologyLinks={topologyLinks} loadTopology={loadTopology}
-          setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus}
+          setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow}
+          runtimeState={runtimeState}
           onAreasChange={onAreasChange} onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {
             setDeviceWinboxAvailability(deviceId, hasWinboxProfile);
@@ -473,7 +433,7 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
         topologyRecoveryNotice={topologyRecoveryNotice}
         dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
         retryTopologyRefresh={retryTopologyRefresh}
-        prometheusStatus={prometheusStatus} prometheusAlertDismissed={prometheusAlertDismissed}
+        prometheusDown={runtimeSummary.prometheusDown} prometheusAlertDismissed={prometheusAlertDismissed}
         setPrometheusAlertDismissed={setPrometheusAlertDismissed} setPanelContent={setPanelContent}
         selectedNodeCount={selectedNodeCount}
         onBulkEditClick={() => {
@@ -486,7 +446,7 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
       {winboxError && (
         <div className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-status-down/35 bg-surface-container-high px-4 py-2.5 text-xs text-status-down shadow-floating">
           <span>{winboxError}</span>
-          <button type="button" onClick={() => setWinboxError(null)} className="ml-1 hover:opacity-70">&times;</button>
+          <button type="button" onClick={clearWinboxError} className="ml-1 hover:opacity-70">&times;</button>
         </div>
       )}
 
@@ -506,7 +466,7 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
             setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
           } else {
             const cd = devices.find((d) => d.id === node.id);
-            if (cd) setPanelContent({ type: 'deviceConfig', data: { device: cd } });
+            if (cd) setPanelContent({ type: 'deviceConfig', data: { deviceId: cd.id } });
           }
         }}
         onEdgeClick={(_ev, edge) => {
