@@ -533,7 +533,7 @@ func main() {
 	}
 	deviceBackupScheduler.Start(ctx)
 
-	wsHandler := ws.NewHandler(hub, pipeline.GetOverviewSnapshot, pipeline.GetPrometheusStatus)
+	wsHandler := ws.NewHandler(hub, pipeline.GetOverviewSnapshot, pipeline.GetAlerts, pipeline.GetPrometheusStatus)
 
 	// Create HTTP router with all /api/v1/ routes
 	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, cfg.BridgeBinariesDir, wsHandler)

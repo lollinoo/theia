@@ -5,7 +5,7 @@ import {
   type Connection, type EdgeChange,
 } from '@xyflow/react';
 import type { Area, Device, Link } from '../types/api';
-import { isPrometheusUnavailable, type PrometheusStatusPayload, type SnapshotPayload } from '../types/metrics';
+import { isPrometheusUnavailable, type AlertDTO, type PrometheusStatusPayload, type SnapshotPayload } from '../types/metrics';
 import DeviceCard, { type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import SearchOverlay from './SearchOverlay';
@@ -33,9 +33,11 @@ import { fetchBridgeWithTimeout, getBridgeLaunchErrorMessage } from '../utils/br
 
 const nodeTypes = { device: DeviceCard };
 const edgeTypes = { link: LinkEdge };
+const emptyAlerts: AlertDTO[] = [];
 
 interface CanvasProps {
   snapshot: SnapshotPayload | null;
+  alerts?: AlertDTO[];
   reconnecting: boolean;
   prometheusStatus: PrometheusStatusPayload | null;
   selectedAreaId: string | null;
@@ -47,7 +49,7 @@ interface CanvasProps {
   onDetailDeviceChange?: (deviceId: string | null) => void;
 }
 
-export default function Canvas({ snapshot, reconnecting, prometheusStatus, selectedAreaId, areas, onDevicesChange, onLinksChange, onAreaSelect, onAreasChange, onDetailDeviceChange }: CanvasProps) {
+export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, prometheusStatus, selectedAreaId, areas, onDevicesChange, onLinksChange, onAreaSelect, onAreasChange, onDetailDeviceChange }: CanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
@@ -132,10 +134,13 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
     showRecoveryToast, setShowRecoveryToast,
     topologyRecoveryNotice, dismissTopologyRecoveryNotice, retryTopologyRefresh,
   } = useCanvasData({
-    snapshot, reconnecting, prometheusStatus, editMode,
+    snapshot, alerts, reconnecting, prometheusStatus, editMode,
     openDeviceMenu, openEdgeMenu, openSelfLinkDetails,
     reactFlow, nodes, setNodes, setEdges, onDevicesChange, onLinksChange,
   });
+
+  const alertCount = alerts.filter((alert) => alert.state === 'firing').length
+    + (isPrometheusUnavailable(prometheusStatus) ? 1 : 0);
 
   // Area filtering: derive filtered devices/links and ghost devices
   const { filteredDevices, filteredLinks, ghostDevices } = useAreaFilteredTopology(
@@ -396,7 +401,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
         onCreateLink={() => setPanelContent({ type: 'create-link' })} onAlerts={() => setPanelContent({ type: 'alerts' })}
         onSettings={() => setPanelContent({ type: 'settings' })} onToggleEditMode={() => setEditMode((m) => !m)}
         editMode={editMode}
-        alertCount={(snapshot?.alerts.filter((a) => a.state === 'firing').length ?? 0) + (isPrometheusUnavailable(prometheusStatus) ? 1 : 0)} />
+        alertCount={alertCount} />
 
       {deviceMenu && (() => {
         const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
@@ -453,7 +458,7 @@ export default function Canvas({ snapshot, reconnecting, prometheusStatus, selec
       })()}
 
       <SidePanel open={!!panelContent} onClose={() => setPanelContent(null)} title={getPanelTitle()}>
-        <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} snapshot={snapshot}
+        <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} snapshot={snapshot} alerts={alerts}
           devices={devices} topologyLinks={topologyLinks} loadTopology={loadTopology}
           setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow} prometheusStatus={prometheusStatus}
           onAreasChange={onAreasChange} onSettingsChange={refreshSettings}

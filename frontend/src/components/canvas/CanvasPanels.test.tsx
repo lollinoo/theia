@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CanvasPanels } from './CanvasPanels';
 import type { Device, Link } from '../../types/api';
+import type { AlertDTO } from '../../types/metrics';
 
 vi.mock('../DeviceConfigPanel', () => ({
   DeviceConfigPanel: (props: { onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void }) => (
@@ -16,6 +17,12 @@ vi.mock('../LinkDetailsPanel', () => ({
     <div>
       {props.readOnly ? 'Link Details Read Only' : 'Link Details Editable'}:{props.link.target_if_name}
     </div>
+  ),
+}));
+
+vi.mock('../AlertsPanel', () => ({
+  AlertsPanel: (props: { alerts: AlertDTO[] }) => (
+    <div>Alert count: {props.alerts.length}</div>
   ),
 }));
 
@@ -55,6 +62,17 @@ function mockLink(overrides: Partial<Link> = {}): Link {
     source_if_oper_status: 'up',
     target_if_speed: 1_000_000_000,
     target_if_oper_status: 'up',
+    ...overrides,
+  };
+}
+
+function mockAlert(overrides: Partial<AlertDTO> = {}): AlertDTO {
+  return {
+    device_id: 'dev-1',
+    severity: 'critical',
+    alert_name: 'DeviceDown',
+    state: 'firing',
+    summary: 'router unreachable',
     ...overrides,
   };
 }
@@ -137,5 +155,29 @@ describe('CanvasPanels', () => {
     );
 
     expect(screen.getByText('Link Details Read Only:ether2')).toBeInTheDocument();
+  });
+
+  it('passes separate alert state through to the alerts panel', () => {
+    const device = mockDevice();
+
+    render(
+      <CanvasPanels
+        {...({
+          panelContent: { type: 'alerts' },
+          setPanelContent: vi.fn(),
+          snapshot: null,
+          alerts: [mockAlert()],
+          devices: [device],
+          topologyLinks: [],
+          loadTopology: vi.fn().mockResolvedValue(undefined),
+          setDevices: vi.fn(),
+          setNodes: vi.fn(),
+          reactFlow: {} as never,
+          prometheusStatus: null,
+        } as const)}
+      />,
+    );
+
+    expect(screen.getByText('Alert count: 1')).toBeInTheDocument();
   });
 });

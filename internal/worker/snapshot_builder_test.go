@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -16,7 +17,6 @@ func TestBuildPipelineSnapshotPreservesOverviewSections(t *testing.T) {
 	peerID := uuid.New()
 	linkID := uuid.New()
 	collectedAt := time.Date(2026, 4, 13, 9, 30, 0, 0, time.UTC)
-	lastPolledAt := time.Date(2026, 4, 13, 9, 30, 15, 0, time.UTC)
 	expectedInterval := 45 * time.Second
 
 	devices := []domain.Device{
@@ -70,7 +70,6 @@ func TestBuildPipelineSnapshotPreservesOverviewSections(t *testing.T) {
 			Health:           state.HealthStatusWarning,
 			Reachability:     state.ReachabilityUp,
 			Stale:            true,
-			LastPolledAt:     lastPolledAt,
 			ExpectedInterval: expectedInterval,
 		},
 	}
@@ -114,12 +113,6 @@ func TestBuildPipelineSnapshotPreservesOverviewSections(t *testing.T) {
 	if metric.Stale == nil || !*metric.Stale {
 		t.Fatalf("expected stale true, got %#v", metric.Stale)
 	}
-	if metric.LastPolledAt != lastPolledAt.Format(time.RFC3339) {
-		t.Fatalf("expected LastPolledAt %q, got %q", lastPolledAt.Format(time.RFC3339), metric.LastPolledAt)
-	}
-	if metric.ExpectedPollIntervalSeconds == nil || *metric.ExpectedPollIntervalSeconds != int64(expectedInterval/time.Second) {
-		t.Fatalf("expected ExpectedPollIntervalSeconds %d, got %#v", expectedInterval/time.Second, metric.ExpectedPollIntervalSeconds)
-	}
 
 	linkMetrics, ok := snapshot.LinkMetrics[deviceID.String()]
 	if !ok {
@@ -142,25 +135,102 @@ func TestBuildPipelineSnapshotPreservesOverviewSections(t *testing.T) {
 		t.Fatalf("expected peer status probing, got %q", got)
 	}
 
-	if got := snapshot.DeviceHostnames[deviceID.String()]; got != "core-sw-1" {
-		t.Fatalf("expected DB hostname precedence, got %q", got)
-	}
-	if got := snapshot.DeviceHostnames[peerID.String()]; got != "edge-sw-2" {
-		t.Fatalf("expected hostname override fallback, got %q", got)
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
 	}
 
-	if got := snapshot.DeviceModels[deviceID.String()]; got != "CRS326-24G-2S+" {
-		t.Fatalf("expected model CRS326-24G-2S+, got %q", got)
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
 	}
-	if _, ok := snapshot.DeviceModels[peerID.String()]; ok {
-		t.Fatal("did not expect Unknown model to be included")
+	if _, ok := decoded["alerts"]; ok {
+		t.Fatal("expected slim snapshot to omit alerts")
+	}
+	if _, ok := decoded["device_hostnames"]; ok {
+		t.Fatal("expected slim snapshot to omit device_hostnames")
+	}
+	if _, ok := decoded["device_models"]; ok {
+		t.Fatal("expected slim snapshot to omit device_models")
 	}
 
-	if len(snapshot.Alerts) != 1 {
-		t.Fatalf("expected 1 alert, got %d", len(snapshot.Alerts))
+	decodedMetrics, ok := decoded["device_metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("device_metrics = %#v, want object", decoded["device_metrics"])
 	}
-	if snapshot.Alerts[0].AlertName != "HighCPU" {
-		t.Fatalf("expected alert HighCPU, got %q", snapshot.Alerts[0].AlertName)
+	decodedMetric, ok := decodedMetrics[deviceID.String()].(map[string]any)
+	if !ok {
+		t.Fatalf("device_metrics[%s] = %#v, want object", deviceID, decodedMetrics[deviceID.String()])
+	}
+	if _, ok := decodedMetric["temp_celsius"]; ok {
+		t.Fatal("expected slim device_metrics to omit temp_celsius")
+	}
+	if _, ok := decodedMetric["uptime_secs"]; ok {
+		t.Fatal("expected slim device_metrics to omit uptime_secs")
+	}
+	if _, ok := decodedMetric["last_polled_at"]; ok {
+		t.Fatal("expected slim device_metrics to omit last_polled_at")
+	}
+	if _, ok := decodedMetric["expected_poll_interval_seconds"]; ok {
+		t.Fatal("expected slim device_metrics to omit expected_poll_interval_seconds")
+	}
+}
+
+func TestBuildPipelineSnapshotJSONOmitsDetailOnlyDeviceMetricFields(t *testing.T) {
+	deviceID := uuid.New()
+	snapshot := buildPipelineSnapshot(
+		[]domain.Device{{
+			ID:     deviceID,
+			IP:     "192.0.2.10",
+			Status: domain.DeviceStatusUnknown,
+		}},
+		nil,
+		map[uuid.UUID]state.DeviceState{
+			deviceID: {
+				Metrics: domain.DeviceMetrics{
+					DeviceID:    deviceID,
+					CPUPercent:  floatPtr(12),
+					TempCelsius: floatPtr(48),
+					UptimeSecs:  floatPtr(3600),
+					CollectedAt: time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC),
+				},
+				ExpectedInterval: 30 * time.Second,
+				LastPolledAt:     time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC),
+			},
+		},
+		nil,
+		nil,
+	)
+
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+
+	deviceMetrics, ok := decoded["device_metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("device_metrics = %#v, want object", decoded["device_metrics"])
+	}
+	metric, ok := deviceMetrics[deviceID.String()].(map[string]any)
+	if !ok {
+		t.Fatalf("device_metrics[%s] = %#v, want object", deviceID, deviceMetrics[deviceID.String()])
+	}
+	if _, ok := metric["temp_celsius"]; ok {
+		t.Fatal("expected slim overview device_metrics to omit temp_celsius")
+	}
+	if _, ok := metric["uptime_secs"]; ok {
+		t.Fatal("expected slim overview device_metrics to omit uptime_secs")
+	}
+	if _, ok := metric["last_polled_at"]; ok {
+		t.Fatal("expected slim overview device_metrics to omit last_polled_at")
+	}
+	if _, ok := metric["expected_poll_interval_seconds"]; ok {
+		t.Fatal("expected slim overview device_metrics to omit expected_poll_interval_seconds")
 	}
 }
 
@@ -251,12 +321,6 @@ func TestBuildPipelineSnapshot_FallsBackToPollOverrideAndUnknownHealthBeforeFirs
 	if deviceMetrics.Health != string(state.HealthStatusUnknown) {
 		t.Fatalf("Health = %q, want %q", deviceMetrics.Health, state.HealthStatusUnknown)
 	}
-	if deviceMetrics.ExpectedPollIntervalSeconds == nil || *deviceMetrics.ExpectedPollIntervalSeconds != 15 {
-		t.Fatalf("ExpectedPollIntervalSeconds = %#v, want 15", deviceMetrics.ExpectedPollIntervalSeconds)
-	}
-	if deviceMetrics.LastPolledAt != "" {
-		t.Fatalf("LastPolledAt = %q, want empty", deviceMetrics.LastPolledAt)
-	}
 	if deviceMetrics.Stale == nil || *deviceMetrics.Stale {
 		t.Fatalf("Stale = %#v, want false", deviceMetrics.Stale)
 	}
@@ -279,19 +343,14 @@ func TestBuildPipelineSnapshot_FallsBackToPollClassIntervalWhenOverrideAbsent(t 
 		nil,
 	)
 
-	deviceMetrics, ok := snapshot.DeviceMetrics[deviceID.String()]
-	if !ok {
+	if _, ok := snapshot.DeviceMetrics[deviceID.String()]; !ok {
 		t.Fatalf("expected overview metrics for %s", deviceID)
-	}
-	if deviceMetrics.ExpectedPollIntervalSeconds == nil || *deviceMetrics.ExpectedPollIntervalSeconds != 300 {
-		t.Fatalf("ExpectedPollIntervalSeconds = %#v, want 300", deviceMetrics.ExpectedPollIntervalSeconds)
 	}
 }
 
 func TestBuildDeviceDetailDelta_EmbedsOptionalDetailFieldsInDeviceMetrics(t *testing.T) {
 	deviceID := uuid.New()
 	collectedAt := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
-	lastPolledAt := time.Date(2026, 4, 13, 12, 0, 5, 0, time.UTC)
 
 	delta := buildDeviceDetailDelta(
 		domain.Device{
@@ -310,7 +369,6 @@ func TestBuildDeviceDetailDelta_EmbedsOptionalDetailFieldsInDeviceMetrics(t *tes
 			Health:           state.HealthStatusWarning,
 			Reachability:     state.ReachabilityUp,
 			Stale:            true,
-			LastPolledAt:     lastPolledAt,
 			ExpectedInterval: 45 * time.Second,
 		},
 	)
@@ -328,12 +386,6 @@ func TestBuildDeviceDetailDelta_EmbedsOptionalDetailFieldsInDeviceMetrics(t *tes
 	}
 	if deviceMetrics.Stale == nil || !*deviceMetrics.Stale {
 		t.Fatalf("Stale = %#v, want true", deviceMetrics.Stale)
-	}
-	if deviceMetrics.LastPolledAt != lastPolledAt.Format(time.RFC3339) {
-		t.Fatalf("LastPolledAt = %q, want %q", deviceMetrics.LastPolledAt, lastPolledAt.Format(time.RFC3339))
-	}
-	if deviceMetrics.ExpectedPollIntervalSeconds == nil || *deviceMetrics.ExpectedPollIntervalSeconds != 45 {
-		t.Fatalf("ExpectedPollIntervalSeconds = %#v, want 45", deviceMetrics.ExpectedPollIntervalSeconds)
 	}
 	if got := delta.DeviceStatuses[deviceID.String()]; got != string(domain.DeviceStatusUp) {
 		t.Fatalf("DeviceStatuses[%s] = %q, want %q", deviceID, got, domain.DeviceStatusUp)
@@ -392,32 +444,19 @@ func TestBuildDeviceDetailDelta_IncludesSelectedDeviceLinkMetricsOnly(t *testing
 	if linkMetrics[0].CollectedAt != collectedAt.Format(time.RFC3339) {
 		t.Fatalf("LinkMetrics[%s][0].CollectedAt = %q, want %q", deviceID, linkMetrics[0].CollectedAt, collectedAt.Format(time.RFC3339))
 	}
-	if len(delta.Alerts) != 0 {
-		t.Fatalf("Alerts length = %d, want 0", len(delta.Alerts))
-	}
-	if len(delta.DeviceHostnames) != 0 {
-		t.Fatalf("DeviceHostnames length = %d, want 0", len(delta.DeviceHostnames))
-	}
-	if len(delta.DeviceModels) != 0 {
-		t.Fatalf("DeviceModels length = %d, want 0", len(delta.DeviceModels))
-	}
 }
 
-func TestComputeSnapshotHashes_DeviceMetricHashIncludesDetailFields(t *testing.T) {
+func TestComputeSnapshotHashes_DeviceMetricHashIgnoresRemovedDetailFields(t *testing.T) {
 	deviceID := uuid.New().String()
-	expectedPollIntervalSecondsA := int64(45)
-	expectedPollIntervalSecondsB := int64(60)
 	stale := true
 
 	baseMetric := ws.DeviceMetricsDTO{
-		DeviceID:                    deviceID,
-		CPUPercent:                  floatPtr(55),
-		CollectedAt:                 "2026-04-13T12:00:00Z",
-		Health:                      "warning",
-		Reachability:                "up",
-		Stale:                       &stale,
-		LastPolledAt:                "2026-04-13T12:00:05Z",
-		ExpectedPollIntervalSeconds: &expectedPollIntervalSecondsA,
+		DeviceID:     deviceID,
+		CPUPercent:   floatPtr(55),
+		CollectedAt:  "2026-04-13T12:00:00Z",
+		Health:       "warning",
+		Reachability: "up",
+		Stale:        &stale,
 	}
 
 	current := ws.EmptySnapshot()
@@ -426,21 +465,19 @@ func TestComputeSnapshotHashes_DeviceMetricHashIncludesDetailFields(t *testing.T
 	updated := ws.EmptySnapshot()
 	updated.DeviceMetrics[deviceID] = baseMetric
 	updated.DeviceMetrics[deviceID] = ws.DeviceMetricsDTO{
-		DeviceID:                    baseMetric.DeviceID,
-		CPUPercent:                  baseMetric.CPUPercent,
-		CollectedAt:                 baseMetric.CollectedAt,
-		Health:                      baseMetric.Health,
-		Reachability:                baseMetric.Reachability,
-		Stale:                       baseMetric.Stale,
-		LastPolledAt:                baseMetric.LastPolledAt,
-		ExpectedPollIntervalSeconds: &expectedPollIntervalSecondsB,
+		DeviceID:     baseMetric.DeviceID,
+		CPUPercent:   baseMetric.CPUPercent,
+		CollectedAt:  baseMetric.CollectedAt,
+		Health:       baseMetric.Health,
+		Reachability: baseMetric.Reachability,
+		Stale:        baseMetric.Stale,
 	}
 
 	currentHashes := computeSnapshotHashes(current)
 	updatedHashes := computeSnapshotHashes(updated)
 
-	if currentHashes.deviceMetrics[deviceID] == updatedHashes.deviceMetrics[deviceID] {
-		t.Fatal("expected detail field change to alter device metric hash")
+	if currentHashes.deviceMetrics[deviceID] != updatedHashes.deviceMetrics[deviceID] {
+		t.Fatal("expected removed detail field changes to be ignored by slim device metric hash")
 	}
 }
 
@@ -466,10 +503,7 @@ func TestBuildDeltaSuppressesUnchangedSections(t *testing.T) {
 				CollectedAt: "2026-04-13T09:30:00Z",
 			}},
 		},
-		Alerts:          []ws.AlertDTO{{DeviceID: deviceID, Severity: "warning", AlertName: "A", State: "firing", Summary: "same"}},
 		DeviceStatuses:  map[string]string{deviceID: "up"},
-		DeviceHostnames: map[string]string{deviceID: "router1"},
-		DeviceModels:    map[string]string{deviceID: "RB5009"},
 	}
 	current := &ws.SnapshotPayload{
 		DeviceMetrics: map[string]ws.DeviceMetricsDTO{
@@ -488,10 +522,7 @@ func TestBuildDeltaSuppressesUnchangedSections(t *testing.T) {
 				CollectedAt: "2026-04-13T09:30:00Z",
 			}},
 		},
-		Alerts:          []ws.AlertDTO{{DeviceID: deviceID, Severity: "warning", AlertName: "A", State: "firing", Summary: "same"}},
 		DeviceStatuses:  map[string]string{deviceID: "up"},
-		DeviceHostnames: map[string]string{deviceID: "router1"},
-		DeviceModels:    map[string]string{deviceID: "RB5009"},
 	}
 
 	delta := buildDelta(current, computeSnapshotHashes(current), computeSnapshotHashes(previous))
@@ -503,15 +534,6 @@ func TestBuildDeltaSuppressesUnchangedSections(t *testing.T) {
 	}
 	if len(delta.DeviceStatuses) != 0 {
 		t.Fatalf("expected unchanged device_statuses to be suppressed, got %d entries", len(delta.DeviceStatuses))
-	}
-	if len(delta.DeviceHostnames) != 0 {
-		t.Fatalf("expected unchanged device_hostnames to be suppressed, got %d entries", len(delta.DeviceHostnames))
-	}
-	if len(delta.DeviceModels) != 0 {
-		t.Fatalf("expected unchanged device_models to be suppressed, got %d entries", len(delta.DeviceModels))
-	}
-	if delta.Alerts != nil {
-		t.Fatalf("expected unchanged alerts to be suppressed, got %#v", delta.Alerts)
 	}
 	if len(delta.LinkMetrics) != 1 {
 		t.Fatalf("expected changed link_metrics to remain, got %d entries", len(delta.LinkMetrics))

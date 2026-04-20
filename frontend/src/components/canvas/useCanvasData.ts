@@ -8,6 +8,7 @@ import type { Device, Link } from '../../types/api';
 import {
   alertStatusForDevice,
   isPrometheusUnavailable,
+  type AlertDTO,
   type PrometheusStatusPayload,
   type SnapshotPayload,
 } from '../../types/metrics';
@@ -32,6 +33,7 @@ import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIden
 
 interface UseCanvasDataParams {
   snapshot: SnapshotPayload | null;
+  alerts?: AlertDTO[];
   reconnecting: boolean;
   prometheusStatus: PrometheusStatusPayload | null;
   editMode: boolean;
@@ -88,6 +90,7 @@ interface LoadTopologyOptions {
 const structuralRefreshDebounceMs = 250;
 const topologyRefreshRetryActionLabel = 'Retry topology refresh';
 const topologyRefreshDelayedMessage = 'Live topology refresh delayed';
+const emptyAlerts: AlertDTO[] = [];
 
 function measurementTriggerForCauses(
   causes: Set<StructuralRefreshCause>,
@@ -185,18 +188,14 @@ function mergeRuntimeDeviceFields(
   }
 
   const snapshotStatus = effectiveSnapshot.device_statuses[device.id];
-  const snapshotHostname = effectiveSnapshot.device_hostnames[device.id];
-  const snapshotModel = effectiveSnapshot.device_models?.[device.id];
 
-  if (!snapshotStatus && !snapshotHostname && !snapshotModel) {
+  if (!snapshotStatus) {
     return baseDevice;
   }
 
   return {
     ...baseDevice,
     ...(snapshotStatus ? { status: snapshotStatus as Device['status'] } : {}),
-    ...(snapshotHostname ? { sys_name: snapshotHostname } : {}),
-    ...(snapshotModel ? { hardware_model: snapshotModel } : {}),
   };
 }
 
@@ -302,6 +301,7 @@ function buildLayoutInputs(
 
 export function useCanvasData({
   snapshot,
+  alerts = emptyAlerts,
   prometheusStatus,
   editMode,
   openDeviceMenu,
@@ -321,6 +321,7 @@ export function useCanvasData({
 
   const snapshotRef = useRef<SnapshotPayload | null>(null);
   const prometheusStatusRef = useRef<PrometheusStatusPayload | null>(null);
+  const alertsRef = useRef<AlertDTO[]>(alerts);
   const devicesRef = useRef<Device[]>([]);
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
@@ -348,6 +349,9 @@ export function useCanvasData({
   useEffect(() => {
     prometheusStatusRef.current = prometheusStatus;
   }, [prometheusStatus]);
+  useEffect(() => {
+    alertsRef.current = alerts;
+  }, [alerts]);
   devicesRef.current = devices;
   currentNodePositionsRef.current = new Map(
     nodes.map((node) => [
@@ -483,9 +487,7 @@ export function useCanvasData({
                   device: nextDevice,
                   editMode,
                   onContextMenu: openDeviceMenu,
-                  alertStatus: effectiveSnapshot
-                    ? alertStatusForDevice(node.id, effectiveSnapshot.alerts)
-                    : node.data.alertStatus,
+                  alertStatus: alertStatusForDevice(node.id, alertsRef.current),
                   metrics: nextMetrics,
                   monitoringState: resolveDeviceMonitoringState(nextDevice),
                   isVirtual: fetchedDevice.device_type === 'virtual',
@@ -517,7 +519,6 @@ export function useCanvasData({
 
               const sourceDeviceStatus = effectiveSnapshot.device_statuses[fetchedLink.source_device_id];
               const targetDeviceStatus = effectiveSnapshot.device_statuses[fetchedLink.target_device_id];
-              const linkAlertStatus = alertStatusForLink(fetchedLink, effectiveSnapshot.alerts);
               const bothDown = sourceDeviceStatus === 'down' && targetDeviceStatus === 'down';
               const metrics = bothDown
                 ? null
@@ -529,7 +530,7 @@ export function useCanvasData({
                   ? {
                       ...edge.data,
                       link: fetchedLink,
-                      alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
+                      alertStatus: alertStatusForLink(fetchedLink, alertsRef.current),
                       sourceDeviceStatus,
                       targetDeviceStatus,
                       metrics,
@@ -572,13 +573,14 @@ export function useCanvasData({
           editMode,
           openDeviceMenu,
           effectiveSnapshot,
+          alertsRef.current,
           fetchedLinks,
           openSelfLinkDetails,
           currentNodePositionsRef.current,
           placementDeviceIds,
         );
 
-        let nextEdges = buildTopologyEdges(fetchedLinks, devicesByID, nextNodes, undefined, openEdgeMenu);
+        let nextEdges = buildTopologyEdges(fetchedLinks, devicesByID, nextNodes, undefined, openEdgeMenu, alertsRef.current);
 
         // Merge pending snapshot link metrics into edges and mark snapshot time
         // so the stale-data timer doesn't immediately clear the metrics.
@@ -587,7 +589,6 @@ export function useCanvasData({
           nextEdges = nextEdges.map((edge) => {
             const link = edge.data?.link;
             if (!link) return edge;
-            const linkAlertStatus = alertStatusForLink(link, effectiveSnapshot.alerts);
             const srcStatus = effectiveSnapshot.device_statuses[link.source_device_id];
             const tgtStatus = effectiveSnapshot.device_statuses[link.target_device_id];
             const bothDown = srcStatus === 'down' && tgtStatus === 'down';
@@ -596,7 +597,7 @@ export function useCanvasData({
               ...edge,
               data: {
                 ...edge.data!,
-                alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
+                alertStatus: alertStatusForLink(link, alertsRef.current),
                 sourceDeviceStatus: srcStatus,
                 targetDeviceStatus: tgtStatus,
                 metrics: metrics,
@@ -629,9 +630,7 @@ export function useCanvasData({
               data: {
                 ...node.data,
                 highlighted: previousNode.data.highlighted,
-                alertStatus: isSilentRefresh
-                  ? previousNode.data.alertStatus
-                  : node.data.alertStatus,
+                alertStatus: node.data.alertStatus,
               },
             };
           });
@@ -871,25 +870,21 @@ export function useCanvasData({
         }
       }
 
-      // Apply all snapshot data (status, hostname, alerts, metrics) in a single
+      // Apply all snapshot data (status and metrics) in a single
       // urgent update so the first snapshot on page load renders immediately
       // instead of being split across an urgent + deferred transition pass.
       setNodes((currentNodes) =>
         currentNodes.map((node) => {
           const newStatus = effectiveStatuses[node.id];
-          const newHostname = snapshot.device_hostnames[node.id];
-          const newModel = snapshot.device_models?.[node.id];
-          const updatedDevice = newStatus || newHostname || newModel
+          const updatedDevice = newStatus
             ? {
                 ...node.data.device,
                 ...(newStatus ? { status: newStatus as Device['status'] } : {}),
-                ...(newHostname ? { sys_name: newHostname } : {}),
-                ...(newModel ? { hardware_model: newModel } : {}),
               }
             : node.data.device;
 
-          // Preserve overview metadata like health, last_polled_at, and
-          // expected_poll_interval_seconds even when device status is down.
+          // Preserve derived runtime metadata like health and freshness cadence
+          // even when device status is down.
           const nodeMetrics = sanitizeDeviceMetricsForDisplay(
             updatedDevice,
             snapshot.device_metrics[node.id] ?? null,
@@ -899,7 +894,7 @@ export function useCanvasData({
             ...node,
             data: {
               ...node.data,
-              alertStatus: alertStatusForDevice(node.id, snapshot.alerts),
+              alertStatus: alertStatusForDevice(node.id, alertsRef.current),
               device: updatedDevice,
               monitoringState: resolveDeviceMonitoringState(updatedDevice),
               metrics: nodeMetrics,
@@ -908,19 +903,15 @@ export function useCanvasData({
         }),
       );
 
-      // Sync devices state with hostnames/statuses/models so panels (e.g. LinkCreatePanel) see them
-      if (Object.keys(snapshot.device_hostnames).length > 0 || Object.keys(effectiveStatuses).length > 0 || Object.keys(snapshot.device_models ?? {}).length > 0) {
+      // Sync devices state with runtime statuses so panels (e.g. LinkCreatePanel) see them.
+      if (Object.keys(effectiveStatuses).length > 0) {
         setDevices((prev) =>
           prev.map((d) => {
-            const newHostname = snapshot.device_hostnames[d.id];
             const newStatus = effectiveStatuses[d.id];
-            const newModel = snapshot.device_models?.[d.id];
-            if (!newHostname && !newStatus && !newModel) return d;
+            if (!newStatus) return d;
             return {
               ...d,
-              ...(newHostname ? { sys_name: newHostname } : {}),
               ...(newStatus ? { status: newStatus as Device['status'] } : {}),
-              ...(newModel ? { hardware_model: newModel } : {}),
             };
           }),
         );
@@ -930,7 +921,6 @@ export function useCanvasData({
         currentEdges.map((edge) => {
           const link = edge.data?.link;
           if (!link) return edge;
-          const linkAlertStatus = alertStatusForLink(link, snapshot.alerts);
           const srcStatus = effectiveStatuses[link.source_device_id];
           const tgtStatus = effectiveStatuses[link.target_device_id];
 
@@ -943,7 +933,7 @@ export function useCanvasData({
             ...edge,
             data: {
               ...edge.data,
-              alertStatus: linkAlertStatus === 'normal' ? undefined : linkAlertStatus,
+              alertStatus: alertStatusForLink(link, alertsRef.current),
               sourceDeviceStatus: srcStatus,
               targetDeviceStatus: tgtStatus,
               metrics: metrics,
@@ -974,8 +964,8 @@ export function useCanvasData({
           ...node,
           data: {
             ...node.data,
-            // Local stale fallback blanks numeric values only; health, stale,
-            // last_polled_at, and expected_poll_interval_seconds remain intact.
+            // Local stale fallback blanks numeric values only; health and
+            // derived freshness metadata remain intact.
             metrics: node.data.metrics
               ? {
                   ...node.data.metrics,
@@ -985,7 +975,7 @@ export function useCanvasData({
                   uptime_secs: null,
                 }
               : null,
-            alertStatus: undefined,
+            alertStatus: alertStatusForDevice(node.id, alertsRef.current),
           },
         })),
       );
@@ -998,7 +988,7 @@ export function useCanvasData({
             metrics: null,
             throughputLabel: undefined,
             utilization: null,
-            alertStatus: undefined,
+            alertStatus: edge.data?.link ? alertStatusForLink(edge.data.link, alertsRef.current) : undefined,
           },
         })),
       );
@@ -1008,6 +998,30 @@ export function useCanvasData({
       window.clearInterval(interval);
     };
   }, [setNodes]);
+
+  useEffect(() => {
+    setNodes((currentNodes) =>
+      currentNodes.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          alertStatus: alertStatusForDevice(node.id, alerts),
+        },
+      })),
+    );
+
+    setEdges((currentEdges) =>
+      currentEdges.map((edge) => ({
+        ...edge,
+        data: edge.data
+          ? {
+              ...edge.data,
+              alertStatus: edge.data.link ? alertStatusForLink(edge.data.link, alerts) : undefined,
+            }
+          : edge.data,
+      })),
+    );
+  }, [alerts, setEdges, setNodes]);
 
   return {
     devices,

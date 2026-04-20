@@ -15,7 +15,7 @@ export function getDefaultPollingIntervalSeconds(pollClass: DevicePollClass | un
 }
 
 export function getEffectivePollingIntervalSeconds(
-  device: Pick<Device, 'poll_class' | 'poll_interval_override'>,
+  device: Partial<Pick<Device, 'poll_class' | 'poll_interval_override'>>,
 ): number {
   return device.poll_interval_override ?? getDefaultPollingIntervalSeconds(device.poll_class);
 }

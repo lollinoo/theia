@@ -81,6 +81,7 @@ type PipelineOrchestrator struct {
 	snapshotMu              sync.RWMutex
 	lastSnapshot            *ws.SnapshotPayload
 	overviewVersion         uint64
+	alertVersion            uint64
 	promStatus              ws.PrometheusStatusPayload
 	hostnames               map[uuid.UUID]string
 	hostnameObservedAt      map[uuid.UUID]time.Time
@@ -248,6 +249,15 @@ func (p *PipelineOrchestrator) GetPrometheusStatus() ws.PrometheusStatusPayload 
 	p.snapshotMu.RLock()
 	defer p.snapshotMu.RUnlock()
 	return p.promStatus
+}
+
+func (p *PipelineOrchestrator) GetAlerts() ws.AlertMessagePayload {
+	p.snapshotMu.RLock()
+	defer p.snapshotMu.RUnlock()
+	return ws.AlertMessagePayload{
+		Version: p.alertVersion,
+		Alerts:  ws.AlertsToDTOs(flattenAlerts(cloneAlertGroups(p.alerts))),
+	}
 }
 
 func (p *PipelineOrchestrator) Status() string {
@@ -730,13 +740,25 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 	}
 
 	if resyncReason, ok := p.consumeResyncRequired(); ok {
-		return p.broadcastFullSnapshotWithResync(ctx, reloadReasonForResync(resyncReason), resyncReason, topologyDirty)
+		if err := p.broadcastFullSnapshotWithResync(ctx, reloadReasonForResync(resyncReason), resyncReason, topologyDirty); err != nil {
+			return err
+		}
+		p.broadcastAlertsIfDirty(alertsDirty)
+		return nil
 	}
 	if topologyDirty {
-		return p.broadcastFullSnapshot(ctx, refreshReloadReasonTopologyDirty, true)
+		if err := p.broadcastFullSnapshot(ctx, refreshReloadReasonTopologyDirty, true); err != nil {
+			return err
+		}
+		p.broadcastAlertsIfDirty(alertsDirty)
+		return nil
 	}
 	if forceFull {
-		return p.broadcastFullSnapshot(ctx, refreshReloadReasonFullResync, false)
+		if err := p.broadcastFullSnapshot(ctx, refreshReloadReasonFullResync, false); err != nil {
+			return err
+		}
+		p.broadcastAlertsIfDirty(alertsDirty)
+		return nil
 	}
 	if len(dirtyDevices) == 0 && !alertsDirty {
 		return nil
@@ -749,9 +771,14 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 		return err
 	}
 	if requireFullSnapshot {
-		return p.broadcastFullSnapshot(ctx, refreshReloadReasonDirtyDeltaFallback, false)
+		if err := p.broadcastFullSnapshot(ctx, refreshReloadReasonDirtyDeltaFallback, false); err != nil {
+			return err
+		}
+		p.broadcastAlertsIfDirty(alertsDirty)
+		return nil
 	}
 	if delta == nil {
+		p.broadcastAlertsIfDirty(alertsDirty)
 		return nil
 	}
 
@@ -765,8 +792,20 @@ func (p *PipelineOrchestrator) broadcastDirty(ctx context.Context, dirtyDevices 
 	p.snapshotMu.Unlock()
 
 	p.hub.BroadcastOverviewDelta(delta, baseVersion, version, merged)
+	p.broadcastAlertsIfDirty(alertsDirty)
 
 	return nil
+}
+
+func (p *PipelineOrchestrator) broadcastAlertsIfDirty(alertsDirty bool) {
+	if !alertsDirty || p.hub == nil {
+		return
+	}
+
+	p.hub.Broadcast(ws.Message{
+		Type:    ws.MessageTypeAlert,
+		Payload: p.GetAlerts(),
+	})
 }
 
 func (p *PipelineOrchestrator) broadcastFullSnapshot(_ context.Context, reason string, topologyChanged bool) error {
@@ -845,7 +884,7 @@ func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (_ *ws.SnapshotPayloa
 }
 
 func (p *PipelineOrchestrator) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUID]struct{}, alertsDirty bool) (*ws.SnapshotPayload, bool, error) {
-	if len(dirtyDevices) == 0 && !alertsDirty {
+	if len(dirtyDevices) == 0 {
 		return nil, false, nil
 	}
 
@@ -872,36 +911,7 @@ func (p *PipelineOrchestrator) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUI
 			delta.DeviceMetrics = partial.DeviceMetrics
 			delta.LinkMetrics = partial.LinkMetrics
 			delta.DeviceStatuses = partial.DeviceStatuses
-
-			for _, device := range filteredDevices {
-				deviceKey := device.ID.String()
-
-				hostname, ok := partial.DeviceHostnames[deviceKey]
-				if !ok {
-					hostname = ""
-				}
-				delta.DeviceHostnames[deviceKey] = hostname
-
-				model, ok := partial.DeviceModels[deviceKey]
-				if !ok {
-					model = ""
-				}
-				delta.DeviceModels[deviceKey] = model
-			}
 		}
-	}
-
-	if alertsDirty {
-		p.snapshotMu.RLock()
-		alerts := cloneAlertGroups(p.alerts)
-		previousAlerts := append([]ws.AlertDTO(nil), p.lastSnapshot.Alerts...)
-		p.snapshotMu.RUnlock()
-
-		currentAlerts := ws.AlertsToDTOs(flattenAlerts(alerts))
-		if len(currentAlerts) == 0 && len(previousAlerts) > 0 {
-			return nil, true, nil
-		}
-		delta.Alerts = currentAlerts
 	}
 
 	if snapshotPayloadEmpty(delta) {
@@ -917,6 +927,9 @@ func (p *PipelineOrchestrator) setAlerts(next map[uuid.UUID][]domain.AlertState)
 	current := ws.AlertsToDTOs(flattenAlerts(cloneAlertGroups(next)))
 	changed := !reflect.DeepEqual(previous, current)
 	p.alerts = next
+	if changed {
+		p.alertVersion++
+	}
 	p.snapshotMu.Unlock()
 
 	if changed {
@@ -1156,10 +1169,7 @@ func snapshotPayloadEmpty(payload *ws.SnapshotPayload) bool {
 
 	return len(payload.DeviceMetrics) == 0 &&
 		len(payload.LinkMetrics) == 0 &&
-		len(payload.Alerts) == 0 &&
-		len(payload.DeviceStatuses) == 0 &&
-		len(payload.DeviceHostnames) == 0 &&
-		len(payload.DeviceModels) == 0
+		len(payload.DeviceStatuses) == 0
 }
 
 func mergeSnapshotPayload(base *ws.SnapshotPayload, delta *ws.SnapshotPayload) *ws.SnapshotPayload {
@@ -1179,15 +1189,6 @@ func mergeSnapshotPayload(base *ws.SnapshotPayload, delta *ws.SnapshotPayload) *
 	}
 	for key, value := range delta.DeviceStatuses {
 		merged.DeviceStatuses[key] = value
-	}
-	for key, value := range delta.DeviceHostnames {
-		merged.DeviceHostnames[key] = value
-	}
-	for key, value := range delta.DeviceModels {
-		merged.DeviceModels[key] = value
-	}
-	if delta.Alerts != nil {
-		merged.Alerts = append([]ws.AlertDTO(nil), delta.Alerts...)
 	}
 
 	return merged

@@ -155,15 +155,16 @@ describe('useWebSocket', () => {
         payload: {
           device_metrics: {},
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
 
     expect(result.current.snapshot).not.toBeNull();
     expect(result.current.snapshot!.device_metrics).toEqual({});
+    expect((result.current.snapshot! as Record<string, unknown>).alerts).toBeUndefined();
+    expect((result.current.snapshot! as Record<string, unknown>).device_hostnames).toBeUndefined();
+    expect((result.current.snapshot! as Record<string, unknown>).device_models).toBeUndefined();
   });
 
   it('closes WebSocket on unmount', () => {
@@ -212,9 +213,7 @@ describe('useWebSocket', () => {
             },
           },
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
@@ -235,9 +234,7 @@ describe('useWebSocket', () => {
             },
           },
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
@@ -280,10 +277,7 @@ describe('useWebSocket', () => {
               },
             ],
           },
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
-          device_models: {},
         },
       });
     });
@@ -305,10 +299,7 @@ describe('useWebSocket', () => {
               },
             ],
           },
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
-          device_models: {},
         },
       });
     });
@@ -346,6 +337,133 @@ describe('useWebSocket', () => {
       type: 'subscribe_detail',
       payload: { device_id: 'dev-1' },
     }));
+  });
+
+  it('stores separate alert messages in dedicated alert state', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'alert',
+        payload: {
+          device_id: 'dev-1',
+          severity: 'critical',
+          alert_name: 'DeviceDown',
+          state: 'firing',
+          summary: 'router unreachable',
+        },
+      });
+    });
+
+    expect(result.current.alerts).toEqual([
+      {
+        device_id: 'dev-1',
+        severity: 'critical',
+        alert_name: 'DeviceDown',
+        state: 'firing',
+        summary: 'router unreachable',
+      },
+    ]);
+  });
+
+  it('ignores stale versioned alert payloads after a newer alert update', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'alert',
+        payload: {
+          version: 11,
+          alerts: [
+            {
+              device_id: 'dev-1',
+              severity: 'warning',
+              alert_name: 'CpuHigh',
+              state: 'firing',
+              summary: 'cpu high',
+            },
+          ],
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'alert',
+        payload: {
+          version: 10,
+          alerts: [
+            {
+              device_id: 'dev-1',
+              severity: 'critical',
+              alert_name: 'DeviceDown',
+              state: 'firing',
+              summary: 'device down',
+            },
+          ],
+        },
+      });
+    });
+
+    expect(result.current.alerts).toEqual([
+      {
+        device_id: 'dev-1',
+        severity: 'warning',
+        alert_name: 'CpuHigh',
+        state: 'firing',
+        summary: 'cpu high',
+      },
+    ]);
+  });
+
+  it('preserves detail-only device metric fields from detail subscription deltas', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          device_metrics: {
+            'dev-1': {
+              device_id: 'dev-1',
+              cpu_percent: 50,
+              mem_percent: null,
+              collected_at: '2026-01-01T00:00:00Z',
+            },
+          },
+          link_metrics: {},
+          device_statuses: {},
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'snapshot_delta',
+        payload: {
+          device_metrics: {
+            'dev-1': {
+              device_id: 'dev-1',
+              cpu_percent: 51,
+              mem_percent: 52,
+              temp_celsius: 53,
+              uptime_secs: 54,
+              last_polled_at: '2026-01-01T00:00:30Z',
+              expected_poll_interval_seconds: 30,
+              collected_at: '2026-01-01T00:00:30Z',
+            },
+          },
+          link_metrics: {},
+          device_statuses: {},
+        },
+      });
+    });
+
+    expect(result.current.snapshot?.device_metrics['dev-1']).toMatchObject({
+      cpu_percent: 51,
+      mem_percent: 52,
+      temp_celsius: 53,
+      uptime_secs: 54,
+      last_polled_at: '2026-01-01T00:00:30Z',
+      expected_poll_interval_seconds: 30,
+    });
   });
 
   it('sends unsubscribe_detail when detailDeviceId becomes null', () => {
@@ -475,9 +593,7 @@ describe('useWebSocket', () => {
             },
           },
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
@@ -509,9 +625,7 @@ describe('useWebSocket', () => {
             },
           },
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
@@ -543,9 +657,7 @@ describe('useWebSocket', () => {
             },
           },
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
@@ -584,9 +696,7 @@ describe('useWebSocket', () => {
             },
           },
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
@@ -642,59 +752,42 @@ describe('useWebSocket', () => {
     expect(result.current.snapshot!.device_metrics['dev-2']).toBeUndefined();
   });
 
-  it('snapshot_delta with alerts replaces existing alerts', () => {
+  it('ignores alert-only snapshot_delta payloads', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
       mockInstance.simulateOpen();
     });
 
-    // Send full snapshot with one existing alert
+    // Seed a valid snapshot first.
     act(() => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
           device_metrics: {},
           link_metrics: {},
-          alerts: [
-            {
-              device_id: 'd1',
-              severity: 'warning',
-              alert_name: 'HighCPU',
-              state: 'firing',
-              summary: 'CPU high',
-            },
-          ],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
 
-    // Send delta with a different alert
+    // Alert-only deltas should not affect the slim overview snapshot.
     act(() => {
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
           device_metrics: {},
           link_metrics: {},
-          alerts: [
-            {
-              device_id: 'd1',
-              severity: 'critical',
-              alert_name: 'Down',
-              state: 'firing',
-              summary: 'Device down',
-            },
-          ],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
 
-    expect(result.current.snapshot!.alerts).toHaveLength(1);
-    expect(result.current.snapshot!.alerts[0].alert_name).toBe('Down');
+    expect(result.current.snapshot).toEqual({
+      device_metrics: {},
+      link_metrics: {},
+      device_statuses: {},
+    });
   });
 
   it('does not crash when receiving an unknown message type', () => {
@@ -718,51 +811,42 @@ describe('useWebSocket', () => {
     expect(result.current.snapshot).toBeNull();
   });
 
-  it('snapshot_delta with empty alerts preserves existing alerts', () => {
+  it('snapshot_delta without core changes leaves snapshot unchanged', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
       mockInstance.simulateOpen();
     });
 
-    // Send full snapshot with one existing alert
+    // Seed a valid snapshot first.
     act(() => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
           device_metrics: {},
           link_metrics: {},
-          alerts: [
-            {
-              device_id: 'd1',
-              severity: 'warning',
-              alert_name: 'HighCPU',
-              state: 'firing',
-              summary: 'CPU high',
-            },
-          ],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
 
-    // Send delta with empty alerts — should preserve existing
+    // An empty slim delta should keep the current snapshot as-is.
     act(() => {
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
           device_metrics: {},
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
         },
       });
     });
 
-    expect(result.current.snapshot!.alerts).toHaveLength(1);
-    expect(result.current.snapshot!.alerts[0].alert_name).toBe('HighCPU');
+    expect(result.current.snapshot).toEqual({
+      device_metrics: {},
+      link_metrics: {},
+      device_statuses: {},
+    });
   });
 
   it('applies versioned snapshot_delta only when base_version matches local version', () => {
@@ -786,10 +870,7 @@ describe('useWebSocket', () => {
               },
             },
             link_metrics: {},
-            alerts: [],
             device_statuses: {},
-            device_hostnames: {},
-            device_models: {},
           },
         },
       });
@@ -810,10 +891,7 @@ describe('useWebSocket', () => {
               },
             },
             link_metrics: {},
-            alerts: [],
             device_statuses: {},
-            device_hostnames: {},
-            device_models: {},
           },
         },
       });
@@ -843,10 +921,7 @@ describe('useWebSocket', () => {
               },
             },
             link_metrics: {},
-            alerts: [],
             device_statuses: {},
-            device_hostnames: {},
-            device_models: {},
           },
         },
       });
@@ -867,10 +942,7 @@ describe('useWebSocket', () => {
               },
             },
             link_metrics: {},
-            alerts: [],
             device_statuses: {},
-            device_hostnames: {},
-            device_models: {},
           },
         },
       });

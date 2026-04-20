@@ -2,7 +2,7 @@ import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices } from '../../api/client';
 import type { Device, Link } from '../../types/api';
-import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
+import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { InterfaceStatsPanel, DeviceInterfaceStatsPanel } from '../InterfaceStatsPanel';
@@ -14,16 +14,18 @@ import { BulkEditPanel } from '../BulkEditPanel';
 import { LinkCreatePanel } from '../LinkCreatePanel';
 import { LinkDetailsPanel } from '../LinkDetailsPanel';
 import { viewportSize } from './canvasHelpers';
-import { getEffectivePollingIntervalSeconds } from '../../utils/polling';
 import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
 } from '../deviceVisualState';
 
+const emptyAlerts: AlertDTO[] = [];
+
 interface CanvasPanelsProps {
   panelContent: { type: string; data?: unknown } | null;
   setPanelContent: (content: { type: string; data?: unknown } | null) => void;
   snapshot: SnapshotPayload | null;
+  alerts?: AlertDTO[];
   devices: Device[];
   topologyLinks: Link[];
   loadTopology: (silent?: boolean, pos?: { x: number; y: number }) => Promise<void>;
@@ -40,6 +42,7 @@ export function CanvasPanels({
   panelContent,
   setPanelContent,
   snapshot,
+  alerts = emptyAlerts,
   devices,
   topologyLinks,
   loadTopology,
@@ -83,7 +86,7 @@ export function CanvasPanels({
       })()}
       {panelContent?.type === 'alerts' && (
         <AlertsPanel
-          alerts={snapshot?.alerts ?? []}
+          alerts={alerts}
           devices={devices}
           prometheusStatus={prometheusStatus}
         />
@@ -164,12 +167,7 @@ export function CanvasPanels({
                           : undefined,
                         metrics: sanitizeDeviceMetricsForDisplay(
                           updated,
-                          n.data.metrics
-                            ? {
-                                ...n.data.metrics,
-                                expected_poll_interval_seconds: getEffectivePollingIntervalSeconds(updated),
-                              }
-                            : n.data.metrics,
+                          n.data.metrics,
                         ),
                       },
                     }

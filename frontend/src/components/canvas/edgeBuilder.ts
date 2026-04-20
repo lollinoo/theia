@@ -202,6 +202,7 @@ export function buildTopologyEdges(
   nodes: DeviceNode[],
   existingEdgeDataByID?: Map<string, LinkEdgeData>,
   onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void,
+  alerts: AlertDTO[] = [],
 ): LinkEdgeType[] {
   const nodesByID = new Map(nodes.map((node) => [node.id, node]));
   const seenPhysicalLinks = new Set<string>();
@@ -244,6 +245,7 @@ export function buildTopologyEdges(
         existingEdgeDataByID?.get(link.id),
         onContextMenu,
       );
+      data.alertStatus = alertStatusForLink(link, alerts);
 
       return {
         id: link.id,

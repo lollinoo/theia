@@ -20,7 +20,7 @@ function App() {
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
 
-  const { snapshot, reconnecting, prometheusStatus } = useWebSocket('/api/v1/ws', detailDeviceId);
+  const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket('/api/v1/ws', detailDeviceId);
 
   // Fetch areas on mount
   useEffect(() => {
@@ -91,6 +91,7 @@ function App() {
         <ReactFlowProvider>
           <Canvas
             snapshot={snapshot}
+            alerts={alerts}
             reconnecting={reconnecting}
             prometheusStatus={prometheusStatus}
             selectedAreaId={selectedAreaId}

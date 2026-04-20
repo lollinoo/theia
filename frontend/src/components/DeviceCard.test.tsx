@@ -175,7 +175,7 @@ describe('DeviceCard', () => {
     });
 
     expect(screen.getByText('Fresh · 40s ago')).toBeInTheDocument();
-    expect(screen.getByText('Polling every 5m')).toBeInTheDocument();
+    expect(screen.getByText('Polling every 1m')).toBeInTheDocument();
     expect(screen.getByText('UP')).toBeInTheDocument();
     expect(screen.getAllByText('--')).toHaveLength(3);
   });
@@ -313,7 +313,7 @@ describe('DeviceCard', () => {
     expect(screen.getAllByText('Up')).toHaveLength(1);
     expect(screen.getByText('IP 192.168.1.1')).toBeInTheDocument();
     expect(screen.getByText('Fresh · 30s ago')).toBeInTheDocument();
-    expect(screen.getByText('Polling every 30s')).toBeInTheDocument();
+    expect(screen.getByText('Polling every 1m')).toBeInTheDocument();
     expect(screen.queryByText('CPU')).toBeNull();
     expect(screen.queryByText('MEM')).toBeNull();
     expect(screen.queryByText('UP')).toBeNull();

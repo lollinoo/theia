@@ -13,10 +13,7 @@ function makeSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
   return {
     device_metrics: {},
     link_metrics: {},
-    alerts: [],
     device_statuses: {},
-    device_hostnames: {},
-    device_models: {},
     ...overrides,
   };
 }
@@ -34,16 +31,11 @@ describe('parseWSMessage — snapshot_delta', () => {
               device_id: 'dev-1',
               cpu_percent: 90,
               mem_percent: null,
-              temp_celsius: null,
-              uptime_secs: null,
               collected_at: '2026-01-01T00:00:00Z',
             },
           },
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
-          device_models: {},
         },
       },
     });
@@ -63,16 +55,11 @@ describe('parseWSMessage — snapshot_delta', () => {
             device_id: 'dev-1',
             cpu_percent: 90,
             mem_percent: null,
-            temp_celsius: null,
-            uptime_secs: null,
             collected_at: '2026-01-01T00:00:00Z',
           },
         },
         link_metrics: {},
-        alerts: [],
         device_statuses: {},
-        device_hostnames: {},
-        device_models: {},
       },
     });
 
@@ -88,10 +75,7 @@ describe('parseWSMessage — snapshot_delta', () => {
       payload: {
         device_metrics: {},
         link_metrics: {},
-        alerts: [],
         device_statuses: {},
-        device_hostnames: {},
-        device_models: {},
       },
     });
 
@@ -107,16 +91,11 @@ describe('parseWSMessage — snapshot_delta', () => {
             device_id: 'dev-1',
             cpu_percent: 50,
             mem_percent: null,
-            temp_celsius: null,
-            uptime_secs: null,
             collected_at: '2026-01-01T00:00:00Z',
           },
         },
         link_metrics: {},
-        alerts: [],
         device_statuses: {},
-        device_hostnames: {},
-        device_models: {},
       },
     });
 
@@ -133,10 +112,7 @@ describe('parseWSMessage — snapshot_delta', () => {
         snapshot: {
           device_metrics: {},
           link_metrics: {},
-          alerts: [],
           device_statuses: {},
-          device_hostnames: {},
-          device_models: {},
         },
       },
     });
@@ -186,6 +162,82 @@ describe('mergeSnapshotDelta', () => {
 
     expect(result.device_metrics['dev-1'].cpu_percent).toBe(90);
     expect(result.device_metrics['dev-2'].cpu_percent).toBe(75);
+  });
+
+  it('preserves prior non-freshness detail-only device metric fields when a later slim delta updates the same device', () => {
+    const existing = makeSnapshot({
+      device_metrics: {
+        'dev-1': {
+          device_id: 'dev-1',
+          cpu_percent: 50,
+          mem_percent: 25,
+          temp_celsius: 55,
+          uptime_secs: 86400,
+          last_polled_at: '2026-01-01T00:00:30Z',
+          expected_poll_interval_seconds: 30,
+          collected_at: '2026-01-01T00:00:30Z',
+        },
+      },
+    });
+    const delta = makeSnapshot({
+      device_metrics: {
+        'dev-1': {
+          device_id: 'dev-1',
+          cpu_percent: 90,
+          mem_percent: 35,
+          collected_at: '2026-01-01T00:01:00Z',
+        },
+      },
+    });
+
+    const result = mergeSnapshotDelta(existing, delta);
+
+    expect(result.device_metrics['dev-1']).toMatchObject({
+      cpu_percent: 90,
+      mem_percent: 35,
+      temp_celsius: 55,
+      uptime_secs: 86400,
+      expected_poll_interval_seconds: 30,
+      collected_at: '2026-01-01T00:01:00Z',
+    });
+    expect(result.device_metrics['dev-1'].last_polled_at).toBeUndefined();
+  });
+
+  it('does not preserve a stale last_polled_at behind a newer collected_at', () => {
+    const existing = makeSnapshot({
+      device_metrics: {
+        'dev-1': {
+          device_id: 'dev-1',
+          cpu_percent: 50,
+          mem_percent: 25,
+          temp_celsius: 55,
+          uptime_secs: 86400,
+          last_polled_at: '2026-01-01T00:00:30Z',
+          expected_poll_interval_seconds: 30,
+          collected_at: '2026-01-01T00:00:30Z',
+        },
+      },
+    });
+    const delta = makeSnapshot({
+      device_metrics: {
+        'dev-1': {
+          device_id: 'dev-1',
+          cpu_percent: 90,
+          mem_percent: 35,
+          collected_at: '2026-01-01T00:01:00Z',
+        },
+      },
+    });
+
+    const result = mergeSnapshotDelta(existing, delta);
+
+    expect(result.device_metrics['dev-1']).toMatchObject({
+      temp_celsius: 55,
+      uptime_secs: 86400,
+      expected_poll_interval_seconds: 30,
+      collected_at: '2026-01-01T00:01:00Z',
+    });
+    expect(result.device_metrics['dev-1'].last_polled_at).toBeUndefined();
   });
 
   it('merges targeted link_metrics for one device without clearing other devices', () => {
@@ -245,34 +297,15 @@ describe('mergeSnapshotDelta', () => {
 
   it('replaces alerts entirely when delta has non-empty alerts', () => {
     const existing = makeSnapshot({
-      alerts: [
-        { device_id: 'd1', severity: 'warning', alert_name: 'HighCPU', state: 'firing', summary: 'CPU high' },
-      ],
+      device_statuses: { 'dev-1': 'up' },
     });
     const delta = makeSnapshot({
-      alerts: [
-        { device_id: 'd1', severity: 'critical', alert_name: 'Down', state: 'firing', summary: 'Device down' },
-      ],
+      device_statuses: { 'dev-1': 'down' },
     });
 
     const result = mergeSnapshotDelta(existing, delta);
 
-    expect(result.alerts).toHaveLength(1);
-    expect(result.alerts[0].alert_name).toBe('Down');
-  });
-
-  it('preserves existing alerts when delta has empty alerts array', () => {
-    const existing = makeSnapshot({
-      alerts: [
-        { device_id: 'd1', severity: 'warning', alert_name: 'HighCPU', state: 'firing', summary: 'CPU high' },
-      ],
-    });
-    const delta = makeSnapshot({ alerts: [] });
-
-    const result = mergeSnapshotDelta(existing, delta);
-
-    expect(result.alerts).toHaveLength(1);
-    expect(result.alerts[0].alert_name).toBe('HighCPU');
+    expect(result.device_statuses['dev-1']).toBe('down');
   });
 });
 
@@ -287,51 +320,83 @@ describe('parseWSMessage — topology_changed', () => {
   });
 });
 
+describe('parseWSMessage — alert', () => {
+  it('parses a versioned alert envelope', () => {
+    const message = parseWSMessage({
+      type: 'alert',
+      payload: {
+        version: 12,
+        alerts: [
+          {
+            device_id: 'dev-1',
+            severity: 'critical',
+            alert_name: 'DeviceDown',
+            state: 'firing',
+            summary: 'device down',
+          },
+        ],
+      },
+    });
+
+    expect(message.type).toBe('alert');
+    expect(message.payload).toEqual({
+      version: 12,
+      alerts: [
+        {
+          device_id: 'dev-1',
+          severity: 'critical',
+          alert_name: 'DeviceDown',
+          state: 'firing',
+          summary: 'device down',
+        },
+      ],
+    });
+  });
+});
+
 describe('parseDeviceMetrics', () => {
   it('preserves optional detail fields when present', () => {
     const metrics = parseDeviceMetrics({
       device_id: 'dev-1',
       cpu_percent: 50,
       mem_percent: null,
-      temp_celsius: null,
-      uptime_secs: null,
+      temp_celsius: 55,
+      uptime_secs: 86400,
       collected_at: '2026-01-01T00:00:00Z',
       health: 'warning',
       reachability: 'up',
       stale: false,
-      last_polled_at: '2026-01-01T00:00:05Z',
+      last_polled_at: '2026-01-01T00:00:00Z',
       expected_poll_interval_seconds: 30,
     });
 
     expect(metrics.health).toBe('warning');
     expect(metrics.reachability).toBe('up');
     expect(metrics.stale).toBe(false);
-    expect(metrics.last_polled_at).toBe('2026-01-01T00:00:05Z');
+    expect(metrics.temp_celsius).toBe(55);
+    expect(metrics.uptime_secs).toBe(86400);
+    expect(metrics.last_polled_at).toBe('2026-01-01T00:00:00Z');
     expect(metrics.expected_poll_interval_seconds).toBe(30);
   });
 });
 
-describe('mergeSnapshotDelta — device_models', () => {
-  it('merges device_models from delta into existing snapshot', () => {
-    const existing = makeSnapshot({
-      device_models: { 'dev-1': 'RB4011' },
+describe('parseSnapshotPayload', () => {
+  it('does not synthesize removed overview sections', () => {
+    const message = parseWSMessage({
+      type: 'snapshot',
+      payload: {
+        version: 7,
+        snapshot: {
+          device_metrics: {},
+          link_metrics: {},
+          device_statuses: {},
+        },
+      },
     });
-    const delta = makeSnapshot({
-      device_models: { 'dev-2': 'CCR2004' },
-    });
-    const result = mergeSnapshotDelta(existing, delta);
-    expect(result.device_models['dev-1']).toBe('RB4011');
-    expect(result.device_models['dev-2']).toBe('CCR2004');
-  });
 
-  it('overwrites existing device_models entry when delta has same key', () => {
-    const existing = makeSnapshot({
-      device_models: { 'dev-1': 'RB4011' },
-    });
-    const delta = makeSnapshot({
-      device_models: { 'dev-1': 'RB5009' },
-    });
-    const result = mergeSnapshotDelta(existing, delta);
-    expect(result.device_models['dev-1']).toBe('RB5009');
+    const payload = (message as { type: 'snapshot'; payload: SnapshotEnvelopePayload }).payload;
+    expect((payload.snapshot as Record<string, unknown>).alerts).toBeUndefined();
+    expect((payload.snapshot as Record<string, unknown>).device_hostnames).toBeUndefined();
+    expect((payload.snapshot as Record<string, unknown>).device_models).toBeUndefined();
   });
 });

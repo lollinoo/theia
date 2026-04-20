@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -63,29 +64,23 @@ func TestParseClientControlMessage_RejectsBadSubscribeUUID(t *testing.T) {
 	}
 }
 
-func TestCloneSnapshot_PreservesOptionalDetailFields(t *testing.T) {
+func TestCloneSnapshot_PreservesSlimOverviewFields(t *testing.T) {
 	stale := true
-	expectedPollIntervalSeconds := int64(45)
 	deviceID := uuid.New().String()
 
 	snapshot := &SnapshotPayload{
 		DeviceMetrics: map[string]DeviceMetricsDTO{
 			deviceID: {
-				DeviceID:                    deviceID,
-				CPUPercent:                  float64Ptr(17),
-				Health:                      "warning",
-				Reachability:                "reachable",
-				Stale:                       &stale,
-				LastPolledAt:                "2026-04-13T13:00:00Z",
-				ExpectedPollIntervalSeconds: &expectedPollIntervalSeconds,
-				CollectedAt:                 "2026-04-13T13:00:00Z",
+				DeviceID:     deviceID,
+				CPUPercent:   float64Ptr(17),
+				Health:       "warning",
+				Reachability: "reachable",
+				Stale:        &stale,
+				CollectedAt:  "2026-04-13T13:00:00Z",
 			},
 		},
-		LinkMetrics:     map[string][]LinkMetricsDTO{},
-		Alerts:          []AlertDTO{},
-		DeviceStatuses:  map[string]string{},
-		DeviceHostnames: map[string]string{},
-		DeviceModels:    map[string]string{},
+		LinkMetrics:    map[string][]LinkMetricsDTO{},
+		DeviceStatuses: map[string]string{},
 	}
 
 	cloned := CloneSnapshot(snapshot)
@@ -105,13 +100,72 @@ func TestCloneSnapshot_PreservesOptionalDetailFields(t *testing.T) {
 	if got.Stale == nil || *got.Stale != stale {
 		t.Fatalf("Stale = %v, want %v", got.Stale, stale)
 	}
+}
 
-	if got.LastPolledAt != "2026-04-13T13:00:00Z" {
-		t.Fatalf("LastPolledAt = %q, want %q", got.LastPolledAt, "2026-04-13T13:00:00Z")
+func TestNewSnapshotMessage_UsesSlimOverviewContract(t *testing.T) {
+	deviceID := uuid.New().String()
+
+	message := NewSnapshotMessage(&SnapshotPayload{
+		DeviceMetrics: map[string]DeviceMetricsDTO{
+			deviceID: {
+				DeviceID:    deviceID,
+				CPUPercent:  float64Ptr(17),
+				MemPercent:  float64Ptr(34),
+				CollectedAt: "2026-04-13T13:00:00Z",
+				Health:      "warning",
+			},
+		},
+		LinkMetrics:    map[string][]LinkMetricsDTO{},
+		DeviceStatuses: map[string]string{deviceID: "down"},
+	}, 42)
+
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
 	}
 
-	if got.ExpectedPollIntervalSeconds == nil || *got.ExpectedPollIntervalSeconds != expectedPollIntervalSeconds {
-		t.Fatalf("ExpectedPollIntervalSeconds = %v, want %d", got.ExpectedPollIntervalSeconds, expectedPollIntervalSeconds)
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+
+	payload, ok := decoded["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload = %#v, want object", decoded["payload"])
+	}
+	snapshot, ok := payload["snapshot"].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot = %#v, want object", payload["snapshot"])
+	}
+	if _, ok := snapshot["alerts"]; ok {
+		t.Fatal("expected slim snapshot to omit alerts")
+	}
+	if _, ok := snapshot["device_hostnames"]; ok {
+		t.Fatal("expected slim snapshot to omit device_hostnames")
+	}
+	if _, ok := snapshot["device_models"]; ok {
+		t.Fatal("expected slim snapshot to omit device_models")
+	}
+
+	deviceMetrics, ok := snapshot["device_metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("device_metrics = %#v, want object", snapshot["device_metrics"])
+	}
+	metric, ok := deviceMetrics[deviceID].(map[string]any)
+	if !ok {
+		t.Fatalf("device_metrics[%s] = %#v, want object", deviceID, deviceMetrics[deviceID])
+	}
+	if _, ok := metric["temp_celsius"]; ok {
+		t.Fatal("expected slim device_metrics to omit temp_celsius")
+	}
+	if _, ok := metric["uptime_secs"]; ok {
+		t.Fatal("expected slim device_metrics to omit uptime_secs")
+	}
+	if _, ok := metric["last_polled_at"]; ok {
+		t.Fatal("expected slim device_metrics to omit last_polled_at")
+	}
+	if _, ok := metric["expected_poll_interval_seconds"]; ok {
+		t.Fatal("expected slim device_metrics to omit expected_poll_interval_seconds")
 	}
 }
 

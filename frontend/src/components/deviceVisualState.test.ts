@@ -40,13 +40,9 @@ function mockMetrics(overrides: Partial<DeviceMetricsDTO> = {}): DeviceMetricsDT
     device_id: 'dev-1',
     cpu_percent: 42,
     mem_percent: 68,
-    temp_celsius: 55,
-    uptime_secs: 86400,
     collected_at: '2026-04-13T11:59:45Z',
     health: 'healthy',
     stale: false,
-    last_polled_at: '2026-04-13T11:59:30Z',
-    expected_poll_interval_seconds: 30,
     ...overrides,
   };
 }
@@ -134,6 +130,29 @@ describe('deviceVisualState', () => {
     expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
       dotStatus: 'up',
       label: 'Up',
+    });
+  });
+
+  it('derives freshness cadence from collected_at and device polling settings', () => {
+    const device = mockDevice({ poll_class: 'core', poll_interval_override: 15 });
+
+    expect(sanitizeDeviceMetricsForDisplay(device, mockMetrics())).toMatchObject({
+      temp_celsius: null,
+      uptime_secs: null,
+      last_polled_at: '2026-04-13T11:59:45Z',
+      expected_poll_interval_seconds: 15,
+    });
+  });
+
+  it('uses current device polling settings instead of cached metric cadence', () => {
+    const device = mockDevice({ poll_class: 'core', poll_interval_override: 15 });
+
+    expect(sanitizeDeviceMetricsForDisplay(device, mockMetrics({
+      expected_poll_interval_seconds: 300,
+      last_polled_at: '2026-04-13T11:59:30Z',
+    }))).toMatchObject({
+      last_polled_at: '2026-04-13T11:59:30Z',
+      expected_poll_interval_seconds: 15,
     });
   });
 });
