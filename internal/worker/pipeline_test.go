@@ -161,6 +161,22 @@ type fakeSNMPClient struct {
 	walkErr       map[string]error
 }
 
+type spyPipelineTaskRunner struct {
+	runTaskCalls []scheduler.PollTask
+}
+
+func (s *spyPipelineTaskRunner) runWorker(context.Context) {}
+
+func (s *spyPipelineTaskRunner) runTask(_ context.Context, task scheduler.PollTask) {
+	s.runTaskCalls = append(s.runTaskCalls, task)
+}
+
+func (s *spyPipelineTaskRunner) topologyDiscoveryMode(domain.Device) domain.TopologyDiscoveryMode {
+	return domain.TopologyDiscoveryModeOff
+}
+
+func (s *spyPipelineTaskRunner) publishSubscribedDetailDelta(domain.Device) {}
+
 func (c *fakeSNMPClient) Connect() error { return nil }
 func (c *fakeSNMPClient) Close() error   { return nil }
 
@@ -518,6 +534,34 @@ func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRe
 				t.Fatalf("topologyDiscoveryMode() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPipelineOrchestratorRunTask_DelegatesToWiredTaskRunner(t *testing.T) {
+	pipeline := NewPipelineOrchestrator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	if pipeline.taskRunner == nil {
+		t.Fatal("expected NewPipelineOrchestrator to wire taskRunner")
+	}
+	if concrete, ok := pipeline.taskRunner.(*pipelineTaskRunner); !ok || concrete.pipeline != pipeline {
+		t.Fatal("expected wired taskRunner to retain orchestrator back-reference")
+	}
+
+	spy := &spyPipelineTaskRunner{}
+	pipeline.taskRunner = spy
+
+	task := scheduler.PollTask{
+		RunID:           123,
+		Key:             scheduler.NewTaskKey(uuid.New(), domain.VolatilityClassPerformance),
+		VolatilityClass: domain.VolatilityClassPerformance,
+	}
+
+	pipeline.runTask(context.Background(), task)
+
+	if len(spy.runTaskCalls) != 1 {
+		t.Fatalf("expected pipeline.runTask to delegate once, got %d call(s)", len(spy.runTaskCalls))
+	}
+	if spy.runTaskCalls[0].RunID != task.RunID || spy.runTaskCalls[0].Key != task.Key || spy.runTaskCalls[0].VolatilityClass != task.VolatilityClass {
+		t.Fatalf("delegated task = %#v, want %#v", spy.runTaskCalls[0], task)
 	}
 }
 
