@@ -704,6 +704,53 @@ func TestPipelineOrchestratorStartReturnsErrAlreadyStarted(t *testing.T) {
 	}
 }
 
+func TestPipelineOrchestratorStopIsIdempotent(t *testing.T) {
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		state.NewStore(),
+		newPipelineTestCache(nil, nil),
+		ws.NewHub(),
+		newPerformanceTestCollector(t),
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		collector.NewPrometheusCollector(&fakePrometheusClient{}),
+		&fakeTopologyService{},
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := pipeline.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	pipeline.Stop()
+
+	secondStopReturned := make(chan struct{})
+	go func() {
+		pipeline.Stop()
+		close(secondStopReturned)
+	}()
+
+	select {
+	case <-secondStopReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Stop() did not return within 2 seconds")
+	}
+
+	if pipeline.Status() != "stopped" {
+		t.Fatalf("pipeline status = %q, want stopped", pipeline.Status())
+	}
+	if sched.stopCalls != 1 {
+		t.Fatalf("scheduler Stop() calls = %d, want 1", sched.stopCalls)
+	}
+}
+
 func TestPipelineOrchestratorStartRollsBackStoreWhenSchedulerStartFails(t *testing.T) {
 	sched := newPipelineTestScheduler()
 	sched.startErr = errors.New("boom")

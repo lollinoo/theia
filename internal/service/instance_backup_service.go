@@ -609,16 +609,16 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 
 	// Write marker file
 	markerPath := filepath.Join(filepath.Dir(s.dbPath), ".theia-restore-pending")
-	markerContent := map[string]string{
-		"staged_db":          filepath.Join(stagingDir, "theia.db"),
-		"staged_backups":     filepath.Join(stagingDir, "backups"),
-		"staged_known_hosts": filepath.Join(stagingDir, "known_hosts"),
-		"db_path":            s.dbPath,
-		"device_backup_dir":  s.deviceBackupDir,
-		"known_hosts_path":   s.knownHostsPath,
-		"timestamp":          time.Now().UTC().Format(time.RFC3339),
-	}
-	markerJSON, err := json.MarshalIndent(markerContent, "", "  ")
+	marker := newRestoreMarker(
+		filepath.Join(stagingDir, "theia.db"),
+		filepath.Join(stagingDir, "backups"),
+		filepath.Join(stagingDir, "known_hosts"),
+		s.dbPath,
+		s.deviceBackupDir,
+		s.knownHostsPath,
+		time.Now().UTC().Format(time.RFC3339),
+	)
+	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshaling marker JSON: %w", err)
 	}

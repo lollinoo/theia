@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -39,16 +38,12 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// restoreMarker is the JSON structure written by ValidateAndStageRestore.
-// It contains paths to staged files and their target destinations.
-type restoreMarker struct {
-	StagedDB         string `json:"staged_db"`
-	StagedBackups    string `json:"staged_backups"`
-	StagedKnownHosts string `json:"staged_known_hosts"`
-	DBPath           string `json:"db_path"`
-	DeviceBackupDir  string `json:"device_backup_dir"`
-	KnownHostsPath   string `json:"known_hosts_path"`
-	Timestamp        string `json:"timestamp"`
+type pendingRestoreCoordinator interface {
+	ApplyPendingRestore() (bool, error)
+}
+
+var newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
+	return service.NewRestoreCoordinator(dbPath, deviceBackupDir, knownHostsPath)
 }
 
 var newCollectorSNMPClient = func(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
@@ -59,221 +54,16 @@ func wirePollRescheduler(deviceService *service.DeviceService, sched *scheduler.
 	deviceService.SetPollRescheduler(sched)
 }
 
-// applyPendingRestore checks for a .theia-restore-pending marker file and
-// applies the staged restore if found. Must be called BEFORE opening the database.
-// Returns true if a restore was applied (caller should log and continue normally).
-func applyPendingRestore(dbPath string) bool {
-	markerPath := filepath.Join(filepath.Dir(dbPath), ".theia-restore-pending")
-
-	data, err := os.ReadFile(markerPath)
+func applyPendingSQLiteRestore(dbPath, deviceBackupDir, knownHostsPath string) error {
+	applied, err := newRestoreCoordinator(dbPath, deviceBackupDir, knownHostsPath).ApplyPendingRestore()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false // No pending restore — normal startup
-		}
-		log.Printf("Warning: failed to read restore marker %s: %v", markerPath, err)
-		return false
+		return fmt.Errorf("apply pending restore: %w", err)
 	}
-
-	var marker restoreMarker
-	if err := json.Unmarshal(data, &marker); err != nil {
-		log.Printf("Error: invalid restore marker JSON: %v", err)
-		return false
-	}
-
-	log.Printf("Restore marker found (staged at %s), applying restore...", marker.Timestamp)
-
-	// Step 1: Back up current DB as .pre-restore.bak (D-09)
-	bakPath := dbPath + ".pre-restore.bak"
-	if _, err := os.Stat(dbPath); err == nil {
-		// Remove old bak if exists
-		os.Remove(bakPath)
-		if err := copyFileForRestore(dbPath, bakPath); err != nil {
-			log.Fatalf("Restore failed: could not back up current DB to %s: %v", bakPath, err)
-		}
-		log.Printf("Restore: backed up current DB to %s", bakPath)
-	}
-
-	// Step 2: Replace DB with staged DB
-	if marker.StagedDB != "" {
-		if _, err := os.Stat(marker.StagedDB); err == nil {
-			if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
-				log.Fatalf("Restore failed: could not remove current DB: %v", err)
-			}
-			// Also remove WAL and SHM files from current DB
-			os.Remove(dbPath + "-wal")
-			os.Remove(dbPath + "-shm")
-			if err := os.Rename(marker.StagedDB, dbPath); err != nil {
-				log.Fatalf("Restore failed: could not move staged DB to %s: %v", dbPath, err)
-			}
-			log.Printf("Restore: replaced DB at %s", dbPath)
-		}
-	}
-
-	// Step 3: Replace device backup directory with staged backups
-	if marker.StagedBackups != "" && marker.DeviceBackupDir != "" {
-		if info, err := os.Stat(marker.StagedBackups); err == nil && info.IsDir() {
-			if err := replaceDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
-				log.Printf("Warning: failed to replace device backups at %s: %v", marker.DeviceBackupDir, err)
-				return false
-			}
-			log.Printf("Restore: replaced device backups at %s", marker.DeviceBackupDir)
-		}
-	}
-
-	// Step 4: Replace known_hosts with staged version
-	if marker.StagedKnownHosts != "" && marker.KnownHostsPath != "" {
-		if _, err := os.Stat(marker.StagedKnownHosts); err == nil {
-			if err := replaceFileForRestore(marker.StagedKnownHosts, marker.KnownHostsPath); err != nil {
-				log.Printf("Warning: failed to replace known_hosts at %s: %v", marker.KnownHostsPath, err)
-				return false
-			}
-			log.Printf("Restore: replaced known_hosts at %s", marker.KnownHostsPath)
-		}
-	}
-
-	// Step 5: Clean up marker and staging directory
-	os.Remove(markerPath)
-	stagingDir := filepath.Dir(marker.StagedDB)
-	if stagingDir != "" && stagingDir != "." {
-		os.RemoveAll(stagingDir)
-	}
-	log.Printf("Restore: cleanup complete, marker and staging removed")
-
-	return true
-}
-
-// copyFileForRestore copies a single file from src to dst. Used during restore to
-// preserve the original DB as a .pre-restore.bak and as fallback for cross-device moves.
-func copyFileForRestore(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Close()
-}
-
-func replaceDirForRestore(src, dst string) error {
-	tmpPath := dst + ".restore-tmp"
-	backupPath := dst + ".restore-old"
-
-	if err := os.RemoveAll(tmpPath); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(backupPath); err != nil {
-		return err
-	}
-	if err := copyDirForRestore(src, tmpPath); err != nil {
-		return err
-	}
-
-	movedExisting := false
-	if _, err := os.Stat(dst); err == nil {
-		if err := os.Rename(dst, backupPath); err != nil {
-			_ = os.RemoveAll(tmpPath)
-			return err
-		}
-		movedExisting = true
-	} else if !os.IsNotExist(err) {
-		_ = os.RemoveAll(tmpPath)
-		return err
-	}
-
-	if err := os.Rename(tmpPath, dst); err != nil {
-		if movedExisting {
-			if restoreErr := os.Rename(backupPath, dst); restoreErr != nil {
-				return fmt.Errorf("activate staged restore dir: %w (restore previous dir: %v)", err, restoreErr)
-			}
-		}
-		_ = os.RemoveAll(tmpPath)
-		return err
-	}
-
-	if movedExisting {
-		if err := os.RemoveAll(backupPath); err != nil {
-			log.Printf("Warning: failed to remove restore backup dir %s: %v", backupPath, err)
-		}
+	if applied {
+		log.Println("Restore applied successfully, continuing with normal startup")
 	}
 
 	return nil
-}
-
-func replaceFileForRestore(src, dst string) error {
-	tmpPath := dst + ".restore-tmp"
-	backupPath := dst + ".restore-old"
-
-	if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := copyFileForRestore(src, tmpPath); err != nil {
-		return err
-	}
-
-	movedExisting := false
-	if _, err := os.Stat(dst); err == nil {
-		if err := os.Rename(dst, backupPath); err != nil {
-			_ = os.Remove(tmpPath)
-			return err
-		}
-		movedExisting = true
-	} else if !os.IsNotExist(err) {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-
-	if err := os.Rename(tmpPath, dst); err != nil {
-		if movedExisting {
-			if restoreErr := os.Rename(backupPath, dst); restoreErr != nil {
-				return fmt.Errorf("activate staged restore file: %w (restore previous file: %v)", err, restoreErr)
-			}
-		}
-		_ = os.Remove(tmpPath)
-		return err
-	}
-
-	if movedExisting {
-		if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("Warning: failed to remove restore backup file %s: %v", backupPath, err)
-		}
-	}
-
-	return nil
-}
-
-// copyDirForRestore recursively copies a directory from src to dst.
-// Used as fallback when os.Rename fails (cross-device move).
-func copyDirForRestore(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0755)
-		}
-		return copyFileForRestore(path, target)
-	})
 }
 
 func main() {
@@ -308,6 +98,13 @@ func main() {
 		appDataDir = cfg.DataDir
 	}
 
+	backupDir := os.Getenv("THEIA_BACKUP_DIR")
+	if backupDir == "" {
+		backupDir = filepath.Join(appDataDir, "backups")
+	}
+
+	knownHostsPath := filepath.Join(appDataDir, "known_hosts")
+
 	dialect, err := sqlite.NormalizeDialect(cfg.DBDriver)
 	if err != nil {
 		log.Fatalf("Invalid database driver: %v", err)
@@ -320,8 +117,8 @@ func main() {
 		}
 
 		// Check for pending restore BEFORE opening the database (D-07)
-		if applyPendingRestore(cfg.DBPath) {
-			log.Println("Restore applied successfully, continuing with normal startup")
+		if err := applyPendingSQLiteRestore(cfg.DBPath, backupDir, knownHostsPath); err != nil {
+			log.Fatalf("Failed to apply pending SQLite restore: %v", err)
 		}
 	}
 
@@ -430,16 +227,11 @@ func main() {
 
 	// Create backup service
 	sshDialer := &ssh.DefaultDialer{}
-	backupDir := os.Getenv("THEIA_BACKUP_DIR")
-	if backupDir == "" {
-		backupDir = filepath.Join(appDataDir, "backups")
-	}
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
 		log.Fatalf("Failed to create backup directory %s: %v", backupDir, err)
 	}
 
 	// Initialize SSH known hosts store for host key verification
-	knownHostsPath := filepath.Join(appDataDir, "known_hosts")
 	knownHostsStore, err := ssh.NewKnownHostsStore(knownHostsPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize SSH known hosts store: %v", err)

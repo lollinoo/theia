@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"database/sql"
@@ -311,6 +312,115 @@ func createTestArchiveWithCorruptDB(t *testing.T, dbPath string, encryptionKey [
 	return archivePath
 }
 
+func addFileToTestArchive(archivePath, name string, data []byte) error {
+	original, err := os.ReadFile(archivePath)
+	if err != nil {
+		return err
+	}
+
+	tmpPath := archivePath + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+
+	gzWriter := gzip.NewWriter(f)
+	tarWriter := tar.NewWriter(gzWriter)
+
+	reader, err := gzip.NewReader(bytes.NewReader(original))
+	if err != nil {
+		_ = tarWriter.Close()
+		_ = gzWriter.Close()
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	tarReader := tar.NewReader(reader)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			_ = reader.Close()
+			_ = tarWriter.Close()
+			_ = gzWriter.Close()
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		payload, err := io.ReadAll(tarReader)
+		if err != nil {
+			_ = reader.Close()
+			_ = tarWriter.Close()
+			_ = gzWriter.Close()
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		if err := tarWriter.WriteHeader(header); err != nil {
+			_ = reader.Close()
+			_ = tarWriter.Close()
+			_ = gzWriter.Close()
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		if _, err := tarWriter.Write(payload); err != nil {
+			_ = reader.Close()
+			_ = tarWriter.Close()
+			_ = gzWriter.Close()
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+	}
+	if err := reader.Close(); err != nil {
+		_ = tarWriter.Close()
+		_ = gzWriter.Close()
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	if err := tarWriter.WriteHeader(&tar.Header{Name: name, Mode: 0644, Size: int64(len(data))}); err != nil {
+		_ = tarWriter.Close()
+		_ = gzWriter.Close()
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if _, err := tarWriter.Write(data); err != nil {
+		_ = tarWriter.Close()
+		_ = gzWriter.Close()
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tarWriter.Close(); err != nil {
+		_ = gzWriter.Close()
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := gzWriter.Close(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	if err := os.Rename(tmpPath, archivePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	return nil
+}
+
 func TestValidateAndStageRestore(t *testing.T) {
 	t.Run("valid archive returns RestoreReport with Valid=true", func(t *testing.T) {
 		ts := setupInstanceBackupTest(t)
@@ -420,6 +530,82 @@ func TestValidateAndStageRestore(t *testing.T) {
 		}
 		if _, ok := markerJSON["staged_db"]; !ok {
 			t.Error("marker missing staged_db field")
+		}
+	})
+
+	t.Run("staged marker is applied by restore coordinator without translation", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		if err := addFileToTestArchive(archivePath, "backups/router/backup.rsc", []byte("staged-backup")); err != nil {
+			t.Fatalf("adding staged backup to archive: %v", err)
+		}
+		if err := addFileToTestArchive(archivePath, "known_hosts", []byte("staged-known-hosts")); err != nil {
+			t.Fatalf("adding staged known_hosts to archive: %v", err)
+		}
+
+		deviceFile := filepath.Join(ts.deviceBackupDir, "router", "backup.rsc")
+		if err := os.MkdirAll(filepath.Dir(deviceFile), 0755); err != nil {
+			t.Fatalf("creating live device dir: %v", err)
+		}
+		if err := os.WriteFile(deviceFile, []byte("live-backup"), 0644); err != nil {
+			t.Fatalf("writing live backup: %v", err)
+		}
+		if err := os.WriteFile(ts.knownHostsPath, []byte("live-known-hosts"), 0644); err != nil {
+			t.Fatalf("writing live known_hosts: %v", err)
+		}
+
+		report, err := ts.svc.ValidateAndStageRestore(archivePath, false)
+		if err != nil {
+			t.Fatalf("ValidateAndStageRestore: %v", err)
+		}
+		if !report.Valid {
+			t.Fatal("expected Valid=true")
+		}
+
+		if err := os.WriteFile(ts.dbPath+"-wal", []byte("live-wal"), 0644); err != nil {
+			t.Fatalf("writing live wal: %v", err)
+		}
+		if err := os.WriteFile(ts.dbPath+"-shm", []byte("live-shm"), 0644); err != nil {
+			t.Fatalf("writing live shm: %v", err)
+		}
+
+		coordinator := service.NewRestoreCoordinator(ts.dbPath, ts.deviceBackupDir, ts.knownHostsPath)
+		applied, err := coordinator.ApplyPendingRestore()
+		if err != nil {
+			t.Fatalf("ApplyPendingRestore: %v", err)
+		}
+		if !applied {
+			t.Fatal("expected ApplyPendingRestore to apply staged restore")
+		}
+
+		dbBytes, err := os.ReadFile(ts.dbPath)
+		if err != nil {
+			t.Fatalf("reading applied db: %v", err)
+		}
+		archiveEntries := readArchiveEntries(t, archivePath)
+		if string(dbBytes) != string(archiveEntries["theia.db"]) {
+			t.Fatal("applied db content does not match staged archive db")
+		}
+		backupBytes, err := os.ReadFile(deviceFile)
+		if err != nil {
+			t.Fatalf("reading applied backup: %v", err)
+		}
+		if string(backupBytes) != "staged-backup" {
+			t.Fatalf("applied backup = %q, want staged-backup", string(backupBytes))
+		}
+		knownHostsBytes, err := os.ReadFile(ts.knownHostsPath)
+		if err != nil {
+			t.Fatalf("reading applied known_hosts: %v", err)
+		}
+		if string(knownHostsBytes) != "staged-known-hosts" {
+			t.Fatalf("applied known_hosts = %q, want staged-known-hosts", string(knownHostsBytes))
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(ts.dbPath), ".theia-restore-pending")); !os.IsNotExist(err) {
+			t.Fatalf("marker file should be removed after apply, stat err = %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(ts.dbPath), ".restore-staging")); !os.IsNotExist(err) {
+			t.Fatalf("staging dir should be removed after apply, stat err = %v", err)
 		}
 	})
 
