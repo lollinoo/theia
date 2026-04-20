@@ -5,24 +5,21 @@ describe('getCanvasDetailDeviceId', () => {
   it('returns device ID for deviceConfig', () => {
     expect(getCanvasDetailDeviceId({
       type: 'deviceConfig',
-      data: { device: { id: 'dev-1' } },
+      data: { deviceId: 'dev-1' },
     })).toBe('dev-1');
   });
 
   it('returns device ID for device-scoped interfaceStats', () => {
     expect(getCanvasDetailDeviceId({
       type: 'interfaceStats',
-      data: { device: { id: 'dev-2' } },
+      data: { deviceId: 'dev-2' },
     })).toBe('dev-2');
   });
 
   it('link-scoped interfaceStats returns null', () => {
     expect(getCanvasDetailDeviceId({
       type: 'interfaceStats',
-      data: {
-        device: { id: 'dev-3' },
-        link: { id: 'link-1' },
-      },
+      data: { linkId: 'link-1' },
     })).toBeNull();
   });
 

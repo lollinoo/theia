@@ -8,6 +8,7 @@ import { render } from '@testing-library/react';
 import { AlertsPanel } from '../AlertsPanel';
 import { StatusDot } from '../StatusDot';
 import { Toolbar } from '../Toolbar';
+import type { AlertsPanelModel } from '../panelModels';
 
 // Mock MaterialIcon for Toolbar and AlertsPanel
 vi.mock('../MaterialIcon', () => ({
@@ -17,6 +18,15 @@ vi.mock('../MaterialIcon', () => ({
 }));
 
 describe('THEME-05 Component smoke tests', () => {
+  function alertsModel(overrides: Partial<AlertsPanelModel> = {}): AlertsPanelModel {
+    return {
+      firingAlerts: [],
+      resolvedAlerts: [],
+      prometheusOutage: null,
+      ...overrides,
+    };
+  }
+
   describe('StatusDot', () => {
     it('renders without error for all statuses', () => {
       const statuses = ['up', 'down', 'critical', 'probing', 'unknown', 'degraded', 'unmonitored'] as const;
@@ -30,7 +40,7 @@ describe('THEME-05 Component smoke tests', () => {
   describe('AlertsPanel', () => {
     it('renders without error with no alerts', () => {
       const { container } = render(
-        <AlertsPanel alerts={[]} devices={[]} prometheusStatus={null} />,
+        <AlertsPanel model={alertsModel()} />,
       );
       expect(container.firstChild).toBeTruthy();
     });
@@ -38,17 +48,18 @@ describe('THEME-05 Component smoke tests', () => {
     it('renders without error with firing alerts', () => {
       const { container } = render(
         <AlertsPanel
-          alerts={[
-            {
-              device_id: 'dev-1',
-              alert_name: 'HighCPU',
-              severity: 'critical',
-              state: 'firing',
-              summary: 'CPU high',
-            },
-          ]}
-          devices={[]}
-          prometheusStatus={null}
+          model={alertsModel({
+            firingAlerts: [
+              {
+                deviceId: 'dev-1',
+                deviceLabel: 'router-01',
+                alertName: 'HighCPU',
+                severity: 'critical',
+                state: 'firing',
+                summary: 'CPU high',
+              },
+            ],
+          })}
         />,
       );
       expect(container.firstChild).toBeTruthy();

@@ -1,19 +1,16 @@
 import { useState } from 'react';
 import type { Device, Area } from '../../types/api';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
-import type { SnapshotPayload } from '../../types/metrics';
 import { DeviceRow } from './DeviceRow';
-import { resolveDeviceOperationalStatusState } from '../deviceVisualState';
-import { resolveOsVersion } from './parseOsVersion';
+import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
 type SortKey = 'hostname' | 'ip' | 'status' | 'area' | 'hardware_model' | 'vendor' | 'uptime' | 'os_version';
 type SortDir = 'asc' | 'desc';
 
 interface DeviceTableProps {
-  devices: Device[];
+  rows: RuntimeDeviceRow[];
   areaMap: Map<string, Area>;
   resolvedTheme: ResolvedTheme;
-  snapshot: SnapshotPayload | null;
   onSSHCredentials: (device: Device) => void;
   onBackup: (device: Device) => void;
   onBackupHistory: (device: Device) => void;
@@ -21,10 +18,9 @@ interface DeviceTableProps {
 }
 
 export function DeviceTable({
-  devices,
+  rows,
   areaMap,
   resolvedTheme,
-  snapshot,
   onSSHCredentials,
   onBackup,
   onBackupHistory,
@@ -42,27 +38,38 @@ export function DeviceTable({
     }
   };
 
-  const sorted = [...devices].sort((a, b) => {
+  const sorted = [...rows].sort((a, b) => {
     let aVal: string | number;
     let bVal: string | number;
     if (sortKey === 'area') {
-      aVal = (a.area_ids?.[0] ? areaMap.get(a.area_ids[0])?.name : '') ?? '';
-      bVal = (b.area_ids?.[0] ? areaMap.get(b.area_ids[0])?.name : '') ?? '';
+      aVal = a.areaSortName;
+      bVal = b.areaSortName;
     } else if (sortKey === 'status') {
-      aVal = resolveDeviceOperationalStatusState(a).label.toLowerCase();
-      bVal = resolveDeviceOperationalStatusState(b).label.toLowerCase();
+      aVal = a.statusSortLabel;
+      bVal = b.statusSortLabel;
     } else if (sortKey === 'uptime') {
-      // Numeric sort by uptime seconds (null = -1 so they sort last)
-      aVal = snapshot?.device_metrics[a.id]?.uptime_secs ?? -1;
-      bVal = snapshot?.device_metrics[b.id]?.uptime_secs ?? -1;
+      aVal = a.uptimeSecs ?? -1;
+      bVal = b.uptimeSecs ?? -1;
       const cmp = (aVal as number) - (bVal as number);
       return sortDir === 'asc' ? cmp : -cmp;
     } else if (sortKey === 'os_version') {
-      aVal = resolveOsVersion(a.os_version, a.sys_descr);
-      bVal = resolveOsVersion(b.os_version, b.sys_descr);
+      aVal = a.osVersion;
+      bVal = b.osVersion;
+    } else if (sortKey === 'hostname') {
+      aVal = a.hostname.toLowerCase();
+      bVal = b.hostname.toLowerCase();
+    } else if (sortKey === 'ip') {
+      aVal = a.ip.toLowerCase();
+      bVal = b.ip.toLowerCase();
+    } else if (sortKey === 'vendor') {
+      aVal = a.vendor.toLowerCase();
+      bVal = b.vendor.toLowerCase();
+    } else if (sortKey === 'hardware_model') {
+      aVal = a.modelLabel.toLowerCase();
+      bVal = b.modelLabel.toLowerCase();
     } else {
-      aVal = (a[sortKey] ?? '').toString().toLowerCase();
-      bVal = (b[sortKey] ?? '').toString().toLowerCase();
+      aVal = '';
+      bVal = '';
     }
     const cmp = String(aVal).localeCompare(String(bVal));
     return sortDir === 'asc' ? cmp : -cmp;
@@ -100,17 +107,16 @@ export function DeviceTable({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((device) => (
+          {sorted.map((row) => (
             <DeviceRow
-              key={device.id}
-              device={device}
+              key={row.id}
+              row={row}
               areaMap={areaMap}
               resolvedTheme={resolvedTheme}
-              deviceMetrics={snapshot?.device_metrics[device.id] ?? null}
-              onSSHCredentials={() => onSSHCredentials(device)}
-              onBackup={() => onBackup(device)}
-              onBackupHistory={() => onBackupHistory(device)}
-              onViewConfig={() => onViewConfig(device)}
+              onSSHCredentials={() => onSSHCredentials(row.device)}
+              onBackup={() => onBackup(row.device)}
+              onBackupHistory={() => onBackupHistory(row.device)}
+              onViewConfig={() => onViewConfig(row.device)}
             />
           ))}
         </tbody>

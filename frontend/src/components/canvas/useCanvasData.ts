@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices, fetchLinks, fetchSettings, createLink } from '../../api/client';
@@ -15,21 +15,16 @@ import {
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import {
-  resolveDeviceMonitoringState,
-  sanitizeDeviceMetricsForDisplay,
-} from '../deviceVisualState';
-import {
   buildPositionPayload,
-  buildThroughputLabel,
-  findLinkMetrics,
   manualEdgeStorageKey,
   staleThresholdMs,
   viewportSize,
 } from './canvasHelpers';
 import { measureCanvasAsyncWork, measureCanvasWork, type CanvasMeasurementTrigger } from './canvasInstrumentation';
-import { alertStatusForLink, buildTopologyEdges } from './edgeBuilder';
-import { buildTopologyNodes } from './nodeBuilder';
+import { alertStatusForLink } from './edgeBuilder';
+import { composeCanvasTopology } from './topologyComposer';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
+import { buildRuntimeState } from './runtimeAdapters';
 
 interface UseCanvasDataParams {
   snapshot: SnapshotPayload | null;
@@ -52,6 +47,7 @@ interface UseCanvasDataReturn {
   devices: Device[];
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
   topologyLinks: Link[];
+  runtimeSummary: RuntimeSummary;
   loading: boolean;
   error: string | null;
   loadTopology: (
@@ -80,6 +76,11 @@ export interface TopologyRecoveryNotice {
   tone: 'success' | 'warning';
   message: string;
   actionLabel?: string;
+}
+
+interface RuntimeSummary {
+  prometheusDown: boolean;
+  alertCount: number;
 }
 
 interface LoadTopologyOptions {
@@ -140,63 +141,6 @@ function hasUsablePosition(position: PositionState | undefined): position is Pos
   return position !== undefined
     && Number.isFinite(position.x)
     && Number.isFinite(position.y);
-}
-
-function buildEffectiveSnapshot(
-  fetchedDevices: Device[],
-  pendingSnapshot: SnapshotPayload | null,
-  prometheusStatus: PrometheusStatusPayload | null,
-): SnapshotPayload | null {
-  if (!pendingSnapshot) {
-    return null;
-  }
-
-  if (!isPrometheusUnavailable(prometheusStatus)) {
-    return pendingSnapshot;
-  }
-
-  const effectiveStatuses = { ...pendingSnapshot.device_statuses };
-  for (const device of fetchedDevices) {
-    const source = device.metrics_source || 'prometheus';
-    if (source === 'prometheus' || source === 'prometheus_snmp_fallback') {
-      effectiveStatuses[device.id] = 'down';
-    }
-  }
-
-  return {
-    ...pendingSnapshot,
-    device_statuses: effectiveStatuses,
-  };
-}
-
-function mergeRuntimeDeviceFields(
-  device: Device,
-  currentDevice: Device | undefined,
-  effectiveSnapshot: SnapshotPayload | null,
-): Device {
-  const baseDevice = currentDevice
-    ? {
-        ...device,
-        status: currentDevice.status,
-        sys_name: currentDevice.sys_name,
-        hardware_model: currentDevice.hardware_model,
-      }
-    : device;
-
-  if (!effectiveSnapshot) {
-    return baseDevice;
-  }
-
-  const snapshotStatus = effectiveSnapshot.device_statuses[device.id];
-
-  if (!snapshotStatus) {
-    return baseDevice;
-  }
-
-  return {
-    ...baseDevice,
-    ...(snapshotStatus ? { status: snapshotStatus as Device['status'] } : {}),
-  };
 }
 
 function buildUsablePositionState(
@@ -299,6 +243,30 @@ function buildLayoutInputs(
   };
 }
 
+function mergeNodePresentationState(
+  nextNodes: DeviceNode[],
+  currentNodes: DeviceNode[],
+): DeviceNode[] {
+  const currentNodesById = new Map(currentNodes.map((node) => [node.id, node]));
+
+  return nextNodes.map((node) => {
+    const currentNode = currentNodesById.get(node.id);
+    if (!currentNode) {
+      return node;
+    }
+
+    return {
+      ...node,
+      selected: currentNode.selected,
+      dragging: currentNode.dragging,
+      data: {
+        ...node.data,
+        highlighted: currentNode.data.highlighted,
+      },
+    };
+  });
+}
+
 export function useCanvasData({
   snapshot,
   alerts = emptyAlerts,
@@ -323,6 +291,8 @@ export function useCanvasData({
   const prometheusStatusRef = useRef<PrometheusStatusPayload | null>(null);
   const alertsRef = useRef<AlertDTO[]>(alerts);
   const devicesRef = useRef<Device[]>([]);
+  const topologyLinksRef = useRef<Link[]>([]);
+  const nodesRef = useRef<DeviceNode[]>(nodes);
   const lastSnapshotTimeRef = useRef<number | null>(null);
   const staleAppliedRef = useRef(false);
   const lastTopologyIdentityRef = useRef<string | null>(null);
@@ -333,6 +303,14 @@ export function useCanvasData({
   const [prometheusAlertDismissed, setPrometheusAlertDismissed] = useState(false);
 
   const { fetchPositions, savePositions } = usePositions();
+
+  const runtimeSummary = useMemo<RuntimeSummary>(() => {
+    const prometheusDown = isPrometheusUnavailable(prometheusStatus);
+    return {
+      prometheusDown,
+      alertCount: alerts.filter((alert) => alert.state === 'firing').length + (prometheusDown ? 1 : 0),
+    };
+  }, [alerts, prometheusStatus]);
 
   // Track Prometheus recovery transition and auto-dismiss recovery toast.
   const prevPromDownRef = useRef<boolean | null>(null);
@@ -353,6 +331,8 @@ export function useCanvasData({
     alertsRef.current = alerts;
   }, [alerts]);
   devicesRef.current = devices;
+  topologyLinksRef.current = topologyLinks;
+  nodesRef.current = nodes;
   currentNodePositionsRef.current = new Map(
     nodes.map((node) => [
       node.id,
@@ -393,8 +373,6 @@ export function useCanvasData({
           fetchPositions(),
         ]);
 
-        const devicesByID = new Map(fetchedDevices.map((device) => [device.id, device]));
-        const linksByID = new Map(fetchedLinks.map((link) => [link.id, link]));
         const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
         const structureChanged = lastTopologyIdentityRef.current !== topologyIdentity.signature;
         const effectivePositions = new Map(savedPositions);
@@ -415,10 +393,15 @@ export function useCanvasData({
         // initial node/edge data -- eliminates the race where the WS snapshot
         // arrives before loadTopology resolves and the snapshot effect maps over
         // an empty node array.
-        const effectiveSnapshot = buildEffectiveSnapshot(
-          fetchedDevices,
-          snapshotRef.current,
-          prometheusStatusRef.current,
+        const runtimeState = buildRuntimeState({
+          devices: fetchedDevices,
+          links: fetchedLinks,
+          snapshot: snapshotRef.current,
+          alerts: alertsRef.current,
+          prometheusStatus: prometheusStatusRef.current,
+        });
+        const runtimeDevices = fetchedDevices.map(
+          (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
         );
 
         // Migrate localStorage manual edges to backend on first load (best-effort)
@@ -459,88 +442,28 @@ export function useCanvasData({
         }
 
         if (!structureChanged) {
-          setDevices(fetchedDevices);
+          setDevices(runtimeDevices);
           setTopologyLinks(fetchedLinks);
-          setNodes((currentNodes) =>
-            currentNodes.map((node) => {
-              const fetchedDevice = devicesByID.get(node.id);
-              if (!fetchedDevice) {
-                return node;
-              }
-
-              const nextDevice = mergeRuntimeDeviceFields(
-                fetchedDevice,
-                node.data.device,
-                effectiveSnapshot,
-              );
-              const nextMetrics = effectiveSnapshot
-                ? sanitizeDeviceMetricsForDisplay(
-                    nextDevice,
-                    effectiveSnapshot.device_metrics[node.id] ?? null,
-                  )
-                : node.data.metrics;
-
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  device: nextDevice,
-                  editMode,
-                  onContextMenu: openDeviceMenu,
-                  alertStatus: alertStatusForDevice(node.id, alertsRef.current),
-                  metrics: nextMetrics,
-                  monitoringState: resolveDeviceMonitoringState(nextDevice),
-                  isVirtual: fetchedDevice.device_type === 'virtual',
-                  subtype: fetchedDevice.device_type === 'virtual'
-                    ? (nextDevice.tags?.virtual_subtype ?? 'generic')
-                    : undefined,
-                },
-              };
-            }),
-          );
-          setEdges((currentEdges) =>
-            currentEdges.map((edge) => {
-              const fetchedLink = linksByID.get(edge.id);
-              if (!fetchedLink) {
-                return edge;
-              }
-
-              if (!effectiveSnapshot) {
-                return {
-                  ...edge,
-                  data: edge.data
-                    ? {
-                        ...edge.data,
-                        link: fetchedLink,
-                      }
-                    : edge.data,
-                };
-              }
-
-              const sourceDeviceStatus = effectiveSnapshot.device_statuses[fetchedLink.source_device_id];
-              const targetDeviceStatus = effectiveSnapshot.device_statuses[fetchedLink.target_device_id];
-              const bothDown = sourceDeviceStatus === 'down' && targetDeviceStatus === 'down';
-              const metrics = bothDown
-                ? null
-                : findLinkMetrics(effectiveSnapshot.link_metrics, fetchedLink);
-
-              return {
-                ...edge,
-                data: edge.data
-                  ? {
-                      ...edge.data,
-                      link: fetchedLink,
-                      alertStatus: alertStatusForLink(fetchedLink, alertsRef.current),
-                      sourceDeviceStatus,
-                      targetDeviceStatus,
-                      metrics,
-                      throughputLabel: metrics ? buildThroughputLabel(metrics) : undefined,
-                      utilization: metrics?.utilization ?? null,
-                    }
-                  : edge.data,
-              };
-            }),
-          );
+          const { nodes: nextNodes, edges: nextEdges } = composeCanvasTopology({
+            devices: fetchedDevices,
+            links: fetchedLinks,
+            runtimeState,
+            savedPositions: effectivePositions,
+            computedPositions: new Map(),
+            currentPositions: currentNodePositionsRef.current,
+            defaultPosition,
+            editMode,
+            openDeviceMenu,
+            openEdgeMenu,
+            openSelfLinkDetails,
+            placementDeviceIds: new Set(),
+            alerts: alertsRef.current,
+          });
+          setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
+          setEdges(nextEdges);
+          if (snapshotRef.current) {
+            lastSnapshotTimeRef.current = Date.now();
+          }
           lastTopologyIdentityRef.current = topologyIdentity.signature;
           lastUsablePositionStateRef.current = usablePositionState;
           return;
@@ -565,47 +488,24 @@ export function useCanvasData({
             )
           : new Map();
 
-        const nextNodes = buildTopologyNodes(
-          fetchedDevices,
-          effectivePositions,
+        const { nodes: composedNodes, edges: composedEdges } = composeCanvasTopology({
+          devices: fetchedDevices,
+          links: fetchedLinks,
+          runtimeState,
+          savedPositions: effectivePositions,
           computedPositions,
+          currentPositions: currentNodePositionsRef.current,
           defaultPosition,
           editMode,
           openDeviceMenu,
-          effectiveSnapshot,
-          alertsRef.current,
-          fetchedLinks,
+          openEdgeMenu,
           openSelfLinkDetails,
-          currentNodePositionsRef.current,
           placementDeviceIds,
-        );
+          alerts: alertsRef.current,
+        });
 
-        let nextEdges = buildTopologyEdges(fetchedLinks, devicesByID, nextNodes, undefined, openEdgeMenu, alertsRef.current);
-
-        // Merge pending snapshot link metrics into edges and mark snapshot time
-        // so the stale-data timer doesn't immediately clear the metrics.
-        if (effectiveSnapshot) {
+        if (snapshotRef.current) {
           lastSnapshotTimeRef.current = Date.now();
-          nextEdges = nextEdges.map((edge) => {
-            const link = edge.data?.link;
-            if (!link) return edge;
-            const srcStatus = effectiveSnapshot.device_statuses[link.source_device_id];
-            const tgtStatus = effectiveSnapshot.device_statuses[link.target_device_id];
-            const bothDown = srcStatus === 'down' && tgtStatus === 'down';
-            const metrics = bothDown ? null : findLinkMetrics(effectiveSnapshot.link_metrics, link);
-            return {
-              ...edge,
-              data: {
-                ...edge.data!,
-                alertStatus: alertStatusForLink(link, alertsRef.current),
-                sourceDeviceStatus: srcStatus,
-                targetDeviceStatus: tgtStatus,
-                metrics: metrics,
-                throughputLabel: metrics ? buildThroughputLabel(metrics) : undefined,
-                utilization: metrics?.utilization ?? null,
-              },
-            };
-          });
         }
 
         // Apply all state updates together as urgent (not in startTransition).
@@ -613,31 +513,14 @@ export function useCanvasData({
         // low-priority, allowing WebSocket snapshot effects (which depend on
         // devices.length) to interrupt and race with the transition's setNodes,
         // sometimes causing all canvas nodes to vanish after a device delete.
-        setDevices(fetchedDevices);
+        setDevices(runtimeDevices);
         setTopologyLinks(fetchedLinks);
         setNodes((currentNodes) => {
-          const prevNodesByID = new Map(currentNodes.map((node) => [node.id, node]));
-          return nextNodes.map((node) => {
-            const previousNode = prevNodesByID.get(node.id);
-            if (!previousNode) {
-              return node;
-            }
-
-            return {
-              ...node,
-              selected: previousNode.selected,
-              dragging: previousNode.dragging,
-              data: {
-                ...node.data,
-                highlighted: previousNode.data.highlighted,
-                alertStatus: node.data.alertStatus,
-              },
-            };
-          });
+          return mergeNodePresentationState(composedNodes, currentNodes);
         });
-        setEdges(nextEdges);
+        setEdges(composedEdges);
 
-        const nextPositionPayload = buildPositionPayload(nextNodes);
+        const nextPositionPayload = buildPositionPayload(composedNodes);
         if (positionsChanged(nextPositionPayload, savedPositions)) {
           void savePositions(nextPositionPayload);
         }
@@ -852,99 +735,34 @@ export function useCanvasData({
       lastSnapshotTimeRef.current = Date.now();
       staleAppliedRef.current = false;
 
-      // Compute effective device statuses: override prometheus-only devices to 'down'
-      // when Prometheus is unreachable (no probe_success data available).
-      const promDown = isPrometheusUnavailable(prometheusStatus);
-      const effectiveStatuses = { ...snapshot.device_statuses };
+      const runtimeState = buildRuntimeState({
+        devices: devicesRef.current,
+        links: topologyLinksRef.current,
+        snapshot,
+        alerts: alertsRef.current,
+        prometheusStatus,
+      });
+      const { nodes: nextNodes, edges: nextEdges } = composeCanvasTopology({
+        devices: devicesRef.current,
+        links: topologyLinksRef.current,
+        runtimeState,
+        savedPositions: currentNodePositionsRef.current,
+        computedPositions: new Map(),
+        currentPositions: currentNodePositionsRef.current,
+        defaultPosition: undefined,
+        editMode,
+        openDeviceMenu,
+        openEdgeMenu,
+        openSelfLinkDetails,
+        placementDeviceIds: new Set(),
+        alerts: alertsRef.current,
+      });
 
-      if (promDown) {
-        // Use ref to always read the latest devices without adding devices.length
-        // to the dependency array (which would cause redundant re-triggers after
-        // loadTopology).
-        for (const d of devicesRef.current) {
-          const src = d.metrics_source || 'prometheus';
-          if (src === 'prometheus' || src === 'prometheus_snmp_fallback') {
-            effectiveStatuses[d.id] = 'down';
-          }
-          // 'none' and 'snmp' sources are unaffected by Prometheus availability
-        }
-      }
-
-      // Apply all snapshot data (status and metrics) in a single
-      // urgent update so the first snapshot on page load renders immediately
-      // instead of being split across an urgent + deferred transition pass.
-      setNodes((currentNodes) =>
-        currentNodes.map((node) => {
-          const newStatus = effectiveStatuses[node.id];
-          const updatedDevice = newStatus
-            ? {
-                ...node.data.device,
-                ...(newStatus ? { status: newStatus as Device['status'] } : {}),
-              }
-            : node.data.device;
-
-          // Preserve derived runtime metadata like health and freshness cadence
-          // even when device status is down.
-          const nodeMetrics = sanitizeDeviceMetricsForDisplay(
-            updatedDevice,
-            snapshot.device_metrics[node.id] ?? null,
-          );
-
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              alertStatus: alertStatusForDevice(node.id, alertsRef.current),
-              device: updatedDevice,
-              monitoringState: resolveDeviceMonitoringState(updatedDevice),
-              metrics: nodeMetrics,
-            },
-          };
-        }),
-      );
-
-      // Sync devices state with runtime statuses so panels (e.g. LinkCreatePanel) see them.
-      if (Object.keys(effectiveStatuses).length > 0) {
-        setDevices((prev) =>
-          prev.map((d) => {
-            const newStatus = effectiveStatuses[d.id];
-            if (!newStatus) return d;
-            return {
-              ...d,
-              ...(newStatus ? { status: newStatus as Device['status'] } : {}),
-            };
-          }),
-        );
-      }
-
-      setEdges((currentEdges) =>
-        currentEdges.map((edge) => {
-          const link = edge.data?.link;
-          if (!link) return edge;
-          const srcStatus = effectiveStatuses[link.source_device_id];
-          const tgtStatus = effectiveStatuses[link.target_device_id];
-
-          // When both link endpoints are down, null out link metrics so throughput
-          // labels don't show stale last-known values.
-          const bothDown = srcStatus === 'down' && tgtStatus === 'down';
-          const metrics = bothDown ? null : findLinkMetrics(snapshot.link_metrics, link);
-
-          return {
-            ...edge,
-            data: {
-              ...edge.data,
-              alertStatus: alertStatusForLink(link, alertsRef.current),
-              sourceDeviceStatus: srcStatus,
-              targetDeviceStatus: tgtStatus,
-              metrics: metrics,
-              throughputLabel: metrics ? buildThroughputLabel(metrics) : undefined,
-              utilization: metrics?.utilization ?? null,
-            },
-          };
-        }),
-      );
+      setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
+      setEdges(nextEdges);
+      setDevices(devicesRef.current.map((device) => runtimeState.devicesById.get(device.id)?.device ?? device));
     });
-  }, [snapshot, setNodes, prometheusStatus?.available]);
+  }, [editMode, openDeviceMenu, openEdgeMenu, openSelfLinkDetails, prometheusStatus, setEdges, setNodes, snapshot]);
 
   // Stale data timer
   useEffect(() => {
@@ -1027,6 +845,7 @@ export function useCanvasData({
     devices,
     setDevices,
     topologyLinks,
+    runtimeSummary,
     loading,
     error,
     loadTopology,

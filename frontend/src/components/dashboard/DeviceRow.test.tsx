@@ -3,6 +3,9 @@ import { render, screen } from '@testing-library/react';
 import { DeviceRow } from './DeviceRow';
 import type { Device, Area } from '../../types/api';
 import type { DeviceMetricsDTO } from '../../types/metrics';
+import type { SnapshotPayload } from '../../types/metrics';
+import { buildRuntimeDeviceRows } from './runtimeDeviceRows';
+import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
 // Mock StatusDot as a simple stub
 vi.mock('../StatusDot', () => ({
@@ -63,19 +66,35 @@ function mockAreaMap(entries?: [string, Area][]): Map<string, Area> {
 
 const noop = () => {};
 
+function makeRow(overrides: Partial<RuntimeDeviceRow> = {}): RuntimeDeviceRow {
+  return {
+    ...buildRuntimeDeviceRows({ devices: [mockDevice()], snapshot: null })[0],
+    ...overrides,
+  };
+}
+
 function renderRow(
   deviceOverrides: Partial<Device> = {},
   metrics: DeviceMetricsDTO | null = null,
   areaEntries?: [string, Area][]
 ) {
+  const device = mockDevice(deviceOverrides);
+  const snapshot: SnapshotPayload | null = metrics
+    ? {
+        device_metrics: { [device.id]: metrics },
+        link_metrics: {},
+        device_statuses: { [device.id]: device.status },
+      }
+    : null;
+  const row = buildRuntimeDeviceRows({ devices: [device], snapshot })[0];
+
   return render(
     <table>
       <tbody>
         <DeviceRow
-          device={mockDevice(deviceOverrides)}
+          row={row}
           areaMap={mockAreaMap(areaEntries)}
           resolvedTheme="dark"
-          deviceMetrics={metrics}
           onSSHCredentials={noop}
           onBackup={noop}
           onBackupHistory={noop}
@@ -191,5 +210,53 @@ describe('DeviceRow', () => {
     // There should be em dashes for missing data
     const allCells = screen.getAllByText('\u2014');
     expect(allCells.length).toBeGreaterThan(0);
+  });
+
+  it('renders presentation fields from the row model instead of raw device values', () => {
+    const row = makeRow({
+      displayName: 'Display From Row',
+      sysName: 'System From Row',
+      ip: '198.51.100.10',
+      vendor: 'row-vendor',
+      modelLabel: 'Row Model Label',
+      osVersion: 'row-os',
+      uptimeLabel: '9d',
+    });
+
+    row.device = {
+      ...row.device,
+      hostname: 'device-hostname',
+      sys_name: 'Device System',
+      ip: '203.0.113.5',
+      vendor: 'device-vendor',
+      hardware_model: 'Device Model',
+      sys_descr: 'Device Description',
+    };
+
+    render(
+      <table>
+        <tbody>
+          <DeviceRow
+            row={row}
+            areaMap={mockAreaMap()}
+            resolvedTheme="dark"
+            onSSHCredentials={noop}
+            onBackup={noop}
+            onBackupHistory={noop}
+            onViewConfig={noop}
+          />
+        </tbody>
+      </table>,
+    );
+
+    expect(screen.getByText('Display From Row')).toBeInTheDocument();
+    expect(screen.getByText('System From Row')).toBeInTheDocument();
+    expect(screen.getByText('198.51.100.10')).toBeInTheDocument();
+    expect(screen.getByText('row-vendor')).toBeInTheDocument();
+    expect(screen.getByText('Row Model Label')).toBeInTheDocument();
+    expect(screen.getByText('row-os')).toBeInTheDocument();
+    expect(screen.getByText('9d')).toBeInTheDocument();
+    expect(screen.queryByText('device-vendor')).not.toBeInTheDocument();
+    expect(screen.queryByText('203.0.113.5')).not.toBeInTheDocument();
   });
 });

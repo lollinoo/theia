@@ -13,7 +13,7 @@ import { BulkBackupPanel } from './dashboard/BulkBackupPanel';
 import { ConfigViewer } from './dashboard/ConfigViewer';
 import { VendorSettingsPanel } from './dashboard/VendorSettingsPanel';
 import { SidePanel } from './SidePanel';
-import { resolveDeviceOperationalStatusState } from './deviceVisualState';
+import { buildRuntimeDeviceRows } from './dashboard/runtimeDeviceRows';
 
 type PanelType =
   | { kind: 'ssh-credentials'; device: Device }
@@ -50,26 +50,32 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
     return map;
   }, [areas]);
 
-  const filteredDevices = devices.filter((d) => {
-    if (statusFilter !== 'all' && resolveDeviceOperationalStatusState(d).dotStatus !== statusFilter) return false;
-    if (typeFilter !== 'all' && d.device_type !== typeFilter) return false;
+  const rows = useMemo(
+    () => buildRuntimeDeviceRows({ devices, snapshot }),
+    [devices, snapshot],
+  );
+
+  const rowsWithAreaSortNames = useMemo(
+    () => rows.map((row) => ({
+      ...row,
+      areaSortName: row.areaIds[0] ? areaMap.get(row.areaIds[0])?.name ?? '' : '',
+    })),
+    [areaMap, rows],
+  );
+
+  const filteredRows = rowsWithAreaSortNames.filter((row) => {
+    if (statusFilter !== 'all' && row.statusState.dotStatus !== statusFilter) return false;
+    if (typeFilter !== 'all' && row.deviceType !== typeFilter) return false;
     if (areaFilter !== 'all') {
       if (areaFilter === 'unassigned') {
-        if (d.area_ids?.length) return false;
+        if (row.areaIds.length) return false;
       } else {
-        if (!d.area_ids?.includes(areaFilter)) return false;
+        if (!row.areaIds.includes(areaFilter)) return false;
       }
     }
     if (search) {
       const s = search.toLowerCase();
-      const display = d.tags?.display_name || '';
-      if (
-        !d.hostname.toLowerCase().includes(s) &&
-        !d.ip.toLowerCase().includes(s) &&
-        !d.sys_name.toLowerCase().includes(s) &&
-        !display.toLowerCase().includes(s)
-      )
-        return false;
+      if (!row.searchText.includes(s)) return false;
     }
     return true;
   });
@@ -149,7 +155,7 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
         </button>
 
         <span className="font-mono text-xs text-on-bg-secondary bg-surface-high rounded-full px-2.5 py-1">
-          {filteredDevices.length} / {devices.length}
+          {filteredRows.length} / {devices.length}
         </span>
       </div>
 
@@ -158,35 +164,22 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
         {devices.length === 0 ? (
           /* D-16: Skeleton loading rows */
           <SkeletonTable />
-        ) : filteredDevices.length === 0 ? (
-          /* D-17 (no filter matches) or D-15 (no devices at all after load) */
-          search || statusFilter !== 'all' || typeFilter !== 'all' || areaFilter !== 'all' ? (
-            <div className="flex flex-col items-center justify-center h-40 gap-2">
-              <p className="text-on-bg-secondary text-sm">No devices match your filters</p>
-              <button
-                type="button"
-                onClick={() => { setStatusFilter('all'); setTypeFilter('all'); setAreaFilter('all'); setSearch(''); }}
-                className="text-primary hover:text-primary/80 text-xs font-medium transition-colors"
-              >
-                Clear filters
-              </button>
-            </div>
-          ) : (
-            /* D-15: True empty state -- devices loaded but none exist */
-            <div className="bg-surface border border-dashed border-outline rounded-xl p-6 flex flex-col items-center justify-center text-center min-h-[180px] transition-colors duration-200 mt-8">
-              <MaterialIcon name="devices" size={40} className="text-on-bg-secondary/50 mb-3" />
-              <p className="text-on-bg font-semibold text-lg">No devices yet</p>
-              <p className="text-on-bg-secondary text-sm mt-1">
-                Add your first device from the topology canvas
-              </p>
-            </div>
-          )
+        ) : filteredRows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-40 gap-2">
+            <p className="text-on-bg-secondary text-sm">No devices match your filters</p>
+            <button
+              type="button"
+              onClick={() => { setStatusFilter('all'); setTypeFilter('all'); setAreaFilter('all'); setSearch(''); }}
+              className="text-primary hover:text-primary/80 text-xs font-medium transition-colors"
+            >
+              Clear filters
+            </button>
+          </div>
         ) : (
           <DeviceTable
-            devices={filteredDevices}
+            rows={filteredRows}
             areaMap={areaMap}
             resolvedTheme={resolvedTheme}
-            snapshot={snapshot}
             onSSHCredentials={(device) => {
               // Fetch current credential profile assignment when opening the panel
               // (Option A: live source of truth after ssh_profile_id removal)

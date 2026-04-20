@@ -2,12 +2,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { DeviceTable } from './DeviceTable';
 import type { Device, Area } from '../../types/api';
+import { buildRuntimeDeviceRows } from './runtimeDeviceRows';
+import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
 // Mock DeviceRow as a simple <tr> stub
 vi.mock('./DeviceRow', () => ({
-  DeviceRow: ({ device }: { device: Device }) => (
-    <tr data-testid={`device-row-${device.id}`}>
-      <td>{device.hostname}</td>
+  DeviceRow: ({ row }: { row: RuntimeDeviceRow }) => (
+    <tr data-testid={`device-row-${row.id}`}>
+      <td>{row.hostname}</td>
     </tr>
   ),
 }));
@@ -57,12 +59,12 @@ function mockAreaMap(): Map<string, Area> {
 const noop = () => {};
 
 function renderTable(devices = [mockDevice()]) {
+  const rows = buildRuntimeDeviceRows({ devices, snapshot: null });
   return render(
     <DeviceTable
-      devices={devices}
+      rows={rows}
       areaMap={mockAreaMap()}
       resolvedTheme="dark"
-      snapshot={null}
       onSSHCredentials={noop}
       onBackup={noop}
       onBackupHistory={noop}
@@ -143,6 +145,35 @@ describe('DeviceTable', () => {
     const rows = Array.from(container.querySelectorAll('tbody tr'));
     expect(rows[0]?.textContent).toContain('router-down');
     expect(rows[1]?.textContent).toContain('virtual-cloud');
+  });
+
+  it('sorts by row-model hostname instead of raw device hostname', () => {
+    const rows: RuntimeDeviceRow[] = [
+      {
+        ...buildRuntimeDeviceRows({ devices: [mockDevice({ id: 'dev-1', hostname: 'zzz-device' })], snapshot: null })[0],
+        hostname: 'bbb-row',
+      },
+      {
+        ...buildRuntimeDeviceRows({ devices: [mockDevice({ id: 'dev-2', hostname: 'aaa-device' })], snapshot: null })[0],
+        hostname: 'aaa-row',
+      },
+    ];
+
+    const { container } = render(
+      <DeviceTable
+        rows={rows}
+        areaMap={mockAreaMap()}
+        resolvedTheme="dark"
+        onSSHCredentials={noop}
+        onBackup={noop}
+        onBackupHistory={noop}
+        onViewConfig={noop}
+      />,
+    );
+
+    const renderedRows = Array.from(container.querySelectorAll('tbody tr'));
+    expect(renderedRows[0]?.textContent).toContain('aaa-row');
+    expect(renderedRows[1]?.textContent).toContain('bbb-row');
   });
 
 

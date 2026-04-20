@@ -43,6 +43,12 @@ import {
   formatTopologyDiscoveryTimestamp,
 } from '../utils/topologyDiscovery';
 import { MaterialIcon } from './MaterialIcon';
+import {
+  applySNMPProfile,
+  createDeviceConfigFormModel,
+  type DeviceFormModel,
+} from './forms/deviceFormModels';
+import { buildUpdateDevicePayload } from './forms/deviceFormSubmitters';
 
 const POLLING_PRESETS = [
   { label: 'Use device default', value: 'default' },
@@ -89,28 +95,7 @@ export function DeviceConfigPanel({
   const [customPolling, setCustomPolling] = useState('');
   const [grafanaUrl, setGrafanaUrl] = useState('');
 
-  const [displayName, setDisplayName] = useState(device.tags?.display_name || '');
-  const [ip, setIp] = useState(device.ip);
-  const [notes, setNotes] = useState(device.notes ?? '');
-  const [snmpVersion, setSnmpVersion] = useState('2c');
-  const [community, setCommunity] = useState('');
-  // SNMPv3 fields
-  const [username, setUsername] = useState('');
-  const [securityLevel, setSecurityLevel] = useState('authPriv');
-  const [authProtocol, setAuthProtocol] = useState('SHA');
-  const [authPassword, setAuthPassword] = useState('');
-  const [privProtocol, setPrivProtocol] = useState('AES');
-  const [privPassword, setPrivPassword] = useState('');
-  // Metrics source
-  const [metricsSource, setMetricsSource] = useState<MetricsSource>(
-    device.metrics_source || 'snmp',
-  );
-  const [topologyDiscoveryMode, setTopologyDiscoveryMode] = useState<TopologyDiscoveryMode>(
-    device.topology_discovery_mode || 'inherit',
-  );
-  const [prometheusLabelName, setPrometheusLabelName] = useState(device.prometheus_label_name || 'instance');
-  const [prometheusLabelValue, setPrometheusLabelValue] = useState(device.prometheus_label_value || '');
-  const [vendorOverride, setVendorOverride] = useState(device.vendor || '');
+  const [form, setForm] = useState(() => createDeviceConfigFormModel(device, Boolean(isVirtual)));
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editSaved, setEditSaved] = useState(false);
@@ -125,7 +110,6 @@ export function DeviceConfigPanel({
   const [showAddSelect, setShowAddSelect] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
-  const [areaIds, setAreaIds] = useState<string[]>(device.area_ids ?? []);
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
   const [savedPolling, setSavedPolling] = useState(false);
@@ -143,6 +127,22 @@ export function DeviceConfigPanel({
   const savedPollingTimerRef = useRef<number | null>(null);
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const editSavedTimerRef = useRef<number | null>(null);
+
+  const usesPrometheus =
+    form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
+  const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
+
+  function updateForm(update: Partial<DeviceFormModel>) {
+    setForm((current) => ({ ...current, ...update }));
+  }
+
+  function updateSnmp(update: Partial<DeviceFormModel['snmp']>) {
+    setForm((current) => ({ ...current, snmp: { ...current.snmp, ...update } }));
+  }
+
+  function updatePrometheus(update: Partial<DeviceFormModel['prometheus']>) {
+    setForm((current) => ({ ...current, prometheus: { ...current.prometheus, ...update } }));
+  }
 
   function syncPollingState(pollIntervalOverride: number | null | undefined) {
     if (pollIntervalOverride === null || pollIntervalOverride === undefined) {
@@ -224,37 +224,18 @@ export function DeviceConfigPanel({
 
   // Sync inputs when the `device` prop updates from parent
   useEffect(() => {
-    setDisplayName(device.tags?.display_name || '');
-    setIp(device.ip || '');
-    setNotes(device.notes ?? '');
-    setCommunity(''); // We don't fetch credentials back from the API for security
-    setUsername('');
-    setAuthPassword('');
-    setPrivPassword('');
-    setVendorOverride(device.vendor || '');
-    setAreaIds(device.area_ids ?? []);
-    setMetricsSource(device.metrics_source || 'snmp');
-    setTopologyDiscoveryMode(device.topology_discovery_mode || 'inherit');
-    setPrometheusLabelName(device.prometheus_label_name || 'instance');
-    setPrometheusLabelValue(device.prometheus_label_value || '');
+    setForm(createDeviceConfigFormModel(device, Boolean(isVirtual)));
     syncPollingState(device.poll_interval_override);
     setTopologyDiscoveryMessage(null);
     setTopologyDiscoveryError(null);
     setTopologyDiscoveryRunning(false);
     setFieldErrors({});
-  }, [device]);
+  }, [device, isVirtual]);
 
   function applyProfile(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) return;
-    setSnmpVersion(profile.snmp.version);
-    setCommunity(profile.snmp.community ?? '');
-    setUsername(profile.snmp.username ?? '');
-    setSecurityLevel(profile.snmp.security_level ?? 'authPriv');
-    setAuthProtocol(profile.snmp.auth_protocol ?? 'SHA');
-    setAuthPassword(profile.snmp.auth_password ?? '');
-    setPrivProtocol(profile.snmp.priv_protocol ?? 'AES');
-    setPrivPassword(profile.snmp.priv_password ?? '');
+    setForm((current) => applySNMPProfile(current, profile));
   }
 
   function showSaved(
@@ -344,26 +325,24 @@ export function DeviceConfigPanel({
 
     // Validate before API call
     const errors: Record<string, string> = {};
-    const trimmedIP = ip.trim();
+    const trimmedIP = form.ip.trim();
     if (!(isVirtual && trimmedIP === '')) {
       const ipErr = validateIPOrHostname(trimmedIP);
       if (ipErr) errors['ip'] = ipErr;
     }
-    const trimmedDisplayName = displayName.trim();
-    const displayNameErr = validateDisplayNameField(displayName);
+    const displayNameErr = validateDisplayNameField(form.displayName);
     if (displayNameErr) errors['displayName'] = displayNameErr;
-    const usesPrometheus = metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback';
     if (usesPrometheus) {
-      const labelValueErr = validateMaxLength(prometheusLabelValue, MAX_STRING_LENGTH, 'Label value');
+      const labelValueErr = validateMaxLength(form.prometheus.labelValue, MAX_STRING_LENGTH, 'Label value');
       if (labelValueErr) errors['prometheusLabelValue'] = labelValueErr;
     }
-    const isV3 = snmpVersion === '3';
-    if (!isV3 && community.trim()) {
-      const communityErr = validateMaxLength(community, MAX_STRING_LENGTH, 'Community string');
+    const isV3 = form.snmp.version === '3';
+    if (!isV3 && form.snmp.community.trim()) {
+      const communityErr = validateMaxLength(form.snmp.community, MAX_STRING_LENGTH, 'Community string');
       if (communityErr) errors['community'] = communityErr;
     }
-    if (isV3 && username.trim()) {
-      const usernameErr = validateMaxLength(username, MAX_STRING_LENGTH, 'Username');
+    if (isV3 && form.snmp.username.trim()) {
+      const usernameErr = validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username');
       if (usernameErr) errors['username'] = usernameErr;
     }
     if (Object.keys(errors).length > 0) {
@@ -373,39 +352,8 @@ export function DeviceConfigPanel({
 
     setEditLoading(true);
     setEditError(null);
-    const needsAuth = securityLevel === 'authNoPriv' || securityLevel === 'authPriv';
-    const needsPriv = securityLevel === 'authPriv';
-    const hasSnmpChanges = isV3 ? username.trim() !== '' : community.trim() !== '';
     try {
-      const effectiveLabelValue = prometheusLabelValue.trim() || trimmedIP;
-      const normalizedNotes = notes.trim() === '' ? null : notes.trim();
-      const updated = await updateDevice(device.id, {
-        hostname: device.hostname,
-        ip: trimmedIP,
-        notes: normalizedNotes,
-        ...(hasSnmpChanges
-          ? {
-              snmp: isV3
-                ? {
-                    version: '3',
-                    username: username.trim(),
-                    security_level: securityLevel,
-                    ...(needsAuth ? { auth_protocol: authProtocol, auth_password: authPassword } : {}),
-                    ...(needsPriv ? { priv_protocol: privProtocol, priv_password: privPassword } : {}),
-                  }
-                : { version: '2c', community: community.trim() },
-            }
-          : {}),
-        tags: isVirtual
-          ? { ...device.tags, display_name: trimmedDisplayName }
-          : { ...device.tags, ...(trimmedDisplayName ? { display_name: trimmedDisplayName } : {}) },
-        vendor: vendorOverride || undefined,
-        area_ids: areaIds,
-        metrics_source: metricsSource,
-        prometheus_label_name: usesPrometheus ? prometheusLabelName : undefined,
-        prometheus_label_value: usesPrometheus ? effectiveLabelValue : undefined,
-        ...(!isVirtual ? { topology_discovery_mode: topologyDiscoveryMode } : {}),
-      });
+      const updated = await updateDevice(device.id, buildUpdateDevicePayload(device, form));
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated(updated);
     } catch (err) {
@@ -489,7 +437,6 @@ export function DeviceConfigPanel({
     }
   }
 
-  const usesSNMP = metricsSource === 'snmp' || metricsSource === 'prometheus_snmp_fallback';
   const pollClass = device.poll_class || 'standard';
   const defaultPollingDuration = DEFAULT_POLLING_DURATION_BY_CLASS[pollClass];
   const discoveryState = device.topology_bootstrap_state || 'idle';
@@ -498,13 +445,13 @@ export function DeviceConfigPanel({
     discoveryState === 'pending' ||
     discoveryState === 'followup_scheduled';
   const discoveryRunDisabled =
-    discoveryBusy || metricsSource === 'prometheus' || device.ip.trim() === '';
+    discoveryBusy || form.metricsMode === 'prometheus' || form.ip.trim() === '';
   const effectiveTopologyDiscoveryMode =
     device.effective_topology_discovery_mode || 'off';
   const configuredTopologyDiscoveryMode =
-    topologyDiscoveryMode === 'inherit'
+    form.topologyDiscoveryMode === 'inherit'
       ? `Use global default (${formatTopologyDiscoveryMode(topologyDiscoveryDefaultMode)})`
-      : formatTopologyDiscoveryMode(topologyDiscoveryMode);
+      : formatTopologyDiscoveryMode(form.topologyDiscoveryMode);
   const nextTopologyFollowup = formatTopologyFollowupExpectation(
     discoveryState,
     device.last_topology_discovery_at,
@@ -568,13 +515,13 @@ export function DeviceConfigPanel({
               Effective: {formatTopologyDiscoveryMode(effectiveTopologyDiscoveryMode)}
             </span>
           </div>
-          <select
-            id="device-topology-discovery-mode"
-            aria-label="Topology Discovery"
-            value={topologyDiscoveryMode}
-            onChange={(e) => setTopologyDiscoveryMode(e.target.value as TopologyDiscoveryMode)}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-          >
+            <select
+              id="device-topology-discovery-mode"
+              aria-label="Topology Discovery"
+              value={form.topologyDiscoveryMode}
+              onChange={(e) => updateForm({ topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode })}
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+            >
             {TOPOLOGY_DISCOVERY_MODE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -632,9 +579,9 @@ export function DeviceConfigPanel({
             {discoveryBusy ? 'Topology discovery running...' : 'Run Topology Discovery Now'}
           </button>
           <p className="text-xs text-on-bg-secondary/70">
-            {metricsSource === 'prometheus'
+            {form.metricsMode === 'prometheus'
               ? 'Prometheus-only devices cannot run SNMP topology discovery until SNMP or fallback mode is enabled.'
-              : device.ip.trim() === ''
+              : form.ip.trim() === ''
                 ? 'Topology discovery requires a device IP.'
                 : 'Bootstrap once opens a short discovery window, may queue one follow-up to fill missing ports, then returns the device to Off.'}
           </p>
@@ -703,9 +650,9 @@ export function DeviceConfigPanel({
 
         <input
           type="text"
-          value={displayName}
-          onChange={(e) => { setDisplayName(e.target.value); setFieldError('displayName', null); }}
-          onBlur={handleBlur('displayName', () => validateDisplayNameField(displayName))}
+          value={form.displayName}
+          onChange={(e) => { updateForm({ displayName: e.target.value }); setFieldError('displayName', null); }}
+          onBlur={handleBlur('displayName', () => validateDisplayNameField(form.displayName))}
           placeholder={isVirtual ? 'e.g. ISP Gateway' : (device.sys_name ? `Override "${device.sys_name}"` : 'Custom name (optional)')}
           required={isVirtual}
           className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['displayName'] ? ' border-status-down' : ' border-outline-subtle'}`}
@@ -716,9 +663,9 @@ export function DeviceConfigPanel({
 
         <input
           type="text"
-          value={ip}
-          onChange={(e) => { setIp(e.target.value); setFieldError('ip', null); }}
-          onBlur={handleBlur('ip', () => validateIPOrHostname(ip.trim()))}
+          value={form.ip}
+          onChange={(e) => { updateForm({ ip: e.target.value }); setFieldError('ip', null); }}
+          onBlur={handleBlur('ip', () => validateIPOrHostname(form.ip.trim()))}
           placeholder="IP Address"
           className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['ip'] ? ' border-status-down' : ' border-outline-subtle'}`}
         />
@@ -741,8 +688,8 @@ export function DeviceConfigPanel({
           </label>
           <textarea
             id="device-notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            value={form.notes}
+            onChange={(e) => updateForm({ notes: e.target.value })}
             rows={5}
             placeholder="Add internal notes for this device (optional)"
             className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
@@ -751,9 +698,9 @@ export function DeviceConfigPanel({
 
         <div className="space-y-1">
           <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Areas</label>
-          {areaIds.length > 0 && (
+          {form.areaIds.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
-              {areaIds.map((id) => {
+              {form.areaIds.map((id) => {
                 const area = areas.find((a) => a.id === id);
                 if (!area) return null;
                 return (
@@ -766,7 +713,7 @@ export function DeviceConfigPanel({
                     {area.name}
                     <button
                       type="button"
-                      onClick={() => setAreaIds((prev) => prev.filter((a) => a !== id))}
+                      onClick={() => updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })}
                       className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -780,10 +727,10 @@ export function DeviceConfigPanel({
           )}
           <select
             value=""
-            disabled={areas.filter((a) => !areaIds.includes(a.id)).length === 0}
+            disabled={areas.filter((a) => !form.areaIds.includes(a.id)).length === 0}
             onChange={(e) => {
               if (e.target.value) {
-                setAreaIds((prev) => [...prev, e.target.value]);
+                updateForm({ areaIds: [...form.areaIds, e.target.value] });
               }
             }}
             className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:opacity-50"
@@ -791,13 +738,13 @@ export function DeviceConfigPanel({
             <option value="">
               {areas.length === 0
                 ? 'No areas created'
-                : areas.filter((a) => !areaIds.includes(a.id)).length === 0
+                : areas.filter((a) => !form.areaIds.includes(a.id)).length === 0
                   ? 'All areas assigned'
-                  : areaIds.length === 0
+                  : form.areaIds.length === 0
                     ? 'Unassigned - select area...'
                     : 'Add another area...'}
             </option>
-            {areas.filter((a) => !areaIds.includes(a.id)).map((a) => (
+            {areas.filter((a) => !form.areaIds.includes(a.id)).map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
               </option>
@@ -811,8 +758,8 @@ export function DeviceConfigPanel({
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Vendor</label>
               <select
-                value={vendorOverride}
-                onChange={(e) => setVendorOverride(e.target.value)}
+                value={form.vendor}
+                onChange={(e) => updateForm({ vendor: e.target.value })}
                 className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
               >
                 <option value="">— Select vendor —</option>
@@ -942,11 +889,11 @@ export function DeviceConfigPanel({
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Metrics Source</label>
               <select
-                value={metricsSource}
+                value={form.metricsMode}
                 onChange={(e) => {
                   const val = e.target.value as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback';
                   if ((val === 'prometheus' || val === 'prometheus_snmp_fallback') && !prometheusAvailable) return;
-                  setMetricsSource(val);
+                  updateForm({ metricsMode: val as MetricsSource });
                 }}
                 className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
               >
@@ -958,12 +905,12 @@ export function DeviceConfigPanel({
                   Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
                 </option>
               </select>
-              {metricsSource === 'prometheus' && (
+              {form.metricsMode === 'prometheus' && (
                 <p className="text-xs text-on-bg-secondary/70">
                   Metrics from Prometheus only. No fallback if Prometheus is unreachable.
                 </p>
               )}
-              {metricsSource === 'prometheus_snmp_fallback' && (
+              {form.metricsMode === 'prometheus_snmp_fallback' && (
                 <p className="text-xs text-on-bg-secondary/70">
                   Falls back to SNMP if Prometheus is unavailable or has no data for this device.
                 </p>
@@ -971,14 +918,14 @@ export function DeviceConfigPanel({
             </div>
 
             {/* Prometheus Target — visible when metrics source uses Prometheus */}
-            {(metricsSource === 'prometheus' || metricsSource === 'prometheus_snmp_fallback') && (
+            {usesPrometheus && (
               <div className="space-y-2 bg-surface-high rounded-lg p-3">
                 <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Prometheus Target</p>
                 <div className="space-y-1">
                   <label className="text-xs text-on-bg-secondary">Label</label>
                   <select
-                    value={prometheusLabelName}
-                    onChange={(e) => setPrometheusLabelName(e.target.value)}
+                    value={form.prometheus.labelName}
+                    onChange={(e) => updatePrometheus({ labelName: e.target.value })}
                     className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                   >
                     <option value="instance">instance (IP address)</option>
@@ -988,14 +935,14 @@ export function DeviceConfigPanel({
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs text-on-bg-secondary">
-                    Value{prometheusLabelName === 'instance' ? ' (defaults to IP if blank)' : ''}
+                    Value{form.prometheus.labelName === 'instance' ? ' (defaults to IP if blank)' : ''}
                   </label>
                   <input
                     type="text"
-                    value={prometheusLabelValue}
-                    onChange={(e) => { setPrometheusLabelValue(e.target.value); setFieldError('prometheusLabelValue', null); }}
-                    onBlur={handleBlur('prometheusLabelValue', () => validateMaxLength(prometheusLabelValue, MAX_STRING_LENGTH, 'Label value'))}
-                    placeholder={prometheusLabelName === 'instance' ? ip || device.ip : 'e.g. my-router'}
+                    value={form.prometheus.labelValue}
+                    onChange={(e) => { updatePrometheus({ labelValue: e.target.value }); setFieldError('prometheusLabelValue', null); }}
+                    onBlur={handleBlur('prometheusLabelValue', () => validateMaxLength(form.prometheus.labelValue, MAX_STRING_LENGTH, 'Label value'))}
+                    placeholder={form.prometheus.labelName === 'instance' ? form.ip || device.ip : 'e.g. my-router'}
                     className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['prometheusLabelValue'] ? ' border-status-down' : ' border-outline-subtle'}`}
                   />
                   {fieldErrors['prometheusLabelValue'] && (
@@ -1024,21 +971,21 @@ export function DeviceConfigPanel({
             )}
 
             <select
-              value={snmpVersion}
-              onChange={(e) => setSnmpVersion(e.target.value)}
+              value={form.snmp.version}
+              onChange={(e) => updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })}
               className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
             >
               <option value="2c">SNMP v2c</option>
               <option value="3">SNMP v3</option>
             </select>
 
-            {snmpVersion !== '3' && (
+            {form.snmp.version !== '3' && (
               <>
                 <input
                   type="text"
-                  value={community}
-                  onChange={(e) => { setCommunity(e.target.value); setFieldError('community', null); }}
-                  onBlur={handleBlur('community', () => validateMaxLength(community, MAX_STRING_LENGTH, 'Community string'))}
+                  value={form.snmp.community}
+                  onChange={(e) => { updateSnmp({ community: e.target.value }); setFieldError('community', null); }}
+                  onBlur={handleBlur('community', () => validateMaxLength(form.snmp.community, MAX_STRING_LENGTH, 'Community string'))}
                   placeholder="SNMP Community (leave blank to keep current)"
                   className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['community'] ? ' border-status-down' : ' border-outline-subtle'}`}
                 />
@@ -1048,14 +995,14 @@ export function DeviceConfigPanel({
               </>
             )}
 
-            {snmpVersion === '3' && (
+            {form.snmp.version === '3' && (
               <div className="space-y-2 bg-surface-high rounded-lg p-3">
                 <p className="text-xs text-on-bg-secondary">SNMPv3 Credentials (leave blank to keep current)</p>
                 <input
                   type="text"
-                  value={username}
-                  onChange={(e) => { setUsername(e.target.value); setFieldError('username', null); }}
-                  onBlur={handleBlur('username', () => validateMaxLength(username, MAX_STRING_LENGTH, 'Username'))}
+                  value={form.snmp.username}
+                  onChange={(e) => { updateSnmp({ username: e.target.value }); setFieldError('username', null); }}
+                  onBlur={handleBlur('username', () => validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username'))}
                   placeholder="Username"
                   className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['username'] ? ' border-status-down' : ' border-outline-subtle'}`}
                 />
@@ -1063,19 +1010,19 @@ export function DeviceConfigPanel({
                   <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
                 )}
                 <select
-                  value={securityLevel}
-                  onChange={(e) => setSecurityLevel(e.target.value)}
+                  value={form.snmp.securityLevel}
+                  onChange={(e) => updateSnmp({ securityLevel: e.target.value })}
                   className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                 >
                   <option value="noAuthNoPriv">No Auth, No Privacy</option>
                   <option value="authNoPriv">Auth, No Privacy</option>
                   <option value="authPriv">Auth + Privacy</option>
                 </select>
-                {(securityLevel === 'authNoPriv' || securityLevel === 'authPriv') && (
+                {(form.snmp.securityLevel === 'authNoPriv' || form.snmp.securityLevel === 'authPriv') && (
                   <>
                     <select
-                      value={authProtocol}
-                      onChange={(e) => setAuthProtocol(e.target.value)}
+                      value={form.snmp.authProtocol}
+                      onChange={(e) => updateSnmp({ authProtocol: e.target.value })}
                       className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                     >
                       <option value="SHA">SHA</option>
@@ -1087,19 +1034,19 @@ export function DeviceConfigPanel({
                     </select>
                     <input
                       type="password"
-                      value={authPassword}
-                      onChange={(e) => setAuthPassword(e.target.value)}
+                      value={form.snmp.authPassword}
+                      onChange={(e) => updateSnmp({ authPassword: e.target.value })}
                       placeholder="Auth Key"
                       autoComplete="new-password"
                       className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                     />
                   </>
                 )}
-                {securityLevel === 'authPriv' && (
+                {form.snmp.securityLevel === 'authPriv' && (
                   <>
                     <select
-                      value={privProtocol}
-                      onChange={(e) => setPrivProtocol(e.target.value)}
+                      value={form.snmp.privProtocol}
+                      onChange={(e) => updateSnmp({ privProtocol: e.target.value })}
                       className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                     >
                       <option value="AES">AES</option>
@@ -1107,8 +1054,8 @@ export function DeviceConfigPanel({
                     </select>
                     <input
                       type="password"
-                      value={privPassword}
-                      onChange={(e) => setPrivPassword(e.target.value)}
+                      value={form.snmp.privPassword}
+                      onChange={(e) => updateSnmp({ privPassword: e.target.value })}
                       placeholder="Encryption Key"
                       autoComplete="new-password"
                       className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"

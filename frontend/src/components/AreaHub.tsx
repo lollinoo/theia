@@ -1,40 +1,14 @@
 import type { Area, Device, Link } from '../types/api';
-import type { SnapshotPayload } from '../types/metrics';
 import AreaCard from './AreaCard';
+import { buildRuntimeDeviceRows, computeAreaHealthSummary } from './dashboard/runtimeDeviceRows';
 
 /** Props for the AreaHub component. */
 interface AreaHubProps {
   devices: Device[];
   areas: Area[];
   links: Link[];
-  snapshot: SnapshotPayload | null;
   onAreaSelect: (areaId: string) => void;
   onOpenSettings: () => void;
-}
-
-/** Compute health stats from devices and optional live snapshot statuses. */
-function computeHealth(
-  devices: Device[],
-  snapshot: SnapshotPayload | null,
-): { percentage: number; label: string; color: string } {
-  if (devices.length === 0) {
-    return { percentage: 100, label: 'N/A', color: 'text-on-bg-secondary' };
-  }
-
-  const upCount = devices.filter((d) => {
-    const liveStatus = snapshot?.device_statuses[d.id] ?? d.status;
-    return liveStatus === 'up';
-  }).length;
-
-  const percentage = (upCount / devices.length) * 100;
-
-  if (percentage >= 95) {
-    return { percentage, label: 'Optimal', color: 'text-status-up' };
-  }
-  if (percentage >= 80) {
-    return { percentage, label: 'Degraded', color: 'text-warning' };
-  }
-  return { percentage, label: 'Critical', color: 'text-status-down' };
 }
 
 
@@ -43,12 +17,11 @@ export default function AreaHub({
   devices,
   areas,
   links,
-  snapshot,
   onAreaSelect,
   onOpenSettings,
 }: AreaHubProps) {
   // --- Aggregate stats ---
-  const aggregateHealth = computeHealth(devices, snapshot);
+  const aggregateHealth = computeAreaHealthSummary(buildRuntimeDeviceRows({ devices, snapshot: null }));
 
   return (
     <div className="w-full max-w-[1200px] mx-auto mt-20 px-8 pb-12 flex flex-col gap-12">
@@ -103,7 +76,7 @@ export default function AreaHub({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {areas.map((area) => {
             const areaDevices = devices.filter((d) => d.area_ids?.includes(area.id));
-            const areaHealth = computeHealth(areaDevices, snapshot);
+            const areaHealth = computeAreaHealthSummary(buildRuntimeDeviceRows({ devices: areaDevices, snapshot: null }));
             // Count links where at least one endpoint is in this area
             const areaDeviceIds = new Set(areaDevices.map((d) => d.id));
             const activeLinkCount = links.filter(

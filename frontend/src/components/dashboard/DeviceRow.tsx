@@ -1,19 +1,15 @@
-import type { Device, Area } from '../../types/api';
+import type { Area } from '../../types/api';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import { adaptAreaColor } from '../../contexts/ThemeContext';
-import type { DeviceMetricsDTO } from '../../types/metrics';
-import { formatUptime } from '../../types/metrics';
 import { StatusDot } from '../StatusDot';
 import { MaterialIcon } from '../MaterialIcon';
-import { resolveDeviceOperationalStatusState } from '../deviceVisualState';
-import { resolveOsVersion } from './parseOsVersion';
+import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
 
 interface DeviceRowProps {
-  device: Device;
+  row: RuntimeDeviceRow;
   areaMap: Map<string, Area>;
   resolvedTheme: ResolvedTheme;
-  deviceMetrics: DeviceMetricsDTO | null;
   onSSHCredentials: () => void;
   onBackup: () => void;
   onBackupHistory: () => void;
@@ -21,31 +17,27 @@ interface DeviceRowProps {
 }
 
 export function DeviceRow({
-  device, areaMap, resolvedTheme, deviceMetrics,
+  row, areaMap, resolvedTheme,
   onSSHCredentials, onBackup, onBackupHistory, onViewConfig,
 }: DeviceRowProps) {
-  const displayName = device.tags?.display_name || device.sys_name || device.hostname || device.ip;
-  const deviceAreas = (device.area_ids ?? []).map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
-  const uptimeSecs = deviceMetrics?.uptime_secs ?? null;
-  const osVersion = resolveOsVersion(device.os_version, device.sys_descr);
-  const statusState = resolveDeviceOperationalStatusState(device);
+  const deviceAreas = row.areaIds.map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
 
   return (
     <tr className="[&:nth-child(even)]:bg-surface-high/30 hover:bg-elevated/50 transition-colors duration-150">
       {/* Name -- sticky first column per D-20 */}
       <td className="px-3 py-2.5 sticky left-0 z-[4] bg-inherit">
-        <div className="font-medium text-on-bg">{displayName}</div>
-        {device.sys_name && device.sys_name !== displayName && (
-          <div className="text-on-bg-secondary text-[11px] mt-0.5">{device.sys_name}</div>
+        <div className="font-medium text-on-bg">{row.displayName}</div>
+        {row.sysName && row.sysName !== row.displayName && (
+          <div className="text-on-bg-secondary text-[11px] mt-0.5">{row.sysName}</div>
         )}
       </td>
       {/* IP Address -- monospace per design spec */}
-      <td className="px-3 py-2.5 font-mono text-[11px] font-semibold text-on-bg-secondary whitespace-nowrap">{device.ip}</td>
+      <td className="px-3 py-2.5 font-mono text-[11px] font-semibold text-on-bg-secondary whitespace-nowrap">{row.ip}</td>
       {/* Status -- StatusDot component per D-02 */}
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-1.5">
-          <StatusDot status={statusState.dotStatus} />
-          <span className="text-on-bg-secondary text-[11px]">{statusState.label}</span>
+          <StatusDot status={row.statusState.dotStatus} />
+          <span className="text-on-bg-secondary text-[11px]">{row.statusState.label}</span>
         </div>
       </td>
       {/* Area -- color dot(s) + name per D-02/D-11 */}
@@ -68,27 +60,25 @@ export function DeviceRow({
       </td>
       {/* Vendor */}
       <td className="px-3 py-2.5 text-on-bg-secondary text-[11px] capitalize">
-        {device.vendor || '\u2014'}
+        {row.vendor || '\u2014'}
       </td>
       {/* Model */}
       <td className="px-3 py-2.5 text-on-bg-secondary text-[11px] font-mono">
-        {device.hardware_model && device.hardware_model !== 'Unknown'
-          ? device.hardware_model
-          : device.sys_descr
-            ? device.sys_descr.length > 30 ? `${device.sys_descr.slice(0, 29)}\u2026` : device.sys_descr
-            : '\u2014'}
+        {row.modelLabel
+          ? row.modelLabel.length > 30 ? `${row.modelLabel.slice(0, 29)}\u2026` : row.modelLabel
+          : '\u2014'}
       </td>
       {/* OS Version -- parsed from sys_descr, font-mono per D-02 */}
       <td className="px-3 py-2.5 font-mono text-[11px] text-on-bg-secondary whitespace-nowrap">
-        {osVersion || '\u2014'}
+        {row.osVersion || '\u2014'}
       </td>
       {/* Uptime -- live from WebSocket snapshot, font-mono per D-02 */}
       <td className="px-3 py-2.5 font-mono text-[11px] text-on-bg-secondary whitespace-nowrap">
-        {uptimeSecs !== null ? formatUptime(uptimeSecs) : '\u2014'}
+        {row.uptimeLabel || '\u2014'}
       </td>
       {/* Actions -- icon buttons per D-08; virtual nodes have no SSH/backup */}
       <td className="px-3 py-2.5">
-        {device.device_type !== 'virtual' && (
+        {row.deviceType !== 'virtual' && (
           <div className="flex items-center justify-end gap-0.5">
             <IconAction icon="terminal" title="SSH Credentials" onClick={onSSHCredentials} />
             <IconAction icon="backup" title="Backup Now" onClick={onBackup} />

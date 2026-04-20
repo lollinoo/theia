@@ -2,17 +2,18 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Dashboard } from './Dashboard';
 import type { Device } from '../types/api';
+import type { RuntimeDeviceRow } from './dashboard/runtimeDeviceRows';
 
 // Mock sub-components that have their own complex dependencies
 vi.mock('./dashboard/DeviceTable', () => ({
-  DeviceTable: ({ devices }: { devices: Device[] }) => (
+  DeviceTable: ({ rows }: { rows: RuntimeDeviceRow[] }) => (
     <table data-testid="device-table">
       <tbody>
-        {devices.map((d) => (
-          <tr key={d.id}>
-            <td>{d.hostname}</td>
-            <td>{d.ip}</td>
-            <td>{d.status}</td>
+        {rows.map((row) => (
+          <tr key={row.id}>
+            <td>{row.hostname}</td>
+            <td>{row.ip}</td>
+            <td>{row.statusState.label}</td>
           </tr>
         ))}
       </tbody>
@@ -120,6 +121,24 @@ describe('Dashboard', () => {
     expect(screen.getByText('10.0.0.2')).toBeInTheDocument();
   });
 
+  it('preserves incoming runtime-aware device status when snapshot status disagrees', () => {
+    const devices = [mockDevice({ status: 'down' })];
+
+    render(
+      <Dashboard
+        devices={devices}
+        areas={[]}
+        snapshot={{
+          device_metrics: {},
+          link_metrics: {},
+          device_statuses: { 'dev-1': 'up' },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Down')).toBeInTheDocument();
+  });
+
   it('shows loading state with skeleton table when no devices', () => {
     const { container } = render(<Dashboard devices={[]} areas={[]} snapshot={null} />);
 
@@ -180,29 +199,8 @@ describe('Dashboard', () => {
     expect(screen.getByText('Clear filters')).toBeInTheDocument();
   });
 
-  it('shows empty state CTA when devices loaded but empty', () => {
-    // To test true empty state, we need a situation where devices.length > 0
-    // but filteredDevices.length === 0 with no active filters -- this is the
-    // no-filter-matches case. The true "No devices yet" shows only when
-    // devices array has items but filtering produces 0 without any active filters.
-    // Actually, the "No devices yet" state appears only when devices.length > 0
-    // but all filtered out with no active filters -- which can't happen.
-    // It shows when passed an empty devices prop? No, that's skeleton.
-    // Looking at the code: devices.length === 0 -> skeleton,
-    // filteredDevices.length === 0 with no active filters -> "No devices yet"
-    // This can happen if devices prop is non-empty but somehow all get filtered
-    // by non-search/non-filter mechanisms. But in current code, it can only happen
-    // if we have devices but they are all filtered away with default filters,
-    // which shouldn't happen. Let me test the CTA by verifying its text exists
-    // in the component source instead.
-    // Actually, this state would occur if e.g. devices = [mockDevice()] but it
-    // was already filtered by a parent and we got empty filteredDevices with
-    // all filters set to 'all'. But wait -- the Dashboard is filtering itself.
-    // So this empty state path will never be reached in practice, but it exists
-    // for safety. Let me just verify the text is in the component output for
-    // the skeleton case which has the column headers.
+  it('shows skeleton headers when no devices are available yet', () => {
     const { container } = render(<Dashboard devices={[]} areas={[]} snapshot={null} />);
-    // The skeleton should show correct headers
     expect(container.querySelector('thead')).toBeTruthy();
   });
 
@@ -236,5 +234,17 @@ describe('Dashboard', () => {
 
     expect(screen.getByText('router-down')).toBeInTheDocument();
     expect(screen.queryByText('virtual-cloud')).toBeNull();
+  });
+
+  it('searches using row-model fields instead of raw device fields', () => {
+    const devices = [mockDevice({ hostname: 'router-01', sys_name: 'router-01' })];
+
+    render(<Dashboard devices={devices} areas={[]} snapshot={null} />);
+
+    fireEvent.change(screen.getByPlaceholderText('Search devices...'), {
+      target: { value: '10.0.0.1' },
+    });
+
+    expect(screen.getByText('router-01')).toBeInTheDocument();
   });
 });

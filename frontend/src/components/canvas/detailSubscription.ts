@@ -6,14 +6,14 @@ export function getCanvasDetailDeviceId(
   }
 
   if (panelContent.type === 'deviceConfig') {
-    const data = panelContent.data as { device?: { id?: string } } | undefined;
-    return data?.device?.id ?? null;
+    const data = panelContent.data as { deviceId?: string } | undefined;
+    return data?.deviceId ?? null;
   }
 
   if (panelContent.type === 'interfaceStats') {
-    const data = panelContent.data as { device?: { id?: string }; link?: unknown } | undefined;
-    if (data?.device && !data.link) {
-      return data.device.id ?? null;
+    const data = panelContent.data as { deviceId?: string; linkId?: string } | undefined;
+    if (data?.deviceId && !data.linkId) {
+      return data.deviceId;
     }
   }
 

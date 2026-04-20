@@ -1,4 +1,3 @@
-import { isPrometheusUnavailable, type PrometheusStatusPayload } from '../../types/metrics';
 import { ReconnectBanner } from '../ReconnectBanner';
 import type { TopologyRecoveryNotice } from './useCanvasData';
 
@@ -10,7 +9,7 @@ interface CanvasOverlaysProps {
   topologyRecoveryNotice: TopologyRecoveryNotice | null;
   dismissTopologyRecoveryNotice: () => void;
   retryTopologyRefresh: () => void;
-  prometheusStatus: PrometheusStatusPayload | null;
+  prometheusDown: boolean;
   prometheusAlertDismissed: boolean;
   setPrometheusAlertDismissed: (v: boolean) => void;
   setPanelContent: (content: { type: string; data?: unknown } | null) => void;
@@ -26,14 +25,14 @@ export function CanvasOverlays({
   topologyRecoveryNotice,
   dismissTopologyRecoveryNotice,
   retryTopologyRefresh,
-  prometheusStatus,
+  prometheusDown,
   prometheusAlertDismissed,
   setPrometheusAlertDismissed,
   setPanelContent,
   selectedNodeCount,
   onBulkEditClick,
 }: CanvasOverlaysProps) {
-  const showPrometheusAlert = isPrometheusUnavailable(prometheusStatus) && !prometheusAlertDismissed;
+  const showPrometheusAlert = prometheusDown && !prometheusAlertDismissed;
 
   return (
     <>

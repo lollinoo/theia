@@ -5,7 +5,7 @@ export function useBridgeHealth(bridgePort: string): {
   bridgeRunning: boolean;
   bridgeChecked: boolean;
   bridgeError: string | null;
-  checkBridgeHealth: () => void;
+  checkBridgeHealth: (bridgePortOverride?: string) => void;
 } {
   const [bridgeRunning, setBridgeRunning] = useState(false);
   const [bridgeChecked, setBridgeChecked] = useState(false);
@@ -17,12 +17,12 @@ export function useBridgeHealth(bridgePort: string): {
     unmountedRef.current = true;
   }, []);
 
-  const checkBridgeHealth = useCallback(() => {
+  const checkBridgeHealth = useCallback((bridgePortOverride?: string) => {
     const checkId = latestCheckRef.current + 1;
     latestCheckRef.current = checkId;
     setBridgeChecked(false);
     setBridgeError(null);
-    const url = `http://localhost:${bridgePort}/health`;
+    const url = `http://localhost:${bridgePortOverride ?? bridgePort}/health`;
 
     void (async () => {
       try {
