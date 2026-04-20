@@ -5,7 +5,13 @@ tmp/
 *.db
 .gemini/
 frontend/node_modules/
-docs/
+docs/*
+!docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+!docs/superpowers/specs/*.md
+!docs/superpowers/plans/
+!docs/superpowers/plans/*.md
 frontend/dist/
 frontend/dist/index.html
 # Build output
@@ -16,6 +22,7 @@ bridge_binaries/
 .env
 .env.local
 .claude/
+.worktrees/
 CHANGELOG.md
 .planning/
 
