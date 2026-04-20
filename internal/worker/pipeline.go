@@ -51,9 +51,16 @@ type pipelineScheduler interface {
 
 var ErrAlreadyStarted = errors.New("pipeline orchestrator: already started")
 
+type pipelineTaskRunning interface {
+	runWorker(context.Context)
+	runTask(context.Context, scheduler.PollTask)
+	topologyDiscoveryMode(domain.Device) domain.TopologyDiscoveryMode
+	publishSubscribedDetailDelta(domain.Device)
+}
+
 type PipelineOrchestrator struct {
 	scheduler       pipelineScheduler
-	taskRunner      *pipelineTaskRunner
+	taskRunner      pipelineTaskRunning
 	stateStore      *state.Store
 	cache           *cache.DeviceLinkCache
 	hub             *ws.Hub
