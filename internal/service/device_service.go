@@ -52,6 +52,7 @@ type DeviceService struct {
 	linkRepo        domain.LinkRepository
 	topologyStore   topology.ObservationStore
 	settingsRepo    domain.SettingsRepository
+	mutation        *deviceMutationService
 	discoverFunc    DiscoverFunc
 	pollRescheduler pollRescheduler
 	now             func() time.Time
@@ -107,6 +108,7 @@ func NewDeviceService(
 			option(svc)
 		}
 	}
+	svc.mutation = newDeviceMutationService(svc)
 	return svc
 }
 
@@ -157,86 +159,7 @@ func (s *DeviceService) AddDevice(
 	areaIDs []uuid.UUID,
 	notes ...*string,
 ) (*domain.Device, error) {
-	if tags == nil {
-		tags = map[string]string{}
-	}
-	if deviceType == "" {
-		deviceType = domain.DeviceTypeUnknown
-	}
-	if metricsSource == "" {
-		metricsSource = domain.MetricsSourcePrometheus
-	}
-	if prometheusLabelName == "" {
-		prometheusLabelName = "instance"
-	}
-	if prometheusLabelValue == "" {
-		prometheusLabelValue = ip
-	}
-
-	// Virtual devices without an IP don't use any metrics source — they are
-	// status-inert nodes on the canvas whose state is never overridden by
-	// Prometheus or SNMP polling.
-	if deviceType == domain.DeviceTypeVirtual && ip == "" {
-		metricsSource = domain.MetricsSourceNone
-	}
-
-	var normalizedNotes *string
-	if len(notes) > 0 {
-		normalizedNotes = domain.NormalizeDeviceNotes(notes[0])
-	}
-
-	initialStatus := domain.DeviceStatusProbing
-	if deviceType == domain.DeviceTypeVirtual {
-		initialStatus = domain.DeviceStatusUnknown
-	}
-
-	device := &domain.Device{
-		ID:                     uuid.New(),
-		Hostname:               hostname,
-		IP:                     ip,
-		Notes:                  normalizedNotes,
-		SNMPCredentials:        creds,
-		DeviceType:             deviceType,
-		PollClass:              domain.ClassifyPollClass(deviceType),
-		Status:                 initialStatus,
-		Vendor:                 vendor,
-		Managed:                true,
-		Tags:                   tags,
-		MetricsSource:          metricsSource,
-		PrometheusLabelName:    prometheusLabelName,
-		PrometheusLabelValue:   prometheusLabelValue,
-		TopologyDiscoveryMode:  topologyDiscoveryMode,
-		TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
-		AreaIDs:                areaIDs,
-	}
-	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
-	if domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode()) == domain.TopologyDiscoveryModeBootstrapOnce {
-		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
-	}
-	domain.NormalizeVirtualNoIPDevice(device)
-
-	if err := s.deviceRepo.Create(device); err != nil {
-		return nil, fmt.Errorf("creating device: %w", err)
-	}
-
-	if deviceType == domain.DeviceTypeVirtual {
-		// Virtual devices are not SNMP-probed. Status starts as "unknown".
-		// For virtual devices WITH an IP, the MetricsCollector will update
-		// status via probe_success on its next cycle (per D-05/D-07).
-		// For virtual devices WITHOUT an IP, status stays "unknown" permanently (per D-06).
-		s.populateEffectiveTopologyDiscoveryMode(device)
-		return device, nil
-	}
-
-	// Launch async probe for non-virtual devices
-	s.probeWg.Add(1)
-	go func() {
-		defer s.probeWg.Done()
-		s.probeDevice(device)
-	}()
-
-	s.populateEffectiveTopologyDiscoveryMode(device)
-	return device, nil
+	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, notes...)
 }
 
 // probeDevice performs SNMP discovery and updates the device in the repository.
@@ -700,139 +623,22 @@ func (s *DeviceService) probeDevice(device *domain.Device) {
 
 // UpdateDevice applies partial updates to an existing device without re-probing.
 func (s *DeviceService) UpdateDevice(ctx context.Context, id uuid.UUID, update DeviceUpdate) error {
-	device, err := s.deviceRepo.GetByID(id)
-	if err != nil {
-		return fmt.Errorf("getting device: %w", err)
-	}
-	previousOverride := clonePollIntervalOverride(device.PollIntervalOverride)
-	defaultTopologyMode := s.defaultTopologyDiscoveryMode()
-	previousConfiguredMode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
-	previousEffectiveMode := domain.ResolveTopologyDiscoveryMode(device, defaultTopologyMode)
-	previousBootstrapState := domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState)
-	shouldTriggerTopologyProbe := false
-
-	if update.Hostname != nil {
-		device.Hostname = *update.Hostname
-	}
-	if update.IP != nil {
-		device.IP = *update.IP
-	}
-	if update.Notes != nil {
-		device.Notes = domain.NormalizeDeviceNotes(*update.Notes)
-	}
-	if update.Tags != nil {
-		device.Tags = *update.Tags
-	}
-	if update.SNMPCredentials != nil {
-		device.SNMPCredentials = *update.SNMPCredentials
-	}
-	if update.Vendor != nil {
-		device.Vendor = *update.Vendor
-	}
-	if update.MetricsSource != nil {
-		device.MetricsSource = *update.MetricsSource
-	}
-	if update.PrometheusLabelName != nil {
-		device.PrometheusLabelName = *update.PrometheusLabelName
-	}
-	if update.PrometheusLabelValue != nil {
-		device.PrometheusLabelValue = *update.PrometheusLabelValue
-	}
-	if update.TopologyDiscoveryMode != nil {
-		device.TopologyDiscoveryMode = *update.TopologyDiscoveryMode
-		if device.TopologyDiscoveryMode == "" {
-			device.TopologyDiscoveryMode = domain.TopologyDiscoveryModeInherit
-		}
-		if device.TopologyDiscoveryMode == domain.TopologyDiscoveryModeBootstrapOnce {
-			device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
-		}
-
-		newConfiguredMode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
-		newEffectiveMode := domain.ResolveTopologyDiscoveryMode(device, defaultTopologyMode)
-		newBootstrapState := domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState)
-		discoveryModeChanged :=
-			newConfiguredMode != previousConfiguredMode ||
-				newEffectiveMode != previousEffectiveMode ||
-				newBootstrapState != previousBootstrapState
-		if discoveryModeChanged &&
-			newEffectiveMode != domain.TopologyDiscoveryModeOff &&
-			strings.TrimSpace(device.IP) != "" &&
-			device.DeviceType != domain.DeviceTypeVirtual &&
-			device.MetricsSource != domain.MetricsSourcePrometheus &&
-			device.MetricsSource != domain.MetricsSourceNone {
-			shouldTriggerTopologyProbe = true
-		}
-	}
-	if update.PollIntervalOverride != nil {
-		device.PollIntervalOverride = *update.PollIntervalOverride
-	}
-	if update.AreaIDs != nil {
-		device.AreaIDs = *update.AreaIDs
-	}
-	domain.NormalizeVirtualNoIPDevice(device)
-
-	if err := s.deviceRepo.Update(device); err != nil {
-		return err
-	}
-	if update.PollIntervalOverride == nil || s.pollRescheduler == nil {
-		if !shouldTriggerTopologyProbe {
-			return nil
-		}
-		return s.ReprobeDevice(ctx, id)
-	}
-	if pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride) {
-		if !shouldTriggerTopologyProbe {
-			return nil
-		}
-		return s.ReprobeDevice(ctx, id)
-	}
-
-	s.pollRescheduler.ReduePerformanceTask(*device, time.Now().UTC())
-	if !shouldTriggerTopologyProbe {
-		return nil
-	}
-	return s.ReprobeDevice(ctx, id)
+	return s.mutation.UpdateDevice(ctx, id, update)
 }
 
 // DeleteDevice removes a device and all associated links.
 func (s *DeviceService) DeleteDevice(ctx context.Context, id uuid.UUID) error {
-	// Delete associated links first
-	links, err := s.linkRepo.GetByDeviceID(id)
-	if err != nil {
-		return fmt.Errorf("getting links for device: %w", err)
-	}
-	for _, link := range links {
-		if err := s.linkRepo.Delete(link.ID); err != nil {
-			log.Printf("Warning: failed to delete link %s: %v", link.ID, err)
-		}
-	}
-
-	// Delete the device (cascading delete handles interfaces in SQLite)
-	return s.deviceRepo.Delete(id)
+	return s.mutation.DeleteDevice(ctx, id)
 }
 
 // GetDevice retrieves a single device by ID.
 func (s *DeviceService) GetDevice(ctx context.Context, id uuid.UUID) (*domain.Device, error) {
-	device, err := s.deviceRepo.GetByID(id)
-	if err != nil {
-		return nil, err
-	}
-	domain.NormalizeVirtualNoIPDevice(device)
-	s.populateEffectiveTopologyDiscoveryMode(device)
-	return device, nil
+	return s.mutation.GetDevice(ctx, id)
 }
 
 // GetAllDevices retrieves all devices with their interfaces.
 func (s *DeviceService) GetAllDevices(ctx context.Context) ([]domain.Device, error) {
-	devices, err := s.deviceRepo.GetAll()
-	if err != nil {
-		return nil, err
-	}
-	for i := range devices {
-		domain.NormalizeVirtualNoIPDevice(&devices[i])
-		s.populateEffectiveTopologyDiscoveryMode(&devices[i])
-	}
-	return devices, nil
+	return s.mutation.GetAllDevices(ctx)
 }
 
 // ProbeDevice triggers a re-probe of an existing device.
