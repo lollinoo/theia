@@ -711,42 +711,11 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	}
 
 	linkMetricsByID := attachLinkMetrics(devices, links, linkMetricsByIP)
-	alertsByDevice := attachAlerts(devices, alertStates)
 
 	snapshot.DeviceMetrics = ws.DeviceMetricsToDTOs(deviceMetricsByID)
 	snapshot.LinkMetrics = ws.LinkMetricsToDTOs(linkMetricsByID)
-	snapshot.Alerts = ws.AlertsToDTOs(alertsByDevice)
-
-	// Map hostnames → device IDs.
-	// Primary: DB-stored sys_name (written by probeDevice after SNMP discovery).
-	// Fallback: Prometheus-queried hostname (sysName metric).
-	hostnames := make(map[string]string, len(devices))
-	for _, dev := range devices {
-		devID := dev.ID.String()
-		// Primary: DB-stored sys_name (written by probeDevice after SNMP discovery)
-		if dev.SysName != "" {
-			hostnames[devID] = dev.SysName
-			continue
-		}
-		// Fallback: Prometheus-queried hostname
-		lv := effectiveLabelValue(dev)
-		if lv == "" {
-			continue
-		}
-		if name, ok := hostnamesByLabelValue[lv]; ok {
-			hostnames[devID] = name
-		}
-	}
-	snapshot.DeviceHostnames = hostnames
-
-	// Build device_models from DB hardware_model field.
-	models := make(map[string]string, len(devices))
-	for _, dev := range devices {
-		if dev.HardwareModel != "" && dev.HardwareModel != "Unknown" {
-			models[dev.ID.String()] = dev.HardwareModel
-		}
-	}
-	snapshot.DeviceModels = models
+	_ = alertStates
+	_ = hostnamesByLabelValue
 
 	statuses := make(map[string]string, len(devices))
 	for _, dev := range devices {

@@ -73,22 +73,15 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
         device_id: 'dev-1',
         cpu_percent: 42,
         mem_percent: 68,
-        temp_celsius: 55,
-        uptime_secs: 86400,
         collected_at: '2026-04-13T11:59:45Z',
         health: 'warning',
         stale: false,
-        last_polled_at: '2026-04-13T11:59:30Z',
-        expected_poll_interval_seconds: 30,
       },
     },
     link_metrics: {},
-    alerts: [],
     device_statuses: {
       'dev-1': 'up',
     },
-    device_hostnames: {},
-    device_models: {},
     ...overrides,
   };
 }
@@ -178,8 +171,8 @@ describe('useCanvasData', () => {
     expect(result.current.nodes[0].data.device.status).toBe('down');
     expect(result.current.nodes[0].data.metrics).toMatchObject({
       health: 'warning',
-      last_polled_at: '2026-04-13T11:59:30Z',
-      expected_poll_interval_seconds: 30,
+      last_polled_at: '2026-04-13T11:59:45Z',
+      expected_poll_interval_seconds: 60,
     });
   });
 
@@ -232,8 +225,8 @@ describe('useCanvasData', () => {
       uptime_secs: null,
       health: 'warning',
       stale: false,
-      last_polled_at: '2026-04-13T11:59:30Z',
-      expected_poll_interval_seconds: 30,
+      last_polled_at: '2026-04-13T11:59:45Z',
+      expected_poll_interval_seconds: 60,
     });
   });
 

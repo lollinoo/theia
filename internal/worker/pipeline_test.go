@@ -938,6 +938,14 @@ type wsVersionedSnapshotDeltaMessage struct {
 	} `json:"payload"`
 }
 
+type wsVersionedAlertMessage struct {
+	Type    string `json:"type"`
+	Payload struct {
+		Version uint64        `json:"version"`
+		Alerts  []ws.AlertDTO `json:"alerts"`
+	} `json:"payload"`
+}
+
 func newDetailSubscriptionTestDevice() domain.Device {
 	return domain.Device{
 		ID:     uuid.New(),
@@ -978,6 +986,7 @@ func newDetailSubscriptionTestServer(t *testing.T, hub *ws.Hub) string {
 	server := httptest.NewServer(ws.NewHandler(
 		hub,
 		func() (*ws.SnapshotPayload, uint64) { return ws.EmptySnapshot(), 0 },
+		func() ws.AlertMessagePayload { return ws.AlertMessagePayload{Alerts: []ws.AlertDTO{}} },
 		func() ws.PrometheusStatusPayload {
 			return ws.PrometheusStatusPayload{Enabled: true, Available: true}
 		},
@@ -1004,8 +1013,8 @@ func connectDetailSubscriptionClient(t *testing.T, wsURL string) *websocket.Conn
 func drainBootstrapMessages(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
 
-	types := make([]string, 0, 2)
-	for i := 0; i < 2; i++ {
+	types := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
 		conn.SetReadDeadline(time.Now().Add(time.Second))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -1022,7 +1031,7 @@ func drainBootstrapMessages(t *testing.T, conn *websocket.Conn) {
 	}
 	conn.SetReadDeadline(time.Time{})
 
-	if len(types) != 2 || types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypePrometheusStatus {
+	if len(types) != 3 || types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeAlert || types[2] != ws.MessageTypePrometheusStatus {
 		t.Fatalf("unexpected bootstrap message order: %v", types)
 	}
 }
@@ -1211,7 +1220,7 @@ func TestPipelineOrchestratorBroadcastLoop_LinkChangeForcesFullSnapshotAndTopolo
 	}
 }
 
-func TestPipelineOrchestratorBroadcastLoop_AlertRefreshSendsSnapshotDelta(t *testing.T) {
+func TestPipelineOrchestratorBroadcastLoop_AlertRefreshBroadcastsAlertMessage(t *testing.T) {
 	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
 	pipeline.fullResyncInterval = time.Hour
@@ -1232,20 +1241,26 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshSendsSnapshotDelta(t *tes
 		}},
 	})
 
-	var message wsVersionedSnapshotDeltaMessage
-	for _, raw := range waitForBroadcastMessages(t, hub, time.Second) {
-		if err := json.Unmarshal(raw, &message); err != nil {
-			t.Fatalf("failed to decode alert broadcast: %v", err)
-		}
-		if message.Type == ws.MessageTypeSnapshotDelta {
-			if message.Payload.Delta == nil || len(message.Payload.Delta.Alerts) != 1 {
-				t.Fatalf("expected 1 alert in snapshot_delta, got %#v", message.Payload.Delta)
-			}
-			return
-		}
+	messages := waitForBroadcastMessages(t, hub, time.Second)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 1 || types[0] != ws.MessageTypeAlert {
+		t.Fatalf("expected alert-only refresh to broadcast alert message, got %v", types)
 	}
 
-	t.Fatal("expected snapshot_delta for alert refresh")
+	if len(messages) != 1 {
+		t.Fatalf("expected one alert broadcast message, got %d", len(messages))
+	}
+
+	var alertMessage wsVersionedAlertMessage
+	if err := json.Unmarshal(messages[0], &alertMessage); err != nil {
+		t.Fatalf("decode alert message: %v", err)
+	}
+	if alertMessage.Payload.Version == 0 {
+		t.Fatal("expected alert broadcast version to increment from zero")
+	}
+	if len(alertMessage.Payload.Alerts) != 1 || alertMessage.Payload.Alerts[0].DeviceID != deviceID.String() {
+		t.Fatalf("alert payload = %#v, want single alert for %s", alertMessage.Payload.Alerts, deviceID)
+	}
 }
 
 func TestPipelineOrchestratorBroadcastLoop_DisabledFullResyncDoesNotSendSnapshot(t *testing.T) {
@@ -1340,7 +1355,7 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 	if !ok {
 		t.Fatal("expected performance poll to seed device state")
 	}
-	performanceLastPolledAt := performanceState.LastPolledAt.UTC().Format(time.RFC3339)
+	performanceCollectedAt := performanceState.Metrics.CollectedAt.UTC().Format(time.RFC3339)
 
 	pipeline.runTask(context.Background(), scheduler.PollTask{
 		RunID:            11,
@@ -1381,11 +1396,8 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 	if !ok {
 		t.Fatalf("expected snapshot metric for device %s", deviceID)
 	}
-	if metric.LastPolledAt != performanceLastPolledAt {
-		t.Fatalf("LastPolledAt = %q, want performance poll timestamp %q", metric.LastPolledAt, performanceLastPolledAt)
-	}
-	if metric.ExpectedPollIntervalSeconds == nil || *metric.ExpectedPollIntervalSeconds != 30 {
-		t.Fatalf("ExpectedPollIntervalSeconds = %#v, want 30", metric.ExpectedPollIntervalSeconds)
+	if metric.CollectedAt != performanceCollectedAt {
+		t.Fatalf("CollectedAt = %q, want performance poll timestamp %q", metric.CollectedAt, performanceCollectedAt)
 	}
 	if metric.Reachability != string(state.ReachabilityUp) {
 		t.Fatalf("Reachability = %q, want %q", metric.Reachability, state.ReachabilityUp)
@@ -1590,6 +1602,35 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreser
 	}
 }
 
+func TestPipelineOrchestratorBroadcastDirty_TopologyAndAlertsDirtyAlsoBroadcastsAlert(t *testing.T) {
+	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
+
+	pipeline.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+	pipeline.setAlerts(map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+			Summary:   "device down",
+		}},
+	})
+	drainBroadcastCh(hub)
+
+	if err := pipeline.broadcastDirty(context.Background(), nil, true, true, false); err != nil {
+		t.Fatalf("broadcastDirty topology + alerts recovery: %v", err)
+	}
+
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) < 3 {
+		t.Fatalf("expected snapshot, topology_changed, and alert, got %v", types)
+	}
+	if types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeTopologyChanged || types[2] != ws.MessageTypeAlert {
+		t.Fatalf("expected snapshot before topology_changed before alert, got %v", types)
+	}
+}
+
 func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 
@@ -1693,18 +1734,15 @@ func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkM
 	if metric.Reachability != string(state.ReachabilityUp) {
 		t.Fatalf("Reachability = %q, want %q", metric.Reachability, state.ReachabilityUp)
 	}
-	if metric.LastPolledAt == "" {
-		t.Fatal("expected last_polled_at in detail delta")
-	}
-	if metric.ExpectedPollIntervalSeconds == nil || *metric.ExpectedPollIntervalSeconds != 30 {
-		t.Fatalf("ExpectedPollIntervalSeconds = %#v, want 30", metric.ExpectedPollIntervalSeconds)
+	if metric.CollectedAt == "" {
+		t.Fatal("expected collected_at in detail delta")
 	}
 	if messages := drainBroadcastCh(hub); len(messages) != 0 {
 		t.Fatalf("expected no overview broadcast during targeted detail send, got %d message(s)", len(messages))
 	}
 }
 
-func assertOperationalDetailDeltaKeepsPerformanceFreshnessMetadata(t *testing.T) {
+func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 	t.Helper()
 
 	hub := ws.NewHub()
@@ -1736,15 +1774,15 @@ func assertOperationalDetailDeltaKeepsPerformanceFreshnessMetadata(t *testing.T)
 	if !ok {
 		t.Fatalf("expected performance task to seed device state for %s", device.ID)
 	}
-	performanceLastPolledAt := performanceState.LastPolledAt.UTC().Format(time.RFC3339)
+	performanceCollectedAt := performanceState.Metrics.CollectedAt.UTC().Format(time.RFC3339)
 
 	performanceMessage := readSnapshotDeltaMessage(t, subscriber)
 	performanceMetric, ok := performanceMessage.Payload.DeviceMetrics[device.ID.String()]
 	if !ok {
 		t.Fatalf("expected performance detail delta for device %s", device.ID)
 	}
-	if performanceMetric.ExpectedPollIntervalSeconds == nil || *performanceMetric.ExpectedPollIntervalSeconds != 30 {
-		t.Fatalf("ExpectedPollIntervalSeconds = %#v, want 30", performanceMetric.ExpectedPollIntervalSeconds)
+	if performanceMetric.CollectedAt == "" {
+		t.Fatal("expected performance detail delta to include collected_at")
 	}
 
 	pipeline.runTask(context.Background(), scheduler.PollTask{
@@ -1779,20 +1817,17 @@ func assertOperationalDetailDeltaKeepsPerformanceFreshnessMetadata(t *testing.T)
 	if metric.Reachability != string(state.ReachabilityUp) {
 		t.Fatalf("Reachability = %q, want %q", metric.Reachability, state.ReachabilityUp)
 	}
-	if metric.LastPolledAt != performanceLastPolledAt {
-		t.Fatalf("LastPolledAt = %q, want performance poll timestamp %q", metric.LastPolledAt, performanceLastPolledAt)
-	}
-	if metric.ExpectedPollIntervalSeconds == nil || *metric.ExpectedPollIntervalSeconds != 30 {
-		t.Fatalf("ExpectedPollIntervalSeconds = %#v, want 30", metric.ExpectedPollIntervalSeconds)
+	if metric.CollectedAt != performanceCollectedAt {
+		t.Fatalf("CollectedAt = %q, want performance poll timestamp %q", metric.CollectedAt, performanceCollectedAt)
 	}
 }
 
-func TestPipelineOrchestratorRunTask_DetailDeltaKeepsPerformanceFreshnessMetadataAfterOperationalPoll(t *testing.T) {
-	assertOperationalDetailDeltaKeepsPerformanceFreshnessMetadata(t)
+func TestPipelineOrchestratorRunTask_DetailDeltaKeepsPerformanceMetricTimestampAfterOperationalPoll(t *testing.T) {
+	assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t)
 }
 
 func TestPipelineOrchestratorRunTask_OperationalPollSendsDetailDeltaToSubscribedClient(t *testing.T) {
-	assertOperationalDetailDeltaKeepsPerformanceFreshnessMetadata(t)
+	assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t)
 }
 
 func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t *testing.T) {
@@ -1835,4 +1870,86 @@ func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t
 		t.Fatalf("expected subscribed client detail delta link_metrics for device %s", device.ID)
 	}
 	assertNoWebSocketMessage(t, unsubscribed)
+}
+
+func TestPipelineOrchestratorPublishSubscribedDetailDeltaJSONIncludesDetailOnlyDeviceMetricFields(t *testing.T) {
+	hub := ws.NewHub()
+	pipeline := newDetailSubscriptionTestPipeline(t, hub)
+	device := newDetailSubscriptionTestDevice()
+	collectedAt := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
+	expectedInterval := 45 * time.Second
+
+	pipeline.stateStore.Update(state.StateUpdate{
+		DeviceID:        device.ID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    device.ID,
+			CPUPercent:  floatPtr(55),
+			MemPercent:  floatPtr(62),
+			TempCelsius: floatPtr(48),
+			UptimeSecs:  floatPtr(3600),
+			CollectedAt: collectedAt,
+		},
+		PollSuccess:      true,
+		ExpectedInterval: expectedInterval,
+		Timestamp:        collectedAt,
+	})
+
+	wsURL := newDetailSubscriptionTestServer(t, hub)
+	subscriber := connectDetailSubscriptionClient(t, wsURL)
+	drainBootstrapMessages(t, subscriber)
+	subscribeDetail(t, subscriber, device.ID)
+	waitForDetailSubscribers(t, hub, device.ID, 1)
+
+	pipeline.publishSubscribedDetailDelta(device)
+
+	subscriber.SetReadDeadline(time.Now().Add(time.Second))
+	defer subscriber.SetReadDeadline(time.Time{})
+
+	_, raw, err := subscriber.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read websocket detail delta: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("failed to decode websocket detail delta: %v", err)
+	}
+	if got := decoded["type"]; got != ws.MessageTypeSnapshotDelta {
+		t.Fatalf("message type = %#v, want %q", got, ws.MessageTypeSnapshotDelta)
+	}
+
+	payload, ok := decoded["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload = %#v, want object", decoded["payload"])
+	}
+	deviceMetrics, ok := payload["device_metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload.device_metrics = %#v, want object", payload["device_metrics"])
+	}
+	metric, ok := deviceMetrics[device.ID.String()].(map[string]any)
+	if !ok {
+		t.Fatalf("payload.device_metrics[%s] = %#v, want object", device.ID, deviceMetrics[device.ID.String()])
+	}
+
+	if got, ok := metric["temp_celsius"]; !ok {
+		t.Fatal("expected detail subscription device_metrics to include temp_celsius")
+	} else if got != 48.0 {
+		t.Fatalf("temp_celsius = %#v, want 48", got)
+	}
+	if got, ok := metric["uptime_secs"]; !ok {
+		t.Fatal("expected detail subscription device_metrics to include uptime_secs")
+	} else if got != 3600.0 {
+		t.Fatalf("uptime_secs = %#v, want 3600", got)
+	}
+	if got, ok := metric["last_polled_at"]; !ok {
+		t.Fatal("expected detail subscription device_metrics to include last_polled_at")
+	} else if got != collectedAt.Format(time.RFC3339) {
+		t.Fatalf("last_polled_at = %#v, want %q", got, collectedAt.Format(time.RFC3339))
+	}
+	if got, ok := metric["expected_poll_interval_seconds"]; !ok {
+		t.Fatal("expected detail subscription device_metrics to include expected_poll_interval_seconds")
+	} else if got != expectedInterval.Seconds() {
+		t.Fatalf("expected_poll_interval_seconds = %#v, want %v", got, expectedInterval.Seconds())
+	}
 }

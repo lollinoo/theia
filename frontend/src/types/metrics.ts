@@ -13,12 +13,12 @@ export interface DeviceMetricsDTO {
   device_id: string;
   cpu_percent: number | null;
   mem_percent: number | null;
-  temp_celsius: number | null;
-  uptime_secs: number | null;
   collected_at: string;
   health?: string;
   reachability?: string;
   stale?: boolean;
+  temp_celsius?: number | null;
+  uptime_secs?: number | null;
   last_polled_at?: string;
   expected_poll_interval_seconds?: number | null;
 }
@@ -45,10 +45,7 @@ export type AlertStatus = 'normal' | 'degraded' | 'down';
 export interface SnapshotPayload {
   device_metrics: Record<string, DeviceMetricsDTO>;
   link_metrics: Record<string, LinkMetricsDTO[]>;
-  alerts: AlertDTO[];
   device_statuses: Record<string, string>;
-  device_hostnames: Record<string, string>;
-  device_models: Record<string, string>;
 }
 
 export interface PrometheusStatusPayload {
@@ -98,6 +95,16 @@ export interface ResyncRequiredWSMessage extends Omit<WSMessage, 'type' | 'paylo
   payload: ResyncRequiredPayload;
 }
 
+export interface AlertWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'alert';
+  payload: AlertEnvelopePayload;
+}
+
+export interface AlertEnvelopePayload {
+  version?: number;
+  alerts: AlertDTO[];
+}
+
 function isRecord(value: unknown): value is APIRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -125,17 +132,6 @@ function readOptionalBoolean(record: APIRecord, key: string): boolean | undefine
   return typeof value === 'boolean' ? value : undefined;
 }
 
-function readOptionalNumber(record: APIRecord, key: string): number | null | undefined {
-  const value = record[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === null) {
-    return null;
-  }
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
 export function parseDeviceMetrics(value: unknown): DeviceMetricsDTO {
   if (!isRecord(value)) {
     throw new Error('invalid device metrics payload');
@@ -145,14 +141,14 @@ export function parseDeviceMetrics(value: unknown): DeviceMetricsDTO {
     device_id: readString(value, 'device_id'),
     cpu_percent: readNullableNumber(value, 'cpu_percent'),
     mem_percent: readNullableNumber(value, 'mem_percent'),
-    temp_celsius: readNullableNumber(value, 'temp_celsius'),
-    uptime_secs: readNullableNumber(value, 'uptime_secs'),
     collected_at: readString(value, 'collected_at'),
+    temp_celsius: readNullableNumber(value, 'temp_celsius') ?? undefined,
+    uptime_secs: readNullableNumber(value, 'uptime_secs') ?? undefined,
+    last_polled_at: readOptionalString(value, 'last_polled_at'),
+    expected_poll_interval_seconds: readNullableNumber(value, 'expected_poll_interval_seconds') ?? undefined,
     health: readOptionalString(value, 'health'),
     reachability: readOptionalString(value, 'reachability'),
     stale: readOptionalBoolean(value, 'stale'),
-    last_polled_at: readOptionalString(value, 'last_polled_at'),
-    expected_poll_interval_seconds: readOptionalNumber(value, 'expected_poll_interval_seconds'),
   };
 }
 
@@ -192,10 +188,7 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
 
   const deviceMetrics = isRecord(value.device_metrics) ? value.device_metrics : {};
   const linkMetrics = isRecord(value.link_metrics) ? value.link_metrics : {};
-  const alerts = Array.isArray(value.alerts) ? value.alerts : [];
   const deviceStatuses = isRecord(value.device_statuses) ? value.device_statuses : {};
-  const deviceHostnames = isRecord(value.device_hostnames) ? value.device_hostnames : {};
-  const deviceModels = isRecord(value.device_models) ? value.device_models : {};
 
   return {
     device_metrics: Object.fromEntries(
@@ -210,19 +203,8 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
         Array.isArray(metrics) ? metrics.map(parseLinkMetrics) : [],
       ]),
     ),
-    alerts: alerts.map(parseAlert),
     device_statuses: Object.fromEntries(
       Object.entries(deviceStatuses)
-        .filter(([, v]) => typeof v === 'string')
-        .map(([k, v]) => [k, v as string]),
-    ),
-    device_hostnames: Object.fromEntries(
-      Object.entries(deviceHostnames)
-        .filter(([, v]) => typeof v === 'string')
-        .map(([k, v]) => [k, v as string]),
-    ),
-    device_models: Object.fromEntries(
-      Object.entries(deviceModels)
         .filter(([, v]) => typeof v === 'string')
         .map(([k, v]) => [k, v as string]),
     ),
@@ -232,25 +214,43 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
 /**
  * Deep-merges a sparse delta payload into an existing snapshot.
  * Only entries present in the delta overwrite existing entries.
- * Alerts are replaced entirely if the delta includes a non-empty alerts array.
  */
 export function mergeSnapshotDelta(
   existing: SnapshotPayload,
   delta: SnapshotPayload,
 ): SnapshotPayload {
+  const deviceMetrics = { ...existing.device_metrics };
+
+  for (const [deviceId, nextMetrics] of Object.entries(delta.device_metrics)) {
+    const previousMetrics = deviceMetrics[deviceId];
+    if (!previousMetrics) {
+      deviceMetrics[deviceId] = nextMetrics;
+      continue;
+    }
+
+    const mergedMetrics = { ...previousMetrics, ...nextMetrics };
+
+    if (
+      nextMetrics.last_polled_at === undefined
+      && nextMetrics.collected_at
+      && nextMetrics.collected_at !== previousMetrics.collected_at
+    ) {
+      delete mergedMetrics.last_polled_at;
+    }
+
+    deviceMetrics[deviceId] = mergedMetrics;
+  }
+
   return {
-    device_metrics: { ...existing.device_metrics, ...delta.device_metrics },
+    device_metrics: deviceMetrics,
     link_metrics: { ...existing.link_metrics, ...delta.link_metrics },
     device_statuses: { ...existing.device_statuses, ...delta.device_statuses },
-    device_hostnames: { ...existing.device_hostnames, ...delta.device_hostnames },
-    device_models: { ...existing.device_models, ...delta.device_models },
-    alerts: delta.alerts.length > 0 ? delta.alerts : existing.alerts,
   };
 }
 
 export function parseWSMessage(
   value: unknown,
-): WSMessage | SnapshotWSMessage | SnapshotDeltaWSMessage | PrometheusStatusWSMessage | ResyncRequiredWSMessage {
+): WSMessage | SnapshotWSMessage | SnapshotDeltaWSMessage | PrometheusStatusWSMessage | ResyncRequiredWSMessage | AlertWSMessage {
   if (!isRecord(value)) {
     throw new Error('invalid websocket message');
   }
@@ -328,6 +328,28 @@ export function parseWSMessage(
         error: typeof p.error === 'string' ? p.error : undefined,
       },
     };
+  }
+
+  if (type === 'alert') {
+    const payload = value.payload;
+    const alerts = Array.isArray(payload)
+      ? payload.map(parseAlert)
+      : isRecord(payload) && Array.isArray(payload.alerts)
+        ? payload.alerts.map(parseAlert)
+        : isRecord(payload)
+          ? [parseAlert(payload)]
+          : [];
+    const version = isRecord(payload) && typeof payload.version === 'number' && Number.isFinite(payload.version)
+      ? payload.version
+      : undefined;
+
+    return {
+      type,
+      payload: {
+        version,
+        alerts,
+      },
+    } as AlertWSMessage;
   }
 
   if (type === 'resync_required') {

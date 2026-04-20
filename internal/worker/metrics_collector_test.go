@@ -797,12 +797,6 @@ func TestComputeSnapshotHashes_AllSections(t *testing.T) {
 			devID1: "up",
 			devID2: "down",
 		},
-		DeviceHostnames: map[string]string{
-			devID1: "router-1",
-		},
-		Alerts: []ws.AlertDTO{
-			{DeviceID: devID1, Severity: "warning", AlertName: "HighCPU", State: "firing", Summary: "CPU high"},
-		},
 	}
 
 	hashes := computeSnapshotHashes(snapshot)
@@ -832,15 +826,6 @@ func TestComputeSnapshotHashes_AllSections(t *testing.T) {
 		t.Errorf("expected deviceStatuses hash for %s", devID2)
 	}
 
-	// device_hostnames: devID1 should have an entry.
-	if _, ok := hashes.deviceHostnames[devID1]; !ok {
-		t.Errorf("expected deviceHostnames hash for %s", devID1)
-	}
-
-	// alerts: whole-set hash must be non-zero.
-	if hashes.alertsHash == 0 {
-		t.Error("expected non-zero alertsHash for non-empty alerts")
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -854,8 +839,6 @@ func TestBuildDelta_NoChanges_ReturnsNil(t *testing.T) {
 		DeviceMetrics:   map[string]ws.DeviceMetricsDTO{devID: {DeviceID: devID, CPUPercent: &cpu, CollectedAt: "2024-01-01T00:00:00Z"}},
 		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
 		DeviceStatuses:  map[string]string{devID: "up"},
-		DeviceHostnames: map[string]string{devID: "router-1"},
-		Alerts:          []ws.AlertDTO{},
 	}
 
 	hashes := computeSnapshotHashes(snapshot)
@@ -880,8 +863,6 @@ func TestBuildDelta_OneDeviceMetricsChanged(t *testing.T) {
 		},
 		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
 		DeviceStatuses:  map[string]string{devID1: "up", devID2: "up"},
-		DeviceHostnames: map[string]string{},
-		Alerts:          []ws.AlertDTO{},
 	}
 
 	// Build "previous" hashes from the snapshot.
@@ -896,8 +877,6 @@ func TestBuildDelta_OneDeviceMetricsChanged(t *testing.T) {
 		},
 		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
 		DeviceStatuses:  map[string]string{devID1: "up", devID2: "up"},
-		DeviceHostnames: map[string]string{},
-		Alerts:          []ws.AlertDTO{},
 	}
 	currentHashes := computeSnapshotHashes(snapshotNew)
 
@@ -922,52 +901,6 @@ func TestBuildDelta_OneDeviceMetricsChanged(t *testing.T) {
 	if len(delta.DeviceStatuses) != 0 {
 		t.Errorf("expected empty delta device_statuses, got %d entries", len(delta.DeviceStatuses))
 	}
-	if len(delta.DeviceHostnames) != 0 {
-		t.Errorf("expected empty delta device_hostnames, got %d entries", len(delta.DeviceHostnames))
-	}
-	if delta.Alerts != nil {
-		t.Errorf("expected nil delta alerts (unchanged), got %v", delta.Alerts)
-	}
-}
-
-func TestBuildDelta_AlertsChanged(t *testing.T) {
-	devID := uuid.New().String()
-
-	snapshotPrev := &ws.SnapshotPayload{
-		DeviceMetrics:   map[string]ws.DeviceMetricsDTO{},
-		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
-		DeviceStatuses:  map[string]string{},
-		DeviceHostnames: map[string]string{},
-		Alerts:          []ws.AlertDTO{},
-	}
-	prevHashes := computeSnapshotHashes(snapshotPrev)
-
-	// Add a new alert.
-	snapshotNew := &ws.SnapshotPayload{
-		DeviceMetrics:   map[string]ws.DeviceMetricsDTO{},
-		LinkMetrics:     map[string][]ws.LinkMetricsDTO{},
-		DeviceStatuses:  map[string]string{},
-		DeviceHostnames: map[string]string{},
-		Alerts: []ws.AlertDTO{
-			{DeviceID: devID, Severity: "critical", AlertName: "Down", State: "firing", Summary: "Device is down"},
-		},
-	}
-	currentHashes := computeSnapshotHashes(snapshotNew)
-
-	delta := buildDelta(snapshotNew, currentHashes, prevHashes)
-
-	if delta == nil {
-		t.Fatal("buildDelta: expected non-nil delta when alerts changed")
-	}
-	if delta.Alerts == nil {
-		t.Fatal("expected full alerts array in delta when alertsHash changed")
-	}
-	if len(delta.Alerts) != 1 {
-		t.Errorf("expected 1 alert in delta, got %d", len(delta.Alerts))
-	}
-	if delta.Alerts[0].AlertName != "Down" {
-		t.Errorf("expected alert name 'Down', got %q", delta.Alerts[0].AlertName)
-	}
 }
 
 func TestBuildDelta_MixedChanges(t *testing.T) {
@@ -986,9 +919,7 @@ func TestBuildDelta_MixedChanges(t *testing.T) {
 		LinkMetrics: map[string][]ws.LinkMetricsDTO{
 			devID1: {{DeviceID: devID1, IfName: "ether1", TxBps: &tx, CollectedAt: "2024-01-01T00:00:00Z"}},
 		},
-		DeviceStatuses:  map[string]string{devID1: "up", devID2: "up", devID3: "up"},
-		DeviceHostnames: map[string]string{},
-		Alerts:          []ws.AlertDTO{},
+		DeviceStatuses: map[string]string{devID1: "up", devID2: "up", devID3: "up"},
 	}
 	prevHashes := computeSnapshotHashes(snapshotPrev)
 
@@ -1006,9 +937,7 @@ func TestBuildDelta_MixedChanges(t *testing.T) {
 		LinkMetrics: map[string][]ws.LinkMetricsDTO{
 			devID1: {{DeviceID: devID1, IfName: "ether1", TxBps: &txNew, CollectedAt: "2024-01-01T00:01:00Z"}},
 		},
-		DeviceStatuses:  map[string]string{devID1: "up", devID2: "up", devID3: "down"}, // devID3 changed
-		DeviceHostnames: map[string]string{},
-		Alerts:          []ws.AlertDTO{}, // unchanged
+		DeviceStatuses: map[string]string{devID1: "up", devID2: "up", devID3: "down"}, // devID3 changed
 	}
 	currentHashes := computeSnapshotHashes(snapshotNew)
 
@@ -1042,10 +971,6 @@ func TestBuildDelta_MixedChanges(t *testing.T) {
 		t.Errorf("expected devID1 NOT in delta device_statuses (unchanged)")
 	}
 
-	// alerts: unchanged → nil.
-	if delta.Alerts != nil {
-		t.Errorf("expected nil delta alerts (unchanged), got %v", delta.Alerts)
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1755,7 +1680,7 @@ func assertSNMPLinkMetricsPresent(t *testing.T, snapshot *ws.SnapshotPayload, de
 // New tests: device_models population and topology_changed broadcast
 // ---------------------------------------------------------------------------
 
-func TestBuildSnapshot_DeviceModels(t *testing.T) {
+func TestBuildSnapshot_UsesSlimOverviewSections(t *testing.T) {
 	devID := uuid.New()
 	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]interface{}{
@@ -1790,22 +1715,31 @@ func TestBuildSnapshot_DeviceModels(t *testing.T) {
 
 	snapshot, _, _ := mc.buildSnapshot(context.Background())
 
-	// device_models should contain the hardware model
-	model, ok := snapshot.DeviceModels[devID.String()]
+	status, ok := snapshot.DeviceStatuses[devID.String()]
 	if !ok {
-		t.Fatal("expected device_models entry for device")
+		t.Fatal("expected device_statuses entry for device")
 	}
-	if model != "RB4011" {
-		t.Errorf("expected model RB4011, got %s", model)
+	if status != string(domain.DeviceStatusUp) {
+		t.Errorf("expected status up, got %s", status)
 	}
 
-	// device_hostnames should use DB sys_name (D-02)
-	hostname, ok := snapshot.DeviceHostnames[devID.String()]
-	if !ok {
-		t.Fatal("expected device_hostnames entry for device")
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
 	}
-	if hostname != "router1" {
-		t.Errorf("expected hostname router1 (from DB sys_name), got %s", hostname)
+
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+	if _, ok := decoded["alerts"]; ok {
+		t.Fatal("expected slim snapshot to omit alerts")
+	}
+	if _, ok := decoded["device_hostnames"]; ok {
+		t.Fatal("expected slim snapshot to omit device_hostnames")
+	}
+	if _, ok := decoded["device_models"]; ok {
+		t.Fatal("expected slim snapshot to omit device_models")
 	}
 }
 

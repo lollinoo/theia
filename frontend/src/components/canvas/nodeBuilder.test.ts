@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { buildTopologyNodes } from './nodeBuilder';
 import type { Device, Link } from '../../types/api';
-import type { SnapshotPayload } from '../../types/metrics';
+import type { AlertDTO, SnapshotPayload } from '../../types/metrics';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -35,22 +35,15 @@ function mockSnapshot(): SnapshotPayload {
         device_id: 'dev-1',
         cpu_percent: 42,
         mem_percent: 68,
-        temp_celsius: 55,
-        uptime_secs: 86400,
         collected_at: '2026-04-13T11:59:45Z',
         health: 'warning',
         stale: false,
-        last_polled_at: '2026-04-13T11:59:30Z',
-        expected_poll_interval_seconds: 30,
       },
     },
     link_metrics: {},
-    alerts: [],
     device_statuses: {
       'dev-1': 'down',
     },
-    device_hostnames: {},
-    device_models: {},
   };
 }
 
@@ -70,6 +63,17 @@ function mockLink(overrides: Partial<Link> = {}): Link {
   };
 }
 
+function mockAlert(overrides: Partial<AlertDTO> = {}): AlertDTO {
+  return {
+    device_id: 'dev-1',
+    severity: 'critical',
+    alert_name: 'DeviceDown',
+    state: 'firing',
+    summary: 'router unreachable',
+    ...overrides,
+  };
+}
+
 describe('buildTopologyNodes', () => {
   it('keeps overview metadata on down physical nodes instead of nulling metrics', () => {
     const nodes = buildTopologyNodes(
@@ -80,13 +84,15 @@ describe('buildTopologyNodes', () => {
       false,
       vi.fn(),
       mockSnapshot(),
+      [mockAlert()],
     );
 
     expect(nodes[0].data.device.status).toBe('down');
+    expect(nodes[0].data.alertStatus).toBe('down');
     expect(nodes[0].data.metrics).toMatchObject({
       health: 'warning',
-      last_polled_at: '2026-04-13T11:59:30Z',
-      expected_poll_interval_seconds: 30,
+      last_polled_at: '2026-04-13T11:59:45Z',
+      expected_poll_interval_seconds: 60,
     });
   });
 
@@ -96,6 +102,7 @@ describe('buildTopologyNodes', () => {
         mockDevice({
           device_type: 'virtual',
           ip: '192.168.1.1',
+          poll_interval_override: 15,
           tags: { display_name: 'Cloud VPN', virtual_subtype: 'cloud' },
         }),
       ],
@@ -110,13 +117,14 @@ describe('buildTopologyNodes', () => {
           'dev-1': 'up',
         },
       },
+      [],
     );
 
     expect(nodes[0].data.isVirtual).toBe(true);
     expect(nodes[0].data.metrics).toMatchObject({
       health: 'warning',
-      last_polled_at: '2026-04-13T11:59:30Z',
-      expected_poll_interval_seconds: 30,
+      last_polled_at: '2026-04-13T11:59:45Z',
+      expected_poll_interval_seconds: 15,
     });
   });
 
@@ -136,6 +144,7 @@ describe('buildTopologyNodes', () => {
       false,
       vi.fn(),
       mockSnapshot(),
+      [],
     );
 
     expect(nodes[0].data.monitoringState).toBe('unmonitored');
@@ -161,6 +170,7 @@ describe('buildTopologyNodes', () => {
       false,
       vi.fn(),
       mockSnapshot(),
+      [],
       [
         mockLink(),
         mockLink({
@@ -200,6 +210,7 @@ describe('buildTopologyNodes', () => {
       false,
       vi.fn(),
       null,
+      [],
       [],
       undefined,
       new Map([

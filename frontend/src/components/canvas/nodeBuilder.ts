@@ -1,6 +1,5 @@
 import type { Device, Link } from '../../types/api';
-import type { SnapshotPayload } from '../../types/metrics';
-import { alertStatusForDevice } from '../../types/metrics';
+import { alertStatusForDevice, type AlertDTO, type SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import {
   resolveDeviceMonitoringState,
@@ -31,6 +30,7 @@ export function buildTopologyNodes(
   editMode: boolean,
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void,
   pendingSnapshot: SnapshotPayload | null,
+  alerts: AlertDTO[] = [],
   links: Link[] = [],
   onSelfLinkClick?: (link: Link) => void,
   currentPositions: Map<string, { x: number; y: number; pinned?: boolean }> = new Map(),
@@ -67,18 +67,14 @@ export function buildTopologyNodes(
     const resolvedPosition = position ?? { x: 0, y: 0 };
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
-    // Merge snapshot status/hostname/model into device if available
+    // Merge runtime status into fetched topology data when available.
     let deviceData = device;
     if (pendingSnapshot) {
       const snapStatus = pendingSnapshot.device_statuses[device.id];
-      const snapHostname = pendingSnapshot.device_hostnames[device.id];
-      const snapModel = pendingSnapshot.device_models?.[device.id];
-      if (snapStatus || snapHostname || snapModel) {
+      if (snapStatus) {
         deviceData = {
           ...device,
           ...(snapStatus ? { status: snapStatus as Device['status'] } : {}),
-          ...(snapHostname ? { sys_name: snapHostname } : {}),
-          ...(snapModel ? { hardware_model: snapModel } : {}),
         };
       }
     }
@@ -106,9 +102,7 @@ export function buildTopologyNodes(
         editMode,
         onContextMenu: openDeviceMenu,
         metrics: nodeMetrics,
-        alertStatus: pendingSnapshot
-          ? alertStatusForDevice(device.id, pendingSnapshot.alerts)
-          : undefined,
+        alertStatus: alertStatusForDevice(device.id, alerts),
         isVirtual,
         monitoringState,
         subtype: isVirtual ? (deviceData.tags?.virtual_subtype ?? 'generic') : undefined,

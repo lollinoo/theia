@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildEdgeData, buildTopologyEdges } from './edgeBuilder';
 import type { Device, Link } from '../../types/api';
+import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -51,6 +52,17 @@ function mockNode(id: string, x: number, y: number): DeviceNode {
       pinned: false,
     },
   } as DeviceNode;
+}
+
+function mockAlert(overrides: Partial<AlertDTO> = {}): AlertDTO {
+  return {
+    device_id: 'dev-1',
+    severity: 'critical',
+    alert_name: 'LinkDown',
+    state: 'firing',
+    summary: 'ether1 down',
+    ...overrides,
+  };
 }
 
 describe('buildEdgeData', () => {
@@ -273,6 +285,21 @@ describe('buildEdgeData', () => {
 });
 
 describe('buildTopologyEdges', () => {
+  it('derives edge alert status from separate alert state', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+      ['dev-2', dev2],
+    ]);
+    const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
+
+    const edges = buildTopologyEdges([mockLink()], devicesByID, nodes, undefined, undefined, [mockAlert()]);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0].data.alertStatus).toBe('down');
+  });
+
   it('keeps distinct parallel uplinks between the same devices visible', () => {
     const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
     const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });

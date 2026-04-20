@@ -18,14 +18,10 @@ import (
 )
 
 // sectionHashes stores FNV-64a hashes for each section of the snapshot, keyed by device_id.
-// Alerts use a whole-set hash so any alert change resends the entire array.
 type sectionHashes struct {
-	deviceMetrics   map[string]uint64
-	linkMetrics     map[string]uint64
-	deviceStatuses  map[string]uint64
-	deviceHostnames map[string]uint64
-	deviceModels    map[string]uint64
-	alertsHash      uint64
+	deviceMetrics  map[string]uint64
+	linkMetrics    map[string]uint64
+	deviceStatuses map[string]uint64
 }
 
 func buildPipelineSnapshot(
@@ -39,8 +35,6 @@ func buildPipelineSnapshot(
 	deviceMetrics := make(map[string]domain.DeviceMetrics, len(devices))
 	linkMetrics := make(map[string][]domain.LinkMetrics, len(devices))
 	statuses := make(map[string]string, len(devices))
-	hostnames := make(map[string]string, len(devices))
-	models := make(map[string]string, len(devices))
 
 	linksByDevice := make(map[uuid.UUID][]domain.Link, len(links)*2)
 	for _, link := range links {
@@ -57,16 +51,6 @@ func buildPipelineSnapshot(
 		deviceMetrics[deviceKey] = metric
 		linkMetrics[deviceKey] = buildDeviceLinkMetrics(device, linksByDevice[device.ID], deviceState.LinkMetrics)
 		statuses[deviceKey] = effectiveSnapshotDeviceStatus(device, deviceState)
-
-		if hostname := strings.TrimSpace(device.SysName); hostname != "" {
-			hostnames[deviceKey] = hostname
-		} else if hostname := strings.TrimSpace(hostnameOverrides[device.ID]); hostname != "" {
-			hostnames[deviceKey] = hostname
-		}
-
-		if model := strings.TrimSpace(device.HardwareModel); model != "" && model != "Unknown" {
-			models[deviceKey] = model
-		}
 	}
 
 	snapshot.DeviceMetrics = ws.DeviceMetricsToDTOs(deviceMetrics)
@@ -87,27 +71,11 @@ func buildPipelineSnapshot(
 			dto.Reachability = string(deviceState.Reachability)
 		}
 		dto.Stale = boolPtr(deviceState.Stale)
-		if !deviceState.LastPolledAt.IsZero() {
-			dto.LastPolledAt = deviceState.LastPolledAt.UTC().Format(time.RFC3339)
-		}
-
-		expectedInterval := deviceState.ExpectedInterval
-		if expectedInterval <= 0 {
-			if device.PollIntervalOverride != nil {
-				expectedInterval = time.Duration(*device.PollIntervalOverride) * time.Second
-			} else {
-				expectedInterval = device.PollClass.Interval()
-			}
-		}
-		dto.ExpectedPollIntervalSeconds = int64Ptr(int64(expectedInterval / time.Second))
 
 		snapshot.DeviceMetrics[deviceID] = dto
 	}
 	snapshot.LinkMetrics = ws.LinkMetricsToDTOs(linkMetrics)
-	snapshot.Alerts = ws.AlertsToDTOs(flattenAlerts(alerts))
 	snapshot.DeviceStatuses = statuses
-	snapshot.DeviceHostnames = hostnames
-	snapshot.DeviceModels = models
 
 	return snapshot
 }
@@ -122,15 +90,13 @@ func buildDeviceDetailDelta(device domain.Device, deviceState state.DeviceState)
 		deviceID: deviceMetrics,
 	})[deviceID]
 
+	dto.TempCelsius = deviceState.Metrics.TempCelsius
+	dto.UptimeSecs = deviceState.Metrics.UptimeSecs
+	dto.LastPolledAt = wsTimestamp(deviceState.LastPolledAt)
+	dto.ExpectedPollIntervalSeconds = durationSecondsPtr(deviceState.ExpectedInterval)
 	dto.Health = string(deviceState.Health)
 	dto.Reachability = string(deviceState.Reachability)
 	dto.Stale = boolPtr(deviceState.Stale)
-	if !deviceState.LastPolledAt.IsZero() {
-		dto.LastPolledAt = deviceState.LastPolledAt.UTC().Format(time.RFC3339)
-	}
-	if deviceState.ExpectedInterval > 0 {
-		dto.ExpectedPollIntervalSeconds = int64Ptr(int64(deviceState.ExpectedInterval / time.Second))
-	}
 
 	delta.DeviceMetrics[deviceID] = dto
 	delta.DeviceStatuses[deviceID] = effectiveSnapshotDeviceStatus(device, deviceState)
@@ -341,29 +307,23 @@ func formatInt64Ptr(value *int64) string {
 
 func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 	sh := &sectionHashes{
-		deviceMetrics:   make(map[string]uint64, len(snapshot.DeviceMetrics)),
-		linkMetrics:     make(map[string]uint64, len(snapshot.LinkMetrics)),
-		deviceStatuses:  make(map[string]uint64, len(snapshot.DeviceStatuses)),
-		deviceHostnames: make(map[string]uint64, len(snapshot.DeviceHostnames)),
-		deviceModels:    make(map[string]uint64, len(snapshot.DeviceModels)),
+		deviceMetrics:  make(map[string]uint64, len(snapshot.DeviceMetrics)),
+		linkMetrics:    make(map[string]uint64, len(snapshot.LinkMetrics)),
+		deviceStatuses: make(map[string]uint64, len(snapshot.DeviceStatuses)),
 	}
 
 	for id, dm := range snapshot.DeviceMetrics {
-		key := fmt.Sprintf("%s|%v|%v|%v|%v|%s",
+		key := fmt.Sprintf("%s|%v|%v|%s",
 			dm.DeviceID,
 			formatFloatPtr(dm.CPUPercent),
 			formatFloatPtr(dm.MemPercent),
-			formatFloatPtr(dm.TempCelsius),
-			formatFloatPtr(dm.UptimeSecs),
 			dm.CollectedAt,
 		)
-		key = fmt.Sprintf("%s|%s|%s|%s|%s|%s",
+		key = fmt.Sprintf("%s|%s|%s|%s",
 			key,
 			dm.Health,
 			dm.Reachability,
 			formatBoolPtr(dm.Stale),
-			dm.LastPolledAt,
-			formatInt64Ptr(dm.ExpectedPollIntervalSeconds),
 		)
 		sh.deviceMetrics[id] = computeSectionHash(key)
 	}
@@ -387,36 +347,14 @@ func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 		sh.deviceStatuses[id] = computeSectionHash(status)
 	}
 
-	for id, hostname := range snapshot.DeviceHostnames {
-		sh.deviceHostnames[id] = computeSectionHash(hostname)
-	}
-
-	for id, model := range snapshot.DeviceModels {
-		sh.deviceModels[id] = computeSectionHash(model)
-	}
-
-	var alertSb strings.Builder
-	for _, a := range snapshot.Alerts {
-		alertSb.WriteString(fmt.Sprintf("%s|%s|%s|%s|%s",
-			a.DeviceID,
-			a.Severity,
-			a.AlertName,
-			a.State,
-			a.Summary,
-		))
-	}
-	sh.alertsHash = computeSectionHash(alertSb.String())
-
 	return sh
 }
 
 func buildDelta(current *ws.SnapshotPayload, currentHashes, previousHashes *sectionHashes) *ws.SnapshotPayload {
 	delta := &ws.SnapshotPayload{
-		DeviceMetrics:   make(map[string]ws.DeviceMetricsDTO),
-		LinkMetrics:     make(map[string][]ws.LinkMetricsDTO),
-		DeviceStatuses:  make(map[string]string),
-		DeviceHostnames: make(map[string]string),
-		DeviceModels:    make(map[string]string),
+		DeviceMetrics:  make(map[string]ws.DeviceMetricsDTO),
+		LinkMetrics:    make(map[string][]ws.LinkMetricsDTO),
+		DeviceStatuses: make(map[string]string),
 	}
 
 	anyChanged := false
@@ -442,25 +380,6 @@ func buildDelta(current *ws.SnapshotPayload, currentHashes, previousHashes *sect
 		}
 	}
 
-	for id, hash := range currentHashes.deviceHostnames {
-		if previousHash, ok := previousHashes.deviceHostnames[id]; !ok || previousHash != hash {
-			delta.DeviceHostnames[id] = current.DeviceHostnames[id]
-			anyChanged = true
-		}
-	}
-
-	for id, hash := range currentHashes.deviceModels {
-		if previousHash, ok := previousHashes.deviceModels[id]; !ok || previousHash != hash {
-			delta.DeviceModels[id] = current.DeviceModels[id]
-			anyChanged = true
-		}
-	}
-
-	if currentHashes.alertsHash != previousHashes.alertsHash {
-		delta.Alerts = current.Alerts
-		anyChanged = true
-	}
-
 	if !anyChanged {
 		return nil
 	}
@@ -472,6 +391,19 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
-func int64Ptr(value int64) *int64 {
-	return &value
+func durationSecondsPtr(value time.Duration) *float64 {
+	if value <= 0 {
+		return nil
+	}
+
+	seconds := value.Seconds()
+	return &seconds
+}
+
+func wsTimestamp(ts time.Time) string {
+	if ts.IsZero() {
+		return ""
+	}
+
+	return ts.UTC().Format(time.RFC3339)
 }

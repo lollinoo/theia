@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import {
   mergeSnapshotDelta,
   parseWSMessage,
+  type AlertDTO,
+  type AlertWSMessage,
   type PrometheusStatusPayload,
   type ResyncRequiredPayload,
   type ResyncRequiredWSMessage,
@@ -12,6 +14,7 @@ import {
 
 interface UseWebSocketResult {
   snapshot: SnapshotPayload | null;
+  alerts: AlertDTO[];
   connected: boolean;
   reconnecting: boolean;
   prometheusStatus: PrometheusStatusPayload | null;
@@ -39,6 +42,7 @@ function buildWebSocketURL(url: string): string {
 
 export function useWebSocket(url: string, detailDeviceId: string | null = null): UseWebSocketResult {
   const [snapshot, setSnapshot] = useState<SnapshotPayload | null>(null);
+  const [alerts, setAlerts] = useState<AlertDTO[]>([]);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [prometheusStatus, setPrometheusStatus] = useState<PrometheusStatusPayload | null>(null);
@@ -47,6 +51,7 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
   const detailDeviceIdRef = useRef<string | null>(detailDeviceId);
   const lastSubscribedDeviceIdRef = useRef<string | null>(null);
   const snapshotVersionRef = useRef<number | null>(null);
+  const alertVersionRef = useRef<number | null>(null);
   const awaitingResyncRef = useRef(false);
 
   const reconnectAttemptRef = useRef(0);
@@ -103,6 +108,7 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
       }
 
       const ws = new WebSocket(buildWebSocketURL(url));
+      alertVersionRef.current = null;
       socketRef.current = ws;
 
       ws.onopen = () => {
@@ -156,6 +162,19 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
             });
           } else if (message.type === 'prometheus_status') {
             setPrometheusStatus(message.payload as PrometheusStatusPayload);
+          } else if (message.type === 'alert') {
+            const payload = (message as AlertWSMessage).payload;
+            if (
+              payload.version !== undefined
+              && alertVersionRef.current !== null
+              && payload.version < alertVersionRef.current
+            ) {
+              return;
+            }
+            if (payload.version !== undefined) {
+              alertVersionRef.current = payload.version;
+            }
+            setAlerts(payload.alerts);
           } else if (message.type === 'resync_required') {
             awaitingResyncRef.current = true;
             window.dispatchEvent(new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
@@ -191,6 +210,7 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
       setConnected(false);
       setReconnecting(false);
       snapshotVersionRef.current = null;
+      alertVersionRef.current = null;
       awaitingResyncRef.current = false;
 
       if (socketRef.current) {
@@ -226,6 +246,7 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
 
   return {
     snapshot,
+    alerts,
     connected,
     reconnecting,
     prometheusStatus,

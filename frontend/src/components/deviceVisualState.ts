@@ -1,13 +1,14 @@
 import type { CSSProperties } from 'react';
 import type { Device, DeviceStatus } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
+import { getEffectivePollingIntervalSeconds } from '../utils/polling';
 
 export type DeviceMonitoringState = 'monitorable' | 'unmonitored';
 export type DeviceVisualStatus = DeviceStatus | 'degraded' | 'critical' | 'unmonitored';
 
 type DeviceVisualLabel = 'Up' | 'Down' | 'Probing' | 'Unknown' | 'Warning' | 'Critical' | 'Unmonitored';
 
-type DeviceMonitoringInput = Pick<Device, 'device_type' | 'ip'>;
+type DeviceMonitoringInput = Pick<Device, 'device_type' | 'ip'> & Partial<Pick<Device, 'poll_class' | 'poll_interval_override'>>;
 type DeviceVisualInput = Pick<Device, 'device_type' | 'ip' | 'status'>;
 type DeviceVisualMetrics = DeviceMetricsDTO | null | undefined;
 export type DeviceAddressState = 'address' | 'missing' | 'unmonitored';
@@ -58,7 +59,17 @@ export function sanitizeDeviceMetricsForDisplay(
   device: DeviceMonitoringInput,
   metrics?: DeviceVisualMetrics,
 ): DeviceMetricsDTO | null {
-  return isDeviceMonitorable(device) ? metrics ?? null : null;
+  if (!isDeviceMonitorable(device) || !metrics) {
+    return null;
+  }
+
+  return {
+    ...metrics,
+    temp_celsius: metrics.temp_celsius ?? null,
+    uptime_secs: metrics.uptime_secs ?? null,
+    last_polled_at: metrics.last_polled_at ?? metrics.collected_at,
+    expected_poll_interval_seconds: getEffectivePollingIntervalSeconds(device),
+  };
 }
 
 export function resolveDeviceAddressState(device: DeviceMonitoringInput): DeviceAddressState {

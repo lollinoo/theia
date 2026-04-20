@@ -66,6 +66,12 @@ type SnapshotDeltaMessagePayload struct {
 	Delta       *SnapshotPayload `json:"delta"`
 }
 
+// AlertMessagePayload is the versioned alert-only payload sent to clients.
+type AlertMessagePayload struct {
+	Version uint64     `json:"version"`
+	Alerts  []AlertDTO `json:"alerts"`
+}
+
 // Message is the WebSocket envelope used for all server pushes.
 type Message struct {
 	Type    string `json:"type"`
@@ -93,6 +99,16 @@ func NewSnapshotDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64
 	}
 }
 
+func NewAlertMessage(alerts []AlertDTO, version uint64) Message {
+	return Message{
+		Type: MessageTypeAlert,
+		Payload: AlertMessagePayload{
+			Version: version,
+			Alerts:  append([]AlertDTO(nil), alerts...),
+		},
+	}
+}
+
 type clientControlMessage struct {
 	Type     string
 	DeviceID uuid.UUID
@@ -109,12 +125,9 @@ type clientControlPayload struct {
 
 // SnapshotPayload contains the complete live state sent to clients.
 type SnapshotPayload struct {
-	DeviceMetrics   map[string]DeviceMetricsDTO `json:"device_metrics"`
-	LinkMetrics     map[string][]LinkMetricsDTO `json:"link_metrics"`
-	Alerts          []AlertDTO                  `json:"alerts"`
-	DeviceStatuses  map[string]string           `json:"device_statuses"`
-	DeviceHostnames map[string]string           `json:"device_hostnames"` // device ID → auto-discovered hostname
-	DeviceModels    map[string]string           `json:"device_models"`    // device ID → hardware model
+	DeviceMetrics  map[string]DeviceMetricsDTO `json:"device_metrics"`
+	LinkMetrics    map[string][]LinkMetricsDTO `json:"link_metrics"`
+	DeviceStatuses map[string]string           `json:"device_statuses"`
 }
 
 // DeviceMetricsDTO is the frontend JSON shape for device metrics.
@@ -122,14 +135,14 @@ type DeviceMetricsDTO struct {
 	DeviceID                    string   `json:"device_id"`
 	CPUPercent                  *float64 `json:"cpu_percent"`
 	MemPercent                  *float64 `json:"mem_percent"`
-	TempCelsius                 *float64 `json:"temp_celsius"`
-	UptimeSecs                  *float64 `json:"uptime_secs"`
 	CollectedAt                 string   `json:"collected_at"`
+	TempCelsius                 *float64 `json:"temp_celsius,omitempty"`
+	UptimeSecs                  *float64 `json:"uptime_secs,omitempty"`
+	LastPolledAt                string   `json:"last_polled_at,omitempty"`
+	ExpectedPollIntervalSeconds *float64 `json:"expected_poll_interval_seconds,omitempty"`
 	Health                      string   `json:"health,omitempty"`
 	Reachability                string   `json:"reachability,omitempty"`
 	Stale                       *bool    `json:"stale,omitempty"`
-	LastPolledAt                string   `json:"last_polled_at,omitempty"`
-	ExpectedPollIntervalSeconds *int64   `json:"expected_poll_interval_seconds,omitempty"`
 }
 
 // LinkMetricsDTO is the frontend JSON shape for interface/link metrics.
@@ -154,12 +167,9 @@ type AlertDTO struct {
 // EmptySnapshot returns a fully initialized empty snapshot payload.
 func EmptySnapshot() *SnapshotPayload {
 	return &SnapshotPayload{
-		DeviceMetrics:   map[string]DeviceMetricsDTO{},
-		LinkMetrics:     map[string][]LinkMetricsDTO{},
-		Alerts:          []AlertDTO{},
-		DeviceStatuses:  map[string]string{},
-		DeviceHostnames: map[string]string{},
-		DeviceModels:    map[string]string{},
+		DeviceMetrics:  map[string]DeviceMetricsDTO{},
+		LinkMetrics:    map[string][]LinkMetricsDTO{},
+		DeviceStatuses: map[string]string{},
 	}
 }
 
@@ -170,24 +180,13 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	cloned := &SnapshotPayload{
-		DeviceMetrics:   make(map[string]DeviceMetricsDTO, len(snapshot.DeviceMetrics)),
-		LinkMetrics:     make(map[string][]LinkMetricsDTO, len(snapshot.LinkMetrics)),
-		Alerts:          append([]AlertDTO(nil), snapshot.Alerts...),
-		DeviceStatuses:  make(map[string]string, len(snapshot.DeviceStatuses)),
-		DeviceHostnames: make(map[string]string, len(snapshot.DeviceHostnames)),
-		DeviceModels:    make(map[string]string, len(snapshot.DeviceModels)),
+		DeviceMetrics:  make(map[string]DeviceMetricsDTO, len(snapshot.DeviceMetrics)),
+		LinkMetrics:    make(map[string][]LinkMetricsDTO, len(snapshot.LinkMetrics)),
+		DeviceStatuses: make(map[string]string, len(snapshot.DeviceStatuses)),
 	}
 
 	for key, value := range snapshot.DeviceStatuses {
 		cloned.DeviceStatuses[key] = value
-	}
-
-	for key, value := range snapshot.DeviceHostnames {
-		cloned.DeviceHostnames[key] = value
-	}
-
-	for key, value := range snapshot.DeviceModels {
-		cloned.DeviceModels[key] = value
 	}
 
 	for key, value := range snapshot.DeviceMetrics {
@@ -251,8 +250,6 @@ func DeviceMetricsToDTOs(metrics map[string]domain.DeviceMetrics) map[string]Dev
 			DeviceID:    deviceID,
 			CPUPercent:  metric.CPUPercent,
 			MemPercent:  metric.MemPercent,
-			TempCelsius: metric.TempCelsius,
-			UptimeSecs:  metric.UptimeSecs,
 			CollectedAt: formatTimestamp(metric.CollectedAt),
 		}
 	}
