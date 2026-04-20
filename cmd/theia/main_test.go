@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,33 @@ type stubPendingRestoreCoordinator struct {
 	dbPath  string
 	backup  string
 	hosts   string
+}
+
+type stubBootstrapRunner struct {
+	runCalls []string
+	runErr   error
+}
+
+func (s *stubBootstrapRunner) Run(configPath string) error {
+	s.runCalls = append(s.runCalls, configPath)
+	return s.runErr
+}
+
+func TestRunMainDelegatesToBootstrapRunner(t *testing.T) {
+	runner := &stubBootstrapRunner{}
+	original := newBootstrapRunner
+	newBootstrapRunner = func() bootstrapRunner {
+		return runner
+	}
+	t.Cleanup(func() { newBootstrapRunner = original })
+
+	err := runMain([]string{"-config", "/tmp/theia.yaml"})
+	if err != nil {
+		t.Fatalf("runMain() error = %v, want nil", err)
+	}
+	if !slices.Equal(runner.runCalls, []string{"/tmp/theia.yaml"}) {
+		t.Fatalf("runner calls = %v, want [/tmp/theia.yaml]", runner.runCalls)
+	}
 }
 
 func (s *stubPendingRestoreCoordinator) ApplyPendingRestore() (bool, error) {
