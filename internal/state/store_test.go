@@ -949,6 +949,26 @@ func TestStore_StartReturnsErrAlreadyStarted(t *testing.T) {
 	}
 }
 
+func TestStore_CanRestartAfterStop(t *testing.T) {
+	s := NewStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+
+	s.Stop()
+	s.Stop()
+
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("restart Start() error = %v", err)
+	}
+
+	s.Stop()
+	s.Stop()
+}
+
 func TestStore_UpdateDropsChangesWhenChannelFull(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {

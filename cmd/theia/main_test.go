@@ -1,12 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
+	"log"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -36,39 +37,6 @@ func openVendorConfigTestDB(t *testing.T) *sql.DB {
 	}
 
 	return db
-}
-
-func writeRestoreTestFile(t *testing.T, path string, contents string, mode os.FileMode) {
-	t.Helper()
-
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatalf("creating parent dir for %s: %v", path, err)
-	}
-	if err := os.WriteFile(path, []byte(contents), mode); err != nil {
-		t.Fatalf("writing %s: %v", path, err)
-	}
-}
-
-func readRestoreTestFile(t *testing.T, path string) string {
-	t.Helper()
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-	return string(data)
-}
-
-func writeRestoreMarker(t *testing.T, markerPath string, marker restoreMarker) {
-	t.Helper()
-
-	data, err := json.Marshal(marker)
-	if err != nil {
-		t.Fatalf("marshal restore marker: %v", err)
-	}
-	if err := os.WriteFile(markerPath, data, 0644); err != nil {
-		t.Fatalf("write restore marker: %v", err)
-	}
 }
 
 func TestLoadRegistryFromDB_FallsBackWhenAllRecordsInvalid(t *testing.T) {
@@ -149,104 +117,108 @@ func TestSeedVendorConfigs_SyncsMissingDefaultsWithoutOverwritingCustomizations(
 	}
 }
 
-func TestApplyPendingRestore_KeepsLiveArtifactsWhenBackupReplacementFails(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "theia.db")
-	liveBackupDir := filepath.Join(tempDir, "backups")
-	knownHostsPath := filepath.Join(tempDir, "known_hosts")
-	stagingDir := filepath.Join(tempDir, ".restore-staging")
-	stagedDB := filepath.Join(stagingDir, "theia.db")
-	stagedBackupDir := filepath.Join(stagingDir, "backups")
-	stagedKnownHosts := filepath.Join(stagingDir, "known_hosts")
 
-	writeRestoreTestFile(t, dbPath, "live-db", 0644)
-	writeRestoreTestFile(t, filepath.Join(liveBackupDir, "router.cfg"), "live-backup", 0644)
-	writeRestoreTestFile(t, knownHostsPath, "live-known-hosts", 0644)
-	writeRestoreTestFile(t, stagedDB, "staged-db", 0644)
-	writeRestoreTestFile(t, filepath.Join(stagedBackupDir, "router.cfg"), "staged-backup", 0644)
-	if err := os.Chmod(filepath.Join(stagedBackupDir, "router.cfg"), 0); err != nil {
-		t.Fatalf("chmod staged backup unreadable: %v", err)
-	}
-	writeRestoreTestFile(t, stagedKnownHosts, "staged-known-hosts", 0644)
+type stubPendingRestoreCoordinator struct {
+	applied bool
+	err     error
+	called  bool
+	dbPath  string
+	backup  string
+	hosts   string
+}
 
-	markerPath := filepath.Join(tempDir, ".theia-restore-pending")
-	writeRestoreMarker(t, markerPath, restoreMarker{
-		StagedDB:         stagedDB,
-		StagedBackups:    stagedBackupDir,
-		StagedKnownHosts: stagedKnownHosts,
-		DBPath:           dbPath,
-		DeviceBackupDir:  liveBackupDir,
-		KnownHostsPath:   knownHostsPath,
-		Timestamp:        time.Now().UTC().Format(time.RFC3339),
-	})
+func (s *stubPendingRestoreCoordinator) ApplyPendingRestore() (bool, error) {
+	s.called = true
+	return s.applied, s.err
+}
 
-	if applied := applyPendingRestore(dbPath); applied {
-		t.Fatal("applyPendingRestore() = true, want false when backup replacement fails")
+func TestApplyPendingSQLiteRestore_WrapsCoordinatorError(t *testing.T) {
+	coordinator := &stubPendingRestoreCoordinator{err: errors.New("boom")}
+	original := newRestoreCoordinator
+	newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
+		coordinator.dbPath = dbPath
+		coordinator.backup = deviceBackupDir
+		coordinator.hosts = knownHostsPath
+		return coordinator
 	}
+	t.Cleanup(func() { newRestoreCoordinator = original })
 
-	if got := readRestoreTestFile(t, filepath.Join(liveBackupDir, "router.cfg")); got != "live-backup" {
-		t.Fatalf("live backup content = %q, want preserved live-backup", got)
+	err := applyPendingSQLiteRestore("/tmp/theia.db", "/tmp/backups", "/tmp/known_hosts")
+	if err == nil {
+		t.Fatal("applyPendingSQLiteRestore() error = nil, want wrapped error")
 	}
-	if got := readRestoreTestFile(t, knownHostsPath); got != "live-known-hosts" {
-		t.Fatalf("known_hosts content = %q, want preserved live-known-hosts", got)
+	if !strings.Contains(err.Error(), "apply pending restore: boom") {
+		t.Fatalf("applyPendingSQLiteRestore() error = %q, want wrapped coordinator error", err)
 	}
-	if got := readRestoreTestFile(t, dbPath); got != "staged-db" {
-		t.Fatalf("db content = %q, want staged-db after DB swap", got)
+	if !coordinator.called {
+		t.Fatal("ApplyPendingRestore() was not called")
 	}
-	if _, err := os.Stat(markerPath); err != nil {
-		t.Fatalf("restore marker should remain for retry, stat error: %v", err)
-	}
-	if _, err := os.Stat(stagingDir); err != nil {
-		t.Fatalf("staging dir should remain for retry, stat error: %v", err)
+	if coordinator.dbPath != "/tmp/theia.db" || coordinator.backup != "/tmp/backups" || coordinator.hosts != "/tmp/known_hosts" {
+		t.Fatalf("coordinator paths = (%q, %q, %q), want runtime paths", coordinator.dbPath, coordinator.backup, coordinator.hosts)
 	}
 }
 
-func TestApplyPendingRestore_CleansUpAfterSuccessfulArtifactSwap(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "theia.db")
-	liveBackupDir := filepath.Join(tempDir, "backups")
-	knownHostsPath := filepath.Join(tempDir, "known_hosts")
-	stagingDir := filepath.Join(tempDir, ".restore-staging")
-	stagedDB := filepath.Join(stagingDir, "theia.db")
-	stagedBackupDir := filepath.Join(stagingDir, "backups")
-	stagedKnownHosts := filepath.Join(stagingDir, "known_hosts")
+func TestApplyPendingSQLiteRestore_ReturnsNilWhenNothingApplied(t *testing.T) {
+	coordinator := &stubPendingRestoreCoordinator{}
+	original := newRestoreCoordinator
+	newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
+		return coordinator
+	}
+	t.Cleanup(func() { newRestoreCoordinator = original })
 
-	writeRestoreTestFile(t, dbPath, "live-db", 0644)
-	writeRestoreTestFile(t, filepath.Join(liveBackupDir, "router.cfg"), "live-backup", 0644)
-	writeRestoreTestFile(t, knownHostsPath, "live-known-hosts", 0644)
-	writeRestoreTestFile(t, stagedDB, "staged-db", 0644)
-	writeRestoreTestFile(t, filepath.Join(stagedBackupDir, "router.cfg"), "staged-backup", 0644)
-	writeRestoreTestFile(t, stagedKnownHosts, "staged-known-hosts", 0644)
-
-	markerPath := filepath.Join(tempDir, ".theia-restore-pending")
-	writeRestoreMarker(t, markerPath, restoreMarker{
-		StagedDB:         stagedDB,
-		StagedBackups:    stagedBackupDir,
-		StagedKnownHosts: stagedKnownHosts,
-		DBPath:           dbPath,
-		DeviceBackupDir:  liveBackupDir,
-		KnownHostsPath:   knownHostsPath,
-		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+	var logBuffer bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
 	})
 
-	if applied := applyPendingRestore(dbPath); !applied {
-		t.Fatal("applyPendingRestore() = false, want true on successful restore")
+	if err := applyPendingSQLiteRestore("/tmp/theia.db", "/tmp/backups", "/tmp/known_hosts"); err != nil {
+		t.Fatalf("applyPendingSQLiteRestore() error = %v, want nil", err)
+	}
+	if !coordinator.called {
+		t.Fatal("ApplyPendingRestore() was not called")
+	}
+	if logBuffer.Len() != 0 {
+		t.Fatalf("unexpected restore log output: %q", logBuffer.String())
+	}
+}
+
+func TestApplyPendingSQLiteRestore_LogsSuccessExactlyOnceWhenApplied(t *testing.T) {
+	coordinator := &stubPendingRestoreCoordinator{applied: true}
+	original := newRestoreCoordinator
+	newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
+		return coordinator
+	}
+	t.Cleanup(func() { newRestoreCoordinator = original })
+
+	var logBuffer bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+
+	if err := applyPendingSQLiteRestore("/tmp/theia.db", "/tmp/backups", "/tmp/known_hosts"); err != nil {
+		t.Fatalf("applyPendingSQLiteRestore() error = %v, want nil", err)
+	}
+	if !coordinator.called {
+		t.Fatal("ApplyPendingRestore() was not called")
 	}
 
-	if got := readRestoreTestFile(t, dbPath); got != "staged-db" {
-		t.Fatalf("db content = %q, want staged-db", got)
+	const expected = "Restore applied successfully, continuing with normal startup"
+	logOutput := logBuffer.String()
+	if !strings.Contains(logOutput, expected) {
+		t.Fatalf("log output = %q, want success message %q", logOutput, expected)
 	}
-	if got := readRestoreTestFile(t, filepath.Join(liveBackupDir, "router.cfg")); got != "staged-backup" {
-		t.Fatalf("live backup content = %q, want staged-backup", got)
-	}
-	if got := readRestoreTestFile(t, knownHostsPath); got != "staged-known-hosts" {
-		t.Fatalf("known_hosts content = %q, want staged-known-hosts", got)
-	}
-	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
-		t.Fatalf("restore marker should be removed, stat err = %v", err)
-	}
-	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
-		t.Fatalf("staging dir should be removed, stat err = %v", err)
+	if count := strings.Count(logOutput, expected); count != 1 {
+		t.Fatalf("success message count = %d, want 1; log output = %q", count, logOutput)
 	}
 }
 
