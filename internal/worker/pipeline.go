@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,17 +56,18 @@ type pipelineTaskRunning interface {
 }
 
 type PipelineOrchestrator struct {
-	scheduler       pipelineScheduler
-	taskRunner      pipelineTaskRunning
-	broadcaster     *pipelineSnapshotBroadcaster
-	stateStore      *state.Store
-	cache           *cache.DeviceLinkCache
-	hub             *ws.Hub
-	performance     *collector.PerformanceCollector
-	operational     *collector.OperationalCollector
-	staticCollector *collector.StaticCollector
-	prometheus      *collector.PrometheusCollector
-	topologyService interface {
+	scheduler         pipelineScheduler
+	taskRunner        pipelineTaskRunning
+	broadcaster       *pipelineSnapshotBroadcaster
+	prometheusMonitor *pipelinePrometheusMonitor
+	stateStore        *state.Store
+	cache             *cache.DeviceLinkCache
+	hub               *ws.Hub
+	performance       *collector.PerformanceCollector
+	operational       *collector.OperationalCollector
+	staticCollector   *collector.StaticCollector
+	prometheus        *collector.PrometheusCollector
+	topologyService   interface {
 		ApplyStaticDiscovery(uuid.UUID, service.StaticDiscoveryInput) (service.StaticPersistenceResult, error)
 	}
 	settingsRepo            domain.SettingsRepository
@@ -125,6 +125,7 @@ func NewPipelineOrchestrator(
 	}
 	p.taskRunner = &pipelineTaskRunner{pipeline: p}
 	p.broadcaster = &pipelineSnapshotBroadcaster{pipeline: p}
+	p.prometheusMonitor = &pipelinePrometheusMonitor{pipeline: p}
 	return p
 }
 
@@ -181,7 +182,7 @@ func (p *PipelineOrchestrator) Start(ctx context.Context) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			p.refreshPrometheus(runCtx)
+			p.prometheusMonitor.run(runCtx)
 		}()
 
 		wg.Add(1)
@@ -255,74 +256,6 @@ func (p *PipelineOrchestrator) workerCount() int {
 	return count
 }
 
-func (p *PipelineOrchestrator) refreshPrometheus(ctx context.Context) {
-	defer close(p.healthDone)
-
-	p.refreshPrometheusOnce(ctx)
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			p.refreshPrometheusOnce(ctx)
-		}
-	}
-}
-
-func (p *PipelineOrchestrator) refreshPrometheusOnce(ctx context.Context) {
-	if p.prometheus == nil || p.cache == nil {
-		return
-	}
-
-	promURL := p.prometheusURL()
-	if promURL == "" {
-		p.prometheus.SetPrometheusURL("")
-		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
-		p.clearPrometheusHostnames()
-		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
-			Enabled:   false,
-			Available: false,
-		})
-		return
-	}
-
-	p.prometheus.SetPrometheusURL(promURL)
-
-	devices, err := p.cache.GetDevices()
-	if err != nil {
-		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
-		p.prunePrometheusHostnames()
-		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
-			Enabled:   true,
-			Available: false,
-			Error:     err.Error(),
-		})
-		return
-	}
-
-	alerts, err := p.prometheus.CollectAlerts(ctx, devices)
-	if err != nil {
-		p.setAlerts(make(map[uuid.UUID][]domain.AlertState))
-		p.prunePrometheusHostnames()
-		p.publishPrometheusStatus(ws.PrometheusStatusPayload{
-			Enabled:   true,
-			Available: false,
-			Error:     err.Error(),
-		})
-		return
-	}
-
-	p.setAlerts(alerts)
-	p.publishPrometheusStatus(ws.PrometheusStatusPayload{
-		Enabled:   true,
-		Available: true,
-	})
-}
-
 func (p *PipelineOrchestrator) broadcastLoop(ctx context.Context) {
 	p.broadcaster.broadcastLoop(ctx)
 }
@@ -355,42 +288,6 @@ func (p *PipelineOrchestrator) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUI
 	return p.broadcaster.buildDirtyOverviewDelta(dirtyDevices, alertsDirty)
 }
 
-func (p *PipelineOrchestrator) setAlerts(next map[uuid.UUID][]domain.AlertState) {
-	changed := p.runtime.setAlerts(next)
-
-	if changed {
-		select {
-		case p.alertNotify <- struct{}{}:
-		default:
-		}
-	}
-}
-
-func (p *PipelineOrchestrator) publishPrometheusStatus(status ws.PrometheusStatusPayload) {
-	changed := p.runtime.setPrometheusStatus(status)
-
-	if !changed || p.hub == nil {
-		return
-	}
-
-	p.hub.Broadcast(ws.Message{
-		Type:    ws.MessageTypePrometheusStatus,
-		Payload: status,
-	})
-}
-
-func (p *PipelineOrchestrator) recordPrometheusHostname(deviceID uuid.UUID, hostname string) {
-	p.runtime.recordPrometheusHostname(deviceID, hostname)
-}
-
-func (p *PipelineOrchestrator) clearPrometheusHostnames() {
-	p.runtime.clearPrometheusHostnames()
-}
-
-func (p *PipelineOrchestrator) prunePrometheusHostnames() {
-	p.runtime.prunePrometheusHostnames()
-}
-
 func (p *PipelineOrchestrator) clockNow() time.Time {
 	if p != nil && p.runtime != nil {
 		return p.runtime.clockNow()
@@ -411,36 +308,6 @@ func reloadReasonForResync(reason string) string {
 		return refreshReloadReasonStateChangesDropped
 	default:
 		return refreshReloadReasonDirtyDeltaFallback
-	}
-}
-
-func (p *PipelineOrchestrator) prometheusURL() string {
-	if p.settingsRepo == nil {
-		return ""
-	}
-
-	value, err := p.settingsRepo.Get(domain.SettingPrometheusURL)
-	if err != nil {
-		return ""
-	}
-
-	return strings.TrimSpace(value)
-}
-
-func initialPrometheusStatus(settingsRepo domain.SettingsRepository) ws.PrometheusStatusPayload {
-	if settingsRepo == nil {
-		return ws.PrometheusStatusPayload{}
-	}
-
-	value, err := settingsRepo.Get(domain.SettingPrometheusURL)
-	if err != nil {
-		return ws.PrometheusStatusPayload{}
-	}
-
-	enabled := strings.TrimSpace(value) != ""
-	return ws.PrometheusStatusPayload{
-		Enabled:   enabled,
-		Available: enabled,
 	}
 }
 
