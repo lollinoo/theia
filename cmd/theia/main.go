@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -87,23 +86,7 @@ func main() {
 
 	log.Printf("Config loaded: driver=%s listen=%s log_level=%s", cfg.DBDriver, cfg.ListenAddr, cfg.LogLevel)
 
-	appDataDir := cfg.DataDir
-	if appDataDir == "" {
-		appDataDir = "./data"
-	}
-	if cfg.DBPath != "" {
-		appDataDir = filepath.Dir(cfg.DBPath)
-	}
-	if cfg.DataDir != "" {
-		appDataDir = cfg.DataDir
-	}
-
-	backupDir := os.Getenv("THEIA_BACKUP_DIR")
-	if backupDir == "" {
-		backupDir = filepath.Join(appDataDir, "backups")
-	}
-
-	knownHostsPath := filepath.Join(appDataDir, "known_hosts")
+	paths := resolveRuntimePaths(cfg)
 
 	dialect, err := sqlite.NormalizeDialect(cfg.DBDriver)
 	if err != nil {
@@ -117,13 +100,13 @@ func main() {
 		}
 
 		// Check for pending restore BEFORE opening the database (D-07)
-		if err := applyPendingSQLiteRestore(cfg.DBPath, backupDir, knownHostsPath); err != nil {
+		if err := applyPendingSQLiteRestore(cfg.DBPath, paths.backupDir, paths.knownHostsPath); err != nil {
 			log.Fatalf("Failed to apply pending SQLite restore: %v", err)
 		}
 	}
 
-	if err := os.MkdirAll(appDataDir, 0755); err != nil {
-		log.Fatalf("Failed to create application data directory %s: %v", appDataDir, err)
+	if err := os.MkdirAll(paths.appDataDir, 0755); err != nil {
+		log.Fatalf("Failed to create application data directory %s: %v", paths.appDataDir, err)
 	}
 
 	db, dialect, err := sqlite.OpenPrimaryDB(cfg.DBDriver, cfg.DBPath, cfg.DBDSN)
@@ -158,18 +141,16 @@ func main() {
 	// Load vendor registry for seeding.
 	// By default the built-in configs are loaded from the binary (go:embed).
 	// Set THEIA_VENDORS_DIR to override with a custom directory on disk.
-	var yamlRegistry *vendor.Registry
-	if envVendors := os.Getenv("THEIA_VENDORS_DIR"); envVendors != "" {
-		yamlRegistry, err = vendor.LoadRegistryFromYAML(envVendors)
-		if err != nil {
+	yamlRegistry, envVendors, err := loadBootstrapVendorRegistry()
+	if err != nil {
+		if envVendors != "" {
 			log.Fatalf("Failed to load vendor registry from %s: %v", envVendors, err)
 		}
+		log.Fatalf("Failed to load embedded vendor registry: %v", err)
+	}
+	if envVendors != "" {
 		log.Printf("Vendor YAML loaded: %d vendors from %s", yamlRegistry.VendorCount(), envVendors)
 	} else {
-		yamlRegistry, err = vendor.LoadRegistryFromEmbedded()
-		if err != nil {
-			log.Fatalf("Failed to load embedded vendor registry: %v", err)
-		}
 		log.Printf("Vendor registry loaded: %d vendors (embedded)", yamlRegistry.VendorCount())
 	}
 
@@ -227,41 +208,37 @@ func main() {
 
 	// Create backup service
 	sshDialer := &ssh.DefaultDialer{}
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
-		log.Fatalf("Failed to create backup directory %s: %v", backupDir, err)
+	if err := os.MkdirAll(paths.backupDir, 0755); err != nil {
+		log.Fatalf("Failed to create backup directory %s: %v", paths.backupDir, err)
 	}
 
 	// Initialize SSH known hosts store for host key verification
-	knownHostsStore, err := ssh.NewKnownHostsStore(knownHostsPath)
+	knownHostsStore, err := ssh.NewKnownHostsStore(paths.knownHostsPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize SSH known hosts store: %v", err)
 	}
-	log.Printf("SSH known hosts store: %s", knownHostsPath)
+	log.Printf("SSH known hosts store: %s", paths.knownHostsPath)
 
-	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, backupDir, knownHostsStore.HostKeyCallback())
+	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback())
 
 	var instanceBackupService *service.InstanceBackupService
 	var backupScheduler *worker.BackupScheduler
 	if dialect == sqlite.DialectSQLite {
 		instanceBackupRepo := sqlite.NewInstanceBackupRepo(db)
-		instanceBackupDir := os.Getenv("THEIA_INSTANCE_BACKUP_DIR")
-		if instanceBackupDir == "" {
-			instanceBackupDir = filepath.Join(appDataDir, "instance-backups")
-		}
-		if err := os.MkdirAll(instanceBackupDir, 0755); err != nil {
-			log.Fatalf("Failed to create instance backup directory %s: %v", instanceBackupDir, err)
+		if err := os.MkdirAll(paths.instanceBackupDir, 0755); err != nil {
+			log.Fatalf("Failed to create instance backup directory %s: %v", paths.instanceBackupDir, err)
 		}
 		instanceBackupService = service.NewInstanceBackupService(
 			db,
 			instanceBackupRepo,
 			settingsRepo,
-			instanceBackupDir,
-			backupDir,
-			knownHostsPath,
+			paths.instanceBackupDir,
+			paths.backupDir,
+			paths.knownHostsPath,
 			cfg.DBPath,
 			encryptionKey,
 		)
-		log.Printf("Instance backup directory: %s", instanceBackupDir)
+		log.Printf("Instance backup directory: %s", paths.instanceBackupDir)
 		instanceBackupService.FailStaleRunning()
 		backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
 	} else {
@@ -372,118 +349,6 @@ func main() {
 		log.Fatalf("Server error: %v", err)
 	}
 	log.Println("Server stopped")
-}
-
-// seedVendorConfigs seeds vendor configs into the DB from YAML if not already present.
-func seedVendorConfigs(yamlRegistry *vendor.Registry, repo *sqlite.VendorConfigRepo) {
-	configs, err := yamlRegistry.ExportAllConfigs()
-	if err != nil {
-		log.Printf("Warning: failed to export YAML configs for seeding: %v", err)
-		return
-	}
-
-	for name, configJSON := range configs {
-		existing, err := repo.GetByName(name)
-		if err != nil {
-			log.Printf("Warning: failed to check vendor %s in DB: %v", name, err)
-			continue
-		}
-		displayName := yamlRegistry.GetDisplayName(name)
-		if name == "default" {
-			displayName = "Generic / Default"
-		}
-
-		record := &domain.VendorConfigRecord{Name: name, DisplayName: displayName, ConfigJSON: string(configJSON)}
-		if existing != nil {
-			mergedJSON, changed, mergeErr := mergeVendorConfigDefaults([]byte(existing.ConfigJSON), configJSON)
-			if mergeErr != nil {
-				log.Printf("Warning: failed to merge vendor %s defaults from YAML: %v", name, mergeErr)
-				continue
-			}
-			if !changed {
-				continue
-			}
-			record.CreatedAt = existing.CreatedAt
-			record.ConfigJSON = string(mergedJSON)
-		}
-
-		if err := repo.Upsert(record); err != nil {
-			log.Printf("Warning: failed to seed vendor %s: %v", name, err)
-		} else if existing != nil {
-			log.Printf("Synced vendor config defaults: %s", name)
-		} else {
-			log.Printf("Seeded vendor config: %s", name)
-		}
-	}
-}
-
-func mergeVendorConfigDefaults(existingJSON, defaultsJSON []byte) ([]byte, bool, error) {
-	var existingCfg vendor.VendorConfig
-	if err := json.Unmarshal(existingJSON, &existingCfg); err != nil {
-		return nil, false, fmt.Errorf("unmarshal existing config: %w", err)
-	}
-
-	var defaultCfg vendor.VendorConfig
-	if err := json.Unmarshal(defaultsJSON, &defaultCfg); err != nil {
-		return nil, false, fmt.Errorf("unmarshal default config: %w", err)
-	}
-
-	changed := mergeMissingVendorConfigFields(&existingCfg, defaultCfg)
-	if !changed {
-		return existingJSON, false, nil
-	}
-
-	mergedJSON, err := json.Marshal(existingCfg)
-	if err != nil {
-		return nil, false, fmt.Errorf("marshal merged config: %w", err)
-	}
-	return mergedJSON, true, nil
-}
-
-func mergeMissingVendorConfigFields(dst *vendor.VendorConfig, defaults vendor.VendorConfig) bool {
-	if dst == nil {
-		return false
-	}
-
-	changed := false
-	if dst.SNMP.Static.SoftwareVersionOID == "" && defaults.SNMP.Static.SoftwareVersionOID != "" {
-		dst.SNMP.Static.SoftwareVersionOID = defaults.SNMP.Static.SoftwareVersionOID
-		changed = true
-	}
-
-	return changed
-}
-
-// loadRegistryFromDB builds a vendor registry from DB records.
-func loadRegistryFromDB(repo *sqlite.VendorConfigRepo) (*vendor.Registry, error) {
-	records, err := repo.GetAll()
-	if err != nil {
-		return nil, err
-	}
-	if len(records) == 0 {
-		return nil, nil
-	}
-
-	var dbRecords []vendor.DBVendorRecord
-	for _, rec := range records {
-		// Validate JSON is parseable
-		var raw json.RawMessage
-		if err := json.Unmarshal([]byte(rec.ConfigJSON), &raw); err != nil {
-			log.Printf("Warning: invalid vendor config JSON for %s, skipping: %v", rec.Name, err)
-			continue
-		}
-		dbRecords = append(dbRecords, vendor.DBVendorRecord{
-			Name:       rec.Name,
-			ConfigJSON: rec.ConfigJSON,
-		})
-	}
-
-	if len(dbRecords) == 0 {
-		log.Printf("Warning: all DB vendor records failed JSON validation, falling back to YAML registry")
-		return nil, nil
-	}
-
-	return vendor.LoadRegistryFromDB(dbRecords)
 }
 
 func newCollectorSNMPClientFunc(settingsRepo domain.SettingsRepository) collector.NewSNMPClientFunc {
