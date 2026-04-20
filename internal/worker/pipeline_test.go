@@ -332,7 +332,7 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 		nil,
 		nil,
 	)
-	pipeline.prevCounters[deviceID] = map[string]collector.CounterBaseline{
+	pipeline.runtime.prevCounters[deviceID] = map[string]collector.CounterBaseline{
 		"ether1": {
 			InOctets:  1_000,
 			OutOctets: 2_000,
@@ -356,9 +356,9 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 		t.Fatalf("expected positive tx_bps, got %#v", deviceState.LinkMetrics[0].TxBps)
 	}
 
-	pipeline.snapshotMu.RLock()
-	hostname := pipeline.hostnames[deviceID]
-	pipeline.snapshotMu.RUnlock()
+	pipeline.runtime.mu.RLock()
+	hostname := pipeline.runtime.hostnames[deviceID]
+	pipeline.runtime.mu.RUnlock()
 	if hostname != "core-sw-1" {
 		t.Fatalf("expected hostname override from prometheus enrichment, got %q", hostname)
 	}
@@ -561,23 +561,23 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		nil,
 	)
 	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
-	pipeline.now = func() time.Time { return now }
+	pipeline.runtime.now = func() time.Time { return now }
 
 	pipeline.refreshPrometheusOnce(context.Background())
 
-	pipeline.snapshotMu.RLock()
-	if len(pipeline.alerts[deviceID]) != 1 {
-		t.Fatalf("expected alert cache to update, got %d alert(s)", len(pipeline.alerts[deviceID]))
+	pipeline.runtime.mu.RLock()
+	if len(pipeline.runtime.alerts[deviceID]) != 1 {
+		t.Fatalf("expected alert cache to update, got %d alert(s)", len(pipeline.runtime.alerts[deviceID]))
 	}
-	pipeline.snapshotMu.RUnlock()
+	pipeline.runtime.mu.RUnlock()
 	if !pipeline.IsPromAvailable() {
 		t.Fatal("expected prometheus to remain available after successful refresh")
 	}
 
-	pipeline.snapshotMu.Lock()
-	pipeline.hostnames[deviceID] = "edge-prom-host"
-	pipeline.hostnameObservedAt[deviceID] = now.Add(-31 * time.Second)
-	pipeline.snapshotMu.Unlock()
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.hostnames[deviceID] = "edge-prom-host"
+	pipeline.runtime.hostnameObservedAt[deviceID] = now.Add(-31 * time.Second)
+	pipeline.runtime.mu.Unlock()
 
 	promClient.mu.Lock()
 	promClient.alertsErr = errors.New("prometheus unavailable")
@@ -593,12 +593,12 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		t.Fatal("expected prometheus error message to be recorded")
 	}
 
-	pipeline.snapshotMu.RLock()
-	defer pipeline.snapshotMu.RUnlock()
-	if alerts := pipeline.alerts[deviceID]; len(alerts) != 0 {
+	pipeline.runtime.mu.RLock()
+	defer pipeline.runtime.mu.RUnlock()
+	if alerts := pipeline.runtime.alerts[deviceID]; len(alerts) != 0 {
 		t.Fatalf("expected alerts to clear on refresh failure, got %d alert(s)", len(alerts))
 	}
-	if hostname := pipeline.hostnames[deviceID]; hostname != "" {
+	if hostname := pipeline.runtime.hostnames[deviceID]; hostname != "" {
 		t.Fatalf("expected stale hostname override to expire, got %q", hostname)
 	}
 }
@@ -862,9 +862,9 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 		t.Fatalf("expected virtual operational task to bypass SNMP collector, got %d SNMP call(s)", snmpCalls)
 	}
 
-	pipeline.snapshotMu.RLock()
-	hostname := pipeline.hostnames[deviceID]
-	pipeline.snapshotMu.RUnlock()
+	pipeline.runtime.mu.RLock()
+	hostname := pipeline.runtime.hostnames[deviceID]
+	pipeline.runtime.mu.RUnlock()
 	if hostname != "cloud-vpn" {
 		t.Fatalf("hostname override = %q, want %q", hostname, "cloud-vpn")
 	}
@@ -1726,7 +1726,7 @@ func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkM
 		ExpectedInterval: 30 * time.Second,
 		Timestamp:        time.Now().Add(-time.Second),
 	})
-	pipeline.prevCounters[device.ID] = map[string]collector.CounterBaseline{
+	pipeline.runtime.prevCounters[device.ID] = map[string]collector.CounterBaseline{
 		"ether1": {
 			InOctets:  1_000,
 			OutOctets: 2_000,
@@ -1795,7 +1795,7 @@ func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 	hub := ws.NewHub()
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
-	pipeline.prevCounters[device.ID] = map[string]collector.CounterBaseline{
+	pipeline.runtime.prevCounters[device.ID] = map[string]collector.CounterBaseline{
 		"ether1": {
 			InOctets:  1_000,
 			OutOctets: 2_000,
@@ -1888,7 +1888,7 @@ func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t
 		ExpectedInterval: 30 * time.Second,
 		Timestamp:        time.Now().Add(-time.Second),
 	})
-	pipeline.prevCounters[device.ID] = map[string]collector.CounterBaseline{
+	pipeline.runtime.prevCounters[device.ID] = map[string]collector.CounterBaseline{
 		"ether1": {
 			InOctets:  1_000,
 			OutOctets: 2_000,
