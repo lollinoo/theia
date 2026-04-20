@@ -607,7 +607,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
 	pipeline.runtime.now = func() time.Time { return now }
 
-	pipeline.refreshPrometheusOnce(context.Background())
+	pipeline.prometheusMonitor.refreshOnce(context.Background())
 
 	pipeline.runtime.mu.RLock()
 	if len(pipeline.runtime.alerts[deviceID]) != 1 {
@@ -628,7 +628,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 	promClient.mu.Unlock()
 	now = now.Add(5 * time.Second)
 
-	pipeline.refreshPrometheusOnce(context.Background())
+	pipeline.prometheusMonitor.refreshOnce(context.Background())
 
 	if pipeline.IsPromAvailable() {
 		t.Fatal("expected prometheus availability to flip false on refresh failure")
@@ -882,7 +882,7 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 		nil,
 		nil,
 	)
-	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
+	pipeline.prometheusMonitor.publishStatus(ws.PrometheusStatusPayload{
 		Enabled:   true,
 		Available: true,
 	})
@@ -1322,7 +1322,7 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshBroadcastsAlertMessage(t 
 
 	_ = waitForBroadcastMessages(t, hub, time.Second)
 
-	pipeline.setAlerts(map[uuid.UUID][]domain.AlertState{
+	pipeline.prometheusMonitor.setAlerts(map[uuid.UUID][]domain.AlertState{
 		deviceID: {{
 			DeviceID:  deviceID,
 			Severity:  "critical",
@@ -1698,7 +1698,7 @@ func TestPipelineOrchestratorBroadcastDirty_TopologyAndAlertsDirtyAlsoBroadcasts
 
 	pipeline.broadcaster.broadcastOnce(context.Background())
 	drainBroadcastCh(hub)
-	pipeline.setAlerts(map[uuid.UUID][]domain.AlertState{
+	pipeline.prometheusMonitor.setAlerts(map[uuid.UUID][]domain.AlertState{
 		deviceID: {{
 			DeviceID:  deviceID,
 			Severity:  "critical",
@@ -1725,12 +1725,12 @@ func TestPipelineOrchestratorBroadcastDirty_TopologyAndAlertsDirtyAlsoBroadcasts
 func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 
-	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{})
+	pipeline.prometheusMonitor.publishStatus(ws.PrometheusStatusPayload{})
 	if messages := drainBroadcastCh(hub); len(messages) != 0 {
 		t.Fatalf("expected no broadcast for unchanged disabled state, got %d message(s)", len(messages))
 	}
 
-	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
+	pipeline.prometheusMonitor.publishStatus(ws.PrometheusStatusPayload{
 		Enabled:   true,
 		Available: false,
 		Error:     "prometheus down",
@@ -1740,7 +1740,7 @@ func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testi
 		t.Fatalf("expected one prometheus_status message on failure transition, got %v", firstTypes)
 	}
 
-	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
+	pipeline.prometheusMonitor.publishStatus(ws.PrometheusStatusPayload{
 		Enabled:   true,
 		Available: false,
 		Error:     "prometheus down",
@@ -1749,7 +1749,7 @@ func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testi
 		t.Fatalf("expected no duplicate broadcast without state transition, got %d message(s)", len(messages))
 	}
 
-	pipeline.publishPrometheusStatus(ws.PrometheusStatusPayload{
+	pipeline.prometheusMonitor.publishStatus(ws.PrometheusStatusPayload{
 		Enabled:   true,
 		Available: true,
 	})

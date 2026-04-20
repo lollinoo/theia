@@ -73,7 +73,7 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			if p.prometheus != nil && p.GetPrometheusStatus().Enabled {
 				enrichment, err := p.prometheus.CollectDeviceEnrichment(ctx, task.Device)
 				if err == nil && enrichment.Hostname != "" {
-					p.recordPrometheusHostname(task.Device.ID, enrichment.Hostname)
+					p.prometheusMonitor.recordHostname(task.Device.ID, enrichment.Hostname)
 				}
 			}
 
@@ -179,7 +179,7 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 			log.Printf("pipeline: virtual enrichment failed for %s: %v", task.Device.ID, err)
 		} else {
 			if enrichment.Hostname != "" {
-				p.recordPrometheusHostname(task.Device.ID, enrichment.Hostname)
+				p.prometheusMonitor.recordHostname(task.Device.ID, enrichment.Hostname)
 			}
 			if enrichment.ProbeReachable != nil {
 				result.Reachable = *enrichment.ProbeReachable
