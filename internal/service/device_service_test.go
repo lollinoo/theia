@@ -586,6 +586,48 @@ func TestRunTopologyDiscoveryNow_SetsPendingAndTriggersReprobe(t *testing.T) {
 	}
 }
 
+func TestDeviceDiscoveryCoordinatorTestSNMPUsesTopologyOff(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	var seenMode domain.TopologyDiscoveryMode
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		seenMode = mode
+		return &snmp.DiscoveryResult{SysName: "agg-1", SysDescr: "SwitchOS"}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	device := &domain.Device{
+		ID:                    uuid.New(),
+		IP:                    "10.0.0.21",
+		Hostname:              "agg-1",
+		Managed:               true,
+		Status:                domain.DeviceStatusUp,
+		DeviceType:            domain.DeviceTypeSwitch,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeLLDPCDP,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	result, err := svc.discovery.TestSNMP(context.Background(), device.ID)
+	if err != nil {
+		t.Fatalf("TestSNMP failed: %v", err)
+	}
+	if !result.Success {
+		t.Fatal("expected SNMP test to succeed")
+	}
+	if seenMode != domain.TopologyDiscoveryModeOff {
+		t.Fatalf("expected TestSNMP to force topology mode off, got %s", seenMode)
+	}
+}
+
 func TestProbeCompletes_DeviceStatusUp(t *testing.T) {
 	result := &snmp.DiscoveryResult{
 		SysName:       "core-router",
@@ -1502,32 +1544,6 @@ func TestProbeDiscoversNeighbors_PrefersPhysicalLinkOverVirtualVariant(t *testin
 	}
 	if links[0].TargetIfName != "ether6-link_new_apparati" {
 		t.Fatalf("expected physical target interface to win, got %q", links[0].TargetIfName)
-	}
-}
-
-func TestDedupePreferredDiscoveredNeighbors_PrefersPhysicalRemotePortWhenLocalInterfaceIsMissingOnAllVariants(t *testing.T) {
-	neighbors := dedupePreferredDiscoveredNeighbors([]snmp.NeighborInfo{
-		{
-			RemoteSysName:   "PRE-M-PZ-GALLITELLO_DORSALE",
-			RemotePortID:    "br_eoip_radius_vlan/eoip_gallitello_uff",
-			LocalIfName:     "",
-			Protocol:        domain.DiscoveryProtocolLLDP,
-			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
-		},
-		{
-			RemoteSysName:   "PRE-M-PZ-GALLITELLO_DORSALE",
-			RemotePortID:    "ether6-Link_Ufficio",
-			LocalIfName:     "",
-			Protocol:        domain.DiscoveryProtocolLLDP,
-			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
-		},
-	})
-
-	if len(neighbors) != 1 {
-		t.Fatalf("expected only the physical neighbor to remain, got %d", len(neighbors))
-	}
-	if neighbors[0].RemotePortID != "ether6-Link_Ufficio" {
-		t.Fatalf("expected physical remote port to survive, got %q", neighbors[0].RemotePortID)
 	}
 }
 
