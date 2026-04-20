@@ -1207,7 +1207,7 @@ func waitForBroadcastMessages(t *testing.T, hub *ws.Hub, timeout time.Duration) 
 func TestPipelineOrchestratorBroadcastLoopSendsSnapshotThenDelta(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	firstMessages := drainBroadcastCh(hub)
 	firstTypes := broadcastMessageTypes(t, firstMessages)
@@ -1232,7 +1232,7 @@ func TestPipelineOrchestratorBroadcastLoopSendsSnapshotThenDelta(t *testing.T) {
 		Timestamp:        time.Date(2026, 4, 13, 12, 0, 5, 0, time.UTC),
 	})
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	secondMessages := drainBroadcastCh(hub)
 	secondTypes := broadcastMessageTypes(t, secondMessages)
@@ -1258,7 +1258,7 @@ func TestPipelineOrchestratorBroadcastLoop_EventDrivenStateChangeSendsDelta(t *t
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pipeline.broadcastLoop(ctx)
+	go pipeline.broadcaster.broadcastLoop(ctx)
 
 	initialTypes := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
 	if len(initialTypes) == 0 || initialTypes[0] != ws.MessageTypeSnapshot {
@@ -1293,7 +1293,7 @@ func TestPipelineOrchestratorBroadcastLoop_LinkChangeForcesFullSnapshotAndTopolo
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pipeline.broadcastLoop(ctx)
+	go pipeline.broadcaster.broadcastLoop(ctx)
 
 	_ = waitForBroadcastMessages(t, hub, time.Second)
 
@@ -1318,7 +1318,7 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshBroadcastsAlertMessage(t 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pipeline.broadcastLoop(ctx)
+	go pipeline.broadcaster.broadcastLoop(ctx)
 
 	_ = waitForBroadcastMessages(t, hub, time.Second)
 
@@ -1361,7 +1361,7 @@ func TestPipelineOrchestratorBroadcastLoop_DisabledFullResyncDoesNotSendSnapshot
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pipeline.broadcastLoop(ctx)
+	go pipeline.broadcaster.broadcastLoop(ctx)
 
 	initialTypes := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
 	if len(initialTypes) == 0 || initialTypes[0] != ws.MessageTypeSnapshot {
@@ -1382,7 +1382,7 @@ func TestPipelineOrchestratorBroadcastLoop_PeriodicFullResyncSendsSnapshot(t *te
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go pipeline.broadcastLoop(ctx)
+	go pipeline.broadcaster.broadcastLoop(ctx)
 
 	initialTypes := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
 	if len(initialTypes) == 0 || initialTypes[0] != ws.MessageTypeSnapshot {
@@ -1463,7 +1463,7 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 		Device:           device,
 	})
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	var snapshotMessage wsVersionedSnapshotMessage
 	foundSnapshot := false
@@ -1502,7 +1502,7 @@ func TestPipelineOrchestratorTopologyChangedFiresAfterSnapshot(t *testing.T) {
 	pipeline, hub, _, topologyNotify, _ := newBroadcastTestPipeline(t)
 	topologyNotify <- struct{}{}
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
 	if len(types) < 2 {
@@ -1516,11 +1516,11 @@ func TestPipelineOrchestratorTopologyChangedFiresAfterSnapshot(t *testing.T) {
 func TestPipelineOrchestratorTopologyChangedForcesSnapshotWhenOverviewDeltaNil(t *testing.T) {
 	pipeline, hub, _, topologyNotify, _ := newBroadcastTestPipeline(t)
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 	drainBroadcastCh(hub)
 
 	topologyNotify <- struct{}{}
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
 	if len(types) < 2 {
@@ -1541,7 +1541,7 @@ func TestPipelineOrchestratorBroadcastOnceRecordsStartupReloadMetrics(t *testing
 	})
 
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
 	if len(types) == 0 || types[0] != ws.MessageTypeSnapshot {
@@ -1560,12 +1560,12 @@ func TestPipelineOrchestratorBroadcastOnceRecordsStartupReloadMetrics(t *testing
 func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing.T) {
 	pipeline, hub, _, topologyNotify, _ := newBroadcastTestPipeline(t)
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 	drainBroadcastCh(hub)
 
 	topologyRegistry := observability.ResetDefaultForTest()
 	topologyNotify <- struct{}{}
-	if err := pipeline.broadcastDirty(context.Background(), nil, false, true, false); err != nil {
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, false, true, false); err != nil {
 		t.Fatalf("broadcastDirty topology refresh: %v", err)
 	}
 
@@ -1585,7 +1585,7 @@ func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing
 	}
 
 	fullResyncRegistry := observability.ResetDefaultForTest()
-	if err := pipeline.broadcastDirty(context.Background(), nil, false, false, true); err != nil {
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, false, false, true); err != nil {
 		t.Fatalf("broadcastDirty forced refresh: %v", err)
 	}
 
@@ -1609,7 +1609,7 @@ func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing
 func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredThenSnapshot(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 	drainBroadcastCh(hub)
 
 	for i := 0; i < 40; i++ {
@@ -1629,7 +1629,7 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredT
 		})
 	}
 
-	if err := pipeline.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
 		t.Fatalf("broadcastDirty overflow recovery: %v", err)
 	}
 
@@ -1660,7 +1660,7 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredT
 func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreservesOrdering(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 	drainBroadcastCh(hub)
 
 	for i := 0; i < 40; i++ {
@@ -1680,7 +1680,7 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreser
 		})
 	}
 
-	if err := pipeline.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, true, false); err != nil {
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, true, false); err != nil {
 		t.Fatalf("broadcastDirty overflow + topology recovery: %v", err)
 	}
 
@@ -1696,7 +1696,7 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreser
 func TestPipelineOrchestratorBroadcastDirty_TopologyAndAlertsDirtyAlsoBroadcastsAlert(t *testing.T) {
 	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
 
-	pipeline.broadcastOnce(context.Background())
+	pipeline.broadcaster.broadcastOnce(context.Background())
 	drainBroadcastCh(hub)
 	pipeline.setAlerts(map[uuid.UUID][]domain.AlertState{
 		deviceID: {{
@@ -1709,7 +1709,7 @@ func TestPipelineOrchestratorBroadcastDirty_TopologyAndAlertsDirtyAlsoBroadcasts
 	})
 	drainBroadcastCh(hub)
 
-	if err := pipeline.broadcastDirty(context.Background(), nil, true, true, false); err != nil {
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, true, true, false); err != nil {
 		t.Fatalf("broadcastDirty topology + alerts recovery: %v", err)
 	}
 
