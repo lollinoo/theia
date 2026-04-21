@@ -31,6 +31,18 @@ func readRestoreTestFile(t *testing.T, path string) string {
 	return string(data)
 }
 
+func assertRestorePathMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode for %s = %04o, want %04o", path, got, want)
+	}
+}
+
 func writeRestoreMarker(t *testing.T, markerPath string, marker restoreMarker) {
 	t.Helper()
 
@@ -320,6 +332,7 @@ func TestRestoreCoordinatorApplyPendingRestoreSwapsDBAndOptionalArtifacts(t *tes
 	if got := readRestoreTestFile(t, dbPath); got != "staged-db" {
 		t.Fatalf("db content = %q, want staged-db", got)
 	}
+	assertRestorePathMode(t, dbPath, 0600)
 	if got := readRestoreTestFile(t, dbPath+".pre-restore.bak"); got != "live-db" {
 		t.Fatalf("pre-restore backup content = %q, want live-db", got)
 	}
@@ -335,6 +348,7 @@ func TestRestoreCoordinatorApplyPendingRestoreSwapsDBAndOptionalArtifacts(t *tes
 	if got := readRestoreTestFile(t, knownHostsPath); got != "staged-known-hosts" {
 		t.Fatalf("known_hosts content = %q, want staged-known-hosts", got)
 	}
+	assertRestorePathMode(t, knownHostsPath, 0600)
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
 		t.Fatalf("restore marker should be removed, stat err = %v", err)
 	}

@@ -696,6 +696,53 @@ func TestValidateAndStageRestore(t *testing.T) {
 	})
 }
 
+func TestValidateAndStageRestoreWritesPrivateMarkerAndStagingTree(t *testing.T) {
+	ts := setupInstanceBackupTest(t)
+
+	archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+	if err := addFileToTestArchive(archivePath, "known_hosts", []byte("example-host ssh-ed25519 AAAA\n")); err != nil {
+		t.Fatalf("adding known_hosts to archive: %v", err)
+	}
+
+	if _, err := ts.svc.ValidateAndStageRestore(archivePath, false); err != nil {
+		t.Fatalf("ValidateAndStageRestore: %v", err)
+	}
+
+	stagingDir := filepath.Join(filepath.Dir(ts.dbPath), ".restore-staging")
+	assertPathMode(t, stagingDir, 0700)
+	assertPathMode(t, filepath.Join(stagingDir, "theia.db"), 0600)
+	assertPathMode(t, filepath.Join(stagingDir, "known_hosts"), 0600)
+	assertPathMode(t, filepath.Join(filepath.Dir(ts.dbPath), ".theia-restore-pending"), 0600)
+}
+
+func TestValidateAndStageRestoreTightensExistingMarkerPermissions(t *testing.T) {
+	ts := setupInstanceBackupTest(t)
+
+	archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+	markerPath := filepath.Join(filepath.Dir(ts.dbPath), ".theia-restore-pending")
+	if err := os.WriteFile(markerPath, []byte("old marker"), 0o644); err != nil {
+		t.Fatalf("WriteFile(existing marker): %v", err)
+	}
+
+	if _, err := ts.svc.ValidateAndStageRestore(archivePath, false); err != nil {
+		t.Fatalf("ValidateAndStageRestore: %v", err)
+	}
+
+	assertPathMode(t, markerPath, 0600)
+}
+
+func assertPathMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode for %s = %04o, want %04o", path, got, want)
+	}
+}
+
 func TestInstanceBackupService(t *testing.T) {
 	t.Run("Create produces tar.gz at expected path", func(t *testing.T) {
 		ts := setupInstanceBackupTest(t)
@@ -941,6 +988,18 @@ func TestInstanceBackupService(t *testing.T) {
 		if sidecarHash != actualHash {
 			t.Errorf("sidecar hash = %q, actual archive hash = %q", sidecarHash, actualHash)
 		}
+	})
+
+	t.Run("Archive and sidecar are written with private permissions", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+
+		backup, err := ts.svc.Create(t.Context())
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		assertPathMode(t, backup.FilePath, 0600)
+		assertPathMode(t, backup.FilePath+".sha256", 0600)
 	})
 
 	t.Run("Backup record has status success after Create", func(t *testing.T) {

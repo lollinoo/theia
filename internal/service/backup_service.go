@@ -304,8 +304,12 @@ func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.Cre
 
 	// Ensure device backup directory
 	deviceDir := filepath.Join(s.backupDir, device.ID.String())
-	if err := os.MkdirAll(deviceDir, 0755); err != nil {
+	if err := os.MkdirAll(deviceDir, 0700); err != nil {
 		s.failJob(jobID, fmt.Sprintf("creating backup directory: %v", err))
+		return
+	}
+	if err := os.Chmod(deviceDir, 0700); err != nil {
+		s.failJob(jobID, fmt.Sprintf("restricting backup directory permissions: %v", err))
 		return
 	}
 
@@ -388,8 +392,11 @@ func (s *BackupService) runTextExport(ctx context.Context, client *ssh.Client, j
 	}
 
 	filePath := filepath.Join(dir, fileName)
-	if err := os.WriteFile(filePath, []byte(output), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(output), 0600); err != nil {
 		return fmt.Errorf("writing file: %w", err)
+	}
+	if err := os.Chmod(filePath, 0600); err != nil {
+		return fmt.Errorf("restricting file permissions: %w", err)
 	}
 
 	hash := sha256.Sum256([]byte(output))
@@ -421,6 +428,9 @@ func (s *BackupService) runBinaryExport(ctx context.Context, client *ssh.Client,
 	log.Printf("Binary backup: downloading file: %s -> %s", bcfg.RemoteFilePath, filePath)
 	if err := client.DownloadFileToDisk(ctx, bcfg.RemoteFilePath, filePath); err != nil {
 		return fmt.Errorf("SFTP download failed: %w", err)
+	}
+	if err := os.Chmod(filePath, 0600); err != nil {
+		return fmt.Errorf("restricting downloaded file permissions: %w", err)
 	}
 
 	// Step 4: Cleanup remote file
