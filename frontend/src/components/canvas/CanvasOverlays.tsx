@@ -4,36 +4,24 @@ import type { TopologyRecoveryNotice } from './useCanvasData';
 interface CanvasOverlaysProps {
   editMode: boolean;
   reconnecting: boolean;
-  showRecoveryToast: boolean;
-  setShowRecoveryToast: (v: boolean) => void;
   topologyRecoveryNotice: TopologyRecoveryNotice | null;
   dismissTopologyRecoveryNotice: () => void;
   retryTopologyRefresh: () => void;
-  prometheusDown: boolean;
-  prometheusAlertDismissed: boolean;
-  setPrometheusAlertDismissed: (v: boolean) => void;
-  setPanelContent: (content: { type: string; data?: unknown } | null) => void;
   selectedNodeCount: number;
+  prometheusDiagnosticsVisible: boolean;
   onBulkEditClick?: () => void;
 }
 
 export function CanvasOverlays({
   editMode,
   reconnecting,
-  showRecoveryToast,
-  setShowRecoveryToast,
   topologyRecoveryNotice,
   dismissTopologyRecoveryNotice,
   retryTopologyRefresh,
-  prometheusDown,
-  prometheusAlertDismissed,
-  setPrometheusAlertDismissed,
-  setPanelContent,
   selectedNodeCount,
+  prometheusDiagnosticsVisible,
   onBulkEditClick,
 }: CanvasOverlaysProps) {
-  const showPrometheusAlert = prometheusDown && !prometheusAlertDismissed;
-
   return (
     <>
       {/* Bottom-center stacking container for all status pills */}
@@ -53,46 +41,11 @@ export function CanvasOverlays({
             )}
           </button>
         )}
-        {showPrometheusAlert && (
-          <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-warning/30 bg-surface-container-high/95 px-4 py-2.5 shadow-floating backdrop-blur-sm">
-            <span className="h-2 w-2 flex-none rounded-full bg-warning animate-pulse" />
-            <p className="text-sm text-warning">Prometheus unreachable</p>
-            <button
-              type="button"
-              onClick={() => {
-                setPanelContent({ type: 'alerts' });
-                setPrometheusAlertDismissed(true);
-              }}
-              className="text-xs font-medium text-warning hover:text-warning/80"
-            >
-              Details
-            </button>
-            <button
-              type="button"
-              onClick={() => setPrometheusAlertDismissed(true)}
-              className="text-on-bg-secondary hover:text-on-bg"
-              title="Dismiss"
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        )}
-        {showRecoveryToast && (
-          <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-status-up/30 bg-surface-container-high/95 px-4 py-2.5 shadow-floating backdrop-blur-sm">
-            <span className="h-2 w-2 flex-none rounded-full bg-status-up" />
-            <p className="text-sm text-status-up">Prometheus reconnected</p>
-            <button
-              type="button"
-              onClick={() => setShowRecoveryToast(false)}
-              className="text-on-bg-secondary hover:text-on-bg"
-              title="Dismiss"
-            >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+        {prometheusDiagnosticsVisible && (
+          <div className="pointer-events-none flex items-center gap-2.5 rounded-full border border-warning/30 bg-surface-container-high/95 px-4 py-2.5 shadow-floating backdrop-blur-sm">
+            <span className="h-2 w-2 flex-none rounded-full bg-warning" />
+            <p className="text-sm text-warning">Prometheus degraded</p>
+            <span className="text-xs text-on-bg-secondary">Diagnostics only</span>
           </div>
         )}
         {topologyRecoveryNotice && (

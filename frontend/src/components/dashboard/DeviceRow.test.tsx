@@ -81,9 +81,24 @@ function renderRow(
   const device = mockDevice(deviceOverrides);
   const snapshot: SnapshotPayload | null = metrics
     ? {
-        device_metrics: { [device.id]: metrics },
-        link_metrics: {},
-        device_statuses: { [device.id]: device.status },
+        devices: {
+          [device.id]: {
+            operational_status: device.status,
+            reachability: 'up',
+            health: 'healthy',
+            freshness: 'fresh',
+            primary_reason: 'ok',
+            metrics_status: 'available',
+            metrics_reason: 'ok',
+            alert_status: 'normal',
+            firing_alert_count: 0,
+            last_collected_at: '2024-01-01T00:00:00Z',
+            last_polled_at: '2024-01-01T00:00:00Z',
+            expected_poll_interval_seconds: 60,
+            ...metrics,
+          },
+        },
+        links: {},
       }
     : null;
   const row = buildRuntimeDeviceRows({ devices: [device], snapshot })[0];
@@ -168,11 +183,22 @@ describe('DeviceRow', () => {
   it('renders uptime value from deviceMetrics when available', () => {
     const metrics: DeviceMetricsDTO = {
       device_id: 'dev-1',
+      operational_status: 'up',
+      reachability: 'up',
       cpu_percent: 15,
       mem_percent: 40,
       temp_celsius: 45,
       uptime_secs: 259200, // 3 days
-      collected_at: '2024-01-01T00:00:00Z',
+      health: 'healthy',
+      freshness: 'fresh',
+      primary_reason: 'ok',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      alert_status: 'normal',
+      firing_alert_count: 0,
+      last_collected_at: '2024-01-01T00:00:00Z',
+      last_polled_at: '2024-01-01T00:00:00Z',
+      expected_poll_interval_seconds: 60,
     };
 
     renderRow({}, metrics);

@@ -2,6 +2,46 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
 
+function makeDeviceRuntime(overrides: Record<string, unknown> = {}) {
+  return {
+    device_id: 'dev-1',
+    operational_status: 'up',
+    reachability: 'up',
+    health: 'healthy',
+    freshness: 'fresh',
+    primary_reason: 'ok',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    alert_status: 'normal',
+    firing_alert_count: 0,
+    last_collected_at: '2026-01-01T00:00:00Z',
+    last_polled_at: '2026-01-01T00:00:00Z',
+    expected_poll_interval_seconds: 30,
+    cpu_percent: 50,
+    mem_percent: 25,
+    temp_celsius: 55,
+    uptime_secs: 86400,
+    ...overrides,
+  };
+}
+
+function makeLinkRuntime(overrides: Record<string, unknown> = {}) {
+  return {
+    link_id: 'link-1',
+    source_device_id: 'dev-1',
+    target_device_id: 'dev-2',
+    source_if_name: 'ether1',
+    target_if_name: 'ether2',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    last_collected_at: '2026-01-01T00:00:00Z',
+    tx_bps: 100,
+    rx_bps: 200,
+    utilization: 0.1,
+    ...overrides,
+  };
+}
+
 class MockWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -153,18 +193,18 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {},
-          link_metrics: {},
-          device_statuses: {},
+          devices: {},
+          links: {},
         },
       });
     });
 
     expect(result.current.snapshot).not.toBeNull();
-    expect(result.current.snapshot!.device_metrics).toEqual({});
+    expect(result.current.snapshot!.devices).toEqual({});
     expect((result.current.snapshot! as Record<string, unknown>).alerts).toBeUndefined();
-    expect((result.current.snapshot! as Record<string, unknown>).device_hostnames).toBeUndefined();
-    expect((result.current.snapshot! as Record<string, unknown>).device_models).toBeUndefined();
+    expect((result.current.snapshot! as Record<string, unknown>).device_metrics).toBeUndefined();
+    expect((result.current.snapshot! as Record<string, unknown>).link_metrics).toBeUndefined();
+    expect((result.current.snapshot! as Record<string, unknown>).device_statuses).toBeUndefined();
   });
 
   it('closes WebSocket on unmount', () => {
@@ -194,26 +234,22 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
+          devices: {
+            'dev-1': makeDeviceRuntime({
               cpu_percent: 50,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:00:00Z',
-            },
-            'dev-2': {
+            }),
+            'dev-2': makeDeviceRuntime({
               device_id: 'dev-2',
               cpu_percent: 75,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:00:00Z',
-            },
+            }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       });
     });
@@ -223,27 +259,26 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
+          devices: {
+            'dev-1': makeDeviceRuntime({
               cpu_percent: 90,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:01:00Z',
-            },
+              last_collected_at: '2026-01-01T00:01:00Z',
+              last_polled_at: '2026-01-01T00:01:00Z',
+            }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       });
     });
 
-    expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(90);
-    expect(result.current.snapshot!.device_metrics['dev-2'].cpu_percent).toBe(75);
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(90);
+    expect(result.current.snapshot!.devices['dev-2'].cpu_percent).toBe(75);
   });
 
-  it('handles snapshot_delta message with targeted link_metrics by merging into existing snapshot', () => {
+  it('handles snapshot_delta message with targeted links by merging into existing snapshot', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
@@ -254,30 +289,20 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {},
-          link_metrics: {
-            'dev-1': [
-              {
-                device_id: 'dev-1',
-                if_name: 'ether1',
-                tx_bps: 100,
-                rx_bps: 200,
-                utilization: 0.1,
-                collected_at: '2026-01-01T00:00:00Z',
-              },
-            ],
-            'dev-2': [
-              {
-                device_id: 'dev-2',
-                if_name: 'ether2',
-                tx_bps: 300,
-                rx_bps: 400,
-                utilization: 0.2,
-                collected_at: '2026-01-01T00:00:00Z',
-              },
-            ],
+          devices: {},
+          links: {
+            'link-1': makeLinkRuntime(),
+            'link-2': makeLinkRuntime({
+              link_id: 'link-2',
+              source_device_id: 'dev-2',
+              target_device_id: 'dev-3',
+              source_if_name: 'ether2',
+              target_if_name: 'ether3',
+              tx_bps: 300,
+              rx_bps: 400,
+              utilization: 0.2,
+            }),
           },
-          device_statuses: {},
         },
       });
     });
@@ -286,44 +311,35 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
-          device_metrics: {},
-          link_metrics: {
-            'dev-1': [
-              {
-                device_id: 'dev-1',
-                if_name: 'ether1',
-                tx_bps: 150,
-                rx_bps: 250,
-                utilization: 0.15,
-                collected_at: '2026-01-01T00:01:00Z',
-              },
-            ],
+          devices: {},
+          links: {
+            'link-1': makeLinkRuntime({
+              tx_bps: 150,
+              rx_bps: 250,
+              utilization: 0.15,
+              last_collected_at: '2026-01-01T00:01:00Z',
+            }),
           },
-          device_statuses: {},
         },
       });
     });
 
-    expect(result.current.snapshot!.link_metrics['dev-1']).toEqual([
-      {
-        device_id: 'dev-1',
-        if_name: 'ether1',
-        tx_bps: 150,
-        rx_bps: 250,
-        utilization: 0.15,
-        collected_at: '2026-01-01T00:01:00Z',
-      },
-    ]);
-    expect(result.current.snapshot!.link_metrics['dev-2']).toEqual([
-      {
-        device_id: 'dev-2',
-        if_name: 'ether2',
-        tx_bps: 300,
-        rx_bps: 400,
-        utilization: 0.2,
-        collected_at: '2026-01-01T00:00:00Z',
-      },
-    ]);
+    expect(result.current.snapshot!.links['link-1']).toEqual(makeLinkRuntime({
+      tx_bps: 150,
+      rx_bps: 250,
+      utilization: 0.15,
+      last_collected_at: '2026-01-01T00:01:00Z',
+    }));
+    expect(result.current.snapshot!.links['link-2']).toEqual(makeLinkRuntime({
+      link_id: 'link-2',
+      source_device_id: 'dev-2',
+      target_device_id: 'dev-3',
+      source_if_name: 'ether2',
+      target_if_name: 'ether3',
+      tx_bps: 300,
+      rx_bps: 400,
+      utilization: 0.2,
+    }));
   });
 
   it('sends subscribe_detail on open when detailDeviceId is preset', () => {
@@ -347,11 +363,15 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'alert',
         payload: {
-          device_id: 'dev-1',
-          severity: 'critical',
-          alert_name: 'DeviceDown',
-          state: 'firing',
-          summary: 'router unreachable',
+          alerts: [
+            {
+              device_id: 'dev-1',
+              severity: 'critical',
+              alert_name: 'DeviceDown',
+              state: 'firing',
+              summary: 'router unreachable',
+            },
+          ],
         },
       });
     });
@@ -415,6 +435,141 @@ describe('useWebSocket', () => {
     ]);
   });
 
+  it('clears alerts and resets alert version when resync is required', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'alert',
+        payload: {
+          version: 11,
+          alerts: [
+            {
+              device_id: 'dev-1',
+              severity: 'warning',
+              alert_name: 'CpuHigh',
+              state: 'firing',
+              summary: 'cpu high',
+            },
+          ],
+        },
+      });
+    });
+
+    expect(result.current.alerts).toHaveLength(1);
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'resync_required',
+        payload: {
+          scope: 'overview',
+          reason: 'state_changes_dropped',
+        },
+      });
+    });
+
+    expect(result.current.alerts).toEqual([]);
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'alert',
+        payload: {
+          version: 1,
+          alerts: [
+            {
+              device_id: 'dev-2',
+              severity: 'critical',
+              alert_name: 'DeviceDown',
+              state: 'firing',
+              summary: 'device down',
+            },
+          ],
+        },
+      });
+    });
+
+    expect(result.current.alerts).toEqual([
+      {
+        device_id: 'dev-2',
+        severity: 'critical',
+        alert_name: 'DeviceDown',
+        state: 'firing',
+        summary: 'device down',
+      },
+    ]);
+  });
+
+  it('clears alerts while reconnecting and accepts a fresh alert stream after reconnect', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'alert',
+        payload: {
+          version: 11,
+          alerts: [
+            {
+              device_id: 'dev-1',
+              severity: 'warning',
+              alert_name: 'CpuHigh',
+              state: 'firing',
+              summary: 'cpu high',
+            },
+          ],
+        },
+      });
+    });
+
+    const firstSocket = mockInstance;
+
+    act(() => {
+      firstSocket.simulateClose();
+    });
+
+    expect(result.current.reconnecting).toBe(true);
+    expect(result.current.alerts).toEqual([]);
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    const secondSocket = mockInstances[1];
+    if (!secondSocket) {
+      throw new Error('expected reconnect socket instance');
+    }
+
+    act(() => {
+      secondSocket.simulateOpen();
+      secondSocket.simulateMessage({
+        type: 'alert',
+        payload: {
+          version: 1,
+          alerts: [
+            {
+              device_id: 'dev-2',
+              severity: 'critical',
+              alert_name: 'DeviceDown',
+              state: 'firing',
+              summary: 'device down',
+            },
+          ],
+        },
+      });
+    });
+
+    expect(result.current.alerts).toEqual([
+      {
+        device_id: 'dev-2',
+        severity: 'critical',
+        alert_name: 'DeviceDown',
+        state: 'firing',
+        summary: 'device down',
+      },
+    ]);
+  });
+
   it('preserves detail-only device metric fields from detail subscription deltas', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
@@ -423,40 +578,35 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
+          devices: {
+            'dev-1': makeDeviceRuntime({
               cpu_percent: 50,
               mem_percent: null,
-              collected_at: '2026-01-01T00:00:00Z',
-            },
+            }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       });
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
+          devices: {
+            'dev-1': makeDeviceRuntime({
               cpu_percent: 51,
               mem_percent: 52,
               temp_celsius: 53,
               uptime_secs: 54,
               last_polled_at: '2026-01-01T00:00:30Z',
               expected_poll_interval_seconds: 30,
-              collected_at: '2026-01-01T00:00:30Z',
-            },
+              last_collected_at: '2026-01-01T00:00:30Z',
+            }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       });
     });
 
-    expect(result.current.snapshot?.device_metrics['dev-1']).toMatchObject({
+    expect(result.current.snapshot?.devices['dev-1']).toMatchObject({
       cpu_percent: 51,
       mem_percent: 52,
       temp_celsius: 53,
@@ -582,18 +732,15 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
+          devices: {
+            'dev-1': makeDeviceRuntime({
               cpu_percent: 50,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:00:00Z',
-            },
+            }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       });
     });
@@ -608,30 +755,30 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(50);
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(50);
 
     act(() => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {
-            'dev-2': {
+          devices: {
+            'dev-2': makeDeviceRuntime({
               device_id: 'dev-2',
               cpu_percent: 10,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:02:00Z',
-            },
+              last_collected_at: '2026-01-01T00:02:00Z',
+              last_polled_at: '2026-01-01T00:02:00Z',
+            }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       });
     });
 
-    expect(result.current.snapshot!.device_metrics['dev-2'].cpu_percent).toBe(10);
-    expect(result.current.snapshot!.device_metrics['dev-1']).toBeUndefined();
+    expect(result.current.snapshot!.devices['dev-2'].cpu_percent).toBe(10);
+    expect(result.current.snapshot!.devices['dev-1']).toBeUndefined();
   });
 
   it('ignores snapshot_delta when no base snapshot exists', () => {
@@ -646,18 +793,15 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
+          devices: {
+            'dev-1': makeDeviceRuntime({
               cpu_percent: 90,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:00:00Z',
-            },
+            }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       });
     });
@@ -677,26 +821,22 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
+          devices: {
+            'dev-1': makeDeviceRuntime({
               cpu_percent: 50,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:00:00Z',
-            },
-            'dev-2': {
+            }),
+            'dev-2': makeDeviceRuntime({
               device_id: 'dev-2',
               cpu_percent: 75,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:00:00Z',
-            },
+            }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       });
     });
@@ -706,20 +846,17 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
+          devices: {
+            'dev-1': makeDeviceRuntime({
               cpu_percent: 90,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:01:00Z',
-            },
+              last_collected_at: '2026-01-01T00:01:00Z',
+              last_polled_at: '2026-01-01T00:01:00Z',
+            }),
           },
-          link_metrics: {},
-          alerts: [],
-          device_statuses: {},
-          device_hostnames: {},
+          links: {},
         },
       });
     });
@@ -729,27 +866,25 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {
-            'dev-3': {
+          devices: {
+            'dev-3': makeDeviceRuntime({
               device_id: 'dev-3',
               cpu_percent: 10,
               mem_percent: null,
               temp_celsius: null,
               uptime_secs: null,
-              collected_at: '2026-01-01T00:02:00Z',
-            },
+              last_collected_at: '2026-01-01T00:02:00Z',
+              last_polled_at: '2026-01-01T00:02:00Z',
+            }),
           },
-          link_metrics: {},
-          alerts: [],
-          device_statuses: {},
-          device_hostnames: {},
+          links: {},
         },
       });
     });
 
-    expect(result.current.snapshot!.device_metrics['dev-3'].cpu_percent).toBe(10);
-    expect(result.current.snapshot!.device_metrics['dev-1']).toBeUndefined();
-    expect(result.current.snapshot!.device_metrics['dev-2']).toBeUndefined();
+    expect(result.current.snapshot!.devices['dev-3'].cpu_percent).toBe(10);
+    expect(result.current.snapshot!.devices['dev-1']).toBeUndefined();
+    expect(result.current.snapshot!.devices['dev-2']).toBeUndefined();
   });
 
   it('ignores alert-only snapshot_delta payloads', () => {
@@ -764,9 +899,8 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {},
-          link_metrics: {},
-          device_statuses: {},
+          devices: {},
+          links: {},
         },
       });
     });
@@ -776,17 +910,15 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
-          device_metrics: {},
-          link_metrics: {},
-          device_statuses: {},
+          devices: {},
+          links: {},
         },
       });
     });
 
     expect(result.current.snapshot).toEqual({
-      device_metrics: {},
-      link_metrics: {},
-      device_statuses: {},
+      devices: {},
+      links: {},
     });
   });
 
@@ -823,9 +955,8 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot',
         payload: {
-          device_metrics: {},
-          link_metrics: {},
-          device_statuses: {},
+          devices: {},
+          links: {},
         },
       });
     });
@@ -835,17 +966,15 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'snapshot_delta',
         payload: {
-          device_metrics: {},
-          link_metrics: {},
-          device_statuses: {},
+          devices: {},
+          links: {},
         },
       });
     });
 
     expect(result.current.snapshot).toEqual({
-      device_metrics: {},
-      link_metrics: {},
-      device_statuses: {},
+      devices: {},
+      links: {},
     });
   });
 
@@ -859,18 +988,15 @@ describe('useWebSocket', () => {
         payload: {
           version: 10,
           snapshot: {
-            device_metrics: {
-              'dev-1': {
-                device_id: 'dev-1',
+            devices: {
+              'dev-1': makeDeviceRuntime({
                 cpu_percent: 50,
                 mem_percent: null,
                 temp_celsius: null,
                 uptime_secs: null,
-                collected_at: '2026-01-01T00:00:00Z',
-              },
+              }),
             },
-            link_metrics: {},
-            device_statuses: {},
+            links: {},
           },
         },
       });
@@ -880,24 +1006,23 @@ describe('useWebSocket', () => {
           base_version: 10,
           version: 11,
           delta: {
-            device_metrics: {
-              'dev-1': {
-                device_id: 'dev-1',
+            devices: {
+              'dev-1': makeDeviceRuntime({
                 cpu_percent: 90,
                 mem_percent: null,
                 temp_celsius: null,
                 uptime_secs: null,
-                collected_at: '2026-01-01T00:01:00Z',
-              },
+                last_collected_at: '2026-01-01T00:01:00Z',
+                last_polled_at: '2026-01-01T00:01:00Z',
+              }),
             },
-            link_metrics: {},
-            device_statuses: {},
+            links: {},
           },
         },
       });
     });
 
-    expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(90);
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(90);
   });
 
   it('ignores versioned snapshot_delta when base_version does not match local version', () => {
@@ -910,18 +1035,15 @@ describe('useWebSocket', () => {
         payload: {
           version: 3,
           snapshot: {
-            device_metrics: {
-              'dev-1': {
-                device_id: 'dev-1',
+            devices: {
+              'dev-1': makeDeviceRuntime({
                 cpu_percent: 50,
                 mem_percent: null,
                 temp_celsius: null,
                 uptime_secs: null,
-                collected_at: '2026-01-01T00:00:00Z',
-              },
+              }),
             },
-            link_metrics: {},
-            device_statuses: {},
+            links: {},
           },
         },
       });
@@ -931,23 +1053,22 @@ describe('useWebSocket', () => {
           base_version: 2,
           version: 4,
           delta: {
-            device_metrics: {
-              'dev-1': {
-                device_id: 'dev-1',
+            devices: {
+              'dev-1': makeDeviceRuntime({
                 cpu_percent: 99,
                 mem_percent: null,
                 temp_celsius: null,
                 uptime_secs: null,
-                collected_at: '2026-01-01T00:01:00Z',
-              },
+                last_collected_at: '2026-01-01T00:01:00Z',
+                last_polled_at: '2026-01-01T00:01:00Z',
+              }),
             },
-            link_metrics: {},
-            device_statuses: {},
+            links: {},
           },
         },
       });
     });
 
-    expect(result.current.snapshot!.device_metrics['dev-1'].cpu_percent).toBe(50);
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(50);
   });
 });

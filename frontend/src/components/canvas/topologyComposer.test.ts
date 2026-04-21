@@ -47,37 +47,60 @@ function mockLink(overrides: Partial<Link> = {}): Link {
 
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
-    device_metrics: {
+    devices: {
       'dev-1': {
         device_id: 'dev-1',
+        operational_status: 'up',
+        reachability: 'up',
+        health: 'healthy',
+        freshness: 'fresh',
+        primary_reason: 'ok',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'normal',
+        firing_alert_count: 0,
+        last_collected_at: '2026-04-20T12:00:00Z',
+        last_polled_at: '2026-04-20T12:00:00Z',
+        expected_poll_interval_seconds: 60,
         cpu_percent: 12,
         mem_percent: 44,
+        temp_celsius: null,
         uptime_secs: 900,
-        collected_at: '2026-04-20T12:00:00Z',
-        health: 'healthy',
       },
       'dev-2': {
         device_id: 'dev-2',
+        operational_status: 'up',
+        reachability: 'up',
+        health: 'warning',
+        freshness: 'fresh',
+        primary_reason: 'ok',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'degraded',
+        firing_alert_count: 1,
+        last_collected_at: '2026-04-20T12:00:00Z',
+        last_polled_at: '2026-04-20T12:00:00Z',
+        expected_poll_interval_seconds: 60,
         cpu_percent: 18,
         mem_percent: 50,
+        temp_celsius: null,
         uptime_secs: 800,
-        collected_at: '2026-04-20T12:00:00Z',
-        health: 'warning',
       },
     },
-    link_metrics: {
-      'dev-1': [{
-        device_id: 'dev-1',
-        if_name: 'ether1',
+    links: {
+      'link-1': {
+        link_id: 'link-1',
+        source_device_id: 'dev-1',
+        target_device_id: 'dev-2',
+        source_if_name: 'ether1',
+        target_if_name: 'ether2',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        last_collected_at: '2026-04-20T12:00:00Z',
         tx_bps: 1200,
         rx_bps: 2400,
         utilization: 0.15,
-        collected_at: '2026-04-20T12:00:00Z',
-      }],
-    },
-    device_statuses: {
-      'dev-1': 'up',
-      'dev-2': 'up',
+      },
     },
     ...overrides,
   };
@@ -128,9 +151,12 @@ describe('composeCanvasTopology', () => {
   it('hydrates node device status from runtime models', () => {
     const { nodes } = buildSubject({
       snapshot: mockSnapshot({
-        device_statuses: {
-          'dev-1': 'down',
-          'dev-2': 'up',
+        devices: {
+          ...mockSnapshot().devices,
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+          },
         },
       }),
     });
@@ -141,9 +167,15 @@ describe('composeCanvasTopology', () => {
   it('hydrates edge endpoint status from runtime models', () => {
     const { edges } = buildSubject({
       snapshot: mockSnapshot({
-        device_statuses: {
-          'dev-1': 'probing',
-          'dev-2': 'down',
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'probing',
+          },
+          'dev-2': {
+            ...mockSnapshot().devices['dev-2'],
+            operational_status: 'down',
+          },
         },
       }),
     });
@@ -170,9 +202,15 @@ describe('composeCanvasTopology', () => {
   it('removes throughput when runtime marks link telemetry unusable', () => {
     const { edges } = buildSubject({
       snapshot: mockSnapshot({
-        device_statuses: {
-          'dev-1': 'down',
-          'dev-2': 'down',
+        links: {
+          'link-1': {
+            ...mockSnapshot().links['link-1'],
+            metrics_status: 'unavailable',
+            metrics_reason: 'upstream_unavailable',
+            tx_bps: null,
+            rx_bps: null,
+            utilization: null,
+          },
         },
       }),
     });

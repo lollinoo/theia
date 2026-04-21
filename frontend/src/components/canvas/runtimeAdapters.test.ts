@@ -46,44 +46,67 @@ function mockLink(overrides: Partial<Link> = {}): Link {
 
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
-    device_metrics: {
+    devices: {
       'dev-1': {
         device_id: 'dev-1',
+        operational_status: 'up',
+        reachability: 'up',
+        health: 'warning',
+        freshness: 'fresh',
+        primary_reason: 'ok',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'degraded',
+        firing_alert_count: 1,
+        last_collected_at: '2026-04-20T12:00:00Z',
+        last_polled_at: '2026-04-20T12:00:00Z',
+        expected_poll_interval_seconds: 60,
         cpu_percent: 17,
         mem_percent: 55,
+        temp_celsius: null,
         uptime_secs: 900,
-        collected_at: '2026-04-20T12:00:00Z',
-        health: 'warning',
       },
       'dev-2': {
         device_id: 'dev-2',
+        operational_status: 'up',
+        reachability: 'up',
+        health: 'healthy',
+        freshness: 'fresh',
+        primary_reason: 'ok',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'normal',
+        firing_alert_count: 0,
+        last_collected_at: '2026-04-20T12:00:00Z',
+        last_polled_at: '2026-04-20T12:00:00Z',
+        expected_poll_interval_seconds: 60,
         cpu_percent: 9,
         mem_percent: 34,
+        temp_celsius: null,
         uptime_secs: 1200,
-        collected_at: '2026-04-20T12:00:00Z',
-        health: 'healthy',
       },
     },
-    link_metrics: {
-      'dev-1': [{
-        device_id: 'dev-1',
-        if_name: 'ether1',
+    links: {
+      'link-1': {
+        link_id: 'link-1',
+        source_device_id: 'dev-1',
+        target_device_id: 'dev-2',
+        source_if_name: 'ether1',
+        target_if_name: 'ether2',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        last_collected_at: '2026-04-20T12:00:00Z',
         tx_bps: 1200,
         rx_bps: 2400,
         utilization: 0.15,
-        collected_at: '2026-04-20T12:00:00Z',
-      }],
-    },
-    device_statuses: {
-      'dev-1': 'up',
-      'dev-2': 'up',
+      },
     },
     ...overrides,
   };
 }
 
 describe('buildRuntimeState', () => {
-  it('forces Prometheus and fallback devices down during an enabled outage', () => {
+  it('uses normalized device runtime even during a Prometheus outage', () => {
     const devices = [
       mockDevice(),
       mockDevice({
@@ -106,55 +129,70 @@ describe('buildRuntimeState', () => {
       devices,
       links: [mockLink({ target_device_id: 'dev-2' })],
       snapshot: mockSnapshot({
-        device_statuses: { 'dev-1': 'up', 'dev-2': 'up', 'dev-3': 'up' },
+        devices: {
+          ...mockSnapshot().devices,
+          'dev-3': {
+            device_id: 'dev-3',
+            operational_status: 'up',
+            reachability: 'up',
+            health: 'healthy',
+            freshness: 'fresh',
+            primary_reason: 'ok',
+            metrics_status: 'available',
+            metrics_reason: 'ok',
+            alert_status: 'normal',
+            firing_alert_count: 0,
+            last_collected_at: '2026-04-20T12:00:00Z',
+            last_polled_at: '2026-04-20T12:00:00Z',
+            expected_poll_interval_seconds: 60,
+            cpu_percent: 12,
+            mem_percent: 24,
+            temp_celsius: null,
+            uptime_secs: 1800,
+          },
+        },
       }),
       alerts: [],
       prometheusStatus: { enabled: true, available: false },
     });
 
     expect(runtime.prometheusDown).toBe(true);
-    expect(runtime.devicesById.get('dev-1')?.device.status).toBe('down');
-    expect(runtime.devicesById.get('dev-2')?.device.status).toBe('down');
+    expect(runtime.devicesById.get('dev-1')?.device.status).toBe('up');
+    expect(runtime.devicesById.get('dev-2')?.device.status).toBe('up');
     expect(runtime.devicesById.get('dev-3')?.device.status).toBe('up');
-    expect(runtime.devicesById.get('dev-1')?.prometheusOutageMode).toBe('offline');
-    expect(runtime.devicesById.get('dev-2')?.prometheusOutageMode).toBe('fallback');
-    expect(runtime.devicesById.get('dev-3')?.prometheusOutageMode).toBe('none');
   });
 
   it('keeps normalized device metrics in the runtime model', () => {
     const runtime = buildRuntimeState({
       devices: [mockDevice()],
       links: [],
-      snapshot: mockSnapshot({
-        device_metrics: {
-          'dev-1': {
-            device_id: 'dev-1',
-            cpu_percent: 17,
-            mem_percent: 55,
-            uptime_secs: 900,
-            collected_at: '2026-04-20T12:00:00Z',
-            health: 'warning',
-          },
-        },
-      }),
+      snapshot: mockSnapshot(),
       alerts: [],
       prometheusStatus: null,
     });
 
     expect(runtime.devicesById.get('dev-1')?.metrics).toEqual({
       device_id: 'dev-1',
-      cpu_percent: 17,
-      mem_percent: 55,
-      uptime_secs: 900,
-      collected_at: '2026-04-20T12:00:00Z',
+      operational_status: 'up',
+      reachability: 'up',
       health: 'warning',
-      temp_celsius: null,
+      freshness: 'fresh',
+      primary_reason: 'ok',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      alert_status: 'degraded',
+      firing_alert_count: 1,
+      last_collected_at: '2026-04-20T12:00:00Z',
       last_polled_at: '2026-04-20T12:00:00Z',
       expected_poll_interval_seconds: 60,
+      cpu_percent: 17,
+      mem_percent: 55,
+      temp_celsius: null,
+      uptime_secs: 900,
     });
   });
 
-  it('derives usable link telemetry fields from snapshot metrics', () => {
+  it('keeps shared link telemetry on the link model without inventing endpoint copies', () => {
     const runtime = buildRuntimeState({
       devices: [
         mockDevice(),
@@ -172,22 +210,18 @@ describe('buildRuntimeState', () => {
     });
 
     expect(runtime.linksById.get('link-1')).toMatchObject({
-      sourceMetrics: {
-        device_id: 'dev-1',
-        if_name: 'ether1',
-        tx_bps: 1200,
-        rx_bps: 2400,
-        utilization: 0.15,
-        collected_at: '2026-04-20T12:00:00Z',
-      },
-      targetMetrics: null,
       metrics: {
-        device_id: 'dev-1',
-        if_name: 'ether1',
+        link_id: 'link-1',
+        source_device_id: 'dev-1',
+        target_device_id: 'dev-2',
+        source_if_name: 'ether1',
+        target_if_name: 'ether2',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        last_collected_at: '2026-04-20T12:00:00Z',
         tx_bps: 1200,
         rx_bps: 2400,
         utilization: 0.15,
-        collected_at: '2026-04-20T12:00:00Z',
       },
       metricsUsable: true,
       throughputLabel: 'TX: 1K / RX: 2K',
@@ -195,7 +229,7 @@ describe('buildRuntimeState', () => {
     });
   });
 
-  it('preserves source and target endpoint metrics separately when both are present', () => {
+  it('uses snapshot link runtime by link id instead of endpoint maps', () => {
     const runtime = buildRuntimeState({
       devices: [
         mockDevice(),
@@ -208,23 +242,20 @@ describe('buildRuntimeState', () => {
       ],
       links: [mockLink({ target_device_id: 'dev-2' })],
       snapshot: mockSnapshot({
-        link_metrics: {
-          'dev-1': [{
-            device_id: 'dev-1',
-            if_name: 'ether1',
+        links: {
+          'link-1': {
+            link_id: 'link-1',
+            source_device_id: 'dev-1',
+            target_device_id: 'dev-2',
+            source_if_name: 'ether1',
+            target_if_name: 'ether2',
+            metrics_status: 'partial',
+            metrics_reason: 'ok',
+            last_collected_at: '2026-04-20T12:00:00Z',
             tx_bps: 1500,
             rx_bps: 2500,
             utilization: 0.42,
-            collected_at: '2026-04-20T12:00:00Z',
-          }],
-          'dev-2': [{
-            device_id: 'dev-2',
-            if_name: 'ether2',
-            tx_bps: 3500,
-            rx_bps: 4500,
-            utilization: 0.91,
-            collected_at: '2026-04-20T12:00:00Z',
-          }],
+          },
         },
       }),
       alerts: [],
@@ -232,29 +263,18 @@ describe('buildRuntimeState', () => {
     });
 
     expect(runtime.linksById.get('link-1')).toMatchObject({
-      sourceMetrics: {
-        device_id: 'dev-1',
-        if_name: 'ether1',
-        tx_bps: 1500,
-        rx_bps: 2500,
-        utilization: 0.42,
-        collected_at: '2026-04-20T12:00:00Z',
-      },
-      targetMetrics: {
-        device_id: 'dev-2',
-        if_name: 'ether2',
-        tx_bps: 3500,
-        rx_bps: 4500,
-        utilization: 0.91,
-        collected_at: '2026-04-20T12:00:00Z',
-      },
       metrics: {
-        device_id: 'dev-1',
-        if_name: 'ether1',
+        link_id: 'link-1',
+        source_device_id: 'dev-1',
+        target_device_id: 'dev-2',
+        source_if_name: 'ether1',
+        target_if_name: 'ether2',
+        metrics_status: 'partial',
+        metrics_reason: 'ok',
+        last_collected_at: '2026-04-20T12:00:00Z',
         tx_bps: 1500,
         rx_bps: 2500,
         utilization: 0.42,
-        collected_at: '2026-04-20T12:00:00Z',
       },
       metricsUsable: true,
       throughputLabel: 'TX: 2K / RX: 3K',
@@ -262,12 +282,10 @@ describe('buildRuntimeState', () => {
     });
   });
 
-  it('falls back to target-side link metrics with normalized interface names', () => {
+  it('drops link telemetry when normalized link runtime marks metrics unavailable', () => {
     const runtime = buildRuntimeState({
       devices: [
-        mockDevice({
-          interfaces: [],
-        }),
+        mockDevice(),
         mockDevice({
           id: 'dev-2',
           hostname: 'switch-01',
@@ -275,22 +293,22 @@ describe('buildRuntimeState', () => {
           sys_name: 'switch-01',
         }),
       ],
-      links: [mockLink({
-        source_if_name: 'missing0',
-        target_device_id: 'dev-2',
-        target_if_name: ' Ether2 ',
-      })],
+      links: [mockLink({ target_device_id: 'dev-2' })],
       snapshot: mockSnapshot({
-        link_metrics: {
-          'dev-1': [],
-          'dev-2': [{
-            device_id: 'dev-2',
-            if_name: 'ether2',
-            tx_bps: 5000,
-            rx_bps: 7000,
-            utilization: 0.42,
-            collected_at: '2026-04-20T12:00:00Z',
-          }],
+        links: {
+          'link-1': {
+            link_id: 'link-1',
+            source_device_id: 'dev-1',
+            target_device_id: 'dev-2',
+            source_if_name: 'ether1',
+            target_if_name: 'ether2',
+            metrics_status: 'unavailable',
+            metrics_reason: 'upstream_unavailable',
+            last_collected_at: null,
+            tx_bps: null,
+            rx_bps: null,
+            utilization: null,
+          },
         },
       }),
       alerts: [],
@@ -298,21 +316,14 @@ describe('buildRuntimeState', () => {
     });
 
     expect(runtime.linksById.get('link-1')).toMatchObject({
-      metrics: {
-        device_id: 'dev-2',
-        if_name: 'ether2',
-        tx_bps: 5000,
-        rx_bps: 7000,
-        utilization: 0.42,
-        collected_at: '2026-04-20T12:00:00Z',
-      },
-      metricsUsable: true,
-      throughputLabel: 'TX: 5K / RX: 7K',
-      utilization: 0.42,
+      metrics: null,
+      metricsUsable: false,
+      throughputLabel: undefined,
+      utilization: null,
     });
   });
 
-  it('drops link telemetry when both endpoints are effectively down', () => {
+  it('keeps normalized link telemetry when both endpoints are effectively down', () => {
     const devices = [
       mockDevice(),
       mockDevice({
@@ -327,7 +338,18 @@ describe('buildRuntimeState', () => {
       devices,
       links: [mockLink({ target_device_id: 'dev-2' })],
       snapshot: mockSnapshot({
-        device_statuses: { 'dev-1': 'down', 'dev-2': 'down' },
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+            primary_reason: 'device_unreachable',
+          },
+          'dev-2': {
+            ...mockSnapshot().devices['dev-2'],
+            operational_status: 'down',
+            primary_reason: 'device_unreachable',
+          },
+        },
       }),
       alerts: [{
         device_id: 'dev-1',
@@ -339,18 +361,122 @@ describe('buildRuntimeState', () => {
       prometheusStatus: null,
     });
 
-    expect(runtime.linksById.get('link-1')?.metrics).toBeNull();
-    expect(runtime.linksById.get('link-1')?.metricsUsable).toBe(false);
-    expect(runtime.devicesById.get('dev-1')?.alertStatus).toBe('down');
+    expect(runtime.linksById.get('link-1')?.metrics).toEqual(mockSnapshot().links['link-1']);
+    expect(runtime.linksById.get('link-1')?.metricsUsable).toBe(true);
+    expect(runtime.devicesById.get('dev-1')?.alertStatus).toBe('degraded');
   });
 
-  it('ignores invalid snapshot device statuses', () => {
+  it('trusts normalized link metrics_status even when both endpoints are down', () => {
+    const runtime = buildRuntimeState({
+      devices: [
+        mockDevice(),
+        mockDevice({
+          id: 'dev-2',
+          hostname: 'switch-01',
+          ip: '10.0.0.2',
+          sys_name: 'switch-01',
+        }),
+      ],
+      links: [mockLink({ target_device_id: 'dev-2' })],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+            primary_reason: 'device_unreachable',
+          },
+          'dev-2': {
+            ...mockSnapshot().devices['dev-2'],
+            operational_status: 'down',
+            primary_reason: 'device_unreachable',
+          },
+        },
+        links: {
+          'link-1': {
+            ...mockSnapshot().links['link-1'],
+            metrics_status: 'available',
+            metrics_reason: 'ok',
+            tx_bps: 12_000,
+            rx_bps: 24_000,
+            utilization: 0.5,
+          },
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    expect(runtime.linksById.get('link-1')).toMatchObject({
+      metricsUsable: true,
+      throughputLabel: 'TX: 12K / RX: 24K',
+      utilization: 0.5,
+    });
+  });
+
+  it('prefers normalized alert state over the alert feed when runtime exists', () => {
+    const runtime = buildRuntimeState({
+      devices: [mockDevice()],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            alert_status: 'normal',
+            firing_alert_count: 0,
+          },
+        },
+      }),
+      alerts: [{
+        device_id: 'dev-1',
+        alert_name: 'DeviceDown',
+        severity: 'critical',
+        state: 'firing',
+        summary: 'legacy alert feed still firing',
+      } satisfies AlertDTO],
+      prometheusStatus: null,
+    });
+
+    expect(runtime.devicesById.get('dev-1')?.alertStatus).toBe('normal');
+  });
+
+  it('preserves normalized unmonitored device state in the runtime model', () => {
+    const runtime = buildRuntimeState({
+      devices: [mockDevice()],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'unmonitored',
+            reachability: 'unmonitored',
+            freshness: 'unmonitored',
+            metrics_status: 'unmonitored',
+            metrics_reason: 'unmonitored',
+            primary_reason: 'unmonitored',
+            last_collected_at: null,
+            last_polled_at: null,
+            cpu_percent: null,
+            mem_percent: null,
+            uptime_secs: null,
+          },
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    expect(runtime.devicesById.get('dev-1')).toMatchObject({
+      monitoringState: 'unmonitored',
+      metrics: null,
+      runtimeStatus: 'unmonitored',
+    });
+  });
+
+  it('falls back to inventory status when normalized runtime omits a device', () => {
     const runtime = buildRuntimeState({
       devices: [mockDevice({ status: 'up' })],
       links: [],
-      snapshot: mockSnapshot({
-        device_statuses: { 'dev-1': 'definitely-bad-status' },
-      }),
+      snapshot: { devices: {}, links: {} },
       alerts: [],
       prometheusStatus: null,
     });
@@ -358,7 +484,7 @@ describe('buildRuntimeState', () => {
     expect(runtime.devicesById.get('dev-1')?.device.status).toBe('up');
   });
 
-  it('does not apply outage semantics when Prometheus is disabled', () => {
+  it('keeps Prometheus outage diagnostic state separate from runtime semantics when disabled', () => {
     const runtime = buildRuntimeState({
       devices: [mockDevice()],
       links: [],
@@ -371,20 +497,25 @@ describe('buildRuntimeState', () => {
     expect(runtime.devicesById.get('dev-1')?.device.status).toBe('up');
   });
 
-  it('indexes snapshot interface metrics even without a topology link', () => {
+  it('indexes snapshot interface metrics for both source and target endpoints', () => {
     const runtime = buildRuntimeState({
       devices: [mockDevice()],
       links: [],
       snapshot: mockSnapshot({
-        link_metrics: {
-          'dev-1': [{
-            device_id: 'dev-1',
-            if_name: 'ether7',
+        links: {
+          'link-7': {
+            link_id: 'link-7',
+            source_device_id: 'dev-1',
+            target_device_id: 'dev-9',
+            source_if_name: 'ether7',
+            target_if_name: 'ether8',
+            metrics_status: 'available',
+            metrics_reason: 'ok',
+            last_collected_at: '2026-04-20T12:00:00Z',
             tx_bps: 7_500,
             rx_bps: 8_500,
             utilization: 0.11,
-            collected_at: '2026-04-20T12:00:00Z',
-          }],
+          },
         },
       }),
       alerts: [],
@@ -392,12 +523,58 @@ describe('buildRuntimeState', () => {
     });
 
     expect(runtime.interfaceMetricsByDeviceId.get('dev-1')?.get('ether7')).toEqual({
-      device_id: 'dev-1',
-      if_name: 'ether7',
+      link_id: 'link-7',
+      source_device_id: 'dev-1',
+      target_device_id: 'dev-9',
+      source_if_name: 'ether7',
+      target_if_name: 'ether8',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      last_collected_at: '2026-04-20T12:00:00Z',
       tx_bps: 7_500,
       rx_bps: 8_500,
       utilization: 0.11,
-      collected_at: '2026-04-20T12:00:00Z',
     });
+    expect(runtime.interfaceMetricsByDeviceId.get('dev-9')?.get('ether8')).toEqual({
+      link_id: 'link-7',
+      source_device_id: 'dev-1',
+      target_device_id: 'dev-9',
+      source_if_name: 'ether7',
+      target_if_name: 'ether8',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      last_collected_at: '2026-04-20T12:00:00Z',
+      tx_bps: 7_500,
+      rx_bps: 8_500,
+      utilization: 0.11,
+    });
+  });
+
+  it('does not index unusable normalized link telemetry into interface lookups', () => {
+    const runtime = buildRuntimeState({
+      devices: [mockDevice()],
+      links: [],
+      snapshot: mockSnapshot({
+        links: {
+          'link-7': {
+            link_id: 'link-7',
+            source_device_id: 'dev-1',
+            target_device_id: 'dev-9',
+            source_if_name: 'ether7',
+            target_if_name: 'ether8',
+            metrics_status: 'unavailable',
+            metrics_reason: 'upstream_unavailable',
+            last_collected_at: '2026-04-20T12:00:00Z',
+            tx_bps: 7_500,
+            rx_bps: 8_500,
+            utilization: 0.11,
+          },
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    expect(runtime.interfaceMetricsByDeviceId.get('dev-1')?.get('ether7')).toBeUndefined();
   });
 });

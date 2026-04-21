@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +18,8 @@ import (
 
 // sectionHashes stores FNV-64a hashes for each section of the snapshot, keyed by device_id.
 type sectionHashes struct {
+	devices        map[string]uint64
+	links          map[string]uint64
 	deviceMetrics  map[string]uint64
 	linkMetrics    map[string]uint64
 	deviceStatuses map[string]uint64
@@ -29,94 +30,97 @@ func buildPipelineSnapshot(
 	links []domain.Link,
 	states map[uuid.UUID]state.DeviceState,
 	alerts map[uuid.UUID][]domain.AlertState,
-	hostnameOverrides map[uuid.UUID]string,
+	promStatus ws.PrometheusStatusPayload,
 ) *ws.SnapshotPayload {
 	snapshot := ws.EmptySnapshot()
-	deviceMetrics := make(map[string]domain.DeviceMetrics, len(devices))
-	linkMetrics := make(map[string][]domain.LinkMetrics, len(devices))
-	statuses := make(map[string]string, len(devices))
 
-	linksByDevice := make(map[uuid.UUID][]domain.Link, len(links)*2)
+	devicesByID := make(map[uuid.UUID]domain.Device, len(devices))
+
+	for _, device := range devices {
+		devicesByID[device.ID] = device
+		snapshot.Devices[device.ID.String()] = normalizeDeviceRuntimeDTO(device, states[device.ID], alerts[device.ID], promStatus)
+	}
+
 	for _, link := range links {
-		linksByDevice[link.SourceDeviceID] = append(linksByDevice[link.SourceDeviceID], link)
-		linksByDevice[link.TargetDeviceID] = append(linksByDevice[link.TargetDeviceID], link)
+		sourceRuntime := snapshot.Devices[link.SourceDeviceID.String()]
+		targetRuntime := snapshot.Devices[link.TargetDeviceID.String()]
+		linkMetric := selectNormalizedLinkMetric(
+			link,
+			devicesByID[link.SourceDeviceID],
+			devicesByID[link.TargetDeviceID],
+			states[link.SourceDeviceID].LinkMetrics,
+			states[link.TargetDeviceID].LinkMetrics,
+		)
+		snapshot.Links[link.ID.String()] = normalizeLinkRuntimeDTO(link, linkMetric, sourceRuntime, targetRuntime)
 	}
-
-	for _, device := range devices {
-		deviceKey := device.ID.String()
-		deviceState := states[device.ID]
-
-		metric := deviceState.Metrics
-		metric.DeviceID = device.ID
-		deviceMetrics[deviceKey] = metric
-		linkMetrics[deviceKey] = buildDeviceLinkMetrics(device, linksByDevice[device.ID], deviceState.LinkMetrics)
-		statuses[deviceKey] = effectiveSnapshotDeviceStatus(device, deviceState)
-	}
-
-	snapshot.DeviceMetrics = ws.DeviceMetricsToDTOs(deviceMetrics)
-	for _, device := range devices {
-		deviceID := device.ID.String()
-		dto, ok := snapshot.DeviceMetrics[deviceID]
-		if !ok {
-			continue
-		}
-
-		deviceState := states[device.ID]
-		if deviceState.Health == "" {
-			dto.Health = string(state.HealthStatusUnknown)
-		} else {
-			dto.Health = string(deviceState.Health)
-		}
-		if deviceState.Reachability != "" {
-			dto.Reachability = string(deviceState.Reachability)
-		}
-		dto.Stale = boolPtr(deviceState.Stale)
-
-		snapshot.DeviceMetrics[deviceID] = dto
-	}
-	snapshot.LinkMetrics = ws.LinkMetricsToDTOs(linkMetrics)
-	snapshot.DeviceStatuses = statuses
+	syncSnapshotCompatibility(snapshot)
 
 	return snapshot
 }
 
-func buildDeviceDetailDelta(device domain.Device, deviceState state.DeviceState) *ws.SnapshotPayload {
+func buildDeviceDetailDelta(
+	device domain.Device,
+	deviceState state.DeviceState,
+	alerts []domain.AlertState,
+	promStatus ws.PrometheusStatusPayload,
+) *ws.SnapshotPayload {
+	return buildDeviceDetailDeltaWithLinks(device, deviceState, nil, alerts, promStatus)
+}
+
+func buildDeviceDetailDeltaWithLinks(
+	device domain.Device,
+	deviceState state.DeviceState,
+	linkRuntimes []ws.LinkRuntimeDTO,
+	alerts []domain.AlertState,
+	promStatus ws.PrometheusStatusPayload,
+) *ws.SnapshotPayload {
 	delta := ws.EmptySnapshot()
 	deviceID := device.ID.String()
-
-	deviceMetrics := deviceState.Metrics
-	deviceMetrics.DeviceID = device.ID
-	dto := ws.DeviceMetricsToDTOs(map[string]domain.DeviceMetrics{
-		deviceID: deviceMetrics,
-	})[deviceID]
-
-	dto.TempCelsius = deviceState.Metrics.TempCelsius
-	dto.UptimeSecs = deviceState.Metrics.UptimeSecs
-	dto.LastPolledAt = wsTimestamp(deviceState.LastPolledAt)
-	dto.ExpectedPollIntervalSeconds = durationSecondsPtr(deviceState.ExpectedInterval)
-	dto.Health = string(deviceState.Health)
-	dto.Reachability = string(deviceState.Reachability)
-	dto.Stale = boolPtr(deviceState.Stale)
-
-	delta.DeviceMetrics[deviceID] = dto
-	delta.DeviceStatuses[deviceID] = effectiveSnapshotDeviceStatus(device, deviceState)
-	if len(deviceState.LinkMetrics) > 0 {
-		copiedLinkMetrics := make([]domain.LinkMetrics, 0, len(deviceState.LinkMetrics))
-		for _, metric := range deviceState.LinkMetrics {
-			mapped := metric
-			mapped.DeviceID = device.ID
-			copiedLinkMetrics = append(copiedLinkMetrics, mapped)
-		}
-
-		linkMetrics := ws.LinkMetricsToDTOs(map[string][]domain.LinkMetrics{
-			deviceID: copiedLinkMetrics,
-		})
-		if deviceLinkMetrics, ok := linkMetrics[deviceID]; ok {
-			delta.LinkMetrics[deviceID] = deviceLinkMetrics
-		}
+	delta.Devices[deviceID] = normalizeDeviceRuntimeDTO(device, deviceState, alerts, promStatus)
+	for _, linkRuntime := range linkRuntimes {
+		delta.Links[linkRuntime.LinkID] = linkRuntime
 	}
+	syncSnapshotCompatibility(delta)
 
 	return delta
+}
+
+func buildDeviceLinkRuntimeDTOs(
+	device domain.Device,
+	deviceState state.DeviceState,
+	devicesByID map[uuid.UUID]domain.Device,
+	states map[uuid.UUID]state.DeviceState,
+	links []domain.Link,
+	promStatus ws.PrometheusStatusPayload,
+) []ws.LinkRuntimeDTO {
+	deviceID := device.ID
+	sourceRuntime := normalizeDeviceRuntimeDTO(device, deviceState, nil, promStatus)
+	linkRuntimes := make([]ws.LinkRuntimeDTO, 0, len(links))
+
+	for _, link := range links {
+		if link.SourceDeviceID != deviceID && link.TargetDeviceID != deviceID {
+			continue
+		}
+
+		sourceDevice := devicesByID[link.SourceDeviceID]
+		targetDevice := devicesByID[link.TargetDeviceID]
+		sourceState := states[link.SourceDeviceID]
+		targetState := states[link.TargetDeviceID]
+		linkMetric := selectNormalizedLinkMetric(link, sourceDevice, targetDevice, sourceState.LinkMetrics, targetState.LinkMetrics)
+
+		linkSourceRuntime := sourceRuntime
+		if link.SourceDeviceID != deviceID {
+			linkSourceRuntime = normalizeDeviceRuntimeDTO(sourceDevice, sourceState, nil, promStatus)
+		}
+		linkTargetRuntime := sourceRuntime
+		if link.TargetDeviceID != deviceID {
+			linkTargetRuntime = normalizeDeviceRuntimeDTO(targetDevice, targetState, nil, promStatus)
+		}
+
+		linkRuntimes = append(linkRuntimes, normalizeLinkRuntimeDTO(link, linkMetric, linkSourceRuntime, linkTargetRuntime))
+	}
+
+	return linkRuntimes
 }
 
 func buildDeviceLinkMetrics(device domain.Device, links []domain.Link, metrics []domain.LinkMetrics) []domain.LinkMetrics {
@@ -135,13 +139,6 @@ func buildDeviceLinkMetrics(device domain.Device, links []domain.Link, metrics [
 		}
 		built = append(built, mapped)
 	}
-
-	sort.Slice(built, func(i, j int) bool {
-		if built[i].IfName != built[j].IfName {
-			return built[i].IfName < built[j].IfName
-		}
-		return built[i].LinkID < built[j].LinkID
-	})
 
 	return built
 }
@@ -164,25 +161,6 @@ func flattenAlerts(alertsByDevice map[uuid.UUID][]domain.AlertState) []domain.Al
 	}
 
 	return flattened
-}
-
-func mapDeviceStatus(fallback domain.DeviceStatus, reachability state.ReachabilityStatus) string {
-	switch reachability {
-	case state.ReachabilityUp:
-		return string(domain.DeviceStatusUp)
-	case state.ReachabilitySoftDown, state.ReachabilityHardDown:
-		return string(domain.DeviceStatusDown)
-	default:
-		return string(fallback)
-	}
-}
-
-func effectiveSnapshotDeviceStatus(device domain.Device, deviceState state.DeviceState) string {
-	if domain.IsVirtualNoIPDevice(device) {
-		return string(domain.DeviceStatusUnknown)
-	}
-
-	return mapDeviceStatus(device.Status, deviceState.Reachability)
 }
 
 func matchLinkID(device domain.Device, links []domain.Link, metricIfName string) string {
@@ -289,62 +267,55 @@ func formatFloatPtr(value *float64) string {
 	return strconv.FormatFloat(*value, 'f', -1, 64)
 }
 
-func formatBoolPtr(value *bool) string {
-	if value == nil {
-		return "nil"
-	}
-
-	return strconv.FormatBool(*value)
-}
-
-func formatInt64Ptr(value *int64) string {
-	if value == nil {
-		return "nil"
-	}
-
-	return strconv.FormatInt(*value, 10)
-}
-
 func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 	sh := &sectionHashes{
-		deviceMetrics:  make(map[string]uint64, len(snapshot.DeviceMetrics)),
-		linkMetrics:    make(map[string]uint64, len(snapshot.LinkMetrics)),
-		deviceStatuses: make(map[string]uint64, len(snapshot.DeviceStatuses)),
+		devices:        make(map[string]uint64, len(snapshot.Devices)),
+		links:          make(map[string]uint64, len(snapshot.Links)),
+		deviceMetrics:  make(map[string]uint64, len(snapshot.Devices)),
+		linkMetrics:    make(map[string]uint64, len(snapshot.Links)),
+		deviceStatuses: make(map[string]uint64, len(snapshot.Devices)),
 	}
 
-	for id, dm := range snapshot.DeviceMetrics {
-		key := fmt.Sprintf("%s|%v|%v|%s",
+	for id, dm := range snapshot.Devices {
+		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
 			dm.DeviceID,
+			dm.OperationalStatus,
+			dm.Reachability,
+			dm.Health,
+			dm.Freshness,
+			dm.PrimaryReason,
+			dm.MetricsStatus,
+			dm.MetricsReason,
+			dm.AlertStatus,
+			dm.FiringAlertCount,
+			formatStringPtr(dm.LastCollectedAt),
+			formatStringPtr(dm.LastPolledAt),
+			formatFloatPtr(dm.ExpectedPollIntervalSeconds),
 			formatFloatPtr(dm.CPUPercent),
 			formatFloatPtr(dm.MemPercent),
-			dm.CollectedAt,
+			formatFloatPtr(dm.TempCelsius),
+			formatFloatPtr(dm.UptimeSecs),
 		)
-		key = fmt.Sprintf("%s|%s|%s|%s",
-			key,
-			dm.Health,
-			dm.Reachability,
-			formatBoolPtr(dm.Stale),
-		)
-		sh.deviceMetrics[id] = computeSectionHash(key)
+		sh.devices[id] = computeSectionHash(key)
+		sh.deviceMetrics[id] = sh.devices[id]
+		sh.deviceStatuses[id] = computeSectionHash(compatibilityOperationalStatus(dm.OperationalStatus))
 	}
 
-	for id, lms := range snapshot.LinkMetrics {
-		var sb strings.Builder
-		for _, lm := range lms {
-			sb.WriteString(fmt.Sprintf("%s|%s|%v|%v|%v|%s",
-				lm.DeviceID,
-				lm.IfName,
-				formatFloatPtr(lm.TxBps),
-				formatFloatPtr(lm.RxBps),
-				formatFloatPtr(lm.Utilization),
-				lm.CollectedAt,
-			))
-		}
-		sh.linkMetrics[id] = computeSectionHash(sb.String())
-	}
-
-	for id, status := range snapshot.DeviceStatuses {
-		sh.deviceStatuses[id] = computeSectionHash(status)
+	for id, lm := range snapshot.Links {
+		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s",
+			lm.LinkID,
+			lm.SourceDeviceID,
+			lm.TargetDeviceID,
+			lm.SourceIfName,
+			lm.TargetIfName,
+			lm.MetricsStatus,
+			lm.MetricsReason,
+			formatStringPtr(lm.LastCollectedAt),
+			formatFloatPtr(lm.TxBps),
+			formatFloatPtr(lm.RxBps)+"|"+formatFloatPtr(lm.Utilization),
+		)
+		sh.links[id] = computeSectionHash(key)
+		sh.linkMetrics[id] = sh.links[id]
 	}
 
 	return sh
@@ -352,30 +323,22 @@ func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 
 func buildDelta(current *ws.SnapshotPayload, currentHashes, previousHashes *sectionHashes) *ws.SnapshotPayload {
 	delta := &ws.SnapshotPayload{
-		DeviceMetrics:  make(map[string]ws.DeviceMetricsDTO),
-		LinkMetrics:    make(map[string][]ws.LinkMetricsDTO),
-		DeviceStatuses: make(map[string]string),
+		Devices: make(map[string]ws.DeviceRuntimeDTO),
+		Links:   make(map[string]ws.LinkRuntimeDTO),
 	}
 
 	anyChanged := false
 
-	for id, hash := range currentHashes.deviceMetrics {
-		if previousHash, ok := previousHashes.deviceMetrics[id]; !ok || previousHash != hash {
-			delta.DeviceMetrics[id] = current.DeviceMetrics[id]
+	for id, hash := range currentHashes.devices {
+		if previousHash, ok := previousHashes.devices[id]; !ok || previousHash != hash {
+			delta.Devices[id] = current.Devices[id]
 			anyChanged = true
 		}
 	}
 
-	for id, hash := range currentHashes.linkMetrics {
-		if previousHash, ok := previousHashes.linkMetrics[id]; !ok || previousHash != hash {
-			delta.LinkMetrics[id] = current.LinkMetrics[id]
-			anyChanged = true
-		}
-	}
-
-	for id, hash := range currentHashes.deviceStatuses {
-		if previousHash, ok := previousHashes.deviceStatuses[id]; !ok || previousHash != hash {
-			delta.DeviceStatuses[id] = current.DeviceStatuses[id]
+	for id, hash := range currentHashes.links {
+		if previousHash, ok := previousHashes.links[id]; !ok || previousHash != hash {
+			delta.Links[id] = current.Links[id]
 			anyChanged = true
 		}
 	}
@@ -387,10 +350,6 @@ func buildDelta(current *ws.SnapshotPayload, currentHashes, previousHashes *sect
 	return delta
 }
 
-func boolPtr(value bool) *bool {
-	return &value
-}
-
 func durationSecondsPtr(value time.Duration) *float64 {
 	if value <= 0 {
 		return nil
@@ -400,10 +359,62 @@ func durationSecondsPtr(value time.Duration) *float64 {
 	return &seconds
 }
 
-func wsTimestamp(ts time.Time) string {
-	if ts.IsZero() {
-		return ""
+func formatStringPtr(value *string) string {
+	if value == nil {
+		return "nil"
+	}
+	return *value
+}
+
+func selectNormalizedLinkMetric(link domain.Link, sourceDevice domain.Device, targetDevice domain.Device, sourceMetrics []domain.LinkMetrics, targetMetrics []domain.LinkMetrics) *domain.LinkMetrics {
+	sourceCandidates := buildDeviceLinkMetrics(sourceDevice, []domain.Link{link}, sourceMetrics)
+	for _, candidate := range sourceCandidates {
+		if candidate.LinkID == link.ID.String() {
+			return &candidate
+		}
+	}
+	targetCandidates := buildDeviceLinkMetrics(targetDevice, []domain.Link{link}, targetMetrics)
+	for _, candidate := range targetCandidates {
+		if candidate.LinkID == link.ID.String() {
+			return &candidate
+		}
+	}
+	return nil
+}
+
+func syncSnapshotCompatibility(snapshot *ws.SnapshotPayload) {
+	if snapshot == nil {
+		return
+	}
+	if snapshot.DeviceMetrics == nil {
+		snapshot.DeviceMetrics = make(map[string]ws.DeviceRuntimeDTO, len(snapshot.Devices))
+	}
+	if snapshot.LinkMetrics == nil {
+		snapshot.LinkMetrics = make(map[string][]ws.LinkRuntimeDTO)
+	}
+	if snapshot.DeviceStatuses == nil {
+		snapshot.DeviceStatuses = make(map[string]string, len(snapshot.Devices))
 	}
 
-	return ts.UTC().Format(time.RFC3339)
+	clear(snapshot.DeviceMetrics)
+	clear(snapshot.LinkMetrics)
+	clear(snapshot.DeviceStatuses)
+
+	for key, value := range snapshot.Devices {
+		snapshot.DeviceMetrics[key] = value
+		snapshot.DeviceStatuses[key] = compatibilityOperationalStatus(value.OperationalStatus)
+	}
+	for _, value := range snapshot.Links {
+		if value.DeviceID == "" {
+			value.DeviceID = value.SourceDeviceID
+		}
+		snapshot.LinkMetrics[value.DeviceID] = append(snapshot.LinkMetrics[value.DeviceID], value)
+	}
+}
+
+func compatibilityOperationalStatus(status string) string {
+	if status == "unmonitored" {
+		return string(domain.DeviceStatusUnknown)
+	}
+	return status
 }

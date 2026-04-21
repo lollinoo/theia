@@ -57,6 +57,11 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
   const reconnectAttemptRef = useRef(0);
   const disposed = useRef(false);
 
+  function resetAlertState() {
+    alertVersionRef.current = null;
+    setAlerts([]);
+  }
+
   function sendDetailControl(type: DetailControlType, deviceId: string | null): void {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
       return;
@@ -82,6 +87,7 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
     function scheduleReconnect() {
       if (disposed.current || reconnectTimer !== null) return;
 
+      resetAlertState();
       setReconnecting(true);
       const delay = Math.min(1_000 * 2 ** reconnectAttemptRef.current, 30_000);
 
@@ -107,8 +113,8 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
         socketRef.current = null;
       }
 
+      resetAlertState();
       const ws = new WebSocket(buildWebSocketURL(url));
-      alertVersionRef.current = null;
       socketRef.current = ws;
 
       ws.onopen = () => {
@@ -177,6 +183,7 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
             setAlerts(payload.alerts);
           } else if (message.type === 'resync_required') {
             awaitingResyncRef.current = true;
+            resetAlertState();
             window.dispatchEvent(new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
               detail: (message as ResyncRequiredWSMessage).payload,
             }));
@@ -210,7 +217,7 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
       setConnected(false);
       setReconnecting(false);
       snapshotVersionRef.current = null;
-      alertVersionRef.current = null;
+      resetAlertState();
       awaitingResyncRef.current = false;
 
       if (socketRef.current) {

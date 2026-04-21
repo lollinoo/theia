@@ -69,7 +69,7 @@ export function findLinkMetrics(
   if (sourceDeviceMetrics) {
     const sourceIfName = normalizeInterfaceName(link.source_if_name);
     const found = sourceDeviceMetrics.find(
-      (metric) => normalizeInterfaceName(metric.if_name) === sourceIfName,
+      (metric) => normalizeInterfaceName(metric.source_if_name) === sourceIfName,
     );
     if (found) return found;
   }
@@ -79,7 +79,7 @@ export function findLinkMetrics(
   if (targetDeviceMetrics) {
     const targetIfName = normalizeInterfaceName(link.target_if_name);
     const found = targetDeviceMetrics.find(
-      (metric) => normalizeInterfaceName(metric.if_name) === targetIfName,
+      (metric) => normalizeInterfaceName(metric.target_if_name) === targetIfName,
     );
     if (found) return found;
   }

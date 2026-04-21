@@ -1,41 +1,76 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseWSMessage,
   mergeSnapshotDelta,
-  parseDeviceMetrics,
-  type SnapshotPayload,
-  type SnapshotEnvelopePayload,
+  parseDeviceRuntime,
+  parseLinkRuntime,
+  parseWSMessage,
+  type DeviceRuntimeDTO,
+  type LinkRuntimeDTO,
   type SnapshotDeltaEnvelopePayload,
+  type SnapshotEnvelopePayload,
+  type SnapshotPayload,
 } from './metrics';
 
-// Helper to build a minimal SnapshotPayload
-function makeSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
+function makeDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRuntimeDTO {
   return {
-    device_metrics: {},
-    link_metrics: {},
-    device_statuses: {},
+    device_id: 'dev-1',
+    operational_status: 'up',
+    reachability: 'up',
+    health: 'healthy',
+    freshness: 'fresh',
+    primary_reason: 'ok',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    alert_status: 'normal',
+    firing_alert_count: 0,
+    last_collected_at: '2026-01-01T00:00:00Z',
+    last_polled_at: '2026-01-01T00:00:00Z',
+    expected_poll_interval_seconds: 30,
+    cpu_percent: 50,
+    mem_percent: 25,
+    temp_celsius: 55,
+    uptime_secs: 86400,
     ...overrides,
   };
 }
 
-describe('parseWSMessage — snapshot_delta', () => {
-  it('parses a versioned snapshot_delta envelope', () => {
+function makeLinkRuntime(overrides: Partial<LinkRuntimeDTO> = {}): LinkRuntimeDTO {
+  return {
+    link_id: 'link-1',
+    source_device_id: 'dev-1',
+    target_device_id: 'dev-2',
+    source_if_name: 'ether1',
+    target_if_name: 'ether2',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    last_collected_at: '2026-01-01T00:00:00Z',
+    tx_bps: 100,
+    rx_bps: 200,
+    utilization: 0.1,
+    ...overrides,
+  };
+}
+
+function makeSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
+  return {
+    devices: {},
+    links: {},
+    ...overrides,
+  };
+}
+
+describe('parseWSMessage', () => {
+  it('parses a versioned snapshot_delta envelope with normalized runtime records', () => {
     const message = parseWSMessage({
       type: 'snapshot_delta',
       payload: {
         base_version: 10,
         version: 11,
         delta: {
-          device_metrics: {
-            'dev-1': {
-              device_id: 'dev-1',
-              cpu_percent: 90,
-              mem_percent: null,
-              collected_at: '2026-01-01T00:00:00Z',
-            },
+          devices: {
+            'dev-1': makeDeviceRuntime({ cpu_percent: 90 }),
           },
-          link_metrics: {},
-          device_statuses: {},
+          links: {},
         },
       },
     });
@@ -43,360 +78,429 @@ describe('parseWSMessage — snapshot_delta', () => {
     const payload = (message as { type: 'snapshot_delta'; payload: SnapshotDeltaEnvelopePayload }).payload;
     expect(payload.base_version).toBe(10);
     expect(payload.version).toBe(11);
-    expect(payload.delta.device_metrics['dev-1'].cpu_percent).toBe(90);
+    expect(payload.delta.devices['dev-1'].cpu_percent).toBe(90);
   });
 
-  it('parses a snapshot_delta message with a valid sparse payload', () => {
+  it('parses a sparse snapshot_delta payload without a versioned envelope', () => {
     const message = parseWSMessage({
       type: 'snapshot_delta',
       payload: {
-        device_metrics: {
-          'dev-1': {
-            device_id: 'dev-1',
-            cpu_percent: 90,
-            mem_percent: null,
-            collected_at: '2026-01-01T00:00:00Z',
-          },
+        devices: {
+          'dev-1': makeDeviceRuntime({ metrics_reason: 'awaiting_poll' }),
         },
-        link_metrics: {},
-        device_statuses: {},
+        links: {},
       },
     });
 
-    expect(message.type).toBe('snapshot_delta');
-    // payload should be parsed as SnapshotPayload
     const payload = (message as { type: 'snapshot_delta'; payload: SnapshotDeltaEnvelopePayload }).payload;
-    expect(payload.delta.device_metrics['dev-1'].cpu_percent).toBe(90);
+    expect(payload.delta.devices['dev-1'].metrics_reason).toBe('awaiting_poll');
   });
 
-  it('parses a snapshot_delta message with empty sections without error', () => {
-    const message = parseWSMessage({
-      type: 'snapshot_delta',
-      payload: {
-        device_metrics: {},
-        link_metrics: {},
-        device_statuses: {},
-      },
-    });
-
-    expect(message.type).toBe('snapshot_delta');
-  });
-
-  it('still parses snapshot messages correctly (no regression)', () => {
-    const message = parseWSMessage({
-      type: 'snapshot',
-      payload: {
-        device_metrics: {
-          'dev-1': {
-            device_id: 'dev-1',
-            cpu_percent: 50,
-            mem_percent: null,
-            collected_at: '2026-01-01T00:00:00Z',
-          },
-        },
-        link_metrics: {},
-        device_statuses: {},
-      },
-    });
-
-    expect(message.type).toBe('snapshot');
-    const payload = (message as { type: 'snapshot'; payload: SnapshotEnvelopePayload }).payload;
-    expect(payload.snapshot.device_metrics['dev-1'].cpu_percent).toBe(50);
-  });
-
-  it('parses a versioned snapshot message envelope', () => {
+  it('still parses versioned snapshot envelopes', () => {
     const message = parseWSMessage({
       type: 'snapshot',
       payload: {
         version: 7,
         snapshot: {
-          device_metrics: {},
-          link_metrics: {},
-          device_statuses: {},
+          devices: {
+            'dev-1': makeDeviceRuntime(),
+          },
+          links: {},
         },
       },
     });
 
     const payload = (message as { type: 'snapshot'; payload: SnapshotEnvelopePayload }).payload;
     expect(payload.version).toBe(7);
-    expect(payload.snapshot.device_metrics).toEqual({});
-  });
-});
-
-describe('mergeSnapshotDelta', () => {
-  it('overwrites only entries present in the delta', () => {
-    const existing = makeSnapshot({
-      device_metrics: {
-        'dev-1': {
-          device_id: 'dev-1',
-          cpu_percent: 50,
-          mem_percent: null,
-          temp_celsius: null,
-          uptime_secs: null,
-          collected_at: '2026-01-01T00:00:00Z',
-        },
-        'dev-2': {
-          device_id: 'dev-2',
-          cpu_percent: 75,
-          mem_percent: null,
-          temp_celsius: null,
-          uptime_secs: null,
-          collected_at: '2026-01-01T00:00:00Z',
-        },
-      },
-    });
-    const delta = makeSnapshot({
-      device_metrics: {
-        'dev-1': {
-          device_id: 'dev-1',
-          cpu_percent: 90,
-          mem_percent: null,
-          temp_celsius: null,
-          uptime_secs: null,
-          collected_at: '2026-01-01T00:01:00Z',
-        },
-      },
-    });
-
-    const result = mergeSnapshotDelta(existing, delta);
-
-    expect(result.device_metrics['dev-1'].cpu_percent).toBe(90);
-    expect(result.device_metrics['dev-2'].cpu_percent).toBe(75);
+    expect(payload.snapshot.devices['dev-1'].device_id).toBe('dev-1');
   });
 
-  it('preserves prior non-freshness detail-only device metric fields when a later slim delta updates the same device', () => {
-    const existing = makeSnapshot({
-      device_metrics: {
-        'dev-1': {
-          device_id: 'dev-1',
-          cpu_percent: 50,
-          mem_percent: 25,
-          temp_celsius: 55,
-          uptime_secs: 86400,
-          last_polled_at: '2026-01-01T00:00:30Z',
-          expected_poll_interval_seconds: 30,
-          collected_at: '2026-01-01T00:00:30Z',
-        },
-      },
-    });
-    const delta = makeSnapshot({
-      device_metrics: {
-        'dev-1': {
-          device_id: 'dev-1',
-          cpu_percent: 90,
-          mem_percent: 35,
-          collected_at: '2026-01-01T00:01:00Z',
-        },
-      },
-    });
-
-    const result = mergeSnapshotDelta(existing, delta);
-
-    expect(result.device_metrics['dev-1']).toMatchObject({
-      cpu_percent: 90,
-      mem_percent: 35,
-      temp_celsius: 55,
-      uptime_secs: 86400,
-      expected_poll_interval_seconds: 30,
-      collected_at: '2026-01-01T00:01:00Z',
-    });
-    expect(result.device_metrics['dev-1'].last_polled_at).toBeUndefined();
-  });
-
-  it('does not preserve a stale last_polled_at behind a newer collected_at', () => {
-    const existing = makeSnapshot({
-      device_metrics: {
-        'dev-1': {
-          device_id: 'dev-1',
-          cpu_percent: 50,
-          mem_percent: 25,
-          temp_celsius: 55,
-          uptime_secs: 86400,
-          last_polled_at: '2026-01-01T00:00:30Z',
-          expected_poll_interval_seconds: 30,
-          collected_at: '2026-01-01T00:00:30Z',
-        },
-      },
-    });
-    const delta = makeSnapshot({
-      device_metrics: {
-        'dev-1': {
-          device_id: 'dev-1',
-          cpu_percent: 90,
-          mem_percent: 35,
-          collected_at: '2026-01-01T00:01:00Z',
-        },
-      },
-    });
-
-    const result = mergeSnapshotDelta(existing, delta);
-
-    expect(result.device_metrics['dev-1']).toMatchObject({
-      temp_celsius: 55,
-      uptime_secs: 86400,
-      expected_poll_interval_seconds: 30,
-      collected_at: '2026-01-01T00:01:00Z',
-    });
-    expect(result.device_metrics['dev-1'].last_polled_at).toBeUndefined();
-  });
-
-  it('merges targeted link_metrics for one device without clearing other devices', () => {
-    const existing = makeSnapshot({
-      link_metrics: {
-        'dev-1': [
-          {
-            device_id: 'dev-1',
-            if_name: 'ether1',
-            tx_bps: 100,
-            rx_bps: 200,
-            utilization: 0.1,
-            collected_at: '2026-01-01T00:00:00Z',
-          },
-        ],
-        'dev-2': [
-          {
-            device_id: 'dev-2',
-            if_name: 'ether2',
-            tx_bps: 300,
-            rx_bps: 400,
-            utilization: 0.2,
-            collected_at: '2026-01-01T00:00:00Z',
-          },
-        ],
-      },
-    });
-    const delta = makeSnapshot({
-      link_metrics: {
-        'dev-1': [
-          {
-            device_id: 'dev-1',
-            if_name: 'ether1',
-            tx_bps: 150,
-            rx_bps: 250,
-            utilization: 0.15,
-            collected_at: '2026-01-01T00:01:00Z',
-          },
-        ],
-      },
-    });
-
-    const result = mergeSnapshotDelta(existing, delta);
-
-    expect(result.link_metrics['dev-1']).toEqual([
-      {
-        device_id: 'dev-1',
-        if_name: 'ether1',
-        tx_bps: 150,
-        rx_bps: 250,
-        utilization: 0.15,
-        collected_at: '2026-01-01T00:01:00Z',
-      },
-    ]);
-    expect(result.link_metrics['dev-2']).toEqual(existing.link_metrics['dev-2']);
-  });
-
-  it('replaces alerts entirely when delta has non-empty alerts', () => {
-    const existing = makeSnapshot({
-      device_statuses: { 'dev-1': 'up' },
-    });
-    const delta = makeSnapshot({
-      device_statuses: { 'dev-1': 'down' },
-    });
-
-    const result = mergeSnapshotDelta(existing, delta);
-
-    expect(result.device_statuses['dev-1']).toBe('down');
-  });
-});
-
-describe('parseWSMessage — topology_changed', () => {
-  it('parses a topology_changed message with null payload', () => {
+  it('still parses non-versioned snapshot envelopes', () => {
     const message = parseWSMessage({
-      type: 'topology_changed',
-      payload: null,
+      type: 'snapshot',
+      payload: {
+        devices: {
+          'dev-1': makeDeviceRuntime({ operational_status: 'unknown' }),
+        },
+        links: {},
+      },
     });
-    expect(message.type).toBe('topology_changed');
-    expect(message.payload).toBeNull();
-  });
-});
 
-describe('parseWSMessage — alert', () => {
-  it('parses a versioned alert envelope', () => {
-    const message = parseWSMessage({
+    const payload = (message as { type: 'snapshot'; payload: SnapshotEnvelopePayload }).payload;
+    expect(payload.version).toBeNull();
+    expect(payload.snapshot.devices['dev-1'].operational_status).toBe('unknown');
+  });
+
+  it('rejects alert envelope objects without an alerts array', () => {
+    expect(() => parseWSMessage({
       type: 'alert',
       payload: {
-        version: 12,
+        device_id: 'dev-1',
+        severity: 'critical',
+        alert_name: 'DeviceDown',
+        state: 'firing',
+        summary: 'device down',
+      },
+    })).toThrow('invalid alert payload');
+  });
+
+  it('rejects malformed alert records inside an alert envelope', () => {
+    expect(() => parseWSMessage({
+      type: 'alert',
+      payload: {
+        version: 4,
         alerts: [
           {
             device_id: 'dev-1',
             severity: 'critical',
             alert_name: 'DeviceDown',
             state: 'firing',
-            summary: 'device down',
           },
         ],
       },
-    });
-
-    expect(message.type).toBe('alert');
-    expect(message.payload).toEqual({
-      version: 12,
-      alerts: [
-        {
-          device_id: 'dev-1',
-          severity: 'critical',
-          alert_name: 'DeviceDown',
-          state: 'firing',
-          summary: 'device down',
-        },
-      ],
-    });
+    })).toThrow('invalid alert payload');
   });
 });
 
-describe('parseDeviceMetrics', () => {
-  it('preserves optional detail fields when present', () => {
-    const metrics = parseDeviceMetrics({
-      device_id: 'dev-1',
-      cpu_percent: 50,
-      mem_percent: null,
-      temp_celsius: 55,
-      uptime_secs: 86400,
-      collected_at: '2026-01-01T00:00:00Z',
-      health: 'warning',
-      reachability: 'up',
-      stale: false,
-      last_polled_at: '2026-01-01T00:00:00Z',
-      expected_poll_interval_seconds: 30,
+describe('mergeSnapshotDelta', () => {
+  it('replaces atomic device records only for device keys present in the delta', () => {
+    const existing = makeSnapshot({
+      devices: {
+        'dev-1': makeDeviceRuntime(),
+        'dev-2': makeDeviceRuntime({
+          device_id: 'dev-2',
+          cpu_percent: 75,
+          mem_percent: 35,
+        }),
+      },
+    });
+    const delta = makeSnapshot({
+      devices: {
+        'dev-1': makeDeviceRuntime({
+          cpu_percent: 90,
+          mem_percent: null,
+          temp_celsius: null,
+          uptime_secs: null,
+          last_collected_at: '2026-01-01T00:01:00Z',
+          last_polled_at: null,
+          expected_poll_interval_seconds: null,
+          metrics_status: 'partial',
+          metrics_reason: 'no_data',
+        }),
+      },
     });
 
-    expect(metrics.health).toBe('warning');
-    expect(metrics.reachability).toBe('up');
-    expect(metrics.stale).toBe(false);
-    expect(metrics.temp_celsius).toBe(55);
-    expect(metrics.uptime_secs).toBe(86400);
-    expect(metrics.last_polled_at).toBe('2026-01-01T00:00:00Z');
-    expect(metrics.expected_poll_interval_seconds).toBe(30);
+    const result = mergeSnapshotDelta(existing, delta);
+
+    expect(result.devices['dev-1']).toEqual(delta.devices['dev-1']);
+    expect(result.devices['dev-2']).toEqual(existing.devices['dev-2']);
+  });
+
+  it('replaces atomic link records only for link keys present in the delta', () => {
+    const existing = makeSnapshot({
+      links: {
+        'link-1': makeLinkRuntime(),
+        'link-2': makeLinkRuntime({
+          link_id: 'link-2',
+          source_device_id: 'dev-3',
+          target_device_id: 'dev-4',
+          source_if_name: 'ether3',
+          target_if_name: 'ether4',
+          tx_bps: 300,
+          rx_bps: 400,
+          utilization: 0.2,
+        }),
+      },
+    });
+    const delta = makeSnapshot({
+      links: {
+        'link-1': makeLinkRuntime({
+          tx_bps: null,
+          rx_bps: 250,
+          utilization: null,
+          metrics_status: 'unavailable',
+          metrics_reason: 'upstream_unavailable',
+          last_collected_at: null,
+        }),
+      },
+    });
+
+    const result = mergeSnapshotDelta(existing, delta);
+
+    expect(result.links['link-1']).toEqual(delta.links['link-1']);
+    expect(result.links['link-2']).toEqual(existing.links['link-2']);
+  });
+
+  it('preserves explicit null values when replacing runtime records', () => {
+    const existing = makeSnapshot({
+      devices: {
+        'dev-1': makeDeviceRuntime({
+          cpu_percent: 50,
+          temp_celsius: 55,
+          last_polled_at: '2026-01-01T00:00:00Z',
+        }),
+      },
+    });
+    const delta = makeSnapshot({
+      devices: {
+        'dev-1': makeDeviceRuntime({
+          cpu_percent: null,
+          mem_percent: null,
+          temp_celsius: null,
+          uptime_secs: null,
+          last_collected_at: null,
+          last_polled_at: null,
+          expected_poll_interval_seconds: null,
+          metrics_status: 'unavailable',
+          metrics_reason: 'stale',
+        }),
+      },
+    });
+
+    const result = mergeSnapshotDelta(existing, delta);
+
+    expect(result.devices['dev-1']).toEqual(delta.devices['dev-1']);
+    expect(result.devices['dev-1'].last_polled_at).toBeNull();
+    expect(result.devices['dev-1'].cpu_percent).toBeNull();
+  });
+});
+
+describe('parseDeviceRuntime', () => {
+  it('preserves explicit null runtime values and approved reason enums', () => {
+    const runtime = parseDeviceRuntime({
+      device_id: 'dev-1',
+      operational_status: 'probing',
+      reachability: 'soft_down',
+      health: 'warning',
+      freshness: 'awaiting_poll',
+      primary_reason: 'awaiting_poll',
+      metrics_status: 'unavailable',
+      metrics_reason: 'upstream_unavailable',
+      alert_status: 'degraded',
+      firing_alert_count: 2,
+      last_collected_at: null,
+      last_polled_at: null,
+      expected_poll_interval_seconds: null,
+      cpu_percent: null,
+      mem_percent: null,
+      temp_celsius: null,
+      uptime_secs: null,
+    });
+
+    expect(runtime.freshness).toBe('awaiting_poll');
+    expect(runtime.primary_reason).toBe('awaiting_poll');
+    expect(runtime.metrics_reason).toBe('upstream_unavailable');
+    expect(runtime.last_collected_at).toBeNull();
+    expect(runtime.cpu_percent).toBeNull();
+  });
+
+  it('rejects device runtime records with invalid required semantic fields', () => {
+    expect(() => parseDeviceRuntime({
+      device_id: 'dev-1',
+      operational_status: 'invalid-status',
+      reachability: 'up',
+      health: 'healthy',
+      freshness: 'fresh',
+      primary_reason: 'ok',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      alert_status: 'normal',
+      firing_alert_count: 0,
+      last_collected_at: null,
+      last_polled_at: null,
+      expected_poll_interval_seconds: null,
+      cpu_percent: null,
+      mem_percent: null,
+      temp_celsius: null,
+      uptime_secs: null,
+    })).toThrow('invalid device runtime payload');
+  });
+
+  it('rejects device runtime records when required nullable runtime fields are missing or invalid', () => {
+    expect(() => parseDeviceRuntime({
+      device_id: 'dev-1',
+      operational_status: 'up',
+      reachability: 'up',
+      health: 'healthy',
+      freshness: 'fresh',
+      primary_reason: 'ok',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      alert_status: 'normal',
+      firing_alert_count: 0,
+      last_polled_at: null,
+      expected_poll_interval_seconds: null,
+      cpu_percent: null,
+      mem_percent: null,
+      temp_celsius: null,
+      uptime_secs: null,
+    })).toThrow('invalid device runtime payload');
+
+    expect(() => parseDeviceRuntime({
+      device_id: 'dev-1',
+      operational_status: 'up',
+      reachability: 'up',
+      health: 'healthy',
+      freshness: 'fresh',
+      primary_reason: 'ok',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      alert_status: 'normal',
+      firing_alert_count: 0,
+      last_collected_at: null,
+      last_polled_at: null,
+      expected_poll_interval_seconds: '60',
+      cpu_percent: null,
+      mem_percent: null,
+      temp_celsius: null,
+      uptime_secs: null,
+    })).toThrow('invalid device runtime payload');
+  });
+});
+
+describe('parseLinkRuntime', () => {
+  it('rejects link runtime records with invalid required semantic fields', () => {
+    expect(() => parseLinkRuntime({
+      link_id: 'link-1',
+      source_device_id: 'dev-1',
+      target_device_id: 'dev-2',
+      source_if_name: 'ether1',
+      target_if_name: 'ether2',
+      metrics_status: 'unmonitored',
+      metrics_reason: 'unmonitored',
+      last_collected_at: null,
+      tx_bps: null,
+      rx_bps: null,
+      utilization: null,
+    })).toThrow('invalid link runtime payload');
+  });
+
+  it('rejects link runtime records when required nullable telemetry fields are missing or invalid', () => {
+    expect(() => parseLinkRuntime({
+      link_id: 'link-1',
+      source_device_id: 'dev-1',
+      target_device_id: 'dev-2',
+      source_if_name: 'ether1',
+      target_if_name: 'ether2',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      tx_bps: null,
+      rx_bps: null,
+      utilization: null,
+    })).toThrow('invalid link runtime payload');
+
+    expect(() => parseLinkRuntime({
+      link_id: 'link-1',
+      source_device_id: 'dev-1',
+      target_device_id: 'dev-2',
+      source_if_name: 'ether1',
+      target_if_name: 'ether2',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      last_collected_at: null,
+      tx_bps: '1000',
+      rx_bps: null,
+      utilization: null,
+    })).toThrow('invalid link runtime payload');
   });
 });
 
 describe('parseSnapshotPayload', () => {
-  it('does not synthesize removed overview sections', () => {
+  it('does not synthesize removed split-map sections', () => {
     const message = parseWSMessage({
       type: 'snapshot',
       payload: {
         version: 7,
         snapshot: {
-          device_metrics: {},
-          link_metrics: {},
-          device_statuses: {},
+          devices: {},
+          links: {},
         },
       },
     });
 
     const payload = (message as { type: 'snapshot'; payload: SnapshotEnvelopePayload }).payload;
-    expect((payload.snapshot as Record<string, unknown>).alerts).toBeUndefined();
-    expect((payload.snapshot as Record<string, unknown>).device_hostnames).toBeUndefined();
-    expect((payload.snapshot as Record<string, unknown>).device_models).toBeUndefined();
+    expect((payload.snapshot as Record<string, unknown>).device_metrics).toBeUndefined();
+    expect((payload.snapshot as Record<string, unknown>).link_metrics).toBeUndefined();
+    expect((payload.snapshot as Record<string, unknown>).device_statuses).toBeUndefined();
+  });
+
+  it('fails snapshot parsing when normalized sections are missing', () => {
+    expect(() => parseWSMessage({
+      type: 'snapshot',
+      payload: {
+        devices: {},
+      },
+    })).toThrow('invalid snapshot payload');
+
+    expect(() => parseWSMessage({
+      type: 'snapshot_delta',
+      payload: {
+        delta: {
+          links: {},
+        },
+      },
+    })).toThrow('invalid snapshot payload');
+  });
+
+  it('fails snapshot parsing when a normalized device runtime record is malformed', () => {
+    expect(() => parseWSMessage({
+      type: 'snapshot',
+      payload: {
+        devices: {
+          'dev-1': {
+            ...makeDeviceRuntime(),
+            operational_status: 'broken',
+          },
+          'dev-2': makeDeviceRuntime({ device_id: 'dev-2' }),
+        },
+        links: {},
+      },
+    })).toThrow('invalid device runtime payload');
+  });
+
+  it('fails snapshot parsing when device map keys do not match device_id', () => {
+    expect(() => parseWSMessage({
+      type: 'snapshot',
+      payload: {
+        devices: {
+          'dev-1': makeDeviceRuntime({ device_id: 'dev-2' }),
+        },
+        links: {},
+      },
+    })).toThrow('invalid snapshot payload');
+  });
+
+  it('fails snapshot parsing when a normalized link runtime record is malformed', () => {
+    expect(() => parseWSMessage({
+      type: 'snapshot',
+      payload: {
+        devices: {},
+        links: {
+          'link-1': {
+            ...makeLinkRuntime(),
+            metrics_status: 'broken',
+          },
+          'link-2': makeLinkRuntime({
+            link_id: 'link-2',
+            source_device_id: 'dev-2',
+            target_device_id: 'dev-3',
+          }),
+        },
+      },
+    })).toThrow('invalid link runtime payload');
+  });
+
+  it('fails snapshot parsing when link map keys do not match link_id', () => {
+    expect(() => parseWSMessage({
+      type: 'snapshot_delta',
+      payload: {
+        delta: {
+          devices: {},
+          links: {
+            'link-1': makeLinkRuntime({ link_id: 'link-2' }),
+          },
+        },
+      },
+    })).toThrow('invalid snapshot payload');
   });
 });

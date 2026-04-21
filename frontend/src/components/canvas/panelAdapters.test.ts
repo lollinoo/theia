@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Device, InterfaceInfo, Link } from '../../types/api';
-import type { AlertDTO, SnapshotPayload } from '../../types/metrics';
+import type {
+  AlertDTO,
+  DeviceRuntimeDTO,
+  LinkRuntimeDTO,
+  SnapshotPayload,
+} from '../../types/metrics';
 import { buildRuntimeState } from './runtimeAdapters';
 import {
   buildAlertsPanelModel,
@@ -72,37 +77,66 @@ function mockInterface(overrides: Partial<InterfaceInfo> = {}): InterfaceInfo {
   };
 }
 
+function mockRuntimeDevice(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRuntimeDTO {
+  return {
+    device_id: 'dev-1',
+    operational_status: 'up',
+    reachability: 'up',
+    health: 'healthy',
+    freshness: 'fresh',
+    primary_reason: 'ok',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    alert_status: 'normal',
+    firing_alert_count: 0,
+    last_collected_at: '2026-04-20T12:00:00Z',
+    last_polled_at: '2026-04-20T12:00:00Z',
+    expected_poll_interval_seconds: 60,
+    cpu_percent: 15,
+    mem_percent: 30,
+    temp_celsius: null,
+    uptime_secs: 900,
+    ...overrides,
+  };
+}
+
+function mockRuntimeLink(overrides: Partial<LinkRuntimeDTO> = {}): LinkRuntimeDTO {
+  return {
+    link_id: 'link-1',
+    source_device_id: 'dev-1',
+    target_device_id: 'dev-2',
+    source_if_name: 'ether1',
+    target_if_name: 'ether2',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    last_collected_at: '2026-04-20T12:00:00Z',
+    tx_bps: 1_500,
+    rx_bps: 2_500,
+    utilization: 0.42,
+    ...overrides,
+  };
+}
+
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
-    device_metrics: {},
-    link_metrics: {
-      'dev-1': [{
-        device_id: 'dev-1',
-        if_name: 'ether1',
-        tx_bps: 1_500,
-        rx_bps: 2_500,
-        utilization: 0.42,
-        collected_at: '2026-04-20T12:00:00Z',
-      }],
-      'dev-2': [{
+    devices: {
+      'dev-1': mockRuntimeDevice(),
+      'dev-2': mockRuntimeDevice({
         device_id: 'dev-2',
-        if_name: 'ether2',
-        tx_bps: 3_500,
-        rx_bps: 4_500,
-        utilization: 0.91,
-        collected_at: '2026-04-20T12:00:00Z',
-      }],
+        cpu_percent: 22,
+        mem_percent: 44,
+        uptime_secs: 1200,
+      }),
     },
-    device_statuses: {
-      'dev-1': 'up',
-      'dev-2': 'up',
+    links: {
+      'link-1': mockRuntimeLink(),
     },
     ...overrides,
   };
 }
 
 describe('panelAdapters', () => {
-  it('builds explicit alert view models without leaking raw alert dto fields', () => {
+  it('builds alert view models from normalized runtime state before raw alert diagnostics', () => {
     const devices = [
       mockDevice({ tags: { display_name: 'Core Router' } }),
       mockDevice({
@@ -116,7 +150,19 @@ describe('panelAdapters', () => {
     const runtimeState = buildRuntimeState({
       devices,
       links: [],
-      snapshot: mockSnapshot(),
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            alert_status: 'down',
+            firing_alert_count: 2,
+          }),
+          'dev-2': mockRuntimeDevice({
+            device_id: 'dev-2',
+            alert_status: 'normal',
+            firing_alert_count: 0,
+          }),
+        },
+      }),
       alerts: [mockAlert()],
       prometheusStatus: { enabled: true, available: false },
     });
@@ -134,12 +180,87 @@ describe('panelAdapters', () => {
       state: 'firing',
       summary: 'router unreachable',
     });
-    expect(model.prometheusOutage).toEqual({
-      offlineDevices: [{ id: 'dev-1', label: 'Core Router' }],
-      fallbackDevices: [{ id: 'dev-2', label: 'Edge Switch' }],
+    expect(model.prometheusDiagnostics).toEqual({
+      title: 'Prometheus diagnostics unavailable',
+      detail: 'Runtime status and alerts use normalized telemetry. Prometheus health is shown here for operator diagnostics only.',
     });
     expect(model.firingAlerts[0]).not.toHaveProperty('device_id');
     expect(model.firingAlerts[0]).not.toHaveProperty('alert_name');
+  });
+
+  it('suppresses stale raw firing alerts when normalized runtime says the device is normal', () => {
+    const runtimeState = buildRuntimeState({
+      devices: [mockDevice({ tags: { display_name: 'Core Router' } })],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            alert_status: 'normal',
+            firing_alert_count: 0,
+          }),
+        },
+      }),
+      alerts: [mockAlert()],
+      prometheusStatus: null,
+    });
+
+    const model = buildAlertsPanelModel({
+      alerts: [mockAlert()],
+      runtimeState,
+    });
+
+    expect(model.firingAlerts).toEqual([]);
+  });
+
+  it('keeps raw firing alerts for devices omitted from a partial runtime snapshot', () => {
+    const devices = [
+      mockDevice({ tags: { display_name: 'Core Router' } }),
+      mockDevice({
+        id: 'dev-2',
+        ip: '10.0.0.2',
+        sys_name: 'switch-01',
+        tags: { display_name: 'Edge Switch' },
+      }),
+    ];
+    const alerts = [
+      mockAlert({ device_id: 'dev-1', summary: 'stale runtime alert' }),
+      mockAlert({
+        device_id: 'dev-2',
+        alert_name: 'InterfaceDown',
+        summary: 'edge switch link down',
+      }),
+    ];
+    const runtimeState = buildRuntimeState({
+      devices,
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            alert_status: 'normal',
+            firing_alert_count: 0,
+          }),
+        },
+        links: {},
+      }),
+      alerts,
+      prometheusStatus: null,
+    });
+
+    const model = buildAlertsPanelModel({
+      alerts,
+      runtimeState,
+    });
+
+    expect(model.firingAlerts).toEqual([
+      {
+        deviceId: 'dev-2',
+        deviceLabel: 'Edge Switch',
+        alertName: 'InterfaceDown',
+        severity: 'critical',
+        state: 'firing',
+        summary: 'edge switch link down',
+      },
+    ]);
   });
 
   it('builds ordered device interface sections from runtime state and fetched inventory', () => {
@@ -148,17 +269,15 @@ describe('panelAdapters', () => {
       devices: [device],
       links: [mockLink({ target_device_id: 'dev-3', target_if_name: 'ether9' })],
       snapshot: mockSnapshot({
-        link_metrics: {
-          'dev-1': [{
-            device_id: 'dev-1',
-            if_name: 'ether1',
-            tx_bps: 1_500,
-            rx_bps: 2_500,
-            utilization: 0.42,
-            collected_at: '2026-04-20T12:00:00Z',
-          }],
+        devices: {
+          'dev-1': mockRuntimeDevice(),
         },
-        device_statuses: { 'dev-1': 'up' },
+        links: {
+          'link-1': mockRuntimeLink({
+            target_device_id: 'dev-3',
+            target_if_name: 'ether9',
+          }),
+        },
       }),
       alerts: [],
       prometheusStatus: null,
@@ -192,17 +311,14 @@ describe('panelAdapters', () => {
       devices: [device],
       links: [mockLink({ target_device_id: 'dev-3', target_if_name: 'ether9' })],
       snapshot: mockSnapshot({
-        link_metrics: {
-          'dev-1': [{
-            device_id: 'dev-1',
-            if_name: 'ether1',
-            tx_bps: 1_500,
-            rx_bps: 2_500,
-            utilization: 0.42,
-            collected_at: '2026-04-20T12:00:00Z',
-          }],
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            operational_status: 'down',
+            primary_reason: 'device_unreachable',
+            metrics_status: 'unavailable',
+            metrics_reason: 'device_unreachable',
+          }),
         },
-        device_statuses: { 'dev-1': 'down' },
       }),
       alerts: [],
       prometheusStatus: null,
@@ -216,7 +332,7 @@ describe('panelAdapters', () => {
     });
 
     expect(model.sections[0]).toMatchObject({
-      availabilityReason: 'device-down',
+      availabilityReason: 'device_unreachable',
       metricsUnavailableMessage: 'Device unreachable',
       statusLabel: 'down',
       statusTone: 'down',
@@ -224,6 +340,111 @@ describe('panelAdapters', () => {
       rxLabel: '--',
       utilizationPct: null,
     });
+  });
+
+  it('keeps indexed interface runtime visible when device-level metrics are unavailable', () => {
+    const device = mockDevice({ status: 'up' });
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [mockLink({ target_device_id: 'dev-3', target_if_name: 'ether9' })],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            metrics_status: 'unavailable',
+            metrics_reason: 'upstream_unavailable',
+          }),
+        },
+        links: {
+          'link-1': mockRuntimeLink({
+            target_device_id: 'dev-3',
+            target_if_name: 'ether9',
+            tx_bps: 1_500,
+            rx_bps: 2_500,
+            utilization: 0.42,
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildDeviceInterfacePanelModel({
+      device,
+      runtimeState,
+      loadingInterfaces: false,
+      interfaces: [mockInterface()],
+    });
+
+    expect(model.sections[0]).toMatchObject({
+      availabilityReason: null,
+      metricsUnavailableMessage: null,
+      txLabel: '2 Kbps',
+      rxLabel: '3 Kbps',
+      utilizationPct: 42,
+    });
+  });
+
+  it('surfaces the authoritative normalized active alert count without inventing extra rows', () => {
+    const runtimeState = buildRuntimeState({
+      devices: [mockDevice({ tags: { display_name: 'Core Router' } })],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            alert_status: 'down',
+            firing_alert_count: 3,
+          }),
+        },
+      }),
+      alerts: [mockAlert()],
+      prometheusStatus: null,
+    });
+
+    const model = buildAlertsPanelModel({
+      alerts: [mockAlert()],
+      runtimeState,
+    });
+
+    expect(model.firingAlerts).toHaveLength(1);
+    expect(model.activeAlertCount).toBe(3);
+  });
+
+  it('caps rendered runtime-backed firing rows to the normalized device alert count', () => {
+    const alerts = [
+      mockAlert({ alert_name: 'DeviceDown', summary: 'router unreachable' }),
+      mockAlert({ alert_name: 'HighCpu', severity: 'warning', summary: 'cpu threshold exceeded' }),
+    ];
+    const runtimeState = buildRuntimeState({
+      devices: [mockDevice({ tags: { display_name: 'Core Router' } })],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            alert_status: 'down',
+            firing_alert_count: 1,
+          }),
+        },
+      }),
+      alerts,
+      prometheusStatus: null,
+    });
+
+    const model = buildAlertsPanelModel({
+      alerts,
+      runtimeState,
+    });
+
+    expect(model.activeAlertCount).toBe(1);
+    expect(model.firingAlerts).toEqual([
+      {
+        deviceId: 'dev-1',
+        deviceLabel: 'Core Router',
+        alertName: 'DeviceDown',
+        severity: 'critical',
+        state: 'firing',
+        summary: 'router unreachable',
+      },
+    ]);
   });
 
   it('builds link interface sections and negotiation summary from fetched inventory', () => {
@@ -265,9 +486,9 @@ describe('panelAdapters', () => {
     });
     expect(model.target).toMatchObject({
       interfaceDescription: 'Downlink',
-      txLabel: '4 Kbps',
-      rxLabel: '5 Kbps',
-      utilizationPct: 91,
+      txLabel: '2 Kbps',
+      rxLabel: '3 Kbps',
+      utilizationPct: 42,
     });
   });
 
@@ -355,19 +576,37 @@ describe('panelAdapters', () => {
     });
   });
 
-  it('keeps fallback metrics visible during a Prometheus outage', () => {
+  it('keeps shared link runtime visible when a device-level upstream outage does not apply to the link', () => {
     const source = mockDevice();
     const target = mockDevice({
       id: 'dev-2',
       ip: '10.0.0.2',
       sys_name: 'switch-01',
-      metrics_source: 'prometheus_snmp_fallback',
     });
     const link = mockLink();
     const runtimeState = buildRuntimeState({
       devices: [source, target],
       links: [link],
-      snapshot: mockSnapshot(),
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            metrics_status: 'unavailable',
+            metrics_reason: 'upstream_unavailable',
+          }),
+          'dev-2': mockRuntimeDevice({
+            device_id: 'dev-2',
+            metrics_status: 'available',
+            metrics_reason: 'ok',
+          }),
+        },
+        links: {
+          'link-1': mockRuntimeLink({
+            tx_bps: 3_500,
+            rx_bps: 4_500,
+            utilization: 0.91,
+          }),
+        },
+      }),
       alerts: [],
       prometheusStatus: { enabled: true, available: false },
     });
@@ -382,9 +621,11 @@ describe('panelAdapters', () => {
     });
 
     expect(model.source).toMatchObject({
-      metricsUnavailableMessage: 'Prometheus unavailable',
-      txLabel: '--',
-      rxLabel: '--',
+      availabilityReason: null,
+      metricsUnavailableMessage: null,
+      txLabel: '4 Kbps',
+      rxLabel: '5 Kbps',
+      utilizationPct: 91,
     });
     expect(model.target).toMatchObject({
       metricsUnavailableMessage: null,
@@ -394,23 +635,108 @@ describe('panelAdapters', () => {
     });
   });
 
+  it('uses normalized link runtime reasons for unavailable link interface sections', () => {
+    const source = mockDevice();
+    const target = mockDevice({
+      id: 'dev-2',
+      ip: '10.0.0.2',
+      sys_name: 'switch-01',
+    });
+    const link = mockLink();
+    const runtimeState = buildRuntimeState({
+      devices: [source, target],
+      links: [link],
+      snapshot: mockSnapshot({
+        links: {
+          'link-1': mockRuntimeLink({
+            metrics_status: 'unavailable',
+            metrics_reason: 'upstream_unavailable',
+            tx_bps: 3_500,
+            rx_bps: 4_500,
+            utilization: 0.91,
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildLinkInterfacePanelModel({
+      link,
+      sourceDevice: source,
+      targetDevice: target,
+      sourceInterfaces: [mockInterface()],
+      targetInterfaces: [mockInterface({ if_name: 'ether2', if_descr: 'Downlink' })],
+      runtimeState,
+    });
+
+    expect(model.source).toMatchObject({
+      availabilityReason: 'upstream_unavailable',
+      metricsUnavailableMessage: 'Runtime upstream unavailable',
+      txLabel: '--',
+      rxLabel: '--',
+    });
+    expect(model.target).toMatchObject({
+      availabilityReason: 'upstream_unavailable',
+      metricsUnavailableMessage: 'Runtime upstream unavailable',
+      txLabel: '--',
+      rxLabel: '--',
+    });
+  });
+
+  it('does not render stale interface stats from unavailable link telemetry', () => {
+    const source = mockDevice();
+    const target = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'switch-01' });
+    const link = mockLink();
+    const runtimeState = buildRuntimeState({
+      devices: [source, target],
+      links: [link],
+      snapshot: mockSnapshot({
+        links: {
+          'link-1': mockRuntimeLink({
+            metrics_status: 'unavailable',
+            metrics_reason: 'upstream_unavailable',
+            tx_bps: 3_500,
+            rx_bps: 4_500,
+            utilization: 0.91,
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildDeviceInterfacePanelModel({
+      device: source,
+      runtimeState,
+      loadingInterfaces: false,
+      interfaces: [mockInterface()],
+    });
+
+    expect(model.sections[0]).toMatchObject({
+      txLabel: '--',
+      rxLabel: '--',
+      utilizationPct: null,
+    });
+  });
+
   it('uses snapshot interface metrics even when no topology link exists', () => {
     const device = mockDevice();
     const runtimeState = buildRuntimeState({
       devices: [device],
       links: [],
       snapshot: mockSnapshot({
-        link_metrics: {
-          'dev-1': [{
-            device_id: 'dev-1',
-            if_name: 'ether7',
+        links: {
+          'link-7': mockRuntimeLink({
+            link_id: 'link-7',
+            target_device_id: 'dev-9',
+            source_if_name: 'ether7',
+            target_if_name: 'ether8',
             tx_bps: 7_500,
             rx_bps: 8_500,
             utilization: 0.11,
-            collected_at: '2026-04-20T12:00:00Z',
-          }],
+          }),
         },
-        device_statuses: { 'dev-1': 'up' },
       }),
       alerts: [],
       prometheusStatus: null,
@@ -436,7 +762,7 @@ describe('panelAdapters', () => {
     const runtimeState = buildRuntimeState({
       devices: [device],
       links: [],
-      snapshot: mockSnapshot({ device_statuses: { 'dev-1': 'up' } }),
+      snapshot: mockSnapshot(),
       alerts: [],
       prometheusStatus: null,
     });

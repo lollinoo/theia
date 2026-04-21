@@ -1,6 +1,7 @@
 import type { Device } from '../../types/api';
 import { formatUptime, type SnapshotPayload } from '../../types/metrics';
 import {
+  resolveDeviceMonitoringState,
   resolveDeviceOperationalReadouts,
   resolveDeviceOperationalStatusState,
 } from '../deviceVisualState';
@@ -26,6 +27,26 @@ export interface RuntimeDeviceRow {
   osVersion: string;
 }
 
+function runtimeAwareDevice(device: Device, snapshot: SnapshotPayload | null): Device {
+  const runtime = snapshot?.devices?.[device.id];
+  if (!runtime) {
+    return device;
+  }
+
+  return {
+    ...device,
+    status: runtime.operational_status === 'unmonitored'
+      ? device.status
+      : runtime.operational_status,
+  };
+}
+
+function runtimeMonitoringState(device: Device, snapshot: SnapshotPayload | null) {
+  return snapshot?.devices?.[device.id]?.operational_status === 'unmonitored'
+    ? 'unmonitored'
+    : resolveDeviceMonitoringState(device);
+}
+
 export function buildRuntimeDeviceRows({
   devices,
   snapshot,
@@ -34,17 +55,19 @@ export function buildRuntimeDeviceRows({
   snapshot: SnapshotPayload | null;
 }): RuntimeDeviceRow[] {
   return devices.map((device) => {
-    const metrics = snapshot?.device_metrics[device.id] ?? null;
-    const readouts = resolveDeviceOperationalReadouts(device, metrics);
+    const runtimeDevice = runtimeAwareDevice(device, snapshot);
+    const monitoringState = runtimeMonitoringState(device, snapshot);
+    const metrics = snapshot?.devices?.[device.id] ?? null;
+    const readouts = resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState);
     const displayName = device.tags?.display_name || device.sys_name || device.hostname || device.ip;
     const modelLabel = device.hardware_model && device.hardware_model !== 'Unknown'
       ? device.hardware_model
       : device.sys_descr || '';
-    const statusState = resolveDeviceOperationalStatusState(device);
+    const statusState = resolveDeviceOperationalStatusState(runtimeDevice, monitoringState);
 
     return {
       id: device.id,
-      device,
+      device: runtimeDevice,
       displayName,
       hostname: device.hostname,
       ip: device.ip,

@@ -125,34 +125,53 @@ type clientControlPayload struct {
 
 // SnapshotPayload contains the complete live state sent to clients.
 type SnapshotPayload struct {
-	DeviceMetrics  map[string]DeviceMetricsDTO `json:"device_metrics"`
-	LinkMetrics    map[string][]LinkMetricsDTO `json:"link_metrics"`
-	DeviceStatuses map[string]string           `json:"device_statuses"`
+	Devices        map[string]DeviceRuntimeDTO   `json:"devices"`
+	Links          map[string]LinkRuntimeDTO     `json:"links"`
+	DeviceMetrics  map[string]DeviceRuntimeDTO   `json:"-"`
+	LinkMetrics    map[string][]LinkRuntimeDTO   `json:"-"`
+	DeviceStatuses map[string]string             `json:"-"`
 }
 
-// DeviceMetricsDTO is the frontend JSON shape for device metrics.
-type DeviceMetricsDTO struct {
+type DeviceMetricsDTO = DeviceRuntimeDTO
+type LinkMetricsDTO = LinkRuntimeDTO
+
+type DeviceRuntimeDTO struct {
 	DeviceID                    string   `json:"device_id"`
+	OperationalStatus           string   `json:"operational_status"`
+	Reachability                string   `json:"reachability"`
+	Health                      string   `json:"health"`
+	Freshness                   string   `json:"freshness"`
+	PrimaryReason               string   `json:"primary_reason"`
+	MetricsStatus               string   `json:"metrics_status"`
+	MetricsReason               string   `json:"metrics_reason"`
+	AlertStatus                 string   `json:"alert_status"`
+	FiringAlertCount            int      `json:"firing_alert_count"`
+	LastCollectedAt             *string  `json:"last_collected_at"`
+	LastPolledAt                *string  `json:"last_polled_at"`
+	ExpectedPollIntervalSeconds *float64 `json:"expected_poll_interval_seconds"`
 	CPUPercent                  *float64 `json:"cpu_percent"`
 	MemPercent                  *float64 `json:"mem_percent"`
-	CollectedAt                 string   `json:"collected_at"`
-	TempCelsius                 *float64 `json:"temp_celsius,omitempty"`
-	UptimeSecs                  *float64 `json:"uptime_secs,omitempty"`
-	LastPolledAt                string   `json:"last_polled_at,omitempty"`
-	ExpectedPollIntervalSeconds *float64 `json:"expected_poll_interval_seconds,omitempty"`
-	Health                      string   `json:"health,omitempty"`
-	Reachability                string   `json:"reachability,omitempty"`
-	Stale                       *bool    `json:"stale,omitempty"`
+	TempCelsius                 *float64 `json:"temp_celsius"`
+	UptimeSecs                  *float64 `json:"uptime_secs"`
+	CollectedAt                 string   `json:"-"`
+	Stale                       *bool    `json:"-"`
 }
 
-// LinkMetricsDTO is the frontend JSON shape for interface/link metrics.
-type LinkMetricsDTO struct {
-	DeviceID    string   `json:"device_id"`
-	IfName      string   `json:"if_name"`
-	TxBps       *float64 `json:"tx_bps"`
-	RxBps       *float64 `json:"rx_bps"`
-	Utilization *float64 `json:"utilization"`
-	CollectedAt string   `json:"collected_at"`
+type LinkRuntimeDTO struct {
+	LinkID          string   `json:"link_id"`
+	SourceDeviceID  string   `json:"source_device_id"`
+	TargetDeviceID  string   `json:"target_device_id"`
+	SourceIfName    string   `json:"source_if_name"`
+	TargetIfName    string   `json:"target_if_name"`
+	MetricsStatus   string   `json:"metrics_status"`
+	MetricsReason   string   `json:"metrics_reason"`
+	LastCollectedAt *string  `json:"last_collected_at"`
+	TxBps           *float64 `json:"tx_bps"`
+	RxBps           *float64 `json:"rx_bps"`
+	Utilization     *float64 `json:"utilization"`
+	DeviceID        string   `json:"-"`
+	IfName          string   `json:"-"`
+	CollectedAt     string   `json:"-"`
 }
 
 // AlertDTO is the frontend JSON shape for Prometheus alerts.
@@ -167,8 +186,10 @@ type AlertDTO struct {
 // EmptySnapshot returns a fully initialized empty snapshot payload.
 func EmptySnapshot() *SnapshotPayload {
 	return &SnapshotPayload{
-		DeviceMetrics:  map[string]DeviceMetricsDTO{},
-		LinkMetrics:    map[string][]LinkMetricsDTO{},
+		Devices:        map[string]DeviceRuntimeDTO{},
+		Links:          map[string]LinkRuntimeDTO{},
+		DeviceMetrics:  map[string]DeviceRuntimeDTO{},
+		LinkMetrics:    map[string][]LinkRuntimeDTO{},
 		DeviceStatuses: map[string]string{},
 	}
 }
@@ -180,21 +201,28 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	cloned := &SnapshotPayload{
-		DeviceMetrics:  make(map[string]DeviceMetricsDTO, len(snapshot.DeviceMetrics)),
-		LinkMetrics:    make(map[string][]LinkMetricsDTO, len(snapshot.LinkMetrics)),
+		Devices:        make(map[string]DeviceRuntimeDTO, len(snapshot.Devices)),
+		Links:          make(map[string]LinkRuntimeDTO, len(snapshot.Links)),
+		DeviceMetrics:  make(map[string]DeviceRuntimeDTO, len(snapshot.DeviceMetrics)),
+		LinkMetrics:    make(map[string][]LinkRuntimeDTO, len(snapshot.LinkMetrics)),
 		DeviceStatuses: make(map[string]string, len(snapshot.DeviceStatuses)),
 	}
 
-	for key, value := range snapshot.DeviceStatuses {
-		cloned.DeviceStatuses[key] = value
+	for key, value := range snapshot.Devices {
+		cloned.Devices[key] = value
 	}
 
+	for key, value := range snapshot.Links {
+		cloned.Links[key] = value
+	}
 	for key, value := range snapshot.DeviceMetrics {
 		cloned.DeviceMetrics[key] = value
 	}
-
-	for key, values := range snapshot.LinkMetrics {
-		cloned.LinkMetrics[key] = append([]LinkMetricsDTO(nil), values...)
+	for key, value := range snapshot.LinkMetrics {
+		cloned.LinkMetrics[key] = append([]LinkRuntimeDTO(nil), value...)
+	}
+	for key, value := range snapshot.DeviceStatuses {
+		cloned.DeviceStatuses[key] = value
 	}
 
 	return cloned
@@ -234,68 +262,6 @@ func parseClientControlMessage(raw []byte) (clientControlMessage, error) {
 	}, nil
 }
 
-// DeviceMetricsToDTOs converts domain metrics keyed by device ID into DTOs.
-func DeviceMetricsToDTOs(metrics map[string]domain.DeviceMetrics) map[string]DeviceMetricsDTO {
-	dtos := make(map[string]DeviceMetricsDTO, len(metrics))
-	for key, metric := range metrics {
-		deviceID := key
-		if deviceID == "" && metric.DeviceID != uuid.Nil {
-			deviceID = metric.DeviceID.String()
-		}
-		if deviceID == "" {
-			continue
-		}
-
-		dtos[deviceID] = DeviceMetricsDTO{
-			DeviceID:    deviceID,
-			CPUPercent:  metric.CPUPercent,
-			MemPercent:  metric.MemPercent,
-			CollectedAt: formatTimestamp(metric.CollectedAt),
-		}
-	}
-
-	return dtos
-}
-
-// LinkMetricsToDTOs converts domain link metrics keyed by device ID into DTOs.
-func LinkMetricsToDTOs(metrics map[string][]domain.LinkMetrics) map[string][]LinkMetricsDTO {
-	dtos := make(map[string][]LinkMetricsDTO, len(metrics))
-	for key, values := range metrics {
-		deviceID := key
-		list := make([]LinkMetricsDTO, 0, len(values))
-
-		sort.Slice(values, func(i, j int) bool {
-			if values[i].IfName != values[j].IfName {
-				return values[i].IfName < values[j].IfName
-			}
-			return values[i].LinkID < values[j].LinkID
-		})
-
-		for _, metric := range values {
-			if deviceID == "" && metric.DeviceID != uuid.Nil {
-				deviceID = metric.DeviceID.String()
-			}
-
-			list = append(list, LinkMetricsDTO{
-				DeviceID:    deviceID,
-				IfName:      metric.IfName,
-				TxBps:       metric.TxBps,
-				RxBps:       metric.RxBps,
-				Utilization: metric.Utilization,
-				CollectedAt: formatTimestamp(metric.CollectedAt),
-			})
-		}
-
-		if deviceID == "" {
-			continue
-		}
-
-		dtos[deviceID] = list
-	}
-
-	return dtos
-}
-
 // AlertsToDTOs converts domain alerts into frontend DTOs.
 func AlertsToDTOs(alerts []domain.AlertState) []AlertDTO {
 	dtos := make([]AlertDTO, 0, len(alerts))
@@ -327,6 +293,74 @@ func AlertsToDTOs(alerts []domain.AlertState) []AlertDTO {
 		})
 	}
 
+	return dtos
+}
+
+// DeviceMetricsToDTOs preserves the legacy internal helper shape for older worker code.
+func DeviceMetricsToDTOs(metrics map[string]domain.DeviceMetrics) map[string]DeviceRuntimeDTO {
+	dtos := make(map[string]DeviceRuntimeDTO, len(metrics))
+	for key, metric := range metrics {
+		deviceID := key
+		if deviceID == "" && metric.DeviceID != uuid.Nil {
+			deviceID = metric.DeviceID.String()
+		}
+		if deviceID == "" {
+			continue
+		}
+		collectedAt := formatTimestamp(metric.CollectedAt)
+		stale := false
+		dto := DeviceRuntimeDTO{
+			DeviceID:       deviceID,
+			CPUPercent:     metric.CPUPercent,
+			MemPercent:     metric.MemPercent,
+			TempCelsius:    metric.TempCelsius,
+			UptimeSecs:     metric.UptimeSecs,
+			LastCollectedAt: nil,
+			CollectedAt:    collectedAt,
+			Stale:          &stale,
+		}
+		if collectedAt != "" {
+			dto.LastCollectedAt = &collectedAt
+		}
+		dtos[deviceID] = dto
+	}
+	return dtos
+}
+
+// LinkMetricsToDTOs preserves the legacy internal helper shape for older worker code.
+func LinkMetricsToDTOs(metrics map[string][]domain.LinkMetrics) map[string][]LinkRuntimeDTO {
+	dtos := make(map[string][]LinkRuntimeDTO, len(metrics))
+	for key, values := range metrics {
+		deviceID := key
+		list := make([]LinkRuntimeDTO, 0, len(values))
+		for _, metric := range values {
+			if deviceID == "" && metric.DeviceID != uuid.Nil {
+				deviceID = metric.DeviceID.String()
+			}
+			collectedAt := formatTimestamp(metric.CollectedAt)
+			dto := LinkRuntimeDTO{
+				LinkID:        metric.LinkID,
+				SourceDeviceID: deviceID,
+				SourceIfName:  metric.IfName,
+				MetricsStatus: "available",
+				MetricsReason: "ok",
+				TxBps:         metric.TxBps,
+				RxBps:         metric.RxBps,
+				Utilization:   metric.Utilization,
+				DeviceID:      deviceID,
+				IfName:        metric.IfName,
+				CollectedAt:   collectedAt,
+			}
+			if collectedAt != "" {
+				dto.LastCollectedAt = &collectedAt
+			}
+			list = append(list, dto)
+		}
+		if deviceID == "" {
+			continue
+		}
+		dtos[deviceID] = list
+	}
 	return dtos
 }
 

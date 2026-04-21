@@ -30,20 +30,28 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 
 function mockSnapshot(): SnapshotPayload {
   return {
-    device_metrics: {
+    devices: {
       'dev-1': {
         device_id: 'dev-1',
+        operational_status: 'down',
+        reachability: 'hard_down',
+        health: 'warning',
+        freshness: 'fresh',
+        primary_reason: 'device_unreachable',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'degraded',
+        firing_alert_count: 1,
+        last_collected_at: '2026-04-13T11:59:45Z',
+        last_polled_at: '2026-04-13T11:59:45Z',
+        expected_poll_interval_seconds: 60,
         cpu_percent: 42,
         mem_percent: 68,
-        collected_at: '2026-04-13T11:59:45Z',
-        health: 'warning',
-        stale: false,
+        temp_celsius: null,
+        uptime_secs: null,
       },
     },
-    link_metrics: {},
-    device_statuses: {
-      'dev-1': 'down',
-    },
+    links: {},
   };
 }
 
@@ -88,7 +96,7 @@ describe('buildTopologyNodes', () => {
     );
 
     expect(nodes[0].data.device.status).toBe('down');
-    expect(nodes[0].data.alertStatus).toBe('down');
+    expect(nodes[0].data.alertStatus).toBe('degraded');
     expect(nodes[0].data.metrics).toMatchObject({
       health: 'warning',
       last_polled_at: '2026-04-13T11:59:45Z',
@@ -113,8 +121,11 @@ describe('buildTopologyNodes', () => {
       vi.fn(),
       {
         ...mockSnapshot(),
-        device_statuses: {
-          'dev-1': 'up',
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'up',
+          },
         },
       },
       [],
@@ -124,7 +135,7 @@ describe('buildTopologyNodes', () => {
     expect(nodes[0].data.metrics).toMatchObject({
       health: 'warning',
       last_polled_at: '2026-04-13T11:59:45Z',
-      expected_poll_interval_seconds: 15,
+      expected_poll_interval_seconds: 60,
     });
   });
 
@@ -150,6 +161,84 @@ describe('buildTopologyNodes', () => {
     expect(nodes[0].data.monitoringState).toBe('unmonitored');
     expect(nodes[0].data.metrics).toBeNull();
     expect(nodes[0].data.device.status).toBe('down');
+  });
+
+  it('hydrates status from normalized snapshot device runtime', () => {
+    const nodes = buildTopologyNodes(
+      [mockDevice({ status: 'up' })],
+      new Map(),
+      new Map(),
+      { x: 120, y: 180 },
+      false,
+      vi.fn(),
+      mockSnapshot(),
+      [],
+    );
+
+    expect(nodes[0].data.device.status).toBe('down');
+    expect(nodes[0].data.metrics).toMatchObject({
+      health: 'warning',
+      last_polled_at: '2026-04-13T11:59:45Z',
+      expected_poll_interval_seconds: 60,
+    });
+  });
+
+  it('prefers normalized alert state over the alert feed when runtime exists', () => {
+    const nodes = buildTopologyNodes(
+      [mockDevice({ status: 'up' })],
+      new Map(),
+      new Map(),
+      { x: 120, y: 180 },
+      false,
+      vi.fn(),
+      {
+        ...mockSnapshot(),
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            alert_status: 'normal',
+            firing_alert_count: 0,
+          },
+        },
+      },
+      [mockAlert()],
+    );
+
+    expect(nodes[0].data.alertStatus).toBe('normal');
+  });
+
+  it('preserves normalized unmonitored device state when building nodes', () => {
+    const nodes = buildTopologyNodes(
+      [mockDevice({ status: 'up', ip: '10.0.0.1', device_type: 'router' })],
+      new Map(),
+      new Map(),
+      { x: 120, y: 180 },
+      false,
+      vi.fn(),
+      {
+        ...mockSnapshot(),
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'unmonitored',
+            reachability: 'unmonitored',
+            freshness: 'unmonitored',
+            metrics_status: 'unmonitored',
+            metrics_reason: 'unmonitored',
+            primary_reason: 'unmonitored',
+            last_collected_at: null,
+            last_polled_at: null,
+            cpu_percent: null,
+            mem_percent: null,
+            uptime_secs: null,
+          },
+        },
+      },
+      [],
+    );
+
+    expect(nodes[0].data.monitoringState).toBe('unmonitored');
+    expect(nodes[0].data.metrics).toBeNull();
   });
 
   it('attaches visible self-links to matching device nodes', () => {

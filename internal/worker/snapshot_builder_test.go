@@ -84,22 +84,17 @@ func TestBuildPipelineSnapshotPreservesOverviewSections(t *testing.T) {
 			},
 		},
 	}
-	hostnameOverrides := map[uuid.UUID]string{
-		deviceID: "prom-host-ignored",
-		peerID:   "edge-sw-2",
-	}
-
-	snapshot := buildPipelineSnapshot(devices, links, states, alerts, hostnameOverrides)
+	snapshot := buildPipelineSnapshot(devices, links, states, alerts, ws.PrometheusStatusPayload{Enabled: true, Available: true})
 
 	if snapshot == nil {
 		t.Fatal("expected snapshot")
 	}
-	if len(snapshot.DeviceMetrics) != 2 {
-		t.Fatalf("expected device_metrics entries for both devices, got %d", len(snapshot.DeviceMetrics))
+	if len(snapshot.Devices) != 2 {
+		t.Fatalf("expected devices entries for both devices, got %d", len(snapshot.Devices))
 	}
-	metric, ok := snapshot.DeviceMetrics[deviceID.String()]
+	metric, ok := snapshot.Devices[deviceID.String()]
 	if !ok {
-		t.Fatalf("expected metrics for device %s", deviceID)
+		t.Fatalf("expected runtime for device %s", deviceID)
 	}
 	if metric.CPUPercent == nil || *metric.CPUPercent != 41.5 {
 		t.Fatalf("expected CPU 41.5, got %#v", metric.CPUPercent)
@@ -114,24 +109,20 @@ func TestBuildPipelineSnapshotPreservesOverviewSections(t *testing.T) {
 		t.Fatalf("expected stale true, got %#v", metric.Stale)
 	}
 
-	linkMetrics, ok := snapshot.LinkMetrics[deviceID.String()]
+	linkRuntime, ok := snapshot.Links[linkID.String()]
 	if !ok {
-		t.Fatalf("expected link_metrics section for device %s", deviceID)
+		t.Fatalf("expected links entry for %s", linkID)
 	}
-	if len(linkMetrics) != 1 {
-		t.Fatalf("expected 1 link metric, got %d", len(linkMetrics))
+	if linkRuntime.SourceIfName != "ether1" {
+		t.Fatalf("expected source_if_name ether1, got %q", linkRuntime.SourceIfName)
 	}
-	if linkMetrics[0].IfName != "uplink" {
-		t.Fatalf("expected interface uplink, got %q", linkMetrics[0].IfName)
+	if linkRuntime.Utilization == nil || *linkRuntime.Utilization != 0.25 {
+		t.Fatalf("expected utilization 0.25, got %#v", linkRuntime.Utilization)
 	}
-	if linkMetrics[0].Utilization == nil || *linkMetrics[0].Utilization != 0.25 {
-		t.Fatalf("expected utilization 0.25, got %#v", linkMetrics[0].Utilization)
-	}
-
-	if got := snapshot.DeviceStatuses[deviceID.String()]; got != string(domain.DeviceStatusUp) {
+	if got := snapshot.Devices[deviceID.String()].OperationalStatus; got != string(domain.DeviceStatusUp) {
 		t.Fatalf("expected status up, got %q", got)
 	}
-	if got := snapshot.DeviceStatuses[peerID.String()]; got != string(domain.DeviceStatusProbing) {
+	if got := snapshot.Devices[peerID.String()].OperationalStatus; got != string(domain.DeviceStatusProbing) {
 		t.Fatalf("expected peer status probing, got %q", got)
 	}
 
@@ -154,25 +145,172 @@ func TestBuildPipelineSnapshotPreservesOverviewSections(t *testing.T) {
 		t.Fatal("expected slim snapshot to omit device_models")
 	}
 
-	decodedMetrics, ok := decoded["device_metrics"].(map[string]any)
+	decodedMetrics, ok := decoded["devices"].(map[string]any)
 	if !ok {
-		t.Fatalf("device_metrics = %#v, want object", decoded["device_metrics"])
+		t.Fatalf("devices = %#v, want object", decoded["devices"])
 	}
 	decodedMetric, ok := decodedMetrics[deviceID.String()].(map[string]any)
 	if !ok {
-		t.Fatalf("device_metrics[%s] = %#v, want object", deviceID, decodedMetrics[deviceID.String()])
+		t.Fatalf("devices[%s] = %#v, want object", deviceID, decodedMetrics[deviceID.String()])
 	}
-	if _, ok := decodedMetric["temp_celsius"]; ok {
-		t.Fatal("expected slim device_metrics to omit temp_celsius")
+	if got := decodedMetric["temp_celsius"]; got != 48.0 {
+		t.Fatalf("expected temp_celsius 48, got %#v", got)
 	}
-	if _, ok := decodedMetric["uptime_secs"]; ok {
-		t.Fatal("expected slim device_metrics to omit uptime_secs")
+	if got := decodedMetric["uptime_secs"]; got != 7200.0 {
+		t.Fatalf("expected uptime_secs 7200, got %#v", got)
 	}
-	if _, ok := decodedMetric["last_polled_at"]; ok {
-		t.Fatal("expected slim device_metrics to omit last_polled_at")
+	if _, ok := decodedMetric["last_polled_at"]; !ok {
+		t.Fatal("expected normalized devices payload to include last_polled_at")
 	}
-	if _, ok := decodedMetric["expected_poll_interval_seconds"]; ok {
-		t.Fatal("expected slim device_metrics to omit expected_poll_interval_seconds")
+	if _, ok := decodedMetric["expected_poll_interval_seconds"]; !ok {
+		t.Fatal("expected normalized devices payload to include expected_poll_interval_seconds")
+	}
+}
+
+func TestBuildPipelineSnapshot_NormalizesRuntimeCollections(t *testing.T) {
+	deviceID := uuid.New()
+	peerID := uuid.New()
+	linkID := uuid.New()
+	collectedAt := time.Date(2026, 4, 20, 9, 30, 0, 0, time.UTC)
+
+	snapshot := buildPipelineSnapshot(
+		[]domain.Device{
+			{
+				ID:            deviceID,
+				IP:            "192.0.2.10",
+				MetricsSource: domain.MetricsSourceSNMP,
+				Interfaces:    []domain.Interface{{IfName: "ether1", Speed: 1_000_000_000}},
+			},
+			{
+				ID:            peerID,
+				IP:            "192.0.2.11",
+				MetricsSource: domain.MetricsSourceSNMP,
+				Interfaces:    []domain.Interface{{IfName: "ether2", Speed: 1_000_000_000}},
+			},
+		},
+		[]domain.Link{{
+			ID:             linkID,
+			SourceDeviceID: deviceID,
+			SourceIfName:   "ether1",
+			TargetDeviceID: peerID,
+			TargetIfName:   "ether2",
+		}},
+		map[uuid.UUID]state.DeviceState{
+			deviceID: {
+				Metrics: domain.DeviceMetrics{
+					DeviceID:    deviceID,
+					CPUPercent:  floatPtr(41.5),
+					MemPercent:  floatPtr(62),
+					TempCelsius: floatPtr(48),
+					UptimeSecs:  floatPtr(7200),
+					CollectedAt: collectedAt,
+				},
+				LinkMetrics:  []domain.LinkMetrics{{IfName: "ether1", TxBps: floatPtr(125_000_000), RxBps: floatPtr(250_000_000), CollectedAt: collectedAt}},
+				Health:       state.HealthStatusWarning,
+				Reachability: state.ReachabilityUp,
+			},
+			peerID: {
+				Reachability: state.ReachabilityUp,
+			},
+		},
+		map[uuid.UUID][]domain.AlertState{deviceID: {{DeviceID: deviceID, Severity: "critical", State: "firing", AlertName: "HighCPU"}}},
+		ws.PrometheusStatusPayload{Enabled: true, Available: true},
+	)
+
+	deviceRuntime, ok := snapshot.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected devices[%s] entry", deviceID)
+	}
+	if deviceRuntime.OperationalStatus != "up" {
+		t.Fatalf("OperationalStatus = %q, want up", deviceRuntime.OperationalStatus)
+	}
+	if deviceRuntime.MetricsStatus != "available" {
+		t.Fatalf("MetricsStatus = %q, want available", deviceRuntime.MetricsStatus)
+	}
+	if deviceRuntime.AlertStatus != string(domain.AlertStatusDown) {
+		t.Fatalf("AlertStatus = %q, want %q", deviceRuntime.AlertStatus, domain.AlertStatusDown)
+	}
+
+	linkRuntime, ok := snapshot.Links[linkID.String()]
+	if !ok {
+		t.Fatalf("expected links[%s] entry", linkID)
+	}
+	if linkRuntime.MetricsStatus != "available" {
+		t.Fatalf("MetricsStatus = %q, want available", linkRuntime.MetricsStatus)
+	}
+	if linkRuntime.Utilization == nil || *linkRuntime.Utilization != 0.25 {
+		t.Fatalf("Utilization = %#v, want 0.25", linkRuntime.Utilization)
+	}
+}
+
+func TestBuildPipelineSnapshot_CompatibilityLinkMetricsPreserveTargetMetricProvenance(t *testing.T) {
+	sourceID := uuid.New()
+	targetID := uuid.New()
+	linkID := uuid.New()
+	collectedAt := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+
+	snapshot := buildPipelineSnapshot(
+		[]domain.Device{
+			{
+				ID:         sourceID,
+				IP:         "192.0.2.10",
+				Interfaces: []domain.Interface{{IfName: "ether1", Speed: 1_000_000_000}},
+			},
+			{
+				ID:         targetID,
+				IP:         "192.0.2.11",
+				Interfaces: []domain.Interface{{IfName: "ether2", Speed: 1_000_000_000}},
+			},
+		},
+		[]domain.Link{{
+			ID:             linkID,
+			SourceDeviceID: sourceID,
+			SourceIfName:   "ether1",
+			TargetDeviceID: targetID,
+			TargetIfName:   "ether2",
+		}},
+		map[uuid.UUID]state.DeviceState{
+			sourceID: {Reachability: state.ReachabilityUp},
+			targetID: {
+				Reachability: state.ReachabilityUp,
+				LinkMetrics: []domain.LinkMetrics{{
+					IfName:      "ether2",
+					TxBps:       floatPtr(10),
+					RxBps:       floatPtr(20),
+					CollectedAt: collectedAt,
+				}},
+			},
+		},
+		nil,
+		ws.PrometheusStatusPayload{},
+	)
+
+	linkRuntime, ok := snapshot.Links[linkID.String()]
+	if !ok {
+		t.Fatalf("expected links[%s] entry", linkID)
+	}
+	if linkRuntime.SourceDeviceID != sourceID.String() {
+		t.Fatalf("Links[%s].SourceDeviceID = %q, want %q", linkID, linkRuntime.SourceDeviceID, sourceID)
+	}
+	if linkRuntime.SourceIfName != "ether1" {
+		t.Fatalf("Links[%s].SourceIfName = %q, want ether1", linkID, linkRuntime.SourceIfName)
+	}
+
+	legacyMetrics, ok := snapshot.LinkMetrics[targetID.String()]
+	if !ok {
+		t.Fatalf("expected compatibility link_metrics entry for target device %s", targetID)
+	}
+	if _, ok := snapshot.LinkMetrics[sourceID.String()]; ok {
+		t.Fatalf("did not expect compatibility link_metrics entry for source device %s", sourceID)
+	}
+	if len(legacyMetrics) != 1 {
+		t.Fatalf("LinkMetrics[%s] length = %d, want 1", targetID, len(legacyMetrics))
+	}
+	if legacyMetrics[0].DeviceID != targetID.String() {
+		t.Fatalf("LinkMetrics[%s][0].DeviceID = %q, want %q", targetID, legacyMetrics[0].DeviceID, targetID)
+	}
+	if legacyMetrics[0].IfName != "ether2" {
+		t.Fatalf("LinkMetrics[%s][0].IfName = %q, want ether2", targetID, legacyMetrics[0].IfName)
 	}
 }
 
@@ -199,7 +337,7 @@ func TestBuildPipelineSnapshotJSONOmitsDetailOnlyDeviceMetricFields(t *testing.T
 			},
 		},
 		nil,
-		nil,
+		ws.PrometheusStatusPayload{},
 	)
 
 	raw, err := json.Marshal(snapshot)
@@ -212,25 +350,25 @@ func TestBuildPipelineSnapshotJSONOmitsDetailOnlyDeviceMetricFields(t *testing.T
 		t.Fatalf("json.Unmarshal returned error: %v", err)
 	}
 
-	deviceMetrics, ok := decoded["device_metrics"].(map[string]any)
+	deviceMetrics, ok := decoded["devices"].(map[string]any)
 	if !ok {
-		t.Fatalf("device_metrics = %#v, want object", decoded["device_metrics"])
+		t.Fatalf("devices = %#v, want object", decoded["devices"])
 	}
 	metric, ok := deviceMetrics[deviceID.String()].(map[string]any)
 	if !ok {
-		t.Fatalf("device_metrics[%s] = %#v, want object", deviceID, deviceMetrics[deviceID.String()])
+		t.Fatalf("devices[%s] = %#v, want object", deviceID, deviceMetrics[deviceID.String()])
 	}
-	if _, ok := metric["temp_celsius"]; ok {
-		t.Fatal("expected slim overview device_metrics to omit temp_celsius")
+	if got := metric["temp_celsius"]; got != 48.0 {
+		t.Fatalf("temp_celsius = %#v, want 48", got)
 	}
-	if _, ok := metric["uptime_secs"]; ok {
-		t.Fatal("expected slim overview device_metrics to omit uptime_secs")
+	if got := metric["uptime_secs"]; got != 3600.0 {
+		t.Fatalf("uptime_secs = %#v, want 3600", got)
 	}
-	if _, ok := metric["last_polled_at"]; ok {
-		t.Fatal("expected slim overview device_metrics to omit last_polled_at")
+	if got := metric["last_polled_at"]; got != "2026-04-13T12:00:00Z" {
+		t.Fatalf("last_polled_at = %#v, want 2026-04-13T12:00:00Z", got)
 	}
-	if _, ok := metric["expected_poll_interval_seconds"]; ok {
-		t.Fatal("expected slim overview device_metrics to omit expected_poll_interval_seconds")
+	if got := metric["expected_poll_interval_seconds"]; got != 30.0 {
+		t.Fatalf("expected_poll_interval_seconds = %#v, want 30", got)
 	}
 }
 
@@ -253,7 +391,7 @@ func TestBuildPipelineSnapshotMapsReachabilityToExistingStatusStrings(t *testing
 		fallbackID: {},
 	}
 
-	snapshot := buildPipelineSnapshot(devices, nil, states, nil, nil)
+	snapshot := buildPipelineSnapshot(devices, nil, states, nil, ws.PrometheusStatusPayload{})
 
 	if got := snapshot.DeviceStatuses[upID.String()]; got != string(domain.DeviceStatusUp) {
 		t.Fatalf("expected up to map to up, got %q", got)
@@ -288,7 +426,7 @@ func TestBuildPipelineSnapshot_VirtualNoIPIgnoresReachabilityOverride(t *testing
 			},
 		},
 		nil,
-		nil,
+		ws.PrometheusStatusPayload{},
 	)
 
 	if got := snapshot.DeviceStatuses[deviceID.String()]; got != string(domain.DeviceStatusUnknown) {
@@ -311,7 +449,7 @@ func TestBuildPipelineSnapshot_FallsBackToPollOverrideAndUnknownHealthBeforeFirs
 		nil,
 		nil,
 		nil,
-		nil,
+		ws.PrometheusStatusPayload{},
 	)
 
 	deviceMetrics, ok := snapshot.DeviceMetrics[deviceID.String()]
@@ -340,7 +478,7 @@ func TestBuildPipelineSnapshot_FallsBackToPollClassIntervalWhenOverrideAbsent(t 
 		nil,
 		nil,
 		nil,
-		nil,
+		ws.PrometheusStatusPayload{},
 	)
 
 	if _, ok := snapshot.DeviceMetrics[deviceID.String()]; !ok {
@@ -371,9 +509,11 @@ func TestBuildDeviceDetailDelta_EmbedsOptionalDetailFieldsInDeviceMetrics(t *tes
 			Stale:            true,
 			ExpectedInterval: 45 * time.Second,
 		},
+		nil,
+		ws.PrometheusStatusPayload{},
 	)
 
-	deviceMetrics, ok := delta.DeviceMetrics[deviceID.String()]
+	deviceMetrics, ok := delta.Devices[deviceID.String()]
 	if !ok {
 		t.Fatalf("expected device detail delta for %s", deviceID)
 	}
@@ -387,62 +527,112 @@ func TestBuildDeviceDetailDelta_EmbedsOptionalDetailFieldsInDeviceMetrics(t *tes
 	if deviceMetrics.Stale == nil || !*deviceMetrics.Stale {
 		t.Fatalf("Stale = %#v, want true", deviceMetrics.Stale)
 	}
-	if got := delta.DeviceStatuses[deviceID.String()]; got != string(domain.DeviceStatusUp) {
-		t.Fatalf("DeviceStatuses[%s] = %q, want %q", deviceID, got, domain.DeviceStatusUp)
+	if got := delta.Devices[deviceID.String()].OperationalStatus; got != string(domain.DeviceStatusUp) {
+		t.Fatalf("Devices[%s].OperationalStatus = %q, want %q", deviceID, got, domain.DeviceStatusUp)
+	}
+}
+
+func TestBuildDeviceDetailDelta_UsesPrometheusStatusAndAlerts(t *testing.T) {
+	deviceID := uuid.New()
+
+	delta := buildDeviceDetailDelta(
+		domain.Device{ID: deviceID, MetricsSource: domain.MetricsSourcePrometheus},
+		state.DeviceState{},
+		[]domain.AlertState{{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+		}},
+		ws.PrometheusStatusPayload{Enabled: true, Available: false},
+	)
+
+	deviceMetrics, ok := delta.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected device detail delta for %s", deviceID)
+	}
+	if deviceMetrics.PrimaryReason != normalizedReasonUpstreamUnavailable {
+		t.Fatalf("PrimaryReason = %q, want %q", deviceMetrics.PrimaryReason, normalizedReasonUpstreamUnavailable)
+	}
+	if deviceMetrics.MetricsReason != normalizedReasonUpstreamUnavailable {
+		t.Fatalf("MetricsReason = %q, want %q", deviceMetrics.MetricsReason, normalizedReasonUpstreamUnavailable)
+	}
+	if deviceMetrics.AlertStatus != string(domain.AlertStatusDown) {
+		t.Fatalf("AlertStatus = %q, want %q", deviceMetrics.AlertStatus, domain.AlertStatusDown)
+	}
+	if deviceMetrics.FiringAlertCount != 1 {
+		t.Fatalf("FiringAlertCount = %d, want 1", deviceMetrics.FiringAlertCount)
 	}
 }
 
 func TestBuildDeviceDetailDelta_IncludesSelectedDeviceLinkMetricsOnly(t *testing.T) {
 	deviceID := uuid.New()
+	peerID := uuid.New()
+	linkID := uuid.New()
 	collectedAt := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
 
-	delta := buildDeviceDetailDelta(
-		domain.Device{ID: deviceID},
-		state.DeviceState{
-			Metrics: domain.DeviceMetrics{
-				DeviceID:    deviceID,
+	device := domain.Device{ID: deviceID, Interfaces: []domain.Interface{{IfName: "ether1", Speed: 1_000_000_000}}}
+	peer := domain.Device{ID: peerID, Interfaces: []domain.Interface{{IfName: "ether2", Speed: 1_000_000_000}}}
+	link := domain.Link{ID: linkID, SourceDeviceID: deviceID, SourceIfName: "ether1", TargetDeviceID: peerID, TargetIfName: "ether2"}
+	deviceState := state.DeviceState{
+		Metrics: domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CollectedAt: collectedAt,
+		},
+		LinkMetrics: []domain.LinkMetrics{
+			{
+				IfName:      "ether1",
+				TxBps:       floatPtr(125_000_000),
+				RxBps:       floatPtr(250_000_000),
+				Utilization: floatPtr(0.25),
 				CollectedAt: collectedAt,
 			},
-			LinkMetrics: []domain.LinkMetrics{
-				{
-					IfName:      "ether1",
-					TxBps:       floatPtr(125_000_000),
-					RxBps:       floatPtr(250_000_000),
-					Utilization: floatPtr(0.25),
-					CollectedAt: collectedAt,
-				},
-			},
 		},
+	}
+	linkRuntimes := buildDeviceLinkRuntimeDTOs(
+		device,
+		deviceState,
+		map[uuid.UUID]domain.Device{deviceID: device, peerID: peer},
+		map[uuid.UUID]state.DeviceState{deviceID: deviceState, peerID: {Reachability: state.ReachabilityUp}},
+		[]domain.Link{link},
+		ws.PrometheusStatusPayload{},
+	)
+	delta := buildDeviceDetailDeltaWithLinks(
+		device,
+		state.DeviceState{
+			Metrics:     deviceState.Metrics,
+			LinkMetrics: deviceState.LinkMetrics,
+		},
+		linkRuntimes,
+		nil,
+		ws.PrometheusStatusPayload{},
 	)
 
-	if len(delta.LinkMetrics) != 1 {
-		t.Fatalf("LinkMetrics length = %d, want 1", len(delta.LinkMetrics))
+	if len(delta.Links) != 1 {
+		t.Fatalf("Links length = %d, want 1", len(delta.Links))
 	}
 
-	linkMetrics, ok := delta.LinkMetrics[deviceID.String()]
+	linkMetrics, ok := delta.Links[linkID.String()]
 	if !ok {
-		t.Fatalf("expected LinkMetrics[%s] entry", deviceID)
+		t.Fatalf("expected Links[%s] entry", linkID)
 	}
-	if len(linkMetrics) != 1 {
-		t.Fatalf("LinkMetrics[%s] length = %d, want 1", deviceID, len(linkMetrics))
+	if linkMetrics.SourceDeviceID != deviceID.String() {
+		t.Fatalf("Links[%s].SourceDeviceID = %q, want %q", linkID, linkMetrics.SourceDeviceID, deviceID)
 	}
-	if linkMetrics[0].DeviceID != deviceID.String() {
-		t.Fatalf("LinkMetrics[%s][0].DeviceID = %q, want %q", deviceID, linkMetrics[0].DeviceID, deviceID)
+	if linkMetrics.SourceIfName != "ether1" {
+		t.Fatalf("Links[%s].SourceIfName = %q, want ether1", linkID, linkMetrics.SourceIfName)
 	}
-	if linkMetrics[0].IfName != "ether1" {
-		t.Fatalf("LinkMetrics[%s][0].IfName = %q, want ether1", deviceID, linkMetrics[0].IfName)
+	if linkMetrics.TxBps == nil {
+		t.Fatalf("Links[%s].TxBps = nil, want value", linkID)
 	}
-	if linkMetrics[0].TxBps == nil {
-		t.Fatalf("LinkMetrics[%s][0].TxBps = nil, want value", deviceID)
+	if linkMetrics.RxBps == nil {
+		t.Fatalf("Links[%s].RxBps = nil, want value", linkID)
 	}
-	if linkMetrics[0].RxBps == nil {
-		t.Fatalf("LinkMetrics[%s][0].RxBps = nil, want value", deviceID)
+	if linkMetrics.Utilization == nil {
+		t.Fatalf("Links[%s].Utilization = nil, want value", linkID)
 	}
-	if linkMetrics[0].Utilization == nil {
-		t.Fatalf("LinkMetrics[%s][0].Utilization = nil, want value", deviceID)
-	}
-	if linkMetrics[0].CollectedAt != collectedAt.Format(time.RFC3339) {
-		t.Fatalf("LinkMetrics[%s][0].CollectedAt = %q, want %q", deviceID, linkMetrics[0].CollectedAt, collectedAt.Format(time.RFC3339))
+	if linkMetrics.LastCollectedAt == nil || *linkMetrics.LastCollectedAt != collectedAt.Format(time.RFC3339) {
+		t.Fatalf("Links[%s].LastCollectedAt = %#v, want %q", linkID, linkMetrics.LastCollectedAt, collectedAt.Format(time.RFC3339))
 	}
 }
 
@@ -450,28 +640,28 @@ func TestComputeSnapshotHashes_DeviceMetricHashIgnoresRemovedDetailFields(t *tes
 	deviceID := uuid.New().String()
 	stale := true
 
-	baseMetric := ws.DeviceMetricsDTO{
-		DeviceID:     deviceID,
-		CPUPercent:   floatPtr(55),
-		CollectedAt:  "2026-04-13T12:00:00Z",
-		Health:       "warning",
-		Reachability: "up",
-		Stale:        &stale,
+	baseMetric := ws.DeviceRuntimeDTO{
+		DeviceID:          deviceID,
+		OperationalStatus: "up",
+		Reachability:      "up",
+		Health:            "warning",
+		Freshness:         "stale",
+		PrimaryReason:     "stale",
+		MetricsStatus:     "partial",
+		MetricsReason:     "ok",
+		AlertStatus:       "normal",
+		CPUPercent:        floatPtr(55),
+		LastCollectedAt:   stringPtr("2026-04-13T12:00:00Z"),
+		Stale:             &stale,
 	}
 
 	current := ws.EmptySnapshot()
-	current.DeviceMetrics[deviceID] = baseMetric
+	current.Devices[deviceID] = baseMetric
+	syncSnapshotCompatibility(current)
 
 	updated := ws.EmptySnapshot()
-	updated.DeviceMetrics[deviceID] = baseMetric
-	updated.DeviceMetrics[deviceID] = ws.DeviceMetricsDTO{
-		DeviceID:     baseMetric.DeviceID,
-		CPUPercent:   baseMetric.CPUPercent,
-		CollectedAt:  baseMetric.CollectedAt,
-		Health:       baseMetric.Health,
-		Reachability: baseMetric.Reachability,
-		Stale:        baseMetric.Stale,
-	}
+	updated.Devices[deviceID] = baseMetric
+	syncSnapshotCompatibility(updated)
 
 	currentHashes := computeSnapshotHashes(current)
 	updatedHashes := computeSnapshotHashes(updated)
@@ -486,58 +676,86 @@ func TestBuildDeltaSuppressesUnchangedSections(t *testing.T) {
 	sameCPU := floatPtr(10)
 	sameTx := floatPtr(100)
 	changedUtilization := floatPtr(0.5)
+	linkID := uuid.New().String()
 
 	previous := &ws.SnapshotPayload{
-		DeviceMetrics: map[string]ws.DeviceMetricsDTO{
+		Devices: map[string]ws.DeviceRuntimeDTO{
 			deviceID: {
-				DeviceID:    deviceID,
-				CPUPercent:  sameCPU,
-				CollectedAt: "2026-04-13T09:30:00Z",
+				DeviceID:          deviceID,
+				OperationalStatus: "up",
+				Reachability:      "up",
+				Health:            "unknown",
+				Freshness:         "fresh",
+				PrimaryReason:     "ok",
+				MetricsStatus:     "partial",
+				MetricsReason:     "ok",
+				AlertStatus:       "normal",
+				CPUPercent:        sameCPU,
+				LastCollectedAt:   stringPtr("2026-04-13T09:30:00Z"),
 			},
 		},
-		LinkMetrics: map[string][]ws.LinkMetricsDTO{
-			deviceID: {{
-				DeviceID:    deviceID,
-				IfName:      "ether1",
-				TxBps:       sameTx,
-				CollectedAt: "2026-04-13T09:30:00Z",
-			}},
+		Links: map[string]ws.LinkRuntimeDTO{
+			linkID: {
+				LinkID:          linkID,
+				SourceDeviceID:  deviceID,
+				TargetDeviceID:  uuid.New().String(),
+				SourceIfName:    "ether1",
+				TargetIfName:    "ether2",
+				MetricsStatus:   "partial",
+				MetricsReason:   "ok",
+				TxBps:           sameTx,
+				LastCollectedAt: stringPtr("2026-04-13T09:30:00Z"),
+			},
 		},
-		DeviceStatuses:  map[string]string{deviceID: "up"},
 	}
 	current := &ws.SnapshotPayload{
-		DeviceMetrics: map[string]ws.DeviceMetricsDTO{
+		Devices: map[string]ws.DeviceRuntimeDTO{
 			deviceID: {
-				DeviceID:    deviceID,
-				CPUPercent:  sameCPU,
-				CollectedAt: "2026-04-13T09:30:00Z",
+				DeviceID:          deviceID,
+				OperationalStatus: "up",
+				Reachability:      "up",
+				Health:            "unknown",
+				Freshness:         "fresh",
+				PrimaryReason:     "ok",
+				MetricsStatus:     "partial",
+				MetricsReason:     "ok",
+				AlertStatus:       "normal",
+				CPUPercent:        sameCPU,
+				LastCollectedAt:   stringPtr("2026-04-13T09:30:00Z"),
 			},
 		},
-		LinkMetrics: map[string][]ws.LinkMetricsDTO{
-			deviceID: {{
-				DeviceID:    deviceID,
-				IfName:      "ether1",
-				TxBps:       sameTx,
-				Utilization: changedUtilization,
-				CollectedAt: "2026-04-13T09:30:00Z",
-			}},
+		Links: map[string]ws.LinkRuntimeDTO{
+			linkID: {
+				LinkID:          linkID,
+				SourceDeviceID:  deviceID,
+				TargetDeviceID:  previous.Links[linkID].TargetDeviceID,
+				SourceIfName:    "ether1",
+				TargetIfName:    "ether2",
+				MetricsStatus:   "available",
+				MetricsReason:   "ok",
+				TxBps:           sameTx,
+				Utilization:     changedUtilization,
+				LastCollectedAt: stringPtr("2026-04-13T09:30:00Z"),
+			},
 		},
-		DeviceStatuses:  map[string]string{deviceID: "up"},
 	}
+	syncSnapshotCompatibility(previous)
+	syncSnapshotCompatibility(current)
 
 	delta := buildDelta(current, computeSnapshotHashes(current), computeSnapshotHashes(previous))
 	if delta == nil {
 		t.Fatal("expected delta")
 	}
-	if len(delta.DeviceMetrics) != 0 {
-		t.Fatalf("expected unchanged device_metrics to be suppressed, got %d entries", len(delta.DeviceMetrics))
+	if len(delta.Devices) != 0 {
+		t.Fatalf("expected unchanged devices to be suppressed, got %d entries", len(delta.Devices))
 	}
-	if len(delta.DeviceStatuses) != 0 {
-		t.Fatalf("expected unchanged device_statuses to be suppressed, got %d entries", len(delta.DeviceStatuses))
+	if len(delta.Links) != 1 {
+		t.Fatalf("expected changed links to remain, got %d entries", len(delta.Links))
 	}
-	if len(delta.LinkMetrics) != 1 {
-		t.Fatalf("expected changed link_metrics to remain, got %d entries", len(delta.LinkMetrics))
-	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func intPtr(value int) *int {

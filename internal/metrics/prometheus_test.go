@@ -104,7 +104,7 @@ func TestQueryDeviceMetricsParsesPrometheusResponses(t *testing.T) {
 	}
 }
 
-func TestQueryDeviceMetricsEmptyResultsReturnNilPointers(t *testing.T) {
+func TestQueryDeviceMetricsEmptyResultsLeaveCollectedAtZero(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,8 +128,8 @@ func TestQueryDeviceMetricsEmptyResultsReturnNilPointers(t *testing.T) {
 	if result.CPUPercent != nil || result.MemPercent != nil || result.TempCelsius != nil || result.UptimeSecs != nil {
 		t.Fatalf("expected nil metric pointers, got %+v", result)
 	}
-	if result.CollectedAt.IsZero() {
-		t.Fatal("expected CollectedAt to be set")
+	if !result.CollectedAt.IsZero() {
+		t.Fatalf("expected zero CollectedAt when Prometheus returned no metrics, got %s", result.CollectedAt)
 	}
 }
 

@@ -136,13 +136,13 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	}
 
 	p.runtime.mu.RLock()
-	hostnames := cloneHostnameOverrides(p.runtime.hostnames)
 	alerts := cloneAlertGroups(p.runtime.alerts)
+	promStatus := p.runtime.promStatus
 	previousHashes := p.runtime.prevHashes
 	p.runtime.mu.RUnlock()
 
 	startedAt := time.Now()
-	snapshot := buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, hostnames)
+	snapshot := buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, promStatus)
 	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeFull, time.Since(startedAt), true)
 	currentHashes := computeSnapshotHashes(snapshot)
 	drainedTopology := drainTopologyNotify(p.topologyNotify)
@@ -335,20 +335,19 @@ func (b *pipelineSnapshotBroadcaster) buildFullOverviewSnapshot() (_ *ws.Snapsho
 	}
 
 	p.runtime.mu.RLock()
-	hostnames := cloneHostnameOverrides(p.runtime.hostnames)
 	alerts := cloneAlertGroups(p.runtime.alerts)
+	promStatus := p.runtime.promStatus
 	p.runtime.mu.RUnlock()
 
-	return buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, hostnames), nil
+	return buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, promStatus), nil
 }
 
-func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUID]struct{}, _ bool) (*ws.SnapshotPayload, bool, error) {
+func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUID]struct{}, alertsDirty bool) (*ws.SnapshotPayload, bool, error) {
 	p := b.pipeline
-	if len(dirtyDevices) == 0 {
+	if len(dirtyDevices) == 0 && !alertsDirty {
 		return nil, false, nil
 	}
 
-	delta := ws.EmptySnapshot()
 	devices, err := p.cache.GetDevices()
 	if err != nil {
 		return nil, false, err
@@ -360,16 +359,45 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 	}
 
 	p.runtime.mu.RLock()
-	hostnames := cloneHostnameOverrides(p.runtime.hostnames)
+	alerts := cloneAlertGroups(p.runtime.alerts)
+	promStatus := p.runtime.promStatus
+	previousHashes := p.runtime.prevHashes
 	p.runtime.mu.RUnlock()
+	states := p.stateStore.Snapshot()
 
+	if alertsDirty {
+		if previousHashes == nil {
+			return nil, true, nil
+		}
+		current := buildPipelineSnapshot(devices, links, states, alerts, promStatus)
+		currentHashes := computeSnapshotHashes(current)
+		return buildDelta(current, currentHashes, previousHashes), false, nil
+	}
+
+	delta := ws.EmptySnapshot()
 	filteredDevices := filterDevicesByID(devices, dirtyDevices)
 	filteredLinks := filterLinksByDeviceID(links, dirtyDevices)
 	if len(filteredDevices) > 0 {
-		partial := buildPipelineSnapshot(filteredDevices, filteredLinks, p.stateStore.Snapshot(), nil, hostnames)
-		delta.DeviceMetrics = partial.DeviceMetrics
-		delta.LinkMetrics = partial.LinkMetrics
-		delta.DeviceStatuses = partial.DeviceStatuses
+		contextIDs := make(map[uuid.UUID]struct{}, len(dirtyDevices)+len(filteredLinks))
+		for id := range dirtyDevices {
+			contextIDs[id] = struct{}{}
+		}
+		for _, link := range filteredLinks {
+			contextIDs[link.SourceDeviceID] = struct{}{}
+			contextIDs[link.TargetDeviceID] = struct{}{}
+		}
+
+		partial := buildPipelineSnapshot(filterDevicesByID(devices, contextIDs), filteredLinks, states, alerts, promStatus)
+		for id := range dirtyDevices {
+			deviceRuntime, ok := partial.Devices[id.String()]
+			if !ok {
+				continue
+			}
+			delta.Devices[id.String()] = deviceRuntime
+		}
+		for id, linkRuntime := range partial.Links {
+			delta.Links[id] = linkRuntime
+		}
 	}
 
 	if snapshotPayloadEmpty(delta) {

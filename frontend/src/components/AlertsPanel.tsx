@@ -39,60 +39,23 @@ function stateBadge(state: string) {
 }
 
 export function AlertsPanel({ model }: AlertsPanelProps) {
-  const { firingAlerts, resolvedAlerts, prometheusOutage } = model;
-  const promDown = prometheusOutage !== null;
-  const promOnlyDevices = prometheusOutage?.offlineDevices ?? [];
-  const snmpFallbackDevices = prometheusOutage?.fallbackDevices ?? [];
+  const { activeAlertCount, firingAlerts, resolvedAlerts, prometheusDiagnostics } = model;
+  const hiddenActiveAlerts = Math.max(activeAlertCount - firingAlerts.length, 0);
 
   return (
     <div className="space-y-4">
-      {/* Prometheus status */}
-      {promDown && (
+      {/* Prometheus diagnostics */}
+      {prometheusDiagnostics && (
         <div className="space-y-2">
           <div className="flex items-start gap-2.5 rounded-lg border border-red-500/25 bg-red-500/8 p-3">
             <span className="mt-0.5 h-2 w-2 flex-none rounded-full bg-red-400 animate-pulse motion-reduce:animate-none" />
             <div className="min-w-0">
-              <p className="text-sm font-medium text-red-300">Prometheus unreachable</p>
+              <p className="text-sm font-medium text-red-300">{prometheusDiagnostics.title}</p>
               <p className="mt-0.5 text-xs text-red-300/70">
-                Metrics and probe status unavailable. Devices relying on Prometheus are marked offline.
+                {prometheusDiagnostics.detail}
               </p>
             </div>
           </div>
-
-          {promOnlyDevices.length > 0 && (
-            <div className="rounded-lg border border-red-500/15 bg-red-500/5 p-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-red-400/80 mb-1.5">
-                Offline — no fallback ({promOnlyDevices.length})
-              </p>
-              <div className="space-y-1">
-                 {promOnlyDevices.map((device) => (
-                   <div key={device.id} className="flex items-center gap-2 text-xs text-red-300/80">
-                     <span className="h-1.5 w-1.5 flex-none rounded-full bg-red-400" />
-                     {device.label}
-                   </div>
-                 ))}
-              </div>
-            </div>
-          )}
-
-          {snmpFallbackDevices.length > 0 && (
-            <div className="rounded-lg border border-yellow-500/15 bg-yellow-500/5 p-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-yellow-400/80 mb-1.5">
-                SNMP fallback active ({snmpFallbackDevices.length})
-              </p>
-              <p className="text-xs text-yellow-300/60 mb-1.5">
-                Metrics via SNMP. Probe status unavailable.
-              </p>
-              <div className="space-y-1">
-                 {snmpFallbackDevices.map((device) => (
-                   <div key={device.id} className="flex items-center gap-2 text-xs text-yellow-300/80">
-                     <span className="h-1.5 w-1.5 flex-none rounded-full bg-yellow-400" />
-                     {device.label}
-                   </div>
-                 ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -100,8 +63,13 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
       {firingAlerts.length > 0 ? (
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Active ({firingAlerts.length})
+            Active ({activeAlertCount})
           </p>
+          {hiddenActiveAlerts > 0 && (
+            <p className="text-[11px] text-on-bg-secondary/70">
+              Showing {firingAlerts.length} alert row{firingAlerts.length === 1 ? '' : 's'} while normalized runtime reports {activeAlertCount} active alerts.
+            </p>
+          )}
           {firingAlerts.map((alert, i) => (
             <div
               key={`${alert.deviceId}-${alert.alertName}-${i}`}
@@ -121,13 +89,13 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
              </div>
           ))}
         </div>
-      ) : !promDown ? (
+      ) : (
         <div className="flex flex-col items-center justify-center py-8 text-center">
           <MaterialIcon name="check_circle" className="text-status-up/50 mb-2" size={32} />
           <p className="text-sm text-on-bg-secondary">No active alerts</p>
           <p className="text-xs text-on-bg-secondary/60 mt-0.5">All systems operational</p>
         </div>
-      ) : null}
+      )}
 
       {/* Resolved alerts */}
       {resolvedAlerts.length > 0 && (

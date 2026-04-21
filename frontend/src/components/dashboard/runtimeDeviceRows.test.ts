@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Device } from '../../types/api';
-import type { SnapshotPayload } from '../../types/metrics';
+import type { DeviceRuntimeDTO, SnapshotPayload } from '../../types/metrics';
 import { buildRuntimeDeviceRows, computeAreaHealthSummary } from './runtimeDeviceRows';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -29,21 +29,57 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 }
 
 describe('runtimeDeviceRows', () => {
-  it('builds row uptime and status from runtime-aware devices plus snapshot metrics', () => {
+  function mockRuntimeDevice(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRuntimeDTO {
+    return {
+      device_id: 'dev-1',
+      operational_status: 'up',
+      reachability: 'up',
+      health: 'healthy',
+      freshness: 'fresh',
+      primary_reason: 'ok',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      alert_status: 'normal',
+      firing_alert_count: 0,
+      last_collected_at: '2026-04-20T12:00:00Z',
+      last_polled_at: '2026-04-20T12:00:00Z',
+      expected_poll_interval_seconds: 60,
+      cpu_percent: 10,
+      mem_percent: 22,
+      temp_celsius: null,
+      uptime_secs: 7200,
+      ...overrides,
+    };
+  }
+
+  it('builds row uptime and status from normalized runtime devices', () => {
     const rows = buildRuntimeDeviceRows({
       devices: [mockDevice({ status: 'down' })],
       snapshot: {
-        device_metrics: {
-          'dev-1': {
-            device_id: 'dev-1',
-            cpu_percent: 10,
-            mem_percent: 22,
-            uptime_secs: 7200,
-            collected_at: '2026-04-20T12:00:00Z',
-          },
+        devices: {
+          'dev-1': mockRuntimeDevice({ operational_status: 'up' }),
         },
-        link_metrics: {},
-        device_statuses: { 'dev-1': 'down' },
+        links: {},
+      } satisfies SnapshotPayload,
+    });
+
+    expect(rows[0]?.statusState.label).toBe('Up');
+    expect(rows[0]?.uptimeLabel).toBe('2h');
+  });
+
+  it('prefers normalized runtime down status over inventory status', () => {
+    const rows = buildRuntimeDeviceRows({
+      devices: [mockDevice({ status: 'up' })],
+      snapshot: {
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            operational_status: 'down',
+            primary_reason: 'device_unreachable',
+            metrics_status: 'unavailable',
+            metrics_reason: 'device_unreachable',
+          }),
+        },
+        links: {},
       } satisfies SnapshotPayload,
     });
 
@@ -51,48 +87,41 @@ describe('runtimeDeviceRows', () => {
     expect(rows[0]?.uptimeLabel).toBeNull();
   });
 
-  it('uses snapshot metrics without overriding the incoming runtime-aware status', () => {
+  it('keeps inventory status only when normalized runtime omits the device', () => {
     const rows = buildRuntimeDeviceRows({
       devices: [mockDevice({ status: 'down' })],
       snapshot: {
-        device_metrics: {
-          'dev-1': {
-            device_id: 'dev-1',
-            cpu_percent: 10,
-            mem_percent: 22,
-            uptime_secs: 7200,
-            collected_at: '2026-04-20T12:00:00Z',
-          },
-        },
-        link_metrics: {},
-        device_statuses: { 'dev-1': 'up' },
-      } satisfies SnapshotPayload,
-    });
-
-    expect(rows[0]?.statusState.label).toBe('Down');
-    expect(rows[0]?.uptimeLabel).toBeNull();
-  });
-
-  it('preserves incoming runtime-aware status when snapshot status disagrees', () => {
-    const rows = buildRuntimeDeviceRows({
-      devices: [mockDevice({ status: 'down' })],
-      snapshot: {
-        device_metrics: {
-          'dev-1': {
-            device_id: 'dev-1',
-            cpu_percent: 10,
-            mem_percent: 22,
-            uptime_secs: 7200,
-            collected_at: '2026-04-20T12:00:00Z',
-          },
-        },
-        link_metrics: {},
-        device_statuses: { 'dev-1': 'up' },
+        devices: {},
+        links: {},
       } satisfies SnapshotPayload,
     });
 
     expect(rows[0]?.device.status).toBe('down');
     expect(rows[0]?.statusState.label).toBe('Down');
+    expect(rows[0]?.uptimeLabel).toBeNull();
+  });
+
+  it('preserves normalized unmonitored status in dashboard rows', () => {
+    const rows = buildRuntimeDeviceRows({
+      devices: [mockDevice({ status: 'up', ip: '10.0.0.1', device_type: 'router' })],
+      snapshot: {
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            operational_status: 'unmonitored',
+            reachability: 'unmonitored',
+            freshness: 'unmonitored',
+            metrics_status: 'unmonitored',
+            metrics_reason: 'unmonitored',
+            primary_reason: 'unmonitored',
+            uptime_secs: null,
+          }),
+        },
+        links: {},
+      } satisfies SnapshotPayload,
+    });
+
+    expect(rows[0]?.statusState.dotStatus).toBe('unmonitored');
+    expect(rows[0]?.statusState.label).toBe('Unmonitored');
     expect(rows[0]?.uptimeLabel).toBeNull();
   });
 
