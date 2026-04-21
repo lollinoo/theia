@@ -3,19 +3,14 @@ import type { ReactFlowInstance } from '@xyflow/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  createLink,
-  fetchDevices,
-  fetchLinks,
-  fetchSettings,
-} from '../../api/client';
+import { createLink, fetchDevices, fetchLinks, fetchSettings } from '../../api/client';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
 import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import type { CanvasMeasurementRecord } from './canvasInstrumentation';
 import { manualEdgeStorageKey, staleThresholdMs } from './canvasHelpers';
+import type { CanvasMeasurementRecord } from './canvasInstrumentation';
 import { useCanvasData } from './useCanvasData';
 
 vi.mock('../../api/client', () => ({
@@ -107,34 +102,37 @@ function renderUseCanvasData(
   const openDeviceMenu = vi.fn();
   const openEdgeMenu = vi.fn();
 
-  const rendered = renderHook(({ currentSnapshot }) => {
-    const [nodes, setNodes] = useState<DeviceNode[]>([]);
-    const [edges, setEdges] = useState<LinkEdgeType[]>([]);
+  const rendered = renderHook(
+    ({ currentSnapshot }) => {
+      const [nodes, setNodes] = useState<DeviceNode[]>([]);
+      const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
-    const hook = useCanvasData({
-      snapshot: currentSnapshot,
-      reconnecting: false,
-      prometheusStatus,
-      editMode: false,
-      openDeviceMenu,
-      openEdgeMenu,
-      reactFlow,
-      nodes,
-      setNodes,
-      setEdges,
-      onDevicesChange: options.onDevicesChange,
-    });
+      const hook = useCanvasData({
+        snapshot: currentSnapshot,
+        reconnecting: false,
+        prometheusStatus,
+        editMode: false,
+        openDeviceMenu,
+        openEdgeMenu,
+        reactFlow,
+        nodes,
+        setNodes,
+        setEdges,
+        onDevicesChange: options.onDevicesChange,
+      });
 
-    return {
-      ...hook,
-      nodes,
-      edges,
-    };
-  }, {
-    initialProps: {
-      currentSnapshot: snapshot,
+      return {
+        ...hook,
+        nodes,
+        edges,
+      };
     },
-  });
+    {
+      initialProps: {
+        currentSnapshot: snapshot,
+      },
+    },
+  );
 
   return {
     ...rendered,
@@ -287,10 +285,7 @@ describe('useCanvasData', () => {
   });
 
   it('does not let Prometheus status override normalized runtime status', async () => {
-    const { result } = renderUseCanvasData(
-      mockSnapshot(),
-      { enabled: true, available: false },
-    );
+    const { result } = renderUseCanvasData(mockSnapshot(), { enabled: true, available: false });
 
     await act(async () => {
       await Promise.resolve();
@@ -333,13 +328,15 @@ describe('useCanvasData', () => {
     const openDeviceMenu = vi.fn();
     const openEdgeMenu = vi.fn();
 
-    const alerts = [{
-      device_id: 'dev-1',
-      alert_name: 'DeviceDown',
-      severity: 'critical',
-      state: 'firing',
-      summary: 'legacy alert feed still firing',
-    }] as const;
+    const alerts = [
+      {
+        device_id: 'dev-1',
+        alert_name: 'DeviceDown',
+        severity: 'critical',
+        state: 'firing',
+        summary: 'legacy alert feed still firing',
+      },
+    ] as const;
 
     const { result } = renderHook(() => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
@@ -372,10 +369,7 @@ describe('useCanvasData', () => {
   });
 
   it('surfaces Prometheus degradation as diagnostics without changing alert totals', async () => {
-    const { result } = renderUseCanvasData(
-      mockSnapshot(),
-      { enabled: true, available: false },
-    );
+    const { result } = renderUseCanvasData(mockSnapshot(), { enabled: true, available: false });
 
     await act(async () => {
       await Promise.resolve();
@@ -414,13 +408,15 @@ describe('useCanvasData', () => {
       },
       links: {},
     });
-    const alerts = [{
-      device_id: 'dev-2',
-      alert_name: 'DeviceDown',
-      severity: 'critical',
-      state: 'firing',
-      summary: 'legacy alert feed still firing',
-    }] as const;
+    const alerts = [
+      {
+        device_id: 'dev-2',
+        alert_name: 'DeviceDown',
+        severity: 'critical',
+        state: 'firing',
+        summary: 'legacy alert feed still firing',
+      },
+    ] as const;
 
     const { result } = renderHook(() => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
@@ -513,9 +509,7 @@ describe('useCanvasData', () => {
   });
 
   it('clears migrated manual edge storage after all links succeed', async () => {
-    const storedEdges = [
-      { id: 'edge-1', source: 'dev-1', target: 'dev-2' },
-    ];
+    const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
     vi.mocked(fetchDevices).mockResolvedValue([
       mockDevice(),
       mockDevice({
@@ -752,11 +746,13 @@ describe('useCanvasData', () => {
       await Promise.resolve();
     });
 
-    expect(canvasMetrics()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'theia:canvas:topology-load', trigger: 'initial_load' }),
-      expect.objectContaining({ name: 'theia:canvas:layout', trigger: 'initial_load' }),
-      expect.objectContaining({ name: 'theia:canvas:snapshot-apply', trigger: 'snapshot' }),
-    ]));
+    expect(canvasMetrics()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'theia:canvas:topology-load', trigger: 'initial_load' }),
+        expect.objectContaining({ name: 'theia:canvas:layout', trigger: 'initial_load' }),
+        expect.objectContaining({ name: 'theia:canvas:snapshot-apply', trigger: 'snapshot' }),
+      ]),
+    );
 
     await act(async () => {
       window.dispatchEvent(new Event('backend-reconnected'));
@@ -765,12 +761,19 @@ describe('useCanvasData', () => {
       await Promise.resolve();
     });
 
-    expect(canvasMetrics()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'theia:canvas:topology-load', trigger: 'backend_reconnected' }),
-    ]));
-    expect(canvasMetrics()).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'theia:canvas:layout', trigger: 'backend_reconnected' }),
-    ]));
+    expect(canvasMetrics()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'theia:canvas:topology-load',
+          trigger: 'backend_reconnected',
+        }),
+      ]),
+    );
+    expect(canvasMetrics()).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'theia:canvas:layout', trigger: 'backend_reconnected' }),
+      ]),
+    );
     expect(reactFlow.fitView).toHaveBeenCalledTimes(1);
 
     rerender({
@@ -789,9 +792,13 @@ describe('useCanvasData', () => {
       await Promise.resolve();
     });
 
-    expect(canvasMetrics()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'theia:canvas:snapshot-apply', trigger: 'snapshot' }),
-    ]));
-    expect(canvasMetrics().every((measurement) => typeof measurement.durationMs === 'number')).toBe(true);
+    expect(canvasMetrics()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'theia:canvas:snapshot-apply', trigger: 'snapshot' }),
+      ]),
+    );
+    expect(canvasMetrics().every((measurement) => typeof measurement.durationMs === 'number')).toBe(
+      true,
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchDeviceInterfaces, updateLink, deleteLink } from '../api/client';
+import { deleteLink, fetchDeviceInterfaces, updateLink } from '../api/client';
 import type { Device, DeviceInterface, InterfaceInfo, Link } from '../types/api';
 import { formatBandwidth } from './linkSemantics';
 
@@ -64,7 +64,11 @@ function InterfaceSelect({
           </option>
         )}
         {downInterfaces.map((iface) => (
-          <option key={iface.if_name} value={iface.if_name} style={{ color: 'var(--nt-on-bg-muted)' }}>
+          <option
+            key={iface.if_name}
+            value={iface.if_name}
+            style={{ color: 'var(--nt-on-bg-muted)' }}
+          >
             {iface.if_name}
             {formatSpeed(iface.speed) ? `  ${formatSpeed(iface.speed)}` : ''}
             {'  '}down
@@ -108,15 +112,29 @@ export function LinkDetailsPanel({
     (link.discovery_protocol === 'lldp' || link.discovery_protocol === 'cdp') &&
     (!link.source_if_name || !link.target_if_name);
   const sourceDeviceLabel =
-    sourceDevice?.tags?.display_name || sourceDevice?.sys_name || sourceDevice?.hostname || link.source_device_id;
+    sourceDevice?.tags?.display_name ||
+    sourceDevice?.sys_name ||
+    sourceDevice?.hostname ||
+    link.source_device_id;
   const targetDeviceLabel =
-    targetDevice?.tags?.display_name || targetDevice?.sys_name || targetDevice?.hostname || link.target_device_id;
-  const sourceSummaryIfName = displayIfName(link.source_if_name, sourceDevice?.interfaces ?? [], autoDiscoveryPending && !link.source_if_name);
-  const targetSummaryIfName = displayIfName(link.target_if_name, targetDevice?.interfaces ?? [], autoDiscoveryPending && !link.target_if_name);
+    targetDevice?.tags?.display_name ||
+    targetDevice?.sys_name ||
+    targetDevice?.hostname ||
+    link.target_device_id;
+  const sourceSummaryIfName = displayIfName(
+    link.source_if_name,
+    sourceDevice?.interfaces ?? [],
+    autoDiscoveryPending && !link.source_if_name,
+  );
+  const targetSummaryIfName = displayIfName(
+    link.target_if_name,
+    targetDevice?.interfaces ?? [],
+    autoDiscoveryPending && !link.target_if_name,
+  );
   const sourceSpeedLabel = sourceIsVirtual ? 'Virtual link' : formatBandwidth(link.source_if_speed);
   const targetSpeedLabel = targetIsVirtual ? 'Virtual link' : formatBandwidth(link.target_if_speed);
-  const sourceStatusLabel = sourceIsVirtual ? 'virtual' : (link.source_if_oper_status || 'unknown');
-  const targetStatusLabel = targetIsVirtual ? 'virtual' : (link.target_if_oper_status || 'unknown');
+  const sourceStatusLabel = sourceIsVirtual ? 'virtual' : link.source_if_oper_status || 'unknown';
+  const targetStatusLabel = targetIsVirtual ? 'virtual' : link.target_if_oper_status || 'unknown';
 
   const [editing, setEditing] = useState(false);
   const [sourceIfName, setSourceIfName] = useState(link.source_if_name);
@@ -210,7 +228,8 @@ export function LinkDetailsPanel({
         : 'bg-elevated text-on-bg-secondary border-outline-subtle';
   const pendingDiscoveryNotice = (
     <p className="rounded-lg border border-status-probing/30 bg-status-probing/10 px-3 py-2 text-xs text-status-probing">
-      Port assignments are still resolving while probing completes. Missing ports will refresh automatically.
+      Port assignments are still resolving while probing completes. Missing ports will refresh
+      automatically.
     </p>
   );
 
@@ -320,7 +339,8 @@ export function LinkDetailsPanel({
 
           <div className="space-y-1">
             <p className="text-xs text-on-bg-secondary">
-              Source: {sourceDevice?.tags?.display_name || sourceDevice?.hostname || link.source_device_id}
+              Source:{' '}
+              {sourceDevice?.tags?.display_name || sourceDevice?.hostname || link.source_device_id}
             </p>
             {sourceIsVirtual ? (
               <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs italic text-on-bg-secondary">
@@ -339,7 +359,8 @@ export function LinkDetailsPanel({
 
           <div className="space-y-1">
             <p className="text-xs text-on-bg-secondary">
-              Target: {targetDevice?.tags?.display_name || targetDevice?.hostname || link.target_device_id}
+              Target:{' '}
+              {targetDevice?.tags?.display_name || targetDevice?.hostname || link.target_device_id}
             </p>
             {targetIsVirtual ? (
               <p className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-xs italic text-on-bg-secondary">
@@ -377,7 +398,9 @@ export function LinkDetailsPanel({
             </button>
             <button
               type="submit"
-              disabled={saving || (!sourceIsVirtual && !sourceIfName) || (!targetIsVirtual && !targetIfName)}
+              disabled={
+                saving || (!sourceIsVirtual && !sourceIfName) || (!targetIsVirtual && !targetIfName)
+              }
               className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save'}

@@ -1,20 +1,20 @@
 import type { Device, DeviceStatus, Link } from '../../types/api';
 import {
-  alertStatusForDevice,
-  isPrometheusUnavailable,
   type AlertDTO,
   type AlertStatus,
   type DeviceMetricsDTO,
-   type LinkMetricsDTO,
-   type OperationalStatus,
-   type PrometheusStatusPayload,
-   type RuntimeReason,
-   type SnapshotPayload,
+  type LinkMetricsDTO,
+  type OperationalStatus,
+  type PrometheusStatusPayload,
+  type RuntimeReason,
+  type SnapshotPayload,
+  alertStatusForDevice,
+  isPrometheusUnavailable,
 } from '../../types/metrics';
 import {
+  type DeviceMonitoringState,
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
-  type DeviceMonitoringState,
 } from '../deviceVisualState';
 import { buildThroughputLabel, normalizeInterfaceName } from './canvasHelpers';
 
@@ -68,10 +68,14 @@ export function countActiveAlertsFromRuntimeState(
     return alerts.filter((alert) => alert.state === 'firing').length;
   }
 
-  return Array.from(runtimeDevicesById.values()).reduce(
-    (count, entry) => count + (entry.metrics?.firing_alert_count ?? 0),
-    0,
-  ) + alerts.filter((alert) => alert.state === 'firing' && !runtimeDevicesById.has(alert.device_id)).length;
+  return (
+    Array.from(runtimeDevicesById.values()).reduce(
+      (count, entry) => count + (entry.metrics?.firing_alert_count ?? 0),
+      0,
+    ) +
+    alerts.filter((alert) => alert.state === 'firing' && !runtimeDevicesById.has(alert.device_id))
+      .length
+  );
 }
 
 function normalizeDeviceStatus(status: string | undefined): DeviceStatus | undefined {
@@ -86,7 +90,9 @@ function normalizeDeviceStatus(status: string | undefined): DeviceStatus | undef
   }
 }
 
-function effectiveStatusForRuntimeDevice(runtimeDevice: DeviceMetricsDTO | undefined): DeviceStatus | undefined {
+function effectiveStatusForRuntimeDevice(
+  runtimeDevice: DeviceMetricsDTO | undefined,
+): DeviceStatus | undefined {
   return normalizeDeviceStatus(runtimeDevice?.operational_status);
 }
 
@@ -146,14 +152,16 @@ export function buildRuntimeState({
     const runtimeMetrics = snapshot?.devices[device.id];
     const monitoringState = runtimeMonitoringState(device, runtimeMetrics);
     const nextStatus = effectiveStatusForRuntimeDevice(runtimeMetrics);
-    const runtimeDevice = nextStatus
-      ? { ...device, status: nextStatus }
-      : device;
+    const runtimeDevice = nextStatus ? { ...device, status: nextStatus } : device;
 
     devicesById.set(device.id, {
       device: runtimeDevice,
       monitoringState,
-      metrics: sanitizeDeviceMetricsForDisplay(runtimeDevice, runtimeMetrics ?? null, monitoringState),
+      metrics: sanitizeDeviceMetricsForDisplay(
+        runtimeDevice,
+        runtimeMetrics ?? null,
+        monitoringState,
+      ),
       alertStatus: runtimeMetrics?.alert_status ?? alertStatusForDevice(device.id, firingAlerts),
       runtimeStatus: runtimeMetrics?.operational_status ?? null,
     });

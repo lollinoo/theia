@@ -1,15 +1,35 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { DeviceConfigPanel } from './DeviceConfigPanel';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ServerError, ValidationError } from '../api/errors';
 import type { Device } from '../types/api';
-import { ValidationError, ServerError } from '../api/errors';
+import { DeviceConfigPanel } from './DeviceConfigPanel';
 
 // Mock all API calls used in useEffect
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
   fetchCredentialProfiles: vi.fn().mockResolvedValue([
-    { id: 'p1', name: 'Admin SSH', description: '', username: 'admin', port: 22, auth_method: 'password', role: 'Admin', created_at: '', updated_at: '' },
-    { id: 'p2', name: 'Read SSH', description: '', username: 'read', port: 22, auth_method: 'password', role: 'Read', created_at: '', updated_at: '' },
+    {
+      id: 'p1',
+      name: 'Admin SSH',
+      description: '',
+      username: 'admin',
+      port: 22,
+      auth_method: 'password',
+      role: 'Admin',
+      created_at: '',
+      updated_at: '',
+    },
+    {
+      id: 'p2',
+      name: 'Read SSH',
+      description: '',
+      username: 'read',
+      port: 22,
+      auth_method: 'password',
+      role: 'Read',
+      created_at: '',
+      updated_at: '',
+    },
   ]),
   fetchDeviceCredentialProfiles: vi.fn().mockResolvedValue([]),
   assignCredentialProfile: vi.fn().mockResolvedValue(undefined),
@@ -138,7 +158,9 @@ describe('DeviceConfigPanel — polling override', () => {
       />,
     );
 
-    fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByDisplayValue('Use device default'), {
+      target: { value: 'custom' },
+    });
 
     const customInput = screen.getByPlaceholderText('Seconds (5-3600)');
     fireEvent.change(customInput, { target: { value: '4' } });
@@ -175,7 +197,9 @@ describe('DeviceConfigPanel — polling override', () => {
       />,
     );
 
-    fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByDisplayValue('Use device default'), {
+      target: { value: 'custom' },
+    });
     fireEvent.change(screen.getByPlaceholderText('Seconds (5-3600)'), { target: { value: '123' } });
 
     await waitFor(() => {
@@ -190,7 +214,9 @@ describe('DeviceConfigPanel — polling override', () => {
     const pollingHeader = screen.getByText('Polling Override').parentElement;
     expect(pollingHeader).not.toBeNull();
     await waitFor(() => {
-      expect(within(pollingHeader as HTMLElement).getByText('Saved').className).toContain('opacity-100');
+      expect(within(pollingHeader as HTMLElement).getByText('Saved').className).toContain(
+        'opacity-100',
+      );
     });
   });
 
@@ -349,7 +375,9 @@ describe('DeviceConfigPanel', () => {
     expect(savedNotesHeader).toBeInTheDocument();
     const savedNotesSection = savedNotesHeader.parentElement;
     expect(savedNotesSection).not.toBeNull();
-    expect(within(savedNotesSection as HTMLElement).getByText('Check transceiver levels weekly')).toBeInTheDocument();
+    expect(
+      within(savedNotesSection as HTMLElement).getByText('Check transceiver levels weekly'),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText('Device Notes')).toHaveValue('Check transceiver levels weekly');
   });
 
@@ -395,10 +423,7 @@ describe('DeviceConfigPanel', () => {
     fireEvent.click(screen.getByText('Save Changes'));
 
     await waitFor(() => {
-      expect(updateDevice).toHaveBeenCalledWith(
-        'dev-1',
-        expect.objectContaining({ notes: null }),
-      );
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', expect.objectContaining({ notes: null }));
     });
   });
 
@@ -473,7 +498,9 @@ describe('DeviceConfigPanel', () => {
     );
 
     expect(screen.getByText('Next Follow-up')).toBeInTheDocument();
-    expect(screen.getByText('Automatic follow-up runs about 20s after last discovery.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Automatic follow-up runs about 20s after last discovery.'),
+    ).toBeInTheDocument();
   });
 
   it('disables manual topology discovery for Prometheus-only devices', () => {

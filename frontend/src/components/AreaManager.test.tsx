@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AreaManager } from './AreaManager';
 
 vi.mock('../contexts/ThemeContext', () => ({
@@ -41,8 +41,24 @@ describe('AreaManager', () => {
 
   it('renders area list with names and device counts', async () => {
     mockFetchAreas.mockResolvedValue([
-      { id: 'a1', name: 'Backbone', description: 'Core', color: '#2979FF', device_count: 3, created_at: '', updated_at: '' },
-      { id: 'a2', name: 'Edge', description: '', color: '#00E676', device_count: 0, created_at: '', updated_at: '' },
+      {
+        id: 'a1',
+        name: 'Backbone',
+        description: 'Core',
+        color: '#2979FF',
+        device_count: 3,
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 'a2',
+        name: 'Edge',
+        description: '',
+        color: '#00E676',
+        device_count: 0,
+        created_at: '',
+        updated_at: '',
+      },
     ]);
 
     render(<AreaManager />);
@@ -70,7 +86,15 @@ describe('AreaManager', () => {
   });
 
   it('calls createArea with form data on submit', async () => {
-    mockCreateArea.mockResolvedValue({ id: 'new-1', name: 'NewArea', description: '', color: '#00E676', device_count: 0, created_at: '', updated_at: '' });
+    mockCreateArea.mockResolvedValue({
+      id: 'new-1',
+      name: 'NewArea',
+      description: '',
+      color: '#00E676',
+      device_count: 0,
+      created_at: '',
+      updated_at: '',
+    });
 
     render(<AreaManager />);
     await waitFor(() => {
@@ -87,15 +111,21 @@ describe('AreaManager', () => {
     await userEvent.click(screen.getByText(/create area/i));
 
     await waitFor(() => {
-      expect(mockCreateArea).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'NewArea' }),
-      );
+      expect(mockCreateArea).toHaveBeenCalledWith(expect.objectContaining({ name: 'NewArea' }));
     });
   });
 
   it('shows delete confirmation with device count', async () => {
     mockFetchAreas.mockResolvedValue([
-      { id: 'a1', name: 'ToDelete', description: '', color: '#FF1744', device_count: 5, created_at: '', updated_at: '' },
+      {
+        id: 'a1',
+        name: 'ToDelete',
+        description: '',
+        color: '#FF1744',
+        device_count: 5,
+        created_at: '',
+        updated_at: '',
+      },
     ]);
 
     render(<AreaManager />);

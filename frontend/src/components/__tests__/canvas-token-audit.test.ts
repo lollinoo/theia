@@ -1,11 +1,11 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 /**
  * FOUND-06 / THEME-05 Canvas Token Audit
  * Scans 6 canvas-scope files for stale Tailwind v4 token names and hardcoded hex values.
  * All classes must use valid @theme inline tokens defined in index.css.
  */
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { describe, expect, it } from 'vitest';
 
 const SRC_DIR = join(__dirname, '../../');
 
@@ -56,10 +56,7 @@ const FIXED_PALETTE_PATTERNS: { pattern: RegExp; replacement: string }[] = [
   { pattern: /hover:text-yellow-300/, replacement: 'hover:text-warning' },
 ];
 
-function scanFile(
-  filePath: string,
-  patterns: { pattern: RegExp }[],
-): string[] {
+function scanFile(filePath: string, patterns: { pattern: RegExp }[]): string[] {
   const content = readFileSync(filePath, 'utf-8');
   const lines = content.split('\n');
   const violations: string[] = [];
@@ -86,9 +83,7 @@ describe('FOUND-06 / THEME-05: No stale token names in canvas files', () => {
     }
 
     if (violations.length > 0) {
-      console.error(
-        'Stale token name violations found:\n' + violations.join('\n'),
-      );
+      console.error('Stale token name violations found:\n' + violations.join('\n'));
     }
     expect(violations).toHaveLength(0);
   });
@@ -104,9 +99,7 @@ describe('FOUND-06: No hardcoded hex or fixed palette colors in canvas files', (
     }
 
     if (violations.length > 0) {
-      console.error(
-        'Hardcoded hex color violations found:\n' + violations.join('\n'),
-      );
+      console.error('Hardcoded hex color violations found:\n' + violations.join('\n'));
     }
     expect(violations).toHaveLength(0);
   });
@@ -120,9 +113,7 @@ describe('FOUND-06: No hardcoded hex or fixed palette colors in canvas files', (
     }
 
     if (violations.length > 0) {
-      console.error(
-        'Fixed palette color violations found:\n' + violations.join('\n'),
-      );
+      console.error('Fixed palette color violations found:\n' + violations.join('\n'));
     }
     expect(violations).toHaveLength(0);
   });

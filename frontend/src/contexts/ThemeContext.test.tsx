@@ -1,5 +1,5 @@
-import { render, screen, act } from '@testing-library/react';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider, useTheme } from './ThemeContext';
 
 function TestConsumer() {
@@ -8,9 +8,15 @@ function TestConsumer() {
     <div>
       <span data-testid="theme">{theme}</span>
       <span data-testid="resolved">{resolvedTheme}</span>
-      <button data-testid="toggle-light" onClick={() => setTheme('light')}>Light</button>
-      <button data-testid="toggle-dark" onClick={() => setTheme('dark')}>Dark</button>
-      <button data-testid="toggle-system" onClick={() => setTheme('system')}>System</button>
+      <button type="button" data-testid="toggle-light" onClick={() => setTheme('light')}>
+        Light
+      </button>
+      <button type="button" data-testid="toggle-dark" onClick={() => setTheme('dark')}>
+        Dark
+      </button>
+      <button type="button" data-testid="toggle-system" onClick={() => setTheme('system')}>
+        System
+      </button>
     </div>
   );
 }

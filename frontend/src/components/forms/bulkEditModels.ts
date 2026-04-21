@@ -12,7 +12,10 @@ export interface BulkEditModel {
   vendor: BulkField<string>;
 }
 
-function commonValue<T>(devices: Device[], extract: (device: Device) => T): { value: T; mixed: boolean } {
+function commonValue<T>(
+  devices: Device[],
+  extract: (device: Device) => T,
+): { value: T; mixed: boolean } {
   const first = extract(devices[0]);
   const firstJSON = JSON.stringify(first);
 

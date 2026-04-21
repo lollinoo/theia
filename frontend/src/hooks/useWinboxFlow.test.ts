@@ -52,9 +52,7 @@ describe('useWinboxFlow', () => {
   it('refreshes a stale false WinBox cache when reopening the same device menu', async () => {
     apiMocks.fetchDeviceCredentialProfiles
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true },
-      ]);
+      .mockResolvedValueOnce([{ profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true }]);
 
     const { result } = renderHook(() => useWinboxFlow());
 
@@ -96,10 +94,14 @@ describe('useWinboxFlow', () => {
   });
 
   it('waits for settings to load before deciding the bridge secret is missing', async () => {
-    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null = null;
-    apiMocks.fetchSettings.mockImplementation(() => new Promise((resolve) => {
-      resolveSettings = resolve;
-    }));
+    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null =
+      null;
+    apiMocks.fetchSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSettings = resolve;
+        }),
+    );
     apiMocks.fetchBridgeToken.mockResolvedValue('bridge-token');
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 
@@ -120,10 +122,14 @@ describe('useWinboxFlow', () => {
   });
 
   it('waits for settings before the first bridge health check on a non-default port', async () => {
-    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null = null;
-    apiMocks.fetchSettings.mockImplementation(() => new Promise((resolve) => {
-      resolveSettings = resolve;
-    }));
+    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null =
+      null;
+    apiMocks.fetchSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSettings = resolve;
+        }),
+    );
     apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([
       { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: true },
     ]);
@@ -150,10 +156,14 @@ describe('useWinboxFlow', () => {
   });
 
   it('refreshes device WinBox availability immediately before settings resolve', async () => {
-    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null = null;
-    apiMocks.fetchSettings.mockImplementation(() => new Promise((resolve) => {
-      resolveSettings = resolve;
-    }));
+    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null =
+      null;
+    apiMocks.fetchSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSettings = resolve;
+        }),
+    );
     apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([]);
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 

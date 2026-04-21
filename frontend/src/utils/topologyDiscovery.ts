@@ -1,7 +1,4 @@
-import type {
-  TopologyBootstrapState,
-  TopologyDiscoveryMode,
-} from '../types/api';
+import type { TopologyBootstrapState, TopologyDiscoveryMode } from '../types/api';
 
 const TOPOLOGY_DISCOVERY_FOLLOWUP_DELAY_SECONDS = 20;
 
@@ -34,7 +31,8 @@ function humanizeSnakeCase(value: string): string {
 
 export function formatTopologyDiscoveryMode(mode?: TopologyDiscoveryMode): string {
   return (
-    TOPOLOGY_DISCOVERY_MODE_OPTIONS.find((option) => option.value === mode)?.label ?? 'Use global default'
+    TOPOLOGY_DISCOVERY_MODE_OPTIONS.find((option) => option.value === mode)?.label ??
+    'Use global default'
   );
 }
 

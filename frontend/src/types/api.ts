@@ -1,16 +1,7 @@
 export type DeviceType = 'router' | 'switch' | 'ap' | 'firewall' | 'virtual' | 'unknown';
 export type DevicePollClass = 'core' | 'standard' | 'low';
-export type TopologyDiscoveryMode =
-  | 'inherit'
-  | 'off'
-  | 'lldp'
-  | 'lldp_cdp'
-  | 'bootstrap_once';
-export type TopologyBootstrapState =
-  | 'idle'
-  | 'pending'
-  | 'followup_scheduled'
-  | 'completed';
+export type TopologyDiscoveryMode = 'inherit' | 'off' | 'lldp' | 'lldp_cdp' | 'bootstrap_once';
+export type TopologyBootstrapState = 'idle' | 'pending' | 'followup_scheduled' | 'completed';
 
 // SNMPProfile represents a reusable set of SNMP credentials.
 export interface SNMPProfile {
@@ -232,7 +223,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
     }
 
     const attributes = isRecord(resource.attributes) ? resource.attributes : {};
-    const tags = isRecord(attributes.tags) ? attributes.tags as Record<string, string> : {};
+    const tags = isRecord(attributes.tags) ? (attributes.tags as Record<string, string>) : {};
     const relationships = isRecord(resource.relationships) ? resource.relationships : {};
     const interfacesRelationship = isRecord(relationships.interfaces)
       ? relationships.interfaces
@@ -243,10 +234,13 @@ export function parseDevicesResponse(payload: unknown): Device[] {
 
     const rawMetricsSource = readString(attributes, 'metrics_source', 'prometheus');
     const metricsSource: MetricsSource =
-      rawMetricsSource === 'snmp' ? 'snmp'
-      : rawMetricsSource === 'prometheus_snmp_fallback' ? 'prometheus_snmp_fallback'
-      : rawMetricsSource === 'none' ? 'none'
-      : 'prometheus';
+      rawMetricsSource === 'snmp'
+        ? 'snmp'
+        : rawMetricsSource === 'prometheus_snmp_fallback'
+          ? 'prometheus_snmp_fallback'
+          : rawMetricsSource === 'none'
+            ? 'none'
+            : 'prometheus';
 
     return {
       id: readString(resource, 'id'),
@@ -278,17 +272,9 @@ export function parseDevicesResponse(payload: unknown): Device[] {
         attributes.effective_topology_discovery_mode,
         'off',
       ),
-      topology_bootstrap_state: parseTopologyBootstrapState(
-        attributes.topology_bootstrap_state,
-      ),
-      last_topology_discovery_at: readNullableString(
-        attributes,
-        'last_topology_discovery_at',
-      ),
-      last_topology_discovery_result: readString(
-        attributes,
-        'last_topology_discovery_result',
-      ),
+      topology_bootstrap_state: parseTopologyBootstrapState(attributes.topology_bootstrap_state),
+      last_topology_discovery_at: readNullableString(attributes, 'last_topology_discovery_at'),
+      last_topology_discovery_result: readString(attributes, 'last_topology_discovery_result'),
     };
   });
 }
@@ -614,18 +600,20 @@ export function parseAreasResponse(payload: unknown): Area[] {
   if (!isRecord(payload)) return [];
   const data = payload.data;
   if (!Array.isArray(data)) return [];
-  return data.map((item: unknown) => {
-    if (!isRecord(item)) return null;
-    return {
-      id: readString(item, 'id', ''),
-      name: readString(item, 'name', ''),
-      description: readString(item, 'description', ''),
-      color: readString(item, 'color', '#00E676'),
-      device_count: typeof item.device_count === 'number' ? item.device_count : 0,
-      created_at: readString(item, 'created_at', ''),
-      updated_at: readString(item, 'updated_at', ''),
-    };
-  }).filter((a): a is Area => a !== null && a.id !== '');
+  return data
+    .map((item: unknown) => {
+      if (!isRecord(item)) return null;
+      return {
+        id: readString(item, 'id', ''),
+        name: readString(item, 'name', ''),
+        description: readString(item, 'description', ''),
+        color: readString(item, 'color', '#00E676'),
+        device_count: typeof item.device_count === 'number' ? item.device_count : 0,
+        created_at: readString(item, 'created_at', ''),
+        updated_at: readString(item, 'updated_at', ''),
+      };
+    })
+    .filter((a): a is Area => a !== null && a.id !== '');
 }
 
 export function parseAreaResponse(payload: unknown): Area {

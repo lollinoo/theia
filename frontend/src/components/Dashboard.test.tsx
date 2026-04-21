@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { Dashboard } from './Dashboard';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
+import { Dashboard } from './Dashboard';
 import type { RuntimeDeviceRow } from './dashboard/runtimeDeviceRows';
 
 // Mock sub-components that have their own complex dependencies
@@ -34,9 +34,15 @@ vi.mock('./dashboard/FilterSelect', () => ({
     options: Array<{ value: string; label: string }>;
   }) => (
     <div data-testid={`filter-select-${label.toLowerCase()}`} data-value={value}>
-      <button type="button">{label}: {value}</button>
+      <button type="button">
+        {label}: {value}
+      </button>
       {options.map((option) => (
-        <button key={`${label}-${option.value}`} type="button" onClick={() => onChange(option.value)}>
+        <button
+          key={`${label}-${option.value}`}
+          type="button"
+          onClick={() => onChange(option.value)}
+        >
           {label} option {option.label}
         </button>
       ))}
@@ -225,7 +231,13 @@ describe('Dashboard', () => {
   it('does not keep no-ip virtual nodes in the down filter bucket', () => {
     const devices = [
       mockDevice({ id: 'dev-down', hostname: 'router-down', status: 'down' }),
-      mockDevice({ id: 'dev-virtual', hostname: 'virtual-cloud', device_type: 'virtual', ip: '', status: 'down' }),
+      mockDevice({
+        id: 'dev-virtual',
+        hostname: 'virtual-cloud',
+        device_type: 'virtual',
+        ip: '',
+        status: 'down',
+      }),
     ];
 
     render(<Dashboard devices={devices} areas={[]} snapshot={null} />);

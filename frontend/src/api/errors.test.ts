@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ValidationError, ServerError } from './errors';
-import { createDevice, type CreateDevicePayload } from './client';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { type CreateDevicePayload, createDevice } from './client';
+import { ServerError, ValidationError } from './errors';
 
 // Helper to create a mock Response
 function mockResponse(
@@ -114,12 +114,14 @@ describe('client typed errors', () => {
   it('throws ValidationError for 400 response', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'hostname too long' },
-          { ok: false, status: 400, statusText: 'Bad Request' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'hostname too long' },
+            { ok: false, status: 400, statusText: 'Bad Request' },
+          ),
         ),
-      ),
     );
 
     await expect(createDevice(payload)).rejects.toThrow(ValidationError);
@@ -129,27 +131,33 @@ describe('client typed errors', () => {
   it('throws ValidationError for 409 response', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'a device with IP/host "10.0.0.2" already exists' },
-          { ok: false, status: 409, statusText: 'Conflict' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'a device with IP/host "10.0.0.2" already exists' },
+            { ok: false, status: 409, statusText: 'Conflict' },
+          ),
         ),
-      ),
     );
 
     await expect(createDevice(payload)).rejects.toThrow(ValidationError);
-    await expect(createDevice(payload)).rejects.toThrow('a device with IP/host "10.0.0.2" already exists');
+    await expect(createDevice(payload)).rejects.toThrow(
+      'a device with IP/host "10.0.0.2" already exists',
+    );
   });
 
   it('throws ServerError for 500 response with correlation ID', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'internal error, ref: xyz789' },
-          { ok: false, status: 500, statusText: 'Internal Server Error' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'internal error, ref: xyz789' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
         ),
-      ),
     );
 
     let caughtError: unknown;
@@ -166,12 +174,14 @@ describe('client typed errors', () => {
   it('throws ServerError for 500 response without correlation ID', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'internal error' },
-          { ok: false, status: 500, statusText: 'Internal Server Error' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'internal error' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
         ),
-      ),
     );
 
     let caughtError: unknown;
@@ -188,12 +198,14 @@ describe('client typed errors', () => {
   it('throws plain Error for 401 response (not ValidationError or ServerError)', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'Unauthorized' },
-          { ok: false, status: 401, statusText: 'Unauthorized' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'Unauthorized' },
+            { ok: false, status: 401, statusText: 'Unauthorized' },
+          ),
         ),
-      ),
     );
 
     let caughtError: unknown;
@@ -211,12 +223,11 @@ describe('client typed errors', () => {
   it('throws plain Error for 403 response (not ValidationError or ServerError)', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'Forbidden' },
-          { ok: false, status: 403, statusText: 'Forbidden' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse({ error: 'Forbidden' }, { ok: false, status: 403, statusText: 'Forbidden' }),
         ),
-      ),
     );
 
     let caughtError: unknown;
@@ -234,9 +245,11 @@ describe('client typed errors', () => {
   it('resolves successfully on 200 with valid device payload', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ data: deviceResource('uuid-99', 'new-router', '10.0.0.2') }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse({ data: deviceResource('uuid-99', 'new-router', '10.0.0.2') }),
+        ),
     );
 
     const result = await createDevice(payload);

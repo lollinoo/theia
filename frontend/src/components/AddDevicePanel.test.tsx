@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { AddDevicePanel } from './AddDevicePanel';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDevice } from '../api/client';
-import { ValidationError, ServerError } from '../api/errors';
+import { ServerError, ValidationError } from '../api/errors';
+import { AddDevicePanel } from './AddDevicePanel';
 
 // Mock API calls that fire in useEffect
 vi.mock('../api/client', () => ({
@@ -87,7 +87,9 @@ describe('AddDevicePanel', () => {
     render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
 
     // Custom name field
-    expect(screen.getByPlaceholderText('Auto-discovered from SNMP / Prometheus')).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText('Auto-discovered from SNMP / Prometheus'),
+    ).toBeInTheDocument();
     // Vendor field
     expect(screen.getByText('Vendor')).toBeInTheDocument();
   });
@@ -318,9 +320,7 @@ describe('AddDevicePanel — backend typed error display', () => {
   });
 
   it('shows plain Error message when createDevice throws plain Error', async () => {
-    (createDevice as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('network failure'),
-    );
+    (createDevice as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('network failure'));
 
     render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
 

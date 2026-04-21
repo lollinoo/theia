@@ -1,9 +1,9 @@
+import { fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
-import Canvas from './Canvas';
 import type { Device } from '../types/api';
 import { BRIDGE_HEALTH_TIMEOUT_MESSAGE } from '../utils/bridgeRequests';
+import Canvas from './Canvas';
 
 const testState = vi.hoisted(() => ({
   openDeviceMenu: null as null | ((event: unknown, deviceId: string) => void),
@@ -47,10 +47,7 @@ vi.mock('@xyflow/react', async () => {
     MiniMap: () => null,
     ReactFlow: ({ children }: { children: React.ReactNode }) => (
       <div>
-        <button
-          type="button"
-          onClick={(event) => testState.openDeviceMenu?.(event, 'dev-1')}
-        >
+        <button type="button" onClick={(event) => testState.openDeviceMenu?.(event, 'dev-1')}>
           Open device menu
         </button>
         {children}
@@ -140,8 +137,16 @@ vi.mock('./canvas/useCanvasMenus', async () => {
 
   return {
     useCanvasMenus: () => {
-      const [deviceMenu, setDeviceMenu] = ReactModule.useState<null | { deviceId: string; x: number; y: number }>(null);
-      const [edgeMenu, setEdgeMenu] = ReactModule.useState<null | { edgeID: string; x: number; y: number }>(null);
+      const [deviceMenu, setDeviceMenu] = ReactModule.useState<null | {
+        deviceId: string;
+        x: number;
+        y: number;
+      }>(null);
+      const [edgeMenu, setEdgeMenu] = ReactModule.useState<null | {
+        edgeID: string;
+        x: number;
+        y: number;
+      }>(null);
       const [panelContent, setPanelContent] = ReactModule.useState<null>(null);
       const [showShortcuts, setShowShortcuts] = ReactModule.useState(false);
       const [showSearch, setShowSearch] = ReactModule.useState(false);
@@ -168,7 +173,9 @@ vi.mock('./canvas/useCanvasMenus', async () => {
 });
 
 vi.mock('./canvas/useCanvasData', () => ({
-  useCanvasData: ({ openDeviceMenu }: { openDeviceMenu: (event: unknown, deviceId: string) => void }) => {
+  useCanvasData: ({
+    openDeviceMenu,
+  }: { openDeviceMenu: (event: unknown, deviceId: string) => void }) => {
     testState.openDeviceMenu = openDeviceMenu;
     return {
       devices: testState.devices,

@@ -1,11 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { Toolbar } from './Toolbar';
 
 // Mock MaterialIcon to make assertions about which icons are rendered
 vi.mock('./MaterialIcon', () => ({
   MaterialIcon: ({ name }: { name: string }) => (
-    <span data-testid={`material-icon-${name}`} className="material-symbols-rounded">{name}</span>
+    <span data-testid={`material-icon-${name}`} className="material-symbols-rounded">
+      {name}
+    </span>
   ),
 }));
 

@@ -42,10 +42,18 @@ describe('freshness helpers', () => {
   it('schedules freshness updates only when the visible text or tier changes', () => {
     const lastPolledAt = '2026-04-13T12:00:00Z';
 
-    expect(nextFreshnessUpdateDelayMs(lastPolledAt, 30, Date.parse('2026-04-13T12:00:00Z'))).toBe(1_000);
-    expect(nextFreshnessUpdateDelayMs(lastPolledAt, 30, Date.parse('2026-04-13T12:00:59Z'))).toBe(1_000);
-    expect(nextFreshnessUpdateDelayMs(lastPolledAt, 30, Date.parse('2026-04-13T12:01:01Z'))).toBe(59_000);
-    expect(nextFreshnessUpdateDelayMs(lastPolledAt, 30, Date.parse('2026-04-13T12:02:00Z'))).toBe(31_000);
+    expect(nextFreshnessUpdateDelayMs(lastPolledAt, 30, Date.parse('2026-04-13T12:00:00Z'))).toBe(
+      1_000,
+    );
+    expect(nextFreshnessUpdateDelayMs(lastPolledAt, 30, Date.parse('2026-04-13T12:00:59Z'))).toBe(
+      1_000,
+    );
+    expect(nextFreshnessUpdateDelayMs(lastPolledAt, 30, Date.parse('2026-04-13T12:01:01Z'))).toBe(
+      59_000,
+    );
+    expect(nextFreshnessUpdateDelayMs(lastPolledAt, 30, Date.parse('2026-04-13T12:02:00Z'))).toBe(
+      31_000,
+    );
   });
 
   it('formats polling cadence copy for seconds and whole minutes', () => {

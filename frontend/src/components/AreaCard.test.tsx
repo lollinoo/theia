@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import AreaCard from './AreaCard';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { Area } from '../types/api';
+import AreaCard from './AreaCard';
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'dark' as const, resolvedTheme: 'dark' as const, setTheme: vi.fn() }),

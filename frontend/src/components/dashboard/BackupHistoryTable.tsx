@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { backupFileDownloadUrl, deleteBackupJob, fetchBackupJobs } from '../../api/client';
 import { type BackupJob } from '../../types/api';
-import { fetchBackupJobs, deleteBackupJob, backupFileDownloadUrl } from '../../api/client';
 
 interface BackupHistoryTableProps {
   deviceId: string;
@@ -97,29 +97,35 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
         const isExpanded = expandedJob === job.id;
 
         return (
-          <div
-            key={job.id}
-            className="rounded-lg bg-surface-high overflow-hidden"
-          >
+          <div key={job.id} className="rounded-lg bg-surface-high overflow-hidden">
             {/* Job summary row */}
-            <div
-              className="p-3 cursor-pointer hover:bg-elevated/30 transition-colors"
+            <button
+              type="button"
+              className="w-full p-3 text-left cursor-pointer hover:bg-elevated/30 transition-colors"
               onClick={() => setExpandedJob(isExpanded ? null : job.id)}
             >
               <div className="flex items-center justify-between mb-1.5">
-                <span className={`text-xs font-medium capitalize ${statusColors[job.status] ?? ''}`}>
+                <span
+                  className={`text-xs font-medium capitalize ${statusColors[job.status] ?? ''}`}
+                >
                   {job.status}
                 </span>
-                <span className="text-[10px] text-on-bg-secondary font-mono">{formatDate(job.created_at)}</span>
+                <span className="text-[10px] text-on-bg-secondary font-mono">
+                  {formatDate(job.created_at)}
+                </span>
               </div>
               <div className="flex items-center justify-between text-[10px] text-on-bg-secondary">
-                <span className="font-mono">{fileCount} file{fileCount !== 1 ? 's' : ''} / {formatSize(totalSize)}</span>
+                <span className="font-mono">
+                  {fileCount} file{fileCount !== 1 ? 's' : ''} / {formatSize(totalSize)}
+                </span>
                 <span className="text-on-bg-secondary/50">{isExpanded ? '▲' : '▼'}</span>
               </div>
               {job.error_message && (
-                <div className="text-[10px] text-status-down mt-1 break-words">{job.error_message}</div>
+                <div className="text-[10px] text-status-down mt-1 break-words">
+                  {job.error_message}
+                </div>
               )}
-            </div>
+            </button>
 
             {/* Expanded file list */}
             {isExpanded && (
@@ -132,7 +138,9 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
                         <div className="text-on-bg-secondary">
                           {file.file_type} / {formatSize(file.size_bytes)}
                           {file.file_hash && (
-                            <span className="ml-2 font-mono">{file.file_hash.substring(0, 12)}</span>
+                            <span className="ml-2 font-mono">
+                              {file.file_hash.substring(0, 12)}
+                            </span>
                           )}
                         </div>
                       </div>
@@ -152,6 +160,7 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
                 <div className="flex gap-1.5 pt-1">
                   {job.status === 'success' && (
                     <button
+                      type="button"
                       onClick={onViewConfig}
                       className="rounded px-2 py-1 text-[10px] font-medium text-primary border border-primary/30 hover:bg-primary/10 transition-colors"
                     >
@@ -159,6 +168,7 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
                     </button>
                   )}
                   <button
+                    type="button"
                     onClick={() => handleDelete(job.id)}
                     className="rounded px-2 py-1 text-[10px] font-medium text-status-down border border-status-down/30 hover:bg-status-down/10 transition-colors"
                   >

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 describe('Canvas context menu filtering', () => {
   // Replicate the filtering logic from Canvas.tsx
@@ -12,9 +12,7 @@ describe('Canvas context menu filtering', () => {
   function filterMenuItems(deviceType: string) {
     const isVirtual = deviceType === 'virtual';
     const virtualItemIds = new Set(['configure']);
-    return isVirtual
-      ? allItems.filter((item) => virtualItemIds.has(item.id))
-      : allItems;
+    return isVirtual ? allItems.filter((item) => virtualItemIds.has(item.id)) : allItems;
   }
 
   it('shows only Configure for virtual devices with IP', () => {

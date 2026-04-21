@@ -3,10 +3,7 @@ import { useEffect, useState } from 'react';
 import { fetchDeviceInterfaces } from '../../api/client';
 import type { Device, InterfaceInfo, Link } from '../../types/api';
 import { DeviceInterfaceStatsPanel, InterfaceStatsPanel } from '../InterfaceStatsPanel';
-import {
-  buildDeviceInterfacePanelModel,
-  buildLinkInterfacePanelModel,
-} from './panelAdapters';
+import { buildDeviceInterfacePanelModel, buildLinkInterfacePanelModel } from './panelAdapters';
 import type { RuntimeState } from './runtimeAdapters';
 
 function useDeviceInterfaces(deviceId: string): {
@@ -20,9 +17,10 @@ function useDeviceInterfaces(deviceId: string): {
     loading: true,
     error: false,
   });
-  const currentState = state.deviceId === deviceId
-    ? state
-    : { deviceId, interfaces: [] as InterfaceInfo[], loading: true, error: false };
+  const currentState =
+    state.deviceId === deviceId
+      ? state
+      : { deviceId, interfaces: [] as InterfaceInfo[], loading: true, error: false };
 
   useEffect(() => {
     let stale = false;
@@ -61,7 +59,9 @@ export function DeviceInterfaceStatsPanelRoute({
   const { interfaces, loading, error } = useDeviceInterfaces(device.id);
 
   if (error) {
-    return <div className="p-4 text-sm text-on-bg-secondary">Unable to load interface details.</div>;
+    return (
+      <div className="p-4 text-sm text-on-bg-secondary">Unable to load interface details.</div>
+    );
   }
 
   return (
@@ -91,7 +91,9 @@ export function LinkInterfaceStatsPanelRoute({
   const target = useDeviceInterfaces(targetDevice.id);
 
   if (source.error || target.error) {
-    return <div className="p-4 text-sm text-on-bg-secondary">Unable to load interface details.</div>;
+    return (
+      <div className="p-4 text-sm text-on-bg-secondary">Unable to load interface details.</div>
+    );
   }
 
   if (source.loading || target.loading) {

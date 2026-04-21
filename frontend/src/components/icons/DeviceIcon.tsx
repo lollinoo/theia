@@ -33,9 +33,24 @@ function ApIcon({ size }: { size: number }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" aria-hidden="true">
       <circle cx="12" cy="12" r="3.2" fill="currentColor" />
-      <path d="M7.5 9.5C9 8 10.3 7.4 12 7.4C13.7 7.4 15 8 16.5 9.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      <path d="M5 7C7 4.9 9.1 4 12 4C14.9 4 17 4.9 19 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      <path d="M9.1 14.5C10 15.2 10.8 15.6 12 15.6C13.2 15.6 14 15.2 14.9 14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path
+        d="M7.5 9.5C9 8 10.3 7.4 12 7.4C13.7 7.4 15 8 16.5 9.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M5 7C7 4.9 9.1 4 12 4C14.9 4 17 4.9 19 7"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M9.1 14.5C10 15.2 10.8 15.6 12 15.6C13.2 15.6 14 15.2 14.9 14.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

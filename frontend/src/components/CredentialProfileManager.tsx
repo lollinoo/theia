@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react';
-import type { CredentialProfile } from '../types/api';
 import {
   createCredentialProfile,
   deleteCredentialProfile,
   fetchCredentialProfiles,
   updateCredentialProfile,
 } from '../api/client';
-import { ValidationError, ServerError } from '../api/errors';
+import { ServerError, ValidationError } from '../api/errors';
+import type { CredentialProfile } from '../types/api';
 import {
-  validateRequired,
+  MAX_STRING_LENGTH,
   validateMaxLength,
   validatePort,
-  MAX_STRING_LENGTH,
+  validateRequired,
 } from '../utils/validation';
 
 const inputClass =
@@ -92,16 +92,23 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
 
     // Validate all fields before calling onSave
     const errors: Record<string, string> = {};
-    const nameErr = validateRequired(form.name, 'Profile name') ?? validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name');
+    const nameErr =
+      validateRequired(form.name, 'Profile name') ??
+      validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name');
     if (nameErr) errors['name'] = nameErr;
     const descErr = validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description');
     if (descErr) errors['description'] = descErr;
-    const usernameErr = validateRequired(form.username, 'Username') ?? validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username');
+    const usernameErr =
+      validateRequired(form.username, 'Username') ??
+      validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username');
     if (usernameErr) errors['username'] = usernameErr;
     const portErr = validatePort(form.port, 'Port');
     if (portErr) errors['port'] = portErr;
     if (!isEdit) {
-      const secretErr = validateRequired(form.secret, form.authMethod === 'password' ? 'Password' : 'Private key');
+      const secretErr = validateRequired(
+        form.secret,
+        form.authMethod === 'password' ? 'Password' : 'Private key',
+      );
       if (secretErr) errors['secret'] = secretErr;
     }
     if (Object.keys(errors).length > 0) {
@@ -115,9 +122,11 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
       await onSave(form);
     } catch (err) {
       if (err instanceof ServerError) {
-        setError(err.correlationId
-          ? `Something went wrong (ref: ${err.correlationId})`
-          : 'Something went wrong');
+        setError(
+          err.correlationId
+            ? `Something went wrong (ref: ${err.correlationId})`
+            : 'Something went wrong',
+        );
       } else if (err instanceof ValidationError) {
         setError(err.message);
       } else {
@@ -129,14 +138,26 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
   }
 
   return (
-    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-3">
+    <form
+      onSubmit={(e) => {
+        void handleSubmit(e);
+      }}
+      className="space-y-3"
+    >
       <div className="space-y-1">
-        <label className={labelClass}>Profile Name <span className="text-status-down">*</span></label>
+        <label className={labelClass}>
+          Profile Name <span className="text-status-down">*</span>
+        </label>
         <input
           type="text"
           value={form.name}
           onChange={(e) => set('name', e.target.value)}
-          onBlur={handleBlur('name', () => validateRequired(form.name, 'Profile name') ?? validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name'))}
+          onBlur={handleBlur(
+            'name',
+            () =>
+              validateRequired(form.name, 'Profile name') ??
+              validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name'),
+          )}
           placeholder="e.g. MikroTik Admin"
           required
           className={`${inputClass}${fieldErrors['name'] ? ' border-status-down' : ''}`}
@@ -152,7 +173,9 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
           type="text"
           value={form.description}
           onChange={(e) => set('description', e.target.value)}
-          onBlur={handleBlur('description', () => validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description'))}
+          onBlur={handleBlur('description', () =>
+            validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description'),
+          )}
           placeholder="Optional description"
           className={`${inputClass}${fieldErrors['description'] ? ' border-status-down' : ''}`}
         />
@@ -178,7 +201,12 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
           type="text"
           value={form.username}
           onChange={(e) => set('username', e.target.value)}
-          onBlur={handleBlur('username', () => validateRequired(form.username, 'Username') ?? validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username'))}
+          onBlur={handleBlur(
+            'username',
+            () =>
+              validateRequired(form.username, 'Username') ??
+              validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username'),
+          )}
           placeholder="admin"
           className={`${inputClass}${fieldErrors['username'] ? ' border-status-down' : ''}`}
         />
@@ -240,7 +268,11 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
             type="password"
             value={form.secret}
             onChange={(e) => set('secret', e.target.value)}
-            onBlur={!isEdit ? handleBlur('secret', () => validateRequired(form.secret, 'Password')) : undefined}
+            onBlur={
+              !isEdit
+                ? handleBlur('secret', () => validateRequired(form.secret, 'Password'))
+                : undefined
+            }
             placeholder={isEdit ? '(unchanged if blank)' : 'Enter password'}
             autoComplete="new-password"
             className={`${inputClass}${fieldErrors['secret'] ? ' border-status-down' : ''}`}
@@ -249,7 +281,11 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
           <textarea
             value={form.secret}
             onChange={(e) => set('secret', e.target.value)}
-            onBlur={!isEdit ? handleBlur('secret', () => validateRequired(form.secret, 'Private key')) : undefined}
+            onBlur={
+              !isEdit
+                ? handleBlur('secret', () => validateRequired(form.secret, 'Private key'))
+                : undefined
+            }
             placeholder={isEdit ? '(unchanged if blank)' : 'Paste private key'}
             rows={4}
             className={`${inputClass} font-mono text-xs${fieldErrors['secret'] ? ' border-status-down' : ''}`}
@@ -306,7 +342,9 @@ export function CredentialProfileManager() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+  }, []);
 
   function formToPayload(form: FormState) {
     return {
@@ -358,7 +396,12 @@ export function CredentialProfileManager() {
             className="text-on-bg-secondary hover:text-on-bg"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
           </button>
           <p className={labelClass}>New Credential Profile</p>
@@ -379,11 +422,19 @@ export function CredentialProfileManager() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => { setMode('list'); setEditing(null); }}
+            onClick={() => {
+              setMode('list');
+              setEditing(null);
+            }}
             className="text-on-bg-secondary hover:text-on-bg"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
           </button>
           <p className={labelClass}>Edit Credential Profile</p>
@@ -391,7 +442,10 @@ export function CredentialProfileManager() {
         <ProfileForm
           initial={profileToForm(editing)}
           onSave={handleUpdate}
-          onCancel={() => { setMode('list'); setEditing(null); }}
+          onCancel={() => {
+            setMode('list');
+            setEditing(null);
+          }}
           saveLabel="Save Changes"
           isEdit
         />
@@ -415,9 +469,7 @@ export function CredentialProfileManager() {
         </button>
       </div>
 
-      {loading && (
-        <p className="text-xs text-on-bg-secondary">Loading profiles...</p>
-      )}
+      {loading && <p className="text-xs text-on-bg-secondary">Loading profiles...</p>}
 
       {!loading && profiles.length === 0 && (
         <p className="text-xs text-on-bg-secondary">
@@ -425,73 +477,102 @@ export function CredentialProfileManager() {
         </p>
       )}
 
-      {!loading && profiles.map((profile) => (
-        <div
-          key={profile.id}
-          className="rounded-lg bg-surface-high p-3 space-y-1"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-on-bg truncate">{profile.name}</p>
-              {profile.description && (
-                <p className="text-xs text-on-bg-secondary truncate">{profile.description}</p>
-              )}
-              {profile.role && <span className="text-xs text-on-bg-secondary">Role: {profile.role}</span>}
-              <p className="text-xs text-on-bg-secondary/60 mt-1">
-                {profile.username}:{profile.port} ({profile.auth_method})
-              </p>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => { setEditing(profile); setMode('edit'); }}
-                className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
-                title="Edit profile"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setConfirmDeleteId(profile.id); setDeleteError(null); }}
-                className="p-1 text-on-bg-secondary hover:text-status-down rounded"
-                title="Delete profile"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {confirmDeleteId === profile.id && (
-            <div className="mt-2 rounded-lg border border-status-down/30 bg-status-down/10 p-2 space-y-2">
-              <p className="text-xs text-status-down">Delete this profile?</p>
-              {deleteError && (
-                <p className="text-xs text-status-down">{deleteError}</p>
-              )}
-              <div className="flex gap-2">
+      {!loading &&
+        profiles.map((profile) => (
+          <div key={profile.id} className="rounded-lg bg-surface-high p-3 space-y-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-on-bg truncate">{profile.name}</p>
+                {profile.description && (
+                  <p className="text-xs text-on-bg-secondary truncate">{profile.description}</p>
+                )}
+                {profile.role && (
+                  <span className="text-xs text-on-bg-secondary">Role: {profile.role}</span>
+                )}
+                <p className="text-xs text-on-bg-secondary/60 mt-1">
+                  {profile.username}:{profile.port} ({profile.auth_method})
+                </p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
-                  onClick={() => { setConfirmDeleteId(null); setDeleteError(null); }}
-                  className="flex-1 rounded bg-surface-high px-2 py-1 text-xs text-on-bg hover:bg-elevated"
+                  onClick={() => {
+                    setEditing(profile);
+                    setMode('edit');
+                  }}
+                  className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
+                  title="Edit profile"
                 >
-                  Cancel
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                    />
+                  </svg>
                 </button>
                 <button
                   type="button"
-                  disabled={deleteLoading}
-                  onClick={() => { void handleDelete(profile.id); }}
-                  className="flex-1 rounded bg-status-down px-2 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                  onClick={() => {
+                    setConfirmDeleteId(profile.id);
+                    setDeleteError(null);
+                  }}
+                  className="p-1 text-on-bg-secondary hover:text-status-down rounded"
+                  title="Delete profile"
                 >
-                  {deleteLoading ? 'Deleting...' : 'Delete'}
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
+                  </svg>
                 </button>
               </div>
             </div>
-          )}
-        </div>
-      ))}
+
+            {confirmDeleteId === profile.id && (
+              <div className="mt-2 rounded-lg border border-status-down/30 bg-status-down/10 p-2 space-y-2">
+                <p className="text-xs text-status-down">Delete this profile?</p>
+                {deleteError && <p className="text-xs text-status-down">{deleteError}</p>}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmDeleteId(null);
+                      setDeleteError(null);
+                    }}
+                    className="flex-1 rounded bg-surface-high px-2 py-1 text-xs text-on-bg hover:bg-elevated"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deleteLoading}
+                    onClick={() => {
+                      void handleDelete(profile.id);
+                    }}
+                    className="flex-1 rounded bg-status-down px-2 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                  >
+                    {deleteLoading ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
     </div>
   );
 }

@@ -1,11 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import AreaHub from './AreaHub';
+import { describe, expect, it, vi } from 'vitest';
 import type { Area, Device, Link } from '../types/api';
+import AreaHub from './AreaHub';
 
 // Mock AreaCard to isolate AreaHub tests
 vi.mock('./AreaCard', () => ({
-  default: ({ area, deviceCount, activeLinkCount, healthLabel }: {
+  default: ({
+    area,
+    deviceCount,
+    activeLinkCount,
+    healthLabel,
+  }: {
     area: { name: string };
     deviceCount: number;
     activeLinkCount: number;
@@ -74,13 +79,13 @@ function mockLink(overrides: Partial<Link> = {}): Link {
 describe('AreaHub', () => {
   it('renders heading and subtitle', () => {
     render(
-        <AreaHub
-          devices={[]}
-          areas={[]}
-          links={[]}
-          onAreaSelect={() => {}}
-          onOpenSettings={() => {}}
-        />,
+      <AreaHub
+        devices={[]}
+        areas={[]}
+        links={[]}
+        onAreaSelect={() => {}}
+        onOpenSettings={() => {}}
+      />,
     );
 
     expect(screen.getByText('OSPF Area Hub')).toBeInTheDocument();
@@ -89,13 +94,13 @@ describe('AreaHub', () => {
 
   it('renders four stat cards with correct labels', () => {
     render(
-        <AreaHub
-          devices={[mockDevice()]}
-          areas={[]}
-          links={[mockLink()]}
-          onAreaSelect={() => {}}
-          onOpenSettings={() => {}}
-        />,
+      <AreaHub
+        devices={[mockDevice()]}
+        areas={[]}
+        links={[mockLink()]}
+        onAreaSelect={() => {}}
+        onOpenSettings={() => {}}
+      />,
     );
 
     expect(screen.getByText('Aggregate Health')).toBeInTheDocument();
@@ -105,13 +110,13 @@ describe('AreaHub', () => {
 
   it('renders empty state CTA when no areas exist', () => {
     render(
-        <AreaHub
-          devices={[mockDevice()]}
-          areas={[]}
-          links={[]}
-          onAreaSelect={() => {}}
-          onOpenSettings={() => {}}
-        />,
+      <AreaHub
+        devices={[mockDevice()]}
+        areas={[]}
+        links={[]}
+        onAreaSelect={() => {}}
+        onOpenSettings={() => {}}
+      />,
     );
 
     expect(screen.getByText('No areas yet')).toBeInTheDocument();
@@ -131,13 +136,13 @@ describe('AreaHub', () => {
     ];
 
     render(
-        <AreaHub
-          devices={devices}
-          areas={areas}
-          links={[]}
-          onAreaSelect={() => {}}
-          onOpenSettings={() => {}}
-        />,
+      <AreaHub
+        devices={devices}
+        areas={areas}
+        links={[]}
+        onAreaSelect={() => {}}
+        onOpenSettings={() => {}}
+      />,
     );
 
     expect(screen.getByTestId('area-card-Backbone')).toBeInTheDocument();
@@ -151,13 +156,13 @@ describe('AreaHub', () => {
     );
 
     const { rerender } = render(
-        <AreaHub
-          devices={allUpDevices}
-          areas={[mockArea({ id: 'a1', name: 'TestArea' })]}
-          links={[]}
-          onAreaSelect={() => {}}
-          onOpenSettings={() => {}}
-        />,
+      <AreaHub
+        devices={allUpDevices}
+        areas={[mockArea({ id: 'a1', name: 'TestArea' })]}
+        links={[]}
+        onAreaSelect={() => {}}
+        onOpenSettings={() => {}}
+      />,
     );
 
     // With all devices up, area card should show "Optimal"
@@ -169,13 +174,13 @@ describe('AreaHub', () => {
     );
 
     rerender(
-        <AreaHub
-          devices={mixedDevices}
-          areas={[mockArea({ id: 'a1', name: 'TestArea' })]}
-          links={[]}
-          onAreaSelect={() => {}}
-          onOpenSettings={() => {}}
-        />,
+      <AreaHub
+        devices={mixedDevices}
+        areas={[mockArea({ id: 'a1', name: 'TestArea' })]}
+        links={[]}
+        onAreaSelect={() => {}}
+        onOpenSettings={() => {}}
+      />,
     );
 
     expect(screen.getByTestId('health-label')).toHaveTextContent('Degraded');
@@ -186,13 +191,13 @@ describe('AreaHub', () => {
     );
 
     rerender(
-        <AreaHub
-          devices={criticalDevices}
-          areas={[mockArea({ id: 'a1', name: 'TestArea' })]}
-          links={[]}
-          onAreaSelect={() => {}}
-          onOpenSettings={() => {}}
-        />,
+      <AreaHub
+        devices={criticalDevices}
+        areas={[mockArea({ id: 'a1', name: 'TestArea' })]}
+        links={[]}
+        onAreaSelect={() => {}}
+        onOpenSettings={() => {}}
+      />,
     );
 
     expect(screen.getByTestId('health-label')).toHaveTextContent('Critical');

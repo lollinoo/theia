@@ -13,34 +13,40 @@ export function useBridgeHealth(bridgePort: string): {
   const unmountedRef = useRef(false);
   const latestCheckRef = useRef(0);
 
-  useEffect(() => () => {
-    unmountedRef.current = true;
-  }, []);
+  useEffect(
+    () => () => {
+      unmountedRef.current = true;
+    },
+    [],
+  );
 
-  const checkBridgeHealth = useCallback((bridgePortOverride?: string) => {
-    const checkId = latestCheckRef.current + 1;
-    latestCheckRef.current = checkId;
-    setBridgeChecked(false);
-    setBridgeError(null);
-    const url = `http://localhost:${bridgePortOverride ?? bridgePort}/health`;
+  const checkBridgeHealth = useCallback(
+    (bridgePortOverride?: string) => {
+      const checkId = latestCheckRef.current + 1;
+      latestCheckRef.current = checkId;
+      setBridgeChecked(false);
+      setBridgeError(null);
+      const url = `http://localhost:${bridgePortOverride ?? bridgePort}/health`;
 
-    void (async () => {
-      try {
-        const resp = await fetchBridgeWithTimeout(url);
-        if (!unmountedRef.current && latestCheckRef.current === checkId) {
-          setBridgeRunning(resp.ok);
-          setBridgeChecked(true);
-          setBridgeError(resp.ok ? null : `WinBox bridge health check failed (${resp.status}).`);
+      void (async () => {
+        try {
+          const resp = await fetchBridgeWithTimeout(url);
+          if (!unmountedRef.current && latestCheckRef.current === checkId) {
+            setBridgeRunning(resp.ok);
+            setBridgeChecked(true);
+            setBridgeError(resp.ok ? null : `WinBox bridge health check failed (${resp.status}).`);
+          }
+        } catch (error) {
+          if (!unmountedRef.current && latestCheckRef.current === checkId) {
+            setBridgeRunning(false);
+            setBridgeChecked(true);
+            setBridgeError(getBridgeHealthErrorMessage(error));
+          }
         }
-      } catch (error) {
-        if (!unmountedRef.current && latestCheckRef.current === checkId) {
-          setBridgeRunning(false);
-          setBridgeChecked(true);
-          setBridgeError(getBridgeHealthErrorMessage(error));
-        }
-      }
-    })();
-  }, [bridgePort]);
+      })();
+    },
+    [bridgePort],
+  );
 
   return { bridgeRunning, bridgeChecked, bridgeError, checkBridgeHealth };
 }

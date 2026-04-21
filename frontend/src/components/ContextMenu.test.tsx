@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { ContextMenu } from './ContextMenu';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -45,9 +45,7 @@ describe('ContextMenu', () => {
   });
 
   it('has bg-glass-bg and border-glass-border classes on the menu container', () => {
-    const items: ContextMenuItem[] = [
-      { label: 'Edit', onClick: vi.fn() },
-    ];
+    const items: ContextMenuItem[] = [{ label: 'Edit', onClick: vi.fn() }];
     const { container } = render(
       <ContextMenu items={items} position={defaultPosition} onClose={defaultOnClose} />,
     );

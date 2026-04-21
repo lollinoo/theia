@@ -51,9 +51,7 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
             <span className="mt-0.5 h-2 w-2 flex-none rounded-full bg-red-400 animate-pulse motion-reduce:animate-none" />
             <div className="min-w-0">
               <p className="text-sm font-medium text-red-300">{prometheusDiagnostics.title}</p>
-              <p className="mt-0.5 text-xs text-red-300/70">
-                {prometheusDiagnostics.detail}
-              </p>
+              <p className="mt-0.5 text-xs text-red-300/70">{prometheusDiagnostics.detail}</p>
             </div>
           </div>
         </div>
@@ -67,7 +65,8 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
           </p>
           {hiddenActiveAlerts > 0 && (
             <p className="text-[11px] text-on-bg-secondary/70">
-              Showing {firingAlerts.length} alert row{firingAlerts.length === 1 ? '' : 's'} while normalized runtime reports {activeAlertCount} active alerts.
+              Showing {firingAlerts.length} alert row{firingAlerts.length === 1 ? '' : 's'} while
+              normalized runtime reports {activeAlertCount} active alerts.
             </p>
           )}
           {firingAlerts.map((alert, i) => (
@@ -77,16 +76,12 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
             >
               <div className="flex items-center gap-2">
                 {stateBadge(alert.state)}
-                <span className="text-sm font-medium text-on-bg truncate">
-                  {alert.alertName}
-                </span>
+                <span className="text-sm font-medium text-on-bg truncate">{alert.alertName}</span>
                 {severityBadge(alert.severity)}
               </div>
               <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
-              <p className="text-[11px] text-on-bg-secondary/70">
-                 {alert.deviceLabel}
-               </p>
-             </div>
+              <p className="text-[11px] text-on-bg-secondary/70">{alert.deviceLabel}</p>
+            </div>
           ))}
         </div>
       ) : (
@@ -110,16 +105,12 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
             >
               <div className="flex items-center gap-2">
                 {stateBadge(alert.state)}
-                <span className="text-sm font-medium text-on-bg truncate">
-                  {alert.alertName}
-                </span>
+                <span className="text-sm font-medium text-on-bg truncate">{alert.alertName}</span>
                 {severityBadge(alert.severity)}
               </div>
               <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
-              <p className="text-[11px] text-on-bg-secondary/70">
-                 {alert.deviceLabel}
-               </p>
-             </div>
+              <p className="text-[11px] text-on-bg-secondary/70">{alert.deviceLabel}</p>
+            </div>
           ))}
         </div>
       )}

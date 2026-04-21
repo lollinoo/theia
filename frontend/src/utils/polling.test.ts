@@ -10,14 +10,18 @@ describe('polling helpers', () => {
   });
 
   it('prefers poll_interval_override over poll_class default', () => {
-    expect(getEffectivePollingIntervalSeconds({
-      poll_class: 'standard',
-      poll_interval_override: 15,
-    })).toBe(15);
+    expect(
+      getEffectivePollingIntervalSeconds({
+        poll_class: 'standard',
+        poll_interval_override: 15,
+      }),
+    ).toBe(15);
 
-    expect(getEffectivePollingIntervalSeconds({
-      poll_class: 'low',
-      poll_interval_override: null,
-    })).toBe(300);
+    expect(
+      getEffectivePollingIntervalSeconds({
+        poll_class: 'low',
+        poll_interval_override: null,
+      }),
+    ).toBe(300);
   });
 });

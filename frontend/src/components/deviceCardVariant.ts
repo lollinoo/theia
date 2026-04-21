@@ -1,14 +1,11 @@
 import type { Device } from '../types/api';
 import {
   type DeviceAddressState,
-  resolveDeviceMonitoringState,
   type DeviceMonitoringState,
+  resolveDeviceMonitoringState,
 } from './deviceVisualState';
 
-export type DeviceCardVariant =
-  | 'physical'
-  | 'virtual-monitorable'
-  | 'virtual-unmonitored';
+export type DeviceCardVariant = 'physical' | 'virtual-monitorable' | 'virtual-unmonitored';
 
 type DeviceCardVariantInput = Pick<Device, 'device_type' | 'ip'>;
 
@@ -29,9 +26,7 @@ export function resolveDeviceCardVariant(
   }
 
   const effectiveMonitoringState = monitoringState ?? resolveDeviceMonitoringState(device);
-  return effectiveMonitoringState === 'unmonitored'
-    ? 'virtual-unmonitored'
-    : 'virtual-monitorable';
+  return effectiveMonitoringState === 'unmonitored' ? 'virtual-unmonitored' : 'virtual-monitorable';
 }
 
 export function resolveDeviceCardRenderModel({

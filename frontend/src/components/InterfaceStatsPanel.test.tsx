@@ -1,13 +1,12 @@
-import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 
 import { DeviceInterfaceStatsPanel, InterfaceStatsPanel } from './InterfaceStatsPanel';
-import type {
-  DeviceInterfacePanelModel,
-  LinkInterfacePanelModel,
-} from './panelModels';
+import type { DeviceInterfacePanelModel, LinkInterfacePanelModel } from './panelModels';
 
-function mockDeviceModel(overrides: Partial<DeviceInterfacePanelModel> = {}): DeviceInterfacePanelModel {
+function mockDeviceModel(
+  overrides: Partial<DeviceInterfacePanelModel> = {},
+): DeviceInterfacePanelModel {
   return {
     deviceId: 'dev-1',
     deviceLabel: 'router-01',
@@ -79,16 +78,18 @@ describe('InterfaceStatsPanel', () => {
     render(
       <DeviceInterfaceStatsPanel
         model={mockDeviceModel({
-          sections: [{
-            ...mockDeviceModel().sections[0],
-            metricsUnavailableMessage: 'Device unreachable',
-            statusLabel: 'down',
-            statusTone: 'down',
-            txLabel: '--',
-            rxLabel: '--',
-            utilizationPct: null,
-            utilizationColor: 'var(--color-status-unknown)',
-          }],
+          sections: [
+            {
+              ...mockDeviceModel().sections[0],
+              metricsUnavailableMessage: 'Device unreachable',
+              statusLabel: 'down',
+              statusTone: 'down',
+              txLabel: '--',
+              rxLabel: '--',
+              utilizationPct: null,
+              utilizationColor: 'var(--color-status-unknown)',
+            },
+          ],
         })}
       />,
     );
@@ -124,11 +125,7 @@ describe('InterfaceStatsPanel', () => {
   });
 
   it('renders the device no-interfaces state from the adapted model', () => {
-    render(
-      <DeviceInterfaceStatsPanel
-        model={mockDeviceModel({ sections: [] })}
-      />,
-    );
+    render(<DeviceInterfaceStatsPanel model={mockDeviceModel({ sections: [] })} />);
 
     expect(screen.getByText('No interfaces discovered for this device.')).toBeInTheDocument();
   });
@@ -147,11 +144,13 @@ describe('InterfaceStatsPanel', () => {
     render(
       <DeviceInterfaceStatsPanel
         model={mockDeviceModel({
-          sections: [{
-            ...mockDeviceModel().sections[0],
-            statusLabel: 'unknown',
-            statusTone: 'neutral' as never,
-          }],
+          sections: [
+            {
+              ...mockDeviceModel().sections[0],
+              statusLabel: 'unknown',
+              statusTone: 'neutral' as never,
+            },
+          ],
         })}
       />,
     );

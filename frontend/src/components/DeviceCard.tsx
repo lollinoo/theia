@@ -1,16 +1,17 @@
-import { memo, type CSSProperties } from 'react';
-import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
+import { Handle, type Node, type NodeProps, Position } from '@xyflow/react';
+import { type CSSProperties, memo } from 'react';
 import type { Device, Link } from '../types/api';
 import {
-  formatUptime,
-  metricColor,
   type AlertStatus,
   type DeviceMetricsDTO,
   type FreshnessStatus,
+  formatUptime,
+  metricColor,
 } from '../types/metrics';
 import { formatPollingEvery } from '../utils/freshness';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
 import { StatusDot } from './StatusDot';
+import { resolveDeviceCardRenderModel } from './deviceCardVariant';
 import {
   type DeviceMonitoringState,
   resolveDeviceAddressState,
@@ -20,7 +21,6 @@ import {
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
-import { resolveDeviceCardRenderModel } from './deviceCardVariant';
 import { VendorIcon } from './icons/VendorIcon';
 
 export interface DeviceNodeData {
@@ -109,11 +109,13 @@ function sameSelfLinks(previous: Link[] | undefined, next: Link[] | undefined): 
 
   return (previous ?? []).every((link, index) => {
     const candidate = next?.[index];
-    return !!candidate &&
+    return (
+      !!candidate &&
       link.id === candidate.id &&
       link.source_if_name === candidate.source_if_name &&
       link.target_if_name === candidate.target_if_name &&
-      link.discovery_protocol === candidate.discovery_protocol;
+      link.discovery_protocol === candidate.discovery_protocol
+    );
   });
 }
 
@@ -128,9 +130,7 @@ function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): Readout['tone'] {
   }
 }
 
-function freshnessMeta(
-  freshness: FreshnessStatus,
-): { tone: Readout['tone']; text: string } {
+function freshnessMeta(freshness: FreshnessStatus): { tone: Readout['tone']; text: string } {
   switch (freshness) {
     case 'fresh':
       return { tone: freshnessTone('Fresh'), text: 'Fresh telemetry' };
@@ -173,12 +173,28 @@ function buildReadouts({
     {
       label: 'CPU',
       value: formatPercent(cpuPercent),
-      tone: isDeviceDown ? 'critical' : cpuPercent === null ? 'muted' : cpuPercent >= 85 ? 'critical' : cpuPercent >= 60 ? 'warning' : 'ok',
+      tone: isDeviceDown
+        ? 'critical'
+        : cpuPercent === null
+          ? 'muted'
+          : cpuPercent >= 85
+            ? 'critical'
+            : cpuPercent >= 60
+              ? 'warning'
+              : 'ok',
     },
     {
       label: 'MEM',
       value: formatPercent(memPercent),
-      tone: isDeviceDown ? 'critical' : memPercent === null ? 'muted' : memPercent >= 85 ? 'critical' : memPercent >= 60 ? 'warning' : 'default',
+      tone: isDeviceDown
+        ? 'critical'
+        : memPercent === null
+          ? 'muted'
+          : memPercent >= 85
+            ? 'critical'
+            : memPercent >= 60
+              ? 'warning'
+              : 'default',
     },
     {
       label: 'UP',
@@ -196,37 +212,32 @@ function ghostFrameStyle(color?: string): CSSProperties | undefined {
   };
 }
 
-function DeviceCardInner({
-  data,
-  selected,
-}: NodeProps<DeviceNode>) {
+function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const monitoringState = data.monitoringState ?? resolveDeviceMonitoringState(data.device);
   const metrics = sanitizeDeviceMetricsForDisplay(data.device, data.metrics, monitoringState);
   const isVirtual = data.isVirtual === true;
   const headerState = resolveDeviceVisualState(data.device, metrics, monitoringState);
-  const freshness = monitoringState === 'monitorable' && metrics
-      ? freshnessMeta(metrics.freshness)
-    : null;
-  const pollingEvery = monitoringState === 'monitorable' && metrics
-    ? formatPollingEvery(
-        metrics.expected_poll_interval_seconds ?? getEffectivePollingIntervalSeconds(data.device),
-      )
-    : null;
+  const freshness =
+    monitoringState === 'monitorable' && metrics ? freshnessMeta(metrics.freshness) : null;
+  const pollingEvery =
+    monitoringState === 'monitorable' && metrics
+      ? formatPollingEvery(
+          metrics.expected_poll_interval_seconds ?? getEffectivePollingIntervalSeconds(data.device),
+        )
+      : null;
   const label = displayName(data.device);
   const colors = data.areaColors ?? [];
   const hasArea = colors.length > 0;
   const firstColor = colors[0];
-  const areaAccent = colors.length >= 2
-    ? `linear-gradient(90deg, ${colors.join(', ')})`
-    : firstColor;
+  const areaAccent =
+    colors.length >= 2 ? `linear-gradient(90deg, ${colors.join(', ')})` : firstColor;
   const addressLabel = isMacAddress(data.device.ip) ? 'MAC' : 'IP';
   const addressState = resolveDeviceAddressState(data.device);
-  const {
-    cpuPercent,
-    memPercent,
-    uptimeSecs,
-    isDeviceDown,
-  } = resolveDeviceOperationalReadouts(data.device, metrics, monitoringState);
+  const { cpuPercent, memPercent, uptimeSecs, isDeviceDown } = resolveDeviceOperationalReadouts(
+    data.device,
+    metrics,
+    monitoringState,
+  );
   const renderModel = resolveDeviceCardRenderModel({
     device: data.device,
     monitoringState,
@@ -390,9 +401,7 @@ function DeviceCardInner({
                   <div className={`text-[10px] font-medium ${readoutToneClass(freshness!.tone)}`}>
                     {freshness!.text}
                   </div>
-                  <div className="mt-0.5 text-[10px] text-on-bg-secondary">
-                    {pollingEvery}
-                  </div>
+                  <div className="mt-0.5 text-[10px] text-on-bg-secondary">{pollingEvery}</div>
                 </div>
               ) : null}
             </div>
@@ -400,14 +409,23 @@ function DeviceCardInner({
             {renderModel.showOperationalReadouts ? (
               <div className="mt-3 grid grid-cols-3 gap-1.5">
                 {readouts.map((readout) => (
-                  <div key={readout.label} className="rounded-2xl border border-outline bg-surface-container px-2.5 py-2">
+                  <div
+                    key={readout.label}
+                    className="rounded-2xl border border-outline bg-surface-container px-2.5 py-2"
+                  >
                     <div className="text-[9px] uppercase tracking-[0.16em] text-on-bg-secondary">
                       {readout.label}
                     </div>
-                    <div className={`mt-1 truncate font-mono text-[11px] font-semibold ${readoutToneClass(readout.tone)}`}>
-                      {readout.tone === 'default' && readout.label === 'CPU' && cpuPercent !== null ? (
+                    <div
+                      className={`mt-1 truncate font-mono text-[11px] font-semibold ${readoutToneClass(readout.tone)}`}
+                    >
+                      {readout.tone === 'default' &&
+                      readout.label === 'CPU' &&
+                      cpuPercent !== null ? (
                         <span className={metricColor(cpuPercent)}>{readout.value}</span>
-                      ) : readout.tone === 'default' && readout.label === 'MEM' && memPercent !== null ? (
+                      ) : readout.tone === 'default' &&
+                        readout.label === 'MEM' &&
+                        memPercent !== null ? (
                         <span className={metricColor(memPercent)}>{readout.value}</span>
                       ) : (
                         readout.value
@@ -419,7 +437,9 @@ function DeviceCardInner({
             ) : null}
           </div>
         ) : (
-          <div className={`px-3.5 text-center ${isVirtualUnmonitored ? 'pb-4 pt-3.5' : 'pb-3 pt-2.5'}`}>
+          <div
+            className={`px-3.5 text-center ${isVirtualUnmonitored ? 'pb-4 pt-3.5' : 'pb-3 pt-2.5'}`}
+          >
             <div className="flex flex-col items-center">
               {renderModel.showVirtualStatusBadge ? (
                 <div className="mb-1.5 flex w-full justify-end">
@@ -454,12 +474,12 @@ function DeviceCardInner({
 
               {renderModel.showFreshnessMeta ? (
                 <div className="mt-3 flex w-full items-center justify-between gap-2 text-[10px]">
-                  <div className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}>
+                  <div
+                    className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}
+                  >
                     {freshness!.text}
                   </div>
-                  <div className="min-w-0 truncate text-on-bg-secondary">
-                    {pollingEvery}
-                  </div>
+                  <div className="min-w-0 truncate text-on-bg-secondary">{pollingEvery}</div>
                 </div>
               ) : null}
             </div>
@@ -470,41 +490,45 @@ function DeviceCardInner({
   );
 }
 
-const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: NodeProps<DeviceNode>) => {
-  const pd = prev.data;
-  const nd = next.data;
-  return (
-    pd.device.id === nd.device.id &&
-    pd.device.status === nd.device.status &&
-    pd.device.vendor === nd.device.vendor &&
-    pd.device.sys_name === nd.device.sys_name &&
-    pd.device.hardware_model === nd.device.hardware_model &&
-    pd.device.tags?.display_name === nd.device.tags?.display_name &&
-    pd.device.ip === nd.device.ip &&
-    pd.device.area_ids?.length === nd.device.area_ids?.length &&
-    pd.highlighted === nd.highlighted &&
-    pd.alertStatus === nd.alertStatus &&
-    pd.areaColors?.length === nd.areaColors?.length && (pd.areaColors ?? []).every((c, i) => c === nd.areaColors?.[i]) &&
-    pd.isGhost === nd.isGhost &&
-    pd.isVirtual === nd.isVirtual &&
-    pd.monitoringState === nd.monitoringState &&
-    pd.subtype === nd.subtype &&
-    sameSelfLinks(pd.selfLinks, nd.selfLinks) &&
-    pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
-    pd.metrics?.mem_percent === nd.metrics?.mem_percent &&
-    pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
-    pd.metrics?.uptime_secs === nd.metrics?.uptime_secs &&
-    pd.metrics?.health === nd.metrics?.health &&
-    pd.metrics?.freshness === nd.metrics?.freshness &&
-    pd.metrics?.last_polled_at === nd.metrics?.last_polled_at &&
-    pd.metrics?.expected_poll_interval_seconds === nd.metrics?.expected_poll_interval_seconds &&
-    pd.editMode === nd.editMode &&
-    prev.positionAbsoluteX === next.positionAbsoluteX &&
-    prev.positionAbsoluteY === next.positionAbsoluteY &&
-    prev.width === next.width &&
-    prev.height === next.height &&
-    prev.selected === next.selected
-  );
-});
+const DeviceCard = memo(
+  DeviceCardInner,
+  (prev: NodeProps<DeviceNode>, next: NodeProps<DeviceNode>) => {
+    const pd = prev.data;
+    const nd = next.data;
+    return (
+      pd.device.id === nd.device.id &&
+      pd.device.status === nd.device.status &&
+      pd.device.vendor === nd.device.vendor &&
+      pd.device.sys_name === nd.device.sys_name &&
+      pd.device.hardware_model === nd.device.hardware_model &&
+      pd.device.tags?.display_name === nd.device.tags?.display_name &&
+      pd.device.ip === nd.device.ip &&
+      pd.device.area_ids?.length === nd.device.area_ids?.length &&
+      pd.highlighted === nd.highlighted &&
+      pd.alertStatus === nd.alertStatus &&
+      pd.areaColors?.length === nd.areaColors?.length &&
+      (pd.areaColors ?? []).every((c, i) => c === nd.areaColors?.[i]) &&
+      pd.isGhost === nd.isGhost &&
+      pd.isVirtual === nd.isVirtual &&
+      pd.monitoringState === nd.monitoringState &&
+      pd.subtype === nd.subtype &&
+      sameSelfLinks(pd.selfLinks, nd.selfLinks) &&
+      pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
+      pd.metrics?.mem_percent === nd.metrics?.mem_percent &&
+      pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
+      pd.metrics?.uptime_secs === nd.metrics?.uptime_secs &&
+      pd.metrics?.health === nd.metrics?.health &&
+      pd.metrics?.freshness === nd.metrics?.freshness &&
+      pd.metrics?.last_polled_at === nd.metrics?.last_polled_at &&
+      pd.metrics?.expected_poll_interval_seconds === nd.metrics?.expected_poll_interval_seconds &&
+      pd.editMode === nd.editMode &&
+      prev.positionAbsoluteX === next.positionAbsoluteX &&
+      prev.positionAbsoluteY === next.positionAbsoluteY &&
+      prev.width === next.width &&
+      prev.height === next.height &&
+      prev.selected === next.selected
+    );
+  },
+);
 
 export default DeviceCard;

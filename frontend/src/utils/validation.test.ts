@@ -1,21 +1,21 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  validateRequired,
-  validateMaxLength,
-  validateIPOrHostname,
-  validatePort,
-  validateURL,
-  validateSNMPv3Auth,
-  validateSNMPv3Priv,
-  validateSNMPv3SecurityLevel,
-  validateCoordinate,
-  validateIntervalAllowlist,
-  validateRetentionCount,
+  INTERVAL_ALLOWLIST,
   MAX_STRING_LENGTH,
   SNMP_AUTH_PROTOCOLS,
   SNMP_PRIV_PROTOCOLS,
   SNMP_SECURITY_LEVELS,
-  INTERVAL_ALLOWLIST,
+  validateCoordinate,
+  validateIPOrHostname,
+  validateIntervalAllowlist,
+  validateMaxLength,
+  validatePort,
+  validateRequired,
+  validateRetentionCount,
+  validateSNMPv3Auth,
+  validateSNMPv3Priv,
+  validateSNMPv3SecurityLevel,
+  validateURL,
 } from './validation';
 
 // --- validateRequired ---
@@ -326,15 +326,11 @@ describe('validateIntervalAllowlist', () => {
   });
 
   it('returns error for 7 (not in allowlist)', () => {
-    expect(validateIntervalAllowlist('7')).toBe(
-      'Interval must be one of: 0, 6, 12, 24, 48, 168',
-    );
+    expect(validateIntervalAllowlist('7')).toBe('Interval must be one of: 0, 6, 12, 24, 48, 168');
   });
 
   it('returns error for non-numeric string', () => {
-    expect(validateIntervalAllowlist('abc')).toBe(
-      'Interval must be one of: 0, 6, 12, 24, 48, 168',
-    );
+    expect(validateIntervalAllowlist('abc')).toBe('Interval must be one of: 0, 6, 12, 24, 48, 168');
   });
 });
 

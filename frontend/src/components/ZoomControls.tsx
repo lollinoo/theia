@@ -6,11 +6,7 @@ interface ZoomControlsProps {
   onFitView: () => void;
 }
 
-export default function ZoomControls({
-  onZoomIn,
-  onZoomOut,
-  onFitView,
-}: ZoomControlsProps) {
+export default function ZoomControls({ onZoomIn, onZoomOut, onFitView }: ZoomControlsProps) {
   const buttonClassName =
     'flex h-11 w-11 items-center justify-center rounded-2xl border border-transparent text-on-bg-secondary transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
 
@@ -23,11 +19,7 @@ export default function ZoomControls({
         <button type="button" onClick={onZoomOut} className={buttonClassName}>
           <MaterialIcon name="zoom_out" />
         </button>
-        <button
-          type="button"
-          onClick={onFitView}
-          className={buttonClassName}
-        >
+        <button type="button" onClick={onFitView} className={buttonClassName}>
           <MaterialIcon name="fit_screen" />
         </button>
       </div>

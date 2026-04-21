@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { Area, Device } from '../types/api';
 import { deleteDevice, fetchAreas, updateDevice } from '../api/client';
-import { ValidationError, ServerError } from '../api/errors';
-import { buildBulkUpdatePayload, createBulkEditModel, type BulkEditModel } from './forms/bulkEditModels';
+import { ServerError, ValidationError } from '../api/errors';
+import type { Area, Device } from '../types/api';
+import {
+  type BulkEditModel,
+  buildBulkUpdatePayload,
+  createBulkEditModel,
+} from './forms/bulkEditModels';
 
 interface BulkEditPanelProps {
   devices: Device[];
@@ -25,7 +29,11 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
 
   // Load reference data
   useEffect(() => {
-    fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
+    fetchAreas()
+      .then(setAreas)
+      .catch(() => {
+        /* non-fatal */
+      });
   }, []);
 
   useEffect(() => {
@@ -79,9 +87,11 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       }
     } catch (err) {
       if (err instanceof ServerError) {
-        setSaveError(err.correlationId
-          ? `Something went wrong (ref: ${err.correlationId})`
-          : 'Something went wrong');
+        setSaveError(
+          err.correlationId
+            ? `Something went wrong (ref: ${err.correlationId})`
+            : 'Something went wrong',
+        );
       } else if (err instanceof ValidationError) {
         setSaveError(err.message);
       } else {
@@ -135,7 +145,9 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       {/* Area assignment */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Areas</p>
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Areas
+          </p>
           {model.areaIds.mixed && !model.areaIds.dirty && (
             <span className="text-xs text-on-bg-muted italic">Mixed</span>
           )}
@@ -150,9 +162,15 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
                 <span
                   key={id}
                   className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-on-bg"
-                  style={{ backgroundColor: `${area.color}25`, border: `1px solid ${area.color}60` }}
+                  style={{
+                    backgroundColor: `${area.color}25`,
+                    border: `1px solid ${area.color}60`,
+                  }}
                 >
-                  <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: area.color }} />
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ backgroundColor: area.color }}
+                  />
                   {area.name}
                   <button
                     type="button"
@@ -169,7 +187,12 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
                     className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
                   >
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
                     </svg>
                   </button>
                 </span>
@@ -194,10 +217,18 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
             }}
             className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
           >
-            <option value="">{model.areaIds.value.length === 0 ? 'Unassigned - select area...' : 'Add another area...'}</option>
-            {areas.filter((a) => !model.areaIds.value.includes(a.id)).map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
+            <option value="">
+              {model.areaIds.value.length === 0
+                ? 'Unassigned - select area...'
+                : 'Add another area...'}
+            </option>
+            {areas
+              .filter((a) => !model.areaIds.value.includes(a.id))
+              .map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
           </select>
         )}
       </div>
@@ -205,7 +236,9 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       {/* Vendor */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Vendor</p>
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Vendor
+          </p>
           {model.vendor.mixed && !model.vendor.dirty && (
             <span className="text-xs text-on-bg-muted italic">Mixed</span>
           )}
@@ -232,7 +265,9 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       {/* Metrics Source */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Metrics Source</p>
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Metrics Source
+          </p>
           {model.metricsSource.mixed && !model.metricsSource.dirty && (
             <span className="text-xs text-on-bg-muted italic">Mixed</span>
           )}
@@ -276,7 +311,9 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       <button
         type="button"
         disabled={saving || !hasChanges}
-        onClick={() => { void handleSave(); }}
+        onClick={() => {
+          void handleSave();
+        }}
         className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
       >
         {saving ? 'Applying...' : saved ? 'Saved' : `Apply to ${devices.length} Devices`}
@@ -317,10 +354,14 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
               <button
                 type="button"
                 disabled={deleteLoading}
-                onClick={() => { void handleBulkDelete(); }}
+                onClick={() => {
+                  void handleBulkDelete();
+                }}
                 className="flex-1 rounded-lg bg-status-down px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {deleteLoading ? `Deleting ${deleteProgress}/${devices.length}...` : 'Confirm Delete All'}
+                {deleteLoading
+                  ? `Deleting ${deleteProgress}/${devices.length}...`
+                  : 'Confirm Delete All'}
               </button>
             </div>
           </div>
@@ -329,12 +370,21 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
 
       {/* Selected devices list */}
       <div className="space-y-2">
-        <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Selected Devices</p>
+        <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+          Selected Devices
+        </p>
         <div className="space-y-1 max-h-48 overflow-y-auto">
           {devices.map((d) => (
-            <div key={d.id} className="flex items-center gap-2 rounded-lg bg-surface-high px-3 py-1.5 text-xs">
-              <span className={`h-1.5 w-1.5 rounded-full flex-none ${d.status === 'up' ? 'bg-status-up' : d.status === 'down' ? 'bg-status-down' : 'bg-on-bg-muted'}`} />
-              <span className="text-on-bg truncate">{d.tags?.display_name || d.sys_name || d.hostname || d.ip}</span>
+            <div
+              key={d.id}
+              className="flex items-center gap-2 rounded-lg bg-surface-high px-3 py-1.5 text-xs"
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full flex-none ${d.status === 'up' ? 'bg-status-up' : d.status === 'down' ? 'bg-status-down' : 'bg-on-bg-muted'}`}
+              />
+              <span className="text-on-bg truncate">
+                {d.tags?.display_name || d.sys_name || d.hostname || d.ip}
+              </span>
               <span className="text-on-bg-muted ml-auto flex-none">{d.ip}</span>
             </div>
           ))}

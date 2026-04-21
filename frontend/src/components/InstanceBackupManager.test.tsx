@@ -1,14 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ServerError, ValidationError } from '../api/errors';
 import { InstanceBackupManager } from './InstanceBackupManager';
-import { ValidationError, ServerError } from '../api/errors';
 
 // Mock all API calls used by InstanceBackupManager
 vi.mock('../api/client', () => ({
   fetchInstanceBackups: vi.fn().mockResolvedValue([]),
   fetchSettings: vi.fn().mockResolvedValue({}),
   updateSetting: vi.fn().mockResolvedValue(undefined),
-  createInstanceBackup: vi.fn().mockResolvedValue({ id: 'backup-1', status: 'running', created_at: new Date().toISOString() }),
+  createInstanceBackup: vi
+    .fn()
+    .mockResolvedValue({ id: 'backup-1', status: 'running', created_at: new Date().toISOString() }),
   deleteInstanceBackup: vi.fn().mockResolvedValue(undefined),
   instanceBackupDownloadUrl: vi.fn().mockReturnValue('/api/v1/instance-backups/download'),
   restoreInstanceBackup: vi.fn().mockResolvedValue({ success: true }),
@@ -77,7 +79,9 @@ describe('InstanceBackupManager — retention count validated (1-50)', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     const calls = (updateSetting as ReturnType<typeof vi.fn>).mock.calls;
-    const retentionCalls = calls.filter(([key]: string[]) => key === 'instance_backup_retention_count');
+    const retentionCalls = calls.filter(
+      ([key]: string[]) => key === 'instance_backup_retention_count',
+    );
     expect(retentionCalls).toHaveLength(0);
   });
 });
@@ -114,7 +118,9 @@ describe('InstanceBackupManager — schedule interval validated against allowlis
     await new Promise((r) => setTimeout(r, 0));
 
     const calls = (updateSetting as ReturnType<typeof vi.fn>).mock.calls;
-    const intervalCalls = calls.filter(([key]: string[]) => key === 'instance_backup_interval_hours');
+    const intervalCalls = calls.filter(
+      ([key]: string[]) => key === 'instance_backup_interval_hours',
+    );
     expect(intervalCalls).toHaveLength(0);
   });
 });
@@ -659,7 +665,9 @@ describe('InstanceBackupManager — SC-5: inline delete confirm behavior', () =>
     fireEvent.click(screen.getByRole('button', { name: 'Confirm?' }));
 
     await waitFor(() => {
-      expect(screen.queryByText('theia-backup-20260407-120000-v1.4.0.tar.gz')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('theia-backup-20260407-120000-v1.4.0.tar.gz'),
+      ).not.toBeInTheDocument();
     });
   });
 });

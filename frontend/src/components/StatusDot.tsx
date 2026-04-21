@@ -1,7 +1,4 @@
-import {
-  type DeviceVisualStatus,
-  resolveDeviceStatusDotStyles,
-} from './deviceVisualState';
+import { type DeviceVisualStatus, resolveDeviceStatusDotStyles } from './deviceVisualState';
 
 interface StatusDotProps {
   status: DeviceVisualStatus;

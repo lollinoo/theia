@@ -40,10 +40,10 @@ function safeMark(markName: string): void {
 
 function safeMeasure(measureName: string, startMark: string, endMark: string): void {
   if (
-    typeof performance === 'undefined'
-    || typeof performance.measure !== 'function'
-    || typeof performance.clearMarks !== 'function'
-    || typeof performance.clearMeasures !== 'function'
+    typeof performance === 'undefined' ||
+    typeof performance.measure !== 'function' ||
+    typeof performance.clearMarks !== 'function' ||
+    typeof performance.clearMeasures !== 'function'
   ) {
     return;
   }
@@ -60,9 +60,10 @@ function finalizeMeasurement(
   startedAt: number,
   markPrefix: string,
 ): void {
-  const endedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now();
+  const endedAt =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
   const durationMs = Math.max(0, Number((endedAt - startedAt).toFixed(3)));
   const endMark = `${markPrefix}:end`;
 
@@ -81,9 +82,10 @@ export function measureCanvasWork<T>(
   trigger: CanvasMeasurementTrigger,
   work: () => T,
 ): T {
-  const startedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now();
+  const startedAt =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
   const markPrefix = `${name}:${trigger}:${Date.now()}`;
   safeMark(`${markPrefix}:start`);
 
@@ -99,9 +101,10 @@ export async function measureCanvasAsyncWork<T>(
   trigger: CanvasMeasurementTrigger,
   work: () => Promise<T>,
 ): Promise<T> {
-  const startedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now();
+  const startedAt =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
   const markPrefix = `${name}:${trigger}:${Date.now()}`;
   safeMark(`${markPrefix}:start`);
 

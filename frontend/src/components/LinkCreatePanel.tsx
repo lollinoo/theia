@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createLink, fetchDeviceInterfaces } from '../api/client';
-import { ValidationError, ServerError } from '../api/errors';
+import { ServerError, ValidationError } from '../api/errors';
 import type { Device, InterfaceInfo } from '../types/api';
 
 interface LinkCreatePanelProps {
@@ -86,7 +86,9 @@ function SearchableDeviceSelect({
                 )}
               </>
             ) : (
-              <span>{selectedDevice.tags?.display_name || selectedDevice.sys_name || '(unnamed)'}</span>
+              <span>
+                {selectedDevice.tags?.display_name || selectedDevice.sys_name || '(unnamed)'}
+              </span>
             )}
           </span>
         ) : (
@@ -184,7 +186,11 @@ function InterfaceSelect({
           </option>
         )}
         {downInterfaces.map((iface) => (
-          <option key={iface.if_name} value={iface.if_name} style={{ color: 'var(--nt-on-bg-muted)' }}>
+          <option
+            key={iface.if_name}
+            value={iface.if_name}
+            style={{ color: 'var(--nt-on-bg-muted)' }}
+          >
             {iface.if_name}
             {formatSpeed(iface.speed) ? `  ${formatSpeed(iface.speed)}` : ''}
             {'  '}down
@@ -196,7 +202,14 @@ function InterfaceSelect({
   );
 }
 
-export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices, initialSourceDeviceId, initialTargetDeviceId }: LinkCreatePanelProps) {
+export function LinkCreatePanel({
+  devices,
+  onCreated,
+  onClose,
+  onRefreshDevices,
+  initialSourceDeviceId,
+  initialTargetDeviceId,
+}: LinkCreatePanelProps) {
   const [sourceDeviceId, setSourceDeviceId] = useState(initialSourceDeviceId ?? '');
   const [targetDeviceId, setTargetDeviceId] = useState(initialTargetDeviceId ?? '');
   const [sourceIfName, setSourceIfName] = useState('');
@@ -284,7 +297,12 @@ export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices,
       setError('Please select a port for the target device.');
       return;
     }
-    if (!sourceIsVirtual && !targetIsVirtual && sourceDeviceId === targetDeviceId && sourceIfName === targetIfName) {
+    if (
+      !sourceIsVirtual &&
+      !targetIsVirtual &&
+      sourceDeviceId === targetDeviceId &&
+      sourceIfName === targetIfName
+    ) {
       setError('Source and target port cannot be the same.');
       return;
     }
@@ -300,9 +318,11 @@ export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices,
       onCreated();
     } catch (err) {
       if (err instanceof ServerError) {
-        setError(err.correlationId
-          ? `Something went wrong (ref: ${err.correlationId})`
-          : 'Something went wrong');
+        setError(
+          err.correlationId
+            ? `Something went wrong (ref: ${err.correlationId})`
+            : 'Something went wrong',
+        );
       } else if (err instanceof ValidationError) {
         setError(err.message);
       } else {
@@ -325,7 +345,9 @@ export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices,
         <div className="flex justify-end">
           <button
             type="button"
-            onClick={() => { void handleRefresh(); }}
+            onClick={() => {
+              void handleRefresh();
+            }}
             disabled={refreshing}
             className="flex items-center gap-1.5 rounded-lg bg-surface-high px-2.5 py-1.5 text-xs text-on-bg-secondary transition-colors hover:bg-elevated hover:text-on-bg disabled:opacity-50"
             title="Refresh devices & interfaces"
@@ -347,9 +369,7 @@ export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices,
 
       {/* Source device */}
       <div className="space-y-3">
-        <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-          Source
-        </p>
+        <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Source</p>
         <div className="space-y-1.5">
           <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Device
@@ -371,7 +391,13 @@ export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices,
             interfaces={sourceInterfaces}
             value={sourceIfName}
             onChange={setSourceIfName}
-            placeholder={sourceDeviceId ? (sourceInterfaces.length === 0 ? 'No ports available yet' : 'Select port...') : 'Select a device first'}
+            placeholder={
+              sourceDeviceId
+                ? sourceInterfaces.length === 0
+                  ? 'No ports available yet'
+                  : 'Select port...'
+                : 'Select a device first'
+            }
           />
         )}
       </div>
@@ -380,9 +406,7 @@ export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices,
 
       {/* Target device */}
       <div className="space-y-3">
-        <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-          Target
-        </p>
+        <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Target</p>
         <div className="space-y-1.5">
           <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Device
@@ -404,7 +428,13 @@ export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices,
             interfaces={targetInterfaces}
             value={targetIfName}
             onChange={setTargetIfName}
-            placeholder={targetDeviceId ? (targetInterfaces.length === 0 ? 'No ports available yet' : 'Select port...') : 'Select a device first'}
+            placeholder={
+              targetDeviceId
+                ? targetInterfaces.length === 0
+                  ? 'No ports available yet'
+                  : 'Select port...'
+                : 'Select a device first'
+            }
           />
         )}
       </div>
@@ -431,7 +461,16 @@ export function LinkCreatePanel({ devices, onCreated, onClose, onRefreshDevices,
         </button>
         <button
           type="submit"
-          disabled={submitting || sourceLoading || targetLoading || !sourceDeviceId || !targetDeviceId || bothVirtual || (!sourceIsVirtual && !sourceIfName) || (!targetIsVirtual && !targetIfName)}
+          disabled={
+            submitting ||
+            sourceLoading ||
+            targetLoading ||
+            !sourceDeviceId ||
+            !targetDeviceId ||
+            bothVirtual ||
+            (!sourceIsVirtual && !sourceIfName) ||
+            (!targetIsVirtual && !targetIfName)
+          }
           className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Creating...' : 'Create Link'}

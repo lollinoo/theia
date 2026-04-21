@@ -1,29 +1,33 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchDevices, fetchLinks, fetchSettings, createLink } from '../../api/client';
-import { computeForceLayout, type AutoLayoutEdge, type AutoLayoutNode } from '../../hooks/useAutoLayout';
-import { usePositions, type PositionState } from '../../hooks/usePositions';
+import { createLink, fetchDevices, fetchLinks, fetchSettings } from '../../api/client';
+import {
+  type AutoLayoutEdge,
+  type AutoLayoutNode,
+  computeForceLayout,
+} from '../../hooks/useAutoLayout';
+import { type PositionState, usePositions } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import {
-  alertStatusForDevice,
-  isPrometheusUnavailable,
   type AlertDTO,
   type PrometheusStatusPayload,
   type SnapshotPayload,
+  alertStatusForDevice,
+  isPrometheusUnavailable,
 } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
+import { buildPositionPayload, manualEdgeStorageKey, viewportSize } from './canvasHelpers';
 import {
-  buildPositionPayload,
-  manualEdgeStorageKey,
-  viewportSize,
-} from './canvasHelpers';
-import { measureCanvasAsyncWork, measureCanvasWork, type CanvasMeasurementTrigger } from './canvasInstrumentation';
+  type CanvasMeasurementTrigger,
+  measureCanvasAsyncWork,
+  measureCanvasWork,
+} from './canvasInstrumentation';
 import { alertStatusForLink } from './edgeBuilder';
+import { buildRuntimeState, countActiveAlertsFromRuntimeState } from './runtimeAdapters';
 import { composeCanvasTopology } from './topologyComposer';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
-import { buildRuntimeState, countActiveAlertsFromRuntimeState } from './runtimeAdapters';
 
 interface UseCanvasDataParams {
   snapshot: SnapshotPayload | null;
@@ -99,10 +103,7 @@ function runtimeAlertStatusForDevice(
 function measurementTriggerForCauses(
   causes: Set<StructuralRefreshCause>,
 ): CanvasMeasurementTrigger {
-  if (
-    causes.has('backend-reconnected')
-    || causes.has('backend-resync-required')
-  ) {
+  if (causes.has('backend-reconnected') || causes.has('backend-resync-required')) {
     return 'backend_reconnected';
   }
 
@@ -141,9 +142,7 @@ function buildTopologyRecoveryNotice(
 }
 
 function hasUsablePosition(position: PositionState | undefined): position is PositionState {
-  return position !== undefined
-    && Number.isFinite(position.x)
-    && Number.isFinite(position.y);
+  return position !== undefined && Number.isFinite(position.x) && Number.isFinite(position.y);
 }
 
 function buildUsablePositionState(
@@ -178,10 +177,10 @@ function positionsChanged(
   for (const position of nextPositions) {
     const savedPosition = savedPositions.get(position.device_id);
     if (
-      !savedPosition
-      || savedPosition.x !== position.x
-      || savedPosition.y !== position.y
-      || savedPosition.pinned !== position.pinned
+      !savedPosition ||
+      savedPosition.x !== position.x ||
+      savedPosition.y !== position.y ||
+      savedPosition.pinned !== position.pinned
     ) {
       return true;
     }
@@ -213,9 +212,7 @@ function buildLayoutInputs(
       continue;
     }
 
-    const anchorDeviceId = sourceNeedsPlacement
-      ? link.target_device_id
-      : link.source_device_id;
+    const anchorDeviceId = sourceNeedsPlacement ? link.target_device_id : link.source_device_id;
     const anchorPosition = effectivePositions.get(anchorDeviceId);
 
     if (hasUsablePosition(anchorPosition)) {
@@ -238,7 +235,10 @@ function buildLayoutInputs(
         };
       }),
     layoutEdges: links
-      .filter((link) => layoutDeviceIds.has(link.source_device_id) && layoutDeviceIds.has(link.target_device_id))
+      .filter(
+        (link) =>
+          layoutDeviceIds.has(link.source_device_id) && layoutDeviceIds.has(link.target_device_id),
+      )
       .map((link) => ({
         source: link.source_device_id,
         target: link.target_device_id,
@@ -317,7 +317,8 @@ export function useCanvasData({
     };
   }, [alerts, devices, prometheusStatus, snapshot, topologyLinks]);
 
-  const [topologyRecoveryNotice, setTopologyRecoveryNotice] = useState<TopologyRecoveryNotice | null>(null);
+  const [topologyRecoveryNotice, setTopologyRecoveryNotice] =
+    useState<TopologyRecoveryNotice | null>(null);
   const structuralRefreshTimerRef = useRef<number | null>(null);
   const pendingStructuralRefreshCausesRef = useRef<Set<StructuralRefreshCause>>(new Set());
   const lastStructuralRefreshCausesRef = useRef<Set<StructuralRefreshCause>>(new Set());
@@ -359,191 +360,204 @@ export function useCanvasData({
       defaultPosition?: { x: number; y: number },
       trigger: CanvasMeasurementTrigger = 'manual_refresh',
       options: LoadTopologyOptions = {},
-    ) => measureCanvasAsyncWork('theia:canvas:topology-load', trigger, async () => {
-      if (!isSilentRefresh) {
-        setLoading(true);
-      }
-      setError(null);
-
-      try {
-        const [fetchedDevices, fetchedLinks, savedPositions] = await Promise.all([
-          fetchDevices(),
-          fetchLinks(),
-          fetchPositions(),
-        ]);
-
-        const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
-        const structureChanged = lastTopologyIdentityRef.current !== topologyIdentity.signature;
-        const effectivePositions = new Map(savedPositions);
-        for (const [deviceId, position] of currentNodePositionsRef.current.entries()) {
-          if (!effectivePositions.has(deviceId)) {
-            effectivePositions.set(deviceId, position);
-          }
+    ) =>
+      measureCanvasAsyncWork('theia:canvas:topology-load', trigger, async () => {
+        if (!isSilentRefresh) {
+          setLoading(true);
         }
+        setError(null);
 
-        const usablePositionState = buildUsablePositionState(
-          fetchedDevices,
-          currentNodePositionsRef.current,
-          savedPositions,
-        );
-        const shouldAutoFitView = usablePositionState.length === 0;
+        try {
+          const [fetchedDevices, fetchedLinks, savedPositions] = await Promise.all([
+            fetchDevices(),
+            fetchLinks(),
+            fetchPositions(),
+          ]);
 
-        // Read any pending snapshot so first-load metrics are included in the
-        // initial node/edge data -- eliminates the race where the WS snapshot
-        // arrives before loadTopology resolves and the snapshot effect maps over
-        // an empty node array.
-        const runtimeState = buildRuntimeState({
-          devices: fetchedDevices,
-          links: fetchedLinks,
-          snapshot: snapshotRef.current,
-          alerts: alertsRef.current,
-          prometheusStatus,
-        });
-        const runtimeDevices = fetchedDevices.map(
-          (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
-        );
+          const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
+          const structureChanged = lastTopologyIdentityRef.current !== topologyIdentity.signature;
+          const effectivePositions = new Map(savedPositions);
+          for (const [deviceId, position] of currentNodePositionsRef.current.entries()) {
+            if (!effectivePositions.has(deviceId)) {
+              effectivePositions.set(deviceId, position);
+            }
+          }
 
-        // Migrate localStorage manual edges to backend on first load (best-effort)
-        const storedManualRaw = window.localStorage.getItem(manualEdgeStorageKey);
-        if (storedManualRaw) {
-          try {
-            const storedManual = JSON.parse(storedManualRaw) as Array<{
-              id: string;
-              source: string;
-              target: string;
-            }>;
-            if (Array.isArray(storedManual) && storedManual.length > 0) {
-              const results = await Promise.allSettled(storedManual.map((edge) =>
-                createLink({
-                  source_device_id: edge.source,
-                  source_if_name: '',
-                  target_device_id: edge.target,
-                  target_if_name: '',
-                }),
-              ));
-              const failedMigrations = storedManual.filter(
-                (_, index) => results[index]?.status === 'rejected',
-              );
-              if (failedMigrations.length === 0) {
-                window.localStorage.removeItem(manualEdgeStorageKey);
-              } else {
-                window.localStorage.setItem(
-                  manualEdgeStorageKey,
-                  JSON.stringify(failedMigrations),
+          const usablePositionState = buildUsablePositionState(
+            fetchedDevices,
+            currentNodePositionsRef.current,
+            savedPositions,
+          );
+          const shouldAutoFitView = usablePositionState.length === 0;
+
+          // Read any pending snapshot so first-load metrics are included in the
+          // initial node/edge data -- eliminates the race where the WS snapshot
+          // arrives before loadTopology resolves and the snapshot effect maps over
+          // an empty node array.
+          const runtimeState = buildRuntimeState({
+            devices: fetchedDevices,
+            links: fetchedLinks,
+            snapshot: snapshotRef.current,
+            alerts: alertsRef.current,
+            prometheusStatus,
+          });
+          const runtimeDevices = fetchedDevices.map(
+            (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
+          );
+
+          // Migrate localStorage manual edges to backend on first load (best-effort)
+          const storedManualRaw = window.localStorage.getItem(manualEdgeStorageKey);
+          if (storedManualRaw) {
+            try {
+              const storedManual = JSON.parse(storedManualRaw) as Array<{
+                id: string;
+                source: string;
+                target: string;
+              }>;
+              if (Array.isArray(storedManual) && storedManual.length > 0) {
+                const results = await Promise.allSettled(
+                  storedManual.map((edge) =>
+                    createLink({
+                      source_device_id: edge.source,
+                      source_if_name: '',
+                      target_device_id: edge.target,
+                      target_if_name: '',
+                    }),
+                  ),
                 );
+                const failedMigrations = storedManual.filter(
+                  (_, index) => results[index]?.status === 'rejected',
+                );
+                if (failedMigrations.length === 0) {
+                  window.localStorage.removeItem(manualEdgeStorageKey);
+                } else {
+                  window.localStorage.setItem(
+                    manualEdgeStorageKey,
+                    JSON.stringify(failedMigrations),
+                  );
+                }
+              } else {
+                window.localStorage.removeItem(manualEdgeStorageKey);
               }
-            } else {
+            } catch {
               window.localStorage.removeItem(manualEdgeStorageKey);
             }
-          } catch {
-            window.localStorage.removeItem(manualEdgeStorageKey);
           }
-        }
 
-        if (!structureChanged) {
-          setDevices(runtimeDevices);
-          setTopologyLinks(fetchedLinks);
-          const { nodes: nextNodes, edges: nextEdges } = composeCanvasTopology({
+          if (!structureChanged) {
+            setDevices(runtimeDevices);
+            setTopologyLinks(fetchedLinks);
+            const { nodes: nextNodes, edges: nextEdges } = composeCanvasTopology({
+              devices: fetchedDevices,
+              links: fetchedLinks,
+              runtimeState,
+              savedPositions: effectivePositions,
+              computedPositions: new Map(),
+              currentPositions: currentNodePositionsRef.current,
+              defaultPosition,
+              editMode,
+              openDeviceMenu,
+              openEdgeMenu,
+              openSelfLinkDetails,
+              placementDeviceIds: new Set(),
+              alerts: alertsRef.current,
+            });
+            setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
+            setEdges(nextEdges);
+            lastTopologyIdentityRef.current = topologyIdentity.signature;
+            lastUsablePositionStateRef.current = usablePositionState;
+            return;
+          }
+
+          const placementDeviceIds = collectPlacementDeviceIds(
+            fetchedDevices,
+            currentNodePositionsRef.current,
+            savedPositions,
+            currentNodePositionsRef.current.keys(),
+          );
+          const { width, height } = viewportSize();
+          const { layoutNodes, layoutEdges } = buildLayoutInputs(
+            fetchedDevices,
+            fetchedLinks,
+            placementDeviceIds,
+            effectivePositions,
+          );
+          const computedPositions =
+            layoutNodes.length > 0
+              ? measureCanvasWork('theia:canvas:layout', trigger, () =>
+                  computeForceLayout(layoutNodes, layoutEdges, width, height),
+                )
+              : new Map();
+
+          const { nodes: composedNodes, edges: composedEdges } = composeCanvasTopology({
             devices: fetchedDevices,
             links: fetchedLinks,
             runtimeState,
             savedPositions: effectivePositions,
-            computedPositions: new Map(),
+            computedPositions,
             currentPositions: currentNodePositionsRef.current,
             defaultPosition,
             editMode,
             openDeviceMenu,
             openEdgeMenu,
             openSelfLinkDetails,
-            placementDeviceIds: new Set(),
+            placementDeviceIds,
             alerts: alertsRef.current,
           });
-          setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
-          setEdges(nextEdges);
+
+          // Apply all state updates together as urgent (not in startTransition).
+          // Previously these were wrapped in startTransition which made them
+          // low-priority, allowing WebSocket snapshot effects (which depend on
+          // devices.length) to interrupt and race with the transition's setNodes,
+          // sometimes causing all canvas nodes to vanish after a device delete.
+          setDevices(runtimeDevices);
+          setTopologyLinks(fetchedLinks);
+          setNodes((currentNodes) => {
+            return mergeNodePresentationState(composedNodes, currentNodes);
+          });
+          setEdges(composedEdges);
+
+          const nextPositionPayload = buildPositionPayload(composedNodes);
+          if (positionsChanged(nextPositionPayload, savedPositions)) {
+            void savePositions(nextPositionPayload);
+          }
+
+          if (trigger === 'initial_load' || shouldAutoFitView) {
+            window.requestAnimationFrame(() => {
+              reactFlow.fitView({ padding: 0.18, duration: 320 });
+            });
+          }
+
           lastTopologyIdentityRef.current = topologyIdentity.signature;
           lastUsablePositionStateRef.current = usablePositionState;
-          return;
+        } catch (loadError) {
+          const topologyError =
+            loadError instanceof Error ? loadError : new Error('Failed to load topology');
+
+          if (!options.suppressBlockingError) {
+            setError(topologyError.message);
+          }
+
+          if (options.rethrowOnError) {
+            throw topologyError;
+          }
+        } finally {
+          if (!isSilentRefresh) {
+            setLoading(false);
+          }
         }
-
-        const placementDeviceIds = collectPlacementDeviceIds(
-          fetchedDevices,
-          currentNodePositionsRef.current,
-          savedPositions,
-          currentNodePositionsRef.current.keys(),
-        );
-        const { width, height } = viewportSize();
-        const { layoutNodes, layoutEdges } = buildLayoutInputs(
-          fetchedDevices,
-          fetchedLinks,
-          placementDeviceIds,
-          effectivePositions,
-        );
-        const computedPositions = layoutNodes.length > 0
-          ? measureCanvasWork('theia:canvas:layout', trigger, () =>
-              computeForceLayout(layoutNodes, layoutEdges, width, height),
-            )
-          : new Map();
-
-        const { nodes: composedNodes, edges: composedEdges } = composeCanvasTopology({
-          devices: fetchedDevices,
-          links: fetchedLinks,
-          runtimeState,
-          savedPositions: effectivePositions,
-          computedPositions,
-          currentPositions: currentNodePositionsRef.current,
-          defaultPosition,
-          editMode,
-          openDeviceMenu,
-          openEdgeMenu,
-          openSelfLinkDetails,
-          placementDeviceIds,
-          alerts: alertsRef.current,
-        });
-
-        // Apply all state updates together as urgent (not in startTransition).
-        // Previously these were wrapped in startTransition which made them
-        // low-priority, allowing WebSocket snapshot effects (which depend on
-        // devices.length) to interrupt and race with the transition's setNodes,
-        // sometimes causing all canvas nodes to vanish after a device delete.
-        setDevices(runtimeDevices);
-        setTopologyLinks(fetchedLinks);
-        setNodes((currentNodes) => {
-          return mergeNodePresentationState(composedNodes, currentNodes);
-        });
-        setEdges(composedEdges);
-
-        const nextPositionPayload = buildPositionPayload(composedNodes);
-        if (positionsChanged(nextPositionPayload, savedPositions)) {
-          void savePositions(nextPositionPayload);
-        }
-
-        if (trigger === 'initial_load' || shouldAutoFitView) {
-          window.requestAnimationFrame(() => {
-            reactFlow.fitView({ padding: 0.18, duration: 320 });
-          });
-        }
-
-        lastTopologyIdentityRef.current = topologyIdentity.signature;
-        lastUsablePositionStateRef.current = usablePositionState;
-      } catch (loadError) {
-        const topologyError = loadError instanceof Error
-          ? loadError
-          : new Error('Failed to load topology');
-
-        if (!options.suppressBlockingError) {
-          setError(topologyError.message);
-        }
-
-        if (options.rethrowOnError) {
-          throw topologyError;
-        }
-      } finally {
-        if (!isSilentRefresh) {
-          setLoading(false);
-        }
-      }
-    }),
-    [editMode, openDeviceMenu, openEdgeMenu, openSelfLinkDetails, reactFlow, setNodes, setEdges, fetchPositions, savePositions],
+      }),
+    [
+      editMode,
+      openDeviceMenu,
+      openEdgeMenu,
+      openSelfLinkDetails,
+      reactFlow,
+      setNodes,
+      setEdges,
+      fetchPositions,
+      savePositions,
+    ],
   );
 
   const dismissTopologyRecoveryNotice = useCallback(() => {
@@ -557,15 +571,10 @@ export function useCanvasData({
       setTopologyRecoveryNotice(null);
 
       try {
-        await loadTopology(
-          true,
-          undefined,
-          measurementTriggerForCauses(refreshCauses),
-          {
-            suppressBlockingError: true,
-            rethrowOnError: true,
-          },
-        );
+        await loadTopology(true, undefined, measurementTriggerForCauses(refreshCauses), {
+          suppressBlockingError: true,
+          rethrowOnError: true,
+        });
         setTopologyRecoveryNotice(buildTopologyRecoveryNotice(refreshCauses));
       } catch {
         setTopologyRecoveryNotice({
@@ -579,9 +588,10 @@ export function useCanvasData({
   );
 
   const retryTopologyRefresh = useCallback(() => {
-    const retryCauses = lastStructuralRefreshCausesRef.current.size > 0
-      ? new Set(lastStructuralRefreshCausesRef.current)
-      : new Set<StructuralRefreshCause>(['topology-changed']);
+    const retryCauses =
+      lastStructuralRefreshCausesRef.current.size > 0
+        ? new Set(lastStructuralRefreshCausesRef.current)
+        : new Set<StructuralRefreshCause>(['topology-changed']);
     void runStructuralRefresh(retryCauses);
   }, [runStructuralRefresh]);
 
@@ -669,11 +679,7 @@ export function useCanvasData({
     }
 
     const timer = window.setTimeout(() => {
-      setTopologyRecoveryNotice((current) => (
-        current?.tone === 'success'
-          ? null
-          : current
-      ));
+      setTopologyRecoveryNotice((current) => (current?.tone === 'success' ? null : current));
     }, 4000);
 
     return () => {
@@ -727,9 +733,22 @@ export function useCanvasData({
 
       setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
       setEdges(nextEdges);
-      setDevices(devicesRef.current.map((device) => runtimeState.devicesById.get(device.id)?.device ?? device));
+      setDevices(
+        devicesRef.current.map(
+          (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
+        ),
+      );
     });
-  }, [editMode, openDeviceMenu, openEdgeMenu, openSelfLinkDetails, prometheusStatus, setEdges, setNodes, snapshot]);
+  }, [
+    editMode,
+    openDeviceMenu,
+    openEdgeMenu,
+    openSelfLinkDetails,
+    prometheusStatus,
+    setEdges,
+    setNodes,
+    snapshot,
+  ]);
 
   useEffect(() => {
     setNodes((currentNodes) => {
@@ -754,7 +773,9 @@ export function useCanvasData({
     setEdges((currentEdges) => {
       let changed = false;
       const nextEdges = currentEdges.map((edge) => {
-        const alertStatus = edge.data?.link ? alertStatusForLink(edge.data.link, alerts) : undefined;
+        const alertStatus = edge.data?.link
+          ? alertStatusForLink(edge.data.link, alerts)
+          : undefined;
         if (!edge.data || edge.data.alertStatus === alertStatus) {
           return edge;
         }

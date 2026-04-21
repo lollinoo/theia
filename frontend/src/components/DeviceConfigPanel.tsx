@@ -1,15 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import type {
-  Area,
-  CredentialProfile,
-  Device,
-  MetricsSource,
-  DeviceCredentialProfile,
-  DevicePollClass,
-  SNMPProfile,
-  TopologyDiscoveryMode,
-} from '../types/api';
-import { formatUptime, type DeviceMetricsDTO } from '../types/metrics';
 import {
   assignCredentialProfile,
   checkPrometheusHealth,
@@ -18,8 +7,8 @@ import {
   fetchAreas,
   fetchCredentialProfiles,
   fetchDeviceCredentialProfiles,
-  fetchSettings,
   fetchSNMPProfiles,
+  fetchSettings,
   runTopologyDiscovery,
   setWinBoxProfile,
   testSNMPConnection,
@@ -27,27 +16,38 @@ import {
   updateDevice,
   updateSetting,
 } from '../api/client';
-import { ValidationError, ServerError } from '../api/errors';
-import {
-  validateIPOrHostname,
-  validateMaxLength,
-  validateRequired,
-  validateURL,
-  MAX_STRING_LENGTH,
-} from '../utils/validation';
+import { ServerError, ValidationError } from '../api/errors';
+import type {
+  Area,
+  CredentialProfile,
+  Device,
+  DeviceCredentialProfile,
+  DevicePollClass,
+  MetricsSource,
+  SNMPProfile,
+  TopologyDiscoveryMode,
+} from '../types/api';
+import { type DeviceMetricsDTO, formatUptime } from '../types/metrics';
 import {
   TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyBootstrapState,
   formatTopologyDiscoveryMode,
-  formatTopologyFollowupExpectation,
   formatTopologyDiscoveryResult,
   formatTopologyDiscoveryTimestamp,
+  formatTopologyFollowupExpectation,
 } from '../utils/topologyDiscovery';
+import {
+  MAX_STRING_LENGTH,
+  validateIPOrHostname,
+  validateMaxLength,
+  validateRequired,
+  validateURL,
+} from '../utils/validation';
 import { MaterialIcon } from './MaterialIcon';
 import {
+  type DeviceFormModel,
   applySNMPProfile,
   createDeviceConfigFormModel,
-  type DeviceFormModel,
 } from './forms/deviceFormModels';
 import { buildUpdateDevicePayload } from './forms/deviceFormSubmitters';
 
@@ -70,8 +70,7 @@ const DEFAULT_POLLING_DURATION_BY_CLASS: Record<DevicePollClass, string> = {
   low: '5m',
 };
 
-const POLLING_OVERRIDE_ERROR =
-  'Polling override must be an integer between 5 and 3600 seconds';
+const POLLING_OVERRIDE_ERROR = 'Polling override must be an integer between 5 and 3600 seconds';
 
 interface DeviceConfigPanelProps {
   device: Device;
@@ -117,7 +116,8 @@ export function DeviceConfigPanel({
 
   const [savedPolling, setSavedPolling] = useState(false);
   const [savedGrafana, setSavedGrafana] = useState(false);
-  const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] = useState<TopologyDiscoveryMode>('lldp_cdp');
+  const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] =
+    useState<TopologyDiscoveryMode>('lldp_cdp');
   const [topologyDiscoveryMessage, setTopologyDiscoveryMessage] = useState<string | null>(null);
   const [topologyDiscoveryError, setTopologyDiscoveryError] = useState<string | null>(null);
   const [topologyDiscoveryRunning, setTopologyDiscoveryRunning] = useState(false);
@@ -182,8 +182,10 @@ export function DeviceConfigPanel({
   }
 
   function validateDisplayNameField(value: string): string | null {
-    return (isVirtual ? validateRequired(value, 'Display Name') : null)
-      ?? validateMaxLength(value, MAX_STRING_LENGTH, 'Display name');
+    return (
+      (isVirtual ? validateRequired(value, 'Display Name') : null) ??
+      validateMaxLength(value, MAX_STRING_LENGTH, 'Display name')
+    );
   }
 
   async function loadAssignments() {
@@ -201,16 +203,30 @@ export function DeviceConfigPanel({
 
   useEffect(() => {
     if (!isVirtual) {
-      fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
-      fetchCredentialProfiles().then(setCredentialProfiles).catch(() => {/* non-fatal */});
+      fetchSNMPProfiles()
+        .then(setProfiles)
+        .catch(() => {
+          /* non-fatal */
+        });
+      fetchCredentialProfiles()
+        .then(setCredentialProfiles)
+        .catch(() => {
+          /* non-fatal */
+        });
       void loadAssignments();
     }
-    fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
-    checkPrometheusHealth().then((result) => {
-      setPrometheusAvailable(result.enabled !== false && result.available);
-    }).catch(() => {
-      setPrometheusAvailable(false);
-    });
+    fetchAreas()
+      .then(setAreas)
+      .catch(() => {
+        /* non-fatal */
+      });
+    checkPrometheusHealth()
+      .then((result) => {
+        setPrometheusAvailable(result.enabled !== false && result.available);
+      })
+      .catch(() => {
+        setPrometheusAvailable(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -222,7 +238,9 @@ export function DeviceConfigPanel({
             'lldp_cdp',
         );
       })
-      .catch(() => {/* non-fatal */ });
+      .catch(() => {
+        /* non-fatal */
+      });
   }, [device.id, grafanaKey]);
 
   // Sync inputs when the `device` prop updates from parent
@@ -336,12 +354,20 @@ export function DeviceConfigPanel({
     const displayNameErr = validateDisplayNameField(form.displayName);
     if (displayNameErr) errors['displayName'] = displayNameErr;
     if (usesPrometheus) {
-      const labelValueErr = validateMaxLength(form.prometheus.labelValue, MAX_STRING_LENGTH, 'Label value');
+      const labelValueErr = validateMaxLength(
+        form.prometheus.labelValue,
+        MAX_STRING_LENGTH,
+        'Label value',
+      );
       if (labelValueErr) errors['prometheusLabelValue'] = labelValueErr;
     }
     const isV3 = form.snmp.version === '3';
     if (!isV3 && form.snmp.community.trim()) {
-      const communityErr = validateMaxLength(form.snmp.community, MAX_STRING_LENGTH, 'Community string');
+      const communityErr = validateMaxLength(
+        form.snmp.community,
+        MAX_STRING_LENGTH,
+        'Community string',
+      );
       if (communityErr) errors['community'] = communityErr;
     }
     if (isV3 && form.snmp.username.trim()) {
@@ -361,9 +387,11 @@ export function DeviceConfigPanel({
       onDeviceUpdated(updated);
     } catch (err) {
       if (err instanceof ServerError) {
-        setEditError(err.correlationId
-          ? `Something went wrong (ref: ${err.correlationId})`
-          : 'Something went wrong');
+        setEditError(
+          err.correlationId
+            ? `Something went wrong (ref: ${err.correlationId})`
+            : 'Something went wrong',
+        );
       } else if (err instanceof ValidationError) {
         setEditError(err.message);
       } else {
@@ -449,8 +477,7 @@ export function DeviceConfigPanel({
     discoveryState === 'followup_scheduled';
   const discoveryRunDisabled =
     discoveryBusy || form.metricsMode === 'prometheus' || form.ip.trim() === '';
-  const effectiveTopologyDiscoveryMode =
-    device.effective_topology_discovery_mode || 'off';
+  const effectiveTopologyDiscoveryMode = device.effective_topology_discovery_mode || 'off';
   const configuredTopologyDiscoveryMode =
     form.topologyDiscoveryMode === 'inherit'
       ? `Use global default (${formatTopologyDiscoveryMode(topologyDiscoveryDefaultMode)})`
@@ -505,7 +532,9 @@ export function DeviceConfigPanel({
                 Runtime uptime
               </span>
               <span className="text-sm text-on-bg">
-                {detailMetrics?.uptime_secs != null ? formatUptime(detailMetrics.uptime_secs) : '\u2014'}
+                {detailMetrics?.uptime_secs != null
+                  ? formatUptime(detailMetrics.uptime_secs)
+                  : '\u2014'}
               </span>
             </div>
           </div>
@@ -568,13 +597,15 @@ export function DeviceConfigPanel({
               Effective: {formatTopologyDiscoveryMode(effectiveTopologyDiscoveryMode)}
             </span>
           </div>
-            <select
-              id="device-topology-discovery-mode"
-              aria-label="Topology Discovery"
-              value={form.topologyDiscoveryMode}
-              onChange={(e) => updateForm({ topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode })}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-            >
+          <select
+            id="device-topology-discovery-mode"
+            aria-label="Topology Discovery"
+            value={form.topologyDiscoveryMode}
+            onChange={(e) =>
+              updateForm({ topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode })
+            }
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+          >
             {TOPOLOGY_DISCOVERY_MODE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -617,15 +648,15 @@ export function DeviceConfigPanel({
                 <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
                   Next Follow-up
                 </span>
-                <span className="text-sm text-on-bg">
-                  {nextTopologyFollowup}
-                </span>
+                <span className="text-sm text-on-bg">{nextTopologyFollowup}</span>
               </div>
             )}
           </div>
           <button
             type="button"
-            onClick={() => { void handleRunTopologyDiscovery(); }}
+            onClick={() => {
+              void handleRunTopologyDiscovery();
+            }}
             disabled={discoveryRunDisabled}
             className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -682,7 +713,13 @@ export function DeviceConfigPanel({
       )}
 
       {/* Edit Device */}
-      <form noValidate onSubmit={(e) => { void handleEditSave(e); }} className="space-y-3">
+      <form
+        noValidate
+        onSubmit={(e) => {
+          void handleEditSave(e);
+        }}
+        className="space-y-3"
+      >
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Edit Device
@@ -696,7 +733,9 @@ export function DeviceConfigPanel({
 
         {device.sys_name && (
           <div className="bg-surface-high rounded-lg px-3 py-2">
-            <p className="text-[10px] uppercase tracking-widest text-on-bg-secondary/60 mb-0.5">Auto-discovered Hostname</p>
+            <p className="text-[10px] uppercase tracking-widest text-on-bg-secondary/60 mb-0.5">
+              Auto-discovered Hostname
+            </p>
             <p className="text-sm font-mono text-on-bg">{device.sys_name}</p>
           </div>
         )}
@@ -704,9 +743,18 @@ export function DeviceConfigPanel({
         <input
           type="text"
           value={form.displayName}
-          onChange={(e) => { updateForm({ displayName: e.target.value }); setFieldError('displayName', null); }}
+          onChange={(e) => {
+            updateForm({ displayName: e.target.value });
+            setFieldError('displayName', null);
+          }}
           onBlur={handleBlur('displayName', () => validateDisplayNameField(form.displayName))}
-          placeholder={isVirtual ? 'e.g. ISP Gateway' : (device.sys_name ? `Override "${device.sys_name}"` : 'Custom name (optional)')}
+          placeholder={
+            isVirtual
+              ? 'e.g. ISP Gateway'
+              : device.sys_name
+                ? `Override "${device.sys_name}"`
+                : 'Custom name (optional)'
+          }
           required={isVirtual}
           className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['displayName'] ? ' border-status-down' : ' border-outline-subtle'}`}
         />
@@ -717,14 +765,15 @@ export function DeviceConfigPanel({
         <input
           type="text"
           value={form.ip}
-          onChange={(e) => { updateForm({ ip: e.target.value }); setFieldError('ip', null); }}
+          onChange={(e) => {
+            updateForm({ ip: e.target.value });
+            setFieldError('ip', null);
+          }}
           onBlur={handleBlur('ip', () => validateIPOrHostname(form.ip.trim()))}
           placeholder="IP Address"
           className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['ip'] ? ' border-status-down' : ' border-outline-subtle'}`}
         />
-        {fieldErrors['ip'] && (
-          <p className="mt-1 text-xs text-status-down">{fieldErrors['ip']}</p>
-        )}
+        {fieldErrors['ip'] && <p className="mt-1 text-xs text-status-down">{fieldErrors['ip']}</p>}
 
         <div className="space-y-2 rounded-lg bg-surface-high p-3">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
@@ -736,7 +785,10 @@ export function DeviceConfigPanel({
         </div>
 
         <div className="space-y-1">
-          <label htmlFor="device-notes" className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+          <label
+            htmlFor="device-notes"
+            className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
+          >
             Device Notes
           </label>
           <textarea
@@ -750,7 +802,9 @@ export function DeviceConfigPanel({
         </div>
 
         <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Areas</label>
+          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Areas
+          </label>
           {form.areaIds.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {form.areaIds.map((id) => {
@@ -760,17 +814,35 @@ export function DeviceConfigPanel({
                   <span
                     key={id}
                     className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-on-bg"
-                    style={{ backgroundColor: `${area.color}25`, border: `1px solid ${area.color}60` }}
+                    style={{
+                      backgroundColor: `${area.color}25`,
+                      border: `1px solid ${area.color}60`,
+                    }}
                   >
-                    <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: area.color }} />
+                    <span
+                      className="inline-block h-2 w-2 rounded-full"
+                      style={{ backgroundColor: area.color }}
+                    />
                     {area.name}
                     <button
                       type="button"
-                      onClick={() => updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })}
+                      onClick={() =>
+                        updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })
+                      }
                       className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
                     >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      <svg
+                        className="w-3 h-3"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
                       </svg>
                     </button>
                   </span>
@@ -797,11 +869,13 @@ export function DeviceConfigPanel({
                     ? 'Unassigned - select area...'
                     : 'Add another area...'}
             </option>
-            {areas.filter((a) => !form.areaIds.includes(a.id)).map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
+            {areas
+              .filter((a) => !form.areaIds.includes(a.id))
+              .map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
           </select>
         </div>
 
@@ -809,7 +883,9 @@ export function DeviceConfigPanel({
         {!isVirtual && (
           <>
             <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Vendor</label>
+              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                Vendor
+              </label>
               <select
                 value={form.vendor}
                 onChange={(e) => updateForm({ vendor: e.target.value })}
@@ -826,7 +902,9 @@ export function DeviceConfigPanel({
             {/* Credentials section */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Credentials</p>
+                <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                  Credentials
+                </p>
                 <button
                   type="button"
                   onClick={() => setShowAddSelect((v) => !v)}
@@ -847,7 +925,9 @@ export function DeviceConfigPanel({
                     }}
                     className="flex-1 rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                   >
-                    <option value="" disabled>Select a profile...</option>
+                    <option value="" disabled>
+                      Select a profile...
+                    </option>
                     {credentialProfiles
                       .filter((p) => !assignments.some((a) => a.profile_id === p.id))
                       .map((p) => (
@@ -876,61 +956,72 @@ export function DeviceConfigPanel({
                 </p>
               )}
 
-              {!assignmentsLoading && assignments.map((assignment) => (
-                <div key={assignment.profile_id} className="rounded-lg bg-surface-high p-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-sm font-medium text-on-bg truncate">{assignment.name}</span>
-                      <span className="text-xs font-medium px-2 py-0.5 bg-surface rounded-full text-on-bg-secondary shrink-0">
-                        {assignment.role}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0 ml-2">
-                      {/* WinBox key toggle */}
-                      <button
-                        type="button"
-                        title={assignment.is_winbox ? 'Clear WinBox designation' : 'Designate as WinBox profile'}
-                        onClick={() => { void handleToggleWinBox(assignment.profile_id, assignment.is_winbox); }}
-                        className={`p-1 rounded-md transition-colors${assignment.is_winbox ? ' text-primary' : ' text-on-bg-secondary hover:text-on-bg'}`}
-                      >
-                        <MaterialIcon name="key" size={18} />
-                      </button>
-                      {/* Remove button */}
-                      <button
-                        type="button"
-                        title="Remove assignment"
-                        onClick={() => setRemovingId(assignment.profile_id)}
-                        className="p-1 rounded-md text-on-bg-secondary hover:text-status-down transition-colors"
-                      >
-                        <MaterialIcon name="remove" size={18} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Inline removal confirmation */}
-                  {removingId === assignment.profile_id && (
-                    <div className="mt-2 border border-status-down/30 bg-status-down/10 rounded-lg px-3 py-2 flex items-center justify-between">
-                      <p className="text-xs text-status-down">Delete this profile?</p>
-                      <div className="flex gap-2">
+              {!assignmentsLoading &&
+                assignments.map((assignment) => (
+                  <div key={assignment.profile_id} className="rounded-lg bg-surface-high p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm font-medium text-on-bg truncate">
+                          {assignment.name}
+                        </span>
+                        <span className="text-xs font-medium px-2 py-0.5 bg-surface rounded-full text-on-bg-secondary shrink-0">
+                          {assignment.role}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0 ml-2">
+                        {/* WinBox key toggle */}
                         <button
                           type="button"
-                          onClick={() => setRemovingId(null)}
-                          className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg hover:bg-elevated"
+                          title={
+                            assignment.is_winbox
+                              ? 'Clear WinBox designation'
+                              : 'Designate as WinBox profile'
+                          }
+                          onClick={() => {
+                            void handleToggleWinBox(assignment.profile_id, assignment.is_winbox);
+                          }}
+                          className={`p-1 rounded-md transition-colors${assignment.is_winbox ? ' text-primary' : ' text-on-bg-secondary hover:text-on-bg'}`}
                         >
-                          Keep Profile
+                          <MaterialIcon name="key" size={18} />
                         </button>
+                        {/* Remove button */}
                         <button
                           type="button"
-                          onClick={() => { void handleUnassign(assignment.profile_id); }}
-                          className="px-2 py-1 text-xs rounded bg-status-down text-white hover:opacity-90"
+                          title="Remove assignment"
+                          onClick={() => setRemovingId(assignment.profile_id)}
+                          className="p-1 rounded-md text-on-bg-secondary hover:text-status-down transition-colors"
                         >
-                          Delete
+                          <MaterialIcon name="remove" size={18} />
                         </button>
                       </div>
                     </div>
-                  )}
-                </div>
-              ))}
+
+                    {/* Inline removal confirmation */}
+                    {removingId === assignment.profile_id && (
+                      <div className="mt-2 border border-status-down/30 bg-status-down/10 rounded-lg px-3 py-2 flex items-center justify-between">
+                        <p className="text-xs text-status-down">Delete this profile?</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setRemovingId(null)}
+                            className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg hover:bg-elevated"
+                          >
+                            Keep Profile
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleUnassign(assignment.profile_id);
+                            }}
+                            className="px-2 py-1 text-xs rounded bg-status-down text-white hover:opacity-90"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
             </div>
 
             {prometheusAvailable === false && (
@@ -940,12 +1031,18 @@ export function DeviceConfigPanel({
             )}
 
             <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Metrics Source</label>
+              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                Metrics Source
+              </label>
               <select
                 value={form.metricsMode}
                 onChange={(e) => {
                   const val = e.target.value as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback';
-                  if ((val === 'prometheus' || val === 'prometheus_snmp_fallback') && !prometheusAvailable) return;
+                  if (
+                    (val === 'prometheus' || val === 'prometheus_snmp_fallback') &&
+                    !prometheusAvailable
+                  )
+                    return;
                   updateForm({ metricsMode: val as MetricsSource });
                 }}
                 className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
@@ -973,7 +1070,9 @@ export function DeviceConfigPanel({
             {/* Prometheus Target — visible when metrics source uses Prometheus */}
             {usesPrometheus && (
               <div className="space-y-2 bg-surface-high rounded-lg p-3">
-                <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">Prometheus Target</p>
+                <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                  Prometheus Target
+                </p>
                 <div className="space-y-1">
                   <label className="text-xs text-on-bg-secondary">Label</label>
                   <select
@@ -988,18 +1087,34 @@ export function DeviceConfigPanel({
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs text-on-bg-secondary">
-                    Value{form.prometheus.labelName === 'instance' ? ' (defaults to IP if blank)' : ''}
+                    Value
+                    {form.prometheus.labelName === 'instance' ? ' (defaults to IP if blank)' : ''}
                   </label>
                   <input
                     type="text"
                     value={form.prometheus.labelValue}
-                    onChange={(e) => { updatePrometheus({ labelValue: e.target.value }); setFieldError('prometheusLabelValue', null); }}
-                    onBlur={handleBlur('prometheusLabelValue', () => validateMaxLength(form.prometheus.labelValue, MAX_STRING_LENGTH, 'Label value'))}
-                    placeholder={form.prometheus.labelName === 'instance' ? form.ip || device.ip : 'e.g. my-router'}
+                    onChange={(e) => {
+                      updatePrometheus({ labelValue: e.target.value });
+                      setFieldError('prometheusLabelValue', null);
+                    }}
+                    onBlur={handleBlur('prometheusLabelValue', () =>
+                      validateMaxLength(
+                        form.prometheus.labelValue,
+                        MAX_STRING_LENGTH,
+                        'Label value',
+                      ),
+                    )}
+                    placeholder={
+                      form.prometheus.labelName === 'instance'
+                        ? form.ip || device.ip
+                        : 'e.g. my-router'
+                    }
                     className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['prometheusLabelValue'] ? ' border-status-down' : ' border-outline-subtle'}`}
                   />
                   {fieldErrors['prometheusLabelValue'] && (
-                    <p className="mt-1 text-xs text-status-down">{fieldErrors['prometheusLabelValue']}</p>
+                    <p className="mt-1 text-xs text-status-down">
+                      {fieldErrors['prometheusLabelValue']}
+                    </p>
                   )}
                 </div>
               </div>
@@ -1007,118 +1122,142 @@ export function DeviceConfigPanel({
 
             {/* SNMP Credentials — visible when metrics source uses SNMP */}
             {usesSNMP && (
-          <>
-            {profiles.length > 0 && (
-              <select
-                defaultValue=""
-                onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
-                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-              >
-                <option value="" disabled>Load credentials from profile...</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} (SNMP {p.snmp.version})
-                  </option>
-                ))}
-              </select>
-            )}
-
-            <select
-              value={form.snmp.version}
-              onChange={(e) => updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-            >
-              <option value="2c">SNMP v2c</option>
-              <option value="3">SNMP v3</option>
-            </select>
-
-            {form.snmp.version !== '3' && (
               <>
-                <input
-                  type="text"
-                  value={form.snmp.community}
-                  onChange={(e) => { updateSnmp({ community: e.target.value }); setFieldError('community', null); }}
-                  onBlur={handleBlur('community', () => validateMaxLength(form.snmp.community, MAX_STRING_LENGTH, 'Community string'))}
-                  placeholder="SNMP Community (leave blank to keep current)"
-                  className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['community'] ? ' border-status-down' : ' border-outline-subtle'}`}
-                />
-                {fieldErrors['community'] && (
-                  <p className="mt-1 text-xs text-status-down">{fieldErrors['community']}</p>
+                {profiles.length > 0 && (
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      applyProfile(e.target.value);
+                      e.target.value = '';
+                    }}
+                    className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                  >
+                    <option value="" disabled>
+                      Load credentials from profile...
+                    </option>
+                    {profiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} (SNMP {p.snmp.version})
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <select
+                  value={form.snmp.version}
+                  onChange={(e) =>
+                    updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })
+                  }
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                >
+                  <option value="2c">SNMP v2c</option>
+                  <option value="3">SNMP v3</option>
+                </select>
+
+                {form.snmp.version !== '3' && (
+                  <>
+                    <input
+                      type="text"
+                      value={form.snmp.community}
+                      onChange={(e) => {
+                        updateSnmp({ community: e.target.value });
+                        setFieldError('community', null);
+                      }}
+                      onBlur={handleBlur('community', () =>
+                        validateMaxLength(
+                          form.snmp.community,
+                          MAX_STRING_LENGTH,
+                          'Community string',
+                        ),
+                      )}
+                      placeholder="SNMP Community (leave blank to keep current)"
+                      className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['community'] ? ' border-status-down' : ' border-outline-subtle'}`}
+                    />
+                    {fieldErrors['community'] && (
+                      <p className="mt-1 text-xs text-status-down">{fieldErrors['community']}</p>
+                    )}
+                  </>
+                )}
+
+                {form.snmp.version === '3' && (
+                  <div className="space-y-2 bg-surface-high rounded-lg p-3">
+                    <p className="text-xs text-on-bg-secondary">
+                      SNMPv3 Credentials (leave blank to keep current)
+                    </p>
+                    <input
+                      type="text"
+                      value={form.snmp.username}
+                      onChange={(e) => {
+                        updateSnmp({ username: e.target.value });
+                        setFieldError('username', null);
+                      }}
+                      onBlur={handleBlur('username', () =>
+                        validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username'),
+                      )}
+                      placeholder="Username"
+                      className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['username'] ? ' border-status-down' : ' border-outline-subtle'}`}
+                    />
+                    {fieldErrors['username'] && (
+                      <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
+                    )}
+                    <select
+                      value={form.snmp.securityLevel}
+                      onChange={(e) => updateSnmp({ securityLevel: e.target.value })}
+                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                    >
+                      <option value="noAuthNoPriv">No Auth, No Privacy</option>
+                      <option value="authNoPriv">Auth, No Privacy</option>
+                      <option value="authPriv">Auth + Privacy</option>
+                    </select>
+                    {(form.snmp.securityLevel === 'authNoPriv' ||
+                      form.snmp.securityLevel === 'authPriv') && (
+                      <>
+                        <select
+                          value={form.snmp.authProtocol}
+                          onChange={(e) => updateSnmp({ authProtocol: e.target.value })}
+                          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                        >
+                          <option value="SHA">SHA</option>
+                          <option value="MD5">MD5</option>
+                          <option value="SHA-224">SHA-224</option>
+                          <option value="SHA-256">SHA-256</option>
+                          <option value="SHA-384">SHA-384</option>
+                          <option value="SHA-512">SHA-512</option>
+                        </select>
+                        <input
+                          type="password"
+                          value={form.snmp.authPassword}
+                          onChange={(e) => updateSnmp({ authPassword: e.target.value })}
+                          placeholder="Auth Key"
+                          autoComplete="new-password"
+                          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                        />
+                      </>
+                    )}
+                    {form.snmp.securityLevel === 'authPriv' && (
+                      <>
+                        <select
+                          value={form.snmp.privProtocol}
+                          onChange={(e) => updateSnmp({ privProtocol: e.target.value })}
+                          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                        >
+                          <option value="AES">AES</option>
+                          <option value="DES">DES</option>
+                        </select>
+                        <input
+                          type="password"
+                          value={form.snmp.privPassword}
+                          onChange={(e) => updateSnmp({ privPassword: e.target.value })}
+                          placeholder="Encryption Key"
+                          autoComplete="new-password"
+                          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                        />
+                      </>
+                    )}
+                  </div>
                 )}
               </>
             )}
-
-            {form.snmp.version === '3' && (
-              <div className="space-y-2 bg-surface-high rounded-lg p-3">
-                <p className="text-xs text-on-bg-secondary">SNMPv3 Credentials (leave blank to keep current)</p>
-                <input
-                  type="text"
-                  value={form.snmp.username}
-                  onChange={(e) => { updateSnmp({ username: e.target.value }); setFieldError('username', null); }}
-                  onBlur={handleBlur('username', () => validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username'))}
-                  placeholder="Username"
-                  className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['username'] ? ' border-status-down' : ' border-outline-subtle'}`}
-                />
-                {fieldErrors['username'] && (
-                  <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
-                )}
-                <select
-                  value={form.snmp.securityLevel}
-                  onChange={(e) => updateSnmp({ securityLevel: e.target.value })}
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                >
-                  <option value="noAuthNoPriv">No Auth, No Privacy</option>
-                  <option value="authNoPriv">Auth, No Privacy</option>
-                  <option value="authPriv">Auth + Privacy</option>
-                </select>
-                {(form.snmp.securityLevel === 'authNoPriv' || form.snmp.securityLevel === 'authPriv') && (
-                  <>
-                    <select
-                      value={form.snmp.authProtocol}
-                      onChange={(e) => updateSnmp({ authProtocol: e.target.value })}
-                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                    >
-                      <option value="SHA">SHA</option>
-                      <option value="MD5">MD5</option>
-                      <option value="SHA-224">SHA-224</option>
-                      <option value="SHA-256">SHA-256</option>
-                      <option value="SHA-384">SHA-384</option>
-                      <option value="SHA-512">SHA-512</option>
-                    </select>
-                    <input
-                      type="password"
-                      value={form.snmp.authPassword}
-                      onChange={(e) => updateSnmp({ authPassword: e.target.value })}
-                      placeholder="Auth Key"
-                      autoComplete="new-password"
-                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                    />
-                  </>
-                )}
-                {form.snmp.securityLevel === 'authPriv' && (
-                  <>
-                    <select
-                      value={form.snmp.privProtocol}
-                      onChange={(e) => updateSnmp({ privProtocol: e.target.value })}
-                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                    >
-                      <option value="AES">AES</option>
-                      <option value="DES">DES</option>
-                    </select>
-                    <input
-                      type="password"
-                      value={form.snmp.privPassword}
-                      onChange={(e) => updateSnmp({ privPassword: e.target.value })}
-                      placeholder="Encryption Key"
-                      autoComplete="new-password"
-                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                    />
-                  </>
-                )}
-              </div>
-            )}
-          </>
-        )}
           </>
         )}
 
@@ -1164,7 +1303,9 @@ export function DeviceConfigPanel({
               <button
                 type="button"
                 disabled={deleteLoading}
-                onClick={() => { void handleDelete(); }}
+                onClick={() => {
+                  void handleDelete();
+                }}
                 className="flex-1 rounded-lg bg-status-down px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {deleteLoading ? 'Deleting...' : 'Confirm Delete'}
@@ -1205,7 +1346,9 @@ function SNMPTestButton({ deviceId }: { deviceId: string }) {
     <div className="space-y-2">
       <button
         type="button"
-        onClick={() => { void handleTest(); }}
+        onClick={() => {
+          void handleTest();
+        }}
         disabled={testing}
         className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
       >
@@ -1229,10 +1372,15 @@ function SNMPTestButton({ deviceId }: { deviceId: string }) {
             <div className="space-y-1">
               <div className="font-medium">SNMP Failed</div>
               <div className="break-words">{result.error}</div>
-              {result.target_ip && <div className="text-on-bg-secondary">Target: {result.target_ip}:161 (UDP)</div>}
-              {result.snmp_version && <div className="text-on-bg-secondary">Version: {result.snmp_version}</div>}
+              {result.target_ip && (
+                <div className="text-on-bg-secondary">Target: {result.target_ip}:161 (UDP)</div>
+              )}
+              {result.snmp_version && (
+                <div className="text-on-bg-secondary">Version: {result.snmp_version}</div>
+              )}
               <div className="text-on-bg-secondary mt-1">
-                Check: SNMP enabled on device, community/credentials correct, UDP/161 reachable from container
+                Check: SNMP enabled on device, community/credentials correct, UDP/161 reachable from
+                container
               </div>
             </div>
           )}

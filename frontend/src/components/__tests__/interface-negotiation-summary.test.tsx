@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 
 import { InterfaceStatsPanel } from '../InterfaceStatsPanel';
 import type { LinkInterfacePanelModel } from '../panelModels';
@@ -53,7 +53,9 @@ describe('InterfaceStatsPanel autonegotiation summary', () => {
 
     expect(screen.getByText('Autonegotiation')).toBeInTheDocument();
     expect(screen.getByText('Matched at 1 Gbps')).toBeInTheDocument();
-    expect(screen.getByText('Both interfaces report the same negotiated speed.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Both interfaces report the same negotiated speed.'),
+    ).toBeInTheDocument();
     expect(summaryCard).toHaveClass('border-status-up/30');
   });
 
@@ -74,7 +76,9 @@ describe('InterfaceStatsPanel autonegotiation summary', () => {
     let summaryCard = screen.getByText('1 Gbps vs 100 Mbps').closest('div.rounded-xl');
 
     expect(screen.getByText('1 Gbps vs 100 Mbps')).toBeInTheDocument();
-    expect(screen.getByText('The two ends report different negotiated speeds.')).toBeInTheDocument();
+    expect(
+      screen.getByText('The two ends report different negotiated speeds.'),
+    ).toBeInTheDocument();
     expect(summaryCard).toHaveClass('border-status-probing/30');
 
     rerender(
@@ -91,7 +95,9 @@ describe('InterfaceStatsPanel autonegotiation summary', () => {
       />,
     );
     expect(screen.getByText('Only one side exposed a negotiated speed.')).toBeInTheDocument();
-    summaryCard = screen.getByText('Only one side exposed a negotiated speed.').closest('div.rounded-xl');
+    summaryCard = screen
+      .getByText('Only one side exposed a negotiated speed.')
+      .closest('div.rounded-xl');
     expect(summaryCard).toHaveClass('border-status-probing/30');
 
     rerender(
@@ -107,9 +113,13 @@ describe('InterfaceStatsPanel autonegotiation summary', () => {
         })}
       />,
     );
-    summaryCard = screen.getByText('Waiting for interface speed data from one or both ends.').closest('div.rounded-xl');
+    summaryCard = screen
+      .getByText('Waiting for interface speed data from one or both ends.')
+      .closest('div.rounded-xl');
 
-    expect(screen.getByText('Waiting for interface speed data from one or both ends.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Waiting for interface speed data from one or both ends.'),
+    ).toBeInTheDocument();
     expect(summaryCard).toHaveClass('border-outline-subtle');
   });
 });

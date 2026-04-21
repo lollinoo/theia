@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { LinkCreatePanel } from './LinkCreatePanel';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ServerError, ValidationError } from '../api/errors';
 import type { Device } from '../types/api';
-import { ValidationError, ServerError } from '../api/errors';
+import { LinkCreatePanel } from './LinkCreatePanel';
 
 // Mock API calls
 vi.mock('../api/client', () => ({
@@ -15,7 +15,14 @@ vi.mock('../api/client', () => ({
     discovery_protocol: '',
   }),
   fetchDeviceInterfaces: vi.fn().mockImplementation((deviceId: string) => {
-    const iface = { if_name: 'ether1', if_descr: 'Eth1', speed: 1000000000, oper_status: 'up', admin_status: 'up', in_use: false };
+    const iface = {
+      if_name: 'ether1',
+      if_descr: 'Eth1',
+      speed: 1000000000,
+      oper_status: 'up',
+      admin_status: 'up',
+      in_use: false,
+    };
     if (deviceId === 'dev-p1' || deviceId === 'dev-p2' || deviceId === 'dev-physical') {
       return Promise.resolve([iface]);
     }
@@ -36,7 +43,15 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     vendor: 'default',
     managed: true,
     interfaces: [
-      { id: 'if-1', if_index: 1, if_name: 'ether1', if_descr: 'Ethernet 1', speed: 1000000000, admin_status: 'up', oper_status: 'up' },
+      {
+        id: 'if-1',
+        if_index: 1,
+        if_name: 'ether1',
+        if_descr: 'Ethernet 1',
+        speed: 1000000000,
+        admin_status: 'up',
+        oper_status: 'up',
+      },
     ],
     area_ids: [],
     backup_supported: false,
@@ -75,11 +90,7 @@ describe('LinkCreatePanel', () => {
     it('hides interface selector when source device is virtual', () => {
       const devices = [mockVirtualDevice(), mockDevice()];
       render(
-        <LinkCreatePanel
-          {...baseProps}
-          devices={devices}
-          initialSourceDeviceId="dev-virtual"
-        />,
+        <LinkCreatePanel {...baseProps} devices={devices} initialSourceDeviceId="dev-virtual" />,
       );
       expect(screen.getByText(/virtual node/i)).toBeInTheDocument();
     });
@@ -87,11 +98,7 @@ describe('LinkCreatePanel', () => {
     it('shows interface selector for physical device', () => {
       const devices = [mockDevice(), mockVirtualDevice()];
       render(
-        <LinkCreatePanel
-          {...baseProps}
-          devices={devices}
-          initialSourceDeviceId="dev-physical"
-        />,
+        <LinkCreatePanel {...baseProps} devices={devices} initialSourceDeviceId="dev-physical" />,
       );
       // Physical device should show port selector, not "(virtual node ...)" label
       expect(screen.queryByText(/virtual node/i)).not.toBeInTheDocument();
@@ -139,11 +146,7 @@ describe('LinkCreatePanel', () => {
     it('shows display name for virtual device without IP in dropdown', () => {
       const devices = [mockVirtualDevice(), mockDevice()];
       render(
-        <LinkCreatePanel
-          {...baseProps}
-          devices={devices}
-          initialSourceDeviceId="dev-virtual"
-        />,
+        <LinkCreatePanel {...baseProps} devices={devices} initialSourceDeviceId="dev-virtual" />,
       );
       // The selected device display should show the display_name
       expect(screen.getByText('ISP Gateway')).toBeInTheDocument();
@@ -166,7 +169,15 @@ describe('LinkCreatePanel — handleSubmit catch handles typed errors', () => {
     vendor: 'default',
     managed: true,
     interfaces: [
-      { id: 'if-1', if_index: 1, if_name: 'ether1', if_descr: 'Eth1', speed: 1000000000, admin_status: 'up' as const, oper_status: 'up' as const },
+      {
+        id: 'if-1',
+        if_index: 1,
+        if_name: 'ether1',
+        if_descr: 'Eth1',
+        speed: 1000000000,
+        admin_status: 'up' as const,
+        oper_status: 'up' as const,
+      },
     ],
     area_ids: [],
     backup_supported: false,
@@ -182,7 +193,15 @@ describe('LinkCreatePanel — handleSubmit catch handles typed errors', () => {
     hostname: '10.0.0.2',
     sys_name: 'Router2',
     interfaces: [
-      { id: 'if-2', if_index: 1, if_name: 'ether1', if_descr: 'Eth1', speed: 1000000000, admin_status: 'up' as const, oper_status: 'up' as const },
+      {
+        id: 'if-2',
+        if_index: 1,
+        if_name: 'ether1',
+        if_descr: 'Eth1',
+        speed: 1000000000,
+        admin_status: 'up' as const,
+        oper_status: 'up' as const,
+      },
     ],
   };
 

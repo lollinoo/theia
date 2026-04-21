@@ -36,9 +36,7 @@ export function CanvasOverlays({
               {selectedNodeCount}
             </span>
             <span className="text-sm text-on-bg-secondary">nodes selected</span>
-            {editMode && (
-              <span className="text-xs text-primary font-medium">Edit</span>
-            )}
+            {editMode && <span className="text-xs text-primary font-medium">Edit</span>}
           </button>
         )}
         {prometheusDiagnosticsVisible && (
@@ -49,23 +47,24 @@ export function CanvasOverlays({
           </div>
         )}
         {topologyRecoveryNotice && (
-          <div className={`pointer-events-auto flex items-center gap-2.5 rounded-full px-4 py-2.5 shadow-floating backdrop-blur-sm ${
-            topologyRecoveryNotice.tone === 'warning'
-              ? 'border border-warning/30 bg-surface-container-high/95'
-              : 'border border-status-up/30 bg-surface-container-high/95'
-          }`}
+          <div
+            className={`pointer-events-auto flex items-center gap-2.5 rounded-full px-4 py-2.5 shadow-floating backdrop-blur-sm ${
+              topologyRecoveryNotice.tone === 'warning'
+                ? 'border border-warning/30 bg-surface-container-high/95'
+                : 'border border-status-up/30 bg-surface-container-high/95'
+            }`}
           >
-            <span className={`h-2 w-2 flex-none rounded-full ${
-              topologyRecoveryNotice.tone === 'warning'
-                ? 'bg-warning animate-pulse'
-                : 'bg-status-up'
-            }`}
+            <span
+              className={`h-2 w-2 flex-none rounded-full ${
+                topologyRecoveryNotice.tone === 'warning'
+                  ? 'bg-warning animate-pulse'
+                  : 'bg-status-up'
+              }`}
             />
-            <p className={`text-sm ${
-              topologyRecoveryNotice.tone === 'warning'
-                ? 'text-warning'
-                : 'text-status-up'
-            }`}
+            <p
+              className={`text-sm ${
+                topologyRecoveryNotice.tone === 'warning' ? 'text-warning' : 'text-status-up'
+              }`}
             >
               {topologyRecoveryNotice.message}
             </p>
@@ -85,15 +84,30 @@ export function CanvasOverlays({
               title="Dismiss"
             >
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </button>
           </div>
         )}
         {editMode && (
           <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-primary/30 bg-surface-container-high/95 px-4 py-2.5 shadow-floating backdrop-blur-sm">
-            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" className="h-4 w-4 text-primary">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            <svg
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              className="h-4 w-4 text-primary"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+              />
             </svg>
             <p className="text-sm text-primary">Edit Mode</p>
             <span className="text-xs text-on-bg-secondary">Press E to exit</span>

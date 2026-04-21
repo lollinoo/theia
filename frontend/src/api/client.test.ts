@@ -1,20 +1,23 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  fetchDevices,
-  fetchLinks,
-  fetchSettings,
+  type CreateDevicePayload,
   createDevice,
   deleteDevice,
   fetchBackupJobs,
+  fetchDevices,
+  fetchLinks,
+  fetchSettings,
   restoreInstanceBackup,
   runTopologyDiscovery,
   updateDevice,
-  type CreateDevicePayload,
 } from './client';
-import { ValidationError, ServerError } from './errors';
+import { ServerError, ValidationError } from './errors';
 
 // Helper to create a mock Response
-function mockResponse(body: unknown, init: { ok?: boolean; status?: number; statusText?: string } = {}) {
+function mockResponse(
+  body: unknown,
+  init: { ok?: boolean; status?: number; statusText?: string } = {},
+) {
   const { ok = true, status = 200, statusText = 'OK' } = init;
   return {
     ok,
@@ -80,9 +83,14 @@ describe('fetchDevices', () => {
   it('throws on HTTP error', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ error: 'Internal Server Error' }, { ok: false, status: 500, statusText: 'Internal Server Error' }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'Internal Server Error' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
+        ),
     );
 
     await expect(fetchDevices()).rejects.toThrow('Failed to fetch devices');
@@ -156,9 +164,11 @@ describe('createDevice', () => {
   it('sends POST with correct body', async () => {
     // createDevice uses requestJSONWithBody which calls fetch with method+body
     // The response has { data: { id, attributes, ... } } (single resource, not array)
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse({ data: deviceResource('uuid-2', 'new-router', '10.0.0.2') }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        mockResponse({ data: deviceResource('uuid-2', 'new-router', '10.0.0.2') }),
+      );
     vi.stubGlobal('fetch', fetchMock);
 
     await createDevice(payload);
@@ -173,9 +183,14 @@ describe('createDevice', () => {
   it('throws on validation error', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ error: 'hostname required' }, { ok: false, status: 400, statusText: 'Bad Request' }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'hostname required' },
+            { ok: false, status: 400, statusText: 'Bad Request' },
+          ),
+        ),
     );
 
     await expect(createDevice(payload)).rejects.toThrow();
@@ -184,13 +199,20 @@ describe('createDevice', () => {
   it('throws ValidationError on conflict error', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ error: 'a device with IP/host "10.0.0.2" already exists' }, { ok: false, status: 409, statusText: 'Conflict' }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'a device with IP/host "10.0.0.2" already exists' },
+            { ok: false, status: 409, statusText: 'Conflict' },
+          ),
+        ),
     );
 
     await expect(createDevice(payload)).rejects.toThrow(ValidationError);
-    await expect(createDevice(payload)).rejects.toThrow('a device with IP/host "10.0.0.2" already exists');
+    await expect(createDevice(payload)).rejects.toThrow(
+      'a device with IP/host "10.0.0.2" already exists',
+    );
   });
 });
 
@@ -222,9 +244,14 @@ describe('fetchSettings', () => {
   it('throws on HTTP error', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ error: 'Unauthorized' }, { ok: false, status: 401, statusText: 'Unauthorized' }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'Unauthorized' },
+            { ok: false, status: 401, statusText: 'Unauthorized' },
+          ),
+        ),
     );
 
     await expect(fetchSettings()).rejects.toThrow('Failed to fetch settings');
@@ -233,9 +260,9 @@ describe('fetchSettings', () => {
 
 describe('deleteDevice', () => {
   it('sends DELETE request with correct URL', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }));
     vi.stubGlobal('fetch', fetchMock);
 
     await deleteDevice('device-123');
@@ -249,9 +276,9 @@ describe('deleteDevice', () => {
 
 describe('updateDevice', () => {
   it('sends null poll_interval_override unchanged', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { poll_interval_override: null });
@@ -264,9 +291,9 @@ describe('updateDevice', () => {
   });
 
   it('sends numeric poll_interval_override unchanged', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { poll_interval_override: 30 });
@@ -277,22 +304,24 @@ describe('updateDevice', () => {
   });
 
   it('sends nullable notes unchanged', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { notes: null });
     await updateDevice('uuid-1', { notes: 'Needs maintenance window' });
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ notes: null });
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ notes: 'Needs maintenance window' });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      notes: 'Needs maintenance window',
+    });
   });
 
   it('passes topology discovery mode through unchanged', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { topology_discovery_mode: 'bootstrap_once' });
@@ -305,9 +334,9 @@ describe('updateDevice', () => {
 
 describe('runTopologyDiscovery', () => {
   it('posts to the device topology discovery endpoint', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse({ status: 'topology_discovery_started' }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ status: 'topology_discovery_started' }));
     vi.stubGlobal('fetch', fetchMock);
 
     await runTopologyDiscovery('uuid-1');
@@ -415,9 +444,14 @@ describe('restoreInstanceBackup', () => {
   it('throws ValidationError on 400', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ error: 'encryption key mismatch' }, { ok: false, status: 400, statusText: 'Bad Request' }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'encryption key mismatch' },
+            { ok: false, status: 400, statusText: 'Bad Request' },
+          ),
+        ),
     );
     const file = new File(['test'], 'backup.tar.gz');
     try {
@@ -432,12 +466,14 @@ describe('restoreInstanceBackup', () => {
   it('throws ServerError with correlationId on 500 with ref', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'internal error, ref: abc12345' },
-          { ok: false, status: 500, statusText: 'Internal Server Error' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'internal error, ref: abc12345' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
         ),
-      ),
     );
     const file = new File(['test'], 'backup.tar.gz');
     try {
@@ -453,12 +489,14 @@ describe('restoreInstanceBackup', () => {
   it('throws ServerError without correlationId on 500 with no ref', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'unexpected failure' },
-          { ok: false, status: 500, statusText: 'Internal Server Error' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'unexpected failure' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
         ),
-      ),
     );
     const file = new File(['test'], 'backup.tar.gz');
     try {
@@ -474,9 +512,14 @@ describe('restoreInstanceBackup', () => {
   it('throws plain Error for non-400/500 error status (413)', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ error: 'payload too large' }, { ok: false, status: 413, statusText: 'Payload Too Large' }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'payload too large' },
+            { ok: false, status: 413, statusText: 'Payload Too Large' },
+          ),
+        ),
     );
     const file = new File(['test'], 'backup.tar.gz');
     await expect(restoreInstanceBackup(file, true)).rejects.toThrow(/413/);

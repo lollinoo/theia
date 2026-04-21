@@ -1,5 +1,5 @@
-import type { CSSProperties, ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
+import type { CSSProperties, ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
 
@@ -53,7 +53,7 @@ function renderEdge(
             ...dataOverrides,
           },
           ...overrides,
-        }) as never}
+        } as never)}
       />
     </div>,
   );

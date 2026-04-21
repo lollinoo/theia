@@ -1,6 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { triggerBackup, triggerBulkDownload, fetchBackupJob, fetchDeviceCredentialProfiles } from '../../api/client';
-import { ValidationError, ServerError } from '../../api/errors';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  fetchBackupJob,
+  fetchDeviceCredentialProfiles,
+  triggerBackup,
+  triggerBulkDownload,
+} from '../../api/client';
+import { ServerError, ValidationError } from '../../api/errors';
 import type { Device } from '../../types/api';
 
 interface BulkBackupPanelProps {
@@ -33,15 +38,21 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const entriesRef = useRef<DeviceEntry[]>([]);
 
   // Cleanup on unmount
-  useEffect(() => () => {
-    if (pollRef.current) clearInterval(pollRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    },
+    [],
+  );
 
   // Detect completion: all entries terminal → done
   useEffect(() => {
     if (phase !== 'running' || entries.length === 0) return;
     if (entries.every((e) => TERMINAL.has(e.phase))) {
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
       setPhase('done');
     }
   }, [entries, phase]);
@@ -97,25 +108,32 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     // Pre-fetch credential profile assignments for all devices in parallel.
     // Eligibility requires at least one assigned credential profile (replaces legacy ssh_profile_id check).
     const profileResults = await Promise.allSettled(
-      devices.map((d) => fetchDeviceCredentialProfiles(d.id))
+      devices.map((d) => fetchDeviceCredentialProfiles(d.id)),
     );
     const deviceHasProfile = new Map<string, boolean>();
     for (let i = 0; i < devices.length; i++) {
       const result = profileResults[i];
-      deviceHasProfile.set(
-        devices[i].id,
-        result.status === 'fulfilled' && result.value.length > 0
-      );
+      deviceHasProfile.set(devices[i].id, result.status === 'fulfilled' && result.value.length > 0);
     }
 
     // Build entries — pre-check eligibility
     const initial: DeviceEntry[] = devices.map((d) => {
       const name = getDeviceName(d);
       if (!d.backup_supported) {
-        return { deviceId: d.id, deviceName: name, phase: 'skipped' as const, reason: 'backup not supported for this vendor' };
+        return {
+          deviceId: d.id,
+          deviceName: name,
+          phase: 'skipped' as const,
+          reason: 'backup not supported for this vendor',
+        };
       }
       if (!deviceHasProfile.get(d.id)) {
-        return { deviceId: d.id, deviceName: name, phase: 'skipped' as const, reason: 'no credential profile assigned' };
+        return {
+          deviceId: d.id,
+          deviceName: name,
+          phase: 'skipped' as const,
+          reason: 'no credential profile assigned',
+        };
       }
       return { deviceId: d.id, deviceName: name, phase: 'checking' as const };
     });
@@ -136,15 +154,20 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         .catch((err) => {
           let reason: string;
           if (err instanceof ServerError) {
-            reason = err.correlationId ? `server error (ref: ${err.correlationId})` : 'server error';
+            reason = err.correlationId
+              ? `server error (ref: ${err.correlationId})`
+              : 'server error';
           } else if (err instanceof ValidationError) {
             reason = err.message;
           } else {
             const msg = err instanceof Error ? err.message : 'backup failed';
-            reason = msg.includes('unreachable') ? 'device unreachable'
-              : msg.includes('no credential') ? 'no credential profile assigned'
-              : msg.includes('not supported') ? 'backup not supported for this vendor'
-              : msg;
+            reason = msg.includes('unreachable')
+              ? 'device unreachable'
+              : msg.includes('no credential')
+                ? 'no credential profile assigned'
+                : msg.includes('not supported')
+                  ? 'backup not supported for this vendor'
+                  : msg;
           }
           patchEntry(entry.deviceId, { phase: 'skipped', reason });
         });
@@ -179,7 +202,10 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       {/* Idle: start button */}
       {phase === 'idle' && (
         <button
-          onClick={() => { void handleStart(); }}
+          type="button"
+          onClick={() => {
+            void handleStart();
+          }}
           className="w-full rounded-md bg-primary px-3 py-2.5 text-xs font-medium text-white hover:bg-primary/90 transition-colors"
         >
           Backup All Devices
@@ -229,18 +255,27 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                 <span className="text-[10px] text-on-bg truncate mr-2">{e.deviceName}</span>
                 <div className="flex items-center gap-2 shrink-0">
                   {e.reason && e.phase === 'skipped' && (
-                    <span className="text-[9px] text-yellow-400 truncate max-w-[140px]">{e.reason}</span>
+                    <span className="text-[9px] text-yellow-400 truncate max-w-[140px]">
+                      {e.reason}
+                    </span>
                   )}
                   {e.reason && e.phase === 'failed' && (
-                    <span className="text-[9px] text-status-down truncate max-w-[140px]">{e.reason}</span>
+                    <span className="text-[9px] text-status-down truncate max-w-[140px]">
+                      {e.reason}
+                    </span>
                   )}
                   <span
                     className={`text-[10px] font-medium ${
-                      e.phase === 'success' ? 'text-status-up'
-                        : e.phase === 'failed' ? 'text-status-down'
-                          : e.phase === 'skipped' ? 'text-yellow-400'
-                            : e.phase === 'checking' ? 'text-blue-400 animate-pulse'
-                              : e.phase === 'running' ? 'text-primary animate-pulse'
+                      e.phase === 'success'
+                        ? 'text-status-up'
+                        : e.phase === 'failed'
+                          ? 'text-status-down'
+                          : e.phase === 'skipped'
+                            ? 'text-yellow-400'
+                            : e.phase === 'checking'
+                              ? 'text-blue-400 animate-pulse'
+                              : e.phase === 'running'
+                                ? 'text-primary animate-pulse'
                                 : 'text-on-bg-secondary'
                     }`}
                   >
@@ -260,7 +295,10 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
             Download files individually from each device's backup history, or download all as a zip.
           </p>
           <button
-            onClick={() => { void handleDownloadZip(); }}
+            type="button"
+            onClick={() => {
+              void handleDownloadZip();
+            }}
             disabled={downloading}
             className="w-full rounded-md border border-primary bg-primary/10 px-3 py-2.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
           >
@@ -272,7 +310,8 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       {/* No eligible devices */}
       {phase === 'done' && successCount === 0 && failedCount === 0 && (
         <div className="rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down">
-          No devices were eligible for backup. Ensure devices have a supported vendor and an SSH profile assigned.
+          No devices were eligible for backup. Ensure devices have a supported vendor and an SSH
+          profile assigned.
         </div>
       )}
 

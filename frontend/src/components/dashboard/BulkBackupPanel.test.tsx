@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { BulkBackupPanel } from './BulkBackupPanel';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ServerError, ValidationError } from '../../api/errors';
 import type { Device } from '../../types/api';
-import { ValidationError, ServerError } from '../../api/errors';
+import { BulkBackupPanel } from './BulkBackupPanel';
 
 // Mock API calls — triggerBackup resolves by default; individual tests override as needed.
 // fetchDeviceCredentialProfiles returns one profile by default (device is eligible).
@@ -10,9 +10,9 @@ vi.mock('../../api/client', () => ({
   triggerBackup: vi.fn().mockResolvedValue({ id: 'job-1', status: 'queued' }),
   triggerBulkDownload: vi.fn().mockResolvedValue(undefined),
   fetchBackupJob: vi.fn().mockResolvedValue({ id: 'job-1', status: 'success', error_message: '' }),
-  fetchDeviceCredentialProfiles: vi.fn().mockResolvedValue([
-    { profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: false },
-  ]),
+  fetchDeviceCredentialProfiles: vi
+    .fn()
+    .mockResolvedValue([{ profile_id: 'p1', name: 'Admin', role: 'Admin', is_winbox: false }]),
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {

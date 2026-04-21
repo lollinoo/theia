@@ -1,11 +1,11 @@
 import {
+  type SimulationLinkDatum,
+  type SimulationNodeDatum,
   forceCenter,
   forceCollide,
   forceLink,
   forceManyBody,
   forceSimulation,
-  type SimulationLinkDatum,
-  type SimulationNodeDatum,
 } from 'd3-force';
 
 export interface AutoLayoutNode {
@@ -78,7 +78,10 @@ function collectComponent(
     const neighbors = adjacency.get(current) ?? new Set<string>();
 
     [...neighbors]
-      .sort((a, b) => (adjacency.get(b)?.size ?? 0) - (adjacency.get(a)?.size ?? 0) || a.localeCompare(b))
+      .sort(
+        (a, b) =>
+          (adjacency.get(b)?.size ?? 0) - (adjacency.get(a)?.size ?? 0) || a.localeCompare(b),
+      )
       .forEach((neighbor) => {
         if (visited.has(neighbor)) return;
         visited.add(neighbor);
@@ -101,7 +104,11 @@ function computeLayerSeedPositions(
   const adjacency = buildAdjacency(nodes, edges);
   const visited = new Set<string>();
   const componentStarts = [...nodes]
-    .sort((a, b) => (adjacency.get(b.id)?.size ?? 0) - (adjacency.get(a.id)?.size ?? 0) || a.id.localeCompare(b.id))
+    .sort(
+      (a, b) =>
+        (adjacency.get(b.id)?.size ?? 0) - (adjacency.get(a.id)?.size ?? 0) ||
+        a.id.localeCompare(b.id),
+    )
     .map((node) => node.id);
   const positions = new Map<string, { x: number; y: number }>();
 
@@ -114,8 +121,8 @@ function computeLayerSeedPositions(
 
     const component = collectComponent(startId, adjacency, visited);
     const componentSet = new Set(component);
-    const root = [...component]
-      .sort((a, b) => {
+    const root =
+      [...component].sort((a, b) => {
         const aDegree = adjacency.get(a)?.size ?? 0;
         const bDegree = adjacency.get(b)?.size ?? 0;
         if (aDegree !== bDegree) return bDegree - aDegree;
@@ -140,7 +147,9 @@ function computeLayerSeedPositions(
           if (aNode?.y !== undefined && bNode?.y !== undefined && aNode.y !== bNode.y) {
             return aNode.y - bNode.y;
           }
-          return (adjacency.get(b)?.size ?? 0) - (adjacency.get(a)?.size ?? 0) || a.localeCompare(b);
+          return (
+            (adjacency.get(b)?.size ?? 0) - (adjacency.get(a)?.size ?? 0) || a.localeCompare(b)
+          );
         });
 
       neighbors.forEach((neighbor) => {
@@ -233,7 +242,13 @@ export function computeForceLayout(
   }));
 
   const simulation = forceSimulation(simulationNodes)
-    .force('link', forceLink<ForceNode, ForceEdge>(simulationEdges).id((node) => node.id).distance(210).strength(0.7))
+    .force(
+      'link',
+      forceLink<ForceNode, ForceEdge>(simulationEdges)
+        .id((node) => node.id)
+        .distance(210)
+        .strength(0.7),
+    )
     .force('charge', forceManyBody().strength(-280))
     .force('center', forceCenter(safeWidth / 2, safeHeight / 2))
     .force('collide', forceCollide(104))

@@ -1,9 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { DeviceRow } from './DeviceRow';
-import type { Device, Area } from '../../types/api';
+import { describe, expect, it, vi } from 'vitest';
+import type { Area, Device } from '../../types/api';
 import type { DeviceMetricsDTO } from '../../types/metrics';
 import type { SnapshotPayload } from '../../types/metrics';
+import { DeviceRow } from './DeviceRow';
 import { buildRuntimeDeviceRows } from './runtimeDeviceRows';
 import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
@@ -76,7 +76,7 @@ function makeRow(overrides: Partial<RuntimeDeviceRow> = {}): RuntimeDeviceRow {
 function renderRow(
   deviceOverrides: Partial<Device> = {},
   metrics: DeviceMetricsDTO | null = null,
-  areaEntries?: [string, Area][]
+  areaEntries?: [string, Area][],
 ) {
   const device = mockDevice(deviceOverrides);
   const snapshot: SnapshotPayload | null = metrics
@@ -116,7 +116,7 @@ function renderRow(
           onViewConfig={noop}
         />
       </tbody>
-    </table>
+    </table>,
   );
 }
 
@@ -125,7 +125,7 @@ describe('DeviceRow', () => {
     renderRow();
 
     const buttons = screen.getAllByRole('button');
-    const titles = buttons.map(b => b.getAttribute('title'));
+    const titles = buttons.map((b) => b.getAttribute('title'));
     expect(titles).toContain('SSH Credentials');
     expect(titles).toContain('Backup Now');
     expect(titles).toContain('Backup History');

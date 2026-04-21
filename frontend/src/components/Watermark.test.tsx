@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { Watermark } from './Watermark';
+import { describe, expect, it } from 'vitest';
 import type { Area } from '../types/api';
+import { Watermark } from './Watermark';
 
 function mockArea(overrides: Partial<Area> = {}): Area {
   return {
@@ -29,24 +29,32 @@ describe('Watermark', () => {
   });
 
   it('renders nothing on hub view', () => {
-    const { container } = render(<Watermark activeView="hub" selectedAreaId={null} areas={[mockArea()]} />);
+    const { container } = render(
+      <Watermark activeView="hub" selectedAreaId={null} areas={[mockArea()]} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
   it('renders nothing on dashboard view', () => {
-    const { container } = render(<Watermark activeView="dashboard" selectedAreaId={null} areas={[mockArea()]} />);
+    const { container } = render(
+      <Watermark activeView="dashboard" selectedAreaId={null} areas={[mockArea()]} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
   it('has pointer-events-none and aria-hidden attributes', () => {
-    const { container } = render(<Watermark activeView="canvas" selectedAreaId={null} areas={[]} />);
+    const { container } = render(
+      <Watermark activeView="canvas" selectedAreaId={null} areas={[]} />,
+    );
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.className).toContain('pointer-events-none');
     expect(wrapper.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('has fixed positioning classes near minimap', () => {
-    const { container } = render(<Watermark activeView="canvas" selectedAreaId={null} areas={[]} />);
+    const { container } = render(
+      <Watermark activeView="canvas" selectedAreaId={null} areas={[]} />,
+    );
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.className).toContain('fixed');
     expect(wrapper.className).toContain('bottom-[170px]');

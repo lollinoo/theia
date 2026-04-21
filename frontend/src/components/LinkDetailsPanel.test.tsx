@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { LinkDetailsPanel } from './LinkDetailsPanel';
 import type { Device, Link } from '../types/api';
+import { LinkDetailsPanel } from './LinkDetailsPanel';
 
 vi.mock('../api/client', () => ({
   fetchDeviceInterfaces: vi.fn(),
@@ -75,7 +75,9 @@ describe('LinkDetailsPanel', () => {
 
     expect(screen.getByText('Source Endpoint')).toBeInTheDocument();
     expect(screen.getByText('Target Endpoint')).toBeInTheDocument();
-    expect(screen.getByText('Enter edit mode to change ports or delete this link.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Enter edit mode to change ports or delete this link.'),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit Ports' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete Link' })).not.toBeInTheDocument();
   });
@@ -109,7 +111,9 @@ describe('LinkDetailsPanel', () => {
 
     expect(screen.getAllByText('Pending discovery').length).toBeGreaterThan(0);
     expect(
-      screen.getByText('Port assignments are still resolving while probing completes. Missing ports will refresh automatically.'),
+      screen.getByText(
+        'Port assignments are still resolving while probing completes. Missing ports will refresh automatically.',
+      ),
     ).toBeInTheDocument();
   });
 });

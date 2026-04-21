@@ -1,19 +1,19 @@
 import { useEffect, useState } from 'react';
-import type { SNMPProfile } from '../types/api';
 import {
   createSNMPProfile,
   deleteSNMPProfile,
   fetchSNMPProfiles,
   updateSNMPProfile,
 } from '../api/client';
-import { ValidationError, ServerError } from '../api/errors';
+import { ServerError, ValidationError } from '../api/errors';
+import type { SNMPProfile } from '../types/api';
 import {
-  validateRequired,
+  MAX_STRING_LENGTH,
   validateMaxLength,
+  validateRequired,
   validateSNMPv3Auth,
   validateSNMPv3Priv,
   validateSNMPv3SecurityLevel,
-  MAX_STRING_LENGTH,
 } from '../utils/validation';
 
 const inputClass =
@@ -108,7 +108,9 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
 
     // Validate all fields before calling onSave
     const errors: Record<string, string> = {};
-    const nameErr = validateRequired(form.name, 'Profile name') ?? validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name');
+    const nameErr =
+      validateRequired(form.name, 'Profile name') ??
+      validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name');
     if (nameErr) errors['name'] = nameErr;
     const descErr = validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description');
     if (descErr) errors['description'] = descErr;
@@ -140,9 +142,11 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
       await onSave(form);
     } catch (err) {
       if (err instanceof ServerError) {
-        setError(err.correlationId
-          ? `Something went wrong (ref: ${err.correlationId})`
-          : 'Something went wrong');
+        setError(
+          err.correlationId
+            ? `Something went wrong (ref: ${err.correlationId})`
+            : 'Something went wrong',
+        );
       } else if (err instanceof ValidationError) {
         setError(err.message);
       } else {
@@ -154,14 +158,26 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
   }
 
   return (
-    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-3">
+    <form
+      onSubmit={(e) => {
+        void handleSubmit(e);
+      }}
+      className="space-y-3"
+    >
       <div className="space-y-1">
-        <label className={labelClass}>Profile Name <span className="text-status-down">*</span></label>
+        <label className={labelClass}>
+          Profile Name <span className="text-status-down">*</span>
+        </label>
         <input
           type="text"
           value={form.name}
           onChange={(e) => set('name', e.target.value)}
-          onBlur={handleBlur('name', () => validateRequired(form.name, 'Profile name') ?? validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name'))}
+          onBlur={handleBlur(
+            'name',
+            () =>
+              validateRequired(form.name, 'Profile name') ??
+              validateMaxLength(form.name, MAX_STRING_LENGTH, 'Profile name'),
+          )}
           placeholder="e.g. Office SNMPv3"
           required
           className={`${inputClass}${fieldErrors['name'] ? ' border-status-down' : ''}`}
@@ -177,7 +193,9 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
           type="text"
           value={form.description}
           onChange={(e) => set('description', e.target.value)}
-          onBlur={handleBlur('description', () => validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description'))}
+          onBlur={handleBlur('description', () =>
+            validateMaxLength(form.description, MAX_STRING_LENGTH, 'Description'),
+          )}
           placeholder="Optional description"
           className={`${inputClass}${fieldErrors['description'] ? ' border-status-down' : ''}`}
         />
@@ -188,7 +206,11 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
 
       <div className="space-y-1">
         <label className={labelClass}>SNMP Version</label>
-        <select value={form.version} onChange={(e) => set('version', e.target.value)} className={selectClass}>
+        <select
+          value={form.version}
+          onChange={(e) => set('version', e.target.value)}
+          className={selectClass}
+        >
           <option value="2c">v2c</option>
           <option value="3">v3</option>
         </select>
@@ -201,7 +223,9 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
             type="text"
             value={form.community}
             onChange={(e) => set('community', e.target.value)}
-            onBlur={handleBlur('community', () => validateMaxLength(form.community, MAX_STRING_LENGTH, 'Community string'))}
+            onBlur={handleBlur('community', () =>
+              validateMaxLength(form.community, MAX_STRING_LENGTH, 'Community string'),
+            )}
             placeholder="public"
             className={`${inputClass}${fieldErrors['community'] ? ' border-status-down' : ''}`}
           />
@@ -221,7 +245,9 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
               type="text"
               value={form.username}
               onChange={(e) => set('username', e.target.value)}
-              onBlur={handleBlur('username', () => validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username'))}
+              onBlur={handleBlur('username', () =>
+                validateMaxLength(form.username, MAX_STRING_LENGTH, 'Username'),
+              )}
               placeholder="snmpv3user"
               className={`${inputClass}${fieldErrors['username'] ? ' border-status-down' : ''}`}
             />
@@ -357,7 +383,9 @@ export function SNMPProfileManager() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+  }, []);
 
   function formToPayload(form: FormState) {
     const isV3 = form.version === '3';
@@ -371,8 +399,12 @@ export function SNMPProfileManager() {
             version: '3' as const,
             username: form.username.trim(),
             security_level: form.securityLevel,
-            ...(needsAuth ? { auth_protocol: form.authProtocol, auth_password: form.authPassword } : {}),
-            ...(needsPriv ? { priv_protocol: form.privProtocol, priv_password: form.privPassword } : {}),
+            ...(needsAuth
+              ? { auth_protocol: form.authProtocol, auth_password: form.authPassword }
+              : {}),
+            ...(needsPriv
+              ? { priv_protocol: form.privProtocol, priv_password: form.privPassword }
+              : {}),
           }
         : {
             version: form.version,
@@ -416,7 +448,12 @@ export function SNMPProfileManager() {
             className="text-on-bg-secondary hover:text-on-bg"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
           </button>
           <p className={labelClass}>New Profile</p>
@@ -437,11 +474,19 @@ export function SNMPProfileManager() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => { setMode('list'); setEditing(null); }}
+            onClick={() => {
+              setMode('list');
+              setEditing(null);
+            }}
             className="text-on-bg-secondary hover:text-on-bg"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
           </button>
           <p className={labelClass}>Edit Profile</p>
@@ -449,7 +494,10 @@ export function SNMPProfileManager() {
         <ProfileForm
           initial={profileToForm(editing)}
           onSave={handleUpdate}
-          onCancel={() => { setMode('list'); setEditing(null); }}
+          onCancel={() => {
+            setMode('list');
+            setEditing(null);
+          }}
           saveLabel="Save Changes"
         />
       </div>
@@ -472,9 +520,7 @@ export function SNMPProfileManager() {
         </button>
       </div>
 
-      {loading && (
-        <p className="text-xs text-on-bg-secondary">Loading profiles...</p>
-      )}
+      {loading && <p className="text-xs text-on-bg-secondary">Loading profiles...</p>}
 
       {!loading && profiles.length === 0 && (
         <p className="text-xs text-on-bg-secondary">
@@ -482,71 +528,98 @@ export function SNMPProfileManager() {
         </p>
       )}
 
-      {!loading && profiles.map((profile) => (
-        <div
-          key={profile.id}
-          className="rounded-lg bg-surface-high p-3 space-y-1"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-on-bg truncate">{profile.name}</p>
-              {profile.description && (
-                <p className="text-xs text-on-bg-secondary truncate">{profile.description}</p>
-              )}
-              <p className="text-xs text-on-bg-secondary/60 mt-1">
-                SNMP {profile.snmp.version}
-                {profile.snmp.version === '2c' && profile.snmp.community && ` · ${profile.snmp.community}`}
-                {profile.snmp.version === '3' && profile.snmp.username && ` · ${profile.snmp.username}`}
-              </p>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => { setEditing(profile); setMode('edit'); }}
-                className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
-                title="Edit profile"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDeleteId(profile.id)}
-                className="p-1 text-on-bg-secondary hover:text-status-down rounded"
-                title="Delete profile"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {confirmDeleteId === profile.id && (
-            <div className="mt-2 rounded-lg border border-status-down/30 bg-status-down/10 p-2 space-y-2">
-              <p className="text-xs text-status-down">Delete this profile?</p>
-              <div className="flex gap-2">
+      {!loading &&
+        profiles.map((profile) => (
+          <div key={profile.id} className="rounded-lg bg-surface-high p-3 space-y-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-on-bg truncate">{profile.name}</p>
+                {profile.description && (
+                  <p className="text-xs text-on-bg-secondary truncate">{profile.description}</p>
+                )}
+                <p className="text-xs text-on-bg-secondary/60 mt-1">
+                  SNMP {profile.snmp.version}
+                  {profile.snmp.version === '2c' &&
+                    profile.snmp.community &&
+                    ` · ${profile.snmp.community}`}
+                  {profile.snmp.version === '3' &&
+                    profile.snmp.username &&
+                    ` · ${profile.snmp.username}`}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
-                  onClick={() => setConfirmDeleteId(null)}
-                  className="flex-1 rounded bg-surface-high px-2 py-1 text-xs text-on-bg hover:bg-elevated"
+                  onClick={() => {
+                    setEditing(profile);
+                    setMode('edit');
+                  }}
+                  className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
+                  title="Edit profile"
                 >
-                  Cancel
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                    />
+                  </svg>
                 </button>
                 <button
                   type="button"
-                  disabled={deleteLoading}
-                  onClick={() => { void handleDelete(profile.id); }}
-                  className="flex-1 rounded bg-status-down px-2 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                  onClick={() => setConfirmDeleteId(profile.id)}
+                  className="p-1 text-on-bg-secondary hover:text-status-down rounded"
+                  title="Delete profile"
                 >
-                  {deleteLoading ? 'Deleting...' : 'Delete'}
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
+                  </svg>
                 </button>
               </div>
             </div>
-          )}
-        </div>
-      ))}
+
+            {confirmDeleteId === profile.id && (
+              <div className="mt-2 rounded-lg border border-status-down/30 bg-status-down/10 p-2 space-y-2">
+                <p className="text-xs text-status-down">Delete this profile?</p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="flex-1 rounded bg-surface-high px-2 py-1 text-xs text-on-bg hover:bg-elevated"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deleteLoading}
+                    onClick={() => {
+                      void handleDelete(profile.id);
+                    }}
+                    className="flex-1 rounded bg-status-down px-2 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                  >
+                    {deleteLoading ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
     </div>
   );
 }

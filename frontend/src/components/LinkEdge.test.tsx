@@ -1,12 +1,16 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 /**
  * Structural smoke tests for LinkEdge.
  * The labels render through React Flow portals, so the styling assertions
  * read the source file directly.
  */
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { join } from 'path';
-import { normalizeInterfaceStatusForLink, normalizeLinkStateForColor, resolveEdgeTone } from './linkSemantics';
+import { describe, expect, it } from 'vitest';
+import {
+  normalizeInterfaceStatusForLink,
+  normalizeLinkStateForColor,
+  resolveEdgeTone,
+} from './linkSemantics';
 
 const LINK_EDGE_PATH = join(__dirname, 'LinkEdge.tsx');
 const LINK_SEMANTICS_PATH = join(__dirname, 'linkSemantics.ts');
@@ -21,15 +25,17 @@ describe('LinkEdge', () => {
   });
 
   it('ignores device status but preserves physical interface telemetry for inert virtual links', () => {
-    expect(normalizeLinkStateForColor({
-      inertVirtualLink: true,
-      alertStatus: 'degraded',
-      sourceDeviceStatus: 'down',
-      targetDeviceStatus: 'probing',
-      sourceIfStatus: 'down',
-      targetIfStatus: 'up',
-      utilization: 0.9,
-    })).toEqual({
+    expect(
+      normalizeLinkStateForColor({
+        inertVirtualLink: true,
+        alertStatus: 'degraded',
+        sourceDeviceStatus: 'down',
+        targetDeviceStatus: 'probing',
+        sourceIfStatus: 'down',
+        targetIfStatus: 'up',
+        utilization: 0.9,
+      }),
+    ).toEqual({
       inertVirtualLink: true,
       alertStatus: 'degraded',
       sourceDeviceStatus: undefined,
@@ -42,35 +48,41 @@ describe('LinkEdge', () => {
   });
 
   it('renders healthy links with an operational up tone instead of a neutral base color', () => {
-    expect(resolveEdgeTone({
-      sourceDeviceStatus: 'up',
-      targetDeviceStatus: 'up',
-      sourceIfStatus: 'up',
-      targetIfStatus: 'up',
-    })).toMatchObject({
+    expect(
+      resolveEdgeTone({
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        sourceIfStatus: 'up',
+        targetIfStatus: 'up',
+      }),
+    ).toMatchObject({
       color: 'var(--color-status-up)',
       semanticState: 'up',
     });
   });
 
   it('keeps warning and critical tones tied to link health semantics', () => {
-    expect(resolveEdgeTone({
-      sourceDeviceStatus: 'up',
-      targetDeviceStatus: 'up',
-      sourceIfStatus: 'down',
-      targetIfStatus: 'up',
-    })).toMatchObject({
+    expect(
+      resolveEdgeTone({
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        sourceIfStatus: 'down',
+        targetIfStatus: 'up',
+      }),
+    ).toMatchObject({
       color: 'var(--color-edge-warning)',
       semanticState: 'warning',
     });
 
-    expect(resolveEdgeTone({
-      alertStatus: 'down',
-      sourceDeviceStatus: 'up',
-      targetDeviceStatus: 'up',
-      sourceIfStatus: 'up',
-      targetIfStatus: 'up',
-    })).toMatchObject({
+    expect(
+      resolveEdgeTone({
+        alertStatus: 'down',
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        sourceIfStatus: 'up',
+        targetIfStatus: 'up',
+      }),
+    ).toMatchObject({
       color: 'var(--color-edge-critical)',
       semanticState: 'critical',
     });

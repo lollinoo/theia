@@ -1,7 +1,7 @@
 import { renderHook } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
-import { useAreaFilteredTopology } from './useAreaFilteredTopology';
+import { describe, expect, it } from 'vitest';
 import type { Device, Link } from '../../types/api';
+import { useAreaFilteredTopology } from './useAreaFilteredTopology';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -30,18 +30,49 @@ const deviceB = mockDevice({ id: 'b', area_ids: ['area-1'], sys_name: 'Router-B'
 const deviceC = mockDevice({ id: 'c', area_ids: ['area-2'], sys_name: 'Router-C', ip: '10.0.0.3' });
 const deviceD = mockDevice({ id: 'd', area_ids: [], sys_name: 'Unassigned', ip: '10.0.0.4' }); // no areas
 
-const linkAB: Link = { id: 'l1', source_device_id: 'a', target_device_id: 'b', source_if_name: 'ether1', target_if_name: 'ether1', discovery_protocol: 'lldp', source_if_speed: 0, source_if_oper_status: '', target_if_speed: 0, target_if_oper_status: '' };
-const linkAC: Link = { id: 'l2', source_device_id: 'a', target_device_id: 'c', source_if_name: 'ether2', target_if_name: 'ether1', discovery_protocol: 'lldp', source_if_speed: 0, source_if_oper_status: '', target_if_speed: 0, target_if_oper_status: '' };
-const linkCD: Link = { id: 'l3', source_device_id: 'c', target_device_id: 'd', source_if_name: 'ether3', target_if_name: 'ether1', discovery_protocol: 'lldp', source_if_speed: 0, source_if_oper_status: '', target_if_speed: 0, target_if_oper_status: '' };
+const linkAB: Link = {
+  id: 'l1',
+  source_device_id: 'a',
+  target_device_id: 'b',
+  source_if_name: 'ether1',
+  target_if_name: 'ether1',
+  discovery_protocol: 'lldp',
+  source_if_speed: 0,
+  source_if_oper_status: '',
+  target_if_speed: 0,
+  target_if_oper_status: '',
+};
+const linkAC: Link = {
+  id: 'l2',
+  source_device_id: 'a',
+  target_device_id: 'c',
+  source_if_name: 'ether2',
+  target_if_name: 'ether1',
+  discovery_protocol: 'lldp',
+  source_if_speed: 0,
+  source_if_oper_status: '',
+  target_if_speed: 0,
+  target_if_oper_status: '',
+};
+const linkCD: Link = {
+  id: 'l3',
+  source_device_id: 'c',
+  target_device_id: 'd',
+  source_if_name: 'ether3',
+  target_if_name: 'ether1',
+  discovery_protocol: 'lldp',
+  source_if_speed: 0,
+  source_if_oper_status: '',
+  target_if_speed: 0,
+  target_if_oper_status: '',
+};
 
 const allDevices = [deviceA, deviceB, deviceC, deviceD];
 const allLinks = [linkAB, linkAC, linkCD];
 
 describe('useAreaFilteredTopology', () => {
   it('returns all devices and links when selectedAreaId is null (Global view)', () => {
-    const { result } = renderHook(() =>
-      useAreaFilteredTopology(allDevices, allLinks, null),
-    );
+    const { result } = renderHook(() => useAreaFilteredTopology(allDevices, allLinks, null));
 
     expect(result.current.filteredDevices).toEqual(allDevices);
     expect(result.current.filteredLinks).toEqual(allLinks);
@@ -49,17 +80,13 @@ describe('useAreaFilteredTopology', () => {
   });
 
   it('returns only area devices when selectedAreaId is set', () => {
-    const { result } = renderHook(() =>
-      useAreaFilteredTopology(allDevices, allLinks, 'area-1'),
-    );
+    const { result } = renderHook(() => useAreaFilteredTopology(allDevices, allLinks, 'area-1'));
 
     expect(result.current.filteredDevices.map((d) => d.id)).toEqual(['a', 'b']);
   });
 
   it('returns links where at least one endpoint is in the area', () => {
-    const { result } = renderHook(() =>
-      useAreaFilteredTopology(allDevices, allLinks, 'area-1'),
-    );
+    const { result } = renderHook(() => useAreaFilteredTopology(allDevices, allLinks, 'area-1'));
 
     // linkAB: both in area-1 -> included
     // linkAC: a in area-1, c in area-2 -> included (cross-area)
@@ -68,9 +95,7 @@ describe('useAreaFilteredTopology', () => {
   });
 
   it('identifies ghost devices for cross-area links', () => {
-    const { result } = renderHook(() =>
-      useAreaFilteredTopology(allDevices, allLinks, 'area-1'),
-    );
+    const { result } = renderHook(() => useAreaFilteredTopology(allDevices, allLinks, 'area-1'));
 
     // linkAC crosses area-1 to area-2, so deviceC is a ghost
     expect(result.current.ghostDevices.map((d) => d.id)).toEqual(['c']);
@@ -86,9 +111,7 @@ describe('useAreaFilteredTopology', () => {
   });
 
   it('excludes unassigned devices when selectedAreaId is set (per D-14)', () => {
-    const { result } = renderHook(() =>
-      useAreaFilteredTopology(allDevices, allLinks, 'area-1'),
-    );
+    const { result } = renderHook(() => useAreaFilteredTopology(allDevices, allLinks, 'area-1'));
 
     // deviceD has no area_id -> should not be in filteredDevices
     const ids = result.current.filteredDevices.map((d) => d.id);

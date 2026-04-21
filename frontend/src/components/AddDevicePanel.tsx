@@ -1,18 +1,23 @@
 import { useEffect, useState } from 'react';
 import { checkPrometheusHealth, createDevice, fetchAreas, fetchSNMPProfiles } from '../api/client';
-import { ValidationError, ServerError } from '../api/errors';
+import { ServerError, ValidationError } from '../api/errors';
 import type { Area, SNMPProfile, TopologyDiscoveryMode } from '../types/api';
-import { validateIPOrHostname, validateMaxLength, validateRequired, MAX_STRING_LENGTH } from '../utils/validation';
 import {
   TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyDiscoveryMode,
 } from '../utils/topologyDiscovery';
+import {
+  MAX_STRING_LENGTH,
+  validateIPOrHostname,
+  validateMaxLength,
+  validateRequired,
+} from '../utils/validation';
 import { MaterialIcon } from './MaterialIcon';
 import {
+  type DeviceFormModel,
   applySNMPProfile,
   createAddDeviceFormModel,
   resetDeviceFormMode,
-  type DeviceFormModel,
 } from './forms/deviceFormModels';
 import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
 
@@ -42,9 +47,11 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
   const isVirtual = form.mode === 'virtual';
   const isV3 = form.snmp.version === '3';
-  const needsAuth = form.snmp.securityLevel === 'authNoPriv' || form.snmp.securityLevel === 'authPriv';
+  const needsAuth =
+    form.snmp.securityLevel === 'authNoPriv' || form.snmp.securityLevel === 'authPriv';
   const needsPriv = form.snmp.securityLevel === 'authPriv';
-  const usesPrometheus = form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
+  const usesPrometheus =
+    form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
 
   function updateForm(update: Partial<DeviceFormModel>) {
@@ -86,21 +93,31 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   }
 
   useEffect(() => {
-    fetchSNMPProfiles().then(setProfiles).catch(() => {/* non-fatal */});
-    fetchAreas().then(setAreas).catch(() => {/* non-fatal */});
-    checkPrometheusHealth().then((result) => {
-      const nextAvailable = result.enabled !== false && result.available;
-      setPrometheusAvailable(nextAvailable);
-      setPrometheusCheckDone(true);
-      // If prometheus is unavailable, force SNMP mode
-      if (!nextAvailable) {
+    fetchSNMPProfiles()
+      .then(setProfiles)
+      .catch(() => {
+        /* non-fatal */
+      });
+    fetchAreas()
+      .then(setAreas)
+      .catch(() => {
+        /* non-fatal */
+      });
+    checkPrometheusHealth()
+      .then((result) => {
+        const nextAvailable = result.enabled !== false && result.available;
+        setPrometheusAvailable(nextAvailable);
+        setPrometheusCheckDone(true);
+        // If prometheus is unavailable, force SNMP mode
+        if (!nextAvailable) {
+          setForm((current) => ({ ...current, metricsMode: 'snmp' }));
+        }
+      })
+      .catch(() => {
+        setPrometheusAvailable(false);
+        setPrometheusCheckDone(true);
         setForm((current) => ({ ...current, metricsMode: 'snmp' }));
-      }
-    }).catch(() => {
-      setPrometheusAvailable(false);
-      setPrometheusCheckDone(true);
-      setForm((current) => ({ ...current, metricsMode: 'snmp' }));
-    });
+      });
   }, []);
 
   function applyProfile(profileId: string) {
@@ -121,7 +138,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     if (isVirtual) {
       // Validate virtual mode fields
       const errors: Record<string, string> = {};
-      const displayNameErr = validateRequired(form.displayName, 'Display Name') ?? validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name');
+      const displayNameErr =
+        validateRequired(form.displayName, 'Display Name') ??
+        validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name');
       if (displayNameErr) errors['displayName'] = displayNameErr;
       if (form.ip.trim()) {
         const virtualIpErr = validateIPOrHostname(form.ip.trim());
@@ -138,9 +157,11 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         onDeviceAdded();
       } catch (err) {
         if (err instanceof ServerError) {
-          setError(err.correlationId
-            ? `Something went wrong (ref: ${err.correlationId})`
-            : 'Something went wrong');
+          setError(
+            err.correlationId
+              ? `Something went wrong (ref: ${err.correlationId})`
+              : 'Something went wrong',
+          );
         } else if (err instanceof ValidationError) {
           setError(err.message);
         } else {
@@ -159,11 +180,19 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     const displayNameErr = validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name');
     if (displayNameErr) errors['displayName'] = displayNameErr;
     if (usesPrometheus) {
-      const labelValueErr = validateMaxLength(form.prometheus.labelValue, MAX_STRING_LENGTH, 'Label value');
+      const labelValueErr = validateMaxLength(
+        form.prometheus.labelValue,
+        MAX_STRING_LENGTH,
+        'Label value',
+      );
       if (labelValueErr) errors['prometheusLabelValue'] = labelValueErr;
     }
     if (!isV3) {
-      const communityErr = validateMaxLength(form.snmp.community, MAX_STRING_LENGTH, 'Community string');
+      const communityErr = validateMaxLength(
+        form.snmp.community,
+        MAX_STRING_LENGTH,
+        'Community string',
+      );
       if (communityErr) errors['community'] = communityErr;
     } else {
       const usernameErr = validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username');
@@ -181,9 +210,11 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       onDeviceAdded();
     } catch (err) {
       if (err instanceof ServerError) {
-        setError(err.correlationId
-          ? `Something went wrong (ref: ${err.correlationId})`
-          : 'Something went wrong');
+        setError(
+          err.correlationId
+            ? `Something went wrong (ref: ${err.correlationId})`
+            : 'Something went wrong',
+        );
       } else if (err instanceof ValidationError) {
         setError(err.message);
       } else {
@@ -201,7 +232,12 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const labelClass = 'text-xs font-medium uppercase tracking-widest text-on-bg-secondary';
 
   return (
-    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4 p-4 transition-colors duration-200">
+    <form
+      onSubmit={(e) => {
+        void handleSubmit(e);
+      }}
+      className="space-y-4 p-4 transition-colors duration-200"
+    >
       {/* Device mode toggle */}
       <div className="flex rounded-lg bg-surface p-0.5">
         <button
@@ -234,8 +270,16 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             <input
               type="text"
               value={form.displayName}
-              onChange={(e) => { updateForm({ displayName: e.target.value }); setFieldError('displayName', null); }}
-              onBlur={handleBlur('displayName', () => validateRequired(form.displayName, 'Display Name') ?? validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name'))}
+              onChange={(e) => {
+                updateForm({ displayName: e.target.value });
+                setFieldError('displayName', null);
+              }}
+              onBlur={handleBlur(
+                'displayName',
+                () =>
+                  validateRequired(form.displayName, 'Display Name') ??
+                  validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name'),
+              )}
               placeholder="e.g. ISP Gateway"
               className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder:text-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['displayName'] ? ' border-status-down' : ' border-outline-subtle'}`}
               required
@@ -251,12 +295,14 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               Type
             </label>
             <div className="grid grid-cols-2 gap-2">
-              {([
-                { value: 'internet', label: 'Internet', icon: 'language' },
-                { value: 'cloud', label: 'Cloud', icon: 'cloud' },
-                { value: 'server', label: 'Server', icon: 'dns' },
-                { value: 'generic', label: 'Generic', icon: 'hub' },
-              ] as const).map((st) => (
+              {(
+                [
+                  { value: 'internet', label: 'Internet', icon: 'language' },
+                  { value: 'cloud', label: 'Cloud', icon: 'cloud' },
+                  { value: 'server', label: 'Server', icon: 'dns' },
+                  { value: 'generic', label: 'Generic', icon: 'hub' },
+                ] as const
+              ).map((st) => (
                 <button
                   key={st.value}
                   type="button"
@@ -267,12 +313,18 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                       : 'border-outline-subtle bg-elevated hover:border-outline'
                   }`}
                 >
-                  <MaterialIcon name={st.icon} size={24} className={
-                    form.virtual.subtype === st.value ? 'text-primary' : 'text-on-bg-secondary'
-                  } />
-                  <span className={`text-xs font-medium ${
-                    form.virtual.subtype === st.value ? 'text-primary' : 'text-on-bg-secondary'
-                  }`}>
+                  <MaterialIcon
+                    name={st.icon}
+                    size={24}
+                    className={
+                      form.virtual.subtype === st.value ? 'text-primary' : 'text-on-bg-secondary'
+                    }
+                  />
+                  <span
+                    className={`text-xs font-medium ${
+                      form.virtual.subtype === st.value ? 'text-primary' : 'text-on-bg-secondary'
+                    }`}
+                  >
                     {st.label}
                   </span>
                 </button>
@@ -283,13 +335,19 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
           {/* IP Address (optional) */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-              IP Address <span className="normal-case tracking-normal text-on-bg-muted">(optional)</span>
+              IP Address{' '}
+              <span className="normal-case tracking-normal text-on-bg-muted">(optional)</span>
             </label>
             <input
               type="text"
               value={form.ip}
-              onChange={(e) => { updateForm({ ip: e.target.value }); setFieldError('virtualIp', null); }}
-              onBlur={handleBlur('virtualIp', () => form.ip.trim() ? validateIPOrHostname(form.ip.trim()) : null)}
+              onChange={(e) => {
+                updateForm({ ip: e.target.value });
+                setFieldError('virtualIp', null);
+              }}
+              onBlur={handleBlur('virtualIp', () =>
+                form.ip.trim() ? validateIPOrHostname(form.ip.trim()) : null,
+              )}
               placeholder="e.g. 203.0.113.1"
               className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder:text-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['virtualIp'] ? ' border-status-down' : ' border-outline-subtle'}`}
             />
@@ -344,14 +402,15 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                 Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
               </option>
             </select>
-              {form.metricsMode === 'prometheus' && (
+            {form.metricsMode === 'prometheus' && (
               <p className="text-xs text-on-bg-secondary/70">
                 Metrics from Prometheus only. No fallback if Prometheus is unreachable.
               </p>
             )}
-              {form.metricsMode === 'prometheus_snmp_fallback' && (
+            {form.metricsMode === 'prometheus_snmp_fallback' && (
               <p className="text-xs text-on-bg-secondary/70">
-                Metrics from Prometheus. Falls back to SNMP if Prometheus is unavailable or has no data.
+                Metrics from Prometheus. Falls back to SNMP if Prometheus is unavailable or has no
+                data.
               </p>
             )}
           </div>
@@ -363,7 +422,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             <select
               id="topology-discovery-mode"
               value={form.topologyDiscoveryMode}
-              onChange={(e) => updateForm({ topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode })}
+              onChange={(e) =>
+                updateForm({ topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode })
+              }
               className={selectClass}
             >
               {TOPOLOGY_DISCOVERY_MODE_OPTIONS.map((option) => (
@@ -373,7 +434,11 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               ))}
             </select>
             <p className="text-xs text-on-bg-secondary/70">
-              Selected mode: <span className="font-medium">{formatTopologyDiscoveryMode(form.topologyDiscoveryMode)}</span>.
+              Selected mode:{' '}
+              <span className="font-medium">
+                {formatTopologyDiscoveryMode(form.topologyDiscoveryMode)}
+              </span>
+              .
               {form.metricsMode === 'prometheus'
                 ? ' Prometheus-only devices skip SNMP topology discovery until SNMP or fallback mode is enabled.'
                 : ' Bootstrap once runs an initial discovery window, may queue one follow-up to fill missing ports, then auto-disables.'}
@@ -398,18 +463,30 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-on-bg-secondary">
-                    Value{form.prometheus.labelName === 'instance' ? ' (defaults to IP if blank)' : ''}
+                  Value
+                  {form.prometheus.labelName === 'instance' ? ' (defaults to IP if blank)' : ''}
                 </label>
                 <input
                   type="text"
                   value={form.prometheus.labelValue}
-                  onChange={(e) => { updatePrometheus({ labelValue: e.target.value }); setFieldError('prometheusLabelValue', null); }}
-                  onBlur={handleBlur('prometheusLabelValue', () => validateMaxLength(form.prometheus.labelValue, MAX_STRING_LENGTH, 'Label value'))}
-                  placeholder={form.prometheus.labelName === 'instance' ? form.hostname || '192.168.1.1' : 'e.g. my-router'}
+                  onChange={(e) => {
+                    updatePrometheus({ labelValue: e.target.value });
+                    setFieldError('prometheusLabelValue', null);
+                  }}
+                  onBlur={handleBlur('prometheusLabelValue', () =>
+                    validateMaxLength(form.prometheus.labelValue, MAX_STRING_LENGTH, 'Label value'),
+                  )}
+                  placeholder={
+                    form.prometheus.labelName === 'instance'
+                      ? form.hostname || '192.168.1.1'
+                      : 'e.g. my-router'
+                  }
                   className={`${inputClass}${fieldErrors['prometheusLabelValue'] ? ' border-status-down' : ''}`}
                 />
                 {fieldErrors['prometheusLabelValue'] && (
-                  <p className="mt-1 text-xs text-status-down">{fieldErrors['prometheusLabelValue']}</p>
+                  <p className="mt-1 text-xs text-status-down">
+                    {fieldErrors['prometheusLabelValue']}
+                  </p>
                 )}
               </div>
             </div>
@@ -425,10 +502,15 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                   <label className="text-xs text-on-bg-secondary">Load from Profile</label>
                   <select
                     defaultValue=""
-                    onChange={(e) => { applyProfile(e.target.value); e.target.value = ''; }}
+                    onChange={(e) => {
+                      applyProfile(e.target.value);
+                      e.target.value = '';
+                    }}
                     className={selectClass}
                   >
-                    <option value="" disabled>Select a credential profile...</option>
+                    <option value="" disabled>
+                      Select a credential profile...
+                    </option>
                     {profiles.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name} (SNMP {p.snmp.version})
@@ -442,7 +524,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                 <label className="text-xs text-on-bg-secondary">Version</label>
                 <select
                   value={form.snmp.version}
-                  onChange={(e) => updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })}
+                  onChange={(e) =>
+                    updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })
+                  }
                   className={selectClass}
                 >
                   <option value="2c">v2c</option>
@@ -456,8 +540,13 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                   <input
                     type="text"
                     value={form.snmp.community}
-                    onChange={(e) => { updateSnmp({ community: e.target.value }); setFieldError('community', null); }}
-                    onBlur={handleBlur('community', () => validateMaxLength(form.snmp.community, MAX_STRING_LENGTH, 'Community string'))}
+                    onChange={(e) => {
+                      updateSnmp({ community: e.target.value });
+                      setFieldError('community', null);
+                    }}
+                    onBlur={handleBlur('community', () =>
+                      validateMaxLength(form.snmp.community, MAX_STRING_LENGTH, 'Community string'),
+                    )}
                     placeholder="public"
                     className={`${inputClass}${fieldErrors['community'] ? ' border-status-down' : ''}`}
                   />
@@ -474,8 +563,13 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                     <input
                       type="text"
                       value={form.snmp.username}
-                      onChange={(e) => { updateSnmp({ username: e.target.value }); setFieldError('username', null); }}
-                      onBlur={handleBlur('username', () => validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username'))}
+                      onChange={(e) => {
+                        updateSnmp({ username: e.target.value });
+                        setFieldError('username', null);
+                      }}
+                      onBlur={handleBlur('username', () =>
+                        validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username'),
+                      )}
                       placeholder="snmpv3user"
                       className={`${inputClass}${fieldErrors['username'] ? ' border-status-down' : ''}`}
                     />
@@ -502,8 +596,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                       <div className="space-y-1">
                         <label className="text-xs text-on-bg-secondary">Auth Protocol</label>
                         <select
-                           value={form.snmp.authProtocol}
-                           onChange={(e) => updateSnmp({ authProtocol: e.target.value })}
+                          value={form.snmp.authProtocol}
+                          onChange={(e) => updateSnmp({ authProtocol: e.target.value })}
                           className={selectClass}
                         >
                           <option value="SHA">SHA</option>
@@ -518,8 +612,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                         <label className="text-xs text-on-bg-secondary">Auth Key</label>
                         <input
                           type="password"
-                           value={form.snmp.authPassword}
-                           onChange={(e) => updateSnmp({ authPassword: e.target.value })}
+                          value={form.snmp.authPassword}
+                          onChange={(e) => updateSnmp({ authPassword: e.target.value })}
                           placeholder="Authentication passphrase"
                           autoComplete="new-password"
                           className={inputClass}
@@ -533,8 +627,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                       <div className="space-y-1">
                         <label className="text-xs text-on-bg-secondary">Encryption Protocol</label>
                         <select
-                           value={form.snmp.privProtocol}
-                           onChange={(e) => updateSnmp({ privProtocol: e.target.value })}
+                          value={form.snmp.privProtocol}
+                          onChange={(e) => updateSnmp({ privProtocol: e.target.value })}
                           className={selectClass}
                         >
                           <option value="AES">AES</option>
@@ -545,8 +639,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                         <label className="text-xs text-on-bg-secondary">Encryption Key</label>
                         <input
                           type="password"
-                           value={form.snmp.privPassword}
-                           onChange={(e) => updateSnmp({ privPassword: e.target.value })}
+                          value={form.snmp.privPassword}
+                          onChange={(e) => updateSnmp({ privPassword: e.target.value })}
                           placeholder="Privacy passphrase"
                           autoComplete="new-password"
                           className={inputClass}
@@ -566,8 +660,13 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             <input
               type="text"
               value={form.displayName}
-              onChange={(e) => { updateForm({ displayName: e.target.value }); setFieldError('displayName', null); }}
-              onBlur={handleBlur('displayName', () => validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name'))}
+              onChange={(e) => {
+                updateForm({ displayName: e.target.value });
+                setFieldError('displayName', null);
+              }}
+              onBlur={handleBlur('displayName', () =>
+                validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name'),
+              )}
               placeholder="Auto-discovered from SNMP / Prometheus"
               className={`${inputClass}${fieldErrors['displayName'] ? ' border-status-down' : ''}`}
             />
@@ -610,17 +709,35 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                   <span
                     key={id}
                     className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-on-bg"
-                    style={{ backgroundColor: `${area.color}25`, border: `1px solid ${area.color}60` }}
+                    style={{
+                      backgroundColor: `${area.color}25`,
+                      border: `1px solid ${area.color}60`,
+                    }}
                   >
-                    <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: area.color }} />
+                    <span
+                      className="inline-block h-2 w-2 rounded-full"
+                      style={{ backgroundColor: area.color }}
+                    />
                     {area.name}
                     <button
                       type="button"
-                      onClick={() => updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })}
+                      onClick={() =>
+                        updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })
+                      }
                       className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
                     >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      <svg
+                        className="w-3 h-3"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
                       </svg>
                     </button>
                   </span>
@@ -638,12 +755,16 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               }}
               className={selectClass}
             >
-              <option value="">{form.areaIds.length === 0 ? 'Unassigned - select area...' : 'Add another area...'}</option>
-              {areas.filter((a) => !form.areaIds.includes(a.id)).map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
+              <option value="">
+                {form.areaIds.length === 0 ? 'Unassigned - select area...' : 'Add another area...'}
+              </option>
+              {areas
+                .filter((a) => !form.areaIds.includes(a.id))
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
             </select>
           )}
         </div>
@@ -660,7 +781,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         disabled={loading}
         className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {loading ? 'Adding...' : (isVirtual ? 'Add Virtual Node' : 'Add Device')}
+        {loading ? 'Adding...' : isVirtual ? 'Add Virtual Node' : 'Add Device'}
       </button>
     </form>
   );

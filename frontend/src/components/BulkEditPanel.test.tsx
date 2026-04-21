@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { BulkEditPanel } from './BulkEditPanel';
-import type { Device } from '../types/api';
-import { ValidationError, ServerError } from '../api/errors';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchAreas, updateDevice } from '../api/client';
+import { ServerError, ValidationError } from '../api/errors';
+import type { Device } from '../types/api';
+import { BulkEditPanel } from './BulkEditPanel';
 
 // Mock API calls
 vi.mock('../api/client', () => ({
@@ -50,11 +50,7 @@ describe('BulkEditPanel — per-device error loop handles ServerError', () => {
 
     const devices = [mockDevice()];
     render(
-      <BulkEditPanel
-        devices={devices}
-        onDevicesUpdated={vi.fn()}
-        onDevicesDeleted={vi.fn()}
-      />,
+      <BulkEditPanel devices={devices} onDevicesUpdated={vi.fn()} onDevicesDeleted={vi.fn()} />,
     );
 
     // Make a change so the save button is enabled: change the vendor
@@ -77,11 +73,7 @@ describe('BulkEditPanel — per-device error loop handles ServerError', () => {
 
     const devices = [mockDevice()];
     render(
-      <BulkEditPanel
-        devices={devices}
-        onDevicesUpdated={vi.fn()}
-        onDevicesDeleted={vi.fn()}
-      />,
+      <BulkEditPanel devices={devices} onDevicesUpdated={vi.fn()} onDevicesDeleted={vi.fn()} />,
     );
 
     const vendorSelect = screen.getByDisplayValue('MikroTik');
@@ -107,11 +99,7 @@ describe('BulkEditPanel — outer catch handles typed errors for multiple device
       mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
     ];
     render(
-      <BulkEditPanel
-        devices={devices}
-        onDevicesUpdated={vi.fn()}
-        onDevicesDeleted={vi.fn()}
-      />,
+      <BulkEditPanel devices={devices} onDevicesUpdated={vi.fn()} onDevicesDeleted={vi.fn()} />,
     );
 
     const vendorSelect = screen.getByDisplayValue('MikroTik');
@@ -130,11 +118,7 @@ describe('BulkEditPanel — save button is disabled without changes', () => {
   it('save button is disabled when no fields have been changed', () => {
     const devices = [mockDevice()];
     render(
-      <BulkEditPanel
-        devices={devices}
-        onDevicesUpdated={vi.fn()}
-        onDevicesDeleted={vi.fn()}
-      />,
+      <BulkEditPanel devices={devices} onDevicesUpdated={vi.fn()} onDevicesDeleted={vi.fn()} />,
     );
 
     // The apply button is disabled when hasChanges is false
@@ -189,7 +173,12 @@ describe('BulkEditPanel — bulk save behavior', () => {
       <BulkEditPanel
         devices={[
           mockDevice({ id: 'dev-1', hostname: 'router-01', metrics_source: 'snmp' }),
-          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2', metrics_source: 'prometheus' }),
+          mockDevice({
+            id: 'dev-2',
+            hostname: 'router-02',
+            ip: '10.0.0.2',
+            metrics_source: 'prometheus',
+          }),
         ]}
         onDevicesUpdated={vi.fn()}
         onDevicesDeleted={vi.fn()}

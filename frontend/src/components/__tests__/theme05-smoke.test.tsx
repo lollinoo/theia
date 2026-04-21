@@ -1,10 +1,10 @@
+import { render } from '@testing-library/react';
 /**
  * THEME-05 Smoke Tests
  * Key components render without errors in both dark and light theme contexts.
  * Uses token classes (no hardcoded hex) so they work in either theme.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { AlertsPanel } from '../AlertsPanel';
 import { StatusDot } from '../StatusDot';
 import { Toolbar } from '../Toolbar';
@@ -30,7 +30,15 @@ describe('THEME-05 Component smoke tests', () => {
 
   describe('StatusDot', () => {
     it('renders without error for all statuses', () => {
-      const statuses = ['up', 'down', 'critical', 'probing', 'unknown', 'degraded', 'unmonitored'] as const;
+      const statuses = [
+        'up',
+        'down',
+        'critical',
+        'probing',
+        'unknown',
+        'degraded',
+        'unmonitored',
+      ] as const;
       for (const status of statuses) {
         const { container } = render(<StatusDot status={status} />);
         expect(container.firstChild).toBeTruthy();
@@ -40,9 +48,7 @@ describe('THEME-05 Component smoke tests', () => {
 
   describe('AlertsPanel', () => {
     it('renders without error with no alerts', () => {
-      const { container } = render(
-        <AlertsPanel model={alertsModel()} />,
-      );
+      const { container } = render(<AlertsPanel model={alertsModel()} />);
       expect(container.firstChild).toBeTruthy();
     });
 

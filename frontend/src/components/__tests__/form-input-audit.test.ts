@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 /**
  * COMP-08 Form Standardization Audit
  * Verifies that form inputs across key component files use border-outline-subtle
@@ -6,9 +8,7 @@
  * Audits: SettingsPanel, SNMPProfileManager, SSHProfileManager, AddDevicePanel,
  *         DeviceConfigPanel, LinkCreatePanel, LinkDetailsPanel, InterfaceStatsPanel
  */
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { describe, expect, it } from 'vitest';
 
 const COMPONENTS_DIR = join(__dirname, '..');
 

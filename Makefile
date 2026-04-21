@@ -103,6 +103,7 @@ collector-contract: ## Run the required collector-contract PR gate locally
 
 frontend-fast: ## Run the required frontend-fast PR gate locally
 	npm --prefix frontend ci
+	npm --prefix frontend run check
 	npm --prefix frontend run test:coverage
 	npm --prefix frontend run typecheck
 	npm --prefix frontend run build

@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, SnapshotPayload } from '../../types/metrics';
-import { composeCanvasTopology } from './topologyComposer';
 import { buildRuntimeState } from './runtimeAdapters';
+import { composeCanvasTopology } from './topologyComposer';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {

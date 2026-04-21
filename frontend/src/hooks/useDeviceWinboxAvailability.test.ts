@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDeviceWinboxAvailability } from './useDeviceWinboxAvailability';
 
 vi.mock('../api/client', () => ({
@@ -66,17 +66,19 @@ describe('useDeviceWinboxAvailability', () => {
     const { fetchDeviceCredentialProfiles } = await import('../api/client');
     let resolveDeviceA: ((value: Array<{ is_winbox: boolean }>) => void) | null = null;
     let resolveDeviceB: ((value: Array<{ is_winbox: boolean }>) => void) | null = null;
-    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockImplementation((deviceId: string) => {
-      if (deviceId === 'dev-a') {
-        return new Promise((resolve) => {
-          resolveDeviceA = resolve;
-        });
-      }
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockImplementation(
+      (deviceId: string) => {
+        if (deviceId === 'dev-a') {
+          return new Promise((resolve) => {
+            resolveDeviceA = resolve;
+          });
+        }
 
-      return new Promise((resolve) => {
-        resolveDeviceB = resolve;
-      });
-    });
+        return new Promise((resolve) => {
+          resolveDeviceB = resolve;
+        });
+      },
+    );
 
     const { result } = renderHook(() => useDeviceWinboxAvailability());
 
@@ -112,11 +114,12 @@ describe('useDeviceWinboxAvailability', () => {
   it('ignores an older in-flight refresh after an explicit cache update for the same device', async () => {
     const { fetchDeviceCredentialProfiles } = await import('../api/client');
     let resolveRefresh: ((value: Array<{ is_winbox: boolean }>) => void) | null = null;
-    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockImplementation(() => (
-      new Promise((resolve) => {
-        resolveRefresh = resolve;
-      })
-    ));
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
 
     const { result } = renderHook(() => useDeviceWinboxAvailability());
 

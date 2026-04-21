@@ -1,5 +1,5 @@
 import type { Device, Link } from '../../types/api';
-import { alertStatusForDevice, type AlertDTO, type SnapshotPayload } from '../../types/metrics';
+import { type AlertDTO, type SnapshotPayload, alertStatusForDevice } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import {
   resolveDeviceMonitoringState,
@@ -31,9 +31,7 @@ function snapshotMonitoringState(
 function hasUsablePosition(
   position: { x: number; y: number; pinned?: boolean } | undefined,
 ): boolean {
-  return position !== undefined
-    && Number.isFinite(position.x)
-    && Number.isFinite(position.y);
+  return position !== undefined && Number.isFinite(position.x) && Number.isFinite(position.y);
 }
 function selfLinkScore(link: Link): number {
   let score = 0;
@@ -78,7 +76,7 @@ export function buildTopologyNodes(
     const saved = savedPositions.get(device.id);
     const canPlaceDevice = placementDeviceIds.has(device.id);
     const placementPosition = canPlaceDevice
-      ? defaultPosition ?? computedPositions.get(device.id)
+      ? (defaultPosition ?? computedPositions.get(device.id))
       : undefined;
     const position = hasUsablePosition(current)
       ? current

@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import type { Area, Device, Link } from './types/api';
 import type { SnapshotPayload } from './types/metrics';
@@ -31,14 +31,21 @@ vi.mock('./components/Watermark', () => ({
 vi.mock('./components/NavigationPill', () => ({
   default: ({ onViewChange }: { onViewChange: (view: 'hub' | 'canvas' | 'dashboard') => void }) => (
     <div>
-      <button type="button" onClick={() => onViewChange('hub')}>Hub</button>
-      <button type="button" onClick={() => onViewChange('dashboard')}>Dashboard</button>
+      <button type="button" onClick={() => onViewChange('hub')}>
+        Hub
+      </button>
+      <button type="button" onClick={() => onViewChange('dashboard')}>
+        Dashboard
+      </button>
     </div>
   ),
 }));
 
 vi.mock('./components/Canvas', () => ({
-  default: ({ onDevicesChange, onLinksChange }: {
+  default: ({
+    onDevicesChange,
+    onLinksChange,
+  }: {
     onDevicesChange: (devices: Device[]) => void;
     onLinksChange: (links: Link[]) => void;
   }) => {
@@ -86,7 +93,11 @@ vi.mock('./components/Canvas', () => ({
 }));
 
 vi.mock('./components/AreaHub', () => ({
-  default: ({ devices, links, snapshot }: { devices: Device[]; links: Link[]; snapshot?: SnapshotPayload | null }) => (
+  default: ({
+    devices,
+    links,
+    snapshot,
+  }: { devices: Device[]; links: Link[]; snapshot?: SnapshotPayload | null }) => (
     <div data-testid="area-hub">
       <span>{`devices:${devices.length}`}</span>
       <span>{`links:${links.length}`}</span>

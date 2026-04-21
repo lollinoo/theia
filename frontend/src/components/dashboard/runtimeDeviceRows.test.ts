@@ -127,16 +127,18 @@ describe('runtimeDeviceRows', () => {
 
   it('builds presentation and sort fields on the row model', () => {
     const rows = buildRuntimeDeviceRows({
-      devices: [mockDevice({
-        hostname: 'edge-01',
-        ip: '10.10.10.1',
-        device_type: 'switch',
-        sys_name: 'edge-core-01',
-        sys_descr: 'RouterOS RB5009 7.15.1',
-        hardware_model: 'Unknown',
-        vendor: 'mikrotik',
-        area_ids: ['area-1'],
-      })],
+      devices: [
+        mockDevice({
+          hostname: 'edge-01',
+          ip: '10.10.10.1',
+          device_type: 'switch',
+          sys_name: 'edge-core-01',
+          sys_descr: 'RouterOS RB5009 7.15.1',
+          hardware_model: 'Unknown',
+          vendor: 'mikrotik',
+          area_ids: ['area-1'],
+        }),
+      ],
       snapshot: null,
     });
 
