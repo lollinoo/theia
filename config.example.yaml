@@ -7,32 +7,36 @@
 #
 # All values can be overridden with environment variables:
 #   THEIA_DB_DRIVER, THEIA_LISTEN_ADDR, THEIA_DB_PATH, THEIA_DB_DSN,
-#   THEIA_DATA_DIR, THEIA_LOG_LEVEL
+#   THEIA_DATA_DIR, THEIA_LOG_LEVEL, THEIA_BRIDGE_BINARIES_DIR
 # =============================================================================
 
-# Database driver: sqlite or postgres.
-# Use postgres for production and staging; sqlite remains the dev/small-install path.
-# Default: "sqlite"
-db_driver: "sqlite"
+# Database driver: postgres or sqlite.
+# PostgreSQL is the standard backend for development, staging, and production.
+# SQLite is supported only for demo, lab, or very small installs with
+# THEIA_ALLOW_SQLITE_SMALL_INSTALL=true.
+# Default: "postgres"
+db_driver: "postgres"
 
 # Address and port the HTTP server listens on.
 # Default: ":8080"
 listen_addr: ":8080"
 
 # Path to the SQLite database file.
-# The directory will be created automatically if it does not exist.
+# Used only when db_driver=sqlite.
 # Default: "./data/theia.db"
 db_path: "./data/theia.db"
 
 # PostgreSQL DSN. Required when db_driver=postgres.
-# Production reference example:
-# "postgres://theia:change-me@postgres:5432/theia?sslmode=disable"
-# Example: "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
-# db_dsn: ""
+# Example local dev value for this config file:
+db_dsn: "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
 
 # Local app data directory used for known_hosts and backup files.
 # Default: "./data"
 data_dir: "./data"
+
+# Optional directory containing pre-built bridge binaries.
+# Leave empty to disable bridge downloads.
+bridge_binaries_dir: ""
 
 # Log verbosity: debug, info, warn, error
 # Default: "info"

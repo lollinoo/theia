@@ -38,17 +38,18 @@ The dev stack runs everything locally with hot-reload for both backend and front
 |---------|-----|-------------|
 | Backend | http://localhost:8080 | Go API with Air hot-reload |
 | Frontend | http://localhost:3000 | React + Vite dev server |
+| PostgreSQL | `127.0.0.1:5432` | Bundled development database |
 | Prometheus | http://localhost:9090 | Metrics and alerting |
 | SNMP exporter | http://localhost:9116 | Prometheus SNMP scrape adapter |
-| SNMP Router sim | `172.28.10.10:161` | Router simulator (UDP) |
-| SNMP Switch sim | `172.28.10.11:161` | Cisco simulator (UDP) |
-| SNMP AP sim | `172.28.10.12:161` | Ubiquiti simulator (UDP) |
+| SNMP Router sim | `127.0.10.10:161` | Router simulator (UDP) |
+| SNMP Switch sim | `127.0.10.11:161` | Cisco simulator (UDP) |
+| SNMP AP sim | `127.0.10.12:161` | Ubiquiti simulator (UDP) |
 
 ### 1. Clone and start
 
 ```bash
 git clone <repo-url>
-cd mikrotik-theia
+cd theia
 make install-hooks
 make dev
 ```
@@ -87,31 +88,35 @@ make test           # Run unit tests
 make test-integration  # Run integration tests against SNMP sims
 
 # Debug SNMP simulators directly
-make snmpwalk-router   # snmpwalk 172.28.10.10
-make snmpwalk-switch   # snmpwalk 172.28.10.11
-make snmpwalk-ap       # snmpwalk 172.28.10.12
+make snmpwalk-router   # snmpwalk 127.0.10.10
+make snmpwalk-switch   # snmpwalk 127.0.10.11
+make snmpwalk-ap       # snmpwalk 127.0.10.12
 ```
 
-### 4.1 Run dev on PostgreSQL
+### 4.1 Database default and small-install exception
 
-SQLite remains the default, but the backend can now run on PostgreSQL for larger deployments.
+PostgreSQL is the standard database backend for Theia in development, staging, and production. The normal `make dev` flow starts the backend against the local PostgreSQL service on `127.0.0.1:5432`.
+
+SQLite is supported only for demo, lab, or very small installs, and only with explicit opt-in:
 
 ```bash
-make dev-postgres
+THEIA_DB_DRIVER=sqlite \
+THEIA_ALLOW_SQLITE_SMALL_INSTALL=true \
+make dev
 ```
 
-That starts a local PostgreSQL container on `127.0.0.1:5432` and boots the normal dev stack with:
+Use SQLite only when the installation stays within all of these limits:
 
-```bash
-THEIA_DB_DRIVER=postgres
-THEIA_DB_DSN=postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable
-```
+- up to 50 managed devices
+- one active Theia process
+- one active administrative operator at a time
+- no expectation of overlapping intensive polling, topology churn, scheduled backup activity, and configuration-write bursts
 
 Instance backup / restore remains SQLite-only for now and returns `501 Not Implemented` when the backend is running on PostgreSQL.
 
 ### 4.2 Migrate an existing SQLite dataset to PostgreSQL
 
-For an existing installation, stop the backend first so the SQLite source stays stable during the copy, then import the database into PostgreSQL:
+Once an installation outgrows the small-install envelope, migration to PostgreSQL is the expected path. Stop the backend first so the SQLite source stays stable during the copy, then import the database into PostgreSQL:
 
 ```bash
 make postgres-up
@@ -121,7 +126,7 @@ make migrate-postgres
 
 The import command runs the PostgreSQL schema migrations first, then copies all application tables from the SQLite file configured in `config.yaml` (or from `MIGRATE_SOURCE` if you override it).
 
-You can also run the migrator directly:
+You can also run the migrator directly if you have a local Go toolchain installed:
 
 ```bash
 go run ./cmd/theia-db-migrate \
@@ -254,16 +259,17 @@ The production stack uses compiled images — no hot-reload, no source mounts, n
 | Service | URL | Description |
 |---------|-----|-------------|
 | Frontend | http://localhost:80 | nginx serving React SPA + API proxy |
-| Backend | http://localhost:8080 | Compiled Go binary |
-| PostgreSQL | `127.0.0.1:5432` | Optional bundled database (`--profile postgres`) |
+| Backend | internal-only | Compiled Go binary behind the frontend proxy |
+| PostgreSQL | `127.0.0.1:5432` | Standard bundled production database |
 | Prometheus | http://localhost:9090 | Metrics (optional, `--profile metrics`) |
 | SNMP exporter | http://localhost:9116 | Scrape adapter (optional, `--profile metrics`) |
 
-### 1. Configure environment (optional)
+### 1. Configure environment
 
 ```bash
 cp .env.prod.example .env.prod
-# Edit ports or log level if needed
+# Set THEIA_ENCRYPTION_KEY before first start
+# Replace example POSTGRES_PASSWORD / THEIA_DB_DSN values
 ```
 
 ### 2. Start the stack
@@ -272,17 +278,17 @@ cp .env.prod.example .env.prod
 make prod
 ```
 
-To run production on the bundled PostgreSQL service instead of SQLite:
+`make prod` starts the standard production stack on PostgreSQL using the bundled `postgres` service from `docker-compose.prod.yml`.
+
+The shipped `make prod` and `make prod-metrics` targets hard-depend on the bundled `postgres` service in `docker-compose.prod.yml`. If you need an external PostgreSQL service or the SQLite small-install exception path, use a custom compose override or edit instead of only setting `THEIA_DB_DSN` or `THEIA_DB_DRIVER`.
+
+SQLite is only for explicit demo, lab, or very small production installs. To use that exception path, first remove or override the bundled `postgres` dependency in your production compose setup, then set:
 
 ```bash
-# in .env.prod set:
-# THEIA_DB_DRIVER=postgres
-# POSTGRES_PASSWORD=change-me
-# THEIA_DB_DSN=postgres://theia:change-me@postgres:5432/theia?sslmode=disable
-make prod-postgres
+# THEIA_DB_DRIVER=sqlite
+# THEIA_ALLOW_SQLITE_SMALL_INSTALL=true
+make prod
 ```
-
-If you use an external PostgreSQL service instead, set `THEIA_DB_DRIVER=postgres` and `THEIA_DB_DSN=...` in `.env.prod`, then keep using `make prod` or `make prod-metrics`.
 
 Or with the metrics stack (Prometheus + SNMP exporter):
 
@@ -290,20 +296,14 @@ Or with the metrics stack (Prometheus + SNMP exporter):
 make prod-metrics
 ```
 
-Or PostgreSQL plus metrics:
-
-```bash
-make prod-postgres-metrics
-```
-
-Open http://localhost in the browser.
+Open `http://localhost` in the browser. Use `http://localhost/api/v1/...` for API requests through the frontend proxy.
 
 ### 3. Add your network devices
 
 Via the UI Settings panel, or directly via the API:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/devices \
+curl -X POST http://localhost/api/v1/devices \
   -H "Content-Type: application/json" \
   -d '{
     "ip": "192.168.1.1",
@@ -324,12 +324,12 @@ static_configs:
       - 192.168.1.2   # dist-switch
 ```
 
-Then in the Theia UI Settings panel, set the Prometheus URL to `http://theia-prometheus:9090`.
+Then in the Theia UI Settings panel, set the Prometheus URL to a host-reachable Prometheus address for the Docker host/network, for example `http://<docker-host-address>:9090`.
 
 Restart Prometheus to pick up the new targets:
 
 ```bash
-docker compose -f docker-compose.prod.yml --profile metrics restart prometheus
+docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics restart prometheus
 ```
 
 ### 5. Production commands
@@ -337,10 +337,7 @@ docker compose -f docker-compose.prod.yml --profile metrics restart prometheus
 ```bash
 make prod           # Start backend + frontend
 make prod-metrics   # Start with Prometheus + SNMP exporter
-make prod-postgres  # Start backend + frontend on PostgreSQL
-make prod-postgres-metrics  # Start PostgreSQL + metrics stack
 make prod-down      # Stop all production containers
-make prod-build     # Build images without starting
 make prod-logs      # Follow backend logs
 make prod-clean     # Stop + delete volumes (resets database)
 ```
@@ -355,6 +352,8 @@ The staging stack pulls pre-built images from GHCR and keeps them updated with W
 
 ```bash
 cp .env.staging.example .env.staging
+# Set THEIA_ENCRYPTION_KEY before first start
+# Replace example POSTGRES_PASSWORD / THEIA_DB_DSN values
 ```
 
 ### 2. Start the stack
@@ -363,29 +362,28 @@ cp .env.staging.example .env.staging
 make staging
 ```
 
-To run staging on the bundled PostgreSQL service:
+`make staging` starts the standard staging stack on PostgreSQL using the bundled `postgres` service from `docker-compose.staging.yml`.
+
+The shipped `make staging` target hard-depends on the bundled `postgres` service in `docker-compose.staging.yml`. If you need an external PostgreSQL service or the SQLite small-install exception path, use a custom compose override or edit instead of only setting `THEIA_DB_DSN` or `THEIA_DB_DRIVER`.
+
+SQLite is only for explicit demo, lab, or very small staging installs. To use that exception path, first remove or override the bundled `postgres` dependency in your staging compose setup, then set:
 
 ```bash
-# in .env.staging set:
-# THEIA_DB_DRIVER=postgres
-# POSTGRES_PASSWORD=change-me
-# THEIA_DB_DSN=postgres://theia:change-me@postgres:5432/theia?sslmode=disable
-make staging-postgres
+# THEIA_DB_DRIVER=sqlite
+# THEIA_ALLOW_SQLITE_SMALL_INSTALL=true
+make staging
 ```
-
-For an external PostgreSQL service, set `THEIA_DB_DRIVER=postgres` and `THEIA_DB_DSN=...` in `.env.staging`, then use the normal `make staging` target.
 
 Default staging ports:
 
 - Frontend: `http://localhost:3001`
-- Backend: `http://localhost:8081`
-- PostgreSQL: `127.0.0.1:5433` when using the bundled postgres profile
+- Backend: internal-only in the shipped staging compose stack unless you publish it separately
+- PostgreSQL: `127.0.0.1:5433` for the bundled staging database
 
 ### 3. Staging commands
 
 ```bash
-make staging           # Start staging stack on SQLite
-make staging-postgres  # Start staging stack on PostgreSQL
+make staging           # Start staging stack
 make staging-down      # Stop all staging containers
 make staging-logs      # Follow staging backend logs
 ```
@@ -400,11 +398,12 @@ Configuration is loaded from `config.yaml` (or `config.example.yaml` as a templa
 
 | config.yaml key | Environment variable | Default | Description |
 |-----------------|---------------------|---------|-------------|
-| `db_driver` | `THEIA_DB_DRIVER` | `sqlite` | Primary database driver: `sqlite` or `postgres` |
+| `db_driver` | `THEIA_DB_DRIVER` | `postgres` | Primary database driver: `postgres` by default; `sqlite` only with explicit small-install opt-in |
 | `listen_addr` | `THEIA_LISTEN_ADDR` | `:8080` | HTTP server bind address |
 | `db_path` | `THEIA_DB_PATH` | `./data/theia.db` | SQLite database file path |
-| `db_dsn` | `THEIA_DB_DSN` | `` | PostgreSQL DSN, required when `db_driver=postgres` |
+| `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN for the standard postgres path; `config.Load()` does not inject one, so set it explicitly or use a config/env example such as `postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable` |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
+| `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Optional directory containing pre-built bridge binaries; leave empty to disable bridge downloads |
 | `log_level` | `THEIA_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 Runtime settings (poll interval, Prometheus URL, Grafana URL) are stored in the database and configurable via the Settings panel in the UI — no restart needed.
@@ -419,7 +418,11 @@ Runtime settings (poll interval, Prometheus URL, Grafana URL) are stored in the 
 
 ## API Quick Reference
 
-Base path: `http://localhost:8080/api/v1`
+Base path:
+
+- Development: `http://localhost:8080/api/v1`
+- Production: `http://localhost/api/v1`
+- Staging: `http://localhost:3001/api/v1`
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -482,7 +485,7 @@ docker compose logs backend
 
 Common causes:
 - Port 8080 already in use: change the host port in `docker-compose.yml` (`"8081:8080"`)
-- Database permission error: ensure `/opt/theia/data` is writable by the container user
+- Database permission error: ensure `/data` in the container, or your configured `THEIA_DATA_DIR`, is writable by the container user
 
 ### SNMP probes fail / devices stay "down"
 
@@ -516,7 +519,7 @@ curl -X DELETE http://localhost:8080/api/v1/links/<uuid>
 ### Prometheus / metrics not showing
 
 1. Check Prometheus is running: http://localhost:9090/targets — all targets should be `UP`
-2. In the Theia UI, open Settings and confirm the Prometheus URL is set to `http://theia-prometheus:9090` (internal Docker hostname) or `http://localhost:9090` if running Prometheus externally
+2. In the Theia UI, open Settings and confirm the Prometheus URL is set to a host-reachable Prometheus address for the Docker host/network, for example `http://<docker-host-address>:9090`
 3. Metrics appear only after the first successful scrape cycle (~15–30 seconds after startup)
 
 ### Reset everything

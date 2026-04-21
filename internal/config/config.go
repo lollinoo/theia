@@ -23,7 +23,7 @@ type Config struct {
 // defaults returns a Config with sensible default values.
 func defaults() *Config {
 	return &Config{
-		DBDriver:   "sqlite",
+		DBDriver:   "postgres",
 		ListenAddr: ":8080",
 		DBPath:     "./data/theia.db",
 		DataDir:    "./data",
