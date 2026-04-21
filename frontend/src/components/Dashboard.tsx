@@ -176,34 +176,36 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
             </button>
           </div>
         ) : (
-          <DeviceTable
-            rows={filteredRows}
-            areaMap={areaMap}
-            resolvedTheme={resolvedTheme}
-            onSSHCredentials={(device) => {
-              // Fetch current credential profile assignment when opening the panel
-              // (Option A: live source of truth after ssh_profile_id removal)
-              setSSHPanelProfileId(undefined);
-              setPanel({ kind: 'ssh-credentials', device });
-              const targetDeviceId = device.id;
-              void fetchDeviceCredentialProfiles(device.id).then((profiles) => {
-                // Guard against stale fetch: only apply if the panel is still open
-                // for the same device (prevents race when user switches devices quickly).
-                setPanel((current) => {
-                  if (current?.kind === 'ssh-credentials' && current.device.id === targetDeviceId) {
-                    // Use first non-WinBox profile as the "current" SSH profile, matching
-                    // GetBackupProfileForDevice ordering (is_winbox ASC).
-                    const nonWinbox = profiles.find((p) => !p.is_winbox);
-                    setSSHPanelProfileId(nonWinbox?.profile_id);
-                  }
-                  return current;
-                });
-              }).catch(() => {/* non-fatal — panel starts with no selection */});
-            }}
-            onBackup={(device) => setPanel({ kind: 'backup', device })}
-            onBackupHistory={(device) => setPanel({ kind: 'backup-history', device })}
-            onViewConfig={(device) => setPanel({ kind: 'config-viewer', device })}
-          />
+          <div data-testid="dashboard-table">
+            <DeviceTable
+              rows={filteredRows}
+              areaMap={areaMap}
+              resolvedTheme={resolvedTheme}
+              onSSHCredentials={(device) => {
+                // Fetch current credential profile assignment when opening the panel
+                // (Option A: live source of truth after ssh_profile_id removal)
+                setSSHPanelProfileId(undefined);
+                setPanel({ kind: 'ssh-credentials', device });
+                const targetDeviceId = device.id;
+                void fetchDeviceCredentialProfiles(device.id).then((profiles) => {
+                  // Guard against stale fetch: only apply if the panel is still open
+                  // for the same device (prevents race when user switches devices quickly).
+                  setPanel((current) => {
+                    if (current?.kind === 'ssh-credentials' && current.device.id === targetDeviceId) {
+                      // Use first non-WinBox profile as the "current" SSH profile, matching
+                      // GetBackupProfileForDevice ordering (is_winbox ASC).
+                      const nonWinbox = profiles.find((p) => !p.is_winbox);
+                      setSSHPanelProfileId(nonWinbox?.profile_id);
+                    }
+                    return current;
+                  });
+                }).catch(() => {/* non-fatal — panel starts with no selection */});
+              }}
+              onBackup={(device) => setPanel({ kind: 'backup', device })}
+              onBackupHistory={(device) => setPanel({ kind: 'backup-history', device })}
+              onViewConfig={(device) => setPanel({ kind: 'config-viewer', device })}
+            />
+          </div>
         )}
       </div>
 

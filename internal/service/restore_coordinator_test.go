@@ -343,6 +343,66 @@ func TestRestoreCoordinatorApplyPendingRestoreSwapsDBAndOptionalArtifacts(t *tes
 	}
 }
 
+func TestRestoreCoordinatorApplyPendingRestoreIsIdempotentAfterSuccess(t *testing.T) {
+	runtimeDir := t.TempDir()
+	dbPath := filepath.Join(runtimeDir, "theia.db")
+	deviceBackupDir := filepath.Join(runtimeDir, "device-backups")
+	knownHostsPath := filepath.Join(runtimeDir, "known_hosts")
+	stagingDir := filepath.Join(runtimeDir, ".restore-staging")
+	stagedDB := filepath.Join(stagingDir, "theia.db")
+	stagedBackups := filepath.Join(stagingDir, "backups")
+	stagedKnownHosts := filepath.Join(stagingDir, "known_hosts")
+	markerPath := filepath.Join(runtimeDir, ".theia-restore-pending")
+
+	writeRestoreTestFile(t, dbPath, "live-db", 0644)
+	writeRestoreTestFile(t, filepath.Join(deviceBackupDir, "router.cfg"), "live-backup", 0644)
+	writeRestoreTestFile(t, knownHostsPath, "live-known-hosts", 0644)
+	writeRestoreTestFile(t, stagedDB, "staged-db", 0644)
+	writeRestoreTestFile(t, filepath.Join(stagedBackups, "router.cfg"), "staged-backup", 0644)
+	writeRestoreTestFile(t, stagedKnownHosts, "staged-known-hosts", 0644)
+
+	writeRestoreMarker(t, markerPath, restoreMarker{
+		StagedDB:         stagedDB,
+		StagedBackups:    stagedBackups,
+		StagedKnownHosts: stagedKnownHosts,
+		DBPath:           dbPath,
+		DeviceBackupDir:  deviceBackupDir,
+		KnownHostsPath:   knownHostsPath,
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+	})
+
+	coordinator := NewRestoreCoordinator(dbPath, deviceBackupDir, knownHostsPath)
+
+	applied, err := coordinator.ApplyPendingRestore()
+	if err != nil {
+		t.Fatalf("first ApplyPendingRestore() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("first ApplyPendingRestore() applied = false, want true")
+	}
+
+	applied, err = coordinator.ApplyPendingRestore()
+	if err != nil {
+		t.Fatalf("second ApplyPendingRestore() error = %v", err)
+	}
+	if applied {
+		t.Fatal("second ApplyPendingRestore() applied = true, want false")
+	}
+
+	if got := readRestoreTestFile(t, dbPath); got != "staged-db" {
+		t.Fatalf("db content after second apply = %q, want staged-db", got)
+	}
+	if got := readRestoreTestFile(t, filepath.Join(deviceBackupDir, "router.cfg")); got != "staged-backup" {
+		t.Fatalf("backup content after second apply = %q, want staged-backup", got)
+	}
+	if got := readRestoreTestFile(t, knownHostsPath); got != "staged-known-hosts" {
+		t.Fatalf("known_hosts after second apply = %q, want staged-known-hosts", got)
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("restore marker should stay absent after second apply, stat err = %v", err)
+	}
+}
+
 func TestRestoreCoordinatorApplyPendingRestoreKeepsRetryStateWhenBackupReplacementFails(t *testing.T) {
 	runtimeDir := t.TempDir()
 	dbPath := filepath.Join(runtimeDir, "theia.db")

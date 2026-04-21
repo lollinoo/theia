@@ -159,6 +159,7 @@ export function CanvasPanels({
           return (
             <DeviceConfigPanel
               device={device}
+              detailMetrics={runtimeState.devicesById.get(device.id)?.metrics ?? null}
               isVirtual={device.device_type === 'virtual'}
               onDeviceUpdated={(updated) => {
                 setDevices((prev) => prev.map((d) => d.id === updated.id ? updated : d));

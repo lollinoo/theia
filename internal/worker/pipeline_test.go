@@ -1875,6 +1875,73 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredT
 	}
 }
 
+func TestPipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	first := forcePipelineOverviewOverflow(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 20, 0, 0, time.UTC))
+	second := forcePipelineOverviewOverflow(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 21, 0, 0, time.UTC))
+
+	if len(first) < 2 {
+		t.Fatalf("first overflow sequence too short: %v", first)
+	}
+	if len(second) < 2 {
+		t.Fatalf("second overflow sequence too short: %v", second)
+	}
+	if first[0] != ws.MessageTypeResyncRequired || first[1] != ws.MessageTypeSnapshot {
+		t.Fatalf("first overflow ordering = %v, want [resync_required snapshot ...]", first)
+	}
+	if second[0] != ws.MessageTypeResyncRequired || second[1] != ws.MessageTypeSnapshot {
+		t.Fatalf("second overflow ordering = %v, want [resync_required snapshot ...]", second)
+	}
+	if first[0] != second[0] || first[1] != second[1] {
+		t.Fatalf("overflow ordering changed across bursts: first=%v second=%v", first, second)
+	}
+}
+
+func forcePipelineOverviewOverflow(t *testing.T, pipeline *PipelineOrchestrator, store *state.Store, deviceID uuid.UUID, updates int, startedAt time.Time) []string {
+	t.Helper()
+
+	// Overflow the state change mailbox without timing assumptions by issuing
+	// more updates than the buffered channel can hold before any consumer drains it.
+	for i := 0; i < 32+updates; i++ {
+		cpu := float64(110 + i)
+		at := startedAt.Add(time.Duration(i) * time.Second)
+		store.Update(state.StateUpdate{
+			DeviceID:        deviceID,
+			VolatilityClass: domain.VolatilityClassPerformance,
+			Metrics: &domain.DeviceMetrics{
+				DeviceID:    deviceID,
+				CPUPercent:  &cpu,
+				CollectedAt: at,
+			},
+			PollSuccess:      true,
+			ExpectedInterval: 30 * time.Second,
+			Timestamp:        at,
+		})
+	}
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty overflow recovery: %v", err)
+	}
+
+	sequence := broadcastMessageTypes(t, drainBroadcastCh(pipeline.hub))
+	clearBufferedStateChanges(store)
+	return sequence
+}
+
+func clearBufferedStateChanges(store *state.Store) {
+	for {
+		select {
+		case <-store.Changes():
+		default:
+			return
+		}
+	}
+}
+
 func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreservesOrdering(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
