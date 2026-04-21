@@ -17,6 +17,8 @@ import (
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
+const snmpContractEnableEnv = "THEIA_ENABLE_CONTRACT_TESTS"
+
 type snmpContractFixture struct {
 	Version    int      `json:"version"`
 	DeviceIP   string   `json:"device_ip"`
@@ -24,6 +26,10 @@ type snmpContractFixture struct {
 }
 
 func TestSNMPCollectorContractCases(t *testing.T) {
+	if !snmpContractEnabled() {
+		t.Skip("SNMP contract tests require THEIA_ENABLE_CONTRACT_TESTS=1")
+	}
+
 	t.Parallel()
 
 	registry, err := vendor.LoadRegistryFromEmbedded()
@@ -47,17 +53,18 @@ func TestSNMPCollectorContractCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := loadSNMPContractFixture(t, tt.fixture)
+			expectedTarget := resolveSNMPContractTarget(fixture.DeviceIP)
 
 			collector := NewStaticCollector(registry, func(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (SNMPClient, error) {
-				if target != fixture.DeviceIP {
-					t.Fatalf("target = %q, want %q", target, fixture.DeviceIP)
+				if target != expectedTarget {
+					t.Fatalf("target = %q, want %q", target, expectedTarget)
 				}
 				return snmp.NewClient(target, creds, timeout, retries)
 			})
 
 			result := collector.Poll(context.Background(), domain.Device{
 				ID: uuid.New(),
-				IP: fixture.DeviceIP,
+				IP: expectedTarget,
 				SNMPCredentials: domain.SNMPCredentials{
 					Version: domain.SNMPVersionV2c,
 					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -82,6 +89,56 @@ func TestSNMPCollectorContractCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSNMPContractEnabledRequiresOptIn(t *testing.T) {
+	t.Setenv(snmpContractEnableEnv, "")
+	if snmpContractEnabled() {
+		t.Fatal("expected contract tests to be disabled without opt-in")
+	}
+
+	t.Setenv(snmpContractEnableEnv, "1")
+	if !snmpContractEnabled() {
+		t.Fatal("expected contract tests to be enabled with opt-in")
+	}
+}
+
+func TestResolveSNMPContractTargetPrefersEnvOverride(t *testing.T) {
+	t.Setenv("THEIA_SNMP_ROUTER_TARGET", "172.18.0.10")
+	t.Setenv("THEIA_SNMP_AP_TARGET", "172.18.0.12")
+
+	if got := resolveSNMPContractTarget("127.0.10.10"); got != "172.18.0.10" {
+		t.Fatalf("router target = %q, want %q", got, "172.18.0.10")
+	}
+	if got := resolveSNMPContractTarget("127.0.10.12"); got != "172.18.0.12" {
+		t.Fatalf("ap target = %q, want %q", got, "172.18.0.12")
+	}
+	if got := resolveSNMPContractTarget("127.0.10.254"); got != "127.0.10.254" {
+		t.Fatalf("fallback target = %q, want %q", got, "127.0.10.254")
+	}
+}
+
+func snmpContractEnabled() bool {
+	return os.Getenv(snmpContractEnableEnv) == "1"
+}
+
+func resolveSNMPContractTarget(fixtureIP string) string {
+	for _, candidate := range []struct {
+		fixtureIP string
+		envVar    string
+	}{
+		{fixtureIP: "127.0.10.10", envVar: "THEIA_SNMP_ROUTER_TARGET"},
+		{fixtureIP: "127.0.10.12", envVar: "THEIA_SNMP_AP_TARGET"},
+	} {
+		if fixtureIP == candidate.fixtureIP {
+			if target := strings.TrimSpace(os.Getenv(candidate.envVar)); target != "" {
+				return target
+			}
+			break
+		}
+	}
+
+	return fixtureIP
 }
 
 func loadSNMPContractFixture(t *testing.T, name string) snmpContractFixture {
