@@ -7,6 +7,27 @@ import {
 } from '../deviceVisualState';
 import { preferVisibleLinks } from './edgeBuilder';
 
+function normalizeSnapshotStatus(status: string | undefined): Device['status'] | undefined {
+  switch (status) {
+    case 'up':
+    case 'down':
+    case 'probing':
+    case 'unknown':
+      return status;
+    default:
+      return undefined;
+  }
+}
+
+function snapshotMonitoringState(
+  device: Device,
+  runtimeDevice: SnapshotPayload['devices'][string] | undefined,
+) {
+  return runtimeDevice?.operational_status === 'unmonitored'
+    ? 'unmonitored'
+    : resolveDeviceMonitoringState(device);
+}
+
 function hasUsablePosition(
   position: { x: number; y: number; pinned?: boolean } | undefined,
 ): boolean {
@@ -69,8 +90,10 @@ export function buildTopologyNodes(
 
     // Merge runtime status into fetched topology data when available.
     let deviceData = device;
+    const runtimeDevice = pendingSnapshot?.devices[device.id];
+    const monitoringState = snapshotMonitoringState(device, runtimeDevice);
     if (pendingSnapshot) {
-      const snapStatus = pendingSnapshot.device_statuses[device.id];
+      const snapStatus = normalizeSnapshotStatus(runtimeDevice?.operational_status);
       if (snapStatus) {
         deviceData = {
           ...device,
@@ -81,13 +104,12 @@ export function buildTopologyNodes(
 
     const nodeMetrics = sanitizeDeviceMetricsForDisplay(
       deviceData,
-      pendingSnapshot?.device_metrics[device.id] ?? null,
+      runtimeDevice ?? null,
+      monitoringState,
     );
 
     // Virtual devices have no SNMP metrics; detect and propagate flags
     const isVirtual = device.device_type === 'virtual';
-    const monitoringState = resolveDeviceMonitoringState(deviceData);
-
     return {
       id: device.id,
       type: 'device',
@@ -102,7 +124,7 @@ export function buildTopologyNodes(
         editMode,
         onContextMenu: openDeviceMenu,
         metrics: nodeMetrics,
-        alertStatus: alertStatusForDevice(device.id, alerts),
+        alertStatus: runtimeDevice?.alert_status ?? alertStatusForDevice(device.id, alerts),
         isVirtual,
         monitoringState,
         subtype: isVirtual ? (deviceData.tags?.virtual_subtype ?? 'generic') : undefined,

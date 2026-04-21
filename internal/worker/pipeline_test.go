@@ -1049,6 +1049,26 @@ func newDetailSubscriptionTestDevice() domain.Device {
 	}
 }
 
+func attachDetailSubscriptionTopology(device domain.Device) (*cache.DeviceLinkCache, domain.Link) {
+	peer := domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.81",
+		Status: domain.DeviceStatusUp,
+		Vendor: "default",
+		Interfaces: []domain.Interface{
+			{IfName: "ether2", IfDescr: "downlink", Speed: 1_000_000_000},
+		},
+	}
+	link := domain.Link{
+		ID:             uuid.New(),
+		SourceDeviceID: device.ID,
+		SourceIfName:   "ether1",
+		TargetDeviceID: peer.ID,
+		TargetIfName:   "ether2",
+	}
+	return newPipelineTestCache([]domain.Device{device, peer}, []domain.Link{link}), link
+}
+
 func newDetailSubscriptionTestPipeline(t *testing.T, hub *ws.Hub) *PipelineOrchestrator {
 	t.Helper()
 
@@ -1154,7 +1174,7 @@ func waitForDetailSubscribers(t *testing.T, hub *ws.Hub, deviceID uuid.UUID, wan
 	t.Fatalf("expected %d detail subscribers for %s, got %d", want, deviceID, len(hub.DetailSubscribers(deviceID)))
 }
 
-func readSnapshotDeltaMessage(t *testing.T, conn *websocket.Conn) wsSnapshotMessage {
+func readSnapshotDeltaMessage(t *testing.T, conn *websocket.Conn) wsVersionedSnapshotDeltaMessage {
 	t.Helper()
 
 	conn.SetReadDeadline(time.Now().Add(time.Second))
@@ -1165,7 +1185,7 @@ func readSnapshotDeltaMessage(t *testing.T, conn *websocket.Conn) wsSnapshotMess
 		t.Fatalf("failed to read websocket detail delta: %v", err)
 	}
 
-	var message wsSnapshotMessage
+	var message wsVersionedSnapshotDeltaMessage
 	if err := json.Unmarshal(raw, &message); err != nil {
 		t.Fatalf("failed to decode websocket detail delta: %v", err)
 	}
@@ -1284,6 +1304,193 @@ func TestPipelineOrchestratorBroadcastLoop_EventDrivenStateChangeSendsDelta(t *t
 	}
 }
 
+func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertOnlyChangeIncludesAlertRuntimeFields(t *testing.T) {
+	pipeline, _, _, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.runtime.lastSnapshot = ws.EmptySnapshot()
+	pipeline.runtime.prevHashes = computeSnapshotHashes(pipeline.runtime.lastSnapshot)
+	pipeline.runtime.alerts = map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "HighCPU",
+			State:     "firing",
+		}},
+	}
+
+	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(nil, true)
+	if err != nil {
+		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
+	}
+	if requireFull {
+		t.Fatal("requireFull = true, want false")
+	}
+	if delta == nil {
+		t.Fatal("expected alert-only dirty delta")
+	}
+
+	deviceRuntime, ok := delta.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected devices[%s] in alert-only delta", deviceID)
+	}
+	if deviceRuntime.AlertStatus != string(domain.AlertStatusDown) {
+		t.Fatalf("AlertStatus = %q, want %q", deviceRuntime.AlertStatus, domain.AlertStatusDown)
+	}
+	if deviceRuntime.FiringAlertCount != 1 {
+		t.Fatalf("FiringAlertCount = %d, want 1", deviceRuntime.FiringAlertCount)
+	}
+}
+
+func TestPipelineOrchestratorBuildDirtyOverviewDelta_PreservesPeerContextForLinks(t *testing.T) {
+	pipeline, _, store, _, deviceID := newBroadcastTestPipeline(t)
+	peerID := uuid.New()
+	pipeline.cache = newPipelineTestCache([]domain.Device{
+		{
+			ID:            deviceID,
+			IP:            "192.0.2.40",
+			MetricsSource: domain.MetricsSourcePrometheus,
+			Interfaces:    []domain.Interface{{IfName: "ether1", Speed: 1_000_000_000}},
+		},
+		{
+			ID:            peerID,
+			IP:            "192.0.2.41",
+			MetricsSource: domain.MetricsSourcePrometheus,
+			Interfaces:    []domain.Interface{{IfName: "ether2", Speed: 1_000_000_000}},
+		},
+	}, []domain.Link{{
+		ID:             uuid.New(),
+		SourceDeviceID: deviceID,
+		SourceIfName:   "ether1",
+		TargetDeviceID: peerID,
+		TargetIfName:   "ether2",
+	}})
+	devices, err := pipeline.cache.GetDevices()
+	if err != nil {
+		t.Fatalf("GetDevices returned error: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(devices))
+	}
+	links, err := pipeline.cache.GetLinks()
+	if err != nil {
+		t.Fatalf("GetLinks returned error: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(links))
+	}
+	linkID := links[0].ID
+
+	store.Update(state.StateUpdate{
+		DeviceID:        peerID,
+		VolatilityClass: domain.VolatilityClassOperational,
+		PollSuccess:     true,
+		Timestamp:       time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC),
+	})
+	pipeline.runtime.promStatus = ws.PrometheusStatusPayload{Enabled: true, Available: false}
+
+	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(map[uuid.UUID]struct{}{deviceID: {}}, false)
+	if err != nil {
+		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
+	}
+	if requireFull {
+		t.Fatal("requireFull = true, want false")
+	}
+	if delta == nil {
+		t.Fatal("expected dirty overview delta")
+	}
+
+	linkRuntime, ok := delta.Links[linkID.String()]
+	if !ok {
+		t.Fatalf("expected links[%s] in dirty delta", linkID)
+	}
+	if linkRuntime.MetricsReason != normalizedReasonUpstreamUnavailable {
+		t.Fatalf("MetricsReason = %q, want %q", linkRuntime.MetricsReason, normalizedReasonUpstreamUnavailable)
+	}
+}
+
+func TestMergeSnapshotPayload_RefreshesCompatibilityViewsAfterDelta(t *testing.T) {
+	deviceID := uuid.New().String()
+	linkID := uuid.New().String()
+	updatedCollectedAt := "2026-04-20T10:30:00Z"
+
+	base := &ws.SnapshotPayload{
+		Devices: map[string]ws.DeviceRuntimeDTO{
+			deviceID: {
+				DeviceID:          deviceID,
+				OperationalStatus: string(domain.DeviceStatusDown),
+				MetricsStatus:     "missing",
+			},
+		},
+		Links: map[string]ws.LinkRuntimeDTO{
+			linkID: {
+				LinkID:         linkID,
+				SourceDeviceID: deviceID,
+				SourceIfName:   "ether1",
+				MetricsStatus:  "missing",
+			},
+		},
+		DeviceMetrics: map[string]ws.DeviceRuntimeDTO{
+			deviceID: {
+				DeviceID:          deviceID,
+				OperationalStatus: string(domain.DeviceStatusDown),
+				MetricsStatus:     "missing",
+			},
+		},
+		LinkMetrics: map[string][]ws.LinkRuntimeDTO{
+			deviceID: {{
+				LinkID:         linkID,
+				DeviceID:       deviceID,
+				IfName:         "ether1",
+				MetricsStatus:  "missing",
+				LastCollectedAt: nil,
+			}},
+		},
+		DeviceStatuses: map[string]string{deviceID: string(domain.DeviceStatusDown)},
+	}
+
+	delta := &ws.SnapshotPayload{
+		Devices: map[string]ws.DeviceRuntimeDTO{
+			deviceID: {
+				DeviceID:          deviceID,
+				OperationalStatus: string(domain.DeviceStatusUp),
+				MetricsStatus:     "available",
+			},
+		},
+		Links: map[string]ws.LinkRuntimeDTO{
+			linkID: {
+				LinkID:          linkID,
+				SourceDeviceID:  deviceID,
+				SourceIfName:    "ether1",
+				DeviceID:        deviceID,
+				IfName:          "ether1",
+				MetricsStatus:   "available",
+				LastCollectedAt: &updatedCollectedAt,
+			},
+		},
+	}
+
+	merged := mergeSnapshotPayload(base, delta)
+
+	if got := merged.DeviceMetrics[deviceID].MetricsStatus; got != "available" {
+		t.Fatalf("DeviceMetrics[%s].MetricsStatus = %q, want available", deviceID, got)
+	}
+	if got := merged.DeviceStatuses[deviceID]; got != string(domain.DeviceStatusUp) {
+		t.Fatalf("DeviceStatuses[%s] = %q, want %q", deviceID, got, domain.DeviceStatusUp)
+	}
+	legacyLinks, ok := merged.LinkMetrics[deviceID]
+	if !ok {
+		t.Fatalf("expected LinkMetrics[%s] entry after merge", deviceID)
+	}
+	if len(legacyLinks) != 1 {
+		t.Fatalf("LinkMetrics[%s] length = %d, want 1", deviceID, len(legacyLinks))
+	}
+	if got := legacyLinks[0].MetricsStatus; got != "available" {
+		t.Fatalf("LinkMetrics[%s][0].MetricsStatus = %q, want available", deviceID, got)
+	}
+	if legacyLinks[0].LastCollectedAt == nil || *legacyLinks[0].LastCollectedAt != updatedCollectedAt {
+		t.Fatalf("LinkMetrics[%s][0].LastCollectedAt = %#v, want %q", deviceID, legacyLinks[0].LastCollectedAt, updatedCollectedAt)
+	}
+}
+
 func TestPipelineOrchestratorBroadcastLoop_LinkChangeForcesFullSnapshotAndTopologyChanged(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
@@ -1334,16 +1541,27 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshBroadcastsAlertMessage(t 
 
 	messages := waitForBroadcastMessages(t, hub, time.Second)
 	types := broadcastMessageTypes(t, messages)
-	if len(types) != 1 || types[0] != ws.MessageTypeAlert {
-		t.Fatalf("expected alert-only refresh to broadcast alert message, got %v", types)
+	if len(types) != 2 || types[0] != ws.MessageTypeSnapshotDelta || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected alert-only refresh to broadcast snapshot_delta then alert, got %v", types)
 	}
 
-	if len(messages) != 1 {
-		t.Fatalf("expected one alert broadcast message, got %d", len(messages))
+	var deltaMessage wsVersionedSnapshotDeltaMessage
+	if err := json.Unmarshal(messages[0], &deltaMessage); err != nil {
+		t.Fatalf("decode alert-driven delta: %v", err)
+	}
+	deviceRuntime, ok := deltaMessage.Payload.Delta.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected alert-driven delta for device %s", deviceID)
+	}
+	if deviceRuntime.AlertStatus != string(domain.AlertStatusDown) {
+		t.Fatalf("AlertStatus = %q, want %q", deviceRuntime.AlertStatus, domain.AlertStatusDown)
+	}
+	if deviceRuntime.FiringAlertCount != 1 {
+		t.Fatalf("FiringAlertCount = %d, want 1", deviceRuntime.FiringAlertCount)
 	}
 
 	var alertMessage wsVersionedAlertMessage
-	if err := json.Unmarshal(messages[0], &alertMessage); err != nil {
+	if err := json.Unmarshal(messages[1], &alertMessage); err != nil {
 		t.Fatalf("decode alert message: %v", err)
 	}
 	if alertMessage.Payload.Version == 0 {
@@ -1483,18 +1701,18 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 	if snapshotMessage.Payload.Snapshot == nil {
 		t.Fatal("expected versioned snapshot payload")
 	}
-	metric, ok := snapshotMessage.Payload.Snapshot.DeviceMetrics[deviceID.String()]
+	metric, ok := snapshotMessage.Payload.Snapshot.Devices[deviceID.String()]
 	if !ok {
 		t.Fatalf("expected snapshot metric for device %s", deviceID)
 	}
-	if metric.CollectedAt != performanceCollectedAt {
-		t.Fatalf("CollectedAt = %q, want performance poll timestamp %q", metric.CollectedAt, performanceCollectedAt)
+	if metric.LastCollectedAt == nil || *metric.LastCollectedAt != performanceCollectedAt {
+		t.Fatalf("LastCollectedAt = %#v, want performance poll timestamp %q", metric.LastCollectedAt, performanceCollectedAt)
 	}
 	if metric.Reachability != string(state.ReachabilityUp) {
 		t.Fatalf("Reachability = %q, want %q", metric.Reachability, state.ReachabilityUp)
 	}
-	if snapshotMessage.Payload.Snapshot.DeviceStatuses[deviceID.String()] != string(domain.DeviceStatusUp) {
-		t.Fatalf("DeviceStatus = %q, want %q", snapshotMessage.Payload.Snapshot.DeviceStatuses[deviceID.String()], domain.DeviceStatusUp)
+	if snapshotMessage.Payload.Snapshot.Devices[deviceID.String()].OperationalStatus != string(domain.DeviceStatusUp) {
+		t.Fatalf("DeviceStatus = %q, want %q", snapshotMessage.Payload.Snapshot.Devices[deviceID.String()].OperationalStatus, domain.DeviceStatusUp)
 	}
 }
 
@@ -1763,6 +1981,8 @@ func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkM
 	hub := ws.NewHub()
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
+	device.MetricsSource = domain.MetricsSourcePrometheus
+	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
 	pipeline.stateStore.Update(state.StateUpdate{
 		DeviceID:         device.ID,
 		VolatilityClass:  domain.VolatilityClassOperational,
@@ -1793,31 +2013,31 @@ func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkM
 	})
 
 	message := readSnapshotDeltaMessage(t, subscriber)
-	metric, ok := message.Payload.DeviceMetrics[device.ID.String()]
+	metric, ok := message.Payload.Delta.Devices[device.ID.String()]
 	if !ok {
 		t.Fatalf("expected detail delta for device %s", device.ID)
 	}
-	if len(message.Payload.LinkMetrics) != 1 {
-		t.Fatalf("expected targeted detail delta to contain 1 link_metrics key, got %d", len(message.Payload.LinkMetrics))
+	if len(message.Payload.Delta.Links) != 1 {
+		t.Fatalf("expected targeted detail delta to contain 1 links entry, got %d", len(message.Payload.Delta.Links))
 	}
-	linkMetrics, ok := message.Payload.LinkMetrics[device.ID.String()]
-	if !ok {
-		t.Fatalf("expected targeted detail delta link_metrics for device %s", device.ID)
+	var linkMetrics ws.LinkRuntimeDTO
+	for _, linkRuntime := range message.Payload.Delta.Links {
+		linkMetrics = linkRuntime
 	}
-	if len(linkMetrics) != 1 {
-		t.Fatalf("expected 1 targeted link metric for device %s, got %d", device.ID, len(linkMetrics))
+	if linkMetrics.LinkID == "" {
+		t.Fatalf("expected targeted detail delta link for device %s", device.ID)
 	}
-	if linkMetrics[0].DeviceID != device.ID.String() {
-		t.Fatalf("LinkMetrics[%s][0].DeviceID = %q, want %q", device.ID, linkMetrics[0].DeviceID, device.ID)
+	if linkMetrics.SourceDeviceID != device.ID.String() {
+		t.Fatalf("Links[*].SourceDeviceID = %q, want %q", linkMetrics.SourceDeviceID, device.ID)
 	}
-	if linkMetrics[0].IfName != "ether1" {
-		t.Fatalf("LinkMetrics[%s][0].IfName = %q, want ether1", device.ID, linkMetrics[0].IfName)
+	if linkMetrics.SourceIfName != "ether1" {
+		t.Fatalf("Links[*].SourceIfName = %q, want ether1", linkMetrics.SourceIfName)
 	}
-	if linkMetrics[0].TxBps == nil {
-		t.Fatalf("LinkMetrics[%s][0].TxBps = nil, want value", device.ID)
+	if linkMetrics.TxBps == nil {
+		t.Fatalf("Links[*].TxBps = nil, want value")
 	}
-	if linkMetrics[0].RxBps == nil {
-		t.Fatalf("LinkMetrics[%s][0].RxBps = nil, want value", device.ID)
+	if linkMetrics.RxBps == nil {
+		t.Fatalf("Links[*].RxBps = nil, want value")
 	}
 	if metric.Health == "" {
 		t.Fatal("expected health field in detail delta")
@@ -1825,8 +2045,8 @@ func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkM
 	if metric.Reachability != string(state.ReachabilityUp) {
 		t.Fatalf("Reachability = %q, want %q", metric.Reachability, state.ReachabilityUp)
 	}
-	if metric.CollectedAt == "" {
-		t.Fatal("expected collected_at in detail delta")
+	if metric.LastCollectedAt == nil || *metric.LastCollectedAt == "" {
+		t.Fatal("expected last_collected_at in detail delta")
 	}
 	if messages := drainBroadcastCh(hub); len(messages) != 0 {
 		t.Fatalf("expected no overview broadcast during targeted detail send, got %d message(s)", len(messages))
@@ -1839,6 +2059,7 @@ func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 	hub := ws.NewHub()
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
+	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
 	pipeline.runtime.prevCounters[device.ID] = map[string]collector.CounterBaseline{
 		"ether1": {
 			InOctets:  1_000,
@@ -1868,12 +2089,12 @@ func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 	performanceCollectedAt := performanceState.Metrics.CollectedAt.UTC().Format(time.RFC3339)
 
 	performanceMessage := readSnapshotDeltaMessage(t, subscriber)
-	performanceMetric, ok := performanceMessage.Payload.DeviceMetrics[device.ID.String()]
+	performanceMetric, ok := performanceMessage.Payload.Delta.Devices[device.ID.String()]
 	if !ok {
 		t.Fatalf("expected performance detail delta for device %s", device.ID)
 	}
-	if performanceMetric.CollectedAt == "" {
-		t.Fatal("expected performance detail delta to include collected_at")
+	if performanceMetric.LastCollectedAt == nil || *performanceMetric.LastCollectedAt == "" {
+		t.Fatal("expected performance detail delta to include last_collected_at")
 	}
 
 	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
@@ -1885,31 +2106,29 @@ func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 	})
 
 	message := readSnapshotDeltaMessage(t, subscriber)
-	metric, ok := message.Payload.DeviceMetrics[device.ID.String()]
+	metric, ok := message.Payload.Delta.Devices[device.ID.String()]
 	if !ok {
 		t.Fatalf("expected detail delta for device %s", device.ID)
 	}
-	linkMetrics, ok := message.Payload.LinkMetrics[device.ID.String()]
-	if !ok {
-		t.Fatalf("expected operational detail delta link_metrics for device %s", device.ID)
+	if len(message.Payload.Delta.Links) != 1 {
+		t.Fatalf("expected operational detail delta to keep 1 link for %s, got %d", device.ID, len(message.Payload.Delta.Links))
 	}
-	if len(linkMetrics) != 1 {
-		t.Fatalf("expected operational detail delta to keep 1 link metric for %s, got %d", device.ID, len(linkMetrics))
-	}
-	if linkMetrics[0].IfName != "ether1" {
-		t.Fatalf("LinkMetrics[%s][0].IfName = %q, want ether1", device.ID, linkMetrics[0].IfName)
-	}
-	if linkMetrics[0].TxBps == nil {
-		t.Fatalf("LinkMetrics[%s][0].TxBps = nil, want value", device.ID)
-	}
-	if linkMetrics[0].RxBps == nil {
-		t.Fatalf("LinkMetrics[%s][0].RxBps = nil, want value", device.ID)
+	for _, linkMetrics := range message.Payload.Delta.Links {
+		if linkMetrics.SourceIfName != "ether1" {
+			t.Fatalf("Links[*].SourceIfName = %q, want ether1", linkMetrics.SourceIfName)
+		}
+		if linkMetrics.TxBps == nil {
+			t.Fatalf("Links[*].TxBps = nil, want value")
+		}
+		if linkMetrics.RxBps == nil {
+			t.Fatalf("Links[*].RxBps = nil, want value")
+		}
 	}
 	if metric.Reachability != string(state.ReachabilityUp) {
 		t.Fatalf("Reachability = %q, want %q", metric.Reachability, state.ReachabilityUp)
 	}
-	if metric.CollectedAt != performanceCollectedAt {
-		t.Fatalf("CollectedAt = %q, want performance poll timestamp %q", metric.CollectedAt, performanceCollectedAt)
+	if metric.LastCollectedAt == nil || *metric.LastCollectedAt != performanceCollectedAt {
+		t.Fatalf("LastCollectedAt = %#v, want performance poll timestamp %q", metric.LastCollectedAt, performanceCollectedAt)
 	}
 }
 
@@ -1925,6 +2144,7 @@ func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t
 	hub := ws.NewHub()
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
+	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
 	pipeline.stateStore.Update(state.StateUpdate{
 		DeviceID:         device.ID,
 		VolatilityClass:  domain.VolatilityClassOperational,
@@ -1957,8 +2177,8 @@ func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t
 	})
 
 	message := readSnapshotDeltaMessage(t, subscriber)
-	if _, ok := message.Payload.LinkMetrics[device.ID.String()]; !ok {
-		t.Fatalf("expected subscribed client detail delta link_metrics for device %s", device.ID)
+	if len(message.Payload.Delta.Links) == 0 {
+		t.Fatalf("expected subscribed client detail delta links for device %s", device.ID)
 	}
 	assertNoWebSocketMessage(t, unsubscribed)
 }
@@ -1967,6 +2187,7 @@ func TestPipelineOrchestratorPublishSubscribedDetailDeltaJSONIncludesDetailOnlyD
 	hub := ws.NewHub()
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
+	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
 	collectedAt := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
 	expectedInterval := 45 * time.Second
 
@@ -1985,6 +2206,16 @@ func TestPipelineOrchestratorPublishSubscribedDetailDeltaJSONIncludesDetailOnlyD
 		ExpectedInterval: expectedInterval,
 		Timestamp:        collectedAt,
 	})
+	pipeline.runtime.promStatus = ws.PrometheusStatusPayload{Enabled: true, Available: false}
+	pipeline.runtime.alerts = map[uuid.UUID][]domain.AlertState{
+		device.ID: {{
+			DeviceID:  device.ID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+		}},
+	}
+	pipeline.runtime.overviewVersion = 7
 
 	wsURL := newDetailSubscriptionTestServer(t, hub)
 	subscriber := connectDetailSubscriptionClient(t, wsURL)
@@ -2014,33 +2245,101 @@ func TestPipelineOrchestratorPublishSubscribedDetailDeltaJSONIncludesDetailOnlyD
 	if !ok {
 		t.Fatalf("payload = %#v, want object", decoded["payload"])
 	}
-	deviceMetrics, ok := payload["device_metrics"].(map[string]any)
+	if got := payload["base_version"]; got != float64(7) {
+		t.Fatalf("base_version = %#v, want 7", got)
+	}
+	if got := payload["version"]; got != float64(7) {
+		t.Fatalf("version = %#v, want 7", got)
+	}
+	deltaPayload, ok := payload["delta"].(map[string]any)
 	if !ok {
-		t.Fatalf("payload.device_metrics = %#v, want object", payload["device_metrics"])
+		t.Fatalf("payload.delta = %#v, want object", payload["delta"])
+	}
+	deviceMetrics, ok := deltaPayload["devices"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload.delta.devices = %#v, want object", deltaPayload["devices"])
 	}
 	metric, ok := deviceMetrics[device.ID.String()].(map[string]any)
 	if !ok {
-		t.Fatalf("payload.device_metrics[%s] = %#v, want object", device.ID, deviceMetrics[device.ID.String()])
+		t.Fatalf("payload.delta.devices[%s] = %#v, want object", device.ID, deviceMetrics[device.ID.String()])
 	}
 
 	if got, ok := metric["temp_celsius"]; !ok {
-		t.Fatal("expected detail subscription device_metrics to include temp_celsius")
+		t.Fatal("expected detail subscription devices to include temp_celsius")
 	} else if got != 48.0 {
 		t.Fatalf("temp_celsius = %#v, want 48", got)
 	}
 	if got, ok := metric["uptime_secs"]; !ok {
-		t.Fatal("expected detail subscription device_metrics to include uptime_secs")
+		t.Fatal("expected detail subscription devices to include uptime_secs")
 	} else if got != 3600.0 {
 		t.Fatalf("uptime_secs = %#v, want 3600", got)
 	}
 	if got, ok := metric["last_polled_at"]; !ok {
-		t.Fatal("expected detail subscription device_metrics to include last_polled_at")
+		t.Fatal("expected detail subscription devices to include last_polled_at")
 	} else if got != collectedAt.Format(time.RFC3339) {
 		t.Fatalf("last_polled_at = %#v, want %q", got, collectedAt.Format(time.RFC3339))
 	}
 	if got, ok := metric["expected_poll_interval_seconds"]; !ok {
-		t.Fatal("expected detail subscription device_metrics to include expected_poll_interval_seconds")
+		t.Fatal("expected detail subscription devices to include expected_poll_interval_seconds")
 	} else if got != expectedInterval.Seconds() {
 		t.Fatalf("expected_poll_interval_seconds = %#v, want %v", got, expectedInterval.Seconds())
+	}
+	if got, ok := metric["alert_status"]; !ok {
+		t.Fatal("expected detail subscription devices to include alert_status")
+	} else if got != string(domain.AlertStatusDown) {
+		t.Fatalf("alert_status = %#v, want %q", got, domain.AlertStatusDown)
+	}
+	if got, ok := metric["firing_alert_count"]; !ok {
+		t.Fatal("expected detail subscription devices to include firing_alert_count")
+	} else if got != float64(1) {
+		t.Fatalf("firing_alert_count = %#v, want 1", got)
+	}
+}
+
+func TestPipelineOrchestratorPublishSubscribedDetailDelta_UsesPrometheusStatusAndAlerts(t *testing.T) {
+	hub := ws.NewHub()
+	pipeline := newDetailSubscriptionTestPipeline(t, hub)
+	device := newDetailSubscriptionTestDevice()
+	device.MetricsSource = domain.MetricsSourcePrometheus
+	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
+	pipeline.stateStore.Update(state.StateUpdate{
+		DeviceID:        device.ID,
+		VolatilityClass: domain.VolatilityClassOperational,
+		PollSuccess:     true,
+		Timestamp:       time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC),
+	})
+	pipeline.runtime.promStatus = ws.PrometheusStatusPayload{Enabled: true, Available: false}
+	pipeline.runtime.alerts = map[uuid.UUID][]domain.AlertState{
+		device.ID: {{
+			DeviceID:  device.ID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+		}},
+	}
+
+	wsURL := newDetailSubscriptionTestServer(t, hub)
+	subscriber := connectDetailSubscriptionClient(t, wsURL)
+	drainBootstrapMessages(t, subscriber)
+	subscribeDetail(t, subscriber, device.ID)
+	waitForDetailSubscribers(t, hub, device.ID, 1)
+
+	pipeline.publishSubscribedDetailDelta(device)
+	message := readSnapshotDeltaMessage(t, subscriber)
+	metric, ok := message.Payload.Delta.Devices[device.ID.String()]
+	if !ok {
+		t.Fatalf("expected detail delta for device %s", device.ID)
+	}
+	if metric.PrimaryReason != normalizedReasonUpstreamUnavailable {
+		t.Fatalf("PrimaryReason = %q, want %q", metric.PrimaryReason, normalizedReasonUpstreamUnavailable)
+	}
+	if metric.MetricsReason != normalizedReasonUpstreamUnavailable {
+		t.Fatalf("MetricsReason = %q, want %q", metric.MetricsReason, normalizedReasonUpstreamUnavailable)
+	}
+	if metric.AlertStatus != string(domain.AlertStatusDown) {
+		t.Fatalf("AlertStatus = %q, want %q", metric.AlertStatus, domain.AlertStatusDown)
+	}
+	if metric.FiringAlertCount != 1 {
+		t.Fatalf("FiringAlertCount = %d, want 1", metric.FiringAlertCount)
 	}
 }

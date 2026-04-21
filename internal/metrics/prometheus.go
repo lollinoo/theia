@@ -76,7 +76,7 @@ func (c *PromClient) QueryDeviceMetrics(ctx context.Context, labelName string, l
 
 	collectedAt := time.Now().UTC()
 	for _, v := range uniqueSorted(labelValues) {
-		results[v] = domain.DeviceMetrics{CollectedAt: collectedAt}
+		results[v] = domain.DeviceMetrics{}
 	}
 
 	targets := buildTargetMatcher(labelValues)
@@ -134,7 +134,11 @@ func (c *PromClient) QueryDeviceMetrics(ctx context.Context, labelName string, l
 			if err != nil {
 				return nil, err
 			}
-			results[labelValue] = query.apply(metric, value)
+			metric = query.apply(metric, value)
+			if metric.CollectedAt.IsZero() {
+				metric.CollectedAt = collectedAt
+			}
+			results[labelValue] = metric
 		}
 	}
 

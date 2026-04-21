@@ -38,11 +38,22 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 function mockMetrics(overrides: Partial<DeviceMetricsDTO> = {}): DeviceMetricsDTO {
   return {
     device_id: 'dev-1',
+    operational_status: 'up',
+    reachability: 'up',
     cpu_percent: 42,
     mem_percent: 68,
-    collected_at: '2026-04-13T11:59:45Z',
     health: 'healthy',
-    stale: false,
+    freshness: 'fresh',
+    primary_reason: 'ok',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    alert_status: 'normal',
+    firing_alert_count: 0,
+    last_collected_at: '2026-04-13T11:59:45Z',
+    last_polled_at: '2026-04-13T11:59:45Z',
+    expected_poll_interval_seconds: 30,
+    temp_celsius: null,
+    uptime_secs: null,
     ...overrides,
   };
 }
@@ -133,26 +144,26 @@ describe('deviceVisualState', () => {
     });
   });
 
-  it('derives freshness cadence from collected_at and device polling settings', () => {
+  it('preserves normalized runtime cadence fields without backfilling from inventory', () => {
     const device = mockDevice({ poll_class: 'core', poll_interval_override: 15 });
 
     expect(sanitizeDeviceMetricsForDisplay(device, mockMetrics())).toMatchObject({
       temp_celsius: null,
       uptime_secs: null,
       last_polled_at: '2026-04-13T11:59:45Z',
-      expected_poll_interval_seconds: 15,
+      expected_poll_interval_seconds: 30,
     });
   });
 
-  it('uses current device polling settings instead of cached metric cadence', () => {
+  it('does not infer last_polled_at from last_collected_at when runtime omits it', () => {
     const device = mockDevice({ poll_class: 'core', poll_interval_override: 15 });
 
     expect(sanitizeDeviceMetricsForDisplay(device, mockMetrics({
-      expected_poll_interval_seconds: 300,
-      last_polled_at: '2026-04-13T11:59:30Z',
+      expected_poll_interval_seconds: null,
+      last_polled_at: null,
     }))).toMatchObject({
-      last_polled_at: '2026-04-13T11:59:30Z',
-      expected_poll_interval_seconds: 15,
+      last_polled_at: null,
+      expected_poll_interval_seconds: null,
     });
   });
 });

@@ -34,13 +34,20 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 function mockMetrics(overrides: Partial<DeviceMetricsDTO> = {}): DeviceMetricsDTO {
   return {
     device_id: 'dev-1',
+    operational_status: 'up',
+    reachability: 'up',
     cpu_percent: 42,
     mem_percent: 68,
     temp_celsius: 55,
     uptime_secs: 86400,
-    collected_at: '2026-04-13T11:59:45Z',
     health: 'healthy',
-    stale: false,
+    freshness: 'fresh',
+    primary_reason: 'ok',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    alert_status: 'normal',
+    firing_alert_count: 0,
+    last_collected_at: '2026-04-13T11:59:45Z',
     last_polled_at: '2026-04-13T11:59:30Z',
     expected_poll_interval_seconds: 30,
     ...overrides,
@@ -163,9 +170,10 @@ describe('DeviceCard', () => {
     expect(screen.getByText('1d')).toBeInTheDocument();
   });
 
-  it('keeps freshness metadata visible while preserving the uptime slot', () => {
+  it('renders freshness copy from the normalized runtime enum while preserving the uptime slot', () => {
     renderDeviceCard({
       metrics: mockMetrics({
+        freshness: 'stale',
         cpu_percent: null,
         mem_percent: null,
         uptime_secs: null,
@@ -174,15 +182,16 @@ describe('DeviceCard', () => {
       }),
     });
 
-    expect(screen.getByText('Fresh · 40s ago')).toBeInTheDocument();
-    expect(screen.getByText('Polling every 1m')).toBeInTheDocument();
+    expect(screen.getByText('Stale telemetry')).toBeInTheDocument();
+    expect(screen.getByText('Polling every 5m')).toBeInTheDocument();
     expect(screen.getByText('UP')).toBeInTheDocument();
     expect(screen.getAllByText('--')).toHaveLength(3);
   });
 
-  it('updates freshness readout over time', async () => {
+  it('does not derive freshness text from a client timer', async () => {
     renderDeviceCard({
       metrics: mockMetrics({
+        freshness: 'awaiting_poll',
         cpu_percent: null,
         mem_percent: null,
         uptime_secs: null,
@@ -191,13 +200,13 @@ describe('DeviceCard', () => {
       }),
     });
 
-    expect(screen.getByText('Fresh · 0s ago')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting first poll')).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(7_000);
     });
 
-    expect(screen.getByText('Fresh · 1s ago')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting first poll')).toBeInTheDocument();
   });
 
   it('renders ghost nodes as cross-area markers without overview metrics', () => {
@@ -312,8 +321,8 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('Status')).toBeNull();
     expect(screen.getAllByText('Up')).toHaveLength(1);
     expect(screen.getByText('IP 192.168.1.1')).toBeInTheDocument();
-    expect(screen.getByText('Fresh · 30s ago')).toBeInTheDocument();
-    expect(screen.getByText('Polling every 1m')).toBeInTheDocument();
+    expect(screen.getByText('Fresh telemetry')).toBeInTheDocument();
+    expect(screen.getByText('Polling every 30s')).toBeInTheDocument();
     expect(screen.queryByText('CPU')).toBeNull();
     expect(screen.queryByText('MEM')).toBeNull();
     expect(screen.queryByText('UP')).toBeNull();

@@ -4,6 +4,7 @@ import {
   utilizationColor,
   type AlertDTO,
   type LinkMetricsDTO,
+  type RuntimeReason,
 } from '../../types/metrics';
 import { formatBandwidth } from '../linkSemantics';
 import type {
@@ -15,7 +16,7 @@ import type {
   LinkNegotiationModel,
 } from '../panelModels';
 import { normalizeInterfaceName } from './canvasHelpers';
-import type { RuntimeDeviceModel, RuntimeState } from './runtimeAdapters';
+import { countActiveAlertsFromRuntimeState, type RuntimeDeviceModel, type RuntimeState } from './runtimeAdapters';
 
 const UNKNOWN_UTILIZATION_COLOR = 'var(--color-status-unknown)';
 
@@ -31,13 +32,32 @@ function labelForDevice(device: Device): string {
 }
 
 function resolveRuntimeDevice(runtimeState: RuntimeState, device: Device): RuntimeDeviceModel {
-  return runtimeState.devicesById.get(device.id) ?? {
-    device,
-    monitoringState: 'monitorable',
-    metrics: null,
-    alertStatus: 'normal',
-    prometheusOutageMode: 'none',
-  };
+    return runtimeState.devicesById.get(device.id) ?? {
+      device,
+      monitoringState: 'monitorable',
+      metrics: null,
+      alertStatus: 'normal',
+      runtimeStatus: null,
+    };
+}
+
+function runtimeReasonMessage(reason: Exclude<RuntimeReason, 'ok'>): string {
+  switch (reason) {
+    case 'awaiting_poll':
+      return 'Awaiting first poll';
+    case 'stale':
+      return 'Telemetry stale';
+    case 'device_unreachable':
+      return 'Device unreachable';
+    case 'upstream_unavailable':
+      return 'Runtime upstream unavailable';
+    case 'no_data':
+      return 'No runtime telemetry';
+    case 'unmonitored':
+      return 'Device unmonitored';
+    case 'unsupported':
+      return 'Telemetry unsupported';
+  }
 }
 
 function metricsAvailability(runtimeDevice: RuntimeDeviceModel): {
@@ -45,13 +65,91 @@ function metricsAvailability(runtimeDevice: RuntimeDeviceModel): {
   message: string | null;
   reason: InterfaceSectionModel['availabilityReason'];
 } {
-  if (runtimeDevice.device.status === 'down' && runtimeDevice.prometheusOutageMode === 'none') {
-    return { available: false, message: 'Device unreachable', reason: 'device-down' };
+  if (runtimeDevice.metrics?.primary_reason === 'device_unreachable') {
+    return {
+      available: false,
+      message: runtimeReasonMessage('device_unreachable'),
+      reason: 'device_unreachable',
+    };
   }
-  if (runtimeDevice.prometheusOutageMode === 'offline') {
-    return { available: false, message: 'Prometheus unavailable', reason: 'prometheus-unavailable' };
+
+  const metricsReason = runtimeDevice.metrics?.metrics_reason;
+  if (
+    runtimeDevice.metrics
+    && runtimeDevice.metrics.metrics_status !== 'available'
+    && runtimeDevice.metrics.metrics_status !== 'partial'
+    && metricsReason
+    && metricsReason !== 'ok'
+  ) {
+    return {
+      available: false,
+      message: runtimeReasonMessage(metricsReason),
+      reason: metricsReason,
+    };
   }
+
   return { available: true, message: null, reason: null };
+}
+
+function linkMetricsAvailability(runtimeState: RuntimeState, linkId: string): {
+  available: boolean;
+  message: string | null;
+  reason: InterfaceSectionModel['availabilityReason'];
+} {
+  const runtimeLink = runtimeState.linksById.get(linkId);
+
+  if (
+    runtimeLink
+    && !runtimeLink.metricsUsable
+    && runtimeLink.metricsReason
+    && runtimeLink.metricsReason !== 'ok'
+  ) {
+    return {
+      available: false,
+      message: runtimeReasonMessage(runtimeLink.metricsReason),
+      reason: runtimeLink.metricsReason,
+    };
+  }
+
+  return { available: true, message: null, reason: null };
+}
+
+function linkPanelAvailability(
+  runtimeDevice: RuntimeDeviceModel,
+  linkAvailability: ReturnType<typeof linkMetricsAvailability>,
+  hasLinkRuntime: boolean,
+): ReturnType<typeof metricsAvailability> {
+  const deviceAvailability = metricsAvailability(runtimeDevice);
+
+  if (deviceAvailability.reason === 'device_unreachable') {
+    return deviceAvailability;
+  }
+
+  if (!linkAvailability.available) {
+    return linkAvailability;
+  }
+
+  if (hasLinkRuntime) {
+    return { available: true, message: null, reason: null };
+  }
+
+  return deviceAvailability;
+}
+
+function interfaceMetricsAvailability(
+  runtimeState: RuntimeState,
+  runtimeDevice: RuntimeDeviceModel,
+  ifName: string,
+): ReturnType<typeof metricsAvailability> {
+  const deviceAvailability = metricsAvailability(runtimeDevice);
+
+  if (deviceAvailability.available || deviceAvailability.reason === 'device_unreachable') {
+    return deviceAvailability;
+  }
+
+  return findIndexedInterfaceMetrics(runtimeState, runtimeDevice.device.id, ifName)
+    ? { available: true, message: null, reason: null }
+    : deviceAvailability;
 }
 
 function emptyStats(): AdaptedInterfaceStats {
@@ -76,34 +174,13 @@ function adaptInterfaceStats(metrics: LinkMetricsDTO | null, available: boolean)
   };
 }
 
-function findInterfaceMetrics(
+function findIndexedInterfaceMetrics(
   runtimeState: RuntimeState,
   deviceId: string,
   ifName: string,
 ): LinkMetricsDTO | null {
   const normalizedIfName = normalizeInterfaceName(ifName);
-  const directMetric = runtimeState.interfaceMetricsByDeviceId.get(deviceId)?.get(normalizedIfName);
-
-  if (directMetric) {
-    return directMetric;
-  }
-
-  for (const runtimeLink of runtimeState.linksById.values()) {
-    const sourceMatches = runtimeLink.link.source_device_id === deviceId
-      && normalizeInterfaceName(runtimeLink.link.source_if_name) === normalizedIfName;
-    const targetMatches = runtimeLink.link.target_device_id === deviceId
-      && normalizeInterfaceName(runtimeLink.link.target_if_name) === normalizedIfName;
-
-    if (sourceMatches) {
-      return runtimeLink.sourceMetrics;
-    }
-
-    if (targetMatches) {
-      return runtimeLink.targetMetrics;
-    }
-  }
-
-  return null;
+  return runtimeState.interfaceMetricsByDeviceId.get(deviceId)?.get(normalizedIfName) ?? null;
 }
 
 function matchInterfaceInfo(interfaces: InterfaceInfo[], ifName: string): InterfaceInfo | null {
@@ -166,7 +243,7 @@ function buildInterfaceSection({
   interfaceInfo: InterfaceInfo | null;
 }): InterfaceSectionModel {
   const speedLabel = interfaceInfo && interfaceInfo.speed > 0 ? formatBandwidth(interfaceInfo.speed) : null;
-  const deviceDown = availabilityReason === 'device-down';
+  const deviceDown = availabilityReason === 'device_unreachable';
   const statusLabel = interfaceInfo
     ? (deviceDown ? 'down' : interfaceInfo.oper_status)
     : null;
@@ -252,6 +329,44 @@ function adaptAlert(deviceMap: Map<string, Device>, alert: AlertDTO): AlertsPane
   };
 }
 
+function syntheticRuntimeAlert(runtimeDevice: RuntimeDeviceModel): AlertsPanelAlertModel {
+  const count = runtimeDevice.metrics?.firing_alert_count ?? 0;
+  const severity = runtimeDevice.alertStatus === 'down' ? 'critical' : 'warning';
+
+  return {
+    deviceId: runtimeDevice.device.id,
+    deviceLabel: labelForDevice(runtimeDevice.device),
+    alertName: runtimeDevice.alertStatus === 'down' ? 'RuntimeDown' : 'RuntimeDegraded',
+    severity,
+    state: 'firing',
+    summary: count > 0
+      ? `${count} active runtime alert${count === 1 ? '' : 's'}`
+      : 'Normalized runtime reports an active alert state.',
+  };
+}
+
+function runtimeBackedFiringAlerts(
+  deviceMap: Map<string, Device>,
+  alerts: AlertDTO[],
+  runtimeDevice: RuntimeDeviceModel,
+): AlertsPanelAlertModel[] {
+  const normalizedCount = runtimeDevice.metrics?.firing_alert_count ?? 0;
+
+  if (normalizedCount <= 0) {
+    return [];
+  }
+
+  const rawAlerts = alerts
+    .filter((alert) => alert.device_id === runtimeDevice.device.id && alert.state === 'firing')
+    .map((alert) => adaptAlert(deviceMap, alert));
+
+  if (rawAlerts.length === 0) {
+    return [syntheticRuntimeAlert(runtimeDevice)];
+  }
+
+  return rawAlerts.slice(0, normalizedCount);
+}
+
 export function buildAlertsPanelModel({
   alerts,
   runtimeState,
@@ -261,25 +376,37 @@ export function buildAlertsPanelModel({
 }): AlertsPanelModel {
   const devices = Array.from(runtimeState.devicesById.values()).map((entry) => entry.device);
   const deviceMap = new Map(devices.map((device) => [device.id, device]));
-  const firingAlerts = alerts
-    .filter((alert) => alert.state === 'firing')
+  const runtimeDevicesById = new Map(
+    Array.from(runtimeState.devicesById.values())
+      .filter((entry) => entry.runtimeStatus !== null)
+      .map((entry) => [entry.device.id, entry] as const),
+  );
+  const runtimeAlertsAvailable = runtimeDevicesById.size > 0;
+  const runtimeDrivenFiringAlerts = Array.from(runtimeDevicesById.values())
+    .filter((entry) => entry.alertStatus !== 'normal')
+    .flatMap((entry) => runtimeBackedFiringAlerts(deviceMap, alerts, entry));
+  const fallbackRawFiringAlerts = alerts
+    .filter((alert) => alert.state === 'firing' && !runtimeDevicesById.has(alert.device_id))
     .map((alert) => adaptAlert(deviceMap, alert));
+  const firingAlerts = runtimeAlertsAvailable
+    ? [...runtimeDrivenFiringAlerts, ...fallbackRawFiringAlerts]
+    : alerts
+      .filter((alert) => alert.state === 'firing')
+      .map((alert) => adaptAlert(deviceMap, alert));
+  const activeAlertCount = countActiveAlertsFromRuntimeState(runtimeState, alerts);
   const resolvedAlerts = alerts
     .filter((alert) => alert.state !== 'firing')
     .map((alert) => adaptAlert(deviceMap, alert));
 
-  const offlineDevices = devices
-    .filter((device) => runtimeState.devicesById.get(device.id)?.prometheusOutageMode === 'offline')
-    .map((device) => ({ id: device.id, label: labelForDevice(device) }));
-  const fallbackDevices = devices
-    .filter((device) => runtimeState.devicesById.get(device.id)?.prometheusOutageMode === 'fallback')
-    .map((device) => ({ id: device.id, label: labelForDevice(device) }));
-
   return {
+    activeAlertCount,
     firingAlerts,
     resolvedAlerts,
-    prometheusOutage: offlineDevices.length > 0 || fallbackDevices.length > 0
-      ? { offlineDevices, fallbackDevices }
+    prometheusDiagnostics: runtimeState.prometheusDown
+      ? {
+          title: 'Prometheus diagnostics unavailable',
+          detail: 'Runtime status and alerts use normalized telemetry. Prometheus health is shown here for operator diagnostics only.',
+        }
       : null,
   };
 }
@@ -296,19 +423,22 @@ export function buildDeviceInterfacePanelModel({
   interfaces: InterfaceInfo[];
 }): DeviceInterfacePanelModel {
   const runtimeDevice = resolveRuntimeDevice(runtimeState, device);
-  const availability = metricsAvailability(runtimeDevice);
   const deviceLabel = labelForDevice(runtimeDevice.device);
-  const sections = sortDeviceInterfaces(interfaces).map((iface) => buildInterfaceSection({
-    deviceLabel,
-    ifName: iface.if_name,
-    availabilityReason: availability.reason,
-    metricsUnavailableMessage: availability.message,
-    stats: adaptInterfaceStats(
-      findInterfaceMetrics(runtimeState, runtimeDevice.device.id, iface.if_name),
-      availability.available,
-    ),
-    interfaceInfo: iface,
-  }));
+  const sections = sortDeviceInterfaces(interfaces).map((iface) => {
+    const availability = interfaceMetricsAvailability(runtimeState, runtimeDevice, iface.if_name);
+
+    return buildInterfaceSection({
+      deviceLabel,
+      ifName: iface.if_name,
+      availabilityReason: availability.reason,
+      metricsUnavailableMessage: availability.message,
+      stats: adaptInterfaceStats(
+        findIndexedInterfaceMetrics(runtimeState, runtimeDevice.device.id, iface.if_name),
+        availability.available,
+      ),
+      interfaceInfo: iface,
+    });
+  });
 
   return {
     deviceId: runtimeDevice.device.id,
@@ -335,8 +465,10 @@ export function buildLinkInterfacePanelModel({
 }): LinkInterfacePanelModel {
   const runtimeSource = resolveRuntimeDevice(runtimeState, sourceDevice);
   const runtimeTarget = resolveRuntimeDevice(runtimeState, targetDevice);
-  const sourceAvailability = metricsAvailability(runtimeSource);
-  const targetAvailability = metricsAvailability(runtimeTarget);
+  const runtimeLink = runtimeState.linksById.get(link.id) ?? null;
+  const linkAvailability = linkMetricsAvailability(runtimeState, link.id);
+  const sourceAvailability = linkPanelAvailability(runtimeSource, linkAvailability, runtimeLink !== null);
+  const targetAvailability = linkPanelAvailability(runtimeTarget, linkAvailability, runtimeLink !== null);
   const sourceInterfaceInfo = matchInterfaceInfo(sourceInterfaces, link.source_if_name)
     ?? fallbackInterfaceInfo({
       ifName: link.source_if_name,
@@ -356,24 +488,24 @@ export function buildLinkInterfacePanelModel({
     source: buildInterfaceSection({
       deviceLabel: labelForDevice(runtimeSource.device),
       ifName: link.source_if_name,
-      availabilityReason: sourceAvailability.reason,
-      metricsUnavailableMessage: sourceAvailability.message,
-      stats: adaptInterfaceStats(
-        findInterfaceMetrics(runtimeState, runtimeSource.device.id, link.source_if_name),
-        sourceAvailability.available,
-      ),
-      interfaceInfo: sourceInterfaceInfo,
+        availabilityReason: sourceAvailability.reason,
+        metricsUnavailableMessage: sourceAvailability.message,
+        stats: adaptInterfaceStats(
+          runtimeLink?.metrics ?? null,
+          sourceAvailability.available,
+        ),
+        interfaceInfo: sourceInterfaceInfo,
     }),
-    target: buildInterfaceSection({
-      deviceLabel: labelForDevice(runtimeTarget.device),
-      ifName: link.target_if_name,
-      availabilityReason: targetAvailability.reason,
-      metricsUnavailableMessage: targetAvailability.message,
-      stats: adaptInterfaceStats(
-        findInterfaceMetrics(runtimeState, runtimeTarget.device.id, link.target_if_name),
-        targetAvailability.available,
-      ),
-      interfaceInfo: targetInterfaceInfo,
-    }),
+      target: buildInterfaceSection({
+        deviceLabel: labelForDevice(runtimeTarget.device),
+        ifName: link.target_if_name,
+        availabilityReason: targetAvailability.reason,
+        metricsUnavailableMessage: targetAvailability.message,
+        stats: adaptInterfaceStats(
+          runtimeLink?.metrics ?? null,
+          targetAvailability.available,
+        ),
+        interfaceInfo: targetInterfaceInfo,
+      }),
   };
 }

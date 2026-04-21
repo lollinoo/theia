@@ -1,4 +1,4 @@
-import type { AlertDTO } from '../types/metrics';
+import type { AlertDTO, RuntimeReason } from '../types/metrics';
 
 export interface AlertsPanelAlertModel {
   deviceId: string;
@@ -10,11 +10,12 @@ export interface AlertsPanelAlertModel {
 }
 
 export interface AlertsPanelModel {
+  activeAlertCount: number;
   firingAlerts: AlertsPanelAlertModel[];
   resolvedAlerts: AlertsPanelAlertModel[];
-  prometheusOutage: {
-    offlineDevices: Array<{ id: string; label: string }>;
-    fallbackDevices: Array<{ id: string; label: string }>;
+  prometheusDiagnostics: {
+    title: string;
+    detail: string;
   } | null;
 }
 
@@ -25,7 +26,7 @@ export interface InterfaceSectionModel {
   speedLabel: string | null;
   statusLabel: string | null;
   statusTone: 'up' | 'down' | 'neutral';
-  availabilityReason: 'device-down' | 'prometheus-unavailable' | null;
+  availabilityReason: Exclude<RuntimeReason, 'ok'> | null;
   metricsUnavailableMessage: string | null;
   txLabel: string;
   rxLabel: string;

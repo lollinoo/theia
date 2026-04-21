@@ -20,9 +20,10 @@ vi.mock('../MaterialIcon', () => ({
 describe('THEME-05 Component smoke tests', () => {
   function alertsModel(overrides: Partial<AlertsPanelModel> = {}): AlertsPanelModel {
     return {
+      activeAlertCount: 0,
       firingAlerts: [],
       resolvedAlerts: [],
-      prometheusOutage: null,
+      prometheusDiagnostics: null,
       ...overrides,
     };
   }

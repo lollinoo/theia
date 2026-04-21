@@ -380,9 +380,8 @@ func snapshotPayloadEmpty(payload *ws.SnapshotPayload) bool {
 		return true
 	}
 
-	return len(payload.DeviceMetrics) == 0 &&
-		len(payload.LinkMetrics) == 0 &&
-		len(payload.DeviceStatuses) == 0
+	return len(payload.Devices) == 0 &&
+		len(payload.Links) == 0
 }
 
 func mergeSnapshotPayload(base *ws.SnapshotPayload, delta *ws.SnapshotPayload) *ws.SnapshotPayload {
@@ -391,18 +390,18 @@ func mergeSnapshotPayload(base *ws.SnapshotPayload, delta *ws.SnapshotPayload) *
 		merged = ws.EmptySnapshot()
 	}
 	if delta == nil {
+		syncSnapshotCompatibility(merged)
 		return merged
 	}
 
-	for key, value := range delta.DeviceMetrics {
-		merged.DeviceMetrics[key] = value
+	for key, value := range delta.Devices {
+		merged.Devices[key] = value
 	}
-	for key, value := range delta.LinkMetrics {
-		merged.LinkMetrics[key] = append([]ws.LinkMetricsDTO(nil), value...)
+	for key, value := range delta.Links {
+		merged.Links[key] = value
 	}
-	for key, value := range delta.DeviceStatuses {
-		merged.DeviceStatuses[key] = value
-	}
+
+	syncSnapshotCompatibility(merged)
 
 	return merged
 }

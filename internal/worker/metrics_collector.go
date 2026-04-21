@@ -13,6 +13,7 @@ import (
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/metrics"
+	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/vendor"
 	"github.com/lollinoo/theia/internal/ws"
 )
@@ -62,6 +63,7 @@ type MetricsCollector struct {
 	// prevHashes stores per-section FNV-64a hashes from the previous collection cycle.
 	// nil on the first cycle — causes a full snapshot broadcast instead of a delta.
 	prevHashes *sectionHashes
+	version    uint64
 }
 
 // NewMetricsCollector creates a background collector for live Prometheus data.
@@ -239,6 +241,7 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 	defer cancel()
 
 	snapshot, promNowAvailable, promErr := c.buildSnapshot(collectCtx)
+	broadcastedSnapshot := false
 
 	// Compute hashes for the current snapshot to drive delta detection.
 	currentHashes := computeSnapshotHashes(snapshot)
@@ -253,18 +256,23 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 
 	if prev == nil {
 		// First cycle: send full snapshot so new/reconnecting clients get complete state.
-		c.hub.Broadcast(ws.Message{
-			Type:    ws.MessageTypeSnapshot,
-			Payload: snapshot,
-		})
+		c.mu.Lock()
+		c.version++
+		version := c.version
+		c.mu.Unlock()
+		c.hub.Broadcast(ws.NewSnapshotMessage(snapshot, version))
+		broadcastedSnapshot = true
 	} else {
 		delta := buildDelta(snapshot, currentHashes, prev)
 		if delta != nil {
 			// Subsequent cycles: send only the changed entries as a snapshot_delta.
-			c.hub.Broadcast(ws.Message{
-				Type:    ws.MessageTypeSnapshotDelta,
-				Payload: delta,
-			})
+			c.mu.Lock()
+			baseVersion := c.version
+			c.version++
+			version := c.version
+			c.mu.Unlock()
+			c.hub.Broadcast(ws.NewSnapshotDeltaMessage(delta, baseVersion, version))
+			broadcastedSnapshot = true
 		}
 		// If delta is nil, nothing changed — skip broadcast entirely.
 	}
@@ -303,6 +311,13 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 		}
 	topologyDrained:
 		if drained {
+			if !broadcastedSnapshot {
+				c.mu.Lock()
+				c.version++
+				version := c.version
+				c.mu.Unlock()
+				c.hub.Broadcast(ws.NewSnapshotMessage(snapshot, version))
+			}
 			c.hub.Broadcast(ws.Message{
 				Type:    ws.MessageTypeTopologyChanged,
 				Payload: nil,
@@ -320,6 +335,7 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 		log.Printf("Metrics collector: failed to load devices: %v", err)
 		return snapshot, true, ""
 	}
+	devices = cloneDevices(devices)
 	for i := range devices {
 		domain.NormalizeVirtualNoIPDevice(&devices[i])
 	}
@@ -712,14 +728,9 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 
 	linkMetricsByID := attachLinkMetrics(devices, links, linkMetricsByIP)
 
-	snapshot.DeviceMetrics = ws.DeviceMetricsToDTOs(deviceMetricsByID)
-	snapshot.LinkMetrics = ws.LinkMetricsToDTOs(linkMetricsByID)
-	_ = alertStates
-	_ = hostnamesByLabelValue
-
-	statuses := make(map[string]string, len(devices))
+	statuses := make(map[uuid.UUID]domain.DeviceStatus, len(devices))
 	for _, dev := range devices {
-		statuses[dev.ID.String()] = string(dev.Status)
+		statuses[dev.ID] = dev.Status
 	}
 
 	// Override device status with blackbox_exporter probe_success when Prometheus is
@@ -752,17 +763,61 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 					continue
 				}
 				if isUp {
-					statuses[dev.ID.String()] = string(domain.DeviceStatusUp)
+					statuses[dev.ID] = domain.DeviceStatusUp
 				} else {
-					statuses[dev.ID.String()] = string(domain.DeviceStatusDown)
+					statuses[dev.ID] = domain.DeviceStatusDown
 				}
 			}
 		}
 	}
 
-	snapshot.DeviceStatuses = statuses
+	alertsByDevice := make(map[uuid.UUID][]domain.AlertState)
+	for _, alert := range attachAlerts(devices, alertStates) {
+		alertsByDevice[alert.DeviceID] = append(alertsByDevice[alert.DeviceID], alert)
+	}
+
+	legacyStates := make(map[uuid.UUID]state.DeviceState, len(devices))
+	for _, device := range devices {
+		deviceState := state.DeviceState{
+			Metrics:     deviceMetricsByID[device.ID.String()],
+			LinkMetrics: linkMetricsByID[device.ID.String()],
+		}
+		switch statuses[device.ID] {
+		case domain.DeviceStatusUp:
+			deviceState.Reachability = state.ReachabilityUp
+		case domain.DeviceStatusDown:
+			deviceState.Reachability = state.ReachabilityHardDown
+		}
+		legacyStates[device.ID] = deviceState
+	}
+
+	snapshot = buildPipelineSnapshot(devices, links, legacyStates, alertsByDevice, ws.PrometheusStatusPayload{
+		Enabled:   len(allPromLabelGroups) > 0,
+		Available: promNowAvailable,
+	})
+	_ = hostnamesByLabelValue
 
 	return snapshot, promNowAvailable, firstPromError
+}
+
+func cloneDevices(devices []domain.Device) []domain.Device {
+	cloned := make([]domain.Device, len(devices))
+	for i := range devices {
+		cloned[i] = devices[i]
+		if devices[i].Interfaces != nil {
+			cloned[i].Interfaces = append([]domain.Interface(nil), devices[i].Interfaces...)
+		}
+		if devices[i].AreaIDs != nil {
+			cloned[i].AreaIDs = append([]uuid.UUID(nil), devices[i].AreaIDs...)
+		}
+		if devices[i].Tags != nil {
+			cloned[i].Tags = make(map[string]string, len(devices[i].Tags))
+			for k, v := range devices[i].Tags {
+				cloned[i].Tags[k] = v
+			}
+		}
+	}
+	return cloned
 }
 
 func attachDeviceMetrics(
@@ -770,22 +825,12 @@ func attachDeviceMetrics(
 	metricsByLabel map[string]domain.DeviceMetrics,
 	labelFor func(domain.Device) string,
 ) map[string]domain.DeviceMetrics {
-	collectedAt := time.Now().UTC()
 	metricsByID := make(map[string]domain.DeviceMetrics, len(devices))
 
 	for _, device := range devices {
 		var metric domain.DeviceMetrics
 		if lv := labelFor(device); lv != "" {
-			var ok bool
-			metric, ok = metricsByLabel[lv]
-			if !ok {
-				metric = domain.DeviceMetrics{CollectedAt: collectedAt}
-			}
-		} else {
-			metric = domain.DeviceMetrics{CollectedAt: collectedAt}
-		}
-		if metric.CollectedAt.IsZero() {
-			metric.CollectedAt = collectedAt
+			metric = metricsByLabel[lv]
 		}
 		metric.DeviceID = device.ID
 		metricsByID[device.ID.String()] = metric

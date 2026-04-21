@@ -1,16 +1,14 @@
 import { memo, type CSSProperties } from 'react';
-import { Handle, Position, useStore, type Node, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import type { Device, Link } from '../types/api';
 import {
   formatUptime,
   metricColor,
   type AlertStatus,
   type DeviceMetricsDTO,
+  type FreshnessStatus,
 } from '../types/metrics';
-import { formatFreshness, formatPollingEvery } from '../utils/freshness';
-import { isNodeVisibleInViewport } from '../utils/canvasVisibility';
-import { useDocumentVisibility } from '../hooks/useDocumentVisibility';
-import { useFreshnessClock } from '../hooks/useFreshnessClock';
+import { formatPollingEvery } from '../utils/freshness';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
 import { StatusDot } from './StatusDot';
 import {
@@ -130,6 +128,21 @@ function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): Readout['tone'] {
   }
 }
 
+function freshnessMeta(
+  freshness: FreshnessStatus,
+): { tone: Readout['tone']; text: string } {
+  switch (freshness) {
+    case 'fresh':
+      return { tone: freshnessTone('Fresh'), text: 'Fresh telemetry' };
+    case 'stale':
+      return { tone: freshnessTone('Stale'), text: 'Stale telemetry' };
+    case 'awaiting_poll':
+      return { tone: freshnessTone('Dead'), text: 'Awaiting first poll' };
+    case 'unmonitored':
+      return { tone: 'muted', text: 'Unmonitored' };
+  }
+}
+
 function readoutToneClass(tone: Readout['tone']): string {
   switch (tone) {
     case 'ok':
@@ -185,42 +198,14 @@ function ghostFrameStyle(color?: string): CSSProperties | undefined {
 
 function DeviceCardInner({
   data,
-  width,
-  height,
-  positionAbsoluteX,
-  positionAbsoluteY,
   selected,
 }: NodeProps<DeviceNode>) {
   const monitoringState = data.monitoringState ?? resolveDeviceMonitoringState(data.device);
-  const metrics = sanitizeDeviceMetricsForDisplay(data.device, data.metrics);
-  const transform = useStore((state) => state.transform);
-  const viewportWidth = useStore((state) => state.width);
-  const viewportHeight = useStore((state) => state.height);
-  const documentVisible = useDocumentVisibility();
+  const metrics = sanitizeDeviceMetricsForDisplay(data.device, data.metrics, monitoringState);
   const isVirtual = data.isVirtual === true;
-  const fallbackWidth = data.isGhost ? 132 : isVirtual ? 200 : 236;
-  const fallbackHeight = data.isGhost ? 52 : isVirtual ? 160 : 156;
-  const freshnessActive = documentVisible && isNodeVisibleInViewport({
-    nodeX: positionAbsoluteX,
-    nodeY: positionAbsoluteY,
-    nodeWidth: width ?? fallbackWidth,
-    nodeHeight: height ?? fallbackHeight,
-    viewportWidth,
-    viewportHeight,
-    transform,
-  });
-  const nowMs = useFreshnessClock(
-    metrics?.last_polled_at,
-    metrics?.expected_poll_interval_seconds,
-    freshnessActive,
-  );
-  const headerState = resolveDeviceVisualState(data.device, metrics);
+  const headerState = resolveDeviceVisualState(data.device, metrics, monitoringState);
   const freshness = monitoringState === 'monitorable' && metrics
-    ? formatFreshness(
-        metrics.last_polled_at,
-        metrics.expected_poll_interval_seconds,
-        nowMs,
-      )
+      ? freshnessMeta(metrics.freshness)
     : null;
   const pollingEvery = monitoringState === 'monitorable' && metrics
     ? formatPollingEvery(
@@ -241,12 +226,12 @@ function DeviceCardInner({
     memPercent,
     uptimeSecs,
     isDeviceDown,
-  } = resolveDeviceOperationalReadouts(data.device, metrics);
+  } = resolveDeviceOperationalReadouts(data.device, metrics, monitoringState);
   const renderModel = resolveDeviceCardRenderModel({
     device: data.device,
     monitoringState,
     addressState,
-    hasFreshnessMeta: freshness !== null && pollingEvery !== null,
+    hasFreshnessMeta: freshness !== null,
   });
   const isVirtualUnmonitored = renderModel.variant === 'virtual-unmonitored';
   const readouts = buildReadouts({
@@ -402,7 +387,7 @@ function DeviceCardInner({
 
               {renderModel.showFreshnessMeta ? (
                 <div className="min-w-0 text-right">
-                  <div className={`text-[10px] font-medium ${readoutToneClass(freshnessTone(freshness!.tier))}`}>
+                  <div className={`text-[10px] font-medium ${readoutToneClass(freshness!.tone)}`}>
                     {freshness!.text}
                   </div>
                   <div className="mt-0.5 text-[10px] text-on-bg-secondary">
@@ -469,7 +454,7 @@ function DeviceCardInner({
 
               {renderModel.showFreshnessMeta ? (
                 <div className="mt-3 flex w-full items-center justify-between gap-2 text-[10px]">
-                  <div className={`min-w-0 truncate font-medium ${readoutToneClass(freshnessTone(freshness!.tier))}`}>
+                  <div className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}>
                     {freshness!.text}
                   </div>
                   <div className="min-w-0 truncate text-on-bg-secondary">
@@ -510,7 +495,7 @@ const DeviceCard = memo(DeviceCardInner, (prev: NodeProps<DeviceNode>, next: Nod
     pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
     pd.metrics?.uptime_secs === nd.metrics?.uptime_secs &&
     pd.metrics?.health === nd.metrics?.health &&
-    pd.metrics?.stale === nd.metrics?.stale &&
+    pd.metrics?.freshness === nd.metrics?.freshness &&
     pd.metrics?.last_polled_at === nd.metrics?.last_polled_at &&
     pd.metrics?.expected_poll_interval_seconds === nd.metrics?.expected_poll_interval_seconds &&
     pd.editMode === nd.editMode &&

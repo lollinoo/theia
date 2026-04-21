@@ -68,20 +68,28 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
-    device_metrics: {
+    devices: {
       'dev-1': {
         device_id: 'dev-1',
+        operational_status: 'up',
+        reachability: 'up',
+        health: 'warning',
+        freshness: 'fresh',
+        primary_reason: 'ok',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'normal',
+        firing_alert_count: 0,
+        last_collected_at: '2026-04-13T11:59:45Z',
+        last_polled_at: '2026-04-13T11:59:45Z',
+        expected_poll_interval_seconds: 60,
         cpu_percent: 42,
         mem_percent: 68,
-        collected_at: '2026-04-13T11:59:45Z',
-        health: 'warning',
-        stale: false,
+        temp_celsius: null,
+        uptime_secs: null,
       },
     },
-    link_metrics: {},
-    device_statuses: {
-      'dev-1': 'up',
-    },
+    links: {},
     ...overrides,
   };
 }
@@ -103,19 +111,19 @@ function renderUseCanvasData(
     const [nodes, setNodes] = useState<DeviceNode[]>([]);
     const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
-      const hook = useCanvasData({
-        snapshot: currentSnapshot,
-        reconnecting: false,
-        prometheusStatus,
-        editMode: false,
+    const hook = useCanvasData({
+      snapshot: currentSnapshot,
+      reconnecting: false,
+      prometheusStatus,
+      editMode: false,
       openDeviceMenu,
       openEdgeMenu,
-        reactFlow,
-        nodes,
-        setNodes,
-        setEdges,
-        onDevicesChange: options.onDevicesChange,
-      });
+      reactFlow,
+      nodes,
+      setNodes,
+      setEdges,
+      onDevicesChange: options.onDevicesChange,
+    });
 
     return {
       ...hook,
@@ -164,8 +172,11 @@ describe('useCanvasData', () => {
   it('snapshot application keeps overview metadata attached when device status is down', async () => {
     const { result } = renderUseCanvasData(
       mockSnapshot({
-        device_statuses: {
-          'dev-1': 'down',
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+          },
         },
       }),
     );
@@ -179,8 +190,8 @@ describe('useCanvasData', () => {
     expect(result.current.nodes).toHaveLength(1);
     expect(result.current.nodes[0].data.device.status).toBe('down');
     expect(result.current.runtimeSummary).toEqual({
-      prometheusDown: false,
       alertCount: 0,
+      prometheusDiagnosticsVisible: false,
     });
     expect(result.current.nodes[0].data.metrics).toMatchObject({
       health: 'warning',
@@ -194,8 +205,11 @@ describe('useCanvasData', () => {
 
     const { result } = renderUseCanvasData(
       mockSnapshot({
-        device_statuses: {
-          'dev-1': 'down',
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+          },
         },
       }),
       null,
@@ -226,8 +240,11 @@ describe('useCanvasData', () => {
 
     const { result } = renderUseCanvasData(
       mockSnapshot({
-        device_statuses: {
-          'dev-1': 'down',
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+          },
         },
       }),
     );
@@ -243,7 +260,7 @@ describe('useCanvasData', () => {
     expect(result.current.nodes[0].data.metrics).toBeNull();
   });
 
-  it('stale fallback blanks numeric metrics but preserves health freshness and cadence metadata', async () => {
+  it('does not blank runtime telemetry client-side after a local stale timer expires', async () => {
     const { result } = renderUseCanvasData(mockSnapshot());
 
     await act(async () => {
@@ -257,21 +274,22 @@ describe('useCanvasData', () => {
 
     expect(result.current.nodes).toHaveLength(1);
     expect(result.current.nodes[0].data.metrics).toMatchObject({
-      cpu_percent: null,
-      mem_percent: null,
+      cpu_percent: 42,
+      mem_percent: 68,
       temp_celsius: null,
       uptime_secs: null,
       health: 'warning',
-      stale: false,
+      freshness: 'fresh',
+      metrics_status: 'available',
       last_polled_at: '2026-04-13T11:59:45Z',
       expected_poll_interval_seconds: 60,
     });
   });
 
-  it('does not force Prometheus devices down when Prometheus is disabled', async () => {
+  it('does not let Prometheus status override normalized runtime status', async () => {
     const { result } = renderUseCanvasData(
       mockSnapshot(),
-      { enabled: false, available: false },
+      { enabled: true, available: false },
     );
 
     await act(async () => {
@@ -282,6 +300,184 @@ describe('useCanvasData', () => {
     expect(result.current.loading).toBe(false);
     expect(result.current.nodes).toHaveLength(1);
     expect(result.current.nodes[0].data.device.status).toBe('up');
+  });
+
+  it('prefers normalized runtime firing alert counts over the raw alert feed', async () => {
+    const { result } = renderUseCanvasData(
+      mockSnapshot({
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            firing_alert_count: 3,
+          },
+        },
+      }),
+      null,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.runtimeSummary).toEqual({
+      alertCount: 3,
+      prometheusDiagnosticsVisible: false,
+    });
+  });
+
+  it('falls back to the raw alert feed when runtime snapshot devices are unavailable', async () => {
+    const reactFlow = {
+      fitView: vi.fn(),
+    } as unknown as ReactFlowInstance<DeviceNode, LinkEdgeType>;
+    const openDeviceMenu = vi.fn();
+    const openEdgeMenu = vi.fn();
+
+    const alerts = [{
+      device_id: 'dev-1',
+      alert_name: 'DeviceDown',
+      severity: 'critical',
+      state: 'firing',
+      summary: 'legacy alert feed still firing',
+    }] as const;
+
+    const { result } = renderHook(() => {
+      const [nodes, setNodes] = useState<DeviceNode[]>([]);
+      const [edges, setEdges] = useState<LinkEdgeType[]>([]);
+
+      return useCanvasData({
+        snapshot: null,
+        alerts,
+        reconnecting: false,
+        prometheusStatus: { enabled: true, available: false },
+        editMode: false,
+        openDeviceMenu,
+        openEdgeMenu,
+        reactFlow,
+        nodes,
+        setNodes,
+        setEdges,
+      });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.runtimeSummary).toEqual({
+      alertCount: 1,
+      prometheusDiagnosticsVisible: true,
+    });
+  });
+
+  it('surfaces Prometheus degradation as diagnostics without changing alert totals', async () => {
+    const { result } = renderUseCanvasData(
+      mockSnapshot(),
+      { enabled: true, available: false },
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.runtimeSummary).toEqual({
+      alertCount: 0,
+      prometheusDiagnosticsVisible: true,
+    });
+  });
+
+  it('counts normalized and raw firing alerts together during mixed runtime coverage', async () => {
+    vi.mocked(fetchDevices).mockResolvedValue([
+      mockDevice(),
+      mockDevice({
+        id: 'dev-2',
+        hostname: 'switch-01',
+        ip: '10.0.0.2',
+        sys_name: 'switch-01',
+      }),
+    ]);
+
+    const reactFlow = {
+      fitView: vi.fn(),
+    } as unknown as ReactFlowInstance<DeviceNode, LinkEdgeType>;
+    const openDeviceMenu = vi.fn();
+    const openEdgeMenu = vi.fn();
+
+    const snapshot = mockSnapshot({
+      devices: {
+        'dev-1': {
+          ...mockSnapshot().devices['dev-1'],
+          firing_alert_count: 2,
+        },
+      },
+      links: {},
+    });
+    const alerts = [{
+      device_id: 'dev-2',
+      alert_name: 'DeviceDown',
+      severity: 'critical',
+      state: 'firing',
+      summary: 'legacy alert feed still firing',
+    }] as const;
+
+    const { result } = renderHook(() => {
+      const [nodes, setNodes] = useState<DeviceNode[]>([]);
+      const [edges, setEdges] = useState<LinkEdgeType[]>([]);
+
+      return useCanvasData({
+        snapshot,
+        alerts,
+        reconnecting: false,
+        prometheusStatus: null,
+        editMode: false,
+        openDeviceMenu,
+        openEdgeMenu,
+        reactFlow,
+        nodes,
+        setNodes,
+        setEdges,
+      });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.runtimeSummary).toEqual({
+      alertCount: 3,
+      prometheusDiagnosticsVisible: false,
+    });
+  });
+
+  it('ignores runtime alert counts for snapshot devices outside the current topology inventory', async () => {
+    const snapshot = mockSnapshot({
+      devices: {
+        'dev-1': {
+          ...mockSnapshot().devices['dev-1'],
+          firing_alert_count: 1,
+        },
+        'dev-2': {
+          ...mockSnapshot().devices['dev-1'],
+          device_id: 'dev-2',
+          firing_alert_count: 5,
+        },
+      },
+    });
+
+    const { result } = renderUseCanvasData(snapshot);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.runtimeSummary).toEqual({
+      alertCount: 1,
+      prometheusDiagnosticsVisible: false,
+    });
   });
 
   it('retains only failed manual edge migrations in localStorage', async () => {
@@ -384,8 +580,11 @@ describe('useCanvasData', () => {
 
     rerender({
       currentSnapshot: mockSnapshot({
-        device_statuses: {
-          'dev-1': 'down',
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+          },
         },
       }),
     });
@@ -576,8 +775,11 @@ describe('useCanvasData', () => {
 
     rerender({
       currentSnapshot: mockSnapshot({
-        device_statuses: {
-          'dev-1': 'down',
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+          },
         },
       }),
     });

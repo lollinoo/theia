@@ -23,9 +23,10 @@ function mockAlert(overrides: Partial<AlertsPanelModel['firingAlerts'][number]> 
 
 function mockModel(overrides: Partial<AlertsPanelModel> = {}): AlertsPanelModel {
   return {
+    activeAlertCount: 1,
     firingAlerts: [mockAlert()],
     resolvedAlerts: [],
-    prometheusOutage: null,
+    prometheusDiagnostics: null,
     ...overrides,
   };
 }
@@ -69,22 +70,21 @@ describe('AlertsPanel (COMP-06)', () => {
     expect(container.innerHTML).toContain('motion-reduce:animate-none');
   });
 
-  it('renders Prometheus outage groupings from the adapted model', () => {
+  it('renders Prometheus health as diagnostics only', () => {
     const { getByText } = render(
       <AlertsPanel
         model={mockModel({
           firingAlerts: [],
-          prometheusOutage: {
-            offlineDevices: [{ id: 'dev-1', label: 'Core Router' }],
-            fallbackDevices: [{ id: 'dev-2', label: 'Edge Switch' }],
+          prometheusDiagnostics: {
+            title: 'Prometheus diagnostics unavailable',
+            detail: 'Runtime status and alerts use normalized telemetry. Prometheus health is shown here for operator diagnostics only.',
           },
         })}
       />,
     );
 
-    expect(getByText('Prometheus unreachable')).toBeInTheDocument();
-    expect(getByText('Core Router')).toBeInTheDocument();
-    expect(getByText('Edge Switch')).toBeInTheDocument();
+    expect(getByText('Prometheus diagnostics unavailable')).toBeInTheDocument();
+    expect(getByText(/operator diagnostics only/i)).toBeInTheDocument();
   });
 
   it('renders resolved alerts from the adapted model', () => {
@@ -101,11 +101,25 @@ describe('AlertsPanel (COMP-06)', () => {
     expect(getByText('RecoveredCPU')).toBeInTheDocument();
   });
 
-  it('does not render Prometheus outage UI without an outage model', () => {
+  it('shows the authoritative active alert count when normalized totals exceed rendered rows', () => {
+    const { getByText } = render(
+      <AlertsPanel
+        model={mockModel({
+          firingAlerts: [mockAlert()],
+          activeAlertCount: 3,
+        })}
+      />,
+    );
+
+    expect(getByText('Active (3)')).toBeInTheDocument();
+    expect(getByText(/showing 1 alert row while normalized runtime reports 3 active alerts/i)).toBeInTheDocument();
+  });
+
+  it('does not render Prometheus diagnostics without a diagnostics model', () => {
     const { queryByText } = render(
       <AlertsPanel model={mockModel({ firingAlerts: [] })} />,
     );
 
-    expect(queryByText('Prometheus unreachable')).not.toBeInTheDocument();
+    expect(queryByText('Prometheus diagnostics unavailable')).not.toBeInTheDocument();
   });
 });

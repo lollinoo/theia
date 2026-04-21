@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
@@ -236,12 +237,29 @@ func (r *pipelineTaskRunner) publishSubscribedDetailDelta(device domain.Device) 
 		return
 	}
 
-	delta := buildDeviceDetailDelta(device, deviceState)
+	p.runtime.mu.RLock()
+	promStatus := p.runtime.promStatus
+	alerts := cloneAlertGroups(p.runtime.alerts)
+	version := p.runtime.overviewVersion
+	p.runtime.mu.RUnlock()
+
+	states := p.stateStore.Snapshot()
+	devicesByID := map[uuid.UUID]domain.Device{device.ID: device}
+	var linkRuntimes []ws.LinkRuntimeDTO
+	if p.cache != nil {
+		if cachedDevices, err := p.cache.GetDevices(); err == nil {
+			for _, cachedDevice := range cachedDevices {
+				devicesByID[cachedDevice.ID] = cachedDevice
+			}
+		}
+		if links, err := p.cache.GetLinks(); err == nil {
+			linkRuntimes = buildDeviceLinkRuntimeDTOs(device, deviceState, devicesByID, states, links, promStatus)
+		}
+	}
+
+	delta := buildDeviceDetailDeltaWithLinks(device, deviceState, linkRuntimes, alerts[device.ID], promStatus)
 	for _, client := range subscribers {
-		p.hub.SendTo(client, ws.Message{
-			Type:    ws.MessageTypeSnapshotDelta,
-			Payload: delta,
-		})
+		p.hub.SendTo(client, ws.NewSnapshotDeltaMessage(delta, version, version))
 	}
 }
 

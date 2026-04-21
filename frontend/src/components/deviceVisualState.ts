@@ -1,7 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { Device, DeviceStatus } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
-import { getEffectivePollingIntervalSeconds } from '../utils/polling';
 
 export type DeviceMonitoringState = 'monitorable' | 'unmonitored';
 export type DeviceVisualStatus = DeviceStatus | 'degraded' | 'critical' | 'unmonitored';
@@ -51,25 +50,23 @@ export function resolveDeviceMonitoringState(device: DeviceMonitoringInput): Dev
   return device.device_type === 'virtual' && !hasIp ? 'unmonitored' : 'monitorable';
 }
 
-export function isDeviceMonitorable(device: DeviceMonitoringInput): boolean {
-  return resolveDeviceMonitoringState(device) === 'monitorable';
+export function isDeviceMonitorable(
+  device: DeviceMonitoringInput,
+  monitoringStateOverride?: DeviceMonitoringState,
+): boolean {
+  return (monitoringStateOverride ?? resolveDeviceMonitoringState(device)) === 'monitorable';
 }
 
 export function sanitizeDeviceMetricsForDisplay(
   device: DeviceMonitoringInput,
   metrics?: DeviceVisualMetrics,
+  monitoringStateOverride?: DeviceMonitoringState,
 ): DeviceMetricsDTO | null {
-  if (!isDeviceMonitorable(device) || !metrics) {
+  if (!isDeviceMonitorable(device, monitoringStateOverride) || !metrics) {
     return null;
   }
 
-  return {
-    ...metrics,
-    temp_celsius: metrics.temp_celsius ?? null,
-    uptime_secs: metrics.uptime_secs ?? null,
-    last_polled_at: metrics.last_polled_at ?? metrics.collected_at,
-    expected_poll_interval_seconds: getEffectivePollingIntervalSeconds(device),
-  };
+  return metrics;
 }
 
 export function resolveDeviceAddressState(device: DeviceMonitoringInput): DeviceAddressState {
@@ -125,8 +122,9 @@ function unmonitoredLabelClass(): string {
 
 export function resolveDeviceOperationalStatusState(
   device: DeviceVisualInput,
+  monitoringStateOverride?: DeviceMonitoringState,
 ): DeviceVisualState {
-  if (!isDeviceMonitorable(device)) {
+  if (!isDeviceMonitorable(device, monitoringStateOverride)) {
     return {
       dotStatus: 'unmonitored',
       label: 'Unmonitored',
@@ -329,8 +327,9 @@ export function resolveDeviceStatusDotStyles(status: DeviceVisualStatus): Device
 export function resolveDeviceVisualState(
   device: DeviceVisualInput,
   metrics?: DeviceVisualMetrics,
+  monitoringStateOverride?: DeviceMonitoringState,
 ): DeviceVisualState {
-  const operationalStatus = resolveDeviceOperationalStatusState(device);
+  const operationalStatus = resolveDeviceOperationalStatusState(device, monitoringStateOverride);
 
   if (
     operationalStatus.dotStatus === 'unmonitored' ||
@@ -371,9 +370,10 @@ export function resolveDeviceVisualState(
 export function resolveDeviceOperationalReadouts(
   device: DeviceVisualInput,
   metrics?: DeviceVisualMetrics,
+  monitoringStateOverride?: DeviceMonitoringState,
 ): DeviceOperationalReadouts {
-  const sanitizedMetrics = sanitizeDeviceMetricsForDisplay(device, metrics);
-  const isDeviceDown = isDeviceMonitorable(device) && device.status === 'down';
+  const sanitizedMetrics = sanitizeDeviceMetricsForDisplay(device, metrics, monitoringStateOverride);
+  const isDeviceDown = isDeviceMonitorable(device, monitoringStateOverride) && device.status === 'down';
 
   return {
     cpuPercent: isDeviceDown ? null : sanitizedMetrics?.cpu_percent ?? null,

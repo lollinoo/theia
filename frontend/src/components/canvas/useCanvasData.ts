@@ -17,14 +17,13 @@ import type { LinkEdgeType } from '../LinkEdge';
 import {
   buildPositionPayload,
   manualEdgeStorageKey,
-  staleThresholdMs,
   viewportSize,
 } from './canvasHelpers';
 import { measureCanvasAsyncWork, measureCanvasWork, type CanvasMeasurementTrigger } from './canvasInstrumentation';
 import { alertStatusForLink } from './edgeBuilder';
 import { composeCanvasTopology } from './topologyComposer';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
-import { buildRuntimeState } from './runtimeAdapters';
+import { buildRuntimeState, countActiveAlertsFromRuntimeState } from './runtimeAdapters';
 
 interface UseCanvasDataParams {
   snapshot: SnapshotPayload | null;
@@ -58,10 +57,6 @@ interface UseCanvasDataReturn {
   grafanaUrlRef: React.MutableRefObject<string>;
   deviceGrafanaUrlsRef: React.MutableRefObject<Map<string, string>>;
   refreshSettings: () => void;
-  prometheusAlertDismissed: boolean;
-  setPrometheusAlertDismissed: React.Dispatch<React.SetStateAction<boolean>>;
-  showRecoveryToast: boolean;
-  setShowRecoveryToast: React.Dispatch<React.SetStateAction<boolean>>;
   topologyRecoveryNotice: TopologyRecoveryNotice | null;
   dismissTopologyRecoveryNotice: () => void;
   retryTopologyRefresh: () => void;
@@ -79,8 +74,8 @@ export interface TopologyRecoveryNotice {
 }
 
 interface RuntimeSummary {
-  prometheusDown: boolean;
   alertCount: number;
+  prometheusDiagnosticsVisible: boolean;
 }
 
 interface LoadTopologyOptions {
@@ -92,6 +87,14 @@ const structuralRefreshDebounceMs = 250;
 const topologyRefreshRetryActionLabel = 'Retry topology refresh';
 const topologyRefreshDelayedMessage = 'Live topology refresh delayed';
 const emptyAlerts: AlertDTO[] = [];
+
+function runtimeAlertStatusForDevice(
+  deviceId: string,
+  snapshot: SnapshotPayload | null,
+  alerts: AlertDTO[],
+) {
+  return snapshot?.devices[deviceId]?.alert_status ?? alertStatusForDevice(deviceId, alerts);
+}
 
 function measurementTriggerForCauses(
   causes: Set<StructuralRefreshCause>,
@@ -288,33 +291,32 @@ export function useCanvasData({
   const [error, setError] = useState<string | null>(null);
 
   const snapshotRef = useRef<SnapshotPayload | null>(null);
-  const prometheusStatusRef = useRef<PrometheusStatusPayload | null>(null);
   const alertsRef = useRef<AlertDTO[]>(alerts);
   const devicesRef = useRef<Device[]>([]);
   const topologyLinksRef = useRef<Link[]>([]);
   const nodesRef = useRef<DeviceNode[]>(nodes);
-  const lastSnapshotTimeRef = useRef<number | null>(null);
-  const staleAppliedRef = useRef(false);
   const lastTopologyIdentityRef = useRef<string | null>(null);
   const lastUsablePositionStateRef = useRef('');
   const currentNodePositionsRef = useRef<Map<string, PositionState>>(new Map());
   const grafanaUrlRef = useRef<string>('');
   const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
-  const [prometheusAlertDismissed, setPrometheusAlertDismissed] = useState(false);
-
   const { fetchPositions, savePositions } = usePositions();
 
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
-    const prometheusDown = isPrometheusUnavailable(prometheusStatus);
-    return {
-      prometheusDown,
-      alertCount: alerts.filter((alert) => alert.state === 'firing').length + (prometheusDown ? 1 : 0),
-    };
-  }, [alerts, prometheusStatus]);
+    const runtimeState = buildRuntimeState({
+      devices,
+      links: topologyLinks,
+      snapshot,
+      alerts,
+      prometheusStatus,
+    });
 
-  // Track Prometheus recovery transition and auto-dismiss recovery toast.
-  const prevPromDownRef = useRef<boolean | null>(null);
-  const [showRecoveryToast, setShowRecoveryToast] = useState(false);
+    return {
+      alertCount: countActiveAlertsFromRuntimeState(runtimeState, alerts),
+      prometheusDiagnosticsVisible: isPrometheusUnavailable(prometheusStatus),
+    };
+  }, [alerts, devices, prometheusStatus, snapshot, topologyLinks]);
+
   const [topologyRecoveryNotice, setTopologyRecoveryNotice] = useState<TopologyRecoveryNotice | null>(null);
   const structuralRefreshTimerRef = useRef<number | null>(null);
   const pendingStructuralRefreshCausesRef = useRef<Set<StructuralRefreshCause>>(new Set());
@@ -324,9 +326,6 @@ export function useCanvasData({
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
-  useEffect(() => {
-    prometheusStatusRef.current = prometheusStatus;
-  }, [prometheusStatus]);
   useEffect(() => {
     alertsRef.current = alerts;
   }, [alerts]);
@@ -398,7 +397,7 @@ export function useCanvasData({
           links: fetchedLinks,
           snapshot: snapshotRef.current,
           alerts: alertsRef.current,
-          prometheusStatus: prometheusStatusRef.current,
+          prometheusStatus,
         });
         const runtimeDevices = fetchedDevices.map(
           (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
@@ -461,9 +460,6 @@ export function useCanvasData({
           });
           setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
           setEdges(nextEdges);
-          if (snapshotRef.current) {
-            lastSnapshotTimeRef.current = Date.now();
-          }
           lastTopologyIdentityRef.current = topologyIdentity.signature;
           lastUsablePositionStateRef.current = usablePositionState;
           return;
@@ -503,10 +499,6 @@ export function useCanvasData({
           placementDeviceIds,
           alerts: alertsRef.current,
         });
-
-        if (snapshotRef.current) {
-          lastSnapshotTimeRef.current = Date.now();
-        }
 
         // Apply all state updates together as urgent (not in startTransition).
         // Previously these were wrapped in startTransition which made them
@@ -671,28 +663,6 @@ export function useCanvasData({
     refreshSettings();
   }, [refreshSettings]);
 
-  // Prometheus recovery toast effect
-  useEffect(() => {
-    if (prometheusStatus === null) return;
-
-    const promDown = isPrometheusUnavailable(prometheusStatus);
-
-    // Detect recovery only for configured Prometheus connections.
-    if (prevPromDownRef.current === true && !promDown && prometheusStatus.enabled !== false && prometheusStatus.available) {
-      setShowRecoveryToast(true);
-      setPrometheusAlertDismissed(false);
-      const timer = window.setTimeout(() => setShowRecoveryToast(false), 8000);
-      prevPromDownRef.current = promDown;
-      return () => { window.clearTimeout(timer); };
-    }
-
-    if (!promDown) {
-      setPrometheusAlertDismissed(false);
-    }
-
-    prevPromDownRef.current = promDown;
-  }, [prometheusStatus?.enabled, prometheusStatus?.available]);
-
   useEffect(() => {
     if (topologyRecoveryNotice?.tone !== 'success') {
       return;
@@ -732,9 +702,6 @@ export function useCanvasData({
     }
 
     measureCanvasWork('theia:canvas:snapshot-apply', 'snapshot', () => {
-      lastSnapshotTimeRef.current = Date.now();
-      staleAppliedRef.current = false;
-
       const runtimeState = buildRuntimeState({
         devices: devicesRef.current,
         links: topologyLinksRef.current,
@@ -764,81 +731,44 @@ export function useCanvasData({
     });
   }, [editMode, openDeviceMenu, openEdgeMenu, openSelfLinkDetails, prometheusStatus, setEdges, setNodes, snapshot]);
 
-  // Stale data timer
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (lastSnapshotTimeRef.current === null || staleAppliedRef.current) {
-        return;
-      }
-
-      if (Date.now() - lastSnapshotTimeRef.current <= staleThresholdMs) {
-        return;
-      }
-
-      staleAppliedRef.current = true;
-
-      setNodes((currentNodes) =>
-        currentNodes.map((node) => ({
+    setNodes((currentNodes) => {
+      let changed = false;
+      const nextNodes = currentNodes.map((node) => {
+        const alertStatus = runtimeAlertStatusForDevice(node.id, snapshot, alerts);
+        if (node.data.alertStatus === alertStatus) {
+          return node;
+        }
+        changed = true;
+        return {
           ...node,
           data: {
             ...node.data,
-            // Local stale fallback blanks numeric values only; health and
-            // derived freshness metadata remain intact.
-            metrics: node.data.metrics
-              ? {
-                  ...node.data.metrics,
-                  cpu_percent: null,
-                  mem_percent: null,
-                  temp_celsius: null,
-                  uptime_secs: null,
-                }
-              : null,
-            alertStatus: alertStatusForDevice(node.id, alertsRef.current),
+            alertStatus,
           },
-        })),
-      );
+        };
+      });
+      return changed ? nextNodes : currentNodes;
+    });
 
-      setEdges((currentEdges) =>
-        currentEdges.map((edge) => ({
+    setEdges((currentEdges) => {
+      let changed = false;
+      const nextEdges = currentEdges.map((edge) => {
+        const alertStatus = edge.data?.link ? alertStatusForLink(edge.data.link, alerts) : undefined;
+        if (!edge.data || edge.data.alertStatus === alertStatus) {
+          return edge;
+        }
+        changed = true;
+        return {
           ...edge,
           data: {
             ...edge.data,
-            metrics: null,
-            throughputLabel: undefined,
-            utilization: null,
-            alertStatus: edge.data?.link ? alertStatusForLink(edge.data.link, alertsRef.current) : undefined,
+            alertStatus,
           },
-        })),
-      );
-    }, 10_000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [setNodes]);
-
-  useEffect(() => {
-    setNodes((currentNodes) =>
-      currentNodes.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          alertStatus: alertStatusForDevice(node.id, alerts),
-        },
-      })),
-    );
-
-    setEdges((currentEdges) =>
-      currentEdges.map((edge) => ({
-        ...edge,
-        data: edge.data
-          ? {
-              ...edge.data,
-              alertStatus: edge.data.link ? alertStatusForLink(edge.data.link, alerts) : undefined,
-            }
-          : edge.data,
-      })),
-    );
+        };
+      });
+      return changed ? nextEdges : currentEdges;
+    });
   }, [alerts, setEdges, setNodes]);
 
   return {
@@ -852,10 +782,6 @@ export function useCanvasData({
     grafanaUrlRef,
     deviceGrafanaUrlsRef,
     refreshSettings,
-    prometheusAlertDismissed,
-    setPrometheusAlertDismissed,
-    showRecoveryToast,
-    setShowRecoveryToast,
     topologyRecoveryNotice,
     dismissTopologyRecoveryNotice,
     retryTopologyRefresh,

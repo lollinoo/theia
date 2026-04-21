@@ -114,8 +114,6 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
     devices, setDevices, topologyLinks, loading, error, loadTopology,
     runtimeSummary,
     grafanaUrlRef, deviceGrafanaUrlsRef, refreshSettings,
-    prometheusAlertDismissed, setPrometheusAlertDismissed,
-    showRecoveryToast, setShowRecoveryToast,
     topologyRecoveryNotice, dismissTopologyRecoveryNotice, retryTopologyRefresh,
   } = useCanvasData({
     snapshot, alerts, reconnecting, prometheusStatus, editMode,
@@ -429,13 +427,11 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
 
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <CanvasOverlays editMode={editMode} reconnecting={reconnecting}
-        showRecoveryToast={showRecoveryToast} setShowRecoveryToast={setShowRecoveryToast}
         topologyRecoveryNotice={topologyRecoveryNotice}
         dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
         retryTopologyRefresh={retryTopologyRefresh}
-        prometheusDown={runtimeSummary.prometheusDown} prometheusAlertDismissed={prometheusAlertDismissed}
-        setPrometheusAlertDismissed={setPrometheusAlertDismissed} setPanelContent={setPanelContent}
         selectedNodeCount={selectedNodeCount}
+        prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
         onBulkEditClick={() => {
           const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
           if (selectedNodes.length > 1) {

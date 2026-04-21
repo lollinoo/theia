@@ -64,59 +64,71 @@ func TestParseClientControlMessage_RejectsBadSubscribeUUID(t *testing.T) {
 	}
 }
 
-func TestCloneSnapshot_PreservesSlimOverviewFields(t *testing.T) {
-	stale := true
+func TestCloneSnapshot_PreservesNormalizedRuntimeFields(t *testing.T) {
 	deviceID := uuid.New().String()
+	lastCollectedAt := "2026-04-13T13:00:00Z"
 
 	snapshot := &SnapshotPayload{
-		DeviceMetrics: map[string]DeviceMetricsDTO{
+		Devices: map[string]DeviceRuntimeDTO{
 			deviceID: {
-				DeviceID:     deviceID,
-				CPUPercent:   float64Ptr(17),
-				Health:       "warning",
-				Reachability: "reachable",
-				Stale:        &stale,
-				CollectedAt:  "2026-04-13T13:00:00Z",
+				DeviceID:          deviceID,
+				OperationalStatus: "up",
+				Reachability:      "up",
+				Health:            "warning",
+				Freshness:         "fresh",
+				PrimaryReason:     "ok",
+				MetricsStatus:     "available",
+				MetricsReason:     "ok",
+				AlertStatus:       "normal",
+				FiringAlertCount:  0,
+				LastCollectedAt:   &lastCollectedAt,
 			},
 		},
-		LinkMetrics:    map[string][]LinkMetricsDTO{},
-		DeviceStatuses: map[string]string{},
+		Links: map[string]LinkRuntimeDTO{},
 	}
 
 	cloned := CloneSnapshot(snapshot)
-	got, ok := cloned.DeviceMetrics[deviceID]
+	got, ok := cloned.Devices[deviceID]
 	if !ok {
-		t.Fatalf("cloned snapshot missing device metrics for %s", deviceID)
+		t.Fatalf("cloned snapshot missing device runtime for %s", deviceID)
 	}
 
-	if got.Health != "warning" {
-		t.Fatalf("Health = %q, want %q", got.Health, "warning")
+	if got.OperationalStatus != "up" {
+		t.Fatalf("OperationalStatus = %q, want %q", got.OperationalStatus, "up")
 	}
 
-	if got.Reachability != "reachable" {
-		t.Fatalf("Reachability = %q, want %q", got.Reachability, "reachable")
+	if got.Reachability != "up" {
+		t.Fatalf("Reachability = %q, want %q", got.Reachability, "up")
 	}
 
-	if got.Stale == nil || *got.Stale != stale {
-		t.Fatalf("Stale = %v, want %v", got.Stale, stale)
+	if got.LastCollectedAt == nil || *got.LastCollectedAt != lastCollectedAt {
+		t.Fatalf("LastCollectedAt = %#v, want %q", got.LastCollectedAt, lastCollectedAt)
 	}
 }
 
-func TestNewSnapshotMessage_UsesSlimOverviewContract(t *testing.T) {
+func TestNewSnapshotMessage_UsesNormalizedRuntimeContract(t *testing.T) {
 	deviceID := uuid.New().String()
+	lastCollectedAt := "2026-04-13T13:00:00Z"
 
 	message := NewSnapshotMessage(&SnapshotPayload{
-		DeviceMetrics: map[string]DeviceMetricsDTO{
+		Devices: map[string]DeviceRuntimeDTO{
 			deviceID: {
-				DeviceID:    deviceID,
-				CPUPercent:  float64Ptr(17),
-				MemPercent:  float64Ptr(34),
-				CollectedAt: "2026-04-13T13:00:00Z",
-				Health:      "warning",
+				DeviceID:         deviceID,
+				OperationalStatus: "up",
+				Reachability:      "up",
+				Health:            "warning",
+				Freshness:         "fresh",
+				PrimaryReason:     "ok",
+				MetricsStatus:     "available",
+				MetricsReason:     "ok",
+				AlertStatus:       "normal",
+				FiringAlertCount:  0,
+				CPUPercent:        float64Ptr(17),
+				MemPercent:        float64Ptr(34),
+				LastCollectedAt:   &lastCollectedAt,
 			},
 		},
-		LinkMetrics:    map[string][]LinkMetricsDTO{},
-		DeviceStatuses: map[string]string{deviceID: "down"},
+		Links: map[string]LinkRuntimeDTO{},
 	}, 42)
 
 	raw, err := json.Marshal(message)
@@ -147,25 +159,25 @@ func TestNewSnapshotMessage_UsesSlimOverviewContract(t *testing.T) {
 		t.Fatal("expected slim snapshot to omit device_models")
 	}
 
-	deviceMetrics, ok := snapshot["device_metrics"].(map[string]any)
+	deviceMetrics, ok := snapshot["devices"].(map[string]any)
 	if !ok {
-		t.Fatalf("device_metrics = %#v, want object", snapshot["device_metrics"])
+		t.Fatalf("devices = %#v, want object", snapshot["devices"])
 	}
 	metric, ok := deviceMetrics[deviceID].(map[string]any)
 	if !ok {
-		t.Fatalf("device_metrics[%s] = %#v, want object", deviceID, deviceMetrics[deviceID])
+		t.Fatalf("devices[%s] = %#v, want object", deviceID, deviceMetrics[deviceID])
 	}
-	if _, ok := metric["temp_celsius"]; ok {
-		t.Fatal("expected slim device_metrics to omit temp_celsius")
+	if _, ok := snapshot["device_metrics"]; ok {
+		t.Fatal("expected normalized snapshot to omit legacy device_metrics")
 	}
-	if _, ok := metric["uptime_secs"]; ok {
-		t.Fatal("expected slim device_metrics to omit uptime_secs")
+	if _, ok := snapshot["link_metrics"]; ok {
+		t.Fatal("expected normalized snapshot to omit legacy link_metrics")
 	}
-	if _, ok := metric["last_polled_at"]; ok {
-		t.Fatal("expected slim device_metrics to omit last_polled_at")
+	if _, ok := snapshot["device_statuses"]; ok {
+		t.Fatal("expected normalized snapshot to omit legacy device_statuses")
 	}
-	if _, ok := metric["expected_poll_interval_seconds"]; ok {
-		t.Fatal("expected slim device_metrics to omit expected_poll_interval_seconds")
+	if got := metric["last_collected_at"]; got != lastCollectedAt {
+		t.Fatalf("last_collected_at = %#v, want %q", got, lastCollectedAt)
 	}
 }
 
