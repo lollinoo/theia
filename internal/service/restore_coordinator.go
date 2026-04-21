@@ -100,6 +100,9 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	if err := os.Rename(marker.StagedDB, c.dbPath); err != nil {
 		return false, fmt.Errorf("activate staged db: %w", err)
 	}
+	if err := os.Chmod(c.dbPath, 0600); err != nil {
+		return false, fmt.Errorf("chmod restored db: %w", err)
+	}
 
 	if marker.StagedBackups != "" && marker.DeviceBackupDir != "" {
 		if info, err := os.Stat(marker.StagedBackups); err == nil {
@@ -172,11 +175,11 @@ func copyFileForRestore(src, dst string) error {
 	}
 	defer in.Close()
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 		return err
 	}
 
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
@@ -187,6 +190,10 @@ func copyFileForRestore(src, dst string) error {
 	}
 
 	if err := out.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Chmod(dst, 0600); err != nil {
 		return err
 	}
 
@@ -206,7 +213,7 @@ func copyDirForRestore(src, dst string) error {
 
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
-			return os.MkdirAll(target, 0755)
+			return os.MkdirAll(target, 0700)
 		}
 
 		return copyFileForRestore(path, target)

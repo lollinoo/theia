@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	crand "crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -17,7 +20,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	internalssh "github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/vendor"
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -953,6 +958,327 @@ func TestTriggerBackup_NoCredentialProfileAssigned(t *testing.T) {
 	if !strings.Contains(err.Error(), "no credential profile") {
 		t.Errorf("expected error to contain %q, got %q", "no credential profile", err.Error())
 	}
+}
+
+func TestRunTextExportWrites0600BackupFile(t *testing.T) {
+	addr := startBackupTestSSHServer(t, func(command string) (string, error) {
+		if command != "/export" {
+			return "", fmt.Errorf("unexpected command: %s", command)
+		}
+		return "/interface bridge add name=br0\n", nil
+	})
+
+	client, err := internalssh.NewClient(&internalssh.DefaultDialer{}, "127.0.0.1", serverPort(t, addr), "admin", "secret", 5*time.Second, ssh.InsecureIgnoreHostKey())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	backupDir := t.TempDir()
+	svc := &BackupService{fileRepo: newMockBackupFileRepo()}
+	if err := svc.runTextExport(context.Background(), client, uuid.New(), backupDir, "router.rsc", "running", "/export"); err != nil {
+		t.Fatalf("runTextExport: %v", err)
+	}
+
+	assertBackupMode(t, filepath.Join(backupDir, "router.rsc"), 0600)
+}
+
+func TestRunTextExportTightensExistingBackupFileOnOverwrite(t *testing.T) {
+	addr := startBackupTestSSHServer(t, func(command string) (string, error) {
+		if command != "/export" {
+			return "", fmt.Errorf("unexpected command: %s", command)
+		}
+		return "/interface bridge add name=br0\n", nil
+	})
+
+	client, err := internalssh.NewClient(&internalssh.DefaultDialer{}, "127.0.0.1", serverPort(t, addr), "admin", "secret", 5*time.Second, ssh.InsecureIgnoreHostKey())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	backupDir := t.TempDir()
+	filePath := filepath.Join(backupDir, "router.rsc")
+	if err := os.WriteFile(filePath, []byte("old"), 0o644); err != nil {
+		t.Fatalf("WriteFile(existing backup): %v", err)
+	}
+
+	svc := &BackupService{fileRepo: newMockBackupFileRepo()}
+	if err := svc.runTextExport(context.Background(), client, uuid.New(), backupDir, "router.rsc", "running", "/export"); err != nil {
+		t.Fatalf("runTextExport: %v", err)
+	}
+
+	assertBackupMode(t, filePath, 0600)
+}
+
+func TestRunTextExportReconcilesExistingDeviceBackupDirBeforeWritingBackupFile(t *testing.T) {
+	addr := startBackupTestSSHServer(t, func(command string) (string, error) {
+		if command != "/export" {
+			return "", fmt.Errorf("unexpected command: %s", command)
+		}
+		return "/interface bridge add name=br0\n", nil
+	})
+
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	backupRoot := t.TempDir()
+	encryptionKey := []byte("0123456789abcdef")
+
+	secretCiphertext, err := crypto.Encrypt([]byte("secret"), encryptionKey)
+	if err != nil {
+		t.Fatalf("crypto.Encrypt: %v", err)
+	}
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &internalssh.DefaultDialer{}, encryptionKey, backupRoot,
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	profileID := uuid.New()
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID:              profileID,
+		Name:            "test-profile",
+		Username:        "admin",
+		Port:            serverPort(t, addr),
+		EncryptedSecret: base64.StdEncoding.EncodeToString(secretCiphertext),
+		AuthMethod:      domain.SSHAuthPassword,
+		Role:            "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID:      deviceID,
+		IP:      "127.0.0.1",
+		Vendor:  "testvendor",
+		Managed: true,
+		Status:  domain.DeviceStatusUp,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+
+	deviceDir := filepath.Join(backupRoot, deviceID.String())
+	if err := os.MkdirAll(deviceDir, 0755); err != nil {
+		t.Fatalf("precreate device dir: %v", err)
+	}
+	assertBackupMode(t, deviceDir, 0755)
+
+	job, err := svc.TriggerBackup(context.Background(), deviceID)
+	if err != nil {
+		t.Fatalf("TriggerBackup: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		files, err := fileRepo.GetByJobID(job.ID)
+		if err == nil && len(files) > 0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	files, err := fileRepo.GetByJobID(job.ID)
+	if err != nil {
+		t.Fatalf("GetByJobID: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected backup file to be created")
+	}
+
+	assertBackupMode(t, deviceDir, 0700)
+}
+
+func TestRunBinaryExportWrites0600BackupFile(t *testing.T) {
+	remoteDir := t.TempDir()
+	remotePath := filepath.Join(remoteDir, "router.backup")
+	addr := startBackupTestSSHServer(t, func(command string) (string, error) {
+		switch command {
+		case "save-backup":
+			if err := os.WriteFile(remotePath, []byte("binary-backup"), 0644); err != nil {
+				return "", err
+			}
+			return "", nil
+		case "cleanup-backup":
+			if err := os.Remove(remotePath); err != nil && !os.IsNotExist(err) {
+				return "", err
+			}
+			return "", nil
+		default:
+			return "", fmt.Errorf("unexpected command: %s", command)
+		}
+	})
+
+	client, err := internalssh.NewClient(&internalssh.DefaultDialer{}, "127.0.0.1", serverPort(t, addr), "admin", "secret", 5*time.Second, ssh.InsecureIgnoreHostKey())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	backupDir := t.TempDir()
+	svc := &BackupService{fileRepo: newMockBackupFileRepo()}
+	if err := svc.runBinaryExport(context.Background(), client, uuid.New(), backupDir, "router.backup", &vendor.BinaryBackupCmd{
+		SaveCommand:    "save-backup",
+		RemoteFilePath: remotePath,
+		CleanupCommand: "cleanup-backup",
+	}); err != nil {
+		t.Fatalf("runBinaryExport: %v", err)
+	}
+
+	assertBackupMode(t, filepath.Join(backupDir, "router.backup"), 0600)
+}
+
+func assertBackupMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode for %s = %04o, want %04o", path, got, want)
+	}
+}
+
+func startBackupTestSSHServer(t *testing.T, execHandler func(command string) (string, error)) string {
+	t.Helper()
+
+	privateKey, err := rsa.GenerateKey(crand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate server key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromSigner(privateKey)
+	if err != nil {
+		t.Fatalf("create server signer: %v", err)
+	}
+
+	config := &ssh.ServerConfig{
+		PasswordCallback: func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+			if conn.User() != "admin" || string(password) != "secret" {
+				return nil, fmt.Errorf("invalid credentials")
+			}
+			return nil, nil
+		},
+	}
+	config.AddHostKey(signer)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go serveBackupSSHConn(conn, config, execHandler)
+		}
+	}()
+
+	return listener.Addr().String()
+}
+
+func serveBackupSSHConn(conn net.Conn, config *ssh.ServerConfig, execHandler func(command string) (string, error)) {
+	serverConn, chans, reqs, err := ssh.NewServerConn(conn, config)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	defer serverConn.Close()
+	go ssh.DiscardRequests(reqs)
+
+	for newChannel := range chans {
+		if newChannel.ChannelType() != "session" {
+			_ = newChannel.Reject(ssh.UnknownChannelType, "unsupported channel type")
+			continue
+		}
+
+		channel, requests, err := newChannel.Accept()
+		if err != nil {
+			continue
+		}
+		go handleBackupSSHChannel(channel, requests, execHandler)
+	}
+}
+
+func handleBackupSSHChannel(channel ssh.Channel, requests <-chan *ssh.Request, execHandler func(command string) (string, error)) {
+	defer channel.Close()
+
+	for req := range requests {
+		switch req.Type {
+		case "exec":
+			command := parseSSHExecCommand(req.Payload)
+			stdout, err := execHandler(command)
+			if req.WantReply {
+				_ = req.Reply(err == nil, nil)
+			}
+			if stdout != "" {
+				_, _ = io.WriteString(channel, stdout)
+			}
+			status := uint32(0)
+			if err != nil {
+				_, _ = io.WriteString(channel.Stderr(), err.Error())
+				status = 1
+			}
+			_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: status}))
+			return
+		case "subsystem":
+			if parseSSHExecCommand(req.Payload) != "sftp" {
+				if req.WantReply {
+					_ = req.Reply(false, nil)
+				}
+				continue
+			}
+			if req.WantReply {
+				_ = req.Reply(true, nil)
+			}
+			server, err := sftp.NewServer(channel)
+			if err != nil {
+				return
+			}
+			_ = server.Serve()
+			return
+		default:
+			if req.WantReply {
+				_ = req.Reply(false, nil)
+			}
+		}
+	}
+}
+
+func parseSSHExecCommand(payload []byte) string {
+	if len(payload) < 4 {
+		return ""
+	}
+	length := binary.BigEndian.Uint32(payload[:4])
+	if int(length) > len(payload)-4 {
+		return ""
+	}
+	return string(payload[4 : 4+length])
+}
+
+func serverPort(t *testing.T, addr string) int {
+	t.Helper()
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("split host port %q: %v", addr, err)
+	}
+
+	parsed, err := net.LookupPort("tcp", port)
+	if err != nil {
+		t.Fatalf("parse port %q: %v", port, err)
+	}
+
+	return parsed
 }
 
 // recordingSSHDialer captures the SSH config passed to Dial for verification.

@@ -64,11 +64,14 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("invalid database driver: %w", err)
 	}
+	if err := ensurePrivateDir(paths.backupDir); err != nil {
+		return fmt.Errorf("prepare backup directory %s: %w", paths.backupDir, err)
+	}
 
 	if dialect == sqlite.DialectSQLite {
 		dbDir := filepath.Dir(cfg.DBPath)
-		if err := os.MkdirAll(dbDir, 0755); err != nil {
-			return fmt.Errorf("create database directory %s: %w", dbDir, err)
+		if err := ensurePrivateDir(dbDir); err != nil {
+			return fmt.Errorf("prepare database directory %s: %w", dbDir, err)
 		}
 
 		if err := applyPendingSQLiteRestore(cfg.DBPath, paths.backupDir, paths.knownHostsPath); err != nil {
@@ -76,8 +79,15 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		}
 	}
 
-	if err := os.MkdirAll(paths.appDataDir, 0755); err != nil {
-		return fmt.Errorf("create application data directory %s: %w", paths.appDataDir, err)
+	if err := ensurePrivateDir(paths.appDataDir); err != nil {
+		return fmt.Errorf("prepare application data directory %s: %w", paths.appDataDir, err)
+	}
+	if _, err := os.Stat(paths.knownHostsPath); err == nil {
+		if err := ensureFileMode(paths.knownHostsPath, privateFileMode); err != nil {
+			return fmt.Errorf("prepare known_hosts file %s: %w", paths.knownHostsPath, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat known_hosts file %s: %w", paths.knownHostsPath, err)
 	}
 
 	db, dialect, err := sqlite.OpenPrimaryDB(cfg.DBDriver, cfg.DBPath, cfg.DBDSN)
@@ -163,9 +173,6 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	)
 
 	sshDialer := &ssh.DefaultDialer{}
-	if err := os.MkdirAll(paths.backupDir, 0755); err != nil {
-		return fmt.Errorf("create backup directory %s: %w", paths.backupDir, err)
-	}
 
 	knownHostsStore, err := ssh.NewKnownHostsStore(paths.knownHostsPath)
 	if err != nil {
@@ -179,8 +186,8 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	var backupScheduler *worker.BackupScheduler
 	if dialect == sqlite.DialectSQLite {
 		instanceBackupRepo := sqlite.NewInstanceBackupRepo(db)
-		if err := os.MkdirAll(paths.instanceBackupDir, 0755); err != nil {
-			return fmt.Errorf("create instance backup directory %s: %w", paths.instanceBackupDir, err)
+		if err := ensurePrivateDir(paths.instanceBackupDir); err != nil {
+			return fmt.Errorf("prepare instance backup directory %s: %w", paths.instanceBackupDir, err)
 		}
 		instanceBackupService = service.NewInstanceBackupService(
 			db,

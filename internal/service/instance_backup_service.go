@@ -91,7 +91,7 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 
 	// Create backup subdirectory: {backupDir}/{backupID}/
 	backupSubDir := filepath.Join(s.backupDir, backupID.String())
-	if err := os.MkdirAll(backupSubDir, 0755); err != nil {
+	if err := os.MkdirAll(backupSubDir, 0700); err != nil {
 		return nil, fmt.Errorf("creating backup directory: %w", err)
 	}
 
@@ -214,6 +214,10 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 		os.Remove(tempArchivePath)
 		return nil, fmt.Errorf("renaming archive: %w", err)
 	}
+	if err := os.Chmod(finalPath, 0600); err != nil {
+		cleanupOnError(fmt.Sprintf("restricting archive permissions: %v", err))
+		return nil, fmt.Errorf("restricting archive permissions: %w", err)
+	}
 
 	// Step 8: Compute archive SHA-256 and write sidecar
 	archiveHash, err := computeFileHash(finalPath)
@@ -224,7 +228,7 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 
 	sidecarContent := fmt.Sprintf("%s  %s\n", archiveHash, filepath.Base(finalPath))
 	sidecarPath := finalPath + ".sha256"
-	if err := os.WriteFile(sidecarPath, []byte(sidecarContent), 0644); err != nil {
+	if err := os.WriteFile(sidecarPath, []byte(sidecarContent), 0600); err != nil {
 		cleanupOnError(fmt.Sprintf("writing sidecar: %v", err))
 		return nil, fmt.Errorf("writing sidecar: %w", err)
 	}
@@ -264,7 +268,7 @@ func (s *InstanceBackupService) createArchive(
 	},
 	manifest *backupManifest,
 ) (int64, error) {
-	f, err := os.Create(archivePath)
+	f, err := os.OpenFile(archivePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return 0, fmt.Errorf("creating archive file: %w", err)
 	}
@@ -582,7 +586,7 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	if err := os.RemoveAll(stagingDir); err != nil {
 		return nil, fmt.Errorf("removing existing staging dir: %w", err)
 	}
-	if err := os.MkdirAll(stagingDir, 0755); err != nil {
+	if err := os.MkdirAll(stagingDir, 0700); err != nil {
 		return nil, fmt.Errorf("creating staging dir: %w", err)
 	}
 
@@ -622,8 +626,11 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	if err != nil {
 		return nil, fmt.Errorf("marshaling marker JSON: %w", err)
 	}
-	if err := os.WriteFile(markerPath, markerJSON, 0644); err != nil {
+	if err := os.WriteFile(markerPath, markerJSON, 0600); err != nil {
 		return nil, fmt.Errorf("writing restore marker: %w", err)
+	}
+	if err := os.Chmod(markerPath, 0600); err != nil {
+		return nil, fmt.Errorf("restricting restore marker permissions: %w", err)
 	}
 
 	report.Message = "Restore staged successfully. Server will restart to apply."
@@ -681,18 +688,18 @@ func extractArchive(archivePath, destDir string) error {
 		targetPath := filepath.Join(destDir, cleanName)
 
 		if header.Typeflag == tar.TypeDir {
-			if err := os.MkdirAll(targetPath, 0755); err != nil {
+			if err := os.MkdirAll(targetPath, 0700); err != nil {
 				return fmt.Errorf("creating directory %s: %w", cleanName, err)
 			}
 			continue
 		}
 
 		// Ensure parent directory exists
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0700); err != nil {
 			return fmt.Errorf("creating parent directory for %s: %w", cleanName, err)
 		}
 
-		outFile, err := os.Create(targetPath)
+		outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 		if err != nil {
 			return fmt.Errorf("creating file %s: %w", cleanName, err)
 		}
@@ -717,7 +724,7 @@ func isAllowedArchiveEntry(name string) bool {
 	return false
 }
 
-// copyFile copies a single file from src to dst, preserving mode 0644.
+// copyFile copies a single file from src to dst with private file permissions.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -725,7 +732,11 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+		return fmt.Errorf("creating parent directory for %s: %w", dst, err)
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", dst, err)
 	}
@@ -735,7 +746,7 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("copying %s to %s: %w", src, dst, err)
 	}
 
-	return os.Chmod(dst, 0644)
+	return os.Chmod(dst, 0600)
 }
 
 // copyDir recursively copies a directory from srcDir to dstDir.
@@ -752,7 +763,7 @@ func copyDir(srcDir, dstDir string) error {
 		target := filepath.Join(dstDir, rel)
 
 		if info.IsDir() {
-			return os.MkdirAll(target, 0755)
+			return os.MkdirAll(target, 0700)
 		}
 
 		return copyFile(path, target)
