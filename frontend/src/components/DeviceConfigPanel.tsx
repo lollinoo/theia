@@ -9,6 +9,7 @@ import type {
   SNMPProfile,
   TopologyDiscoveryMode,
 } from '../types/api';
+import { formatUptime, type DeviceMetricsDTO } from '../types/metrics';
 import {
   assignCredentialProfile,
   checkPrometheusHealth,
@@ -74,6 +75,7 @@ const POLLING_OVERRIDE_ERROR =
 
 interface DeviceConfigPanelProps {
   device: Device;
+  detailMetrics: DeviceMetricsDTO | null;
   onDeviceUpdated: (updated: Device) => void;
   onDeviceDeleted: () => void;
   onSettingsChange?: () => void;
@@ -83,6 +85,7 @@ interface DeviceConfigPanelProps {
 
 export function DeviceConfigPanel({
   device,
+  detailMetrics,
   onDeviceUpdated,
   onDeviceDeleted,
   onSettingsChange,
@@ -456,9 +459,59 @@ export function DeviceConfigPanel({
     discoveryState,
     device.last_topology_discovery_at,
   );
+  const hasDetailMetrics = detailMetrics !== null;
 
   return (
     <div className="space-y-6 p-4 transition-colors duration-200">
+      {hasDetailMetrics && (
+        <div className="space-y-3" data-testid="device-detail-runtime">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+              Live Detail Telemetry
+            </p>
+            <span className="text-xs text-on-bg-secondary/70">
+              {detailMetrics?.freshness ?? 'unknown'}
+            </span>
+          </div>
+          <div className="space-y-2 rounded-lg bg-surface-high p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                Operational status
+              </span>
+              <span className="text-sm text-on-bg">
+                {detailMetrics?.operational_status ?? '\u2014'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                Expected interval
+              </span>
+              <span className="text-sm text-on-bg">
+                {detailMetrics?.expected_poll_interval_seconds != null
+                  ? `${detailMetrics.expected_poll_interval_seconds}s`
+                  : '\u2014'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                Last poll
+              </span>
+              <span className="text-sm text-on-bg">
+                {detailMetrics?.last_polled_at ?? '\u2014'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
+                Runtime uptime
+              </span>
+              <span className="text-sm text-on-bg">
+                {detailMetrics?.uptime_secs != null ? formatUptime(detailMetrics.uptime_secs) : '\u2014'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Polling Override — physical devices only */}
       {!isVirtual && (
         <div className="space-y-3">

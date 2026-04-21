@@ -12,8 +12,12 @@ docs/superpowers/*
 !docs/superpowers/specs/*.md
 !docs/superpowers/plans/
 !docs/superpowers/plans/*.md
+!docs/testing/
+!docs/testing/*.md
 frontend/dist/
 frontend/dist/index.html
+frontend/playwright-report/
+frontend/test-results/
 # Build output
 /theia
 /winbox-bridge

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -643,6 +646,102 @@ func TestBuildSnapshot_PrometheusInterfaceDiscoveryDoesNotMutateCachedDevices(t 
 	}
 }
 
+func TestMetricsCollectorAppliesContractNormalizedRuntimeOutcome(t *testing.T) {
+	devID := uuid.New()
+	peerID := uuid.New()
+	linkID := uuid.New()
+	fixture := loadPrometheusRuntimeFixture(t, "partial.json")
+
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result := prometheusRuntimeFixtureResponse(fixture, r.URL.Query().Get("query"))
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data": map[string]any{
+				"resultType": "vector",
+				"result":     result,
+			},
+		}); err != nil {
+			t.Fatalf("encode Prometheus response: %v", err)
+		}
+	}))
+	t.Cleanup(promServer.Close)
+
+	promClient := metrics.NewPromClient(promServer.URL, nil)
+	hub := ws.NewHub()
+	deviceRepo := &mockWorkerDeviceRepo{
+		devices: []domain.Device{
+			{
+				ID:                   devID,
+				IP:                   fixture.Device.IP,
+				Status:               domain.DeviceStatusUnknown,
+				MetricsSource:        domain.MetricsSourcePrometheus,
+				PrometheusLabelName:  fixture.Device.LabelName,
+				PrometheusLabelValue: fixture.Device.LabelValue,
+				Vendor:               "default",
+				Interfaces:           []domain.Interface{{DeviceID: devID, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000}},
+			},
+			{
+				ID:         peerID,
+				IP:         "192.0.2.99",
+				Status:     domain.DeviceStatusUp,
+				Interfaces: []domain.Interface{{DeviceID: peerID, IfName: "ether9", IfDescr: "ether9", Speed: 1_000_000_000}},
+			},
+		},
+	}
+	linkRepo := &mockWorkerLinkRepo{links: []domain.Link{{
+		ID:             linkID,
+		SourceDeviceID: devID,
+		SourceIfName:   "ether1",
+		TargetDeviceID: peerID,
+		TargetIfName:   "ether9",
+	}}}
+	invalidateCh := make(chan struct{}, 1)
+	dlCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, invalidateCh)
+	settingsRepo := newMockWorkerSettingsRepo()
+	registry := buildEmptyVendorRegistry()
+
+	mc := NewMetricsCollector(promClient, hub, dlCache, deviceRepo, settingsRepo, registry, nil, nil, nil)
+
+	snapshot, promAvailable, promErr := mc.buildSnapshot(context.Background())
+	if !promAvailable {
+		t.Fatalf("expected Prometheus available, error: %s", promErr)
+	}
+
+	runtime := normalizedRuntimeOutcomeFromSnapshot(snapshot, devID)
+	if runtime.Device.Status != domain.DeviceStatusUp {
+		t.Fatalf("runtime.Device.Status = %q, want %q", runtime.Device.Status, domain.DeviceStatusUp)
+	}
+	if got := len(runtime.Links); got != 1 {
+		t.Fatalf("runtime link count = %d, want 1", got)
+	}
+	linkRuntime := runtime.Links[0]
+	if linkRuntime.LinkID != linkID.String() {
+		t.Fatalf("linkRuntime.LinkID = %q, want %q", linkRuntime.LinkID, linkID)
+	}
+	if linkRuntime.DeviceID != devID.String() {
+		t.Fatalf("linkRuntime.DeviceID = %q, want %q", linkRuntime.DeviceID, devID)
+	}
+	if linkRuntime.IfName != "ether1" {
+		t.Fatalf("linkRuntime.IfName = %q, want %q", linkRuntime.IfName, "ether1")
+	}
+	if linkRuntime.MetricsStatus != "available" {
+		t.Fatalf("linkRuntime.MetricsStatus = %q, want available", linkRuntime.MetricsStatus)
+	}
+	if linkRuntime.MetricsReason != "ok" {
+		t.Fatalf("linkRuntime.MetricsReason = %q, want ok", linkRuntime.MetricsReason)
+	}
+	if linkRuntime.TxBps == nil || *linkRuntime.TxBps != 500 {
+		t.Fatalf("linkRuntime.TxBps = %#v, want 500", linkRuntime.TxBps)
+	}
+	if linkRuntime.RxBps == nil || *linkRuntime.RxBps != 250 {
+		t.Fatalf("linkRuntime.RxBps = %#v, want 250", linkRuntime.RxBps)
+	}
+	if linkRuntime.Utilization == nil || *linkRuntime.Utilization != 0.0000005 {
+		t.Fatalf("linkRuntime.Utilization = %#v, want 0.0000005", linkRuntime.Utilization)
+	}
+}
+
 func TestBuildSnapshot_VirtualNoIPNormalizesLegacyStatus(t *testing.T) {
 	devID := uuid.New()
 	var requestCount int32
@@ -709,6 +808,110 @@ func TestBuildSnapshot_VirtualNoIPNormalizesLegacyStatus(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&requestCount); got != 0 {
 		t.Fatalf("expected no Prometheus queries for no-IP virtual node, got %d", got)
+	}
+}
+
+type prometheusRuntimeFixture struct {
+	Version int `json:"version"`
+	Device  struct {
+		IP         string `json:"ip"`
+		LabelName  string `json:"label_name"`
+		LabelValue string `json:"label_value"`
+	} `json:"device"`
+	Probe []struct {
+		Instance string  `json:"instance"`
+		Value    float64 `json:"value"`
+	} `json:"probe"`
+	Links []struct {
+		Instance string  `json:"instance"`
+		IfIndex  string  `json:"if_index"`
+		IfName   string  `json:"if_name"`
+		TxBps    float64 `json:"tx_bps"`
+		RxBps    float64 `json:"rx_bps"`
+		IfSpeed  float64 `json:"if_speed"`
+	} `json:"links"`
+}
+
+type normalizedRuntimeOutcome struct {
+	Device domain.Device
+	Links  []ws.LinkRuntimeDTO
+}
+
+func loadPrometheusRuntimeFixture(t *testing.T, name string) prometheusRuntimeFixture {
+	t.Helper()
+
+	path := filepath.Join("..", "collector", "testdata", "prometheus", name)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	var fixture prometheusRuntimeFixture
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", path, err)
+	}
+	if fixture.Version != 1 {
+		t.Fatalf("fixture version = %d, want 1", fixture.Version)
+	}
+
+	return fixture
+}
+
+func prometheusRuntimeFixtureResponse(fixture prometheusRuntimeFixture, query string) []map[string]any {
+	switch {
+	case strings.Contains(query, "probe_success"):
+		return prometheusRuntimeProbeResponse(fixture)
+	case strings.Contains(query, "rate(ifHCOutOctets"):
+		return prometheusRuntimeLinkResponse(fixture, "tx")
+	case strings.Contains(query, "rate(ifHCInOctets"):
+		return prometheusRuntimeLinkResponse(fixture, "rx")
+	case strings.Contains(query, "ifSpeed{"):
+		return prometheusRuntimeLinkResponse(fixture, "speed")
+	default:
+		return nil
+	}
+}
+
+func prometheusRuntimeProbeResponse(fixture prometheusRuntimeFixture) []map[string]any {
+	result := make([]map[string]any, 0, len(fixture.Probe))
+	for _, sample := range fixture.Probe {
+		result = append(result, map[string]any{
+			"metric": map[string]string{"instance": sample.Instance},
+			"value":  []any{1741374000.0, strconv.FormatFloat(sample.Value, 'f', -1, 64)},
+		})
+	}
+	return result
+}
+
+func prometheusRuntimeLinkResponse(fixture prometheusRuntimeFixture, field string) []map[string]any {
+	result := make([]map[string]any, 0, len(fixture.Links))
+	for _, sample := range fixture.Links {
+		value := 0.0
+		switch field {
+		case "tx":
+			value = sample.TxBps
+		case "rx":
+			value = sample.RxBps
+		case "speed":
+			value = sample.IfSpeed
+		}
+		result = append(result, map[string]any{
+			"metric": map[string]string{
+				"instance": sample.Instance,
+				"ifIndex":  sample.IfIndex,
+				"ifName":   sample.IfName,
+			},
+			"value": []any{1741374000.0, strconv.FormatFloat(value, 'f', -1, 64)},
+		})
+	}
+	return result
+}
+
+func normalizedRuntimeOutcomeFromSnapshot(snapshot *ws.SnapshotPayload, deviceID uuid.UUID) normalizedRuntimeOutcome {
+	deviceKey := deviceID.String()
+	return normalizedRuntimeOutcome{
+		Device: domain.Device{ID: deviceID, Status: domain.DeviceStatus(snapshot.DeviceStatuses[deviceKey])},
+		Links:  snapshot.LinkMetrics[deviceKey],
 	}
 }
 
