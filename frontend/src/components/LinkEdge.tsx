@@ -1,18 +1,14 @@
-import { memo, useMemo, useState } from 'react';
 import {
   BaseEdge,
+  type Edge,
   EdgeLabelRenderer,
+  type EdgeProps,
   getBezierPath,
   useStore,
-  type Edge,
-  type EdgeProps,
 } from '@xyflow/react';
-import {
-  resolveEdgeTone,
-  resolveLinkBadgePresentation,
-  type LinkEdgeData,
-} from './linkSemantics';
+import { memo, useMemo, useState } from 'react';
 import { buildSelfLoopPathModel } from './linkEdgeGeometry';
+import { type LinkEdgeData, resolveEdgeTone, resolveLinkBadgePresentation } from './linkSemantics';
 
 export type LinkEdgeType = Edge<LinkEdgeData>;
 
@@ -35,7 +31,8 @@ function LinkEdgeInner({
   const isConnected = data?.emphasis === 'connected';
   const isMuted = data?.emphasis === 'muted';
   const index = data?.parallelIndex || 0;
-  const isSelfLoop = source === target || data?.link?.source_device_id === data?.link?.target_device_id;
+  const isSelfLoop =
+    source === target || data?.link?.source_device_id === data?.link?.target_device_id;
   const { edgePath, labelX, labelY } = isSelfLoop
     ? buildSelfLoopPathModel({
         sourceX,
@@ -66,7 +63,10 @@ function LinkEdgeInner({
   const labelOffsetY = sign * magnitude;
   const tone = resolveEdgeTone(data);
   const haloColor =
-    isConnected && data?.areaColor && tone.semanticState !== 'warning' && tone.semanticState !== 'critical'
+    isConnected &&
+    data?.areaColor &&
+    tone.semanticState !== 'warning' &&
+    tone.semanticState !== 'critical'
       ? data.areaColor
       : tone.haloColor;
   const strokeOpacity = isMuted ? 0.22 : isConnected ? 0.98 : isActive ? 0.94 : 0.72;

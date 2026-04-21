@@ -2,14 +2,19 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { Link } from '../types/api';
 import { type AlertStatus, type LinkMetricsDTO } from '../types/metrics';
 import {
+  type EdgeBadgeAnchor,
   computeLinkBadgeAnchor,
   measureEdgePathLength,
-  type EdgeBadgeAnchor,
 } from './edgeBadgeAnchors';
 
 export type EdgeEmphasis = 'default' | 'muted' | 'connected';
 export type EdgeSemanticState = 'neutral' | 'up' | 'warning' | 'critical';
-export type LinkNegotiationState = 'matched' | 'mismatch' | 'partial' | 'unknown' | 'not_applicable';
+export type LinkNegotiationState =
+  | 'matched'
+  | 'mismatch'
+  | 'partial'
+  | 'unknown'
+  | 'not_applicable';
 export type LinkBadgeKind = 'rate' | 'throughput';
 export type LinkBadgeZoomBand = 'low' | 'medium' | 'high';
 
@@ -162,7 +167,12 @@ export function buildLinkTelemetryBadges({
   sourceIsVirtual,
 }: LinkTelemetryInput): Pick<
   LinkEdgeData,
-  'bandwidthLabel' | 'speedLabel' | 'negotiationTitle' | 'autonegTitle' | 'speedMismatch' | 'negotiationState'
+  | 'bandwidthLabel'
+  | 'speedLabel'
+  | 'negotiationTitle'
+  | 'autonegTitle'
+  | 'speedMismatch'
+  | 'negotiationState'
 > {
   if (isVirtualLink) {
     const realSpeed = sourceIsVirtual ? targetSpeed : sourceSpeed;
@@ -208,7 +218,8 @@ export function buildLinkTelemetryBadges({
 
   if (sourceSpeed > 0 || targetSpeed > 0) {
     const detectedSpeed = sourceSpeed > 0 ? sourceSpeed : targetSpeed;
-    const title = 'Autonegotiation is only partially visible because one side did not expose negotiated speed.';
+    const title =
+      'Autonegotiation is only partially visible because one side did not expose negotiated speed.';
 
     return {
       bandwidthLabel: formatBandwidth(detectedSpeed),
@@ -283,21 +294,21 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   const singleKnownIf = sourceIfKnown !== targetIfKnown;
   const singleKnownIfUp = sourceIfKnown ? sourceUp : targetIfKnown ? targetUp : false;
   const singleKnownIfDown = singleKnownIf && !singleKnownIfUp;
-  const oneIfDown = (sourceIfKnown || targetIfKnown) && ((sourceUp && !targetUp) || (!sourceUp && targetUp));
+  const oneIfDown =
+    (sourceIfKnown || targetIfKnown) && ((sourceUp && !targetUp) || (!sourceUp && targetUp));
   const bothIfDown = sourceIfKnown && targetIfKnown && !sourceUp && !targetUp;
-  const inertUtilDown = inertVirtualLink &&
-    utilization !== null &&
-    utilization > INERT_VIRTUAL_UTIL_CRITICAL_THRESHOLD;
-  const inertUtilWarn = inertVirtualLink &&
+  const inertUtilDown =
+    inertVirtualLink && utilization !== null && utilization > INERT_VIRTUAL_UTIL_CRITICAL_THRESHOLD;
+  const inertUtilWarn =
+    inertVirtualLink &&
     utilization !== null &&
     utilization >= INERT_VIRTUAL_UTIL_WARNING_THRESHOLD &&
     utilization <= INERT_VIRTUAL_UTIL_CRITICAL_THRESHOLD;
-  const devicesHealthy = (!sourceDeviceStatus || sourceDeviceStatus === 'up') && (!targetDeviceStatus || targetDeviceStatus === 'up');
+  const devicesHealthy =
+    (!sourceDeviceStatus || sourceDeviceStatus === 'up') &&
+    (!targetDeviceStatus || targetDeviceStatus === 'up');
   const hasOperationalTelemetry =
-    sourceIfKnown ||
-    targetIfKnown ||
-    sourceDeviceStatus === 'up' ||
-    targetDeviceStatus === 'up';
+    sourceIfKnown || targetIfKnown || sourceDeviceStatus === 'up' || targetDeviceStatus === 'up';
   const healthyPhysicalLink =
     !inertVirtualLink &&
     hasOperationalTelemetry &&
@@ -305,9 +316,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
     sourceUp &&
     targetUp &&
     !speedMismatch;
-  const healthyInertVirtualLink =
-    inertVirtualLink &&
-    singleKnownIfUp;
+  const healthyInertVirtualLink = inertVirtualLink && singleKnownIfUp;
 
   if (
     alertStatus === 'down' ||
@@ -433,12 +442,12 @@ export function resolveLinkBadgeVisibility({
 
   const screenLength = pathLength > 0 ? pathLength * zoom : 0;
   const showRate = Boolean(bandwidthLabel);
-  const showThroughput = Boolean(throughputLabel) && (
-    !showRate ||
-    zoomBand === 'high' ||
-    (zoomBand === 'medium' && screenLength >= LINK_BADGE_MIN_SCREEN_LENGTH.medium) ||
-    (zoomBand === 'low' && screenLength >= LINK_BADGE_MIN_SCREEN_LENGTH.low)
-  );
+  const showThroughput =
+    Boolean(throughputLabel) &&
+    (!showRate ||
+      zoomBand === 'high' ||
+      (zoomBand === 'medium' && screenLength >= LINK_BADGE_MIN_SCREEN_LENGTH.medium) ||
+      (zoomBand === 'low' && screenLength >= LINK_BADGE_MIN_SCREEN_LENGTH.low));
 
   return {
     zoomBand,
@@ -460,7 +469,9 @@ function buildStackedLinkBadgeItems(
       key: 'rate',
       text: data.bandwidthLabel,
       title: negotiationTitle,
-      className: resolveBadgeClassName(resolveInlineBadgeTone(edgeTone.semanticState, 'rate', data)),
+      className: resolveBadgeClassName(
+        resolveInlineBadgeTone(edgeTone.semanticState, 'rate', data),
+      ),
       warningIndicator: isNegotiationWarning(data?.negotiationState)
         ? {
             text: '!',
@@ -475,7 +486,9 @@ function buildStackedLinkBadgeItems(
     badgeByKind.throughput = {
       key: 'throughput',
       text: data.throughputLabel,
-      className: resolveBadgeClassName(resolveInlineBadgeTone(edgeTone.semanticState, 'throughput', data)),
+      className: resolveBadgeClassName(
+        resolveInlineBadgeTone(edgeTone.semanticState, 'throughput', data),
+      ),
     };
   }
 

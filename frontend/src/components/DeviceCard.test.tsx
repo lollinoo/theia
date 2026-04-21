@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
-import DeviceCard from './DeviceCard';
-import type { Device, Link } from '../types/api';
-import type { DeviceNodeData, DeviceNode } from './DeviceCard';
 import type { NodeProps } from '@xyflow/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Device, Link } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
+import DeviceCard from './DeviceCard';
+import type { DeviceNode, DeviceNodeData } from './DeviceCard';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -384,7 +384,8 @@ describe('DeviceCard', () => {
   });
 
   it('truncates long virtual node text inside the size-capped card', () => {
-    const longName = 'Virtual node with an intentionally very long display name for truncation checks';
+    const longName =
+      'Virtual node with an intentionally very long display name for truncation checks';
     const longAddress = 'edge-gateway-with-an-extremely-long-hostname.example.internal';
 
     renderDeviceCard({
@@ -442,9 +443,11 @@ describe('DeviceCard', () => {
     expect(screen.getByText('Self LLDP')).toBeInTheDocument();
     expect(screen.getByText('ether1 -> ether9')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', {
-      name: 'View details for self link ether1 -> ether9',
-    }));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'View details for self link ether1 -> ether9',
+      }),
+    );
 
     expect(onSelfLinkClick).toHaveBeenCalledWith(selfLink);
   });

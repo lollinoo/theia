@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  mergeSnapshotDelta,
-  parseWSMessage,
   type AlertDTO,
   type AlertWSMessage,
   type PrometheusStatusPayload,
@@ -10,6 +8,8 @@ import {
   type SnapshotDeltaWSMessage,
   type SnapshotPayload,
   type SnapshotWSMessage,
+  mergeSnapshotDelta,
+  parseWSMessage,
 } from '../types/metrics';
 
 interface UseWebSocketResult {
@@ -40,7 +40,10 @@ function buildWebSocketURL(url: string): string {
   return `${protocol}//${window.location.host}${normalizedPath}`;
 }
 
-export function useWebSocket(url: string, detailDeviceId: string | null = null): UseWebSocketResult {
+export function useWebSocket(
+  url: string,
+  detailDeviceId: string | null = null,
+): UseWebSocketResult {
   const [snapshot, setSnapshot] = useState<SnapshotPayload | null>(null);
   const [alerts, setAlerts] = useState<AlertDTO[]>([]);
   const [connected, setConnected] = useState(false);
@@ -67,10 +70,12 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
       return;
     }
 
-    socketRef.current.send(JSON.stringify({
-      type,
-      payload: { device_id: deviceId },
-    }));
+    socketRef.current.send(
+      JSON.stringify({
+        type,
+        payload: { device_id: deviceId },
+      }),
+    );
   }
 
   useEffect(() => {
@@ -157,7 +162,10 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
               }
 
               if (payload.version !== undefined || payload.base_version !== undefined) {
-                if (snapshotVersionRef.current !== payload.base_version || payload.version === undefined) {
+                if (
+                  snapshotVersionRef.current !== payload.base_version ||
+                  payload.version === undefined
+                ) {
                   awaitingResyncRef.current = true;
                   return prev;
                 }
@@ -171,9 +179,9 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
           } else if (message.type === 'alert') {
             const payload = (message as AlertWSMessage).payload;
             if (
-              payload.version !== undefined
-              && alertVersionRef.current !== null
-              && payload.version < alertVersionRef.current
+              payload.version !== undefined &&
+              alertVersionRef.current !== null &&
+              payload.version < alertVersionRef.current
             ) {
               return;
             }
@@ -184,9 +192,11 @@ export function useWebSocket(url: string, detailDeviceId: string | null = null):
           } else if (message.type === 'resync_required') {
             awaitingResyncRef.current = true;
             resetAlertState();
-            window.dispatchEvent(new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
-              detail: (message as ResyncRequiredWSMessage).payload,
-            }));
+            window.dispatchEvent(
+              new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
+                detail: (message as ResyncRequiredWSMessage).payload,
+              }),
+            );
           } else if (message.type === 'topology_changed') {
             window.dispatchEvent(new Event('topology-changed'));
           }

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { fetchHealthVersion } from '../api/client';
-import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
-import { MaterialIcon } from './MaterialIcon';
 import type { ActiveView } from '../App';
+import { fetchHealthVersion } from '../api/client';
+import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area } from '../types/api';
+import { MaterialIcon } from './MaterialIcon';
 
 interface NavigationPillProps {
   activeView: ActiveView;
@@ -13,7 +13,13 @@ interface NavigationPillProps {
   onAreaSelect: (areaId: string | null) => void;
 }
 
-function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAreaSelect }: NavigationPillProps) {
+function NavigationPill({
+  activeView,
+  selectedAreaId,
+  areas,
+  onViewChange,
+  onAreaSelect,
+}: NavigationPillProps) {
   const [version, setVersion] = useState('');
   const { resolvedTheme, setTheme } = useTheme();
 
@@ -41,6 +47,7 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
 
       {/* HUB ICON */}
       <button
+        type="button"
         onClick={() => onViewChange('hub')}
         className={`flex items-center rounded-full border px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
           isHub
@@ -61,6 +68,7 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
       ) : (
         <div className="flex max-w-[56vw] items-center gap-1 overflow-x-auto">
           <button
+            type="button"
             onClick={() => onAreaSelect(null)}
             className={`rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
               isGlobal
@@ -76,6 +84,7 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
             return (
               <button
                 key={area.id}
+                type="button"
                 onClick={() => onAreaSelect(area.id)}
                 className={`flex items-center gap-1.5 rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
                   isActive
@@ -87,7 +96,9 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
                   className="w-2 h-2 rounded-full flex-shrink-0"
                   style={{
                     backgroundColor: adaptAreaColor(area.color, resolvedTheme),
-                    boxShadow: isActive ? `0 0 8px ${adaptAreaColor(area.color, resolvedTheme)}` : undefined,
+                    boxShadow: isActive
+                      ? `0 0 8px ${adaptAreaColor(area.color, resolvedTheme)}`
+                      : undefined,
                   }}
                 />
                 {area.name}
@@ -101,6 +112,7 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
 
       {/* DEVICES ICON */}
       <button
+        type="button"
         onClick={() => onViewChange('dashboard')}
         className={`flex items-center rounded-full border px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
           isDashboard
@@ -115,15 +127,13 @@ function NavigationPill({ activeView, selectedAreaId, areas, onViewChange, onAre
 
       {/* THEME TOGGLE */}
       <button
+        type="button"
         onClick={toggleTheme}
         className="flex items-center rounded-full border border-transparent px-3 py-2 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
         title={resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}
       >
-        <MaterialIcon
-          name={resolvedTheme === 'dark' ? 'light_mode' : 'dark_mode'}
-          size={20}
-        />
+        <MaterialIcon name={resolvedTheme === 'dark' ? 'light_mode' : 'dark_mode'} size={20} />
       </button>
     </div>
   );

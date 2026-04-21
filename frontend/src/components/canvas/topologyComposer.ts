@@ -90,9 +90,10 @@ export function composeCanvasTopology({
         alertStatus: runtimeDevice.alertStatus,
         monitoringState: runtimeDevice.monitoringState,
         isVirtual: runtimeDevice.device.device_type === 'virtual',
-        subtype: runtimeDevice.device.device_type === 'virtual'
-          ? (runtimeDevice.device.tags?.virtual_subtype ?? 'generic')
-          : undefined,
+        subtype:
+          runtimeDevice.device.device_type === 'virtual'
+            ? (runtimeDevice.device.tags?.virtual_subtype ?? 'generic')
+            : undefined,
       },
     };
   });

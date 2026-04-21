@@ -1,9 +1,9 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-import Canvas from './Canvas';
 import type { Device, Link } from '../types/api';
+import Canvas from './Canvas';
 
 const testState = vi.hoisted(() => ({
   link: {
@@ -159,7 +159,8 @@ vi.mock('./canvas/CanvasPanels', () => ({
     panelContent: { type: string; data?: { link?: { id?: string }; readOnly?: boolean } } | null;
   }) => (
     <div data-testid="panel-state">
-      {panelContent?.type}:{panelContent?.data?.readOnly === true ? 'view' : 'edit'}:{panelContent?.data?.link?.id}
+      {panelContent?.type}:{panelContent?.data?.readOnly === true ? 'view' : 'edit'}:
+      {panelContent?.data?.link?.id}
     </div>
   ),
 }));

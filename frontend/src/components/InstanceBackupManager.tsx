@@ -1,16 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import type { InstanceBackup, RestoreReport } from '../types/api';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createInstanceBackup,
+  deleteInstanceBackup,
   fetchInstanceBackups,
   fetchSettings,
-  updateSetting,
-  deleteInstanceBackup,
   instanceBackupDownloadUrl,
   restoreInstanceBackup,
+  updateSetting,
 } from '../api/client';
+import { ServerError, ValidationError } from '../api/errors';
+import type { InstanceBackup, RestoreReport } from '../types/api';
 import { validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
-import { ValidationError, ServerError } from '../api/errors';
 
 const statusColors: Record<string, string> = {
   success: 'text-status-up',
@@ -19,9 +19,9 @@ const statusColors: Record<string, string> = {
 };
 
 const statusIcons: Record<string, string> = {
-  success: '\u2713',  // checkmark
-  failed: '\u2717',   // X mark
-  running: '\u25CF',  // filled circle
+  success: '\u2713', // checkmark
+  failed: '\u2717', // X mark
+  running: '\u25CF', // filled circle
 };
 
 export function InstanceBackupManager() {
@@ -139,7 +139,10 @@ export function InstanceBackupManager() {
     });
   }
 
-  function showSaved(setter: (v: boolean) => void, timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) {
+  function showSaved(
+    setter: (v: boolean) => void,
+    timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
+  ) {
     setter(true);
     if (timerRef.current !== null) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setter(false), 2000);
@@ -147,7 +150,11 @@ export function InstanceBackupManager() {
 
   function handleScheduleChange(value: string) {
     const err = validateIntervalAllowlist(value);
-    if (err) { setFieldError('scheduleInterval', err); setScheduleInterval(value); return; }
+    if (err) {
+      setFieldError('scheduleInterval', err);
+      setScheduleInterval(value);
+      return;
+    }
     setFieldError('scheduleInterval', null);
     setScheduleInterval(value);
     if (scheduleTimerRef.current !== null) clearTimeout(scheduleTimerRef.current);
@@ -160,7 +167,11 @@ export function InstanceBackupManager() {
 
   function handleRetentionChange(value: string) {
     const err = validateRetentionCount(value);
-    if (err) { setFieldError('retentionCount', err); setRetentionCount(value); return; }
+    if (err) {
+      setFieldError('retentionCount', err);
+      setRetentionCount(value);
+      return;
+    }
     setFieldError('retentionCount', null);
     setRetentionCount(value);
     if (retentionTimerRef.current !== null) clearTimeout(retentionTimerRef.current);
@@ -314,7 +325,9 @@ export function InstanceBackupManager() {
       setRestoreReport(null);
       setRestoreConfirmed(false);
       // Show a banner that the app is restarting
-      setCreateError('Restore initiated. The application is restarting. Please refresh the page in a few seconds.');
+      setCreateError(
+        'Restore initiated. The application is restarting. Please refresh the page in a few seconds.',
+      );
     }
   };
 
@@ -335,7 +348,11 @@ export function InstanceBackupManager() {
 
   const formatDate = (dateStr: string) => {
     if (!dateStr) return 'N/A';
-    try { return new Date(dateStr).toLocaleString(); } catch { return dateStr; }
+    try {
+      return new Date(dateStr).toLocaleString();
+    } catch {
+      return dateStr;
+    }
   };
 
   const formatSize = (bytes: number) => {
@@ -361,7 +378,9 @@ export function InstanceBackupManager() {
             type="file"
             accept=".tar.gz"
             className="hidden"
-            onChange={(e) => { void handleFileSelected(e); }}
+            onChange={(e) => {
+              void handleFileSelected(e);
+            }}
           />
           <button
             type="button"
@@ -372,8 +391,19 @@ export function InstanceBackupManager() {
             {restoreLoading ? (
               <>
                 <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
                 </svg>
                 Validating...
               </>
@@ -383,15 +413,28 @@ export function InstanceBackupManager() {
           </button>
           <button
             type="button"
-            onClick={() => { void handleCreate(); }}
+            onClick={() => {
+              void handleCreate();
+            }}
             disabled={hasRunning}
             className="flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             {creating ? (
               <>
                 <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
                 </svg>
                 Creating...
               </>
@@ -410,9 +453,7 @@ export function InstanceBackupManager() {
             <label className="text-[11px] font-medium text-on-bg-secondary">
               Automatic Backup Schedule
             </label>
-            {savedSchedule && (
-              <span className="text-[10px] text-status-up font-medium">Saved</span>
-            )}
+            {savedSchedule && <span className="text-[10px] text-status-up font-medium">Saved</span>}
           </div>
           <select
             value={scheduleInterval}
@@ -427,9 +468,7 @@ export function InstanceBackupManager() {
             <option value="168">Every 7 days</option>
           </select>
           {/* Next backup helper text */}
-          <p className="text-[10px] text-on-bg-muted">
-            {computeNextBackupText()}
-          </p>
+          <p className="text-[10px] text-on-bg-muted">{computeNextBackupText()}</p>
         </div>
 
         {/* Retention Count Input */}
@@ -471,14 +510,13 @@ export function InstanceBackupManager() {
       )}
 
       {/* LOADING STATE */}
-      {loading && (
-        <p className="text-xs text-on-bg-secondary">Loading backups...</p>
-      )}
+      {loading && <p className="text-xs text-on-bg-secondary">Loading backups...</p>}
 
       {/* EMPTY STATE */}
       {!loading && backups.length === 0 && (
         <p className="text-xs text-on-bg-secondary">
-          No instance backups yet. Create one to back up the entire Theia database and configuration.
+          No instance backups yet. Create one to back up the entire Theia database and
+          configuration.
         </p>
       )}
 
@@ -486,14 +524,13 @@ export function InstanceBackupManager() {
       {!loading && backups.length > 0 && (
         <div className="space-y-1.5">
           {backups.map((backup) => (
-            <div
-              key={backup.id}
-              className="rounded-lg bg-surface-high p-2.5 space-y-1"
-            >
+            <div key={backup.id} className="rounded-lg bg-surface-high p-2.5 space-y-1">
               {/* Row 1: Status + Filename + Date */}
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                  <span className={`text-xs font-bold ${statusColors[backup.status] ?? 'text-on-bg-secondary'}`}>
+                  <span
+                    className={`text-xs font-bold ${statusColors[backup.status] ?? 'text-on-bg-secondary'}`}
+                  >
                     {statusIcons[backup.status] ?? '?'}
                   </span>
                   <span className="text-xs text-on-bg font-mono truncate">
@@ -513,10 +550,10 @@ export function InstanceBackupManager() {
               {/* Row 2: Size + Version + Actions */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 text-[10px] text-on-bg-secondary">
-                  <span className="font-mono">{backup.status === 'failed' ? '\u2014' : formatSize(backup.size_bytes)}</span>
-                  {backup.app_version && (
-                    <span>v{backup.app_version}</span>
-                  )}
+                  <span className="font-mono">
+                    {backup.status === 'failed' ? '\u2014' : formatSize(backup.size_bytes)}
+                  </span>
+                  {backup.app_version && <span>v{backup.app_version}</span>}
                 </div>
                 <div className="flex items-center gap-1">
                   {/* Download button -- only for successful backups */}
@@ -547,14 +584,19 @@ export function InstanceBackupManager() {
 
               {/* Error message -- expandable on click */}
               {backup.status === 'failed' && backup.error_message && (
-                <div
-                  className="cursor-pointer"
-                  onClick={() => setExpandedErrorId(expandedErrorId === backup.id ? null : backup.id)}
+                <button
+                  type="button"
+                  className="block w-full cursor-pointer text-left"
+                  onClick={() =>
+                    setExpandedErrorId(expandedErrorId === backup.id ? null : backup.id)
+                  }
                 >
-                  <p className={`text-[10px] text-status-down ${expandedErrorId === backup.id ? '' : 'truncate'}`}>
+                  <p
+                    className={`text-[10px] text-status-down ${expandedErrorId === backup.id ? '' : 'truncate'}`}
+                  >
                     {backup.error_message}
                   </p>
-                </div>
+                </button>
               )}
             </div>
           ))}
@@ -583,7 +625,9 @@ export function InstanceBackupManager() {
               </div>
               <div className="flex justify-between">
                 <span className="text-on-bg-secondary">Database Size</span>
-                <span className="font-mono text-on-bg">{formatBytes(restoreReport.db_size_bytes)}</span>
+                <span className="font-mono text-on-bg">
+                  {formatBytes(restoreReport.db_size_bytes)}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-on-bg-secondary">Backup Files</span>
@@ -592,7 +636,10 @@ export function InstanceBackupManager() {
               {restoreReport.needs_migration && (
                 <div className="flex justify-between text-status-probing">
                   <span>Migration Required</span>
-                  <span className="font-mono">{restoreReport.migration_version} -&gt; {restoreReport.current_migration_version}</span>
+                  <span className="font-mono">
+                    {restoreReport.migration_version} -&gt;{' '}
+                    {restoreReport.current_migration_version}
+                  </span>
                 </div>
               )}
             </div>
@@ -626,7 +673,9 @@ export function InstanceBackupManager() {
               </button>
               <button
                 type="button"
-                onClick={() => { void handleRestoreConfirm(); }}
+                onClick={() => {
+                  void handleRestoreConfirm();
+                }}
                 disabled={!restoreConfirmed || restoreLoading}
                 className="rounded-lg bg-status-down px-3 py-1.5 text-xs font-medium text-white hover:bg-status-down/90 disabled:opacity-50 transition-colors"
               >

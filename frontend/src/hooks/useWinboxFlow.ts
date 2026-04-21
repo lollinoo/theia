@@ -21,23 +21,24 @@ export function useWinboxFlow(): {
   const bridgeSecretRef = useRef('');
   const settingsLoadedRef = useRef(false);
   const settingsLoadPromiseRef = useRef<Promise<void> | null>(null);
-  const { bridgeRunning, bridgeChecked, bridgeError, checkBridgeHealth } = useBridgeHealth(bridgePort);
-  const {
-    deviceWinboxState,
-    refreshDeviceWinboxAvailability,
-    setDeviceWinboxAvailability,
-  } = useDeviceWinboxAvailability();
+  const { bridgeRunning, bridgeChecked, bridgeError, checkBridgeHealth } =
+    useBridgeHealth(bridgePort);
+  const { deviceWinboxState, refreshDeviceWinboxAvailability, setDeviceWinboxAvailability } =
+    useDeviceWinboxAvailability();
 
   useEffect(() => {
-    settingsLoadPromiseRef.current = fetchSettings().then((settings) => {
-      const nextBridgeSecret = settings.bridge_secret ?? '';
-      const nextBridgePort = settings.bridge_port ?? '1337';
-      bridgeSecretRef.current = nextBridgeSecret;
-      bridgePortRef.current = nextBridgePort;
-      setBridgePort(nextBridgePort);
-    }).catch(() => {}).finally(() => {
-      settingsLoadedRef.current = true;
-    });
+    settingsLoadPromiseRef.current = fetchSettings()
+      .then((settings) => {
+        const nextBridgeSecret = settings.bridge_secret ?? '';
+        const nextBridgePort = settings.bridge_port ?? '1337';
+        bridgeSecretRef.current = nextBridgeSecret;
+        bridgePortRef.current = nextBridgePort;
+        setBridgePort(nextBridgePort);
+      })
+      .catch(() => {})
+      .finally(() => {
+        settingsLoadedRef.current = true;
+      });
   }, []);
 
   useEffect(() => {
@@ -56,15 +57,18 @@ export function useWinboxFlow(): {
     }
   }, [bridgeError]);
 
-  const openDeviceMenu = useCallback(async (deviceId: string) => {
-    refreshDeviceWinboxAvailability(deviceId);
+  const openDeviceMenu = useCallback(
+    async (deviceId: string) => {
+      refreshDeviceWinboxAvailability(deviceId);
 
-    if (!settingsLoadedRef.current) {
-      await settingsLoadPromiseRef.current;
-    }
+      if (!settingsLoadedRef.current) {
+        await settingsLoadPromiseRef.current;
+      }
 
-    checkBridgeHealth(bridgePortRef.current);
-  }, [checkBridgeHealth, refreshDeviceWinboxAvailability]);
+      checkBridgeHealth(bridgePortRef.current);
+    },
+    [checkBridgeHealth, refreshDeviceWinboxAvailability],
+  );
 
   const launchWinbox = useCallback(async (deviceId: string) => {
     if (!settingsLoadedRef.current) {
@@ -85,14 +89,17 @@ export function useWinboxFlow(): {
     }
 
     try {
-      const response = await fetchBridgeWithTimeout(`http://localhost:${bridgePortRef.current}/launch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      });
+      const response = await fetchBridgeWithTimeout(
+        `http://localhost:${bridgePortRef.current}/launch`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        },
+      );
 
       if (!response.ok) {
-        const data = await response.json().catch(() => ({})) as { error?: string };
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
         setWinboxError(data.error ?? `Bridge error (${response.status})`);
       }
     } catch (error) {

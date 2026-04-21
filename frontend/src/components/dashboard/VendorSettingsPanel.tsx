@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { type VendorConfig } from '../../types/api';
+import { useEffect, useState } from 'react';
 import { fetchVendorConfig, updateVendorConfig } from '../../api/client';
+import { type VendorConfig } from '../../types/api';
 
 interface VendorSettingsPanelProps {
   vendorName?: string;
@@ -98,9 +98,7 @@ export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsP
 
   return (
     <div className="space-y-5 p-4 transition-colors duration-200">
-      <div className="text-sm font-medium text-on-bg">
-        {vendor.display_name} Settings
-      </div>
+      <div className="text-sm font-medium text-on-bg">{vendor.display_name} Settings</div>
 
       {/* Prometheus Queries */}
       <div className="space-y-3">
@@ -108,24 +106,41 @@ export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsP
           Prometheus Queries
         </div>
         <p className="text-[10px] text-on-bg-secondary/70">
-          Use <code className="bg-elevated px-1 rounded">%[1]s</code> for label name and <code className="bg-elevated px-1 rounded">%[2]s</code> for label value.
+          Use <code className="bg-elevated px-1 rounded">%[1]s</code> for label name and{' '}
+          <code className="bg-elevated px-1 rounded">%[2]s</code> for label value.
         </p>
         <div className="space-y-2">
           <div>
             <label className={labelClass}>CPU</label>
-            <textarea value={promCpu} onChange={(e) => setPromCpu(e.target.value)} className={textareaClass} />
+            <textarea
+              value={promCpu}
+              onChange={(e) => setPromCpu(e.target.value)}
+              className={textareaClass}
+            />
           </div>
           <div>
             <label className={labelClass}>Memory</label>
-            <textarea value={promMemory} onChange={(e) => setPromMemory(e.target.value)} className={textareaClass} />
+            <textarea
+              value={promMemory}
+              onChange={(e) => setPromMemory(e.target.value)}
+              className={textareaClass}
+            />
           </div>
           <div>
             <label className={labelClass}>Temperature</label>
-            <textarea value={promTemp} onChange={(e) => setPromTemp(e.target.value)} className={textareaClass} />
+            <textarea
+              value={promTemp}
+              onChange={(e) => setPromTemp(e.target.value)}
+              className={textareaClass}
+            />
           </div>
           <div>
             <label className={labelClass}>Uptime</label>
-            <textarea value={promUptime} onChange={(e) => setPromUptime(e.target.value)} className={textareaClass} />
+            <textarea
+              value={promUptime}
+              onChange={(e) => setPromUptime(e.target.value)}
+              className={textareaClass}
+            />
           </div>
         </div>
       </div>
@@ -138,23 +153,49 @@ export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsP
         <div className="space-y-2">
           <div>
             <label className={labelClass}>Temperature OID</label>
-            <input type="text" value={snmpTempOid} onChange={(e) => setSnmpTempOid(e.target.value)} className={inputClass} />
+            <input
+              type="text"
+              value={snmpTempOid}
+              onChange={(e) => setSnmpTempOid(e.target.value)}
+              className={inputClass}
+            />
           </div>
           <div>
             <label className={labelClass}>Temperature Scale</label>
-            <input type="number" step="0.01" value={snmpTempScale} onChange={(e) => setSnmpTempScale(parseFloat(e.target.value) || 0)} className={inputClass} />
+            <input
+              type="number"
+              step="0.01"
+              value={snmpTempScale}
+              onChange={(e) => setSnmpTempScale(parseFloat(e.target.value) || 0)}
+              className={inputClass}
+            />
           </div>
           <div>
             <label className={labelClass}>CPU OID</label>
-            <input type="text" value={snmpCpuOid} onChange={(e) => setSnmpCpuOid(e.target.value)} className={inputClass} />
+            <input
+              type="text"
+              value={snmpCpuOid}
+              onChange={(e) => setSnmpCpuOid(e.target.value)}
+              className={inputClass}
+            />
           </div>
           <div>
             <label className={labelClass}>Memory Used OID</label>
-            <input type="text" value={snmpMemUsedOid} onChange={(e) => setSnmpMemUsedOid(e.target.value)} className={inputClass} />
+            <input
+              type="text"
+              value={snmpMemUsedOid}
+              onChange={(e) => setSnmpMemUsedOid(e.target.value)}
+              className={inputClass}
+            />
           </div>
           <div>
             <label className={labelClass}>Memory Total OID</label>
-            <input type="text" value={snmpMemTotalOid} onChange={(e) => setSnmpMemTotalOid(e.target.value)} className={inputClass} />
+            <input
+              type="text"
+              value={snmpMemTotalOid}
+              onChange={(e) => setSnmpMemTotalOid(e.target.value)}
+              className={inputClass}
+            />
           </div>
         </div>
       </div>
@@ -185,6 +226,7 @@ export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsP
 
       <div className="flex gap-2">
         <button
+          type="button"
           onClick={handleSave}
           disabled={saving}
           className="flex-1 rounded-md bg-primary px-3 py-2 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"

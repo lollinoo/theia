@@ -1,20 +1,22 @@
-import { useDeferredValue, useEffect, useState } from 'react';
+import { useDeferredValue, useEffect, useRef, useState } from 'react';
 import type { Device } from '../types/api';
-import { VendorIcon } from './icons/VendorIcon';
 import { MaterialIcon } from './MaterialIcon';
+import { VendorIcon } from './icons/VendorIcon';
 
 interface SearchOverlayProps {
   devices: Device[];
   onSelectDevice: (deviceId: string) => void;
 }
 
-export default function SearchOverlay({
-  devices,
-  onSelectDevice,
-}: SearchOverlayProps) {
+export default function SearchOverlay({ devices, onSelectDevice }: SearchOverlayProps) {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const deferredQuery = useDeferredValue(debouncedQuery);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -31,19 +33,19 @@ export default function SearchOverlay({
     normalizedQuery.length === 0
       ? []
       : devices
-        .filter((device) => {
-          const hostname = device.hostname.toLowerCase();
-          const ip = device.ip.toLowerCase();
-          const sysName = (device.sys_name || '').toLowerCase();
-          const displayName = (device.tags?.display_name || '').toLowerCase();
-          return (
-            hostname.includes(normalizedQuery) ||
-            ip.includes(normalizedQuery) ||
-            sysName.includes(normalizedQuery) ||
-            displayName.includes(normalizedQuery)
-          );
-        })
-        .slice(0, 8);
+          .filter((device) => {
+            const hostname = device.hostname.toLowerCase();
+            const ip = device.ip.toLowerCase();
+            const sysName = (device.sys_name || '').toLowerCase();
+            const displayName = (device.tags?.display_name || '').toLowerCase();
+            return (
+              hostname.includes(normalizedQuery) ||
+              ip.includes(normalizedQuery) ||
+              sysName.includes(normalizedQuery) ||
+              displayName.includes(normalizedQuery)
+            );
+          })
+          .slice(0, 8);
 
   const showDropdown = query.trim().length > 0;
 
@@ -59,7 +61,7 @@ export default function SearchOverlay({
         <label className="flex items-center gap-3 rounded-xl bg-elevated px-4 py-3">
           <MaterialIcon name="search" size={16} className="text-on-bg-secondary" />
           <input
-            autoFocus
+            ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {

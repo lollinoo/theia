@@ -2,7 +2,7 @@ import type { Device, Link } from '../../types/api';
 import type { AlertDTO, AlertStatus } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { buildLinkTelemetryBadges, type LinkEdgeData } from '../linkSemantics';
+import { type LinkEdgeData, buildLinkTelemetryBadges } from '../linkSemantics';
 import { type HandleSide } from './canvasHelpers';
 
 function normalizeLinkValue(value: string): string {
@@ -14,17 +14,47 @@ function extractPhysicalInterfaceAnchor(name: string): string {
   if (!normalized) return '';
 
   const virtualHints = [
-    'vlan', 'vrf', 'vpn', 'bridge', 'br-', 'bond', 'loopback', 'lo',
-    'gre', 'eoip', 'wg', 'wireguard', 'pppoe', 'ppp', 'sstp', 'ovpn',
-    'l2tp', 'vxlan', 'veth', 'tap', 'tun',
+    'vlan',
+    'vrf',
+    'vpn',
+    'bridge',
+    'br-',
+    'bond',
+    'loopback',
+    'lo',
+    'gre',
+    'eoip',
+    'wg',
+    'wireguard',
+    'pppoe',
+    'ppp',
+    'sstp',
+    'ovpn',
+    'l2tp',
+    'vxlan',
+    'veth',
+    'tap',
+    'tun',
   ];
   if (virtualHints.some((hint) => normalized.includes(hint))) {
     return '';
   }
 
   const physicalPatterns = [
-    'ether', 'eth', 'sfp-sfpplus', 'sfp', 'qsfp', 'ens', 'eno', 'enp',
-    'gigabitethernet', 'tengigabitethernet', 'fastethernet', 'ge-', 'xe-', 'et-',
+    'ether',
+    'eth',
+    'sfp-sfpplus',
+    'sfp',
+    'qsfp',
+    'ens',
+    'eno',
+    'enp',
+    'gigabitethernet',
+    'tengigabitethernet',
+    'fastethernet',
+    'ge-',
+    'xe-',
+    'et-',
   ];
   for (const pattern of physicalPatterns) {
     const idx = normalized.indexOf(pattern);
@@ -73,7 +103,9 @@ function canonicalLinkGroupKey(link: Link): string {
   return `${endpoints}|raw|${[
     `${link.source_device_id}:${normalizeLinkValue(link.source_if_name)}`,
     `${link.target_device_id}:${normalizeLinkValue(link.target_if_name)}`,
-  ].sort().join('|')}`;
+  ]
+    .sort()
+    .join('|')}`;
 }
 
 export function preferVisibleLinks(links: Link[]): Link[] {
@@ -131,8 +163,7 @@ export function buildEdgeData(
   const targetIsVirtual = targetDevice?.device_type === 'virtual';
   const isVirtualLink = sourceIsVirtual || targetIsVirtual;
   const inertVirtualLink =
-    (sourceIsVirtual && !sourceDevice?.ip) ||
-    (targetIsVirtual && !targetDevice?.ip);
+    (sourceIsVirtual && !sourceDevice?.ip) || (targetIsVirtual && !targetDevice?.ip);
 
   // For virtual links, use only the real device's interface speed (D-10)
   // Virtual devices have no interfaces, so their speed is always 0
@@ -311,7 +342,8 @@ export function alertStatusForLink(link: Link, alerts: AlertDTO[]): AlertStatus 
     if (alert.state !== 'firing') return false;
     // Interface-specific alerts: check if the summary references the interface name
     const summary = alert.summary.toLowerCase();
-    const isLinkAlert = alert.alert_name === 'LinkDown' || alert.alert_name === 'HighLinkUtilization';
+    const isLinkAlert =
+      alert.alert_name === 'LinkDown' || alert.alert_name === 'HighLinkUtilization';
     if (!isLinkAlert) return false;
     // Best-effort interface name matching
     if (sourceIfName && summary.includes(sourceIfName)) return true;

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import type { Area, Device } from '../../types/api';
 import { DeviceTable } from './DeviceTable';
-import type { Device, Area } from '../../types/api';
 import { buildRuntimeDeviceRows } from './runtimeDeviceRows';
 import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
@@ -69,7 +69,7 @@ function renderTable(devices = [mockDevice()]) {
       onBackup={noop}
       onBackupHistory={noop}
       onViewConfig={noop}
-    />
+    />,
   );
 }
 
@@ -134,7 +134,13 @@ describe('DeviceTable', () => {
 
   it('sorts unmonitored no-ip virtual nodes separately from down nodes', () => {
     const devices = [
-      mockDevice({ id: 'dev-virtual', hostname: 'virtual-cloud', device_type: 'virtual', ip: '', status: 'down' }),
+      mockDevice({
+        id: 'dev-virtual',
+        hostname: 'virtual-cloud',
+        device_type: 'virtual',
+        ip: '',
+        status: 'down',
+      }),
       mockDevice({ id: 'dev-down', hostname: 'router-down', status: 'down' }),
     ];
 
@@ -150,11 +156,17 @@ describe('DeviceTable', () => {
   it('sorts by row-model hostname instead of raw device hostname', () => {
     const rows: RuntimeDeviceRow[] = [
       {
-        ...buildRuntimeDeviceRows({ devices: [mockDevice({ id: 'dev-1', hostname: 'zzz-device' })], snapshot: null })[0],
+        ...buildRuntimeDeviceRows({
+          devices: [mockDevice({ id: 'dev-1', hostname: 'zzz-device' })],
+          snapshot: null,
+        })[0],
         hostname: 'bbb-row',
       },
       {
-        ...buildRuntimeDeviceRows({ devices: [mockDevice({ id: 'dev-2', hostname: 'aaa-device' })], snapshot: null })[0],
+        ...buildRuntimeDeviceRows({
+          devices: [mockDevice({ id: 'dev-2', hostname: 'aaa-device' })],
+          snapshot: null,
+        })[0],
         hostname: 'aaa-row',
       },
     ];
@@ -175,6 +187,4 @@ describe('DeviceTable', () => {
     expect(renderedRows[0]?.textContent).toContain('aaa-row');
     expect(renderedRows[1]?.textContent).toContain('bbb-row');
   });
-
-
 });

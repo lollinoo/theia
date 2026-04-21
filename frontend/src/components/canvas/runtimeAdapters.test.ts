@@ -351,13 +351,15 @@ describe('buildRuntimeState', () => {
           },
         },
       }),
-      alerts: [{
-        device_id: 'dev-1',
-        alert_name: 'DeviceDown',
-        severity: 'critical',
-        state: 'firing',
-        summary: 'router unreachable',
-      } satisfies AlertDTO],
+      alerts: [
+        {
+          device_id: 'dev-1',
+          alert_name: 'DeviceDown',
+          severity: 'critical',
+          state: 'firing',
+          summary: 'router unreachable',
+        } satisfies AlertDTO,
+      ],
       prometheusStatus: null,
     });
 
@@ -426,13 +428,15 @@ describe('buildRuntimeState', () => {
           },
         },
       }),
-      alerts: [{
-        device_id: 'dev-1',
-        alert_name: 'DeviceDown',
-        severity: 'critical',
-        state: 'firing',
-        summary: 'legacy alert feed still firing',
-      } satisfies AlertDTO],
+      alerts: [
+        {
+          device_id: 'dev-1',
+          alert_name: 'DeviceDown',
+          severity: 'critical',
+          state: 'firing',
+          summary: 'legacy alert feed still firing',
+        } satisfies AlertDTO,
+      ],
       prometheusStatus: null,
     });
 

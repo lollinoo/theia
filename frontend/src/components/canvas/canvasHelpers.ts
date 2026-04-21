@@ -1,9 +1,9 @@
+import type { PositionPayload } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import type { LinkMetricsDTO } from '../../types/metrics';
 import { formatThroughput } from '../../types/metrics';
-import type { DeviceNode } from '../DeviceCard';
-import type { PositionPayload } from '../../hooks/usePositions';
 import type { ContextMenuItem } from '../ContextMenu';
+import type { DeviceNode } from '../DeviceCard';
 import { formatBandwidth } from '../linkSemantics';
 
 export type HandleSide = 'top' | 'right' | 'bottom' | 'left';
@@ -161,7 +161,5 @@ export function buildDeviceContextMenuItems({
     },
   ];
 
-  return isVirtual
-    ? allItems.filter((item) => item.id === 'configure')
-    : allItems;
+  return isVirtual ? allItems.filter((item) => item.id === 'configure') : allItems;
 }

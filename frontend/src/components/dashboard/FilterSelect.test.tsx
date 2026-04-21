@@ -1,11 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { FilterSelect, type FilterOption } from './FilterSelect';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { type FilterOption, FilterSelect } from './FilterSelect';
 
 // Mock MaterialIcon to avoid font loading
 vi.mock('../MaterialIcon', () => ({
   MaterialIcon: ({ name, className }: { name: string; className?: string }) => (
-    <span data-testid={`icon-${name}`} className={className}>{name}</span>
+    <span data-testid={`icon-${name}`} className={className}>
+      {name}
+    </span>
   ),
 }));
 
@@ -23,18 +25,14 @@ const areaOptions: FilterOption[] = [
 
 describe('FilterSelect', () => {
   it('renders trigger button showing current selected label', () => {
-    render(
-      <FilterSelect value="up" onChange={vi.fn()} options={statusOptions} label="Status" />,
-    );
+    render(<FilterSelect value="up" onChange={vi.fn()} options={statusOptions} label="Status" />);
 
     expect(screen.getByText('Status:')).toBeInTheDocument();
     expect(screen.getByText('Up')).toBeInTheDocument();
   });
 
   it('clicking trigger opens dropdown options list', () => {
-    render(
-      <FilterSelect value="all" onChange={vi.fn()} options={statusOptions} label="Status" />,
-    );
+    render(<FilterSelect value="all" onChange={vi.fn()} options={statusOptions} label="Status" />);
 
     // Options should not be visible initially (only the trigger with "All" label)
     expect(screen.queryByText('Down')).not.toBeInTheDocument();
@@ -50,9 +48,7 @@ describe('FilterSelect', () => {
 
   it('clicking an option calls onChange with that value and closes dropdown', () => {
     const onChange = vi.fn();
-    render(
-      <FilterSelect value="all" onChange={onChange} options={statusOptions} label="Status" />,
-    );
+    render(<FilterSelect value="all" onChange={onChange} options={statusOptions} label="Status" />);
 
     // Open dropdown
     fireEvent.click(screen.getByRole('button'));
@@ -100,18 +96,14 @@ describe('FilterSelect', () => {
     expect(trigger?.className).not.toMatch(/bg-primary/);
 
     // When value is NOT the default, should have primary color accent
-    rerender(
-      <FilterSelect value="up" onChange={vi.fn()} options={statusOptions} label="Status" />,
-    );
+    rerender(<FilterSelect value="up" onChange={vi.fn()} options={statusOptions} label="Status" />);
     const activeTrigger = container.querySelector('button');
     expect(activeTrigger?.className).toMatch(/bg-primary/);
     expect(activeTrigger?.className).toMatch(/text-primary/);
   });
 
   it('renders options with a color dot when color prop provided', () => {
-    render(
-      <FilterSelect value="all" onChange={vi.fn()} options={areaOptions} label="Area" />,
-    );
+    render(<FilterSelect value="all" onChange={vi.fn()} options={areaOptions} label="Area" />);
 
     // Open dropdown
     fireEvent.click(screen.getByRole('button'));
@@ -125,9 +117,7 @@ describe('FilterSelect', () => {
   });
 
   it('renders expand_more icon as chevron', () => {
-    render(
-      <FilterSelect value="all" onChange={vi.fn()} options={statusOptions} label="Status" />,
-    );
+    render(<FilterSelect value="all" onChange={vi.fn()} options={statusOptions} label="Status" />);
 
     expect(screen.getByTestId('icon-expand_more')).toBeInTheDocument();
   });

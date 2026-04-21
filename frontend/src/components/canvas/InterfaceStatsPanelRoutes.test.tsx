@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import { fetchDeviceInterfaces } from '../../api/client';
 import type { Device, InterfaceInfo, Link } from '../../types/api';
+import {
+  DeviceInterfaceStatsPanelRoute,
+  LinkInterfaceStatsPanelRoute,
+} from './InterfaceStatsPanelRoutes';
 import { buildRuntimeState } from './runtimeAdapters';
-import { DeviceInterfaceStatsPanelRoute, LinkInterfaceStatsPanelRoute } from './InterfaceStatsPanelRoutes';
 
 vi.mock('../../api/client', () => ({
   fetchDeviceInterfaces: vi.fn(),
@@ -82,7 +85,12 @@ function mockLink(overrides: Partial<Link> = {}): Link {
 describe('DeviceInterfaceStatsPanelRoute', () => {
   it('clears stale interfaces when switching devices before the next fetch resolves', async () => {
     const dev1 = mockDevice();
-    const dev2 = mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2', sys_name: 'router-02' });
+    const dev2 = mockDevice({
+      id: 'dev-2',
+      hostname: 'router-02',
+      ip: '10.0.0.2',
+      sys_name: 'router-02',
+    });
     const runtimeState = buildRuntimeState({
       devices: [dev1, dev2],
       links: [],
@@ -133,7 +141,12 @@ describe('DeviceInterfaceStatsPanelRoute', () => {
 
   it('renders an explicit error state for link routes when either endpoint fetch fails', async () => {
     const dev1 = mockDevice();
-    const dev2 = mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2', sys_name: 'router-02' });
+    const dev2 = mockDevice({
+      id: 'dev-2',
+      hostname: 'router-02',
+      ip: '10.0.0.2',
+      sys_name: 'router-02',
+    });
     const link = mockLink();
     const runtimeState = buildRuntimeState({
       devices: [dev1, dev2],
@@ -160,7 +173,12 @@ describe('DeviceInterfaceStatsPanelRoute', () => {
 
   it('renders a loading placeholder for link routes while endpoint interfaces are still loading', () => {
     const dev1 = mockDevice();
-    const dev2 = mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2', sys_name: 'router-02' });
+    const dev2 = mockDevice({
+      id: 'dev-2',
+      hostname: 'router-02',
+      ip: '10.0.0.2',
+      sys_name: 'router-02',
+    });
     const link = mockLink();
     const runtimeState = buildRuntimeState({
       devices: [dev1, dev2],

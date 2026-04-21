@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { buildEdgeData, buildTopologyEdges } from './edgeBuilder';
+import { describe, expect, it } from 'vitest';
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
+import { buildEdgeData, buildTopologyEdges } from './edgeBuilder';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -167,7 +167,14 @@ describe('buildEdgeData', () => {
 
     const existingData = {
       throughputLabel: 'TX: 500M / RX: 300M',
-      metrics: { device_id: 'dev-2', if_name: 'ether2', tx_bps: 500_000_000, rx_bps: 300_000_000, utilization: 50, collected_at: '' },
+      metrics: {
+        device_id: 'dev-2',
+        if_name: 'ether2',
+        tx_bps: 500_000_000,
+        rx_bps: 300_000_000,
+        utilization: 50,
+        collected_at: '',
+      },
       utilization: 50,
     };
 
@@ -294,7 +301,9 @@ describe('buildTopologyEdges', () => {
     ]);
     const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
 
-    const edges = buildTopologyEdges([mockLink()], devicesByID, nodes, undefined, undefined, [mockAlert()]);
+    const edges = buildTopologyEdges([mockLink()], devicesByID, nodes, undefined, undefined, [
+      mockAlert(),
+    ]);
 
     expect(edges).toHaveLength(1);
     expect(edges[0].data.alertStatus).toBe('down');
@@ -330,8 +339,16 @@ describe('buildTopologyEdges', () => {
     const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
     const links = [
       mockLink({ id: 'link-vlan', source_if_name: '', target_if_name: 'VLAN-99-MGMT-ETH6' }),
-      mockLink({ id: 'link-incomplete', source_if_name: '', target_if_name: 'ether6-link_new_apparati' }),
-      mockLink({ id: 'link-physical', source_if_name: 'ether2-verso-border-botte', target_if_name: 'ether6-link_new_apparati' }),
+      mockLink({
+        id: 'link-incomplete',
+        source_if_name: '',
+        target_if_name: 'ether6-link_new_apparati',
+      }),
+      mockLink({
+        id: 'link-physical',
+        source_if_name: 'ether2-verso-border-botte',
+        target_if_name: 'ether6-link_new_apparati',
+      }),
     ];
 
     const edges = buildTopologyEdges(links, devicesByID, nodes);
@@ -368,9 +385,7 @@ describe('buildTopologyEdges', () => {
 
   it('omits self-links from edge rendering so they can be shown as node annotations', () => {
     const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
-    const devicesByID = new Map([
-      ['dev-1', dev1],
-    ]);
+    const devicesByID = new Map([['dev-1', dev1]]);
     const nodes = [mockNode('dev-1', 120, 180)];
     const links = [
       mockLink({

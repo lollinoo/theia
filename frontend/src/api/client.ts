@@ -1,5 +1,8 @@
 import {
   type Area,
+  type BackupFile,
+  type BackupJob,
+  type BackupStatus,
   type CredentialProfile,
   type Device,
   type DeviceCredentialProfile,
@@ -10,9 +13,6 @@ import {
   type RestoreReport,
   type SNMPProfile,
   type TopologyDiscoveryMode,
-  type BackupJob,
-  type BackupFile,
-  type BackupStatus,
   type VendorConfig,
   type WinBoxCredentials,
   parseAreaResponse,
@@ -23,11 +23,11 @@ import {
   parseDevicesResponse,
   parseInterfacesResponse,
   parseLinksResponse,
-  parseSNMPProfilesResponse,
   parseSNMPProfileResponse,
+  parseSNMPProfilesResponse,
   parseWinBoxCredentialsResponse,
 } from '../types/api';
-import { ValidationError, ServerError } from './errors';
+import { ServerError, ValidationError } from './errors';
 
 export { ValidationError, ServerError };
 
@@ -47,9 +47,9 @@ async function requestJSON(path: string): Promise<unknown> {
   if (!response.ok) {
     const errorMessage =
       typeof payload === 'object' &&
-        payload !== null &&
-        'error' in payload &&
-        typeof payload.error === 'string'
+      payload !== null &&
+      'error' in payload &&
+      typeof payload.error === 'string'
         ? payload.error
         : response.statusText;
     throw new Error(`${path} failed: ${response.status} ${errorMessage}`);
@@ -97,11 +97,7 @@ export async function fetchLinks(): Promise<Link[]> {
   }
 }
 
-async function requestJSONWithBody(
-  path: string,
-  method: string,
-  body?: unknown,
-): Promise<unknown> {
+async function requestJSONWithBody(path: string, method: string, body?: unknown): Promise<unknown> {
   const response = await fetch(path, {
     method,
     headers: {
@@ -120,9 +116,9 @@ async function requestJSONWithBody(
   if (!response.ok) {
     const errorMessage =
       typeof payload === 'object' &&
-        payload !== null &&
-        'error' in payload &&
-        typeof payload.error === 'string'
+      payload !== null &&
+      'error' in payload &&
+      typeof payload.error === 'string'
         ? payload.error
         : response.statusText;
 
@@ -252,10 +248,7 @@ export async function deleteDevice(id: string): Promise<void> {
 }
 
 export async function runTopologyDiscovery(id: string): Promise<void> {
-  await requestJSONWithBody(
-    `/api/v1/devices/${encodeURIComponent(id)}/topology-discovery`,
-    'POST',
-  );
+  await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}/topology-discovery`, 'POST');
 }
 
 export async function fetchDeviceInterfaces(deviceId: string): Promise<InterfaceInfo[]> {
@@ -283,18 +276,18 @@ export async function createLink(payload: {
   const record = data as Record<string, unknown>;
   return {
     id: typeof record.id === 'string' ? record.id : '',
-    source_device_id:
-      typeof record.source_device_id === 'string' ? record.source_device_id : '',
+    source_device_id: typeof record.source_device_id === 'string' ? record.source_device_id : '',
     source_if_name: typeof record.source_if_name === 'string' ? record.source_if_name : '',
-    target_device_id:
-      typeof record.target_device_id === 'string' ? record.target_device_id : '',
+    target_device_id: typeof record.target_device_id === 'string' ? record.target_device_id : '',
     target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
     discovery_protocol:
       typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
     source_if_speed: typeof record.source_if_speed === 'number' ? record.source_if_speed : 0,
-    source_if_oper_status: typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
+    source_if_oper_status:
+      typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
     target_if_speed: typeof record.target_if_speed === 'number' ? record.target_if_speed : 0,
-    target_if_oper_status: typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
+    target_if_oper_status:
+      typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
   };
 }
 
@@ -314,18 +307,18 @@ export async function updateLink(
   const record = data as Record<string, unknown>;
   return {
     id: typeof record.id === 'string' ? record.id : '',
-    source_device_id:
-      typeof record.source_device_id === 'string' ? record.source_device_id : '',
+    source_device_id: typeof record.source_device_id === 'string' ? record.source_device_id : '',
     source_if_name: typeof record.source_if_name === 'string' ? record.source_if_name : '',
-    target_device_id:
-      typeof record.target_device_id === 'string' ? record.target_device_id : '',
+    target_device_id: typeof record.target_device_id === 'string' ? record.target_device_id : '',
     target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
     discovery_protocol:
       typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
     source_if_speed: typeof record.source_if_speed === 'number' ? record.source_if_speed : 0,
-    source_if_oper_status: typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
+    source_if_oper_status:
+      typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
     target_if_speed: typeof record.target_if_speed === 'number' ? record.target_if_speed : 0,
-    target_if_oper_status: typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
+    target_if_oper_status:
+      typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
   };
 }
 
@@ -375,7 +368,10 @@ export async function createSNMPProfile(payload: SNMPProfilePayload): Promise<SN
   );
 }
 
-export async function updateSNMPProfile(id: string, payload: SNMPProfilePayload): Promise<SNMPProfile> {
+export async function updateSNMPProfile(
+  id: string,
+  payload: SNMPProfilePayload,
+): Promise<SNMPProfile> {
   return parseSNMPProfileResponse(
     await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}`, 'PUT', payload),
   );
@@ -387,7 +383,14 @@ export async function deleteSNMPProfile(id: string): Promise<void> {
 
 // --- SNMP Test ---
 
-export async function testSNMPConnection(deviceId: string): Promise<{ success: boolean; sys_name?: string; sys_descr?: string; error?: string; target_ip?: string; snmp_version?: string }> {
+export async function testSNMPConnection(deviceId: string): Promise<{
+  success: boolean;
+  sys_name?: string;
+  sys_descr?: string;
+  error?: string;
+  target_ip?: string;
+  snmp_version?: string;
+}> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/snmp-test`,
     'POST',
@@ -419,15 +422,24 @@ export interface CredentialProfilePayload {
   role: string;
 }
 
-export async function createCredentialProfile(payload: CredentialProfilePayload): Promise<CredentialProfile> {
+export async function createCredentialProfile(
+  payload: CredentialProfilePayload,
+): Promise<CredentialProfile> {
   return parseCredentialProfileResponse(
     await requestJSONWithBody('/api/v1/credential-profiles', 'POST', payload),
   );
 }
 
-export async function updateCredentialProfile(id: string, payload: CredentialProfilePayload): Promise<CredentialProfile> {
+export async function updateCredentialProfile(
+  id: string,
+  payload: CredentialProfilePayload,
+): Promise<CredentialProfile> {
   return parseCredentialProfileResponse(
-    await requestJSONWithBody(`/api/v1/credential-profiles/${encodeURIComponent(id)}`, 'PUT', payload),
+    await requestJSONWithBody(
+      `/api/v1/credential-profiles/${encodeURIComponent(id)}`,
+      'PUT',
+      payload,
+    ),
   );
 }
 
@@ -437,8 +449,12 @@ export async function deleteCredentialProfile(id: string): Promise<void> {
 
 // --- Device Credential Profile Assignments ---
 
-export async function fetchDeviceCredentialProfiles(deviceId: string): Promise<DeviceCredentialProfile[]> {
-  const payload = await requestJSON(`/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`);
+export async function fetchDeviceCredentialProfiles(
+  deviceId: string,
+): Promise<DeviceCredentialProfile[]> {
+  const payload = await requestJSON(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`,
+  );
   return parseDeviceCredentialProfilesResponse(payload);
 }
 
@@ -450,7 +466,10 @@ export async function assignCredentialProfile(deviceId: string, profileId: strin
   );
 }
 
-export async function unassignCredentialProfile(deviceId: string, profileId: string): Promise<void> {
+export async function unassignCredentialProfile(
+  deviceId: string,
+  profileId: string,
+): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles/${encodeURIComponent(profileId)}`,
     'DELETE',
@@ -473,7 +492,9 @@ export async function clearWinBoxProfile(deviceId: string): Promise<void> {
 }
 
 export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCredentials> {
-  const payload = await requestJSON(`/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-credentials`);
+  const payload = await requestJSON(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-credentials`,
+  );
   return parseWinBoxCredentialsResponse(payload);
 }
 
@@ -494,7 +515,9 @@ export async function fetchBridgeToken(deviceId: string, bridgeSecret: string): 
   return p.token;
 }
 
-export async function testSSHConnection(deviceId: string): Promise<{ success: boolean; error?: string }> {
+export async function testSSHConnection(
+  deviceId: string,
+): Promise<{ success: boolean; error?: string }> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/ssh-credentials/test`,
     'POST',
@@ -512,13 +535,18 @@ export async function fetchAreas(): Promise<Area[]> {
   return parseAreasResponse(await requestJSON('/api/v1/areas'));
 }
 
-export async function createArea(payload: { name: string; description: string; color: string }): Promise<Area> {
-  return parseAreaResponse(
-    await requestJSONWithBody('/api/v1/areas', 'POST', payload),
-  );
+export async function createArea(payload: {
+  name: string;
+  description: string;
+  color: string;
+}): Promise<Area> {
+  return parseAreaResponse(await requestJSONWithBody('/api/v1/areas', 'POST', payload));
 }
 
-export async function updateArea(id: string, payload: { name: string; description: string; color: string }): Promise<Area> {
+export async function updateArea(
+  id: string,
+  payload: { name: string; description: string; color: string },
+): Promise<Area> {
   return parseAreaResponse(
     await requestJSONWithBody(`/api/v1/areas/${encodeURIComponent(id)}`, 'PUT', payload),
   );
@@ -548,7 +576,9 @@ function parseBackupJob(data: Record<string, unknown>): BackupJob {
   return {
     id: typeof data.id === 'string' ? data.id : '',
     device_id: typeof data.device_id === 'string' ? data.device_id : '',
-    status: (['pending', 'running', 'success', 'failed'].includes(status) ? status : 'pending') as BackupStatus,
+    status: (['pending', 'running', 'success', 'failed'].includes(status)
+      ? status
+      : 'pending') as BackupStatus,
     error_message: typeof data.error_message === 'string' ? data.error_message : '',
     created_at: typeof data.created_at === 'string' ? data.created_at : '',
     files: filesRaw.map((f) => parseBackupFile(f as Record<string, unknown>)),
@@ -617,13 +647,16 @@ export async function triggerBulkDownload(deviceIds: string[]): Promise<void> {
     body: JSON.stringify({ device_ids: deviceIds }),
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
-    const errorMessage = payload && typeof payload.error === 'string' ? payload.error : response.statusText;
+    const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const errorMessage =
+      payload && typeof payload.error === 'string' ? payload.error : response.statusText;
     throw new Error(errorMessage);
   }
   const disposition = response.headers.get('Content-Disposition') ?? '';
   const match = disposition.match(/filename="(.+?)"/);
-  const filename = match?.[1] ?? `${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)}_THEIA_BACKUPS.zip`;
+  const filename =
+    match?.[1] ??
+    `${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)}_THEIA_BACKUPS.zip`;
 
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -662,7 +695,10 @@ export async function fetchVendorConfig(name: string): Promise<VendorConfig> {
   };
 }
 
-export async function updateVendorConfig(name: string, config: VendorConfig['config']): Promise<VendorConfig> {
+export async function updateVendorConfig(
+  name: string,
+  config: VendorConfig['config'],
+): Promise<VendorConfig> {
   const response = await requestJSONWithBody(
     `/api/v1/vendors/${encodeURIComponent(name)}`,
     'PUT',
@@ -688,7 +724,9 @@ function parseInstanceBackup(data: Record<string, unknown>): InstanceBackup {
     sha256: typeof data.sha256 === 'string' ? data.sha256 : '',
     app_version: typeof data.app_version === 'string' ? data.app_version : '',
     migration_version: typeof data.migration_version === 'number' ? data.migration_version : 0,
-    status: (['running', 'success', 'failed'].includes(status) ? status : 'running') as InstanceBackupStatus,
+    status: (['running', 'success', 'failed'].includes(status)
+      ? status
+      : 'running') as InstanceBackupStatus,
     error_message: typeof data.error_message === 'string' ? data.error_message : '',
     trigger: (trigger === 'scheduled' ? 'scheduled' : 'manual') as 'manual' | 'scheduled',
     created_at: typeof data.created_at === 'string' ? data.created_at : '',
@@ -737,7 +775,7 @@ export async function restoreInstanceBackup(file: File, dryRun: boolean): Promis
       payload !== null &&
       'error' in payload &&
       typeof (payload as Record<string, unknown>).error === 'string'
-        ? (payload as Record<string, unknown>).error as string
+        ? ((payload as Record<string, unknown>).error as string)
         : response.statusText;
 
     if (response.status === 400) {
@@ -756,7 +794,7 @@ export async function restoreInstanceBackup(file: File, dryRun: boolean): Promis
     throw new Error(`${url} failed: ${response.status} ${errorMessage}`);
   }
 
-  const payload = await response.json() as Record<string, unknown>;
+  const payload = (await response.json()) as Record<string, unknown>;
   const data = payload.data as Record<string, unknown>;
   return parseRestoreReport(data);
 }
@@ -772,7 +810,8 @@ function parseRestoreReport(data: Record<string, unknown>): RestoreReport {
     backup_file_count: typeof data.backup_file_count === 'number' ? data.backup_file_count : 0,
     total_size_bytes: typeof data.total_size_bytes === 'number' ? data.total_size_bytes : 0,
     needs_migration: typeof data.needs_migration === 'boolean' ? data.needs_migration : false,
-    current_migration_version: typeof data.current_migration_version === 'number' ? data.current_migration_version : 0,
+    current_migration_version:
+      typeof data.current_migration_version === 'number' ? data.current_migration_version : 0,
     message: typeof data.message === 'string' ? data.message : '',
   };
 }

@@ -14,9 +14,7 @@ export interface TopologyIdentity {
 }
 
 function hasUsablePosition(position: PositionLike | undefined): boolean {
-  return position !== undefined
-    && Number.isFinite(position.x)
-    && Number.isFinite(position.y);
+  return position !== undefined && Number.isFinite(position.x) && Number.isFinite(position.y);
 }
 
 export function topologyDeviceKey(deviceId: string): string {
@@ -42,10 +40,7 @@ export function topologyLinkKey(link: Link): string {
   return `${fallbackPair}|id:${link.id.trim().toLowerCase()}`;
 }
 
-export function buildTopologyIdentity(
-  devices: Device[],
-  links: Link[],
-): TopologyIdentity {
+export function buildTopologyIdentity(devices: Device[], links: Link[]): TopologyIdentity {
   const deviceKeys = [...new Set(devices.map((device) => topologyDeviceKey(device.id)))].sort();
   const linkKeys = [...new Set(links.map((link) => topologyLinkKey(link)))].sort();
 

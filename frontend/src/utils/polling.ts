@@ -11,7 +11,10 @@ export function getDefaultPollingIntervalSeconds(pollClass: DevicePollClass | un
     return DEFAULT_POLLING_INTERVAL_SECONDS_BY_CLASS.standard;
   }
 
-  return DEFAULT_POLLING_INTERVAL_SECONDS_BY_CLASS[pollClass] ?? DEFAULT_POLLING_INTERVAL_SECONDS_BY_CLASS.standard;
+  return (
+    DEFAULT_POLLING_INTERVAL_SECONDS_BY_CLASS[pollClass] ??
+    DEFAULT_POLLING_INTERVAL_SECONDS_BY_CLASS.standard
+  );
 }
 
 export function getEffectivePollingIntervalSeconds(

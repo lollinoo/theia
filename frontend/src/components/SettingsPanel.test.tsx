@@ -1,12 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsPanel } from './SettingsPanel';
 
 // Mock API calls made in SettingsPanel on mount
 vi.mock('../api/client', () => ({
   fetchSettings: vi.fn().mockResolvedValue({}),
   updateSetting: vi.fn().mockResolvedValue(undefined),
-  fetchHealthVersion: vi.fn().mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
+  fetchHealthVersion: vi
+    .fn()
+    .mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
 }));
 
 // Mock sub-components that have their own complex dependencies
@@ -31,8 +33,9 @@ describe('SettingsPanel (COMP-05)', () => {
     const { container } = render(<SettingsPanel />);
     const inputs = Array.from(container.querySelectorAll('input, select'));
     // Every input/select with a border class should use border-outline-subtle
-    const withOldBorder = inputs.filter((el) =>
-      el.className.includes('border-outline') && !el.className.includes('border-outline-subtle'),
+    const withOldBorder = inputs.filter(
+      (el) =>
+        el.className.includes('border-outline') && !el.className.includes('border-outline-subtle'),
     );
     expect(withOldBorder).toHaveLength(0);
   });
@@ -240,8 +243,7 @@ describe('SettingsPanel — Device Backups retention input attributes (Gap 4)', 
     const numberInputs = screen
       .getAllByRole('spinbutton')
       .filter(
-        (el) =>
-          (el as HTMLInputElement).min === '1' && (el as HTMLInputElement).max === '50',
+        (el) => (el as HTMLInputElement).min === '1' && (el as HTMLInputElement).max === '50',
       );
     expect(numberInputs).toHaveLength(1);
     expect((numberInputs[0] as HTMLInputElement).min).toBe('1');

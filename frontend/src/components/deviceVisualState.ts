@@ -5,9 +5,17 @@ import type { DeviceMetricsDTO } from '../types/metrics';
 export type DeviceMonitoringState = 'monitorable' | 'unmonitored';
 export type DeviceVisualStatus = DeviceStatus | 'degraded' | 'critical' | 'unmonitored';
 
-type DeviceVisualLabel = 'Up' | 'Down' | 'Probing' | 'Unknown' | 'Warning' | 'Critical' | 'Unmonitored';
+type DeviceVisualLabel =
+  | 'Up'
+  | 'Down'
+  | 'Probing'
+  | 'Unknown'
+  | 'Warning'
+  | 'Critical'
+  | 'Unmonitored';
 
-type DeviceMonitoringInput = Pick<Device, 'device_type' | 'ip'> & Partial<Pick<Device, 'poll_class' | 'poll_interval_override'>>;
+type DeviceMonitoringInput = Pick<Device, 'device_type' | 'ip'> &
+  Partial<Pick<Device, 'poll_class' | 'poll_interval_override'>>;
 type DeviceVisualInput = Pick<Device, 'device_type' | 'ip' | 'status'>;
 type DeviceVisualMetrics = DeviceMetricsDTO | null | undefined;
 export type DeviceAddressState = 'address' | 'missing' | 'unmonitored';
@@ -372,13 +380,18 @@ export function resolveDeviceOperationalReadouts(
   metrics?: DeviceVisualMetrics,
   monitoringStateOverride?: DeviceMonitoringState,
 ): DeviceOperationalReadouts {
-  const sanitizedMetrics = sanitizeDeviceMetricsForDisplay(device, metrics, monitoringStateOverride);
-  const isDeviceDown = isDeviceMonitorable(device, monitoringStateOverride) && device.status === 'down';
+  const sanitizedMetrics = sanitizeDeviceMetricsForDisplay(
+    device,
+    metrics,
+    monitoringStateOverride,
+  );
+  const isDeviceDown =
+    isDeviceMonitorable(device, monitoringStateOverride) && device.status === 'down';
 
   return {
-    cpuPercent: isDeviceDown ? null : sanitizedMetrics?.cpu_percent ?? null,
-    memPercent: isDeviceDown ? null : sanitizedMetrics?.mem_percent ?? null,
-    uptimeSecs: isDeviceDown ? null : sanitizedMetrics?.uptime_secs ?? null,
+    cpuPercent: isDeviceDown ? null : (sanitizedMetrics?.cpu_percent ?? null),
+    memPercent: isDeviceDown ? null : (sanitizedMetrics?.mem_percent ?? null),
+    uptimeSecs: isDeviceDown ? null : (sanitizedMetrics?.uptime_secs ?? null),
     isDeviceDown,
   };
 }

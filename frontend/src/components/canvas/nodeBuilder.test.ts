@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildTopologyNodes } from './nodeBuilder';
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, SnapshotPayload } from '../../types/metrics';
+import { buildTopologyNodes } from './nodeBuilder';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -288,9 +288,7 @@ describe('buildTopologyNodes', () => {
           sys_name: 'router-02',
         }),
       ],
-      new Map([
-        ['dev-1', { x: 120, y: 180, pinned: false }],
-      ]),
+      new Map([['dev-1', { x: 120, y: 180, pinned: false }]]),
       new Map([
         ['dev-1', { x: 900, y: 910 }],
         ['dev-2', { x: 320, y: 420 }],
@@ -302,9 +300,7 @@ describe('buildTopologyNodes', () => {
       [],
       [],
       undefined,
-      new Map([
-        ['dev-1', { x: 25, y: 35, pinned: true }],
-      ]),
+      new Map([['dev-1', { x: 25, y: 35, pinned: true }]]),
       new Set(['dev-2']),
     );
 

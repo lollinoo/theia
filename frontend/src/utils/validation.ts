@@ -4,7 +4,14 @@
 export const MAX_STRING_LENGTH = 255;
 
 /** Allowed SNMP v3 authentication protocols (mirrors Phase 20 backend allowlist). */
-export const SNMP_AUTH_PROTOCOLS = ['MD5', 'SHA', 'SHA-224', 'SHA-256', 'SHA-384', 'SHA-512'] as const;
+export const SNMP_AUTH_PROTOCOLS = [
+  'MD5',
+  'SHA',
+  'SHA-224',
+  'SHA-256',
+  'SHA-384',
+  'SHA-512',
+] as const;
 
 /** Allowed SNMP v3 privacy protocols (mirrors Phase 20 backend allowlist). */
 export const SNMP_PRIV_PROTOCOLS = ['DES', 'AES'] as const;

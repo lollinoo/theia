@@ -1,5 +1,5 @@
 export type WSMessageType =
-  'snapshot'
+  | 'snapshot'
   | 'snapshot_delta'
   | 'metrics'
   | 'link_metrics'
@@ -244,7 +244,10 @@ export function parseDeviceRuntime(value: unknown): DeviceRuntimeDTO {
       firing_alert_count: readRequiredCount(value, 'firing_alert_count'),
       last_collected_at: readRequiredNullableString(value, 'last_collected_at'),
       last_polled_at: readRequiredNullableString(value, 'last_polled_at'),
-      expected_poll_interval_seconds: readRequiredNullableNumber(value, 'expected_poll_interval_seconds'),
+      expected_poll_interval_seconds: readRequiredNullableNumber(
+        value,
+        'expected_poll_interval_seconds',
+      ),
       cpu_percent: readRequiredNullableNumber(value, 'cpu_percent'),
       mem_percent: readRequiredNullableNumber(value, 'mem_percent'),
       temp_celsius: readRequiredNullableNumber(value, 'temp_celsius'),
@@ -306,40 +309,40 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
     throw new Error('invalid snapshot payload');
   }
 
-   if (!('devices' in value) || !isRecord(value.devices)) {
-     throw new Error('invalid snapshot payload');
-   }
+  if (!('devices' in value) || !isRecord(value.devices)) {
+    throw new Error('invalid snapshot payload');
+  }
 
-   if (!('links' in value) || !isRecord(value.links)) {
-     throw new Error('invalid snapshot payload');
-   }
+  if (!('links' in value) || !isRecord(value.links)) {
+    throw new Error('invalid snapshot payload');
+  }
 
-   const devices = Object.fromEntries(
-     Object.entries(value.devices).map(([deviceId, runtime]) => {
-       const parsedRuntime = parseDeviceRuntime(runtime);
-       if (parsedRuntime.device_id !== deviceId) {
-         throw new Error('invalid snapshot payload');
-       }
+  const devices = Object.fromEntries(
+    Object.entries(value.devices).map(([deviceId, runtime]) => {
+      const parsedRuntime = parseDeviceRuntime(runtime);
+      if (parsedRuntime.device_id !== deviceId) {
+        throw new Error('invalid snapshot payload');
+      }
 
-       return [deviceId, parsedRuntime] as const;
-     }),
-   );
+      return [deviceId, parsedRuntime] as const;
+    }),
+  );
 
-   const links = Object.fromEntries(
-     Object.entries(value.links).map(([linkId, runtime]) => {
-       const parsedRuntime = parseLinkRuntime(runtime);
-       if (parsedRuntime.link_id !== linkId) {
-         throw new Error('invalid snapshot payload');
-       }
+  const links = Object.fromEntries(
+    Object.entries(value.links).map(([linkId, runtime]) => {
+      const parsedRuntime = parseLinkRuntime(runtime);
+      if (parsedRuntime.link_id !== linkId) {
+        throw new Error('invalid snapshot payload');
+      }
 
-       return [linkId, parsedRuntime] as const;
-     }),
-   );
+      return [linkId, parsedRuntime] as const;
+    }),
+  );
 
-   return {
-     devices,
-     links,
-   };
+  return {
+    devices,
+    links,
+  };
 }
 
 /**
@@ -357,7 +360,13 @@ export function mergeSnapshotDelta(
 
 export function parseWSMessage(
   value: unknown,
-): WSMessage | SnapshotWSMessage | SnapshotDeltaWSMessage | PrometheusStatusWSMessage | ResyncRequiredWSMessage | AlertWSMessage {
+):
+  | WSMessage
+  | SnapshotWSMessage
+  | SnapshotDeltaWSMessage
+  | PrometheusStatusWSMessage
+  | ResyncRequiredWSMessage
+  | AlertWSMessage {
   if (!isRecord(value)) {
     throw new Error('invalid websocket message');
   }
@@ -379,9 +388,10 @@ export function parseWSMessage(
   if (type === 'snapshot') {
     const payload = isRecord(value.payload) ? value.payload : {};
     if ('version' in payload || 'snapshot' in payload) {
-      const version = typeof payload.version === 'number' && Number.isFinite(payload.version)
-        ? payload.version
-        : null;
+      const version =
+        typeof payload.version === 'number' && Number.isFinite(payload.version)
+          ? payload.version
+          : null;
       return {
         type,
         payload: {
@@ -402,12 +412,14 @@ export function parseWSMessage(
   if (type === 'snapshot_delta') {
     const payload = isRecord(value.payload) ? value.payload : {};
     if ('delta' in payload || 'version' in payload || 'base_version' in payload) {
-      const baseVersion = typeof payload.base_version === 'number' && Number.isFinite(payload.base_version)
-        ? payload.base_version
-        : undefined;
-      const version = typeof payload.version === 'number' && Number.isFinite(payload.version)
-        ? payload.version
-        : undefined;
+      const baseVersion =
+        typeof payload.base_version === 'number' && Number.isFinite(payload.base_version)
+          ? payload.base_version
+          : undefined;
+      const version =
+        typeof payload.version === 'number' && Number.isFinite(payload.version)
+          ? payload.version
+          : undefined;
       return {
         type,
         payload: {
@@ -446,9 +458,10 @@ export function parseWSMessage(
       alerts = payload.map(parseAlert);
     } else if (isRecord(payload) && Array.isArray(payload.alerts)) {
       alerts = payload.alerts.map(parseAlert);
-      version = typeof payload.version === 'number' && Number.isFinite(payload.version)
-        ? payload.version
-        : undefined;
+      version =
+        typeof payload.version === 'number' && Number.isFinite(payload.version)
+          ? payload.version
+          : undefined;
     } else {
       throw new Error('invalid alert payload');
     }
@@ -470,7 +483,11 @@ export function parseWSMessage(
     if (scope !== 'overview') {
       throw new Error(`unsupported resync scope: ${scope}`);
     }
-    if (reason !== 'client_resync_scheduled' && reason !== 'state_changes_dropped' && reason !== 'hub_buffer_full') {
+    if (
+      reason !== 'client_resync_scheduled' &&
+      reason !== 'state_changes_dropped' &&
+      reason !== 'hub_buffer_full'
+    ) {
       throw new Error(`unsupported resync reason: ${reason}`);
     }
 

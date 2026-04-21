@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { parsePositionsResponse, type DevicePosition } from '../types/api';
+import { type DevicePosition, parsePositionsResponse } from '../types/api';
 
 export interface PositionState {
   x: number;
@@ -14,7 +14,9 @@ export interface PositionPayload {
   pinned: boolean;
 }
 
-function toPositionMap(positions: DevicePosition[] | PositionPayload[]): Map<string, PositionState> {
+function toPositionMap(
+  positions: DevicePosition[] | PositionPayload[],
+): Map<string, PositionState> {
   return new Map(
     positions.map((position) => [
       position.device_id,

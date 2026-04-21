@@ -1,12 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ServerError, ValidationError } from '../api/errors';
 import { SNMPProfileManager } from './SNMPProfileManager';
-import { ValidationError, ServerError } from '../api/errors';
 
 // Mock API calls
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
-  createSNMPProfile: vi.fn().mockResolvedValue({ id: 'new-prof', name: 'Test Profile', description: '', snmp: { version: '2c', community: 'public' } }),
+  createSNMPProfile: vi.fn().mockResolvedValue({
+    id: 'new-prof',
+    name: 'Test Profile',
+    description: '',
+    snmp: { version: '2c', community: 'public' },
+  }),
   updateSNMPProfile: vi.fn().mockResolvedValue({}),
   deleteSNMPProfile: vi.fn().mockResolvedValue(undefined),
 }));

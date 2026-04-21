@@ -1,9 +1,9 @@
+import { fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
 
-import Canvas from './Canvas';
 import type { Device } from '../types/api';
+import Canvas from './Canvas';
 
 const testState = vi.hoisted(() => ({
   devices: [
@@ -52,10 +52,7 @@ vi.mock('@xyflow/react', async () => {
       onPaneClick?: () => void;
     }) => (
       <div>
-        <button
-          type="button"
-          onClick={() => onNodeClick?.({}, { id: 'dev-1', data: {} })}
-        >
+        <button type="button" onClick={() => onNodeClick?.({}, { id: 'dev-1', data: {} })}>
           Trigger node click
         </button>
         <button type="button" onClick={() => onPaneClick?.()}>
@@ -89,7 +86,9 @@ vi.mock('./SidePanel', () => ({
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
 vi.mock('./Toolbar', () => ({
   Toolbar: ({ onAlerts }: { onAlerts: () => void }) => (
-    <button type="button" onClick={onAlerts}>Open alerts</button>
+    <button type="button" onClick={onAlerts}>
+      Open alerts
+    </button>
   ),
 }));
 vi.mock('./canvas/CanvasPanels', () => ({

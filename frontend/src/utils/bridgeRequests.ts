@@ -2,10 +2,14 @@ export const BRIDGE_REQUEST_TIMEOUT_MS = 5_000;
 
 const BRIDGE_TIMEOUT_SENTINEL = '__winbox_bridge_timeout__';
 
-export const BRIDGE_HEALTH_TIMEOUT_MESSAGE = 'WinBox bridge health check timed out. Check that the local bridge is running.';
-export const BRIDGE_HEALTH_UNREACHABLE_MESSAGE = 'WinBox bridge is unreachable. Check that the local bridge is running.';
-export const BRIDGE_LAUNCH_TIMEOUT_MESSAGE = 'WinBox launch request timed out. Check that the local bridge is running.';
-export const BRIDGE_LAUNCH_UNREACHABLE_MESSAGE = 'WinBox bridge is unreachable. Check that the local bridge is running.';
+export const BRIDGE_HEALTH_TIMEOUT_MESSAGE =
+  'WinBox bridge health check timed out. Check that the local bridge is running.';
+export const BRIDGE_HEALTH_UNREACHABLE_MESSAGE =
+  'WinBox bridge is unreachable. Check that the local bridge is running.';
+export const BRIDGE_LAUNCH_TIMEOUT_MESSAGE =
+  'WinBox launch request timed out. Check that the local bridge is running.';
+export const BRIDGE_LAUNCH_UNREACHABLE_MESSAGE =
+  'WinBox bridge is unreachable. Check that the local bridge is running.';
 
 export async function fetchBridgeWithTimeout(
   url: string,
@@ -33,7 +37,10 @@ export async function fetchBridgeWithTimeout(
 }
 
 function isBridgeTimeoutError(error: unknown): boolean {
-  return error instanceof Error && (error.message === BRIDGE_TIMEOUT_SENTINEL || error.name === 'AbortError');
+  return (
+    error instanceof Error &&
+    (error.message === BRIDGE_TIMEOUT_SENTINEL || error.name === 'AbortError')
+  );
 }
 
 export function getBridgeHealthErrorMessage(error: unknown): string {

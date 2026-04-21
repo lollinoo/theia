@@ -1,15 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchSettings, updateSetting, fetchHealthVersion, type HealthVersion } from '../api/client';
+import {
+  type HealthVersion,
+  fetchHealthVersion,
+  fetchSettings,
+  updateSetting,
+} from '../api/client';
 import type { TopologyDiscoveryMode } from '../types/api';
-import { validateURL, validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
 import {
   TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS,
   formatTopologyDiscoveryMode,
 } from '../utils/topologyDiscovery';
+import {
+  validateIntervalAllowlist,
+  validateRetentionCount,
+  validateURL,
+} from '../utils/validation';
 import { AreaManager } from './AreaManager';
-import { SNMPProfileManager } from './SNMPProfileManager';
 import { CredentialProfileManager } from './CredentialProfileManager';
 import { InstanceBackupManager } from './InstanceBackupManager';
+import { SNMPProfileManager } from './SNMPProfileManager';
 
 const TIMEZONES = [
   { label: 'UTC', value: 'UTC' },
@@ -149,7 +158,9 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         setBridgeSecret(settings['bridge_secret'] ?? '');
         setBridgePort(settings['bridge_port'] ?? '1337');
       })
-      .catch(() => {/* non-fatal */});
+      .catch(() => {
+        /* non-fatal */
+      });
     fetchHealthVersion().then(setVersionInfo);
   }, []);
 
@@ -219,10 +230,15 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
 
   function handleDeviceIntervalChange(value: string) {
     const err = validateIntervalAllowlist(value);
-    if (err) { setFieldError('deviceBackupInterval', err); setDeviceBackupInterval(value); return; }
+    if (err) {
+      setFieldError('deviceBackupInterval', err);
+      setDeviceBackupInterval(value);
+      return;
+    }
     setFieldError('deviceBackupInterval', null);
     setDeviceBackupInterval(value);
-    if (deviceIntervalTimerRef.current !== null) window.clearTimeout(deviceIntervalTimerRef.current);
+    if (deviceIntervalTimerRef.current !== null)
+      window.clearTimeout(deviceIntervalTimerRef.current);
     deviceIntervalTimerRef.current = window.setTimeout(() => {
       void updateSetting('device_backup_interval_hours', value).then(() =>
         showSaved(setSavedDeviceInterval, savedDeviceIntervalTimerRef),
@@ -232,10 +248,15 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
 
   function handleDeviceRetentionChange(value: string) {
     const err = validateRetentionCount(value);
-    if (err) { setFieldError('deviceBackupRetention', err); setDeviceBackupRetention(value); return; }
+    if (err) {
+      setFieldError('deviceBackupRetention', err);
+      setDeviceBackupRetention(value);
+      return;
+    }
     setFieldError('deviceBackupRetention', null);
     setDeviceBackupRetention(value);
-    if (deviceRetentionTimerRef.current !== null) window.clearTimeout(deviceRetentionTimerRef.current);
+    if (deviceRetentionTimerRef.current !== null)
+      window.clearTimeout(deviceRetentionTimerRef.current);
     const num = parseInt(value, 10);
     deviceRetentionTimerRef.current = window.setTimeout(() => {
       void updateSetting('device_backup_retention_count', String(num)).then(() =>
@@ -327,7 +348,10 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
                 onBlur={() => {
                   const num = parseInt(customPolling, 10);
                   if (!Number.isFinite(num) || num < 5 || num > 3600) {
-                    setFieldError('customPolling', 'Polling interval must be between 5 and 3600 seconds');
+                    setFieldError(
+                      'customPolling',
+                      'Polling interval must be between 5 and 3600 seconds',
+                    );
                   } else {
                     setFieldError('customPolling', null);
                   }
@@ -373,11 +397,12 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
           ))}
         </select>
         <p className="text-xs text-on-bg-secondary/70">
-          Applies to devices using the per-device <span className="font-medium">Use global default</span> mode.
-          Current default:{' '}
+          Applies to devices using the per-device{' '}
+          <span className="font-medium">Use global default</span> mode. Current default:{' '}
           <span className="font-medium">
             {formatTopologyDiscoveryMode(topologyDiscoveryDefaultMode)}
-          </span>.
+          </span>
+          .
         </p>
       </div>
 
@@ -421,7 +446,9 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
             setFieldError('prometheusUrl', null);
             schedulePrometheusUpdate(e.target.value);
           }}
-          onBlur={() => setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'))}
+          onBlur={() =>
+            setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'))
+          }
           className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.prometheusUrl ? ' border-status-down' : ' border-outline-subtle'}`}
         />
         {fieldErrors.prometheusUrl && (
@@ -472,7 +499,9 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
           className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none font-mono"
         />
         <p className="text-xs text-on-bg-secondary/70">
-          Found in <span className="font-mono">~/.config/winbox-bridge/config.json</span> → <span className="font-mono">bridge_secret</span> field. Required to launch WinBox from Theia.
+          Found in <span className="font-mono">~/.config/winbox-bridge/config.json</span> →{' '}
+          <span className="font-mono">bridge_secret</span> field. Required to launch WinBox from
+          Theia.
         </p>
       </div>
 
@@ -567,9 +596,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
                   <option value="168">Every 7 days</option>
                 </select>
                 {/* Next backup helper text (per D-08) */}
-                <p className="text-[10px] text-on-bg-muted">
-                  {computeDeviceNextBackupText()}
-                </p>
+                <p className="text-[10px] text-on-bg-muted">{computeDeviceNextBackupText()}</p>
               </div>
 
               {/* Retention Count Input (per D-04, D-05) */}
@@ -591,7 +618,9 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
                   className={`w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.deviceBackupRetention ? ' border-status-down' : ' border-outline-subtle'}`}
                 />
                 {fieldErrors.deviceBackupRetention && (
-                  <p className="mt-0.5 text-[10px] text-status-down">{fieldErrors.deviceBackupRetention}</p>
+                  <p className="mt-0.5 text-[10px] text-status-down">
+                    {fieldErrors.deviceBackupRetention}
+                  </p>
                 )}
               </div>
             </div>
@@ -631,9 +660,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
             About
           </label>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-on-bg font-medium">
-              Theia v{versionInfo.version}
-            </span>
+            <span className="text-sm text-on-bg font-medium">Theia v{versionInfo.version}</span>
             <span
               className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
                 import.meta.env.DEV
@@ -646,11 +673,15 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
           </div>
           <div className="space-y-0.5 text-xs text-on-bg-secondary/70">
             <p>Commit: {versionInfo.git_commit}</p>
-            <p>Built: {versionInfo.build_date === 'unknown' ? 'unknown' : new Date(versionInfo.build_date).toLocaleString()}</p>
+            <p>
+              Built:{' '}
+              {versionInfo.build_date === 'unknown'
+                ? 'unknown'
+                : new Date(versionInfo.build_date).toLocaleString()}
+            </p>
           </div>
         </div>
       )}
-
     </div>
   );
 }

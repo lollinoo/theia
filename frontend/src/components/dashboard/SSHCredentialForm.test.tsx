@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { SSHCredentialForm } from './SSHCredentialForm';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialProfile } from '../../types/api';
+import { SSHCredentialForm } from './SSHCredentialForm';
 
 // Mock api/client — SSHCredentialForm must use assignCredentialProfile and
 // unassignCredentialProfile, NOT updateDevice (T-27-07 mitigation).

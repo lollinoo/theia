@@ -1,6 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
-import { type BackupJob, type BackupFile } from '../../types/api';
-import { fetchLatestBackupJob, fetchBackupFileContent, backupFileDownloadUrl } from '../../api/client';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  backupFileDownloadUrl,
+  fetchBackupFileContent,
+  fetchLatestBackupJob,
+} from '../../api/client';
+import { type BackupFile, type BackupJob } from '../../types/api';
 
 interface ConfigViewerProps {
   deviceId: string;
@@ -29,7 +33,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
       setJob(data);
       // Default to first available file type
       if (data?.files?.length) {
-        const firstType = FILE_TYPE_ORDER.find(t => data.files.some(f => f.file_type === t));
+        const firstType = FILE_TYPE_ORDER.find((t) => data.files.some((f) => f.file_type === t));
         if (firstType) setActiveTab(firstType);
       }
     } catch (err) {
@@ -43,7 +47,23 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
     load();
   }, [load]);
 
-  const activeFile: BackupFile | undefined = job?.files?.find(f => f.file_type === activeTab);
+  const activeFile: BackupFile | undefined = job?.files?.find((f) => f.file_type === activeTab);
+  const contentLines = (() => {
+    if (!content) {
+      return [] as Array<{ key: string; line: string; number: number }>;
+    }
+
+    const seen = new Map<string, number>();
+    return content.split('\n').map((line, index) => {
+      const occurrence = (seen.get(line) ?? 0) + 1;
+      seen.set(line, occurrence);
+      return {
+        key: `${line}-${occurrence}`,
+        line,
+        number: index + 1,
+      };
+    });
+  })();
 
   // Load text content when tab changes
   useEffect(() => {
@@ -100,7 +120,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
     return <div className="text-xs text-on-bg-secondary">No configuration backup available</div>;
   }
 
-  const availableTypes = FILE_TYPE_ORDER.filter(t => job.files.some(f => f.file_type === t));
+  const availableTypes = FILE_TYPE_ORDER.filter((t) => job.files.some((f) => f.file_type === t));
 
   return (
     <div className="space-y-3 transition-colors duration-200">
@@ -109,6 +129,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
         {availableTypes.map((type) => (
           <button
             key={type}
+            type="button"
             onClick={() => setActiveTab(type)}
             className={`rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors ${
               activeTab === type
@@ -156,6 +177,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
             </a>
           ) : (
             <button
+              type="button"
               onClick={handleCopy}
               className="rounded-md bg-surface-high px-2.5 py-1 text-[10px] font-medium text-on-bg-secondary hover:text-on-bg hover:bg-elevated transition-colors"
             >
@@ -188,10 +210,10 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
         <div className="rounded-lg bg-surface-high overflow-auto max-h-[calc(100vh-220px)]">
           <pre className="font-mono text-[11px] leading-[1.6] p-0 m-0">
             <code>
-              {content.split('\n').map((line, i) => (
-                <div key={i} className="flex hover:bg-elevated/30">
+              {contentLines.map(({ key, line, number }) => (
+                <div key={key} className="flex hover:bg-elevated/30">
                   <span className="select-none text-on-bg-secondary/50 text-right pr-3 pl-2 min-w-[3rem]">
-                    {i + 1}
+                    {number}
                   </span>
                   <span className="pl-3 pr-3 text-on-bg whitespace-pre">{line}</span>
                 </div>

@@ -1,14 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  mergeSnapshotDelta,
-  parseDeviceRuntime,
-  parseLinkRuntime,
-  parseWSMessage,
   type DeviceRuntimeDTO,
   type LinkRuntimeDTO,
   type SnapshotDeltaEnvelopePayload,
   type SnapshotEnvelopePayload,
   type SnapshotPayload,
+  mergeSnapshotDelta,
+  parseDeviceRuntime,
+  parseLinkRuntime,
+  parseWSMessage,
 } from './metrics';
 
 function makeDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRuntimeDTO {
@@ -75,7 +75,8 @@ describe('parseWSMessage', () => {
       },
     });
 
-    const payload = (message as { type: 'snapshot_delta'; payload: SnapshotDeltaEnvelopePayload }).payload;
+    const payload = (message as { type: 'snapshot_delta'; payload: SnapshotDeltaEnvelopePayload })
+      .payload;
     expect(payload.base_version).toBe(10);
     expect(payload.version).toBe(11);
     expect(payload.delta.devices['dev-1'].cpu_percent).toBe(90);
@@ -92,7 +93,8 @@ describe('parseWSMessage', () => {
       },
     });
 
-    const payload = (message as { type: 'snapshot_delta'; payload: SnapshotDeltaEnvelopePayload }).payload;
+    const payload = (message as { type: 'snapshot_delta'; payload: SnapshotDeltaEnvelopePayload })
+      .payload;
     expect(payload.delta.devices['dev-1'].metrics_reason).toBe('awaiting_poll');
   });
 
@@ -132,33 +134,37 @@ describe('parseWSMessage', () => {
   });
 
   it('rejects alert envelope objects without an alerts array', () => {
-    expect(() => parseWSMessage({
-      type: 'alert',
-      payload: {
-        device_id: 'dev-1',
-        severity: 'critical',
-        alert_name: 'DeviceDown',
-        state: 'firing',
-        summary: 'device down',
-      },
-    })).toThrow('invalid alert payload');
+    expect(() =>
+      parseWSMessage({
+        type: 'alert',
+        payload: {
+          device_id: 'dev-1',
+          severity: 'critical',
+          alert_name: 'DeviceDown',
+          state: 'firing',
+          summary: 'device down',
+        },
+      }),
+    ).toThrow('invalid alert payload');
   });
 
   it('rejects malformed alert records inside an alert envelope', () => {
-    expect(() => parseWSMessage({
-      type: 'alert',
-      payload: {
-        version: 4,
-        alerts: [
-          {
-            device_id: 'dev-1',
-            severity: 'critical',
-            alert_name: 'DeviceDown',
-            state: 'firing',
-          },
-        ],
-      },
-    })).toThrow('invalid alert payload');
+    expect(() =>
+      parseWSMessage({
+        type: 'alert',
+        payload: {
+          version: 4,
+          alerts: [
+            {
+              device_id: 'dev-1',
+              severity: 'critical',
+              alert_name: 'DeviceDown',
+              state: 'firing',
+            },
+          ],
+        },
+      }),
+    ).toThrow('invalid alert payload');
   });
 });
 
@@ -295,113 +301,125 @@ describe('parseDeviceRuntime', () => {
   });
 
   it('rejects device runtime records with invalid required semantic fields', () => {
-    expect(() => parseDeviceRuntime({
-      device_id: 'dev-1',
-      operational_status: 'invalid-status',
-      reachability: 'up',
-      health: 'healthy',
-      freshness: 'fresh',
-      primary_reason: 'ok',
-      metrics_status: 'available',
-      metrics_reason: 'ok',
-      alert_status: 'normal',
-      firing_alert_count: 0,
-      last_collected_at: null,
-      last_polled_at: null,
-      expected_poll_interval_seconds: null,
-      cpu_percent: null,
-      mem_percent: null,
-      temp_celsius: null,
-      uptime_secs: null,
-    })).toThrow('invalid device runtime payload');
+    expect(() =>
+      parseDeviceRuntime({
+        device_id: 'dev-1',
+        operational_status: 'invalid-status',
+        reachability: 'up',
+        health: 'healthy',
+        freshness: 'fresh',
+        primary_reason: 'ok',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'normal',
+        firing_alert_count: 0,
+        last_collected_at: null,
+        last_polled_at: null,
+        expected_poll_interval_seconds: null,
+        cpu_percent: null,
+        mem_percent: null,
+        temp_celsius: null,
+        uptime_secs: null,
+      }),
+    ).toThrow('invalid device runtime payload');
   });
 
   it('rejects device runtime records when required nullable runtime fields are missing or invalid', () => {
-    expect(() => parseDeviceRuntime({
-      device_id: 'dev-1',
-      operational_status: 'up',
-      reachability: 'up',
-      health: 'healthy',
-      freshness: 'fresh',
-      primary_reason: 'ok',
-      metrics_status: 'available',
-      metrics_reason: 'ok',
-      alert_status: 'normal',
-      firing_alert_count: 0,
-      last_polled_at: null,
-      expected_poll_interval_seconds: null,
-      cpu_percent: null,
-      mem_percent: null,
-      temp_celsius: null,
-      uptime_secs: null,
-    })).toThrow('invalid device runtime payload');
+    expect(() =>
+      parseDeviceRuntime({
+        device_id: 'dev-1',
+        operational_status: 'up',
+        reachability: 'up',
+        health: 'healthy',
+        freshness: 'fresh',
+        primary_reason: 'ok',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'normal',
+        firing_alert_count: 0,
+        last_polled_at: null,
+        expected_poll_interval_seconds: null,
+        cpu_percent: null,
+        mem_percent: null,
+        temp_celsius: null,
+        uptime_secs: null,
+      }),
+    ).toThrow('invalid device runtime payload');
 
-    expect(() => parseDeviceRuntime({
-      device_id: 'dev-1',
-      operational_status: 'up',
-      reachability: 'up',
-      health: 'healthy',
-      freshness: 'fresh',
-      primary_reason: 'ok',
-      metrics_status: 'available',
-      metrics_reason: 'ok',
-      alert_status: 'normal',
-      firing_alert_count: 0,
-      last_collected_at: null,
-      last_polled_at: null,
-      expected_poll_interval_seconds: '60',
-      cpu_percent: null,
-      mem_percent: null,
-      temp_celsius: null,
-      uptime_secs: null,
-    })).toThrow('invalid device runtime payload');
+    expect(() =>
+      parseDeviceRuntime({
+        device_id: 'dev-1',
+        operational_status: 'up',
+        reachability: 'up',
+        health: 'healthy',
+        freshness: 'fresh',
+        primary_reason: 'ok',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        alert_status: 'normal',
+        firing_alert_count: 0,
+        last_collected_at: null,
+        last_polled_at: null,
+        expected_poll_interval_seconds: '60',
+        cpu_percent: null,
+        mem_percent: null,
+        temp_celsius: null,
+        uptime_secs: null,
+      }),
+    ).toThrow('invalid device runtime payload');
   });
 });
 
 describe('parseLinkRuntime', () => {
   it('rejects link runtime records with invalid required semantic fields', () => {
-    expect(() => parseLinkRuntime({
-      link_id: 'link-1',
-      source_device_id: 'dev-1',
-      target_device_id: 'dev-2',
-      source_if_name: 'ether1',
-      target_if_name: 'ether2',
-      metrics_status: 'unmonitored',
-      metrics_reason: 'unmonitored',
-      last_collected_at: null,
-      tx_bps: null,
-      rx_bps: null,
-      utilization: null,
-    })).toThrow('invalid link runtime payload');
+    expect(() =>
+      parseLinkRuntime({
+        link_id: 'link-1',
+        source_device_id: 'dev-1',
+        target_device_id: 'dev-2',
+        source_if_name: 'ether1',
+        target_if_name: 'ether2',
+        metrics_status: 'unmonitored',
+        metrics_reason: 'unmonitored',
+        last_collected_at: null,
+        tx_bps: null,
+        rx_bps: null,
+        utilization: null,
+      }),
+    ).toThrow('invalid link runtime payload');
   });
 
   it('rejects link runtime records when required nullable telemetry fields are missing or invalid', () => {
-    expect(() => parseLinkRuntime({
-      link_id: 'link-1',
-      source_device_id: 'dev-1',
-      target_device_id: 'dev-2',
-      source_if_name: 'ether1',
-      target_if_name: 'ether2',
-      metrics_status: 'available',
-      metrics_reason: 'ok',
-      tx_bps: null,
-      rx_bps: null,
-      utilization: null,
-    })).toThrow('invalid link runtime payload');
+    expect(() =>
+      parseLinkRuntime({
+        link_id: 'link-1',
+        source_device_id: 'dev-1',
+        target_device_id: 'dev-2',
+        source_if_name: 'ether1',
+        target_if_name: 'ether2',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        tx_bps: null,
+        rx_bps: null,
+        utilization: null,
+      }),
+    ).toThrow('invalid link runtime payload');
 
-    expect(() => parseLinkRuntime({
-      link_id: 'link-1',
-      source_device_id: 'dev-1',
-      target_device_id: 'dev-2',
-      source_if_name: 'ether1',
-      target_if_name: 'ether2',
-      metrics_status: 'available',
-      metrics_reason: 'ok',
-      last_collected_at: null,
-      tx_bps: '1000',
-      rx_bps: null,
-      utilization: null,
-    })).toThrow('invalid link runtime payload');
+    expect(() =>
+      parseLinkRuntime({
+        link_id: 'link-1',
+        source_device_id: 'dev-1',
+        target_device_id: 'dev-2',
+        source_if_name: 'ether1',
+        target_if_name: 'ether2',
+        metrics_status: 'available',
+        metrics_reason: 'ok',
+        last_collected_at: null,
+        tx_bps: '1000',
+        rx_bps: null,
+        utilization: null,
+      }),
+    ).toThrow('invalid link runtime payload');
   });
 });
 
@@ -425,82 +443,94 @@ describe('parseSnapshotPayload', () => {
   });
 
   it('fails snapshot parsing when normalized sections are missing', () => {
-    expect(() => parseWSMessage({
-      type: 'snapshot',
-      payload: {
-        devices: {},
-      },
-    })).toThrow('invalid snapshot payload');
-
-    expect(() => parseWSMessage({
-      type: 'snapshot_delta',
-      payload: {
-        delta: {
-          links: {},
+    expect(() =>
+      parseWSMessage({
+        type: 'snapshot',
+        payload: {
+          devices: {},
         },
-      },
-    })).toThrow('invalid snapshot payload');
+      }),
+    ).toThrow('invalid snapshot payload');
+
+    expect(() =>
+      parseWSMessage({
+        type: 'snapshot_delta',
+        payload: {
+          delta: {
+            links: {},
+          },
+        },
+      }),
+    ).toThrow('invalid snapshot payload');
   });
 
   it('fails snapshot parsing when a normalized device runtime record is malformed', () => {
-    expect(() => parseWSMessage({
-      type: 'snapshot',
-      payload: {
-        devices: {
-          'dev-1': {
-            ...makeDeviceRuntime(),
-            operational_status: 'broken',
+    expect(() =>
+      parseWSMessage({
+        type: 'snapshot',
+        payload: {
+          devices: {
+            'dev-1': {
+              ...makeDeviceRuntime(),
+              operational_status: 'broken',
+            },
+            'dev-2': makeDeviceRuntime({ device_id: 'dev-2' }),
           },
-          'dev-2': makeDeviceRuntime({ device_id: 'dev-2' }),
+          links: {},
         },
-        links: {},
-      },
-    })).toThrow('invalid device runtime payload');
+      }),
+    ).toThrow('invalid device runtime payload');
   });
 
   it('fails snapshot parsing when device map keys do not match device_id', () => {
-    expect(() => parseWSMessage({
-      type: 'snapshot',
-      payload: {
-        devices: {
-          'dev-1': makeDeviceRuntime({ device_id: 'dev-2' }),
+    expect(() =>
+      parseWSMessage({
+        type: 'snapshot',
+        payload: {
+          devices: {
+            'dev-1': makeDeviceRuntime({ device_id: 'dev-2' }),
+          },
+          links: {},
         },
-        links: {},
-      },
-    })).toThrow('invalid snapshot payload');
+      }),
+    ).toThrow('invalid snapshot payload');
   });
 
   it('fails snapshot parsing when a normalized link runtime record is malformed', () => {
-    expect(() => parseWSMessage({
-      type: 'snapshot',
-      payload: {
-        devices: {},
-        links: {
-          'link-1': {
-            ...makeLinkRuntime(),
-            metrics_status: 'broken',
+    expect(() =>
+      parseWSMessage({
+        type: 'snapshot',
+        payload: {
+          devices: {},
+          links: {
+            'link-1': {
+              ...makeLinkRuntime(),
+              metrics_status: 'broken',
+            },
+            'link-2': makeLinkRuntime({
+              link_id: 'link-2',
+              source_device_id: 'dev-2',
+              target_device_id: 'dev-3',
+            }),
           },
-          'link-2': makeLinkRuntime({
-            link_id: 'link-2',
-            source_device_id: 'dev-2',
-            target_device_id: 'dev-3',
-          }),
         },
-      },
-    })).toThrow('invalid link runtime payload');
+      }),
+    ).toThrow('invalid link runtime payload');
   });
 
   it('fails snapshot parsing when link map keys do not match link_id', () => {
-    expect(() => parseWSMessage({
-      type: 'snapshot_delta',
-      payload: {
-        delta: {
-          devices: {},
-          links: {
-            'link-1': makeLinkRuntime({ link_id: 'link-2' }),
+    expect(() =>
+      parseWSMessage({
+        type: 'snapshot_delta',
+        payload: {
+          delta: {
+            devices: {},
+            links: {
+              'link-1': makeLinkRuntime({ link_id: 'link-2' }),
+            },
           },
         },
-      },
-    })).toThrow('invalid snapshot payload');
+      }),
+    ).toThrow('invalid snapshot payload');
   });
 });

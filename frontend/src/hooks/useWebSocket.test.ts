@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useWebSocket } from './useWebSocket';
 
 function makeDeviceRuntime(overrides: Record<string, unknown> = {}) {
@@ -324,22 +324,26 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.links['link-1']).toEqual(makeLinkRuntime({
-      tx_bps: 150,
-      rx_bps: 250,
-      utilization: 0.15,
-      last_collected_at: '2026-01-01T00:01:00Z',
-    }));
-    expect(result.current.snapshot!.links['link-2']).toEqual(makeLinkRuntime({
-      link_id: 'link-2',
-      source_device_id: 'dev-2',
-      target_device_id: 'dev-3',
-      source_if_name: 'ether2',
-      target_if_name: 'ether3',
-      tx_bps: 300,
-      rx_bps: 400,
-      utilization: 0.2,
-    }));
+    expect(result.current.snapshot!.links['link-1']).toEqual(
+      makeLinkRuntime({
+        tx_bps: 150,
+        rx_bps: 250,
+        utilization: 0.15,
+        last_collected_at: '2026-01-01T00:01:00Z',
+      }),
+    );
+    expect(result.current.snapshot!.links['link-2']).toEqual(
+      makeLinkRuntime({
+        link_id: 'link-2',
+        source_device_id: 'dev-2',
+        target_device_id: 'dev-3',
+        source_if_name: 'ether2',
+        target_if_name: 'ether3',
+        tx_bps: 300,
+        rx_bps: 400,
+        utilization: 0.2,
+      }),
+    );
   });
 
   it('sends subscribe_detail on open when detailDeviceId is preset', () => {
@@ -349,10 +353,12 @@ describe('useWebSocket', () => {
       mockInstance.simulateOpen();
     });
 
-    expect(mockInstance.send).toHaveBeenCalledWith(JSON.stringify({
-      type: 'subscribe_detail',
-      payload: { device_id: 'dev-1' },
-    }));
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'subscribe_detail',
+        payload: { device_id: 'dev-1' },
+      }),
+    );
   });
 
   it('stores separate alert messages in dedicated alert state', () => {
@@ -618,7 +624,8 @@ describe('useWebSocket', () => {
 
   it('sends unsubscribe_detail when detailDeviceId becomes null', () => {
     const { rerender } = renderHook(
-      ({ detailDeviceId }: { detailDeviceId: string | null }) => useWebSocket('ws://localhost:8080/ws', detailDeviceId),
+      ({ detailDeviceId }: { detailDeviceId: string | null }) =>
+        useWebSocket('ws://localhost:8080/ws', detailDeviceId),
       { initialProps: { detailDeviceId: 'dev-1' } },
     );
 
@@ -632,15 +639,18 @@ describe('useWebSocket', () => {
       rerender({ detailDeviceId: null });
     });
 
-    expect(mockInstance.send).toHaveBeenCalledWith(JSON.stringify({
-      type: 'unsubscribe_detail',
-      payload: { device_id: 'dev-1' },
-    }));
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'unsubscribe_detail',
+        payload: { device_id: 'dev-1' },
+      }),
+    );
   });
 
   it('sends unsubscribe then subscribe when switching devices', () => {
     const { rerender } = renderHook(
-      ({ detailDeviceId }: { detailDeviceId: string | null }) => useWebSocket('ws://localhost:8080/ws', detailDeviceId),
+      ({ detailDeviceId }: { detailDeviceId: string | null }) =>
+        useWebSocket('ws://localhost:8080/ws', detailDeviceId),
       { initialProps: { detailDeviceId: 'dev-1' } },
     );
 
@@ -654,14 +664,20 @@ describe('useWebSocket', () => {
       rerender({ detailDeviceId: 'dev-2' });
     });
 
-    expect(mockInstance.send).toHaveBeenNthCalledWith(1, JSON.stringify({
-      type: 'unsubscribe_detail',
-      payload: { device_id: 'dev-1' },
-    }));
-    expect(mockInstance.send).toHaveBeenNthCalledWith(2, JSON.stringify({
-      type: 'subscribe_detail',
-      payload: { device_id: 'dev-2' },
-    }));
+    expect(mockInstance.send).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({
+        type: 'unsubscribe_detail',
+        payload: { device_id: 'dev-1' },
+      }),
+    );
+    expect(mockInstance.send).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        type: 'subscribe_detail',
+        payload: { device_id: 'dev-2' },
+      }),
+    );
   });
 
   it('re-sends the current device subscription after reconnect', () => {
@@ -688,10 +704,12 @@ describe('useWebSocket', () => {
       secondSocket.simulateOpen();
     });
 
-    expect(secondSocket.send).toHaveBeenCalledWith(JSON.stringify({
-      type: 'subscribe_detail',
-      payload: { device_id: 'dev-1' },
-    }));
+    expect(secondSocket.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'subscribe_detail',
+        payload: { device_id: 'dev-1' },
+      }),
+    );
   });
 
   it('dispatches backend-reconnected after reconnect', () => {
@@ -718,7 +736,9 @@ describe('useWebSocket', () => {
       secondSocket.simulateOpen();
     });
 
-    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'backend-reconnected' }));
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'backend-reconnected' }),
+    );
   });
 
   it('full snapshot replaces state after resync_required', () => {

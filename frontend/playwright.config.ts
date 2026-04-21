@@ -23,7 +23,8 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'bash -lc "rm -rf /tmp/theia-playwright && mkdir -p /tmp/theia-playwright && THEIA_DB_PATH=/tmp/theia-playwright/theia.db THEIA_DATA_DIR=/tmp/theia-playwright THEIA_LISTEN_ADDR=:38080 THEIA_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef go run ./cmd/theia -config config.yaml"',
+      command:
+        'bash -lc "rm -rf /tmp/theia-playwright && mkdir -p /tmp/theia-playwright && THEIA_DB_PATH=/tmp/theia-playwright/theia.db THEIA_DATA_DIR=/tmp/theia-playwright THEIA_LISTEN_ADDR=:38080 THEIA_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef go run ./cmd/theia -config config.yaml"',
       cwd: '..',
       url: 'http://127.0.0.1:38080/api/v1/health',
       reuseExistingServer: false,

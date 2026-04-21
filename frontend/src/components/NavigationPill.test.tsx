@@ -1,17 +1,23 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import NavigationPill from './NavigationPill';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Area } from '../types/api';
+import NavigationPill from './NavigationPill';
 
 // Mock fetchHealthVersion
 vi.mock('../api/client', () => ({
-  fetchHealthVersion: vi.fn().mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
+  fetchHealthVersion: vi
+    .fn()
+    .mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
 }));
 
 // Mock useTheme
 const mockSetTheme = vi.fn();
 vi.mock('../contexts/ThemeContext', () => ({
-  useTheme: () => ({ theme: 'dark' as const, resolvedTheme: 'dark' as const, setTheme: mockSetTheme }),
+  useTheme: () => ({
+    theme: 'dark' as const,
+    resolvedTheme: 'dark' as const,
+    setTheme: mockSetTheme,
+  }),
   adaptAreaColor: (hex: string) => hex,
 }));
 
@@ -31,10 +37,7 @@ function mockArea(overrides: Partial<Area> = {}): Area {
 const defaultProps = {
   activeView: 'hub' as const,
   selectedAreaId: null as string | null,
-  areas: [
-    mockArea(),
-    mockArea({ id: 'area-2', name: 'Distribution', color: '#FF5722' }),
-  ],
+  areas: [mockArea(), mockArea({ id: 'area-2', name: 'Distribution', color: '#FF5722' })],
   onViewChange: vi.fn(),
   onAreaSelect: vi.fn(),
 };
@@ -60,7 +63,14 @@ describe('NavigationPill', () => {
 
   it('clicking Global calls onAreaSelect with null (shows full canvas)', () => {
     const onAreaSelect = vi.fn();
-    render(<NavigationPill {...defaultProps} activeView="canvas" selectedAreaId="area-1" onAreaSelect={onAreaSelect} />);
+    render(
+      <NavigationPill
+        {...defaultProps}
+        activeView="canvas"
+        selectedAreaId="area-1"
+        onAreaSelect={onAreaSelect}
+      />,
+    );
     fireEvent.click(screen.getByText('Global'));
     expect(onAreaSelect).toHaveBeenCalledWith(null);
   });

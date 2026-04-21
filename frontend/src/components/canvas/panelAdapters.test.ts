@@ -7,12 +7,12 @@ import type {
   LinkRuntimeDTO,
   SnapshotPayload,
 } from '../../types/metrics';
-import { buildRuntimeState } from './runtimeAdapters';
 import {
   buildAlertsPanelModel,
   buildDeviceInterfacePanelModel,
   buildLinkInterfacePanelModel,
 } from './panelAdapters';
+import { buildRuntimeState } from './runtimeAdapters';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -182,7 +182,8 @@ describe('panelAdapters', () => {
     });
     expect(model.prometheusDiagnostics).toEqual({
       title: 'Prometheus diagnostics unavailable',
-      detail: 'Runtime status and alerts use normalized telemetry. Prometheus health is shown here for operator diagnostics only.',
+      detail:
+        'Runtime status and alerts use normalized telemetry. Prometheus health is shown here for operator diagnostics only.',
     });
     expect(model.firingAlerts[0]).not.toHaveProperty('device_id');
     expect(model.firingAlerts[0]).not.toHaveProperty('alert_name');

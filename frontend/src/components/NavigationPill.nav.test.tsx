@@ -1,21 +1,27 @@
+import { render } from '@testing-library/react';
 /**
  * COMP-03 NavBar (NavigationPill) behavioral tests.
  * The NavBar was implemented as NavigationPill in this project.
  * These tests verify the requirements from COMP-03.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import NavigationPill from './NavigationPill';
 
 // Mock API client
 vi.mock('../api/client', () => ({
-  fetchHealthVersion: vi.fn().mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
+  fetchHealthVersion: vi
+    .fn()
+    .mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
 }));
 
 // Mock ThemeContext - resolvedTheme=dark to check light_mode icon
 const mockSetTheme = vi.fn();
 vi.mock('../contexts/ThemeContext', () => ({
-  useTheme: () => ({ theme: 'dark' as const, resolvedTheme: 'dark' as const, setTheme: mockSetTheme }),
+  useTheme: () => ({
+    theme: 'dark' as const,
+    resolvedTheme: 'dark' as const,
+    setTheme: mockSetTheme,
+  }),
   adaptAreaColor: (hex: string) => hex,
 }));
 

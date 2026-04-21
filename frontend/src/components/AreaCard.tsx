@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
+import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area } from '../types/api';
 import { MaterialIcon } from './MaterialIcon';
-import { useTheme, adaptAreaColor } from '../contexts/ThemeContext';
 
 /** Props for the AreaCard component. */
 interface AreaCardProps {
@@ -25,7 +25,10 @@ export default function AreaCard({
 }: AreaCardProps) {
   const [hovered, setHovered] = useState(false);
   const { resolvedTheme } = useTheme();
-  const color = useMemo(() => adaptAreaColor(area.color, resolvedTheme), [area.color, resolvedTheme]);
+  const color = useMemo(
+    () => adaptAreaColor(area.color, resolvedTheme),
+    [area.color, resolvedTheme],
+  );
 
   return (
     <button
@@ -49,7 +52,7 @@ export default function AreaCard({
         className="absolute top-0 right-0 w-32 h-32 rounded-full filter blur-[80px] transition-opacity duration-200 pointer-events-none motion-reduce:transition-none"
         style={{
           backgroundColor: color,
-          opacity: hovered ? 0.20 : 0.10,
+          opacity: hovered ? 0.2 : 0.1,
         }}
       />
 
@@ -67,17 +70,13 @@ export default function AreaCard({
                 boxShadow: `0 0 10px ${color}`,
               }}
             />
-            <h2 className="font-sans font-semibold text-xl text-on-bg">
-              {area.name}
-            </h2>
+            <h2 className="font-sans font-semibold text-xl text-on-bg">{area.name}</h2>
           </div>
           <MaterialIcon name="hub" size={20} className="text-on-bg-secondary" />
         </div>
 
         {/* DESCRIPTION */}
-        <p className="text-on-bg-secondary text-base">
-          {area.description}
-        </p>
+        <p className="text-on-bg-secondary text-base">{area.description}</p>
 
         {/* METRICS */}
         <div className="mt-4 flex flex-col gap-2">

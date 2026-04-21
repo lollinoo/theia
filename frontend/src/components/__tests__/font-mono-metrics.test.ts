@@ -1,11 +1,11 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 /**
  * COMP-09 JetBrains Mono for Metric Values
  * Verifies that LinkDetailsPanel and InterfaceStatsPanel contain font-mono
  * on their metric value elements (bandwidth, throughput, utilization, speed, counters).
  */
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { describe, expect, it } from 'vitest';
 
 const COMPONENTS_DIR = join(__dirname, '..');
 
@@ -77,7 +77,9 @@ describe('COMP-09 Phase 5 sub-panels use font-mono for technical/metric values',
     // Verify that the inputClass constant string contains font-mono.
     expect(content).toContain('font-mono');
     // The inputClass definition itself must embed font-mono so all inputs inherit it.
-    const inputClassMatch = content.match(/const inputClass\s*=\s*['"`][^'"`]*font-mono[^'"`]*['"`]/);
+    const inputClassMatch = content.match(
+      /const inputClass\s*=\s*['"`][^'"`]*font-mono[^'"`]*['"`]/,
+    );
     expect(inputClassMatch).not.toBeNull();
   });
 });

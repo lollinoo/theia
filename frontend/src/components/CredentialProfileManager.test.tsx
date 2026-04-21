@@ -1,12 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ServerError, ValidationError } from '../api/errors';
 import { CredentialProfileManager } from './CredentialProfileManager';
-import { ValidationError, ServerError } from '../api/errors';
 
 // Mock API calls
 vi.mock('../api/client', () => ({
   fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
-  createCredentialProfile: vi.fn().mockResolvedValue({ id: 'new-cp', name: 'Test Profile', description: '', username: 'admin', port: 22, auth_method: 'password', role: 'Admin' }),
+  createCredentialProfile: vi.fn().mockResolvedValue({
+    id: 'new-cp',
+    name: 'Test Profile',
+    description: '',
+    username: 'admin',
+    port: 22,
+    auth_method: 'password',
+    role: 'Admin',
+  }),
   updateCredentialProfile: vi.fn().mockResolvedValue({}),
   deleteCredentialProfile: vi.fn().mockResolvedValue(undefined),
 }));
@@ -136,7 +144,15 @@ describe('CredentialProfileManager ProfileForm — secret required on create', (
   it('does not require secret when isEdit=true (edit mode)', async () => {
     const { fetchCredentialProfiles } = await import('../api/client');
     (fetchCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { id: 'cp-1', name: 'Existing Profile', description: '', username: 'admin', port: 22, auth_method: 'password' as const, role: 'Admin' },
+      {
+        id: 'cp-1',
+        name: 'Existing Profile',
+        description: '',
+        username: 'admin',
+        port: 22,
+        auth_method: 'password' as const,
+        role: 'Admin',
+      },
     ]);
 
     render(<CredentialProfileManager />);

@@ -18,7 +18,7 @@ make browser-e2e
 
 `backend-fast` runs backend vet, build, tests, and the enforced Go coverage threshold.
 
-`frontend-fast` runs the frontend coverage suite, typecheck, and production build.
+`frontend-fast` runs the frontend Biome quality gate, coverage suite, typecheck, and production build.
 
 `realtime-stress` runs the deterministic backend stress coverage tests.
 

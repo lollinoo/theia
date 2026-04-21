@@ -1,5 +1,5 @@
-import type { Area } from '../types/api';
 import type { ActiveView } from '../App';
+import type { Area } from '../types/api';
 
 interface WatermarkProps {
   activeView: ActiveView;

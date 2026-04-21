@@ -4,9 +4,9 @@ import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 import {
   minimapColorForDevice,
+  resolveDeviceMonitoringState,
   resolveDeviceNodeStatusStyles,
   resolveDeviceStatusDotStyles,
-  resolveDeviceMonitoringState,
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
@@ -93,11 +93,21 @@ describe('deviceVisualState', () => {
   });
 
   it('gives down nodes a dedicated frame glow without reusing it for critical', () => {
-    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain('var(--nt-node-down-ring)');
-    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain('var(--nt-node-down-glow)');
-    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameClass).toBe('topology-node-down-fade');
-    expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow).not.toContain('var(--nt-node-down-ring)');
-    expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow).not.toContain('var(--nt-node-down-glow)');
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain(
+      'var(--nt-node-down-ring)',
+    );
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain(
+      'var(--nt-node-down-glow)',
+    );
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameClass).toBe(
+      'topology-node-down-fade',
+    );
+    expect(
+      resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow,
+    ).not.toContain('var(--nt-node-down-ring)');
+    expect(
+      resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow,
+    ).not.toContain('var(--nt-node-down-glow)');
     expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameClass).toBeUndefined();
   });
 
@@ -158,10 +168,15 @@ describe('deviceVisualState', () => {
   it('does not infer last_polled_at from last_collected_at when runtime omits it', () => {
     const device = mockDevice({ poll_class: 'core', poll_interval_override: 15 });
 
-    expect(sanitizeDeviceMetricsForDisplay(device, mockMetrics({
-      expected_poll_interval_seconds: null,
-      last_polled_at: null,
-    }))).toMatchObject({
+    expect(
+      sanitizeDeviceMetricsForDisplay(
+        device,
+        mockMetrics({
+          expected_poll_interval_seconds: null,
+          last_polled_at: null,
+        }),
+      ),
+    ).toMatchObject({
       last_polled_at: null,
       expected_poll_interval_seconds: null,
     });

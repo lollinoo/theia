@@ -1,12 +1,12 @@
+import { readFileSync, readdirSync, statSync } from 'fs';
+import { join } from 'path';
 /**
  * COMP-12 No-Line Rule Audit
  * Scans all component source files for layout border patterns that violate the no-line rule.
  * Layout border separators (border-t border-outline, border-b border-outline, border-l border-outline)
  * must be zero. Ghost/functional borders (border-outline-subtle, border-glass-border, ring-outline) are allowed.
  */
-import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { join } from 'path';
+import { describe, expect, it } from 'vitest';
 
 const COMPONENTS_DIR = join(__dirname, '..');
 

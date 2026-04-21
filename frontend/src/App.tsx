@@ -1,13 +1,13 @@
-import { useState, useCallback, useEffect } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
+import { useCallback, useEffect, useState } from 'react';
+import { fetchAreas } from './api/client';
+import AreaHub from './components/AreaHub';
 import Canvas from './components/Canvas';
+import { Dashboard } from './components/Dashboard';
 import NavigationPill from './components/NavigationPill';
 import { Watermark } from './components/Watermark';
-import { Dashboard } from './components/Dashboard';
-import AreaHub from './components/AreaHub';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useWebSocket } from './hooks/useWebSocket';
-import { fetchAreas } from './api/client';
 import type { Area, Device, Link } from './types/api';
 
 export type ActiveView = 'hub' | 'canvas' | 'dashboard';
@@ -20,7 +20,10 @@ function App() {
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
 
-  const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket('/api/v1/ws', detailDeviceId);
+  const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket(
+    '/api/v1/ws',
+    detailDeviceId,
+  );
 
   // Fetch areas on mount
   useEffect(() => {
@@ -65,48 +68,48 @@ function App() {
 
   return (
     <ThemeProvider>
-    <div className="h-screen w-screen overflow-hidden bg-bg text-on-bg">
-      <NavigationPill
-        activeView={activeView}
-        selectedAreaId={selectedAreaId}
-        areas={areas}
-        onViewChange={handleViewChange}
-        onAreaSelect={handleAreaSelect}
-      />
-      <Watermark activeView={activeView} selectedAreaId={selectedAreaId} areas={areas} />
-      {/* All views stay mounted; inactive ones hidden via CSS */}
-      <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
-        <AreaHub
-          devices={canvasDevices}
+      <div className="h-screen w-screen overflow-hidden bg-bg text-on-bg">
+        <NavigationPill
+          activeView={activeView}
+          selectedAreaId={selectedAreaId}
           areas={areas}
-          links={canvasLinks}
+          onViewChange={handleViewChange}
           onAreaSelect={handleAreaSelect}
-          onOpenSettings={() => {
-            setActiveView('canvas');
-          }}
         />
-      </div>
-      <div className={activeView === 'canvas' ? 'h-full' : 'hidden'}>
-        <ReactFlowProvider>
-          <Canvas
-            snapshot={snapshot}
-            alerts={alerts}
-            reconnecting={reconnecting}
-            prometheusStatus={prometheusStatus}
-            selectedAreaId={selectedAreaId}
+        <Watermark activeView={activeView} selectedAreaId={selectedAreaId} areas={areas} />
+        {/* All views stay mounted; inactive ones hidden via CSS */}
+        <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
+          <AreaHub
+            devices={canvasDevices}
             areas={areas}
-            onDevicesChange={handleCanvasDevicesChange}
-            onLinksChange={handleCanvasLinksChange}
+            links={canvasLinks}
             onAreaSelect={handleAreaSelect}
-            onAreasChange={handleAreasChange}
-            onDetailDeviceChange={setDetailDeviceId}
+            onOpenSettings={() => {
+              setActiveView('canvas');
+            }}
           />
-        </ReactFlowProvider>
+        </div>
+        <div className={activeView === 'canvas' ? 'h-full' : 'hidden'}>
+          <ReactFlowProvider>
+            <Canvas
+              snapshot={snapshot}
+              alerts={alerts}
+              reconnecting={reconnecting}
+              prometheusStatus={prometheusStatus}
+              selectedAreaId={selectedAreaId}
+              areas={areas}
+              onDevicesChange={handleCanvasDevicesChange}
+              onLinksChange={handleCanvasLinksChange}
+              onAreaSelect={handleAreaSelect}
+              onAreasChange={handleAreasChange}
+              onDetailDeviceChange={setDetailDeviceId}
+            />
+          </ReactFlowProvider>
+        </div>
+        <div className={activeView === 'dashboard' ? 'h-full' : 'hidden'}>
+          <Dashboard devices={canvasDevices} areas={areas} snapshot={snapshot} />
+        </div>
       </div>
-      <div className={activeView === 'dashboard' ? 'h-full' : 'hidden'}>
-        <Dashboard devices={canvasDevices} areas={areas} snapshot={snapshot} />
-      </div>
-    </div>
     </ThemeProvider>
   );
 }

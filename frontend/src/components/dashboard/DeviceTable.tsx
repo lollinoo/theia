@@ -1,10 +1,18 @@
 import { useState } from 'react';
-import type { Device, Area } from '../../types/api';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
+import type { Area, Device } from '../../types/api';
 import { DeviceRow } from './DeviceRow';
 import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
-type SortKey = 'hostname' | 'ip' | 'status' | 'area' | 'hardware_model' | 'vendor' | 'uptime' | 'os_version';
+type SortKey =
+  | 'hostname'
+  | 'ip'
+  | 'status'
+  | 'area'
+  | 'hardware_model'
+  | 'vendor'
+  | 'uptime'
+  | 'os_version';
 type SortDir = 'asc' | 'desc';
 
 interface DeviceTableProps {
@@ -94,16 +102,25 @@ export function DeviceTable({
             {columns.map((col) => (
               <th
                 key={col.key}
-                className={`px-3 py-2 text-[12px] font-normal uppercase tracking-[0.16em] cursor-pointer select-none hover:text-on-bg transition-colors whitespace-nowrap ${col.className ?? ''}`}
-                onClick={() => handleSort(col.key)}
+                className={`px-3 py-2 text-[12px] font-normal uppercase tracking-[0.16em] cursor-pointer whitespace-nowrap ${col.className ?? ''}`}
               >
-                {col.label}
-                {sortKey === col.key && (
-                  <span className="ml-1 text-primary">{sortDir === 'asc' ? '\u2191' : '\u2193'}</span>
-                )}
+                <button
+                  type="button"
+                  className="cursor-pointer select-none transition-colors hover:text-on-bg"
+                  onClick={() => handleSort(col.key)}
+                >
+                  {col.label}
+                  {sortKey === col.key && (
+                    <span className="ml-1 text-primary">
+                      {sortDir === 'asc' ? '\u2191' : '\u2193'}
+                    </span>
+                  )}
+                </button>
               </th>
             ))}
-            <th className="px-3 py-2 text-[12px] font-normal uppercase tracking-[0.16em] text-right">Actions</th>
+            <th className="px-3 py-2 text-[12px] font-normal uppercase tracking-[0.16em] text-right">
+              Actions
+            </th>
           </tr>
         </thead>
         <tbody>

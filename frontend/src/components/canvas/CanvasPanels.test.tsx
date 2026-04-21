@@ -1,9 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { CanvasPanels } from './CanvasPanels';
+import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { AlertsPanelModel } from '../panelModels';
+import { CanvasPanels } from './CanvasPanels';
 import { buildRuntimeState } from './runtimeAdapters';
 
 vi.mock('../DeviceConfigPanel', () => ({
@@ -23,7 +23,8 @@ vi.mock('../DeviceConfigPanel', () => ({
 vi.mock('../LinkDetailsPanel', () => ({
   LinkDetailsPanel: (props: { readOnly?: boolean; link: { target_if_name: string } }) => (
     <div>
-      {props.readOnly ? 'Link Details Read Only' : 'Link Details Editable'}:{props.link.target_if_name}
+      {props.readOnly ? 'Link Details Read Only' : 'Link Details Editable'}:
+      {props.link.target_if_name}
     </div>
   ),
 }));
@@ -32,7 +33,9 @@ vi.mock('../AlertsPanel', () => ({
   AlertsPanel: (props: { model: AlertsPanelModel }) => (
     <div>
       Alert count: {props.model.firingAlerts.length}
-      {props.model.firingAlerts[0] ? ` ${props.model.firingAlerts[0].deviceLabel} ${props.model.firingAlerts[0].alertName}` : ''}
+      {props.model.firingAlerts[0]
+        ? ` ${props.model.firingAlerts[0].deviceLabel} ${props.model.firingAlerts[0].alertName}`
+        : ''}
     </div>
   ),
 }));
@@ -110,10 +113,10 @@ describe('CanvasPanels', () => {
     });
 
     render(
-        <CanvasPanels
-          panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
-          setPanelContent={vi.fn()}
-          devices={[device]}
+      <CanvasPanels
+        panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
@@ -141,10 +144,13 @@ describe('CanvasPanels', () => {
     });
 
     render(
-        <CanvasPanels
-          panelContent={{ type: 'deviceConfig', data: { deviceId: staleDevice.id, device: staleDevice } }}
-          setPanelContent={vi.fn()}
-          devices={[liveDevice]}
+      <CanvasPanels
+        panelContent={{
+          type: 'deviceConfig',
+          data: { deviceId: staleDevice.id, device: staleDevice },
+        }}
+        setPanelContent={vi.fn()}
+        devices={[liveDevice]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
@@ -174,10 +180,10 @@ describe('CanvasPanels', () => {
     });
 
     render(
-        <CanvasPanels
-          panelContent={{ type: 'link-details', data: { link: mockLink(), readOnly: true } }}
-          setPanelContent={vi.fn()}
-          devices={[sourceDevice, targetDevice]}
+      <CanvasPanels
+        panelContent={{ type: 'link-details', data: { link: mockLink(), readOnly: true } }}
+        setPanelContent={vi.fn()}
+        devices={[sourceDevice, targetDevice]}
         topologyLinks={[mockLink()]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
@@ -207,10 +213,13 @@ describe('CanvasPanels', () => {
     });
 
     render(
-        <CanvasPanels
-          panelContent={{ type: 'link-details', data: { link: mockLink({ target_if_name: '' }), readOnly: true } }}
-          setPanelContent={vi.fn()}
-          devices={[sourceDevice, targetDevice]}
+      <CanvasPanels
+        panelContent={{
+          type: 'link-details',
+          data: { link: mockLink({ target_if_name: '' }), readOnly: true },
+        }}
+        setPanelContent={vi.fn()}
+        devices={[sourceDevice, targetDevice]}
         topologyLinks={[mockLink({ target_if_name: 'ether2' })]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
@@ -272,13 +281,13 @@ describe('CanvasPanels', () => {
     });
 
     render(
-        <CanvasPanels
-          panelContent={{
-            type: 'interfaceStats',
-            data: { linkId: staleLink.id, link: staleLink, sourceDevice, targetDevice },
-          }}
-          setPanelContent={vi.fn()}
-          devices={[sourceDevice, targetDevice]}
+      <CanvasPanels
+        panelContent={{
+          type: 'interfaceStats',
+          data: { linkId: staleLink.id, link: staleLink, sourceDevice, targetDevice },
+        }}
+        setPanelContent={vi.fn()}
+        devices={[sourceDevice, targetDevice]}
         topologyLinks={[liveLink]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
@@ -303,10 +312,13 @@ describe('CanvasPanels', () => {
     });
 
     render(
-        <CanvasPanels
-          panelContent={{ type: 'interfaceStats', data: { deviceId: staleDevice.id, device: staleDevice } }}
-          setPanelContent={vi.fn()}
-          devices={[liveDevice]}
+      <CanvasPanels
+        panelContent={{
+          type: 'interfaceStats',
+          data: { deviceId: staleDevice.id, device: staleDevice },
+        }}
+        setPanelContent={vi.fn()}
+        devices={[liveDevice]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}

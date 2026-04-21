@@ -1,5 +1,5 @@
 import type { Device } from '../../types/api';
-import { formatUptime, type SnapshotPayload } from '../../types/metrics';
+import { type SnapshotPayload, formatUptime } from '../../types/metrics';
 import {
   resolveDeviceMonitoringState,
   resolveDeviceOperationalReadouts,
@@ -35,9 +35,8 @@ function runtimeAwareDevice(device: Device, snapshot: SnapshotPayload | null): D
 
   return {
     ...device,
-    status: runtime.operational_status === 'unmonitored'
-      ? device.status
-      : runtime.operational_status,
+    status:
+      runtime.operational_status === 'unmonitored' ? device.status : runtime.operational_status,
   };
 }
 
@@ -59,10 +58,12 @@ export function buildRuntimeDeviceRows({
     const monitoringState = runtimeMonitoringState(device, snapshot);
     const metrics = snapshot?.devices?.[device.id] ?? null;
     const readouts = resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState);
-    const displayName = device.tags?.display_name || device.sys_name || device.hostname || device.ip;
-    const modelLabel = device.hardware_model && device.hardware_model !== 'Unknown'
-      ? device.hardware_model
-      : device.sys_descr || '';
+    const displayName =
+      device.tags?.display_name || device.sys_name || device.hostname || device.ip;
+    const modelLabel =
+      device.hardware_model && device.hardware_model !== 'Unknown'
+        ? device.hardware_model
+        : device.sys_descr || '';
     const statusState = resolveDeviceOperationalStatusState(runtimeDevice, monitoringState);
 
     return {

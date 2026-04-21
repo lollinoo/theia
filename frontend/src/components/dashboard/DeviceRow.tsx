@@ -1,10 +1,9 @@
-import type { Area } from '../../types/api';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import { adaptAreaColor } from '../../contexts/ThemeContext';
-import { StatusDot } from '../StatusDot';
+import type { Area } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
+import { StatusDot } from '../StatusDot';
 import type { RuntimeDeviceRow } from './runtimeDeviceRows';
-
 
 interface DeviceRowProps {
   row: RuntimeDeviceRow;
@@ -17,8 +16,13 @@ interface DeviceRowProps {
 }
 
 export function DeviceRow({
-  row, areaMap, resolvedTheme,
-  onSSHCredentials, onBackup, onBackupHistory, onViewConfig,
+  row,
+  areaMap,
+  resolvedTheme,
+  onSSHCredentials,
+  onBackup,
+  onBackupHistory,
+  onViewConfig,
 }: DeviceRowProps) {
   const deviceAreas = row.areaIds.map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
 
@@ -32,7 +36,9 @@ export function DeviceRow({
         )}
       </td>
       {/* IP Address -- monospace per design spec */}
-      <td className="px-3 py-2.5 font-mono text-[11px] font-semibold text-on-bg-secondary whitespace-nowrap">{row.ip}</td>
+      <td className="px-3 py-2.5 font-mono text-[11px] font-semibold text-on-bg-secondary whitespace-nowrap">
+        {row.ip}
+      </td>
       {/* Status -- StatusDot component per D-02 */}
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-1.5">
@@ -65,7 +71,9 @@ export function DeviceRow({
       {/* Model */}
       <td className="px-3 py-2.5 text-on-bg-secondary text-[11px] font-mono">
         {row.modelLabel
-          ? row.modelLabel.length > 30 ? `${row.modelLabel.slice(0, 29)}\u2026` : row.modelLabel
+          ? row.modelLabel.length > 30
+            ? `${row.modelLabel.slice(0, 29)}\u2026`
+            : row.modelLabel
           : '\u2014'}
       </td>
       {/* OS Version -- parsed from sys_descr, font-mono per D-02 */}
@@ -91,13 +99,24 @@ export function DeviceRow({
   );
 }
 
-function IconAction({ icon, title, onClick, disabled }: {
-  icon: string; title: string; onClick: () => void; disabled?: boolean;
+function IconAction({
+  icon,
+  title,
+  onClick,
+  disabled,
+}: {
+  icon: string;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
-      onClick={(e) => { e.stopPropagation(); if (!disabled) onClick(); }}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!disabled) onClick();
+      }}
       title={title}
       disabled={disabled}
       className={`p-1.5 rounded-md transition-colors ${

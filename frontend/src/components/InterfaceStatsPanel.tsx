@@ -12,14 +12,16 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
   const metricsUnavailable = section.metricsUnavailableMessage !== null;
 
   return (
-    <div className={`rounded-xl p-4 space-y-3 transition-colors duration-200 ${metricsUnavailable ? 'bg-status-down/10' : 'bg-surface-high'}`}>
+    <div
+      className={`rounded-xl p-4 space-y-3 transition-colors duration-200 ${metricsUnavailable ? 'bg-status-down/10' : 'bg-surface-high'}`}
+    >
       <div>
         <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Device</p>
-        <p className="mt-0.5 text-sm font-medium text-on-bg">
-          {section.deviceLabel}
-        </p>
+        <p className="mt-0.5 text-sm font-medium text-on-bg">{section.deviceLabel}</p>
         {section.metricsUnavailableMessage && (
-          <p className="mt-1 text-xs font-medium text-status-down">{section.metricsUnavailableMessage}</p>
+          <p className="mt-1 text-xs font-medium text-status-down">
+            {section.metricsUnavailableMessage}
+          </p>
         )}
       </div>
 
@@ -35,13 +37,17 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
         {section.speedLabel && (
           <div>
             <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Speed</p>
-            <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{section.speedLabel}</p>
+            <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">
+              {section.speedLabel}
+            </p>
           </div>
         )}
         {section.statusLabel && (
           <div>
             <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Status</p>
-            <p className={`mt-0.5 text-sm ${section.statusTone === 'up' ? 'text-status-up' : section.statusTone === 'down' ? 'text-status-down' : 'text-on-bg-secondary'}`}>
+            <p
+              className={`mt-0.5 text-sm ${section.statusTone === 'up' ? 'text-status-up' : section.statusTone === 'down' ? 'text-status-down' : 'text-on-bg-secondary'}`}
+            >
               {section.statusLabel}
             </p>
           </div>
@@ -51,18 +57,28 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
       <div className="grid grid-cols-2 gap-3 mt-3 pt-3">
         <div>
           <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">TX</p>
-          <p className={`mt-0.5 font-mono text-[11px] font-semibold ${metricsUnavailable ? 'text-status-down/70' : 'text-on-bg'}`}>{section.txLabel}</p>
+          <p
+            className={`mt-0.5 font-mono text-[11px] font-semibold ${metricsUnavailable ? 'text-status-down/70' : 'text-on-bg'}`}
+          >
+            {section.txLabel}
+          </p>
         </div>
         <div>
           <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">RX</p>
-          <p className={`mt-0.5 font-mono text-[11px] font-semibold ${metricsUnavailable ? 'text-status-down/70' : 'text-on-bg'}`}>{section.rxLabel}</p>
+          <p
+            className={`mt-0.5 font-mono text-[11px] font-semibold ${metricsUnavailable ? 'text-status-down/70' : 'text-on-bg'}`}
+          >
+            {section.rxLabel}
+          </p>
         </div>
       </div>
 
       {section.utilizationPct !== null && (
         <div>
           <div className="flex items-center justify-between">
-            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Utilization</p>
+            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">
+              Utilization
+            </p>
             <p className="text-xs font-mono" style={{ color: section.utilizationColor }}>
               {section.utilizationPct}%
             </p>
@@ -70,7 +86,10 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
           <div className="mt-1 h-1.5 w-full rounded-full bg-surface">
             <div
               className="h-1.5 rounded-full transition-all duration-500"
-              style={{ width: `${Math.min(section.utilizationPct, 100)}%`, backgroundColor: section.utilizationColor }}
+              style={{
+                width: `${Math.min(section.utilizationPct, 100)}%`,
+                backgroundColor: section.utilizationColor,
+              }}
             />
           </div>
         </div>
@@ -98,7 +117,9 @@ function negotiationToneClass(tone: LinkInterfacePanelModel['negotiation']['tone
 export function InterfaceStatsPanel({ model }: InterfaceStatsPanelProps) {
   return (
     <div className="space-y-3 p-4">
-      <div className={`rounded-xl border px-4 py-3 transition-colors duration-200 ${negotiationToneClass(model.negotiation.tone)}`}>
+      <div
+        className={`rounded-xl border px-4 py-3 transition-colors duration-200 ${negotiationToneClass(model.negotiation.tone)}`}
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">
@@ -112,11 +133,15 @@ export function InterfaceStatsPanel({ model }: InterfaceStatsPanelProps) {
         <div className="mt-3 grid grid-cols-2 gap-3 border-t border-outline-subtle/70 pt-3">
           <div>
             <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Source</p>
-            <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{model.negotiation.sourceLabel}</p>
+            <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">
+              {model.negotiation.sourceLabel}
+            </p>
           </div>
           <div>
             <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Target</p>
-            <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">{model.negotiation.targetLabel}</p>
+            <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">
+              {model.negotiation.targetLabel}
+            </p>
           </div>
         </div>
       </div>
@@ -132,11 +157,7 @@ interface DeviceInterfaceStatsPanelProps {
 
 export function DeviceInterfaceStatsPanel({ model }: DeviceInterfaceStatsPanelProps) {
   if (model.loadingInterfaces) {
-    return (
-      <div className="p-4 text-sm text-on-bg-secondary">
-        Loading interface details...
-      </div>
-    );
+    return <div className="p-4 text-sm text-on-bg-secondary">Loading interface details...</div>;
   }
 
   if (!model.loadingInterfaces && model.sections.length === 0) {
@@ -150,10 +171,7 @@ export function DeviceInterfaceStatsPanel({ model }: DeviceInterfaceStatsPanelPr
   return (
     <div className="space-y-3 p-4">
       {model.sections.map((section) => (
-        <InterfaceStatsSection
-          key={section.ifName}
-          section={section}
-        />
+        <InterfaceStatsSection key={section.ifName} section={section} />
       ))}
     </div>
   );

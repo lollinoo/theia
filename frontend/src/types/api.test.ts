@@ -39,10 +39,7 @@ function deviceResource(id: string, deviceType: string) {
 describe('parseDevicesResponse', () => {
   it('maps backend access-point values to ap and preserves firewall devices', () => {
     const devices = parseDevicesResponse({
-      data: [
-        deviceResource('ap-1', 'access_point'),
-        deviceResource('fw-1', 'firewall'),
-      ],
+      data: [deviceResource('ap-1', 'access_point'), deviceResource('fw-1', 'firewall')],
     });
 
     expect(devices[0].device_type).toBe('ap');
