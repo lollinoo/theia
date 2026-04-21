@@ -50,6 +50,57 @@ var loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
 	return config.Load(path)
 }
 
+var openPrimaryRuntimeDB = sqlite.OpenPrimaryDB
+
+func validateDatabasePolicy(cfg *runtimeConfig, dialect sqlite.Dialect) error {
+	switch dialect {
+	case sqlite.DialectSQLite:
+		if os.Getenv("THEIA_ALLOW_SQLITE_SMALL_INSTALL") == "true" {
+			return nil
+		}
+		return fmt.Errorf(
+			"sqlite is only supported for demo, lab, or small-install deployments; "+
+				"set THEIA_ALLOW_SQLITE_SMALL_INSTALL=true only if this instance stays within the documented small-install limits (up to 50 devices, one Theia process, one active admin)",
+		)
+	case sqlite.DialectPostgres:
+		if strings.TrimSpace(cfg.DBDSN) == "" {
+			return fmt.Errorf(
+				"postgres is the default database driver and requires db_dsn; "+
+					"set THEIA_DB_DSN (for example postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable), start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
+			)
+		}
+	}
+
+	return nil
+}
+
+func wrapPostgresConnectError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"connect to database: %w; set THEIA_DB_DSN (for example postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable), start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
+		err,
+	)
+}
+
+func wrapPostgresOpenError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"open database: %w; set THEIA_DB_DSN (for example postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable), start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
+		err,
+	)
+}
+
+func runtimeDBDriver(driver string) string {
+	if strings.TrimSpace(driver) == "" {
+		return string(sqlite.DialectPostgres)
+	}
+	return driver
+}
+
 func (b *runtimeBootstrap) Run(configPath string) error {
 	cfg, err := loadRuntimeConfig(configPath)
 	if err != nil {
@@ -59,10 +110,14 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	log.Printf("Config loaded: driver=%s listen=%s log_level=%s", cfg.DBDriver, cfg.ListenAddr, cfg.LogLevel)
 
 	paths := resolveRuntimePaths(cfg)
+	runtimeDriver := runtimeDBDriver(cfg.DBDriver)
 
-	dialect, err := sqlite.NormalizeDialect(cfg.DBDriver)
+	dialect, err := sqlite.NormalizeDialect(runtimeDriver)
 	if err != nil {
 		return fmt.Errorf("invalid database driver: %w", err)
+	}
+	if err := validateDatabasePolicy(cfg, dialect); err != nil {
+		return err
 	}
 	if err := ensurePrivateDir(paths.backupDir); err != nil {
 		return fmt.Errorf("prepare backup directory %s: %w", paths.backupDir, err)
@@ -90,10 +145,14 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return fmt.Errorf("stat known_hosts file %s: %w", paths.knownHostsPath, err)
 	}
 
-	db, dialect, err := sqlite.OpenPrimaryDB(cfg.DBDriver, cfg.DBPath, cfg.DBDSN)
+	db, openedDialect, err := openPrimaryRuntimeDB(runtimeDriver, cfg.DBPath, cfg.DBDSN)
 	if err != nil {
+		if dialect == sqlite.DialectPostgres {
+			return wrapPostgresOpenError(err)
+		}
 		return fmt.Errorf("open database: %w", err)
 	}
+	dialect = openedDialect
 	defer db.Close()
 
 	sqlite.ConfigureDB(db)
@@ -105,6 +164,9 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 
 	if err := db.Ping(); err != nil {
+		if dialect == sqlite.DialectPostgres {
+			return wrapPostgresConnectError(err)
+		}
 		return fmt.Errorf("connect to database: %w", err)
 	}
 

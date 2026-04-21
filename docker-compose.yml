@@ -2,11 +2,13 @@
 # Theia - Docker Compose
 # =============================================================================
 # Profiles:
-#   dev  — Full stack: backend + frontend + Prometheus + SNMP simulators
-#   test — Backend + SNMP simulators only (for automated testing)
+#   dev      — Frontend + backend + PostgreSQL + Prometheus + SNMP simulators
+#   test     — Backend + PostgreSQL + SNMP simulators only (for automated testing)
+#   postgres — Local PostgreSQL only
 #
 # Usage:
 #   docker compose --profile dev up --build -d
+#   docker compose --profile test up -d --wait postgres
 #   docker compose --profile test run --rm backend go test ./...
 #
 # SNMP simulators are reachable from host network at:
@@ -37,9 +39,10 @@ services:
       - ".:/app"
       - "theia-data:/app/data"
     environment:
-      - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-sqlite}
+      - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-postgres}
+      - THEIA_ALLOW_SQLITE_SMALL_INSTALL=${THEIA_ALLOW_SQLITE_SMALL_INSTALL:-}
       - THEIA_DB_PATH=/app/data/theia.db
-      - THEIA_DB_DSN=${THEIA_DB_DSN:-}
+      - THEIA_DB_DSN=${THEIA_DB_DSN:-postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable}
       - THEIA_DATA_DIR=/app/data
       - THEIA_LISTEN_ADDR=:8080
       - THEIA_ENCRYPTION_KEY=devkey1234567890
@@ -48,6 +51,8 @@ services:
       - GIT_COMMIT=${GIT_COMMIT:-dev}
       - BUILD_DATE=${BUILD_DATE:-dev}
     depends_on:
+      postgres:
+        condition: service_healthy
       snmp-router:
         condition: service_healthy
       snmp-switch:
@@ -63,7 +68,7 @@ services:
 
   postgres:
     image: postgres:17
-    profiles: ["postgres"]
+    profiles: ["dev", "test", "postgres"]
     container_name: theia-postgres
     environment:
       - POSTGRES_DB=theia

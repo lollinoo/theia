@@ -43,12 +43,13 @@ services:
       - theia-staging-data:/data
     environment:
       - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-postgres}
+      - THEIA_ALLOW_SQLITE_SMALL_INSTALL=${THEIA_ALLOW_SQLITE_SMALL_INSTALL:-}
       - THEIA_DB_PATH=${THEIA_DB_PATH:-/data/theia.db}
       - THEIA_DB_DSN=${THEIA_DB_DSN:-postgres://theia:${POSTGRES_PASSWORD:-theia}@postgres:5432/${POSTGRES_DB:-theia}?sslmode=disable}
       - THEIA_DATA_DIR=${THEIA_DATA_DIR:-/data}
       - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8081}
       - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
-      - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-}
+      - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:?THEIA_ENCRYPTION_KEY must be set}
     depends_on:
       postgres:
         condition: service_healthy

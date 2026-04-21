@@ -15,7 +15,8 @@
 VERSION    := $(shell git describe --tags --always 2>/dev/null || echo dev)
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_DATE := $(shell date -u +%FT%TZ)
-DEV_COMPOSE_PROFILES := --profile dev --profile test --profile postgres
+DEV_COMPOSE_PROFILES := --profile dev
+TEST_COMPOSE_PROFILES := --profile test
 PHASE4_API_BASE ?= http://localhost:8080
 PHASE4_OUT ?= .planning/phases/04-scale-validation-and-hardening/evidence/synthetic
 PHASE4_MODE ?= synthetic
@@ -31,11 +32,12 @@ install-hooks: ## Configure repo-managed Git hooks
 dev: ## Start full dev stack (backend + frontend + Prometheus + SNMP sims)
 	@docker compose $(DEV_COMPOSE_PROFILES) down 2>/dev/null || true
 	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
-		docker compose --profile dev up --build -d
+		docker compose $(DEV_COMPOSE_PROFILES) up --build -d
 	@echo ""
 	@echo "Theia dev stack is running:"
 	@echo "  Backend:  http://localhost:8080"
 	@echo "  Frontend: http://localhost:3000"
+	@echo "  PostgreSQL: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
 	@echo "  Prometheus: http://localhost:9090"
 	@echo "  SNMP exporter: http://localhost:9116"
 	@echo ""
@@ -44,23 +46,13 @@ dev: ## Start full dev stack (backend + frontend + Prometheus + SNMP sims)
 
 postgres-up: ## Start local PostgreSQL for Theia
 	@docker compose --profile postgres down 2>/dev/null || true
-	docker compose --profile postgres up -d postgres
+	docker compose --profile postgres up -d --wait postgres
 
 postgres-down: ## Stop local PostgreSQL for Theia
 	docker compose --profile postgres down
 
-dev-postgres: ## Start dev stack with PostgreSQL instead of SQLite
-	@docker compose $(DEV_COMPOSE_PROFILES) down 2>/dev/null || true
-	docker compose --profile postgres up -d postgres
-	THEIA_DB_DRIVER=postgres \
-	THEIA_DB_DSN=postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable \
-	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
-		docker compose --profile dev up --build -d
-	@echo ""
-	@echo "Theia dev stack is running on PostgreSQL:"
-	@echo "  Backend:  http://localhost:8080"
-	@echo "  Frontend: http://localhost:3000"
-	@echo "  PostgreSQL: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
+dev-postgres: ## Start dev stack on PostgreSQL (same as standard dev path)
+	@$(MAKE) dev
 
 migrate-postgres: ## Copy the current SQLite data set into PostgreSQL
 	@if [ -z "$${MIGRATE_DSN:-$${THEIA_DB_DSN}}" ]; then \
@@ -76,14 +68,33 @@ stop: ## Stop all containers
 	docker compose $(DEV_COMPOSE_PROFILES) down
 
 test: ## Run unit tests inside backend container
-	docker compose --profile test run --rm --no-deps backend go test ./... -count=1 -v
+	@status=0; cleanup_status=0; started_services=""; running_services="$$(docker compose $(TEST_COMPOSE_PROFILES) ps --status running --services 2>/dev/null || true)"; \
+		case " $$running_services " in *" postgres "*) ;; *) started_services="postgres" ;; esac; \
+		docker compose $(TEST_COMPOSE_PROFILES) up -d --wait postgres || status=$$?; \
+		if [ $$status -eq 0 ]; then \
+			docker compose $(TEST_COMPOSE_PROFILES) run --rm --no-deps backend go test ./... -count=1 -v || status=$$?; \
+		fi; \
+		if [ -n "$$started_services" ]; then \
+			docker compose $(TEST_COMPOSE_PROFILES) stop $$started_services || cleanup_status=$$?; \
+		fi; \
+		if [ $$status -eq 0 ]; then status=$$cleanup_status; fi; \
+		exit $$status
 
 test-integration: ## Run integration tests against SNMP simulators
-	docker compose --profile test up -d snmp-router snmp-switch snmp-ap
-	@echo "Waiting for SNMP simulators to be healthy..."
-	docker compose --profile test up -d --wait snmp-router snmp-switch snmp-ap
-	docker compose --profile test run --rm backend go test ./... -tags=integration -count=1 -v
-	docker compose --profile test --profile postgres down
+	@status=0; cleanup_status=0; started_services=""; running_services="$$(docker compose $(TEST_COMPOSE_PROFILES) ps --status running --services 2>/dev/null || true)"; \
+		for service in postgres snmp-router snmp-switch snmp-ap; do \
+			case " $$running_services " in *" $$service "*) ;; *) started_services="$$started_services $$service" ;; esac; \
+		done; \
+		echo "Waiting for SNMP simulators to be healthy..."; \
+		docker compose $(TEST_COMPOSE_PROFILES) up -d --wait postgres snmp-router snmp-switch snmp-ap || status=$$?; \
+		if [ $$status -eq 0 ]; then \
+			docker compose $(TEST_COMPOSE_PROFILES) run --rm backend go test ./... -tags=integration -count=1 -v || status=$$?; \
+		fi; \
+		if [ -n "$$started_services" ]; then \
+			docker compose $(TEST_COMPOSE_PROFILES) stop $$started_services || cleanup_status=$$?; \
+		fi; \
+		if [ $$status -eq 0 ]; then status=$$cleanup_status; fi; \
+		exit $$status
 
 # ---------------------------------------------------------------------------
 # Required realtime PR gates
@@ -121,7 +132,7 @@ prod: ## Start production stack (pulls from GHCR)
 	@echo ""
 	@echo "MikroTik Theia production stack is running:"
 	@echo "  Frontend: http://localhost:$$(grep FRONTEND_PORT .env.prod 2>/dev/null | cut -d= -f2 || echo 80)"
-	@echo "  Backend:  http://localhost:$$(grep BACKEND_PORT .env.prod 2>/dev/null | cut -d= -f2 || echo 8080)"
+	@echo "  API proxy: http://localhost:$$(grep FRONTEND_PORT .env.prod 2>/dev/null | cut -d= -f2 || echo 80)/api/v1"
 	@echo ""
 	@echo "Run 'make prod-logs' to follow backend logs."
 
@@ -166,7 +177,7 @@ staging: ## Start staging stack (auto-updates via Watchtower)
 	@echo ""
 	@echo "MikroTik Theia staging stack is running:"
 	@echo "  Frontend: http://localhost:3001"
-	@echo "  Backend:  http://localhost:8081"
+	@echo "  API proxy: http://localhost:3001/api/v1"
 	@echo "  Watchtower polls for new :staging images every 30s"
 	@echo ""
 	@echo "Run 'make staging-logs' to follow backend logs."
@@ -241,13 +252,13 @@ logs: ## Follow backend container logs
 	docker compose logs -f backend
 
 snmpwalk-router: ## Run snmpwalk against router simulator (debug)
-	snmpwalk -v2c -c public localhost:10161 1.3.6.1.2.1.1
+	snmpwalk -v2c -c public 127.0.10.10:161 1.3.6.1.2.1.1
 
 snmpwalk-switch: ## Run snmpwalk against switch simulator (debug)
-	snmpwalk -v2c -c public localhost:10162 1.3.6.1.2.1.1
+	snmpwalk -v2c -c public 127.0.10.11:161 1.3.6.1.2.1.1
 
 snmpwalk-ap: ## Run snmpwalk against AP simulator (debug)
-	snmpwalk -v2c -c public localhost:10163 1.3.6.1.2.1.1
+	snmpwalk -v2c -c public 127.0.10.12:161 1.3.6.1.2.1.1
 
 # ---------------------------------------------------------------------------
 # Release workflow

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"context"
 	"errors"
 	"fmt"
@@ -8,7 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/lollinoo/theia/internal/repository/sqlite"
 )
 
 type stubRuntimeStopper struct {
@@ -152,8 +156,11 @@ func TestRuntimeBootstrapRunTightensExistingKnownHostsFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run() error = nil, want database connect error")
 	}
-	if got, want := err.Error(), "connect to database: failed to connect to `host=127.0.0.1 user=user database=theia`: dial error (dial tcp 127.0.0.1:1: connect: connection refused)"; got != want {
-		t.Fatalf("Run() error = %q, want %q", got, want)
+	if !strings.Contains(err.Error(), "connect to database") {
+		t.Fatalf("Run() error = %q, want connect wrapper", err.Error())
+	}
+	if !strings.Contains(err.Error(), "THEIA_DB_DSN") {
+		t.Fatalf("Run() error = %q, want postgres recovery hint", err.Error())
 	}
 
 	info, statErr := os.Stat(knownHostsPath)
@@ -162,5 +169,155 @@ func TestRuntimeBootstrapRunTightensExistingKnownHostsFile(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("known_hosts mode = %04o, want %04o", got, 0o600)
+	}
+}
+
+func TestRuntimeBootstrapRunRejectsSQLiteWithoutExplicitOptIn(t *testing.T) {
+	bootstrap := &runtimeBootstrap{}
+	runtimeDir := t.TempDir()
+
+	originalLoadRuntimeConfig := loadRuntimeConfig
+	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
+		return &runtimeConfig{
+			DBDriver:   "sqlite",
+			DBPath:     filepath.Join(runtimeDir, "theia.db"),
+			DataDir:    runtimeDir,
+			ListenAddr: ":0",
+			LogLevel:   "info",
+		}, nil
+	}
+	t.Cleanup(func() { loadRuntimeConfig = originalLoadRuntimeConfig })
+
+	t.Setenv("THEIA_ALLOW_SQLITE_SMALL_INSTALL", "")
+
+	err := bootstrap.Run("/tmp/theia.yaml")
+	if err == nil {
+		t.Fatal("Run() error = nil, want sqlite policy rejection")
+	}
+	if got := err.Error(); !strings.Contains(got, "sqlite is only supported for demo, lab, or small-install deployments") {
+		t.Fatalf("Run() error = %q, want sqlite policy guidance", got)
+	}
+	if got := err.Error(); !strings.Contains(got, "THEIA_ALLOW_SQLITE_SMALL_INSTALL=true") {
+		t.Fatalf("Run() error = %q, want sqlite opt-in hint", got)
+	}
+}
+
+func TestRuntimeBootstrapRunRejectsMissingPostgresDSNWithGuidance(t *testing.T) {
+	bootstrap := &runtimeBootstrap{}
+	runtimeDir := t.TempDir()
+
+	originalLoadRuntimeConfig := loadRuntimeConfig
+	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
+		return &runtimeConfig{
+			DBDriver:   "postgres",
+			DBPath:     filepath.Join(runtimeDir, "theia.db"),
+			DataDir:    runtimeDir,
+			ListenAddr: ":0",
+			LogLevel:   "info",
+		}, nil
+	}
+	t.Cleanup(func() { loadRuntimeConfig = originalLoadRuntimeConfig })
+
+	err := bootstrap.Run("/tmp/theia.yaml")
+	if err == nil {
+		t.Fatal("Run() error = nil, want postgres DSN error")
+	}
+	if got := err.Error(); !strings.Contains(got, "postgres is the default database driver and requires db_dsn") {
+		t.Fatalf("Run() error = %q, want missing DSN guidance", got)
+	}
+	if got := err.Error(); !strings.Contains(got, "make migrate-postgres") {
+		t.Fatalf("Run() error = %q, want migration hint", got)
+	}
+}
+
+func TestRuntimeBootstrapRunTreatsBlankDriverAsPostgresDefault(t *testing.T) {
+	bootstrap := &runtimeBootstrap{}
+	runtimeDir := t.TempDir()
+
+	originalLoadRuntimeConfig := loadRuntimeConfig
+	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
+		return &runtimeConfig{
+			DBDriver:   "   ",
+			DBPath:     filepath.Join(runtimeDir, "theia.db"),
+			DataDir:    runtimeDir,
+			ListenAddr: ":0",
+			LogLevel:   "info",
+		}, nil
+	}
+	t.Cleanup(func() { loadRuntimeConfig = originalLoadRuntimeConfig })
+
+	err := bootstrap.Run("/tmp/theia.yaml")
+	if err == nil {
+		t.Fatal("Run() error = nil, want postgres DSN error for blank driver")
+	}
+	if got := err.Error(); !strings.Contains(got, "postgres is the default database driver and requires db_dsn") {
+		t.Fatalf("Run() error = %q, want missing DSN guidance", got)
+	}
+	if got := err.Error(); !strings.Contains(got, "THEIA_DB_DSN") {
+		t.Fatalf("Run() error = %q, want postgres recovery hint", got)
+	}
+}
+
+func TestRuntimeBootstrapRunWrapsPostgresConnectFailureWithGuidance(t *testing.T) {
+	bootstrap := &runtimeBootstrap{}
+	runtimeDir := t.TempDir()
+
+	originalLoadRuntimeConfig := loadRuntimeConfig
+	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
+		return &runtimeConfig{
+			DBDriver:   "postgres",
+			DBDSN:      "postgres://user:pass@127.0.0.1:1/theia?sslmode=disable",
+			DBPath:     filepath.Join(runtimeDir, "theia.db"),
+			DataDir:    runtimeDir,
+			ListenAddr: ":0",
+			LogLevel:   "info",
+		}, nil
+	}
+	t.Cleanup(func() { loadRuntimeConfig = originalLoadRuntimeConfig })
+
+	err := bootstrap.Run("/tmp/theia.yaml")
+	if err == nil {
+		t.Fatal("Run() error = nil, want postgres connection error")
+	}
+	if got := err.Error(); !strings.Contains(got, "connect to database") {
+		t.Fatalf("Run() error = %q, want connect wrapper", got)
+	}
+	if got := err.Error(); !strings.Contains(got, "set THEIA_DB_DSN") {
+		t.Fatalf("Run() error = %q, want postgres recovery hint", got)
+	}
+}
+
+func TestRuntimeBootstrapRunWrapsPostgresOpenFailureWithGuidance(t *testing.T) {
+	bootstrap := &runtimeBootstrap{}
+	runtimeDir := t.TempDir()
+
+	originalLoadRuntimeConfig := loadRuntimeConfig
+	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
+		return &runtimeConfig{
+			DBDriver:   "postgres",
+			DBDSN:      "postgres://user:%zz@127.0.0.1:5432/theia?sslmode=disable",
+			DBPath:     filepath.Join(runtimeDir, "theia.db"),
+			DataDir:    runtimeDir,
+			ListenAddr: ":0",
+			LogLevel:   "info",
+		}, nil
+	}
+	t.Cleanup(func() { loadRuntimeConfig = originalLoadRuntimeConfig })
+
+	originalOpenPrimaryDB := openPrimaryRuntimeDB
+	openPrimaryRuntimeDB = func(driver, path, dsn string) (*sql.DB, sqlite.Dialect, error) {
+		return nil, "", errors.New("boom")
+	}
+	t.Cleanup(func() { openPrimaryRuntimeDB = originalOpenPrimaryDB })
+
+	err := bootstrap.Run("/tmp/theia.yaml")
+	if err == nil {
+		t.Fatal("Run() error = nil, want postgres open error")
+	}
+	if got := err.Error(); !strings.Contains(got, "open database") {
+		t.Fatalf("Run() error = %q, want open wrapper", got)
+	}
+	if got := err.Error(); !strings.Contains(got, "set THEIA_DB_DSN") {
+		t.Fatalf("Run() error = %q, want postgres recovery hint", got)
 	}
 }
