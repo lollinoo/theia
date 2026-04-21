@@ -6,9 +6,10 @@ interface SidePanelProps {
     onClose: () => void;
     title: string;
     children: React.ReactNode;
+    testId?: string;
 }
 
-export function SidePanel({ open, onClose, title, children }: SidePanelProps) {
+export function SidePanel({ open, onClose, title, children, testId }: SidePanelProps) {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (open && e.key === 'Escape') {
@@ -22,6 +23,7 @@ export function SidePanel({ open, onClose, title, children }: SidePanelProps) {
 
     return (
         <div
+            data-testid={testId}
             className={`fixed right-0 top-0 z-40 flex h-full w-[min(420px,100vw)] transform flex-col bg-surface-container-high transition-transform duration-200 ease-in-out shadow-panel ${open ? 'translate-x-0' : 'translate-x-full'
                 }`}
         >

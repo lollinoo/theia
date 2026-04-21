@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "device_ip": "127.0.10.10",
+  "interfaces": ["ether1", "ether2"]
+}

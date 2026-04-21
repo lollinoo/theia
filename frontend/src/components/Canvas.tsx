@@ -414,7 +414,12 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
         );
       })()}
 
-      <SidePanel open={!!panelContent} onClose={() => setPanelContent(null)} title={getPanelTitle()}>
+      <SidePanel
+        open={!!panelContent}
+        onClose={() => setPanelContent(null)}
+        title={getPanelTitle()}
+        testId={getCanvasDetailDeviceId(panelContent) !== null ? 'device-detail-panel' : undefined}
+      >
         <CanvasPanels panelContent={panelContent} setPanelContent={setPanelContent} alerts={alerts}
           devices={devices} topologyLinks={topologyLinks} loadTopology={loadTopology}
           setDevices={setDevices} setNodes={setNodes} reactFlow={reactFlow}
@@ -450,7 +455,7 @@ export default function Canvas({ snapshot, alerts = emptyAlerts, reconnecting, p
         onZoomOut={() => { void reactFlow.zoomOut({ duration: 200 }); }}
         onFitView={() => { void reactFlow.fitView({ padding: 0.18, duration: 280 }); }} />
 
-      <ReactFlow nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+      <ReactFlow data-testid="topology-canvas" nodes={displayNodes} edges={displayEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
         onNodesChange={onNodesChange} onEdgesChange={handleEdgesChange} onConnect={handleConnect}
         onSelectionChange={handleSelectionChange}
         onPaneClick={() => { setEdgeMenu(null); setDeviceMenu(null); setPanelContent(null); setShowSearch(false); setShowShortcuts(false); }}

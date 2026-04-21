@@ -5,8 +5,9 @@
        phase4-scale-lab phase4-validate \
        prod prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
-       snmpwalk-router snmpwalk-switch snmpwalk-ap \
-       version release bridge-build-all
+       snmpwalk-router snmpwalk-switch snmpwalk-ap backend-fast frontend-fast \
+        realtime-stress collector-contract browser-e2e \
+        version release bridge-build-all
 
 # ---------------------------------------------------------------------------
 # Version management
@@ -83,6 +84,33 @@ test-integration: ## Run integration tests against SNMP simulators
 	docker compose --profile test up -d --wait snmp-router snmp-switch snmp-ap
 	docker compose --profile test run --rm backend go test ./... -tags=integration -count=1 -v
 	docker compose --profile test --profile postgres down
+
+# ---------------------------------------------------------------------------
+# Required realtime PR gates
+# ---------------------------------------------------------------------------
+backend-fast: ## Run the required backend-fast PR gate locally
+	mkdir -p coverage
+	go vet ./...
+	go build ./cmd/theia/
+	go test ./... -count=1 -covermode=atomic -coverprofile=coverage/backend-fast.out
+	bash scripts/check-go-cover.sh coverage/backend-fast.out 60
+
+realtime-stress: ## Run the required realtime-stress PR gate locally
+	go test ./internal/ws ./internal/worker ./internal/service ./internal/scalelab -count=1 -run 'Test(HubBroadcastMarksClientForResyncWhenMailboxIsFull|HubRepeatedDetailSubscriptionsConvergeToSingleTarget|PipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay|RestoreCoordinatorApplyPendingRestoreIsIdempotentAfterSuccess|BurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses)'
+
+collector-contract: ## Run the required collector-contract PR gate locally
+	bash -lc "router_was_running=0; ap_was_running=0; need_services=''; if docker container inspect theia-snmp-router >/dev/null 2>&1; then if [ \"$$(docker container inspect -f '{{.State.Running}}' theia-snmp-router)\" = \"true\" ]; then router_was_running=1; else need_services='snmp-router'; fi; else need_services='snmp-router'; fi; if docker container inspect theia-snmp-ap >/dev/null 2>&1; then if [ \"$$(docker container inspect -f '{{.State.Running}}' theia-snmp-ap)\" = \"true\" ]; then ap_was_running=1; else need_services=\"$$need_services snmp-ap\"; fi; else need_services=\"$$need_services snmp-ap\"; fi; if [ -n \"$${need_services## }\" ]; then docker compose --profile test up -d --wait $${need_services}; fi; trap 'if [ \"x$$router_was_running\" = \"x0\" ]; then docker stop theia-snmp-router >/dev/null 2>&1 || true; fi; if [ \"x$$ap_was_running\" = \"x0\" ]; then docker stop theia-snmp-ap >/dev/null 2>&1 || true; fi' EXIT; go test ./internal/collector ./internal/worker -count=1 -run 'Test(PrometheusCollectorContractCases|SNMPCollectorContractCases|MetricsCollectorAppliesContractNormalizedRuntimeOutcome)'"
+
+frontend-fast: ## Run the required frontend-fast PR gate locally
+	npm --prefix frontend ci
+	npm --prefix frontend run test:coverage
+	npm --prefix frontend run typecheck
+	npm --prefix frontend run build
+
+browser-e2e: ## Run the required browser-e2e PR gate locally
+	npm --prefix frontend ci
+	npm --prefix frontend run e2e:install
+	npm --prefix frontend run e2e
 
 # ---------------------------------------------------------------------------
 # Production stack (GHCR pull -- no local builds)

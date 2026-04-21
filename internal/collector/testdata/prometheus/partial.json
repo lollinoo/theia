@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "device": {
+    "ip": "192.0.2.10",
+    "label_name": "instance",
+    "label_value": "192.0.2.10"
+  },
+  "probe": [
+    {
+      "instance": "192.0.2.10",
+      "value": 1
+    }
+  ],
+  "links": [
+    {
+      "instance": "192.0.2.10",
+      "if_index": "1",
+      "if_name": "ether1",
+      "tx_bps": 500,
+      "rx_bps": 250,
+      "if_speed": 1000000000
+    }
+  ]
+}
