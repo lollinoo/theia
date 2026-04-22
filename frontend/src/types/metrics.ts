@@ -163,9 +163,9 @@ function readString(record: APIRecord, key: string, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
-function readRequiredString(record: APIRecord, key: string): string {
+function readRequiredString(record: APIRecord, key: string, allowEmpty = false): string {
   const value = record[key];
-  if (typeof value === 'string' && value.length > 0) {
+  if (typeof value === 'string' && (allowEmpty || value.length > 0)) {
     return value;
   }
   throw new Error(`invalid required field: ${key}`);
@@ -270,8 +270,8 @@ export function parseLinkRuntime(value: unknown): LinkRuntimeDTO {
       link_id: readRequiredString(value, 'link_id'),
       source_device_id: readRequiredString(value, 'source_device_id'),
       target_device_id: readRequiredString(value, 'target_device_id'),
-      source_if_name: readRequiredString(value, 'source_if_name'),
-      target_if_name: readRequiredString(value, 'target_if_name'),
+      source_if_name: readRequiredString(value, 'source_if_name', true),
+      target_if_name: readRequiredString(value, 'target_if_name', true),
       metrics_status: readRequiredEnum(value, 'metrics_status', linkMetricsStatuses),
       metrics_reason: readRequiredEnum(value, 'metrics_reason', runtimeReasons),
       last_collected_at: readRequiredNullableString(value, 'last_collected_at'),
@@ -297,7 +297,7 @@ export function parseAlert(value: unknown): AlertDTO {
       severity: readRequiredString(value, 'severity'),
       alert_name: readRequiredString(value, 'alert_name'),
       state: readRequiredString(value, 'state'),
-      summary: readRequiredString(value, 'summary'),
+      summary: readRequiredString(value, 'summary', true),
     };
   } catch {
     throw new Error('invalid alert payload');
