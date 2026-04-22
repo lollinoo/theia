@@ -14,6 +14,8 @@ docs/superpowers/*
 !docs/superpowers/plans/*.md
 !docs/testing/
 !docs/testing/*.md
+!docs/releases/
+!docs/releases/*.md
 frontend/dist/
 frontend/dist/index.html
 frontend/playwright-report/
