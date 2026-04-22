@@ -185,7 +185,10 @@ describe('parseWSMessage', () => {
     });
 
     expect(message.type).toBe('alert');
-    expect((message as { type: 'alert'; payload: { alerts: Array<{ summary: string }> } }).payload.alerts[0].summary).toBe('');
+    expect(
+      (message as { type: 'alert'; payload: { alerts: Array<{ summary: string }> } }).payload
+        .alerts[0].summary,
+    ).toBe('');
   });
 });
 
