@@ -166,6 +166,27 @@ describe('parseWSMessage', () => {
       }),
     ).toThrow('invalid alert payload');
   });
+
+  it('accepts alert records with an empty summary string', () => {
+    const message = parseWSMessage({
+      type: 'alert',
+      payload: {
+        version: 4,
+        alerts: [
+          {
+            device_id: 'dev-1',
+            severity: 'critical',
+            alert_name: 'DeviceDown',
+            state: 'firing',
+            summary: '',
+          },
+        ],
+      },
+    });
+
+    expect(message.type).toBe('alert');
+    expect((message as { type: 'alert'; payload: { alerts: Array<{ summary: string }> } }).payload.alerts[0].summary).toBe('');
+  });
 });
 
 describe('mergeSnapshotDelta', () => {
@@ -516,6 +537,47 @@ describe('parseSnapshotPayload', () => {
         },
       }),
     ).toThrow('invalid link runtime payload');
+  });
+
+  it('accepts normalized link runtime records when interface names are present but empty', () => {
+    const message = parseWSMessage({
+      type: 'snapshot_delta',
+      payload: {
+        delta: {
+          devices: {},
+          links: {
+            'link-1': makeLinkRuntime({
+              source_if_name: '',
+              target_if_name: '',
+              metrics_status: 'unavailable',
+              metrics_reason: 'no_data',
+              last_collected_at: null,
+              tx_bps: null,
+              rx_bps: null,
+              utilization: null,
+            }),
+          },
+        },
+      },
+    });
+
+    expect(message.type).toBe('snapshot_delta');
+    expect(
+      (
+        message as {
+          type: 'snapshot_delta';
+          payload: { delta: { links: Record<string, LinkRuntimeDTO> } };
+        }
+      ).payload.delta.links['link-1'].source_if_name,
+    ).toBe('');
+    expect(
+      (
+        message as {
+          type: 'snapshot_delta';
+          payload: { delta: { links: Record<string, LinkRuntimeDTO> } };
+        }
+      ).payload.delta.links['link-1'].target_if_name,
+    ).toBe('');
   });
 
   it('fails snapshot parsing when link map keys do not match link_id', () => {
