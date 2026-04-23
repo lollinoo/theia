@@ -31,7 +31,7 @@ func (h *InstanceBackupHandler) ensureConfigured(w http.ResponseWriter) bool {
 	if h.svc != nil {
 		return true
 	}
-	writeError(w, http.StatusNotImplemented, "instance backups are only supported when using sqlite")
+	writeError(w, http.StatusNotImplemented, "instance backups are not configured for this runtime")
 	return false
 }
 

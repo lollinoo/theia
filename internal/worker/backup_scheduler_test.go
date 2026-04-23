@@ -29,10 +29,12 @@ func (m *mockInstanceBackupRepo) DeleteFailedOlderThan(cutoff time.Time) (int, e
 	return m.deleteFailedCount, nil
 }
 
-func (m *mockInstanceBackupRepo) Create(backup *domain.InstanceBackup) error          { return nil }
-func (m *mockInstanceBackupRepo) GetByID(id uuid.UUID) (*domain.InstanceBackup, error) { return nil, nil }
-func (m *mockInstanceBackupRepo) List() ([]domain.InstanceBackup, error)               { return nil, nil }
-func (m *mockInstanceBackupRepo) Update(backup *domain.InstanceBackup) error           { return nil }
+func (m *mockInstanceBackupRepo) Create(backup *domain.InstanceBackup) error { return nil }
+func (m *mockInstanceBackupRepo) GetByID(id uuid.UUID) (*domain.InstanceBackup, error) {
+	return nil, nil
+}
+func (m *mockInstanceBackupRepo) List() ([]domain.InstanceBackup, error)     { return nil, nil }
+func (m *mockInstanceBackupRepo) Update(backup *domain.InstanceBackup) error { return nil }
 func (m *mockInstanceBackupRepo) Delete(id uuid.UUID) error {
 	m.deleteRepoCalls.Add(1)
 	return nil
@@ -51,7 +53,7 @@ func (m *mockInstanceBackupService) Delete(ctx context.Context, id uuid.UUID) er
 // Passing nil for db is safe because Delete only calls repo.GetByID and repo.Delete,
 // neither of which touches the database connection.
 func newTestBackupService(repo domain.InstanceBackupRepository) *service.InstanceBackupService {
-	return service.NewInstanceBackupService(nil, repo, nil, "", "", "", "", nil)
+	return service.NewInstanceBackupService(nil, repo, nil, "", "", "", "", "", nil)
 }
 
 func TestBackupSchedulerRunRetention_Normal(t *testing.T) {

@@ -49,6 +49,18 @@ func applyPendingSQLiteRestore(dbPath, deviceBackupDir, knownHostsPath string) e
 	return nil
 }
 
+func applyPendingPostgresRestore(dbPath, dbDSN, deviceBackupDir, knownHostsPath string) error {
+	applied, err := service.NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath).ApplyPendingRestore()
+	if err != nil {
+		return fmt.Errorf("apply pending restore: %w", err)
+	}
+	if applied {
+		log.Println("PostgreSQL restore applied successfully, continuing with normal startup")
+	}
+
+	return nil
+}
+
 type bootstrapRunner interface {
 	Run(configPath string) error
 }
