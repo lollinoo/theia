@@ -1,245 +1,278 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-04-19
+**Analysis Date:** 2026-04-23
 
 ## Test Framework
 
 **Runner:**
-- Frontend: Vitest `^4.1.0` from `frontend/package.json`
-- Frontend config: `frontend/vitest.config.ts`
-- Backend: Go `testing` package driven by `go test` in `Makefile`
+- Backend: Go `testing` package from Go 1.24, run with `go test ./...`; configuration is `go.mod` and `Makefile`.
+- Frontend unit/component: Vitest 4.1 with jsdom, configured in `frontend/vitest.config.ts`.
+- Browser E2E: Playwright 1.54, configured in `frontend/playwright.config.ts`.
+- CI gates are defined in `.github/workflows/ci.yml` and `Makefile`.
 
 **Assertion Library:**
-- Frontend: Vitest `expect` plus `@testing-library/jest-dom` from `frontend/src/test-setup.ts`
-- Backend: standard `testing` assertions with `t.Fatal`, `t.Fatalf`, `t.Error`, and `t.Errorf`
+- Backend uses standard `testing` assertions with `t.Fatal` / `t.Fatalf`; no `testify` dependency is present in `go.mod`.
+- Frontend uses Vitest `expect` plus `@testing-library/jest-dom/vitest` from `frontend/src/test-setup.ts`.
+- Component tests use Testing Library queries from `@testing-library/react` and `@testing-library/user-event` where needed.
+- E2E tests use Playwright `expect` from `@playwright/test` in `frontend/e2e/realtime.spec.ts`.
 
 **Run Commands:**
 ```bash
-npm --prefix frontend test      # Run frontend tests via `frontend/package.json`
-make test                       # Run backend unit tests in the backend container
-make test-integration           # Run backend integration-tagged tests against simulators
+go test ./... -count=1                         # Run all backend tests locally
+make backend-fast                              # Vet, build, backend tests, backend coverage gate
+npm --prefix frontend run test                 # Run frontend Vitest tests
+npm --prefix frontend run test:coverage        # Run frontend coverage with thresholds
+npm --prefix frontend run e2e                  # Run Playwright browser E2E tests
+make frontend-fast                             # Frontend check, coverage, typecheck, build
+make browser-e2e                               # Install browser deps and run E2E
 ```
-
-Watch mode and a dedicated coverage command are not configured in `frontend/package.json` or `Makefile`.
 
 ## Test File Organization
 
 **Location:**
-- Frontend tests are mostly co-located with implementation files, e.g. `frontend/src/api/client.ts` with `frontend/src/api/client.test.ts`, `frontend/src/hooks/useWebSocket.ts` with `frontend/src/hooks/useWebSocket.test.ts`, and `frontend/src/components/Toolbar.tsx` with `frontend/src/components/Toolbar.test.tsx`.
-- Additional audit/smoke suites live under `frontend/src/components/__tests__/`, such as `frontend/src/components/__tests__/theme05-smoke.test.tsx` and `frontend/src/components/__tests__/canvas-token-audit.test.ts`.
-- Backend tests sit next to package files as `*_test.go`, e.g. `internal/config/config_test.go`, `internal/scheduler/scheduler_test.go`, and `internal/topology/observations_test.go`.
+- Backend tests are co-located with packages under `cmd/` and `internal/`: `internal/api/device_handler_test.go`, `internal/ws/hub_test.go`, `cmd/theia/main_test.go`.
+- Backend repository tests use package-local helpers in the same directory: `internal/repository/sqlite/test_helpers_test.go`.
+- Frontend tests are mostly co-located beside source files: `frontend/src/components/DeviceCard.test.tsx`, `frontend/src/hooks/useWebSocket.test.ts`, `frontend/src/api/client.test.ts`.
+- Frontend cross-file/audit tests live in `frontend/src/components/__tests__/`.
+- E2E tests live under `frontend/e2e/`, currently `frontend/e2e/realtime.spec.ts`.
 
 **Naming:**
-- Use `.test.ts` and `.test.tsx` for frontend tests.
-- Use `*_test.go` with `TestXxx` functions for backend tests.
-- Backend test names often encode exact scenarios with underscores, such as `TestRefreshDevices_SchedulesOperationalOnlyForVirtualIPDevices` in `internal/scheduler/scheduler_test.go`.
+- Backend: `TestName_Scenario` or descriptive `TestName` functions in `_test.go`, e.g. `TestDeviceRepoGetBySysName_NormalizedLookup` in `internal/repository/sqlite/device_repo_test.go`.
+- Frontend: `describe('module/component', ...)` with `it('expected behavior', ...)`, e.g. `frontend/src/components/DeviceCard.test.tsx`.
+- Playwright: `test('user-visible behavior', ...)`, e.g. `renders topology after bootstrap` in `frontend/e2e/realtime.spec.ts`.
 
 **Structure:**
-```text
-frontend/src/<feature>/<module>.ts
-frontend/src/<feature>/<module>.test.ts
-frontend/src/components/__tests__/<audit>.test.ts[x]
-internal/<package>/<module>.go
-internal/<package>/<module>_test.go
+```
+internal/<package>/*_test.go                 # Backend package tests
+frontend/src/<area>/<unit>.test.ts[x]        # Frontend unit/component tests
+frontend/src/components/__tests__/*.test.ts  # Frontend audit/contract tests
+frontend/e2e/*.spec.ts                       # Browser E2E tests
 ```
 
 ## Test Structure
 
 **Suite Organization:**
 ```typescript
-describe('useWebSocket', () => {
-  it('sets connected=true after open', () => {
-    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+// frontend/src/components/DeviceCard.test.tsx
+function mockDevice(overrides: Partial<Device> = {}): Device {
+  return { id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1', ...overrides };
+}
 
-    act(() => {
-      mockInstance.simulateOpen();
-    });
+function renderDeviceCard(data: Partial<DeviceNodeData> = {}) {
+  return render(
+    <ReactFlowProvider>
+      <DeviceCard {...makeNodeProps({ device: mockDevice(), pinned: false, ...data })} />
+    </ReactFlowProvider>,
+  );
+}
 
-    expect(result.current.connected).toBe(true);
+describe('DeviceCard', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('renders compact overview name, type, and IP chip', () => {
+    renderDeviceCard();
+    expect(screen.getByText('router-01')).toBeInTheDocument();
   });
 });
 ```
 
-Pattern from `frontend/src/hooks/useWebSocket.test.ts`.
-
 ```go
-func TestRefreshDevices_SkipsUnmanagedDevices(t *testing.T) {
-	managed := domain.Device{Managed: true}
-	unmanaged := domain.Device{Managed: false}
-	// setup omitted
-	if got := len(scheduler.items); got != 3 {
-		t.Fatalf("len(items) = %d, want only 3 managed tasks", got)
-	}
+// internal/repository/sqlite/device_repo_test.go
+func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
+    db := newTestDB(t)
+    repo := NewDeviceRepo(db, testKey, nil)
+
+    tests := []struct {
+        name string
+        lookup string
+        expectedID uuid.UUID
+    }{ /* cases */ }
+
+    for _, tc := range tests {
+        t.Run(tc.name, func(t *testing.T) {
+            device, err := repo.GetBySysName(tc.lookup)
+            if err != nil { t.Fatalf("GetBySysName failed: %v", err) }
+            if device.ID != tc.expectedID { t.Fatalf("expected device %s, got %s", tc.expectedID, device.ID) }
+        })
+    }
 }
 ```
 
-Pattern from `internal/scheduler/scheduler_test.go`.
-
 **Patterns:**
-- Frontend suites group behavior with `describe` blocks and keep most assertions in small single-behavior `it` cases, as in `frontend/src/api/client.test.ts`, `frontend/src/contexts/ThemeContext.test.tsx`, and `frontend/src/components/Dashboard.test.tsx`.
-- Backend tests favor plain helper functions and direct setup over external test frameworks, as in `internal/topology/observations_test.go` and `internal/service/static_persistence_test.go`.
-- Shared setup lives in local helpers inside the test file, not in a global fixtures package: see `mockDevice` in `frontend/src/components/Dashboard.test.tsx`, `mockResponse` in `frontend/src/api/client.test.ts`, `newMockDeviceRepo` in `internal/service/device_service_test.go`, and `newMaterializerRepos` in `internal/topology/observations_test.go`.
-- Cleanup uses framework-native tools: `beforeEach` / `afterEach` in frontend files and `t.Cleanup` / `t.TempDir` in Go files.
+- Use local factory helpers for DTOs and props: `mockDevice`, `mockMetrics`, `mockLink`, `makeNodeProps` in `frontend/src/components/DeviceCard.test.tsx`.
+- Use `beforeEach`/`afterEach` for fake timers and globals: `frontend/src/components/DeviceCard.test.tsx`, `frontend/src/hooks/useWebSocket.test.ts`.
+- Use table-driven subtests in Go for variants: `internal/repository/sqlite/device_repo_test.go`.
+- Use `t.Helper()` in backend test helpers: `setupTestDB` and `newTestDB` in `internal/repository/sqlite/test_helpers_test.go`.
+- Prefer user-visible assertions in component tests: `screen.getByText`, `screen.queryByText`, and `toBeInTheDocument` in `frontend/src/components/DeviceCard.test.tsx`.
 
 ## Mocking
 
 **Framework:**
-- Frontend: Vitest mocks and spies via `vi.mock`, `vi.fn`, `vi.stubGlobal`, and `vi.spyOn`
-- Backend: hand-written fakes, in-memory repositories, temp directories, and real in-memory SQLite databases
+- Backend uses hand-written fakes/mocks and `httptest`; no generated mocks are detected.
+- Frontend uses Vitest `vi.fn`, `vi.stubGlobal`, `vi.spyOn`, fake timers, and Testing Library helpers.
+- E2E uses Playwright `page.addInitScript` and browser APIs to observe WebSocket behavior.
 
 **Patterns:**
 ```typescript
-vi.mock('../api/client', () => ({
-  fetchAreas: vi.fn().mockResolvedValue([]),
-  updateDevice: vi.fn().mockResolvedValue({}),
-  deleteDevice: vi.fn().mockResolvedValue(undefined),
-}));
-```
+// frontend/src/hooks/useWebSocket.test.ts
+class MockWebSocket {
+  onopen: (() => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  send = vi.fn();
+  close = vi.fn();
+  readyState = MockWebSocket.CONNECTING;
 
-Pattern from `frontend/src/components/BulkEditPanel.test.tsx`.
+  simulateOpen() { this.readyState = MockWebSocket.OPEN; this.onopen?.(); }
+  simulateMessage(data: unknown) { this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent); }
+}
 
-```typescript
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal('WebSocket', OriginalMock);
 });
 ```
 
-Pattern from `frontend/src/hooks/useWebSocket.test.ts`.
-
 ```go
-type mockDialer struct {
-	dialCalled bool
-	addr       string
-	err        error
+// internal/api/device_handler_test.go
+type mockDeviceRepo struct {
+    mu sync.Mutex
+    devices map[uuid.UUID]*domain.Device
 }
 
-func (m *mockDialer) Dial(addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
-	m.dialCalled = true
-	m.addr = addr
-	return nil, m.err
+func newMockDeviceRepo() *mockDeviceRepo {
+    return &mockDeviceRepo{devices: make(map[uuid.UUID]*domain.Device)}
 }
 ```
 
-Pattern from `internal/ssh/client_test.go`.
-
 **What to Mock:**
-- Mock browser globals and network boundaries in frontend tests: `fetch` in `frontend/src/api/client.test.ts`, `WebSocket` in `frontend/src/hooks/useWebSocket.test.ts`, and `matchMedia` in `frontend/src/contexts/ThemeContext.test.tsx`.
-- Mock complex child components when the parent test only cares about composition, as in `frontend/src/components/Dashboard.test.tsx`.
-- Replace backend collaborators with small in-file fakes for repositories and dialers, as in `internal/service/device_service_test.go` and `internal/ssh/client_test.go`.
+- Mock browser globals and network boundaries in frontend unit tests: `fetch` in `frontend/src/api/client.test.ts`, `WebSocket` in `frontend/src/hooks/useWebSocket.test.ts`.
+- Mock repositories/services in backend handler tests with in-memory structs: `mockDeviceRepo`, `mockLinkRepo` in `internal/api/device_handler_test.go`.
+- Use `httptest.NewServer` for external HTTP integrations such as Prometheus and WebSocket handler tests: `internal/metrics/prometheus_test.go`, `internal/ws/handler_test.go`.
+- Use temporary/in-memory SQLite DBs for repository behavior instead of mocking SQL: `internal/repository/sqlite/test_helpers_test.go`.
 
 **What NOT to Mock:**
-- Prefer real parser logic and real component state transitions in frontend tests. `frontend/src/api/client.test.ts` exercises actual response parsing instead of mocking `parseDevicesResponse`.
-- Prefer real SQLite repositories when repository semantics matter, as in `internal/topology/observations_test.go` and parts of `internal/cache/cache_test.go`.
-- Do not add heavyweight mocking libraries; the existing style is manual and file-local.
+- Do not mock parser/normalizer functions when testing API client behavior; assert parsed DTO results from payload fixtures as in `frontend/src/api/client.test.ts`.
+- Do not mock React component internals; render components and assert DOM-visible output as in `frontend/src/components/DeviceCard.test.tsx`.
+- Do not mock database migrations in repository tests; `setupTestDB` runs `RunMigrations(db)` in `internal/repository/sqlite/test_helpers_test.go`.
+- Do not mock full browser/server behavior in E2E; `frontend/playwright.config.ts` starts the Go backend and Vite frontend.
 
 ## Fixtures and Factories
 
 **Test Data:**
 ```typescript
-function mockDevice(overrides: Partial<Device> = {}): Device {
+// frontend/src/api/client.test.ts
+function deviceResource(id: string, hostname: string, ip: string) {
   return {
-    id: 'dev-1',
-    hostname: 'router-01',
-    ip: '10.0.0.1',
-    device_type: 'router',
-    status: 'up',
-    interfaces: [],
-    backup_supported: true,
-    metrics_source: 'prometheus',
-    prometheus_label_name: 'instance',
-    prometheus_label_value: '10.0.0.1:9100',
-    area_ids: [],
-    ...overrides,
+    id,
+    attributes: {
+      hostname,
+      ip,
+      device_type: 'router',
+      status: 'up',
+      vendor: 'mikrotik',
+    },
+    relationships: { interfaces: { data: [] } },
   };
 }
 ```
 
-Pattern from `frontend/src/components/Dashboard.test.tsx`.
-
 ```go
-func newMockSettingsRepo() *mockSettingsRepo {
-	return &mockSettingsRepo{settings: domain.DefaultSettings()}
+// internal/repository/sqlite/device_repo_test.go
+device := &domain.Device{
+    ID: uuid.New(),
+    Hostname: "edge-sw-01",
+    IP: "10.0.0.3",
+    SysName: "edge-sw-01",
+    Managed: true,
+    Status: domain.DeviceStatusUp,
+    Tags: map[string]string{},
 }
 ```
 
-Pattern from `internal/service/device_service_test.go`.
-
 **Location:**
-- Fixtures are defined inline in each test file instead of centralized fixture modules.
-- Temporary filesystem fixtures use `t.TempDir()` in backend tests like `internal/vendor/registry_test.go`.
-- In-memory DB fixtures use `sql.Open("sqlite3", ":memory:?_foreign_keys=on")` plus migrations in `internal/topology/observations_test.go`.
+- Keep small factories local to each test file: `frontend/src/components/DeviceCard.test.tsx`, `frontend/src/api/client.test.ts`.
+- Keep reusable package DB helpers in package test helper files: `internal/repository/sqlite/test_helpers_test.go`.
+- Use test-only constants and helpers inside package tests for WebSocket clients: `registerTestClient` in `internal/ws/hub_test.go`.
+- Playwright bootstrapping uses `frontend/playwright.config.ts` and `frontend/e2e/global.setup.ts` is excluded from Biome in `frontend/biome.json`.
 
 ## Coverage
 
-**Requirements:** None enforced by configuration.
+**Requirements:**
+- Backend `make backend-fast` runs `go test ./... -covermode=atomic -coverprofile=coverage/backend-fast.out` and `scripts/check-go-cover.sh coverage/backend-fast.out 60` from `Makefile`.
+- Frontend Vitest coverage thresholds are lines 60%, functions 50%, branches 55%, statements 60% in `frontend/vitest.config.ts`.
+- Coverage output uses V8 provider with `text` and `lcov` reporters into `frontend/coverage` per `frontend/vitest.config.ts`.
 
 **View Coverage:**
 ```bash
-Not detected in `frontend/package.json`, `frontend/vitest.config.ts`, or `Makefile`
+make backend-fast                              # Writes coverage/backend-fast.out and enforces 60%
+npm --prefix frontend run test:coverage        # Writes frontend/coverage with text and lcov reports
 ```
 
 ## Test Types
 
 **Unit Tests:**
-- Frontend unit tests cover API clients, utility functions, hooks, and component rendering in files such as `frontend/src/api/client.test.ts`, `frontend/src/utils/validation.test.ts`, and `frontend/src/components/Toolbar.test.tsx`.
-- Backend unit tests cover pure domain logic, config loading, encryption, and scheduler behavior in `internal/domain/poll_class_test.go`, `internal/config/config_test.go`, `internal/crypto/encrypt_test.go`, and `internal/scheduler/scheduler_test.go`.
+- Pure frontend utilities are tested directly: `frontend/src/utils/validation.test.ts`, `frontend/src/utils/freshness.test.ts`, `frontend/src/components/canvas/topologyComposer.test.ts`.
+- Frontend parsers/types are tested with payload fixtures: `frontend/src/types/api.test.ts`, `frontend/src/types/metrics.test.ts`.
+- Backend domain/service units use direct constructors and table cases: `internal/domain/poll_class_test.go`, `internal/scheduler/jitter_test.go`.
 
 **Integration Tests:**
-- Backend tests blend unit and lightweight integration styles. Several packages use real SQLite migrations and repositories, notably `internal/topology/observations_test.go` and `internal/cache/cache_test.go`.
-- Containerized integration execution is defined by `make test-integration` in `Makefile`, which runs `go test ./... -tags=integration` against SNMP simulators.
+- Backend repository tests exercise SQLite migrations and SQL behavior: `internal/repository/sqlite/device_repo_test.go`, `internal/repository/sqlite/migrations_test.go`.
+- Backend HTTP handler tests use `httptest.NewRequest` / `httptest.NewRecorder`: `internal/api/settings_handler_test.go`, `internal/api/vendor_handler_test.go`.
+- WebSocket and Prometheus tests use `httptest.NewServer`: `internal/ws/handler_test.go`, `internal/metrics/prometheus_test.go`.
+- `make test-integration` runs `go test ./... -tags=integration -count=1 -v` against Docker Compose services from `Makefile`.
 
 **E2E Tests:**
-- A browser E2E framework is not detected. There is no Playwright or Cypress config at the repository root or in `frontend/`.
-- UI confidence relies on component tests plus audit/smoke suites in `frontend/src/components/__tests__/`.
+- Playwright E2E is used in `frontend/e2e/realtime.spec.ts`.
+- `frontend/playwright.config.ts` starts the backend with SQLite test settings and Vite frontend, then tests against `http://127.0.0.1:3300`.
+- E2E tests assert seeded topology rendering, dashboard rows, websocket reconnect recovery, and device detail panel subscription behavior.
 
 ## Common Patterns
 
 **Async Testing:**
 ```typescript
-fireEvent.click(screen.getByText('Apply to 1 Devices'));
-
-await waitFor(() => {
-  expect(screen.getByText(/server error \(ref: bulk001\)/)).toBeInTheDocument();
-});
+// frontend/src/api/client.test.ts
+vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(payload)));
+await expect(createDevice(payload)).rejects.toThrow(ValidationError);
 ```
 
-Pattern from `frontend/src/components/BulkEditPanel.test.tsx`.
+```typescript
+// frontend/e2e/realtime.spec.ts
+await page.waitForFunction(() => {
+  return Boolean((window as Window & { __playwrightBackendReconnected?: boolean }).__playwrightBackendReconnected);
+}, null, { timeout: 15_000 });
+```
 
 ```go
-if err := sqliterepo.RunMigrations(db); err != nil {
-	t.Fatalf("RunMigrations failed: %v", err)
+// internal/ws/hub_test.go
+deadline := time.Now().Add(time.Second)
+for time.Now().Before(deadline) {
+    metrics := string(registry.MarshalPrometheus())
+    if strings.Contains(metrics, `theia_ws_backpressure_total`) { break }
+    time.Sleep(10 * time.Millisecond)
 }
 ```
-
-Pattern from `internal/topology/observations_test.go`.
 
 **Error Testing:**
 ```typescript
+// frontend/src/api/client.test.ts
+vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+  mockResponse({ error: 'a device already exists' }, { ok: false, status: 409, statusText: 'Conflict' }),
+));
 await expect(createDevice(payload)).rejects.toThrow(ValidationError);
-await expect(createDevice(payload)).rejects.toThrow('a device with IP/host "10.0.0.2" already exists');
 ```
 
-Pattern from `frontend/src/api/client.test.ts`.
-
 ```go
-_, err := Decrypt(ciphertext, key2)
-if err == nil {
-	t.Fatal("Decrypt with wrong key should fail")
+// internal/repository/sqlite/device_repo_test.go
+result, err := repo.GetBySysName("unknown-host.example.net")
+if err != nil {
+    t.Fatalf("GetBySysName failed: %v", err)
+}
+if result != nil {
+    t.Fatalf("expected nil for unknown lookup, got %s", result.ID)
 }
 ```
 
-Pattern from `internal/crypto/encrypt_test.go`.
-
-## Prescriptive Guidance
-
-- Add new frontend tests beside the file under test unless the suite is an audit-style rule check that belongs in `frontend/src/components/__tests__/`.
-- Use Vitest globals, Testing Library render helpers, and local file-level factories, following `frontend/src/api/client.test.ts` and `frontend/src/components/Dashboard.test.tsx`.
-- Mock only boundaries: browser APIs, HTTP, WebSocket, or heavyweight child components. Keep parsing and business logic real.
-- For backend code, prefer table-driven tests for pure logic and explicit in-file mocks for services, matching `internal/domain/poll_class_test.go` and `internal/service/device_service_test.go`.
-- Use `t.TempDir`, `t.Setenv`, and in-memory SQLite instead of bespoke test harnesses when filesystem, environment, or repository behavior matters.
-- Name tests after the exact contract they protect, and keep requirement IDs in comments only when they already exist in the surrounding file.
-
 ---
 
-*Testing analysis: 2026-04-19*
+*Testing analysis: 2026-04-23*

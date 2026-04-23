@@ -1,121 +1,124 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-04-19
+**Analysis Date:** 2026-04-23
 
 ## Naming Patterns
 
 **Files:**
-- Use `PascalCase.tsx` for React components and component tests in `frontend/src/components/Toolbar.tsx`, `frontend/src/components/Toolbar.test.tsx`, and `frontend/src/components/Dashboard.tsx`.
-- Use `camelCase.ts` for hooks, utilities, and plain modules in `frontend/src/hooks/useWebSocket.ts`, `frontend/src/utils/validation.ts`, and `frontend/src/components/deviceVisualState.ts`.
-- Use `snake_case.go` for Go packages and `*_test.go` for tests in `internal/config/config.go`, `internal/service/device_service.go`, and `internal/service/device_service_test.go`.
-- Keep test files adjacent to implementation files when possible, with special audit suites collected under `frontend/src/components/__tests__/`.
+- Go uses package-oriented snake_case filenames under `cmd/` and `internal/`: `internal/service/device_service.go`, `internal/repository/sqlite/device_repo.go`, `internal/ws/hub_broadcast_ch.go`.
+- Go tests live beside implementation with `_test.go`: `internal/api/device_handler_test.go`, `internal/repository/sqlite/device_repo_test.go`.
+- Frontend components use PascalCase `.tsx`: `frontend/src/components/DeviceCard.tsx`, `frontend/src/components/dashboard/BulkBackupPanel.tsx`.
+- Frontend hooks use `useX.ts`: `frontend/src/hooks/useWebSocket.ts`, `frontend/src/hooks/useBridgeHealth.ts`.
+- Frontend utilities and model helpers use camelCase filenames: `frontend/src/utils/freshness.ts`, `frontend/src/components/canvas/topologyComposer.ts`, `frontend/src/components/forms/deviceFormModels.ts`.
+- Frontend tests are co-located as `.test.ts` / `.test.tsx`, with a few audit tests in `frontend/src/components/__tests__/`.
 
 **Functions:**
-- Use `camelCase` for TypeScript functions and hooks, with `use` prefixes for hooks such as `useWebSocket` in `frontend/src/hooks/useWebSocket.ts` and parser helpers like `parseDeviceType` in `frontend/src/types/api.ts`.
-- Use `PascalCase` for exported Go functions and types, and lower camel-case for unexported helpers, as in `Load` / `Config` in `internal/config/config.go` and `defaults` in the same file.
-- Name tests with `TestXxx` in Go and `describe`/`it` strings that mirror behavior in TypeScript, e.g. `TestRefreshDevices_SkipsUnmanagedDevices` in `internal/scheduler/scheduler_test.go` and `'handles prometheus_status message'` in `frontend/src/hooks/useWebSocket.test.ts`.
+- Go exported constructors and handlers use PascalCase with domain prefixes: `NewDeviceHandler` in `internal/api/device_handler.go`, `NewDeviceService` in `internal/service/device_service.go`, `NormalizeTopologyDiscoveryMode` in `internal/domain/device.go`.
+- Go unexported helpers use lower camelCase and are kept near call sites: `writeError`, `decodeJSON`, and `isValidIPOrHostname` in `internal/api/device_handler.go`.
+- React components use PascalCase for exported components and lower camelCase for local helpers: `DeviceCardInner`, `displayName`, `formatPercent`, and `buildReadouts` in `frontend/src/components/DeviceCard.tsx`.
+- React hooks start with `use`: `useWebSocket` in `frontend/src/hooks/useWebSocket.ts`, `usePositions` in `frontend/src/hooks/usePositions.ts`.
+- Parser/normalizer functions use verb prefixes: `parseDevicesResponse` in `frontend/src/types/api.ts`, `parseWSMessage` and `mergeSnapshotDelta` in `frontend/src/types/metrics.ts`.
 
 **Variables:**
-- Use descriptive `camelCase` state and local variables in frontend code: `activeView`, `selectedAreaId`, and `detailDeviceId` in `frontend/src/App.tsx`.
-- Use concise receiver names in Go methods, usually `s` or `r`, as in `func (s *DeviceService)` in `internal/service/device_service.go` and `func (r *mockDeviceRepo)` in `internal/service/device_service_test.go`.
-- Prefer boolean names that read as predicates, such as `reconnecting` in `frontend/src/hooks/useWebSocket.ts`, `movedExisting` in `cmd/theia/main.go`, and `TopologyChanged` assertions in `internal/service/static_persistence_test.go`.
+- Go variables use lower camelCase; constants use PascalCase when exported and lower camelCase when package-private: `DeviceTypeRouter` in `internal/domain/device.go`, `incompleteLinkReprobeDelay` in `internal/service/device_service.go`.
+- Go request/response structs are unexported when handler-local: `createDeviceRequest`, `snmpCredsRequest`, `jsonAPIResource` in `internal/api/device_handler.go`.
+- TypeScript values use camelCase; constants use camelCase unless representing static records: `deviceTypeLabels`, `subtypeLabels`, `macAddressPattern` in `frontend/src/components/DeviceCard.tsx`.
+- API payload fields mirror backend snake_case at boundaries: `CreateDevicePayload.metrics_source` in `frontend/src/api/client.ts`, `Device.device_type` in `frontend/src/types/api.ts`.
 
 **Types:**
-- Use `interface` and `type` aliases for frontend contracts in `frontend/src/api/client.ts` and `frontend/src/types/api.ts`.
-- Use string-literal unions in TypeScript for enums such as `DeviceType`, `MetricsSource`, and `TopologyDiscoveryMode` in `frontend/src/types/api.ts`.
-- Use typed string enums and structs in Go domain code, e.g. `DeviceType`, `DeviceStatus`, and `Device` in `internal/domain/device.go`.
+- Go domain enums are custom string types with typed constants: `DeviceType`, `DeviceStatus`, `MetricsSource`, `TopologyDiscoveryMode` in `internal/domain/device.go`.
+- Go interfaces define repository seams in domain packages: `DeviceRepository` in `internal/domain/device.go`.
+- TypeScript interfaces describe component props and API DTOs: `DeviceNodeData` in `frontend/src/components/DeviceCard.tsx`, `CreateDevicePayload` in `frontend/src/api/client.ts`.
+- TypeScript union types represent narrow UI/control states: `DetailControlType` in `frontend/src/hooks/useWebSocket.ts`, `Readout['tone']` in `frontend/src/components/DeviceCard.tsx`.
 
 ## Code Style
 
 **Formatting:**
-- No ESLint, Prettier, or Biome config is detected at the repository root or in `frontend/`.
-- Frontend formatting is mostly manual and close to Prettier-like defaults in `frontend/src/App.tsx`, `frontend/src/hooks/useWebSocket.ts`, and `frontend/src/contexts/ThemeContext.tsx`: semicolons, single quotes, trailing commas in multiline literals, and 2-space indentation.
-- Frontend indentation is not fully uniform. `frontend/src/components/Toolbar.tsx` uses 4-space indentation while neighboring files such as `frontend/src/App.tsx` and `frontend/src/components/MaterialIcon.tsx` use 2-space indentation. Preserve the surrounding file style when editing.
-- Go code follows `gofmt`-style formatting with tabs and grouped imports in `internal/config/config.go`, `internal/domain/device.go`, and `cmd/theia/main.go`.
+- Go follows `gofmt`/standard Go formatting. Imports are grouped stdlib first, blank line, third-party/local imports as in `internal/api/device_handler.go`.
+- Frontend uses Biome configured in `frontend/biome.json`.
+- Use 2-space indentation for frontend code, single quotes, semicolons, trailing commas, and 100-character line width per `frontend/biome.json`.
+- Use TypeScript strict mode with no unused locals/parameters and no fallthrough in `frontend/tsconfig.app.json` and `frontend/tsconfig.test.json`.
 
 **Linting:**
-- TypeScript strictness is enforced through compiler settings in `frontend/tsconfig.test.json`: `strict`, `noUnusedLocals`, `noUnusedParameters`, and `noFallthroughCasesInSwitch` are enabled.
-- The frontend build uses `tsc -b tsconfig.app.json && vite build` via `frontend/package.json`, so type errors block the production build.
-- Backend verification relies on `go vet` and `go build` via `make verify` in `Makefile` rather than a dedicated linter config.
+- Frontend linting is `npm --prefix frontend run lint` / `npm --prefix frontend run check`, backed by `frontend/biome.json`.
+- Biome recommended rules are enabled, with selected relaxations: `a11y.noLabelWithoutControl`, `complexity.noForEach`, `correctness.useExhaustiveDependencies`, `style.useImportType`, and `style.noNonNullAssertion` are disabled in `frontend/biome.json`.
+- Backend gate uses `go vet ./...` in `Makefile` target `backend-fast`.
+- CI runs `make backend-fast`, `make frontend-fast`, `make realtime-stress`, `make collector-contract`, and `make browser-e2e` in `.github/workflows/ci.yml`.
 
 ## Import Organization
 
 **Order:**
-1. Third-party packages first, such as React and library imports in `frontend/src/App.tsx` and standard-library packages in `internal/config/config.go`.
-2. Internal relative imports second, such as `./components/Canvas` and `../types/api` in `frontend/src/App.tsx` and `frontend/src/api/client.ts`.
-3. Type imports are either grouped inline with value imports or pulled in with `type`, as in `frontend/src/App.tsx`, `frontend/src/api/client.ts`, and `frontend/src/contexts/ThemeContext.tsx`.
+1. Standard library imports in Go (`encoding/json`, `net/http`, `testing`) and package imports in TypeScript (`react`, `@testing-library/react`, `@xyflow/react`).
+2. Third-party packages (`github.com/google/uuid`, `@vitejs/plugin-react`, `vitest`).
+3. Local project imports (`github.com/lollinoo/theia/internal/domain`, `../types/api`, `./DeviceCard`).
 
 **Path Aliases:**
-- No path aliases are configured in `frontend/tsconfig.json` or `frontend/tsconfig.test.json`.
-- Use relative imports like `../api/client` and `./MaterialIcon`, matching `frontend/src/components/BulkEditPanel.test.tsx` and `frontend/src/components/Toolbar.tsx`.
+- No TypeScript path aliases are configured in `frontend/tsconfig.app.json`; use relative imports such as `../types/api` and `./errors` in `frontend/src/api/client.ts`.
+- Go imports use the module path `github.com/lollinoo/theia` from `go.mod`.
 
 ## Error Handling
 
 **Patterns:**
-- Wrap low-level fetch failures with user-facing context in the frontend. `frontend/src/api/client.ts` catches request failures and rethrows messages such as `Failed to fetch devices: ...`.
-- Use typed frontend errors when status codes carry product meaning. `frontend/src/api/client.ts` throws `ValidationError` for `400`/`409` and `ServerError` for `500` responses.
-- Treat some UI-side failures as non-fatal and swallow them intentionally when the screen can degrade gracefully, as in the area fetch `catch(() => {})` calls in `frontend/src/App.tsx`.
-- Throw early on invalid payload shapes in parser modules such as `frontend/src/types/api.ts` (`invalid devices response`, `invalid interface payload`).
-- In Go, return wrapped errors with `%w` for caller context, as in `internal/config/config.go` and `cmd/theia/main.go`.
-- In Go tests, fail immediately with `t.Fatalf` for setup or invariant violations and use `t.Errorf` only when checking multiple related assertions, as in `internal/domain/poll_class_test.go`.
+- Backend HTTP handlers validate early and return immediately through `writeError` in `internal/api/device_handler.go`.
+- Backend request parsing uses `decodeJSON(w, r, &req)` returning `false` after writing the response; follow this pattern in handlers under `internal/api/`.
+- Backend internal errors should be logged server-side with correlation IDs by `writeError` in `internal/api/device_handler.go`; user-facing responses stay generic for 5xx.
+- Backend services return errors to callers and use `log.Printf` only for asynchronous/non-fatal background failures: `markDeviceStatus` in `internal/service/device_service.go`, WebSocket hub logging in `internal/ws/hub.go`.
+- Frontend API wrappers catch unknown errors and rethrow contextual `Error` messages: `fetchDevices`, `fetchLinks`, and `fetchSettings` in `frontend/src/api/client.ts`.
+- Frontend mutation APIs convert 400/409 responses to `ValidationError` and 500 responses to `ServerError` with optional correlation IDs in `frontend/src/api/client.ts` and `frontend/src/api/errors.ts`.
+- UI components handle `ServerError` and `ValidationError` explicitly before generic errors: `frontend/src/components/BulkBackupPanel.tsx`, `frontend/src/components/SNMPProfileManager.tsx`, `frontend/src/components/LinkCreatePanel.tsx`.
 
 ## Logging
 
-**Framework:** `log` in Go, `console` in frontend
+**Framework:** Go standard `log`; browser `console` only for exceptional diagnostics.
 
 **Patterns:**
-- Backend runtime logging uses the standard library `log` package in `cmd/theia/main.go` and `internal/service/device_service.go`.
-- Logging focuses on operational events and warnings, such as restore workflow progress in `cmd/theia/main.go` and failed status updates in `internal/service/device_service.go`.
-- Frontend logging is minimal and mostly reserved for unexpected parse/runtime failures, e.g. `console.error('Failed to parse WebSocket message', error)` in `frontend/src/hooks/useWebSocket.ts`.
-- Tests that verify logging capture global log output with helpers like `captureLogs` in `internal/service/static_persistence_test.go`.
+- Use `log.Printf` in backend long-running workers and infrastructure paths: `internal/worker/metrics_collector.go`, `internal/worker/backup_scheduler.go`, `internal/ws/hub.go`.
+- Request logging is centralized in `RequestLogger` in `internal/api/middleware.go`; avoid duplicate per-handler access logs.
+- Frontend logs parse/network failures with `console.error` in targeted places such as `frontend/src/hooks/useWebSocket.ts`, `frontend/src/hooks/usePositions.ts`, and dashboard fetch panels.
+- Tests may use `console.error` to print audit violations before failing, as in `frontend/src/components/__tests__/canvas-token-audit.test.ts` and `frontend/src/components/__tests__/no-line-audit.test.ts`.
 
 ## Comments
 
 **When to Comment:**
-- Comment exported Go types and functions with doc comments, matching `Config`, `Load`, and `DeviceService` in `internal/config/config.go` and `internal/service/device_service.go`.
-- Add inline comments for non-obvious branches, fallback behavior, or product rules, as seen in `frontend/src/api/client.ts`, `frontend/src/hooks/useWebSocket.ts`, and `cmd/theia/main.go`.
-- Tests often annotate scenario intent with requirement IDs or behavior labels, such as `THEME-01` in `frontend/src/contexts/ThemeContext.test.tsx`, `COMP-04` in `frontend/src/components/Toolbar.test.tsx`, and `D-04`/`D-07` references in `internal/domain/poll_class_test.go`.
+- Use Go doc comments for exported types and functions: `DeviceHandler`, `NewDeviceHandler`, `DeviceService`, and `NewDeviceService` in `internal/api/device_handler.go` and `internal/service/device_service.go`.
+- Use comments to explain protocol/domain decisions, not mechanical code. Examples: virtual device validation notes in `internal/api/device_handler.go` and WebSocket reconnect notes in `frontend/src/hooks/useWebSocket.ts`.
+- Keep phase/audit comments only when they encode enforcement context, as in `frontend/src/components/__tests__/canvas-token-audit.test.ts`.
 
 **JSDoc/TSDoc:**
-- Lightweight JSDoc is used selectively for reusable UI primitives like `frontend/src/components/MaterialIcon.tsx`.
-- Full TSDoc is not consistently used across the frontend; most guidance is inline or implicit from types.
-- Go doc comments are more consistently applied to exported symbols than TSDoc is in TypeScript.
+- TSDoc is light and reserved for exported error classes or audit rationale: `frontend/src/api/errors.ts`.
+- Prefer self-documenting TypeScript interfaces and types over extensive comments in component code: `frontend/src/components/DeviceCard.tsx`.
 
 ## Function Design
 
 **Size:**
-- Keep utility and parser helpers small and single-purpose, as in `readString`, `readNumber`, and `parseDeviceType` inside `frontend/src/types/api.ts`.
-- Larger orchestrator-style functions are accepted for workflow-heavy paths, such as `useWebSocket` in `frontend/src/hooks/useWebSocket.ts`, `AddDevice` in `internal/service/device_service.go`, and restore helpers in `cmd/theia/main.go`. When editing these files, preserve the existing helper extraction style instead of inlining more logic.
+- Prefer small pure helpers for formatting, normalization, and state derivation: `formatPercent`, `freshnessMeta`, and `readoutToneClass` in `frontend/src/components/DeviceCard.tsx`; `NormalizeTopologyDiscoveryMode` in `internal/domain/device.go`.
+- Handler functions may be longer when performing endpoint validation and response shaping; keep validation as guard clauses and move reusable logic to helpers in the same package.
+- For complex backend services, use option functions and coordinator/helper services instead of expanding constructors: `DeviceServiceOption` and `WithTopologyObservationStore` in `internal/service/device_service.go`.
 
 **Parameters:**
-- Prefer strongly typed object shapes for frontend payloads, as in `CreateDevicePayload` and `SNMPPayload` in `frontend/src/api/client.ts`.
-- Use optional and nullable fields deliberately to represent API semantics, e.g. `notes?: string | null` and `poll_interval_override: number | null` in `frontend/src/types/api.ts`.
-- In Go, dependency injection is primarily constructor- and function-based, using interfaces and function types such as `DiscoverFunc`, `SNMPPollFunc`, and `DeviceServiceOption` in `internal/service/device_service.go`.
+- Go service methods pass `context.Context` first for operations that touch repositories or external work: `AddDevice` in `internal/service/device_service.go`.
+- Use option functions for optional backend dependencies: `DeviceServiceOption` in `internal/service/device_service.go`.
+- TypeScript functions use typed payload interfaces for API mutations: `CreateDevicePayload` and `SNMPPayload` in `frontend/src/api/client.ts`.
+- React components accept one props object and derive internal display models through local helpers: `DeviceCardInner` in `frontend/src/components/DeviceCard.tsx`.
 
 **Return Values:**
-- Return parsed, domain-shaped objects from frontend API helpers instead of raw JSON, as in `fetchDevices`, `createDevice`, and `fetchSettings` in `frontend/src/api/client.ts`.
-- Use `null`/empty-object fallbacks only when the UI can tolerate degraded data, such as `fetchHealthVersion` and `fetchSettings` in `frontend/src/api/client.ts`.
-- In Go, return `(value, error)` and keep mutation explicit through pointer receivers and repository updates, as in `internal/config/config.go` and `internal/service/device_service.go`.
+- Go returns `(value, error)` and checks errors immediately; tests use `t.Fatalf` on unexpected errors as in `internal/repository/sqlite/device_repo_test.go`.
+- Backend HTTP helpers return booleans when they already wrote a response: `decodeJSON` in `internal/api/device_handler.go`.
+- Frontend async API methods return parsed DTOs and throw typed errors on failures: `createDevice`, `updateDevice`, and `fetchDevices` in `frontend/src/api/client.ts`.
+- React hooks return explicit result interfaces: `UseWebSocketResult` in `frontend/src/hooks/useWebSocket.ts`.
 
 ## Module Design
 
 **Exports:**
-- Frontend modules mostly use named exports for reusable units, such as `ThemeProvider`, `useTheme`, `MaterialIcon`, and `useWebSocket` in `frontend/src/contexts/ThemeContext.tsx`, `frontend/src/components/MaterialIcon.tsx`, and `frontend/src/hooks/useWebSocket.ts`.
-- Default exports are used sparingly for app-level entry files like `frontend/src/App.tsx`.
-- Go packages export domain and service APIs directly from package files; there is no barrel-file pattern.
+- Backend packages expose constructors and interfaces; keep implementation structs unexported when package-local: `pollRescheduler` in `internal/service/device_service.go`.
+- Frontend component modules usually default export the component and named-export supporting types: `DeviceCard` / `DeviceNodeData` in `frontend/src/components/DeviceCard.tsx`.
+- Frontend API modules named-export all client functions and error classes: `frontend/src/api/client.ts`.
+- Parser modules named-export parse functions and DTO types: `frontend/src/types/api.ts`, `frontend/src/types/metrics.ts`.
 
 **Barrel Files:**
-- Barrel files are not a dominant pattern. Imports usually target concrete files directly, such as `./components/Dashboard` from `frontend/src/App.tsx` and package-level imports like `github.com/lollinoo/theia/internal/service` from `cmd/theia/main.go`.
-
-## Prescriptive Guidance
-
-- Match the file-local formatting style before editing: use 2-space indentation in most frontend files, but preserve existing 4-space indentation in `frontend/src/components/Toolbar.tsx` unless you normalize the whole file.
-- Keep frontend imports relative and grouped with external packages first; do not introduce path aliases without updating `frontend/tsconfig.json`.
-- Use typed error classes from `frontend/src/api/errors.ts` when mapping backend validation or server failures in UI code.
-- Prefer small parser/helper functions for shape validation in API-facing TypeScript modules, following `frontend/src/types/api.ts`.
-- In Go, keep exported symbols documented and return wrapped errors with `%w`, following `internal/config/config.go` and `cmd/theia/main.go`.
-- In tests, keep scenario names explicit and behavior-driven, following `frontend/src/hooks/useWebSocket.test.ts` and `internal/scheduler/scheduler_test.go`.
+- No broad frontend barrel file is used; import directly from concrete modules such as `frontend/src/types/api.ts` and `frontend/src/api/client.ts`.
+- Go package boundaries are directories; add new backend code under the appropriate package in `internal/` and import via `github.com/lollinoo/theia/internal/...`.
 
 ---
 
-*Convention analysis: 2026-04-19*
+*Convention analysis: 2026-04-23*
