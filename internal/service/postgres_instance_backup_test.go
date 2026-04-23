@@ -27,6 +27,7 @@ type postgresServiceTestSetup struct {
 	deviceBackupDir   string
 	knownHostsPath    string
 	dbPath            string
+	dbDSN             string
 	encryptionKey     []byte
 }
 
@@ -56,6 +57,7 @@ func setupPostgresServiceTest(t *testing.T) *postgresServiceTestSetup {
 		t.Fatalf("creating device backup dir: %v", err)
 	}
 	encryptionKey := sha256.Sum256([]byte("postgres-backup-test-key"))
+	dbDSN := "postgres://theia:n3wpr3srl@2026@localhost:5432/theia?sslmode=disable"
 
 	svc := NewInstanceBackupService(
 		db,
@@ -65,7 +67,7 @@ func setupPostgresServiceTest(t *testing.T) *postgresServiceTestSetup {
 		deviceBackupDir,
 		knownHostsPath,
 		dbPath,
-		"postgres://theia:theia@localhost:5432/theia?sslmode=disable",
+		dbDSN,
 		encryptionKey[:],
 	)
 	svc.dialect = reposqlite.DialectPostgres
@@ -81,6 +83,7 @@ func setupPostgresServiceTest(t *testing.T) *postgresServiceTestSetup {
 		deviceBackupDir:   deviceBackupDir,
 		knownHostsPath:    knownHostsPath,
 		dbPath:            dbPath,
+		dbDSN:             dbDSN,
 		encryptionKey:     encryptionKey[:],
 	}
 }
@@ -200,6 +203,13 @@ func TestInstanceBackupServiceCreate_PostgresArchive(t *testing.T) {
 	stubExternalCommands(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "pg_dump":
+			connInfo := commandFlagValue(args, "--dbname")
+			if !strings.Contains(connInfo, "password='n3wpr3srl@2026'") {
+				t.Fatalf("pg_dump conninfo = %q, want libpq-safe password", connInfo)
+			}
+			if strings.Contains(connInfo, "postgres://") {
+				t.Fatalf("pg_dump conninfo should not use raw URL dsn: %q", connInfo)
+			}
 			dest := commandFlagValue(args, "--file")
 			if dest == "" {
 				t.Fatal("pg_dump missing --file argument")
@@ -312,6 +322,8 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 }
 
 func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
+	const dbDSN = "postgres://theia:n3wpr3srl@2026@localhost:5432/theia?sslmode=disable"
+
 	runtimeDir := t.TempDir()
 	dbPath := filepath.Join(runtimeDir, "theia.db")
 	deviceBackupDir := filepath.Join(runtimeDir, "device-backups")
@@ -347,6 +359,10 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	stubExternalCommands(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "pg_dump":
+			connInfo := commandFlagValue(args, "--dbname")
+			if !strings.Contains(connInfo, "password='n3wpr3srl@2026'") {
+				t.Fatalf("pg_dump conninfo = %q, want libpq-safe password", connInfo)
+			}
 			dest := commandFlagValue(args, "--file")
 			if dest == "" {
 				t.Fatal("pg_dump missing --file argument")
@@ -356,6 +372,13 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			}
 			return nil, nil
 		case "pg_restore":
+			connInfo := commandFlagValue(args, "--dbname")
+			if !strings.Contains(connInfo, "password='n3wpr3srl@2026'") {
+				t.Fatalf("pg_restore conninfo = %q, want libpq-safe password", connInfo)
+			}
+			if strings.Contains(connInfo, "postgres://") {
+				t.Fatalf("pg_restore conninfo should not use raw URL dsn: %q", connInfo)
+			}
 			if got := args[len(args)-1]; got != stagedDump {
 				t.Fatalf("pg_restore target = %q, want %q", got, stagedDump)
 			}
@@ -383,7 +406,7 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 		t.Fatalf("write marker: %v", err)
 	}
 
-	coordinator := NewRestoreCoordinatorWithDSN(dbPath, "postgres://theia:theia@localhost:5432/theia?sslmode=disable", deviceBackupDir, knownHostsPath)
+	coordinator := NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath)
 	applied, err := coordinator.ApplyPendingRestore()
 	if err != nil {
 		t.Fatalf("ApplyPendingRestore() error = %v", err)
@@ -414,5 +437,30 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	}
 	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
 		t.Fatalf("staging dir should be removed, stat err = %v", err)
+	}
+}
+
+func TestPostgresCLIConnInfo_RewritesURLDSNWithSpecialPassword(t *testing.T) {
+	connInfo, err := postgresCLIConnInfo("postgres://theia:n3wpr3srl@2026@postgres:5432/theia?sslmode=disable&application_name=theia")
+	if err != nil {
+		t.Fatalf("postgresCLIConnInfo() error = %v", err)
+	}
+
+	checks := []string{
+		"host='postgres'",
+		"port='5432'",
+		"user='theia'",
+		"password='n3wpr3srl@2026'",
+		"dbname='theia'",
+		"sslmode='disable'",
+		"application_name='theia'",
+	}
+	for _, want := range checks {
+		if !strings.Contains(connInfo, want) {
+			t.Fatalf("connInfo = %q, want substring %q", connInfo, want)
+		}
+	}
+	if strings.Contains(connInfo, "postgres://") {
+		t.Fatalf("connInfo should not contain raw URL dsn: %q", connInfo)
 	}
 }
