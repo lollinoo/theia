@@ -204,6 +204,10 @@ func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB 
 	if err := ensureExternalCommand("pg_restore"); err != nil {
 		return err
 	}
+	connInfo, err := postgresCLIConnInfo(c.dbDSN)
+	if err != nil {
+		return fmt.Errorf("build postgres conninfo: %w", err)
+	}
 	if err := terminatePostgresConnections(ctx, c.dbDSN); err != nil {
 		return err
 	}
@@ -216,7 +220,7 @@ func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB 
 		"--no-privileges",
 		"--single-transaction",
 		"--exit-on-error",
-		"--dbname", c.dbDSN,
+		"--dbname", connInfo,
 		stagedDB,
 	); err != nil {
 		return fmt.Errorf("restore postgres database: %w", err)
@@ -264,6 +268,10 @@ func (c *RestoreCoordinator) dumpLivePostgresDatabase(ctx context.Context, destP
 	if err := ensureExternalCommand("pg_dump"); err != nil {
 		return err
 	}
+	connInfo, err := postgresCLIConnInfo(c.dbDSN)
+	if err != nil {
+		return fmt.Errorf("build postgres conninfo: %w", err)
+	}
 	if _, err := runExternalCommand(
 		ctx,
 		"pg_dump",
@@ -271,7 +279,7 @@ func (c *RestoreCoordinator) dumpLivePostgresDatabase(ctx context.Context, destP
 		"--no-owner",
 		"--no-privileges",
 		"--file", destPath,
-		"--dbname", c.dbDSN,
+		"--dbname", connInfo,
 	); err != nil {
 		return fmt.Errorf("pg_dump failed: %w", err)
 	}
