@@ -462,6 +462,14 @@ export function parseWSMessage(
         typeof payload.version === 'number' && Number.isFinite(payload.version)
           ? payload.version
           : undefined;
+    } else if (isRecord(payload) && 'alerts' in payload && payload.alerts === null) {
+      alerts = [];
+      version =
+        typeof payload.version === 'number' && Number.isFinite(payload.version)
+          ? payload.version
+          : undefined;
+    } else if (isRecord(payload)) {
+      alerts = [parseAlert(payload)];
     } else {
       throw new Error('invalid alert payload');
     }

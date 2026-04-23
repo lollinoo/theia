@@ -181,6 +181,36 @@ func TestNewSnapshotMessage_UsesNormalizedRuntimeContract(t *testing.T) {
 	}
 }
 
+func TestNewAlertMessage_EmptyAlertsMarshalAsArray(t *testing.T) {
+	message := NewAlertMessage([]AlertDTO{}, 3)
+
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
+	}
+
+	var decoded struct {
+		Payload struct {
+			Version uint64 `json:"version"`
+			Alerts  any    `json:"alerts"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+
+	alerts, ok := decoded.Payload.Alerts.([]any)
+	if !ok {
+		t.Fatalf("payload.alerts = %#v, want empty array", decoded.Payload.Alerts)
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("payload.alerts length = %d, want 0", len(alerts))
+	}
+	if decoded.Payload.Version != 3 {
+		t.Fatalf("payload.version = %d, want 3", decoded.Payload.Version)
+	}
+}
+
 func float64Ptr(value float64) *float64 {
 	return &value
 }
