@@ -59,13 +59,13 @@ func validateDatabasePolicy(cfg *runtimeConfig, dialect sqlite.Dialect) error {
 			return nil
 		}
 		return fmt.Errorf(
-			"sqlite is only supported for demo, lab, or small-install deployments; "+
+			"sqlite is only supported for demo, lab, or small-install deployments; " +
 				"set THEIA_ALLOW_SQLITE_SMALL_INSTALL=true only if this instance stays within the documented small-install limits (up to 50 devices, one Theia process, one active admin)",
 		)
 	case sqlite.DialectPostgres:
 		if strings.TrimSpace(cfg.DBDSN) == "" {
 			return fmt.Errorf(
-				"postgres is the default database driver and requires db_dsn; "+
+				"postgres is the default database driver and requires db_dsn; " +
 					"set THEIA_DB_DSN (for example postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable), start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
 			)
 		}
@@ -122,15 +122,19 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	if err := ensurePrivateDir(paths.backupDir); err != nil {
 		return fmt.Errorf("prepare backup directory %s: %w", paths.backupDir, err)
 	}
+	dbDir := filepath.Dir(cfg.DBPath)
+	if err := ensurePrivateDir(dbDir); err != nil {
+		return fmt.Errorf("prepare database directory %s: %w", dbDir, err)
+	}
 
-	if dialect == sqlite.DialectSQLite {
-		dbDir := filepath.Dir(cfg.DBPath)
-		if err := ensurePrivateDir(dbDir); err != nil {
-			return fmt.Errorf("prepare database directory %s: %w", dbDir, err)
-		}
-
+	switch dialect {
+	case sqlite.DialectSQLite:
 		if err := applyPendingSQLiteRestore(cfg.DBPath, paths.backupDir, paths.knownHostsPath); err != nil {
 			return fmt.Errorf("apply pending SQLite restore: %w", err)
+		}
+	case sqlite.DialectPostgres:
+		if err := applyPendingPostgresRestore(cfg.DBPath, cfg.DBDSN, paths.backupDir, paths.knownHostsPath); err != nil {
+			return fmt.Errorf("apply pending PostgreSQL restore: %w", err)
 		}
 	}
 
@@ -246,27 +250,24 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 	var instanceBackupService *service.InstanceBackupService
 	var backupScheduler *worker.BackupScheduler
-	if dialect == sqlite.DialectSQLite {
-		instanceBackupRepo := sqlite.NewInstanceBackupRepo(db)
-		if err := ensurePrivateDir(paths.instanceBackupDir); err != nil {
-			return fmt.Errorf("prepare instance backup directory %s: %w", paths.instanceBackupDir, err)
-		}
-		instanceBackupService = service.NewInstanceBackupService(
-			db,
-			instanceBackupRepo,
-			settingsRepo,
-			paths.instanceBackupDir,
-			paths.backupDir,
-			paths.knownHostsPath,
-			cfg.DBPath,
-			encryptionKey,
-		)
-		log.Printf("Instance backup directory: %s", paths.instanceBackupDir)
-		instanceBackupService.FailStaleRunning()
-		backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
-	} else {
-		log.Printf("Instance backup and restore are disabled for database driver %s", dialect)
+	instanceBackupRepo := sqlite.NewInstanceBackupRepo(db)
+	if err := ensurePrivateDir(paths.instanceBackupDir); err != nil {
+		return fmt.Errorf("prepare instance backup directory %s: %w", paths.instanceBackupDir, err)
 	}
+	instanceBackupService = service.NewInstanceBackupService(
+		db,
+		instanceBackupRepo,
+		settingsRepo,
+		paths.instanceBackupDir,
+		paths.backupDir,
+		paths.knownHostsPath,
+		cfg.DBPath,
+		cfg.DBDSN,
+		encryptionKey,
+	)
+	log.Printf("Instance backup directory: %s", paths.instanceBackupDir)
+	instanceBackupService.FailStaleRunning()
+	backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
 
 	deviceBackupScheduler := worker.NewDeviceBackupScheduler(backupService, backupJobRepo, settingsRepo)
 	ctx, cancel := context.WithCancel(context.Background())

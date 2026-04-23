@@ -26,12 +26,14 @@ import (
 // InstanceBackupService orchestrates full Theia instance backups (database + config files).
 type InstanceBackupService struct {
 	db              *sql.DB
+	dialect         sqlite.Dialect
 	repo            domain.InstanceBackupRepository
 	settingsRepo    domain.SettingsRepository
 	backupDir       string // THEIA_INSTANCE_BACKUP_DIR
 	deviceBackupDir string // THEIA_BACKUP_DIR (device config files)
 	knownHostsPath  string // SSH known hosts file path
 	dbPath          string // live DB path
+	dbDSN           string // live DB DSN for postgres backups/restores
 	encryptionKey   []byte // for key hash in manifest
 }
 
@@ -40,12 +42,25 @@ type backupManifest struct {
 	Version           int    `json:"version"`
 	AppVersion        string `json:"app_version"`
 	GitCommit         string `json:"git_commit"`
+	DBDriver          string `json:"db_driver,omitempty"`
+	DBEntryName       string `json:"db_entry_name,omitempty"`
 	MigrationVersion  int    `json:"migration_version"`
 	CreatedAt         string `json:"created_at"`
 	DBSHA256          string `json:"db_sha256"`
 	BackupFileCount   int    `json:"backup_file_count"`
 	TotalSizeBytes    int64  `json:"total_size_bytes"`
 	EncryptionKeyHash string `json:"encryption_key_hash"`
+}
+
+const (
+	sqliteArchiveDBEntry   = "theia.db"
+	postgresArchiveDBEntry = "database.dump"
+)
+
+type databaseBackupArtifact struct {
+	tempPath         string
+	archiveEntryName string
+	migrationVersion int
 }
 
 // NewInstanceBackupService creates a new InstanceBackupService.
@@ -57,16 +72,19 @@ func NewInstanceBackupService(
 	deviceBackupDir string,
 	knownHostsPath string,
 	dbPath string,
+	dbDSN string,
 	encryptionKey []byte,
 ) *InstanceBackupService {
 	return &InstanceBackupService{
 		db:              db,
+		dialect:         sqlite.DetectDialect(db),
 		repo:            repo,
 		settingsRepo:    settingsRepo,
 		backupDir:       backupDir,
 		deviceBackupDir: deviceBackupDir,
 		knownHostsPath:  knownHostsPath,
 		dbPath:          dbPath,
+		dbDSN:           strings.TrimSpace(dbDSN),
 		encryptionKey:   encryptionKey,
 	}
 }
@@ -117,26 +135,19 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 		os.RemoveAll(backupSubDir)
 	}
 
-	// Step 1: VACUUM INTO to create a clean database copy
-	tempDBPath := filepath.Join(backupSubDir, "theia.db.tmp")
-	if err := s.backupDatabase(ctx, tempDBPath); err != nil {
+	// Step 1: Create a dialect-appropriate database snapshot/dump.
+	dbArtifact, err := s.backupDatabase(ctx, backupSubDir)
+	if err != nil {
 		cleanupOnError(fmt.Sprintf("backing up database: %v", err))
 		return nil, fmt.Errorf("backing up database: %w", err)
 	}
-	defer os.Remove(tempDBPath) // clean up temp DB after archiving
+	defer os.Remove(dbArtifact.tempPath)
 
 	// Step 2: Compute SHA-256 of the database copy
-	dbHash, err := computeFileHash(tempDBPath)
+	dbHash, err := computeFileHash(dbArtifact.tempPath)
 	if err != nil {
 		cleanupOnError(fmt.Sprintf("computing DB hash: %v", err))
 		return nil, fmt.Errorf("computing DB hash: %w", err)
-	}
-
-	// Step 3: Read migration version from backup DB
-	migrationVersion, err := readMigrationVersion(tempDBPath)
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("reading migration version: %v", err))
-		return nil, fmt.Errorf("reading migration version: %w", err)
 	}
 
 	// Step 4: Collect device backup files
@@ -188,7 +199,9 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 		Version:           1,
 		AppVersion:        version.Version,
 		GitCommit:         version.GitCommit,
-		MigrationVersion:  migrationVersion,
+		DBDriver:          string(s.dialect),
+		DBEntryName:       dbArtifact.archiveEntryName,
+		MigrationVersion:  dbArtifact.migrationVersion,
 		CreatedAt:         now.Format(time.RFC3339),
 		DBSHA256:          dbHash,
 		BackupFileCount:   backupFileCount,
@@ -200,7 +213,7 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 	finalPath := filepath.Join(backupSubDir, fileName)
 	tempArchivePath := finalPath + ".tmp"
 
-	totalSize, err := s.createArchive(tempArchivePath, tempDBPath, deviceBackupFiles, &manifest)
+	totalSize, err := s.createArchive(tempArchivePath, dbArtifact, deviceBackupFiles, &manifest)
 	if err != nil {
 		cleanupOnError(fmt.Sprintf("creating archive: %v", err))
 		os.Remove(tempArchivePath)
@@ -246,7 +259,7 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 	backup.SizeBytes = archiveInfo.Size()
 	backup.SHA256 = archiveHash
 	backup.AppVersion = version.Version
-	backup.MigrationVersion = migrationVersion
+	backup.MigrationVersion = dbArtifact.migrationVersion
 	backup.Status = domain.InstanceBackupStatusSuccess
 	backup.ErrorMessage = ""
 
@@ -261,7 +274,7 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 // Returns the total size of all archived file data.
 func (s *InstanceBackupService) createArchive(
 	archivePath string,
-	dbCopyPath string,
+	dbArtifact databaseBackupArtifact,
 	deviceBackupFiles []struct {
 		archiveName string
 		diskPath    string
@@ -292,8 +305,8 @@ func (s *InstanceBackupService) createArchive(
 	}
 	totalSize += int64(len(manifestJSON))
 
-	// Add theia.db
-	dbSize, err := addFileToTar(tw, "theia.db", dbCopyPath)
+	// Add the database payload (SQLite file or PostgreSQL dump).
+	dbSize, err := addFileToTar(tw, dbArtifact.archiveEntryName, dbArtifact.tempPath)
 	if err != nil {
 		return 0, fmt.Errorf("adding database to archive: %w", err)
 	}
@@ -322,12 +335,21 @@ func (s *InstanceBackupService) createArchive(
 	return totalSize, nil
 }
 
-// backupDatabase creates a clean copy of the live database using VACUUM INTO.
-func (s *InstanceBackupService) backupDatabase(ctx context.Context, destPath string) error {
+// backupDatabase creates a clean copy or logical dump of the live database.
+func (s *InstanceBackupService) backupDatabase(ctx context.Context, backupSubDir string) (databaseBackupArtifact, error) {
+	switch s.dialect {
+	case sqlite.DialectPostgres:
+		return s.backupPostgresDatabase(ctx, filepath.Join(backupSubDir, postgresArchiveDBEntry+".tmp"))
+	default:
+		return s.backupSQLiteDatabase(ctx, filepath.Join(backupSubDir, sqliteArchiveDBEntry+".tmp"))
+	}
+}
+
+func (s *InstanceBackupService) backupSQLiteDatabase(ctx context.Context, destPath string) (databaseBackupArtifact, error) {
 	// Validate destination path to prevent injection (T-15-04)
 	cleanDest := filepath.Clean(destPath)
 	if strings.ContainsAny(cleanDest, "';") {
-		return fmt.Errorf("invalid destination path: contains forbidden characters")
+		return databaseBackupArtifact{}, fmt.Errorf("invalid destination path: contains forbidden characters")
 	}
 
 	// Checkpoint WAL to ensure all data is in the main database file
@@ -342,26 +364,66 @@ func (s *InstanceBackupService) backupDatabase(ctx context.Context, destPath str
 		// Some SQLite versions don't support parameterized VACUUM INTO
 		_, err = s.db.ExecContext(ctx, fmt.Sprintf("VACUUM INTO '%s'", cleanDest))
 		if err != nil {
-			return fmt.Errorf("VACUUM INTO failed: %w", err)
+			return databaseBackupArtifact{}, fmt.Errorf("VACUUM INTO failed: %w", err)
 		}
 	}
 
 	// Verify integrity of the backup copy
 	backupDB, err := sql.Open("sqlite3", cleanDest+"?mode=ro")
 	if err != nil {
-		return fmt.Errorf("opening backup DB for integrity check: %w", err)
+		return databaseBackupArtifact{}, fmt.Errorf("opening backup DB for integrity check: %w", err)
 	}
 	defer backupDB.Close()
 
 	var integrityResult string
 	if err := backupDB.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrityResult); err != nil {
-		return fmt.Errorf("integrity check failed: %w", err)
+		return databaseBackupArtifact{}, fmt.Errorf("integrity check failed: %w", err)
 	}
 	if integrityResult != "ok" {
-		return fmt.Errorf("backup database integrity check failed: %s", integrityResult)
+		return databaseBackupArtifact{}, fmt.Errorf("backup database integrity check failed: %s", integrityResult)
 	}
 
-	return nil
+	migrationVersion, err := readSQLiteMigrationVersion(cleanDest)
+	if err != nil {
+		return databaseBackupArtifact{}, fmt.Errorf("reading migration version: %w", err)
+	}
+
+	return databaseBackupArtifact{
+		tempPath:         cleanDest,
+		archiveEntryName: sqliteArchiveDBEntry,
+		migrationVersion: migrationVersion,
+	}, nil
+}
+
+func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, destPath string) (databaseBackupArtifact, error) {
+	if strings.TrimSpace(s.dbDSN) == "" {
+		return databaseBackupArtifact{}, fmt.Errorf("postgres backup requires db_dsn")
+	}
+	if err := ensureExternalCommand("pg_dump"); err != nil {
+		return databaseBackupArtifact{}, err
+	}
+	if _, err := runExternalCommand(
+		ctx,
+		"pg_dump",
+		"--format=custom",
+		"--no-owner",
+		"--no-privileges",
+		"--file", destPath,
+		"--dbname", s.dbDSN,
+	); err != nil {
+		return databaseBackupArtifact{}, fmt.Errorf("pg_dump failed: %w", err)
+	}
+
+	migrationVersion, err := s.readCurrentMigrationVersion(ctx)
+	if err != nil {
+		return databaseBackupArtifact{}, fmt.Errorf("reading migration version: %w", err)
+	}
+
+	return databaseBackupArtifact{
+		tempPath:         destPath,
+		archiveEntryName: postgresArchiveDBEntry,
+		migrationVersion: migrationVersion,
+	}, nil
 }
 
 // computeEncryptionKeyHash returns the SHA-256 hash of the first 8 bytes of the encryption key.
@@ -376,8 +438,8 @@ func computeEncryptionKeyHash(key []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// readMigrationVersion reads the current schema migration version from a database file.
-func readMigrationVersion(dbPath string) (int, error) {
+// readSQLiteMigrationVersion reads the current schema migration version from a SQLite database file.
+func readSQLiteMigrationVersion(dbPath string) (int, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
 	if err != nil {
 		return 0, fmt.Errorf("opening DB for migration version: %w", err)
@@ -389,6 +451,53 @@ func readMigrationVersion(dbPath string) (int, error) {
 		return 0, fmt.Errorf("querying migration version: %w", err)
 	}
 	return version, nil
+}
+
+func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context) (int, error) {
+	if s.dialect == sqlite.DialectSQLite {
+		return readSQLiteMigrationVersion(s.dbPath)
+	}
+	if s.db == nil {
+		return 0, fmt.Errorf("database connection unavailable")
+	}
+
+	var version int
+	if err := s.db.QueryRowContext(ctx, "SELECT version FROM schema_migrations").Scan(&version); err != nil {
+		return 0, fmt.Errorf("querying migration version: %w", err)
+	}
+	return version, nil
+}
+
+func manifestDatabaseDialect(manifest backupManifest) (sqlite.Dialect, error) {
+	if strings.TrimSpace(manifest.DBDriver) == "" {
+		return sqlite.DialectSQLite, nil
+	}
+	return sqlite.NormalizeDialect(manifest.DBDriver)
+}
+
+func manifestDatabaseEntryName(dialect sqlite.Dialect, manifest backupManifest) (string, error) {
+	if entry := strings.TrimSpace(manifest.DBEntryName); entry != "" {
+		switch entry {
+		case sqliteArchiveDBEntry, postgresArchiveDBEntry:
+			return entry, nil
+		default:
+			return "", fmt.Errorf("unsupported database entry %q in manifest", entry)
+		}
+	}
+	if dialect == sqlite.DialectPostgres {
+		return postgresArchiveDBEntry, nil
+	}
+	return sqliteArchiveDBEntry, nil
+}
+
+func (s *InstanceBackupService) validatePostgresDump(ctx context.Context, dumpPath string) error {
+	if err := ensureExternalCommand("pg_restore"); err != nil {
+		return err
+	}
+	if _, err := runExternalCommand(ctx, "pg_restore", "--list", dumpPath); err != nil {
+		return fmt.Errorf("validating postgres dump: %w", err)
+	}
+	return nil
 }
 
 // addFileToTar adds a file from disk to the tar archive. Returns the file size.
@@ -472,6 +581,8 @@ type RestoreReport struct {
 // When dryRun is true, only validation is performed. When false, validated files are staged
 // and a marker file is written for the restart-based restore flow.
 func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryRun bool) (*RestoreReport, error) {
+	ctx := context.Background()
+
 	// Step 1: Create temp extraction dir
 	tempDir, err := os.MkdirTemp("", "theia-restore-*")
 	if err != nil {
@@ -496,6 +607,20 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 		return nil, fmt.Errorf("parsing manifest.json: %w", err)
 	}
 
+	archiveDialect, err := manifestDatabaseDialect(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("parsing manifest database driver: %w", err)
+	}
+	if archiveDialect != s.dialect {
+		return nil, fmt.Errorf("archive database driver %q does not match current runtime database driver %q", archiveDialect, s.dialect)
+	}
+
+	dbEntryName, err := manifestDatabaseEntryName(archiveDialect, manifest)
+	if err != nil {
+		return nil, err
+	}
+	extractedDBPath := filepath.Join(tempDir, filepath.FromSlash(dbEntryName))
+
 	// Step 4: Verify encryption key hash
 	currentKeyHash := computeEncryptionKeyHash(s.encryptionKey)
 	if manifest.EncryptionKeyHash != currentKeyHash {
@@ -503,7 +628,6 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	}
 
 	// Step 5: Verify DB checksum
-	extractedDBPath := filepath.Join(tempDir, "theia.db")
 	actualDBHash, err := computeFileHash(extractedDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("computing extracted DB hash: %w", err)
@@ -512,23 +636,30 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 		return nil, fmt.Errorf("database checksum mismatch: archive may be corrupted")
 	}
 
-	// Step 6: Run PRAGMA integrity_check on extracted DB
-	checkDB, err := sql.Open("sqlite3", extractedDBPath+"?mode=ro")
-	if err != nil {
-		return nil, fmt.Errorf("opening extracted DB for integrity check: %w", err)
-	}
-	var integrityResult string
-	if err := checkDB.QueryRow("PRAGMA integrity_check").Scan(&integrityResult); err != nil {
+	// Step 6: Validate the extracted database payload.
+	switch archiveDialect {
+	case sqlite.DialectPostgres:
+		if err := s.validatePostgresDump(ctx, extractedDBPath); err != nil {
+			return nil, err
+		}
+	default:
+		checkDB, err := sql.Open("sqlite3", extractedDBPath+"?mode=ro")
+		if err != nil {
+			return nil, fmt.Errorf("opening extracted DB for integrity check: %w", err)
+		}
+		var integrityResult string
+		if err := checkDB.QueryRow("PRAGMA integrity_check").Scan(&integrityResult); err != nil {
+			checkDB.Close()
+			return nil, fmt.Errorf("running integrity check: %w", err)
+		}
 		checkDB.Close()
-		return nil, fmt.Errorf("running integrity check: %w", err)
-	}
-	checkDB.Close()
-	if integrityResult != "ok" {
-		return nil, fmt.Errorf("database integrity check failed: %s", integrityResult)
+		if integrityResult != "ok" {
+			return nil, fmt.Errorf("database integrity check failed: %s", integrityResult)
+		}
 	}
 
 	// Step 7: Read current migration version from live DB
-	currentVersion, err := readMigrationVersion(s.dbPath)
+	currentVersion, err := s.readCurrentMigrationVersion(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading current migration version: %w", err)
 	}
@@ -543,7 +674,7 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	needsMigration := manifest.MigrationVersion < currentVersion
 
 	// Step 10: Run cross-version migration if needed and not dry run
-	if needsMigration && !dryRun {
+	if archiveDialect == sqlite.DialectSQLite && needsMigration && !dryRun {
 		migDB, err := sql.Open("sqlite3", extractedDBPath)
 		if err != nil {
 			return nil, fmt.Errorf("opening extracted DB for migration: %w", err)
@@ -590,8 +721,11 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 		return nil, fmt.Errorf("creating staging dir: %w", err)
 	}
 
-	// Copy theia.db to staging
-	if err := copyFile(extractedDBPath, filepath.Join(stagingDir, "theia.db")); err != nil {
+	stagedDBName := filepath.Base(dbEntryName)
+	stagedDBPath := filepath.Join(stagingDir, stagedDBName)
+
+	// Copy the database payload to staging.
+	if err := copyFile(extractedDBPath, stagedDBPath); err != nil {
 		return nil, fmt.Errorf("staging database: %w", err)
 	}
 
@@ -614,7 +748,7 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	// Write marker file
 	markerPath := filepath.Join(filepath.Dir(s.dbPath), ".theia-restore-pending")
 	marker := newRestoreMarker(
-		filepath.Join(stagingDir, "theia.db"),
+		stagedDBPath,
 		filepath.Join(stagingDir, "backups"),
 		filepath.Join(stagingDir, "known_hosts"),
 		s.dbPath,
@@ -622,6 +756,7 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 		s.knownHostsPath,
 		time.Now().UTC().Format(time.RFC3339),
 	)
+	marker.DBDriver = string(archiveDialect)
 	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshaling marker JSON: %w", err)
@@ -715,7 +850,7 @@ func extractArchive(archivePath, destDir string) error {
 
 // isAllowedArchiveEntry checks if a tar entry name matches known allowed prefixes.
 func isAllowedArchiveEntry(name string) bool {
-	allowed := []string{"manifest.json", "theia.db", "backups/", "known_hosts"}
+	allowed := []string{"manifest.json", sqliteArchiveDBEntry, postgresArchiveDBEntry, "backups/", "known_hosts"}
 	for _, prefix := range allowed {
 		if name == prefix || strings.HasPrefix(name, prefix) {
 			return true

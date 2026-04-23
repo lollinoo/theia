@@ -88,6 +88,7 @@ func setupInstanceBackupTest(t *testing.T) *testSetup {
 		deviceBackupDir,
 		knownHostsPath,
 		dbPath,
+		"",
 		encryptionKey[:],
 	)
 

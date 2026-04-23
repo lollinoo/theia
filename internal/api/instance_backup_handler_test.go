@@ -62,6 +62,7 @@ func setupInstanceBackupHandlerTest(t *testing.T) (*InstanceBackupHandler, strin
 		deviceBackupDir,
 		knownHostsPath,
 		dbPath,
+		"",
 		encKey[:],
 	)
 
@@ -769,4 +770,3 @@ func TestMiddlewareBypass_DownloadEndpointSkipsJSONContentType(t *testing.T) {
 		t.Fatalf("expected 400 for invalid UUID, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 }
-
