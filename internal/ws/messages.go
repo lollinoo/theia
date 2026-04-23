@@ -104,7 +104,7 @@ func NewAlertMessage(alerts []AlertDTO, version uint64) Message {
 		Type: MessageTypeAlert,
 		Payload: AlertMessagePayload{
 			Version: version,
-			Alerts:  append([]AlertDTO(nil), alerts...),
+			Alerts:  append([]AlertDTO{}, alerts...),
 		},
 	}
 }

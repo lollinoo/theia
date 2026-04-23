@@ -133,19 +133,23 @@ describe('parseWSMessage', () => {
     expect(payload.snapshot.devices['dev-1'].operational_status).toBe('unknown');
   });
 
-  it('rejects alert envelope objects without an alerts array', () => {
-    expect(() =>
-      parseWSMessage({
-        type: 'alert',
-        payload: {
-          device_id: 'dev-1',
-          severity: 'critical',
-          alert_name: 'DeviceDown',
-          state: 'firing',
-          summary: 'device down',
-        },
-      }),
-    ).toThrow('invalid alert payload');
+  it('accepts a legacy single alert object payload', () => {
+    const message = parseWSMessage({
+      type: 'alert',
+      payload: {
+        device_id: 'dev-1',
+        severity: 'critical',
+        alert_name: 'DeviceDown',
+        state: 'firing',
+        summary: 'device down',
+      },
+    });
+
+    expect(message.type).toBe('alert');
+    expect(
+      (message as { type: 'alert'; payload: { alerts: Array<{ summary: string }> } }).payload
+        .alerts[0].summary,
+    ).toBe('device down');
   });
 
   it('rejects malformed alert records inside an alert envelope', () => {
@@ -189,6 +193,24 @@ describe('parseWSMessage', () => {
       (message as { type: 'alert'; payload: { alerts: Array<{ summary: string }> } }).payload
         .alerts[0].summary,
     ).toBe('');
+  });
+
+  it('accepts versioned alert envelopes with alerts set to null', () => {
+    const message = parseWSMessage({
+      type: 'alert',
+      payload: {
+        version: 4,
+        alerts: null,
+      },
+    });
+
+    expect(message.type).toBe('alert');
+    expect(
+      (message as { type: 'alert'; payload: { version?: number; alerts: unknown[] } }).payload,
+    ).toEqual({
+      version: 4,
+      alerts: [],
+    });
   });
 });
 
