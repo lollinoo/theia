@@ -35,6 +35,7 @@ var newCollectorSNMPClient = func(target string, creds domain.SNMPCredentials, t
 
 func wirePollRescheduler(deviceService *service.DeviceService, sched *scheduler.Scheduler) {
 	deviceService.SetPollRescheduler(sched)
+	deviceService.SetBootstrapScheduler(sched)
 }
 
 func applyPendingSQLiteRestore(dbPath, deviceBackupDir, knownHostsPath string) error {

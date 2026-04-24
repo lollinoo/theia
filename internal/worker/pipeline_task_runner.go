@@ -74,6 +74,31 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		return
 	}
 
+	if task.Kind == polling.TaskKindBootstrap {
+		if p.staticCollector == nil || p.stateStore == nil {
+			return
+		}
+
+		profile := r.timeoutProfile(polling.LaneBootstrap)
+		result := p.staticCollector.Poll(ctx, task.Device, profile.Timeout, profile.Retries, r.bootstrapTopologyDiscoveryMode(task.Device))
+		finishedAt = completionTime(result.CollectedAt)
+		observability.Default().IncPollResult(domain.VolatilityClassStatic, result.Err == nil)
+		p.stateStore.Update(state.StateUpdate{
+			DeviceID:         task.Device.ID,
+			VolatilityClass:  domain.VolatilityClassStatic,
+			PollSuccess:      result.Err == nil,
+			ExpectedInterval: task.ExpectedInterval,
+			Timestamp:        finishedAt,
+		})
+		r.publishSubscribedDetailDelta(task.Device)
+		if result.Err != nil || p.topologyService == nil {
+			return
+		}
+
+		r.persistStaticDiscovery(task.Device, result)
+		return
+	}
+
 	if task.Device.DeviceType == domain.DeviceTypeVirtual {
 		finishedAt = r.runVirtualTask(ctx, task)
 		return
@@ -144,25 +169,31 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			return
 		}
 
-		persisted, err := p.topologyService.ApplyStaticDiscovery(task.Device.ID, service.StaticDiscoveryInput{
-			SysName:       result.SysName,
-			SysDescr:      result.SysDescr,
-			SysObjectID:   result.SysObjectID,
-			HardwareModel: result.HardwareModel,
-			Vendor:        result.Vendor,
-			DeviceType:    result.DeviceType,
-			Interfaces:    append([]domain.Interface(nil), result.Interfaces...),
-			Neighbors:     append([]snmp.NeighborInfo(nil), result.Neighbors...),
-		})
-		if err != nil {
-			log.Printf("pipeline: static persistence failed for %s: %v", task.Device.ID, err)
-			return
-		}
-		if persisted.TopologyChanged && p.topologyNotify != nil {
-			select {
-			case p.topologyNotify <- struct{}{}:
-			default:
-			}
+		r.persistStaticDiscovery(task.Device, result)
+	}
+}
+
+func (r *pipelineTaskRunner) persistStaticDiscovery(device domain.Device, result collector.StaticResult) {
+	p := r.pipeline
+	persisted, err := p.topologyService.ApplyStaticDiscovery(device.ID, service.StaticDiscoveryInput{
+		SysName:       result.SysName,
+		SysDescr:      result.SysDescr,
+		SysObjectID:   result.SysObjectID,
+		HardwareModel: result.HardwareModel,
+		OSVersion:     result.OSVersion,
+		Vendor:        result.Vendor,
+		DeviceType:    result.DeviceType,
+		Interfaces:    append([]domain.Interface(nil), result.Interfaces...),
+		Neighbors:     append([]snmp.NeighborInfo(nil), result.Neighbors...),
+	})
+	if err != nil {
+		log.Printf("pipeline: static persistence failed for %s: %v", device.ID, err)
+		return
+	}
+	if persisted.TopologyChanged && p.topologyNotify != nil {
+		select {
+		case p.topologyNotify <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -330,6 +361,21 @@ func (r *pipelineTaskRunner) timeoutProfile(lane polling.Lane) polling.TimeoutPr
 }
 
 func (r *pipelineTaskRunner) topologyDiscoveryMode(device domain.Device) domain.TopologyDiscoveryMode {
+	// Regular static polling must never reopen bootstrap-once discovery windows.
+	// One-shot topology discovery is handled explicitly by DeviceService on add,
+	// manual runs, settings changes, and delayed reprobe follow-ups.
+	mode := r.resolvedTopologyDiscoveryMode(device)
+	if mode == domain.TopologyDiscoveryModeBootstrapOnce {
+		return domain.TopologyDiscoveryModeOff
+	}
+	return mode
+}
+
+func (r *pipelineTaskRunner) bootstrapTopologyDiscoveryMode(device domain.Device) domain.TopologyDiscoveryMode {
+	return r.resolvedTopologyDiscoveryMode(device)
+}
+
+func (r *pipelineTaskRunner) resolvedTopologyDiscoveryMode(device domain.Device) domain.TopologyDiscoveryMode {
 	p := r.pipeline
 	defaultMode := domain.TopologyDiscoveryModeLLDPCDP
 	if p.settingsRepo != nil {
@@ -338,15 +384,9 @@ func (r *pipelineTaskRunner) topologyDiscoveryMode(device domain.Device) domain.
 		}
 	}
 
-	// Regular static polling must never reopen bootstrap-once discovery windows.
-	// One-shot topology discovery is handled explicitly by DeviceService on add,
-	// manual runs, settings changes, and delayed reprobe follow-ups.
 	mode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
 	if mode == domain.TopologyDiscoveryModeInherit {
 		mode = defaultMode
-	}
-	if mode == domain.TopologyDiscoveryModeBootstrapOnce {
-		return domain.TopologyDiscoveryModeOff
 	}
 	return mode
 }

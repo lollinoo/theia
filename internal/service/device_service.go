@@ -28,6 +28,10 @@ type pollRescheduler interface {
 	ReduePerformanceTask(device domain.Device, changedAt time.Time)
 }
 
+type bootstrapScheduler interface {
+	ScheduleBootstrap(device domain.Device, dueAt time.Time) bool
+}
+
 // DeviceUpdate holds optional fields for partial device updates.
 type DeviceUpdate struct {
 	Hostname              *string
@@ -47,23 +51,24 @@ type DeviceUpdate struct {
 // DeviceService orchestrates device management, combining SNMP discovery
 // with persistence through repositories.
 type DeviceService struct {
-	deviceRepo      domain.DeviceRepository
-	linkRepo        domain.LinkRepository
-	topologyStore   topology.ObservationStore
-	settingsRepo    domain.SettingsRepository
-	mutation        *deviceMutationService
-	discovery       *deviceDiscoveryCoordinator
-	discoverFunc    DiscoverFunc
-	pollRescheduler pollRescheduler
-	now             func() time.Time
-	scheduleFunc    func(time.Duration, func())
-	delayedReprobe  func(context.Context, uuid.UUID) error
-	reprobeDelay    time.Duration
-	reprobeCooldown time.Duration
-	reprobeWindow   time.Duration
-	reprobeMu       sync.Mutex
-	reprobeBooked   map[uuid.UUID]time.Time
-	reprobeInFlight atomic.Int32
+	deviceRepo         domain.DeviceRepository
+	linkRepo           domain.LinkRepository
+	topologyStore      topology.ObservationStore
+	settingsRepo       domain.SettingsRepository
+	mutation           *deviceMutationService
+	discovery          *deviceDiscoveryCoordinator
+	discoverFunc       DiscoverFunc
+	pollRescheduler    pollRescheduler
+	bootstrapScheduler bootstrapScheduler
+	now                func() time.Time
+	scheduleFunc       func(time.Duration, func())
+	delayedReprobe     func(context.Context, uuid.UUID) error
+	reprobeDelay       time.Duration
+	reprobeCooldown    time.Duration
+	reprobeWindow      time.Duration
+	reprobeMu          sync.Mutex
+	reprobeBooked      map[uuid.UUID]time.Time
+	reprobeInFlight    atomic.Int32
 
 	probeWg        sync.WaitGroup
 	TopologyNotify chan struct{} // signaled when probeDevice creates new links
@@ -121,6 +126,12 @@ func WithTopologyObservationStore(store topology.ObservationStore) DeviceService
 	}
 }
 
+func WithBootstrapScheduler(scheduler bootstrapScheduler) DeviceServiceOption {
+	return func(s *DeviceService) {
+		s.bootstrapScheduler = scheduler
+	}
+}
+
 func (s *DeviceService) defaultTopologyDiscoveryMode() domain.TopologyDiscoveryMode {
 	if s.settingsRepo == nil {
 		return domain.TopologyDiscoveryModeLLDPCDP
@@ -143,6 +154,10 @@ func (s *DeviceService) populateEffectiveTopologyDiscoveryMode(device *domain.De
 
 func (s *DeviceService) SetPollRescheduler(rescheduler pollRescheduler) {
 	s.pollRescheduler = rescheduler
+}
+
+func (s *DeviceService) SetBootstrapScheduler(scheduler bootstrapScheduler) {
+	s.bootstrapScheduler = scheduler
 }
 
 // AddDevice creates a new device and triggers an async SNMP probe for

@@ -531,6 +531,118 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 	sched.mu.Unlock()
 }
 
+func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t *testing.T) {
+	deviceID := uuid.New()
+	task := scheduler.PollTask{
+		RunID:            78,
+		Key:              scheduler.NewBootstrapTaskKey(deviceID),
+		Kind:             polling.TaskKindBootstrap,
+		Lane:             polling.LaneBootstrap,
+		VolatilityClass:  domain.VolatilityClassStatic,
+		ExpectedInterval: domain.StaticClassInterval,
+		Device: domain.Device{
+			ID:                     deviceID,
+			IP:                     "192.0.2.21",
+			Status:                 domain.DeviceStatusProbing,
+			Vendor:                 "default",
+			TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+			TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+			},
+		},
+	}
+
+	var gotTimeout time.Duration
+	var gotRetries int
+	staticCollector := collector.NewStaticCollector(buildEmptyVendorRegistry(), func(_ string, _ domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+		gotTimeout = timeout
+		gotRetries = retries
+		return &fakeSNMPClient{
+			getResponses: map[string][]gosnmp.SnmpPDU{
+				snmp.OidSysName:     {{Name: snmp.OidSysName, Value: "edge-sw-bootstrap"}},
+				snmp.OidSysDescr:    {{Name: snmp.OidSysDescr, Value: "SwitchOS bootstrap"}},
+				snmp.OidSysObjectID: {{Name: snmp.OidSysObjectID, Value: ".1.3.6.1.4.1.14988.1"}},
+			},
+			walkResponses: map[string][]gosnmp.SnmpPDU{
+				snmp.OidIfTable: {
+					{Name: snmp.OidIfDescr + ".1", Value: "uplink"},
+					{Name: snmp.OidIfSpeed + ".1", Value: uint32(1_000_000_000)},
+					{Name: snmp.OidIfAdminStatus + ".1", Value: 1},
+					{Name: snmp.OidIfOperStatus + ".1", Value: 1},
+				},
+				snmp.OidIfXTable: {
+					{Name: snmp.OidIfName + ".1", Value: "ether1"},
+					{Name: snmp.OidIfHighSpeed + ".1", Value: uint32(1_000)},
+				},
+				snmp.OidLLDPLocPortIfIndex: {
+					{Name: snmp.OidLLDPLocPortIfIndex + ".1", Value: int(1)},
+				},
+				snmp.OidLLDPLocPortId: {
+					{Name: snmp.OidLLDPLocPortId + ".1", Value: "ether1"},
+				},
+				snmp.OidLLDPRemChassisId: {
+					{Name: snmp.OidLLDPRemChassisId + ".0.1.1", Value: "aa:bb:cc:dd:ee:ff"},
+				},
+				snmp.OidLLDPRemPortId: {
+					{Name: snmp.OidLLDPRemPortId + ".0.1.1", Value: "ether2"},
+				},
+				snmp.OidLLDPRemSysName: {
+					{Name: snmp.OidLLDPRemSysName + ".0.1.1", Value: "remote-switch"},
+				},
+			},
+		}, nil
+	})
+	sched := newPipelineTestScheduler()
+	store := state.NewStore()
+	topologyNotify := make(chan struct{}, 1)
+	topologyService := &fakeTopologyService{
+		result: service.StaticPersistenceResult{TopologyChanged: true, LinksCreated: 1},
+	}
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		nil,
+		ws.NewHub(),
+		nil,
+		nil,
+		nil,
+		staticCollector,
+		nil,
+		topologyService,
+		newMockWorkerSettingsRepo(),
+		topologyNotify,
+		nil,
+		nil,
+	)
+
+	pipeline.taskRunner.runTask(context.Background(), task)
+
+	if gotTimeout != 10*time.Second {
+		t.Fatalf("bootstrap timeout = %s, want 10s", gotTimeout)
+	}
+	if gotRetries != 1 {
+		t.Fatalf("bootstrap retries = %d, want 1", gotRetries)
+	}
+	topologyService.mu.Lock()
+	if topologyService.calls != 1 {
+		t.Fatalf("expected ApplyStaticDiscovery once, got %d", topologyService.calls)
+	}
+	if topologyService.lastIn.SysName != "edge-sw-bootstrap" {
+		t.Fatalf("expected bootstrap sysName edge-sw-bootstrap, got %q", topologyService.lastIn.SysName)
+	}
+	if len(topologyService.lastIn.Neighbors) != 1 {
+		t.Fatalf("expected bootstrap topology discovery to include 1 neighbor, got %d", len(topologyService.lastIn.Neighbors))
+	}
+	topologyService.mu.Unlock()
+	select {
+	case <-topologyNotify:
+	default:
+		t.Fatal("expected topology notification after bootstrap discovery")
+	}
+}
+
 func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRegularPolls(t *testing.T) {
 	settingsRepo := newMockWorkerSettingsRepo()
 	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeBootstrapOnce)); err != nil {

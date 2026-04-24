@@ -606,6 +606,55 @@ func TestSchedulerReduePerformanceTask_MissingManagedDeviceCreatesImmediatePerfo
 	assertSchedulerKeyMissing(t, scheduler, NewTaskKey(device.ID, domain.VolatilityClassStatic))
 }
 
+func TestSchedulerScheduleBootstrapEnqueuesImmediateBootstrapTask(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	scheduler.tasks = make(chan PollTask, 3)
+	scheduler.running.Store(true)
+	now := time.Unix(1_700_000_222, 0).UTC()
+	device := domain.Device{
+		ID:                     uuid.MustParse("44000000-0000-0000-0000-000000000010"),
+		Hostname:               "bootstrap-edge",
+		IP:                     "10.0.0.10",
+		Managed:                true,
+		DeviceType:             domain.DeviceTypeRouter,
+		PollClass:              domain.PollClassCore,
+		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+	}
+
+	if !scheduler.ScheduleBootstrap(device, now) {
+		t.Fatal("ScheduleBootstrap returned false")
+	}
+	scheduler.handleReduePerformanceTask(<-scheduler.redueRequests)
+
+	key := NewBootstrapTaskKey(device.ID)
+	item, ok := scheduler.items[key]
+	if !ok {
+		t.Fatalf("bootstrap task key %v was not scheduled", key)
+	}
+	if item.task.Kind != polling.TaskKindBootstrap {
+		t.Fatalf("task kind = %s, want bootstrap", item.task.Kind)
+	}
+	if item.task.Lane != polling.LaneBootstrap {
+		t.Fatalf("task lane = %s, want bootstrap", item.task.Lane)
+	}
+	if item.task.VolatilityClass != domain.VolatilityClassStatic {
+		t.Fatalf("volatility = %s, want static", item.task.VolatilityClass)
+	}
+
+	scheduler.dispatchReady(context.Background(), now)
+	select {
+	case task := <-scheduler.tasks:
+		if task.Key != key {
+			t.Fatalf("dispatched key = %v, want %v", task.Key, key)
+		}
+		if task.DueAt != now {
+			t.Fatalf("dispatched dueAt = %s, want %s", task.DueAt, now)
+		}
+	default:
+		t.Fatal("expected bootstrap task to dispatch immediately")
+	}
+}
+
 func TestSchedulerReduePerformanceTask_IgnoresUnmanagedDevice(t *testing.T) {
 	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
 

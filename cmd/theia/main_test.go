@@ -378,4 +378,21 @@ func TestWirePollRescheduler_AttachesSchedulerToDeviceService(t *testing.T) {
 	if attachedScheduler != sched {
 		t.Fatalf("attached scheduler = %p, want %p", attachedScheduler, sched)
 	}
+
+	bootstrapField := reflect.ValueOf(deviceService).Elem().FieldByName("bootstrapScheduler")
+	if !bootstrapField.IsValid() {
+		t.Fatal("bootstrapScheduler field missing on DeviceService")
+	}
+	if bootstrapField.IsNil() {
+		t.Fatal("bootstrapScheduler field is nil after wirePollRescheduler")
+	}
+
+	attachedBootstrap := reflect.NewAt(bootstrapField.Type(), unsafe.Pointer(bootstrapField.UnsafeAddr())).Elem().Interface()
+	bootstrapScheduler, ok := attachedBootstrap.(*scheduler.Scheduler)
+	if !ok {
+		t.Fatalf("bootstrapScheduler concrete type = %T, want *scheduler.Scheduler", attachedBootstrap)
+	}
+	if bootstrapScheduler != sched {
+		t.Fatalf("attached bootstrap scheduler = %p, want %p", bootstrapScheduler, sched)
+	}
 }
