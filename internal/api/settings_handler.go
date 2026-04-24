@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,37 +25,67 @@ func NewSettingsHandler(repo domain.SettingsRepository) *SettingsHandler {
 
 // validSettingKeys is the allowlist of permitted setting keys. Unknown keys are rejected.
 var validSettingKeys = map[string]bool{
-	domain.SettingPrometheusURL:                true,
-	domain.SettingGrafanaURL:                   true,
-	domain.SettingPollingInterval:              true,
-	domain.SettingSNMPWorkerPoolSize:           true,
-	domain.SettingSNMPWorkerPoolPerformance:    true,
-	domain.SettingSNMPWorkerPoolOperational:    true,
-	domain.SettingSNMPWorkerPoolStatic:         true,
-	domain.SettingSNMPTimeout:                  true,
-	domain.SettingSNMPRetries:                  true,
-	domain.SettingTimezone:                     true,
-	domain.SettingTopologyDiscoveryDefaultMode: true,
-	domain.SettingInstanceBackupIntervalHours:  true,
-	domain.SettingInstanceBackupRetentionCount: true,
-	domain.SettingDeviceBackupIntervalHours:    true,
-	domain.SettingDeviceBackupRetentionCount:   true,
-	domain.SettingBridgeSecret:                 true,
-	domain.SettingBridgePort:                   true,
+	domain.SettingPrometheusURL:                 true,
+	domain.SettingGrafanaURL:                    true,
+	domain.SettingPollingInterval:               true,
+	domain.SettingSNMPWorkerPoolSize:            true,
+	domain.SettingSNMPWorkerPoolPerformance:     true,
+	domain.SettingSNMPWorkerPoolOperational:     true,
+	domain.SettingSNMPWorkerPoolStatic:          true,
+	domain.SettingSNMPTimeout:                   true,
+	domain.SettingSNMPRetries:                   true,
+	domain.SettingPollingEssentialWorkers:       true,
+	domain.SettingPollingMaxWorkersPerSite:      true,
+	domain.SettingPollingMaxWorkersPerSubnet:    true,
+	domain.SettingPollingMaxWorkersPerDevice:    true,
+	domain.SettingPollingMaxInflightPerProfile:  true,
+	domain.SettingPollingEssentialTimeoutMillis: true,
+	domain.SettingPollingEssentialRetries:       true,
+	domain.SettingPollingWebSocketCoalesceMS:    true,
+	domain.SettingPollingPersistenceBatchMS:     true,
+	domain.SettingPollingCapacitySafetyMargin:   true,
+	domain.SettingPollingForceOverCapacity:      true,
+	domain.SettingTimezone:                      true,
+	domain.SettingTopologyDiscoveryDefaultMode:  true,
+	domain.SettingInstanceBackupIntervalHours:   true,
+	domain.SettingInstanceBackupRetentionCount:  true,
+	domain.SettingDeviceBackupIntervalHours:     true,
+	domain.SettingDeviceBackupRetentionCount:    true,
+	domain.SettingBridgeSecret:                  true,
+	domain.SettingBridgePort:                    true,
 }
 
 // numericSettings lists keys that must parse as valid integers.
 var numericSettings = map[string]bool{
-	domain.SettingPollingInterval:              true,
-	domain.SettingSNMPWorkerPoolSize:           true,
-	domain.SettingSNMPWorkerPoolPerformance:    true,
-	domain.SettingSNMPWorkerPoolOperational:    true,
-	domain.SettingSNMPWorkerPoolStatic:         true,
-	domain.SettingSNMPTimeout:                  true,
-	domain.SettingSNMPRetries:                  true,
-	domain.SettingInstanceBackupRetentionCount: true,
-	domain.SettingDeviceBackupRetentionCount:   true,
-	domain.SettingBridgePort:                   true,
+	domain.SettingPollingInterval:               true,
+	domain.SettingSNMPWorkerPoolSize:            true,
+	domain.SettingSNMPWorkerPoolPerformance:     true,
+	domain.SettingSNMPWorkerPoolOperational:     true,
+	domain.SettingSNMPWorkerPoolStatic:          true,
+	domain.SettingSNMPTimeout:                   true,
+	domain.SettingSNMPRetries:                   true,
+	domain.SettingPollingEssentialWorkers:       true,
+	domain.SettingPollingMaxWorkersPerSite:      true,
+	domain.SettingPollingMaxWorkersPerSubnet:    true,
+	domain.SettingPollingMaxWorkersPerDevice:    true,
+	domain.SettingPollingMaxInflightPerProfile:  true,
+	domain.SettingPollingEssentialTimeoutMillis: true,
+	domain.SettingPollingEssentialRetries:       true,
+	domain.SettingPollingWebSocketCoalesceMS:    true,
+	domain.SettingPollingPersistenceBatchMS:     true,
+	domain.SettingInstanceBackupRetentionCount:  true,
+	domain.SettingDeviceBackupRetentionCount:    true,
+	domain.SettingBridgePort:                    true,
+}
+
+// floatSettings lists keys that must parse as finite floats.
+var floatSettings = map[string]bool{
+	domain.SettingPollingCapacitySafetyMargin: true,
+}
+
+// boolSettings lists keys that must parse as valid booleans.
+var boolSettings = map[string]bool{
+	domain.SettingPollingForceOverCapacity: true,
 }
 
 // urlSettings lists keys that must be valid http/https URLs (or empty to clear).
@@ -81,6 +112,17 @@ func validateSetting(key, value string) error {
 	if numericSettings[key] {
 		if _, err := strconv.Atoi(value); err != nil {
 			return fmt.Errorf("%s must be a valid integer", key)
+		}
+	}
+	if floatSettings[key] {
+		n, err := strconv.ParseFloat(value, 64)
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			return fmt.Errorf("%s must be a valid float", key)
+		}
+	}
+	if boolSettings[key] {
+		if _, err := strconv.ParseBool(value); err != nil {
+			return fmt.Errorf("%s must be a valid boolean", key)
 		}
 	}
 	if urlSettings[key] && value != "" {
