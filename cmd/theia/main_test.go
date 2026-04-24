@@ -269,7 +269,7 @@ func TestMainSNMPRuntimeHelpersRemainConstructibleAfterPipelineCutover(t *testin
 		}
 	})
 
-	t.Run("parses settings overrides", func(t *testing.T) {
+	t.Run("preserves explicit caller timeout and retries over legacy settings", func(t *testing.T) {
 		var (
 			gotTimeout time.Duration
 			gotRetries int
@@ -294,7 +294,47 @@ func TestMainSNMPRuntimeHelpersRemainConstructibleAfterPipelineCutover(t *testin
 			V2c: &domain.SNMPv2cCredentials{
 				Community: "public",
 			},
-		}, 12*time.Second, 4)
+		}, 800*time.Millisecond, 0)
+		if err != nil {
+			t.Fatalf("factory() error = %v", err)
+		}
+		if client == nil {
+			t.Fatal("factory() returned nil client")
+		}
+		if gotTimeout != 800*time.Millisecond {
+			t.Fatalf("timeout = %v, want explicit caller timeout 800ms", gotTimeout)
+		}
+		if gotRetries != 0 {
+			t.Fatalf("retries = %d, want explicit caller retries 0", gotRetries)
+		}
+	})
+
+	t.Run("parses settings overrides when caller inputs are invalid", func(t *testing.T) {
+		var (
+			gotTimeout time.Duration
+			gotRetries int
+		)
+
+		original := newCollectorSNMPClient
+		newCollectorSNMPClient = func(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+			gotTimeout = timeout
+			gotRetries = retries
+			return fakeCollectorSNMPClient{}, nil
+		}
+		t.Cleanup(func() { newCollectorSNMPClient = original })
+
+		factory := newCollectorSNMPClientFunc(stubSettingsRepo{
+			values: map[string]string{
+				domain.SettingSNMPTimeout: "9",
+				domain.SettingSNMPRetries: "3",
+			},
+		})
+		client, err := factory("10.0.0.2", domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c: &domain.SNMPv2cCredentials{
+				Community: "public",
+			},
+		}, 0, -1)
 		if err != nil {
 			t.Fatalf("factory() error = %v", err)
 		}

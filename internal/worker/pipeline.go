@@ -12,6 +12,7 @@ import (
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/pollingbudget"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
@@ -44,6 +45,7 @@ type pipelineScheduler interface {
 	Tasks() <-chan scheduler.PollTask
 	Complete(scheduler.Completion)
 	Status() string
+	PollingHealth() polling.HealthSnapshot
 }
 
 var ErrAlreadyStarted = errors.New("pipeline orchestrator: already started")
@@ -63,6 +65,7 @@ type PipelineOrchestrator struct {
 	stateStore        *state.Store
 	cache             *cache.DeviceLinkCache
 	hub               *ws.Hub
+	essential         *collector.EssentialCollector
 	performance       *collector.PerformanceCollector
 	operational       *collector.OperationalCollector
 	staticCollector   *collector.StaticCollector
@@ -90,6 +93,7 @@ func NewPipelineOrchestrator(
 	stateStore *state.Store,
 	cache *cache.DeviceLinkCache,
 	hub *ws.Hub,
+	essential *collector.EssentialCollector,
 	performance *collector.PerformanceCollector,
 	operational *collector.OperationalCollector,
 	staticCollector *collector.StaticCollector,
@@ -107,6 +111,7 @@ func NewPipelineOrchestrator(
 		stateStore:              stateStore,
 		cache:                   cache,
 		hub:                     hub,
+		essential:               essential,
 		performance:             performance,
 		operational:             operational,
 		staticCollector:         staticCollector,
@@ -246,6 +251,13 @@ func (p *PipelineOrchestrator) Status() string {
 		return "running"
 	}
 	return "stopped"
+}
+
+func (p *PipelineOrchestrator) PollingHealth() polling.HealthSnapshot {
+	if p.scheduler == nil {
+		return polling.HealthSnapshot{}
+	}
+	return p.scheduler.PollingHealth()
 }
 
 func (p *PipelineOrchestrator) workerCount() int {

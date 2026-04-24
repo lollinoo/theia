@@ -297,6 +297,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	sched := scheduler.NewScheduler(deviceLinkCache, settingsRepo)
 	wirePollRescheduler(deviceService, sched)
 	snmpClientFactory := newCollectorSNMPClientFunc(settingsRepo)
+	essentialCollector := collector.NewEssentialCollector(vendorRegistry, snmpClientFactory)
 	performanceCollector := collector.NewPerformanceCollector(vendorRegistry, snmpClientFactory)
 	operationalCollector := collector.NewOperationalCollector(vendorRegistry, snmpClientFactory)
 	staticCollector := collector.NewStaticCollector(vendorRegistry, snmpClientFactory)
@@ -309,6 +310,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		stateStore,
 		deviceLinkCache,
 		hub,
+		essentialCollector,
 		performanceCollector,
 		operationalCollector,
 		staticCollector,
