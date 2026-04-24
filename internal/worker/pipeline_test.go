@@ -19,6 +19,7 @@ import (
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -75,6 +76,10 @@ func (s *pipelineTestScheduler) Status() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.status
+}
+
+func (s *pipelineTestScheduler) PollingHealth() polling.HealthSnapshot {
+	return polling.HealthSnapshot{}
 }
 
 type fakeTopologyService struct {
@@ -296,6 +301,47 @@ func newStaticTestCollector(t *testing.T) *collector.StaticCollector {
 	})
 }
 
+func TestPipelineRunsEssentialTaskWithEssentialTimeoutProfile(t *testing.T) {
+	device := domain.Device{
+		ID:        uuid.New(),
+		Hostname:  "edge-essential",
+		IP:        "10.0.0.1",
+		Managed:   true,
+		PollClass: domain.PollClassCore,
+	}
+	stateStore := state.NewStore()
+	var gotTimeout time.Duration
+	gotRetries := -1
+	settingsRepo := newMockWorkerSettingsRepo()
+	_ = settingsRepo.Set(domain.SettingPollingEssentialTimeoutMillis, "800")
+	_ = settingsRepo.Set(domain.SettingPollingEssentialRetries, "0")
+	pipeline := NewPipelineOrchestrator(nil, stateStore, nil, nil, nil, nil, nil, nil, nil, nil, settingsRepo, nil, nil, nil)
+	pipeline.essential = collector.NewEssentialCollector(buildEmptyVendorRegistry(), func(_ string, _ domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+		gotTimeout = timeout
+		gotRetries = retries
+		return &fakeSNMPClient{}, nil
+	})
+
+	task := scheduler.PollTask{
+		Key:              scheduler.NewEssentialTaskKey(device.ID),
+		Kind:             polling.TaskKindEssential,
+		Lane:             polling.LaneEssential,
+		Device:           device,
+		ExpectedInterval: 10 * time.Second,
+	}
+
+	pipeline.runTask(context.Background(), task)
+	if gotTimeout != 800*time.Millisecond {
+		t.Fatalf("essential timeout = %v, want 800ms", gotTimeout)
+	}
+	if gotRetries != 0 {
+		t.Fatalf("essential retries = %d, want 0", gotRetries)
+	}
+	if _, ok := stateStore.GetDevice(device.ID); !ok {
+		t.Fatalf("expected essential task to update state")
+	}
+}
+
 func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t *testing.T) {
 	deviceID := uuid.New()
 	linkID := uuid.New()
@@ -338,6 +384,7 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 			TargetIfName:   "ether9",
 		}}),
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -431,6 +478,7 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 		store,
 		nil,
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -489,7 +537,7 @@ func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRe
 		t.Fatalf("Set setting failed: %v", err)
 	}
 
-	pipeline := NewPipelineOrchestrator(nil, nil, nil, nil, nil, nil, nil, nil, nil, settingsRepo, nil, nil, nil)
+	pipeline := NewPipelineOrchestrator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, settingsRepo, nil, nil, nil)
 
 	tests := []struct {
 		name   string
@@ -538,7 +586,7 @@ func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRe
 }
 
 func TestPipelineOrchestratorRunTask_DelegatesToWiredTaskRunner(t *testing.T) {
-	pipeline := NewPipelineOrchestrator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	pipeline := NewPipelineOrchestrator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if pipeline.taskRunner == nil {
 		t.Fatal("expected NewPipelineOrchestrator to wire taskRunner")
 	}
@@ -594,6 +642,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		state.NewStore(),
 		cache,
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -664,6 +713,7 @@ func TestPipelineOrchestratorWorkerCount_UsesVolatilityBudgets(t *testing.T) {
 		state.NewStore(),
 		nil,
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -687,6 +737,7 @@ func TestPipelineOrchestratorStatusReflectsLifecycle(t *testing.T) {
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -724,6 +775,7 @@ func TestPipelineOrchestratorStartReturnsErrAlreadyStarted(t *testing.T) {
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -755,6 +807,7 @@ func TestPipelineOrchestratorStopIsIdempotent(t *testing.T) {
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -804,6 +857,7 @@ func TestPipelineOrchestratorStartRollsBackStoreWhenSchedulerStartFails(t *testi
 		store,
 		newPipelineTestCache(nil, nil),
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -872,6 +926,7 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 		store,
 		newPipelineTestCache([]domain.Device{task.Device}, nil),
 		ws.NewHub(),
+		nil,
 		newPerformanceTestCollector(t),
 		operational,
 		newStaticTestCollector(t),
@@ -980,6 +1035,7 @@ func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *st
 		nil,
 		nil,
 		nil,
+		nil,
 		collector.NewPrometheusCollector(&fakePrometheusClient{}),
 		&fakeTopologyService{},
 		newMockWorkerSettingsRepo(),
@@ -1077,6 +1133,7 @@ func newDetailSubscriptionTestPipeline(t *testing.T, hub *ws.Hub) *PipelineOrche
 		state.NewStore(),
 		nil,
 		hub,
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),
@@ -1437,10 +1494,10 @@ func TestMergeSnapshotPayload_RefreshesCompatibilityViewsAfterDelta(t *testing.T
 		},
 		LinkMetrics: map[string][]ws.LinkRuntimeDTO{
 			deviceID: {{
-				LinkID:         linkID,
-				DeviceID:       deviceID,
-				IfName:         "ether1",
-				MetricsStatus:  "missing",
+				LinkID:          linkID,
+				DeviceID:        deviceID,
+				IfName:          "ether1",
+				MetricsStatus:   "missing",
 				LastCollectedAt: nil,
 			}},
 		},
@@ -1641,6 +1698,7 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 		store,
 		newPipelineTestCache([]domain.Device{device}, []domain.Link{link}),
 		hub,
+		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
 		newStaticTestCollector(t),

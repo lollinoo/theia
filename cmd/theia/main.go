@@ -96,24 +96,25 @@ func main() {
 
 func newCollectorSNMPClientFunc(settingsRepo domain.SettingsRepository) collector.NewSNMPClientFunc {
 	return func(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
-		if timeout <= 0 {
-			timeout = 10 * time.Second
-		}
-		if retries < 0 {
-			retries = 2
-		}
-
-		if settingsRepo != nil {
+		if settingsRepo != nil && timeout <= 0 {
 			if val, err := settingsRepo.Get(domain.SettingSNMPTimeout); err == nil {
 				if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
 					timeout = time.Duration(secs) * time.Second
 				}
 			}
+		}
+		if settingsRepo != nil && retries < 0 {
 			if val, err := settingsRepo.Get(domain.SettingSNMPRetries); err == nil {
 				if parsed, err := strconv.Atoi(val); err == nil && parsed >= 0 {
 					retries = parsed
 				}
 			}
+		}
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+		if retries < 0 {
+			retries = 2
 		}
 
 		return newCollectorSNMPClient(target, creds, timeout, retries)

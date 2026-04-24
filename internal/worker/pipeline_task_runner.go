@@ -10,6 +10,7 @@ import (
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -53,6 +54,25 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			})
 		}
 	}()
+
+	if task.Kind == polling.TaskKindEssential {
+		if p.essential == nil || p.stateStore == nil {
+			return
+		}
+
+		profile := r.timeoutProfile(polling.LaneEssential)
+		result := p.essential.Poll(ctx, task.Device, profile.Timeout, profile.Retries)
+		finishedAt = completionTime(result.CollectedAt)
+		observability.Default().IncPollResult(domain.VolatilityClassPerformance, result.Err == nil)
+
+		update := result.ToStoreUpdate(task.ExpectedInterval, task.DeadlineMissed)
+		if task.DeadlineMissed && update.Essential != nil {
+			update.Essential.Overloaded = p.PollingHealth().EssentialOverloaded
+		}
+		p.stateStore.Update(update)
+		r.publishSubscribedDetailDelta(task.Device)
+		return
+	}
 
 	if task.Device.DeviceType == domain.DeviceTypeVirtual {
 		finishedAt = r.runVirtualTask(ctx, task)
@@ -299,6 +319,14 @@ func (r *pipelineTaskRunner) snmpRetries() int {
 	}
 
 	return retries
+}
+
+func (r *pipelineTaskRunner) timeoutProfile(lane polling.Lane) polling.TimeoutProfile {
+	policy, _ := polling.PolicyFromSettings(r.pipeline.settingsRepo, 0, 300*time.Millisecond, 0)
+	if profile, ok := policy.Timeouts[lane]; ok {
+		return profile
+	}
+	return polling.TimeoutProfile{Timeout: r.snmpTimeout(), Retries: r.snmpRetries()}
 }
 
 func (r *pipelineTaskRunner) topologyDiscoveryMode(device domain.Device) domain.TopologyDiscoveryMode {
