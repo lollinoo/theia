@@ -4,8 +4,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 )
+
+func TestTaskKeysSeparateEssentialAndBackground(t *testing.T) {
+	deviceID := uuid.New()
+
+	essential := NewEssentialTaskKey(deviceID)
+	background := NewBackgroundTaskKey(deviceID, domain.VolatilityClassPerformance)
+
+	if essential == background {
+		t.Fatalf("essential key equals background key: %#v", essential)
+	}
+	if essential.Kind != polling.TaskKindEssential {
+		t.Fatalf("essential kind = %q, want essential", essential.Kind)
+	}
+	if background.Kind != polling.TaskKindBackground {
+		t.Fatalf("background kind = %q, want background", background.Kind)
+	}
+}
 
 func TestEffectiveInterval_PerformanceUsesOverride(t *testing.T) {
 	override := 45

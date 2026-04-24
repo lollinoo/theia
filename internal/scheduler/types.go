@@ -6,21 +6,29 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 )
 
 type TaskKey struct {
 	DeviceID        uuid.UUID
+	Kind            polling.TaskKind
 	VolatilityClass domain.VolatilityClass
 }
 
 type PollTask struct {
 	Key              TaskKey
 	RunID            uint64
+	Kind             polling.TaskKind
+	Lane             polling.Lane
 	Device           domain.Device
 	PollClass        domain.PollClass
 	VolatilityClass  domain.VolatilityClass
 	ExpectedInterval time.Duration
 	DueAt            time.Time
+	DeadlineAt       time.Time
+	QueueLag         time.Duration
+	DeadlineMissed   bool
+	SkippedWindows   int
 }
 
 type Completion struct {
@@ -30,10 +38,33 @@ type Completion struct {
 }
 
 func NewTaskKey(deviceID uuid.UUID, volatility domain.VolatilityClass) TaskKey {
+	return NewBackgroundTaskKey(deviceID, volatility)
+}
+
+func NewEssentialTaskKey(deviceID uuid.UUID) TaskKey {
+	return TaskKey{
+		DeviceID: deviceID,
+		Kind:     polling.TaskKindEssential,
+	}
+}
+
+func NewBackgroundTaskKey(deviceID uuid.UUID, volatility domain.VolatilityClass) TaskKey {
 	return TaskKey{
 		DeviceID:        deviceID,
+		Kind:            polling.TaskKindBackground,
 		VolatilityClass: volatility,
 	}
+}
+
+func NewBootstrapTaskKey(deviceID uuid.UUID) TaskKey {
+	return TaskKey{
+		DeviceID: deviceID,
+		Kind:     polling.TaskKindBootstrap,
+	}
+}
+
+func EssentialInterval(device domain.Device) time.Duration {
+	return EffectiveInterval(device, domain.VolatilityClassPerformance)
 }
 
 func EffectiveInterval(device domain.Device, volatility domain.VolatilityClass) time.Duration {

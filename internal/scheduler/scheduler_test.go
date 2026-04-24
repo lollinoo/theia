@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 )
 
 func TestRefreshDevices_SeedsManagedDeviceAcrossAllThreeVolatilityClasses(t *testing.T) {
@@ -29,11 +30,22 @@ func TestRefreshDevices_SeedsManagedDeviceAcrossAllThreeVolatilityClasses(t *tes
 		t.Fatalf("refreshDevices() error = %v", err)
 	}
 
-	if got := len(scheduler.items); got != 3 {
-		t.Fatalf("len(items) = %d, want 3", got)
+	if got := len(scheduler.items); got != 4 {
+		t.Fatalf("len(items) = %d, want 4", got)
 	}
-	if got := scheduler.heap.Len(); got != 3 {
-		t.Fatalf("heap.Len() = %d, want 3", got)
+	if got := scheduler.heap.Len(); got != 4 {
+		t.Fatalf("heap.Len() = %d, want 4", got)
+	}
+
+	essential := mustSchedulerItem(t, scheduler, NewEssentialTaskKey(device.ID))
+	if essential.task.Kind != polling.TaskKindEssential {
+		t.Fatalf("essential kind = %q, want essential", essential.task.Kind)
+	}
+	if essential.task.Lane != polling.LaneEssential {
+		t.Fatalf("essential lane = %q, want essential", essential.task.Lane)
+	}
+	if essential.task.ExpectedInterval != 45*time.Second {
+		t.Fatalf("essential expected interval = %v, want 45s", essential.task.ExpectedInterval)
 	}
 
 	tests := []struct {
@@ -91,8 +103,8 @@ func TestRefreshDevices_SkipsUnmanagedDevices(t *testing.T) {
 		t.Fatalf("refreshDevices() error = %v", err)
 	}
 
-	if got := len(scheduler.items); got != 3 {
-		t.Fatalf("len(items) = %d, want only 3 managed tasks", got)
+	if got := len(scheduler.items); got != 4 {
+		t.Fatalf("len(items) = %d, want only 4 managed tasks", got)
 	}
 
 	for _, volatility := range allVolatilityClasses() {
@@ -100,6 +112,7 @@ func TestRefreshDevices_SkipsUnmanagedDevices(t *testing.T) {
 			t.Fatalf("unmanaged key %v unexpectedly scheduled", NewTaskKey(unmanaged.ID, volatility))
 		}
 	}
+	assertSchedulerKeyMissing(t, scheduler, NewEssentialTaskKey(unmanaged.ID))
 }
 
 func TestRefreshDevices_SkipsVirtualNoIPDevices(t *testing.T) {
@@ -125,8 +138,8 @@ func TestRefreshDevices_SkipsVirtualNoIPDevices(t *testing.T) {
 		t.Fatalf("refreshDevices() error = %v", err)
 	}
 
-	if got := len(scheduler.items); got != 3 {
-		t.Fatalf("len(items) = %d, want only 3 physical tasks", got)
+	if got := len(scheduler.items); got != 4 {
+		t.Fatalf("len(items) = %d, want only 4 physical tasks", got)
 	}
 
 	for _, volatility := range allVolatilityClasses() {
@@ -134,6 +147,7 @@ func TestRefreshDevices_SkipsVirtualNoIPDevices(t *testing.T) {
 			t.Fatalf("virtual no-IP key %v unexpectedly scheduled", NewTaskKey(virtualNoIP.ID, volatility))
 		}
 	}
+	assertSchedulerKeyMissing(t, scheduler, NewEssentialTaskKey(virtualNoIP.ID))
 }
 
 func TestRefreshDevices_SchedulesOperationalOnlyForVirtualIPDevices(t *testing.T) {
@@ -153,8 +167,14 @@ func TestRefreshDevices_SchedulesOperationalOnlyForVirtualIPDevices(t *testing.T
 		t.Fatalf("refreshDevices() error = %v", err)
 	}
 
-	if got := len(scheduler.items); got != 1 {
-		t.Fatalf("len(items) = %d, want only 1 operational task", got)
+	if got := len(scheduler.items); got != 2 {
+		t.Fatalf("len(items) = %d, want essential + operational task", got)
+	}
+
+	essentialKey := NewEssentialTaskKey(virtualWithIP.ID)
+	essentialItem := mustSchedulerItem(t, scheduler, essentialKey)
+	if essentialItem.task.Kind != polling.TaskKindEssential {
+		t.Fatalf("essential kind = %q, want essential", essentialItem.task.Kind)
 	}
 
 	operationalKey := NewTaskKey(virtualWithIP.ID, domain.VolatilityClassOperational)
@@ -222,11 +242,11 @@ func TestRefreshDevices_RemovesMissingOrUnmanagedKeys(t *testing.T) {
 		t.Fatalf("second refreshDevices() error = %v", err)
 	}
 
-	if got := len(scheduler.items); got != 4 {
-		t.Fatalf("len(items) = %d, want 4 (3 active + 1 disabled in-flight)", got)
+	if got := len(scheduler.items); got != 5 {
+		t.Fatalf("len(items) = %d, want 5 (4 active + 1 disabled in-flight)", got)
 	}
-	if got := scheduler.heap.Len(); got != 3 {
-		t.Fatalf("heap.Len() = %d, want 3 active items", got)
+	if got := scheduler.heap.Len(); got != 4 {
+		t.Fatalf("heap.Len() = %d, want 4 active items", got)
 	}
 
 	disabledItem := mustSchedulerItem(t, scheduler, inFlightKey)
@@ -239,9 +259,11 @@ func TestRefreshDevices_RemovesMissingOrUnmanagedKeys(t *testing.T) {
 
 	assertSchedulerKeyMissing(t, scheduler, NewTaskKey(deviceA.ID, domain.VolatilityClassOperational))
 	assertSchedulerKeyMissing(t, scheduler, NewTaskKey(deviceA.ID, domain.VolatilityClassStatic))
+	assertSchedulerKeyMissing(t, scheduler, NewEssentialTaskKey(deviceA.ID))
 	for _, volatility := range allVolatilityClasses() {
 		assertSchedulerKeyMissing(t, scheduler, NewTaskKey(deviceC.ID, volatility))
 	}
+	assertSchedulerKeyMissing(t, scheduler, NewEssentialTaskKey(deviceC.ID))
 }
 
 func TestRefreshDevices_PreservesExistingDueTimeButUpdatesDeviceSnapshot(t *testing.T) {
@@ -284,8 +306,8 @@ func TestRefreshDevices_PreservesExistingDueTimeButUpdatesDeviceSnapshot(t *test
 		t.Fatalf("second refreshDevices() error = %v", err)
 	}
 
-	if got := len(scheduler.items); got != 3 {
-		t.Fatalf("len(items) = %d, want 3 without duplicate keys", got)
+	if got := len(scheduler.items); got != 4 {
+		t.Fatalf("len(items) = %d, want 4 without duplicate keys", got)
 	}
 
 	updated := mustSchedulerItem(t, scheduler, key)
@@ -677,6 +699,48 @@ func TestSchedulerDispatchesPriorityOrder(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("dispatch order[%d] = %q, want %q (full order = %v)", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestSchedulerDoesNotQueueOverlappingEssentialTasks(t *testing.T) {
+	deviceID := uuid.New()
+	device := domain.Device{
+		ID:                   deviceID,
+		Hostname:             "edge-1",
+		IP:                   "10.0.0.1",
+		Managed:              true,
+		PollClass:            domain.PollClassCore,
+		PollIntervalOverride: schedulerIntPtr(10),
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{devices: []domain.Device{device}}, nil)
+	now := time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)
+	scheduler.now = func() time.Time { return now }
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("refreshDevices: %v", err)
+	}
+
+	key := NewEssentialTaskKey(deviceID)
+	item := scheduler.items[key]
+	item.dueAt = now.Add(-20 * time.Second)
+	heap.Fix(&scheduler.heap, item.index)
+	scheduler.moveDueTasksToReady(now)
+	scheduler.dispatchReady(context.Background(), now)
+
+	if !item.inFlight {
+		t.Fatal("expected essential item in flight")
+	}
+	now = now.Add(10 * time.Second)
+	item.dueAt = now.Add(-10 * time.Second)
+	scheduler.moveDueTasksToReady(now)
+
+	if got := readyCountForKind(scheduler, polling.TaskKindEssential); got != 0 {
+		t.Fatalf("ready essential count = %d, want 0 while in flight", got)
+	}
+	if !item.pending {
+		t.Fatal("expected pending skipped window marker")
+	}
+	if item.skippedWindows != 1 {
+		t.Fatalf("skippedWindows = %d, want 1", item.skippedWindows)
 	}
 }
 
@@ -1201,6 +1265,7 @@ func TestSchedulerResetRuntimeState_ClearsVolatileQueues(t *testing.T) {
 		},
 		dueAt:    time.Unix(1_700_000_000, 0).UTC(),
 		interval: time.Minute,
+		queued:   true,
 		index:    -1,
 	}
 
@@ -1250,6 +1315,7 @@ func TestSchedulerDispatchReady_UnblocksOnCanceledContext(t *testing.T) {
 		},
 		dueAt:    time.Unix(1_700_000_000, 0).UTC(),
 		interval: time.Minute,
+		queued:   true,
 		index:    -1,
 	}
 	scheduler.ready[VolatilityPriority(domain.VolatilityClassOperational)] = append(
@@ -1312,6 +1378,18 @@ func allVolatilityClasses() []domain.VolatilityClass {
 		domain.VolatilityClassOperational,
 		domain.VolatilityClassStatic,
 	}
+}
+
+func readyCountForKind(scheduler *Scheduler, kind polling.TaskKind) int {
+	count := 0
+	for _, queue := range scheduler.ready {
+		for _, item := range queue {
+			if normalizeTask(item.task).Kind == kind {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func schedulerIntPtr(value int) *int {

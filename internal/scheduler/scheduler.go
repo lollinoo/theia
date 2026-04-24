@@ -12,6 +12,7 @@ import (
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/pollingbudget"
 )
 
@@ -43,6 +44,7 @@ type Scheduler struct {
 	done            chan struct{}
 	inFlight        int
 	inFlightByClass map[domain.VolatilityClass]int
+	inFlightByKind  map[polling.TaskKind]int
 	runID           uint64
 }
 
@@ -64,6 +66,7 @@ func NewScheduler(source DeviceSource, settingsRepo domain.SettingsRepository) *
 		items:           make(map[TaskKey]*heapItem),
 		done:            make(chan struct{}),
 		inFlightByClass: make(map[domain.VolatilityClass]int),
+		inFlightByKind:  make(map[polling.TaskKind]int),
 	}
 	heap.Init(&scheduler.heap)
 	return scheduler
@@ -190,7 +193,7 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 		return err
 	}
 
-	seen := make(map[TaskKey]struct{}, len(devices)*3)
+	seen := make(map[TaskKey]struct{}, len(devices)*4)
 
 	for _, device := range devices {
 		if !device.Managed {
@@ -200,41 +203,24 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 			continue
 		}
 
-		for _, volatility := range scheduledVolatilityClassesForDevice(device) {
-			key := NewTaskKey(device.ID, volatility)
+		essentialKey := NewEssentialTaskKey(device.ID)
+		seen[essentialKey] = struct{}{}
+		s.upsertScheduledItem(
+			device,
+			essentialKey,
+			polling.TaskKindEssential,
+			polling.LaneEssential,
+			"",
+			EssentialInterval(device),
+			now,
+		)
+
+		for _, volatility := range scheduledBackgroundVolatilityClassesForDevice(device) {
+			key := NewBackgroundTaskKey(device.ID, volatility)
 			seen[key] = struct{}{}
 
 			interval := EffectiveInterval(device, volatility)
-			if item, ok := s.items[key]; ok {
-				item.disabled = false
-				item.task.Key = key
-				item.task.Device = device
-				item.task.PollClass = device.PollClass
-				item.task.VolatilityClass = volatility
-				item.task.ExpectedInterval = interval
-				item.interval = interval
-				item.task.DueAt = item.dueAt
-				continue
-			}
-
-			dueAt := now.Add(initialOffset(device.ID, interval))
-			task := PollTask{
-				Key:              key,
-				Device:           device,
-				PollClass:        device.PollClass,
-				VolatilityClass:  volatility,
-				ExpectedInterval: interval,
-				DueAt:            dueAt,
-			}
-			item := &heapItem{
-				task:     task,
-				dueAt:    dueAt,
-				interval: interval,
-				index:    -1,
-			}
-
-			heap.Push(&s.heap, item)
-			s.items[key] = item
+			s.upsertScheduledItem(device, key, polling.TaskKindBackground, polling.LaneBackground, volatility, interval, now)
 		}
 	}
 
@@ -257,9 +243,48 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 	return nil
 }
 
+func (s *Scheduler) upsertScheduledItem(device domain.Device, key TaskKey, kind polling.TaskKind, lane polling.Lane, volatility domain.VolatilityClass, interval time.Duration, now time.Time) {
+	if item, ok := s.items[key]; ok {
+		item.disabled = false
+		item.task.Key = key
+		item.task.Kind = kind
+		item.task.Lane = lane
+		item.task.Device = device
+		item.task.PollClass = device.PollClass
+		item.task.VolatilityClass = volatility
+		item.task.ExpectedInterval = interval
+		item.task.DueAt = item.dueAt
+		item.task.DeadlineAt = item.dueAt.Add(interval)
+		item.interval = interval
+		return
+	}
+
+	dueAt := now.Add(initialOffset(device.ID, interval))
+	task := PollTask{
+		Key:              key,
+		Kind:             kind,
+		Lane:             lane,
+		Device:           device,
+		PollClass:        device.PollClass,
+		VolatilityClass:  volatility,
+		ExpectedInterval: interval,
+		DueAt:            dueAt,
+		DeadlineAt:       dueAt.Add(interval),
+	}
+	item := &heapItem{
+		task:     task,
+		dueAt:    dueAt,
+		interval: interval,
+		index:    -1,
+	}
+
+	heap.Push(&s.heap, item)
+	s.items[key] = item
+}
+
 func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 	for {
-		if s.inFlight >= s.maxInFlight() {
+		if s.inFlight >= s.maxDispatchInFlight() {
 			s.recordBackpressure("global_limit")
 			return
 		}
@@ -274,19 +299,26 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 		}
 
 		task := item.task
+		task = normalizeTask(task)
 		task.RunID = s.runID
 		task.DueAt = item.dueAt
+		task.QueueLag = now.Sub(item.dueAt)
+		if task.QueueLag < 0 {
+			task.QueueLag = 0
+		}
+		task.DeadlineAt = item.dueAt.Add(item.interval)
+		task.DeadlineMissed = !task.DeadlineAt.IsZero() && now.After(task.DeadlineAt)
+		task.SkippedWindows = item.skippedWindows
 
 		select {
 		case s.tasks <- task:
 			item.inFlight = true
 			item.dispatchedAt = now
 			item.runID = s.runID
-			item.task.RunID = s.runID
-			item.task.DueAt = item.dueAt
+			item.task = task
 			s.inFlight++
-			s.inFlightByClass[item.task.VolatilityClass]++
-			observability.Default().IncSchedulerTaskDispatch(task.VolatilityClass)
+			s.incrementInFlight(task)
+			observability.Default().IncSchedulerTaskDispatch(taskVolatilityForMetrics(task))
 		case <-ctx.Done():
 			s.pushReadyFront(item)
 			return
@@ -295,6 +327,8 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 }
 
 func (s *Scheduler) moveDueTasksToReady(now time.Time) {
+	s.markElapsedInFlightWindows(now)
+
 	for s.heap.Len() > 0 {
 		next := s.heap[0]
 		if next.dueAt.After(now) {
@@ -307,10 +341,11 @@ func (s *Scheduler) moveDueTasksToReady(now time.Time) {
 			continue
 		}
 		if item.inFlight {
-			item.pending = true
+			s.markSkippedWindow(item)
 			continue
 		}
 		if item.queued {
+			s.markSkippedWindow(item)
 			continue
 		}
 
@@ -323,7 +358,8 @@ func (s *Scheduler) enqueueReady(item *heapItem) {
 		return
 	}
 
-	priority := VolatilityPriority(item.task.VolatilityClass)
+	item.task = normalizeTask(item.task)
+	priority := readyPriority(item.task)
 	if priority < 0 || priority >= len(s.ready) {
 		priority = len(s.ready) - 1
 	}
@@ -338,7 +374,8 @@ func (s *Scheduler) pushReadyFront(item *heapItem) {
 		return
 	}
 
-	priority := VolatilityPriority(item.task.VolatilityClass)
+	item.task = normalizeTask(item.task)
+	priority := readyPriority(item.task)
 	if priority < 0 || priority >= len(s.ready) {
 		priority = len(s.ready) - 1
 	}
@@ -365,29 +402,41 @@ func (s *Scheduler) popReady() *heapItem {
 
 func (s *Scheduler) popReadyEligible() *heapItem {
 	budgets := s.classBudgets()
-	blocked := make(map[domain.VolatilityClass]struct{})
+	blockedClasses := make(map[domain.VolatilityClass]struct{})
+	blockedKinds := make(map[polling.TaskKind]struct{})
 
 	for priority := range s.ready {
 		if len(s.ready[priority]) == 0 {
 			continue
 		}
 
-		item := s.ready[priority][0]
-		if s.inFlightByClass[item.task.VolatilityClass] >= budgets[item.task.VolatilityClass] {
-			blocked[item.task.VolatilityClass] = struct{}{}
-			continue
-		}
+		for index, item := range s.ready[priority] {
+			item.task = normalizeTask(item.task)
+			if !s.canDispatch(item.task, budgets) {
+				if item.task.Kind == polling.TaskKindEssential {
+					blockedKinds[item.task.Kind] = struct{}{}
+				} else {
+					blockedClasses[item.task.VolatilityClass] = struct{}{}
+				}
+				continue
+			}
 
-		s.ready[priority] = s.ready[priority][1:]
-		item.queued = false
-		return item
+			copy(s.ready[priority][index:], s.ready[priority][index+1:])
+			last := len(s.ready[priority]) - 1
+			s.ready[priority][last] = nil
+			s.ready[priority] = s.ready[priority][:last]
+			item.queued = false
+			return item
+		}
 	}
 
-	for volatility := range blocked {
+	for volatility := range blockedClasses {
 		observability.Default().IncSchedulerBackpressure(volatility, "class_limit")
 	}
-	if len(blocked) > 0 {
-		return s.popReady()
+	for kind := range blockedKinds {
+		if kind == polling.TaskKindEssential {
+			observability.Default().IncSchedulerBackpressure(domain.VolatilityClassPerformance, "essential_limit")
+		}
 	}
 	return nil
 }
@@ -431,11 +480,14 @@ func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskReque
 	item := &heapItem{
 		task: PollTask{
 			Key:              key,
+			Kind:             polling.TaskKindBackground,
+			Lane:             polling.LaneBackground,
 			Device:           device,
 			PollClass:        device.PollClass,
 			VolatilityClass:  domain.VolatilityClassPerformance,
 			ExpectedInterval: interval,
 			DueAt:            changedAt,
+			DeadlineAt:       changedAt.Add(interval),
 		},
 		dueAt:    changedAt,
 		interval: interval,
@@ -448,6 +500,8 @@ func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskReque
 func (s *Scheduler) applyPerformanceRedue(item *heapItem, device domain.Device, changedAt time.Time, interval time.Duration) {
 	item.disabled = false
 	item.task.Key = NewTaskKey(device.ID, domain.VolatilityClassPerformance)
+	item.task.Kind = polling.TaskKindBackground
+	item.task.Lane = polling.LaneBackground
 	item.task.Device = device
 	item.task.PollClass = device.PollClass
 	item.task.VolatilityClass = domain.VolatilityClassPerformance
@@ -455,6 +509,7 @@ func (s *Scheduler) applyPerformanceRedue(item *heapItem, device domain.Device, 
 	item.interval = interval
 	item.dueAt = changedAt
 	item.task.DueAt = changedAt
+	item.task.DeadlineAt = changedAt.Add(interval)
 }
 
 func (s *Scheduler) removeReadyItem(item *heapItem) {
@@ -495,9 +550,7 @@ func (s *Scheduler) handleCompletion(c Completion) {
 	}
 
 	s.inFlight--
-	if s.inFlightByClass[item.task.VolatilityClass] > 0 {
-		s.inFlightByClass[item.task.VolatilityClass]--
-	}
+	s.decrementInFlight(item.task)
 	item.inFlight = false
 	item.dispatchedAt = time.Time{}
 	item.runID = 0
@@ -511,6 +564,7 @@ func (s *Scheduler) handleCompletion(c Completion) {
 		item.pending = false
 		item.dueAt = finishedAt
 		item.task.DueAt = finishedAt
+		item.task.DeadlineAt = finishedAt.Add(item.interval)
 		s.enqueueReady(item)
 		return
 	}
@@ -518,11 +572,81 @@ func (s *Scheduler) handleCompletion(c Completion) {
 	next := jitteredNext(finishedAt, item.interval, s.rnd)
 	item.dueAt = next
 	item.task.DueAt = next
+	item.task.DeadlineAt = next.Add(item.interval)
+	item.skippedWindows = 0
 	heap.Push(&s.heap, item)
 }
 
 func (s *Scheduler) maxInFlight() int {
 	return pollingbudget.Sum(s.classBudgets())
+}
+
+func (s *Scheduler) maxDispatchInFlight() int {
+	limit := s.maxInFlight() + s.maxEssentialInFlight()
+	if bufferLimit := s.bufferLimit(); bufferLimit > 0 && limit > bufferLimit {
+		return bufferLimit
+	}
+	return limit
+}
+
+func (s *Scheduler) maxEssentialInFlight() int {
+	policy, _ := polling.PolicyFromSettings(s.settingsRepo, 0, 0, 0)
+	limit := policy.EssentialWorkers
+	if bufferLimit := s.bufferLimit(); bufferLimit > 0 && limit > bufferLimit {
+		return bufferLimit
+	}
+	if limit <= 0 {
+		return 1
+	}
+	return limit
+}
+
+func (s *Scheduler) canDispatch(task PollTask, budgets map[domain.VolatilityClass]int) bool {
+	if task.Kind == polling.TaskKindEssential {
+		return s.inFlightByKind[polling.TaskKindEssential] < s.maxEssentialInFlight()
+	}
+	return s.inFlightByClass[task.VolatilityClass] < budgets[task.VolatilityClass]
+}
+
+func (s *Scheduler) incrementInFlight(task PollTask) {
+	if task.Kind == polling.TaskKindEssential {
+		s.inFlightByKind[polling.TaskKindEssential]++
+		return
+	}
+	s.inFlightByClass[task.VolatilityClass]++
+}
+
+func (s *Scheduler) decrementInFlight(task PollTask) {
+	if task.Kind == polling.TaskKindEssential {
+		if s.inFlightByKind[polling.TaskKindEssential] > 0 {
+			s.inFlightByKind[polling.TaskKindEssential]--
+		}
+		return
+	}
+	if s.inFlightByClass[task.VolatilityClass] > 0 {
+		s.inFlightByClass[task.VolatilityClass]--
+	}
+}
+
+func (s *Scheduler) markElapsedInFlightWindows(now time.Time) {
+	for _, item := range s.items {
+		if item == nil || !item.inFlight || item.dueAt.After(now) {
+			continue
+		}
+		if item.interval > 0 && now.Before(item.dueAt.Add(item.interval)) {
+			continue
+		}
+		s.markSkippedWindow(item)
+	}
+}
+
+func (s *Scheduler) markSkippedWindow(item *heapItem) {
+	if item.pending {
+		return
+	}
+	item.pending = true
+	item.skippedWindows++
+	observability.Default().IncSchedulerBackpressure(taskVolatilityForMetrics(item.task), "skipped_window")
 }
 
 func (s *Scheduler) nextWakeDelay(now time.Time) time.Duration {
@@ -546,10 +670,61 @@ func scheduledVolatilityClasses() []domain.VolatilityClass {
 }
 
 func scheduledVolatilityClassesForDevice(device domain.Device) []domain.VolatilityClass {
+	return scheduledBackgroundVolatilityClassesForDevice(device)
+}
+
+func scheduledBackgroundVolatilityClassesForDevice(device domain.Device) []domain.VolatilityClass {
 	if device.DeviceType == domain.DeviceTypeVirtual {
 		return []domain.VolatilityClass{domain.VolatilityClassOperational}
 	}
 	return scheduledVolatilityClasses()
+}
+
+func normalizeTask(task PollTask) PollTask {
+	if task.Kind == "" {
+		task.Kind = task.Key.Kind
+	}
+	if task.Kind == "" {
+		task.Kind = polling.TaskKindBackground
+	}
+	if task.Lane == "" {
+		switch task.Kind {
+		case polling.TaskKindEssential:
+			task.Lane = polling.LaneEssential
+		case polling.TaskKindBootstrap:
+			task.Lane = polling.LaneBootstrap
+		default:
+			task.Lane = polling.LaneBackground
+		}
+	}
+	if task.Kind == polling.TaskKindBackground && task.VolatilityClass == "" {
+		task.VolatilityClass = task.Key.VolatilityClass
+	}
+	return task
+}
+
+func readyPriority(task PollTask) int {
+	task = normalizeTask(task)
+	if task.Kind == polling.TaskKindEssential {
+		return 0
+	}
+	return VolatilityPriority(task.VolatilityClass)
+}
+
+func heapPriority(task PollTask) int {
+	task = normalizeTask(task)
+	if task.Kind == polling.TaskKindEssential {
+		return -1
+	}
+	return VolatilityPriority(task.VolatilityClass)
+}
+
+func taskVolatilityForMetrics(task PollTask) domain.VolatilityClass {
+	task = normalizeTask(task)
+	if task.VolatilityClass != "" {
+		return task.VolatilityClass
+	}
+	return domain.VolatilityClassPerformance
 }
 
 func resetSchedulerTimer(timer *time.Timer, delay time.Duration) {
@@ -584,6 +759,7 @@ func (s *Scheduler) resetRuntimeState() {
 	s.ready = [3][]*heapItem{}
 	s.inFlight = 0
 	s.inFlightByClass = make(map[domain.VolatilityClass]int)
+	s.inFlightByKind = make(map[polling.TaskKind]int)
 
 	for {
 		select {
