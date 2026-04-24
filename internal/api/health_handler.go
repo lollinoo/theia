@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/version"
 )
 
 type statusProvider interface {
 	Status() string
+	PollingHealth() polling.HealthSnapshot
 }
 
 // HealthHandler provides the health check endpoint.
@@ -35,6 +37,10 @@ func (h *HealthHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if h.poller != nil {
 		pollerStatus = h.poller.Status()
 	}
+	pollingHealth := polling.HealthSnapshot{}
+	if h.poller != nil {
+		pollingHealth = h.poller.PollingHealth()
+	}
 
 	overallStatus := "ok"
 	if dbStatus != "ok" {
@@ -53,5 +59,6 @@ func (h *HealthHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 			"db_dialect":  string(sqlite.DetectDialect(h.db)),
 			"snmp_poller": pollerStatus,
 		},
+		"polling": pollingHealth,
 	})
 }

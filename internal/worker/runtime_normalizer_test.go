@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/ws"
 )
@@ -135,6 +136,45 @@ func TestNormalizeDeviceRuntimeDTO_AttachesAlertSummaryAndMetrics(t *testing.T) 
 	}
 	if dto.LastPolledAt == nil || *dto.LastPolledAt != lastPolledAt.Format(time.RFC3339) {
 		t.Fatalf("LastPolledAt = %#v, want %q", dto.LastPolledAt, lastPolledAt.Format(time.RFC3339))
+	}
+}
+
+func TestNormalizeDeviceRuntimeDTOIncludesPollingFields(t *testing.T) {
+	deviceID := uuid.New()
+	device := domain.Device{ID: deviceID, Hostname: "edge", Managed: true, Status: domain.DeviceStatusProbing}
+	deviceState := state.DeviceState{
+		PrimaryHealth:    polling.PrimaryHealthSNMPDegraded,
+		NetworkReachable: polling.TriStateTrue,
+		SNMPReachable:    polling.TriStateFalse,
+		FieldStates: map[string]polling.FieldState{
+			"uptime": polling.FieldStateError,
+			"cpu":    polling.FieldStateMissing,
+			"memory": polling.FieldStateMissing,
+		},
+		RuntimeFlags: map[polling.RuntimeFlag]bool{
+			polling.FlagDeadlineMissed:   true,
+			polling.FlagPartialTelemetry: true,
+		},
+		Reachability: state.ReachabilitySoftDown,
+		Health:       state.HealthStatusUnknown,
+	}
+
+	dto := normalizeDeviceRuntimeDTO(device, deviceState, nil, ws.PrometheusStatusPayload{})
+
+	if dto.PrimaryHealth != string(polling.PrimaryHealthSNMPDegraded) {
+		t.Fatalf("PrimaryHealth = %q, want snmp_degraded", dto.PrimaryHealth)
+	}
+	if len(dto.RuntimeFlags) != 2 {
+		t.Fatalf("RuntimeFlags = %#v, want two flags", dto.RuntimeFlags)
+	}
+	if dto.FieldStates["uptime"] != string(polling.FieldStateError) {
+		t.Fatalf("uptime field state = %q, want error", dto.FieldStates["uptime"])
+	}
+	if dto.NetworkReachable != string(polling.TriStateTrue) {
+		t.Fatalf("NetworkReachable = %q, want true", dto.NetworkReachable)
+	}
+	if dto.SNMPReachable != string(polling.TriStateFalse) {
+		t.Fatalf("SNMPReachable = %q, want false", dto.SNMPReachable)
 	}
 }
 

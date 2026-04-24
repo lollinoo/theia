@@ -7,12 +7,20 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/lollinoo/theia/internal/polling"
+
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type fakeStatusProvider struct{ status string }
+type fakeStatusProvider struct {
+	status string
+	health polling.HealthSnapshot
+}
 
 func (f fakeStatusProvider) Status() string { return f.status }
+func (f fakeStatusProvider) PollingHealth() polling.HealthSnapshot {
+	return f.health
+}
 
 func TestHealthHandlerHealth(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
@@ -21,7 +29,15 @@ func TestHealthHandlerHealth(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	poller := fakeStatusProvider{status: "running"}
+	poller := fakeStatusProvider{
+		status: "running",
+		health: polling.HealthSnapshot{
+			EssentialOverloaded:      true,
+			EssentialQueueLagSeconds: 1.5,
+			ActiveWorkers:            4,
+			ConfiguredWorkers:        4,
+		},
+	}
 	h := NewHealthHandler(db, poller)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -34,9 +50,10 @@ func TestHealthHandlerHealth(t *testing.T) {
 	}
 
 	var resp struct {
-		Status     string            `json:"status"`
-		Version    map[string]string `json:"version"`
-		Components map[string]string `json:"components"`
+		Status     string                 `json:"status"`
+		Version    map[string]string      `json:"version"`
+		Components map[string]string      `json:"components"`
+		Polling    polling.HealthSnapshot `json:"polling"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
@@ -56,6 +73,12 @@ func TestHealthHandlerHealth(t *testing.T) {
 	}
 	if resp.Components["snmp_poller"] != "running" {
 		t.Fatalf("expected snmp_poller=running, got %s", resp.Components["snmp_poller"])
+	}
+	if !resp.Polling.EssentialOverloaded {
+		t.Fatalf("expected polling essential_overloaded=true, got %#v", resp.Polling)
+	}
+	if resp.Polling.ConfiguredWorkers != 4 {
+		t.Fatalf("expected configured workers 4, got %d", resp.Polling.ConfiguredWorkers)
 	}
 }
 

@@ -1,12 +1,14 @@
 package worker
 
 import (
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/ws"
 )
@@ -26,15 +28,20 @@ func normalizeDeviceRuntimeDTO(device domain.Device, deviceState state.DeviceSta
 	deviceID := device.ID.String()
 	if domain.IsVirtualNoIPDevice(device) {
 		return ws.DeviceRuntimeDTO{
-			DeviceID:       deviceID,
+			DeviceID:          deviceID,
 			OperationalStatus: "unmonitored",
-			Reachability:   "unmonitored",
-			Health:         string(state.HealthStatusUnknown),
-			Freshness:      "unmonitored",
-			PrimaryReason:  normalizedReasonUnmonitored,
-			MetricsStatus:  "unmonitored",
-			MetricsReason:  normalizedReasonUnmonitored,
-			AlertStatus:    string(domain.AlertStatusNormal),
+			PrimaryHealth:     string(polling.PrimaryHealthProbing),
+			RuntimeFlags:      []string{},
+			FieldStates:       fieldStatesForDTO(nil),
+			NetworkReachable:  string(polling.TriStateUnknown),
+			SNMPReachable:     string(polling.TriStateUnknown),
+			Reachability:      "unmonitored",
+			Health:            string(state.HealthStatusUnknown),
+			Freshness:         "unmonitored",
+			PrimaryReason:     normalizedReasonUnmonitored,
+			MetricsStatus:     "unmonitored",
+			MetricsReason:     normalizedReasonUnmonitored,
+			AlertStatus:       string(domain.AlertStatusNormal),
 		}
 	}
 
@@ -53,6 +60,11 @@ func normalizeDeviceRuntimeDTO(device domain.Device, deviceState state.DeviceSta
 	return ws.DeviceRuntimeDTO{
 		DeviceID:                    deviceID,
 		OperationalStatus:           operationalStatus,
+		PrimaryHealth:               string(primaryHealthForDTO(deviceState)),
+		RuntimeFlags:                runtimeFlagsForDTO(deviceState.RuntimeFlags),
+		FieldStates:                 fieldStatesForDTO(deviceState.FieldStates),
+		NetworkReachable:            string(reachabilityEvidenceForDTO(deviceState.NetworkReachable)),
+		SNMPReachable:               string(reachabilityEvidenceForDTO(deviceState.SNMPReachable)),
 		Reachability:                reachability,
 		Health:                      health,
 		Freshness:                   freshness,
@@ -132,6 +144,55 @@ func normalizeDeviceReachability(deviceState state.DeviceState) string {
 	default:
 		return "unknown"
 	}
+}
+
+func primaryHealthForDTO(deviceState state.DeviceState) polling.PrimaryHealth {
+	if deviceState.PrimaryHealth != "" {
+		return deviceState.PrimaryHealth
+	}
+	if deviceState.Stale {
+		return polling.PrimaryHealthUpStale
+	}
+	switch deviceState.Reachability {
+	case state.ReachabilityUp:
+		return polling.PrimaryHealthUpFresh
+	case state.ReachabilitySoftDown:
+		return polling.PrimaryHealthSNMPDegraded
+	case state.ReachabilityHardDown:
+		return polling.PrimaryHealthUnreachable
+	default:
+		return polling.PrimaryHealthProbing
+	}
+}
+
+func runtimeFlagsForDTO(flags map[polling.RuntimeFlag]bool) []string {
+	out := make([]string, 0, len(flags))
+	for flag, enabled := range flags {
+		if enabled {
+			out = append(out, string(flag))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func fieldStatesForDTO(fields map[string]polling.FieldState) map[string]string {
+	out := map[string]string{
+		"uptime": string(polling.FieldStateMissing),
+		"cpu":    string(polling.FieldStateMissing),
+		"memory": string(polling.FieldStateMissing),
+	}
+	for key, value := range fields {
+		out[key] = string(value)
+	}
+	return out
+}
+
+func reachabilityEvidenceForDTO(value polling.TriState) polling.TriState {
+	if value == "" {
+		return polling.TriStateUnknown
+	}
+	return value
 }
 
 func normalizeDevicePrimaryReason(device domain.Device, deviceState state.DeviceState, promStatus ws.PrometheusStatusPayload, freshness string) string {

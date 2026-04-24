@@ -76,6 +76,11 @@ func TestCloneSnapshot_PreservesNormalizedRuntimeFields(t *testing.T) {
 				Reachability:      "up",
 				Health:            "warning",
 				Freshness:         "fresh",
+				PrimaryHealth:     "up_fresh",
+				RuntimeFlags:      []string{"partial_telemetry"},
+				FieldStates:       map[string]string{"uptime": "ok", "cpu": "missing", "memory": "ok"},
+				NetworkReachable:  "true",
+				SNMPReachable:     "true",
 				PrimaryReason:     "ok",
 				MetricsStatus:     "available",
 				MetricsReason:     "ok",
@@ -100,6 +105,15 @@ func TestCloneSnapshot_PreservesNormalizedRuntimeFields(t *testing.T) {
 	if got.Reachability != "up" {
 		t.Fatalf("Reachability = %q, want %q", got.Reachability, "up")
 	}
+	if got.PrimaryHealth != "up_fresh" {
+		t.Fatalf("PrimaryHealth = %q, want up_fresh", got.PrimaryHealth)
+	}
+	if len(got.RuntimeFlags) != 1 || got.RuntimeFlags[0] != "partial_telemetry" {
+		t.Fatalf("RuntimeFlags = %#v, want partial_telemetry", got.RuntimeFlags)
+	}
+	if got.FieldStates["cpu"] != "missing" {
+		t.Fatalf("FieldStates[cpu] = %q, want missing", got.FieldStates["cpu"])
+	}
 
 	if got.LastCollectedAt == nil || *got.LastCollectedAt != lastCollectedAt {
 		t.Fatalf("LastCollectedAt = %#v, want %q", got.LastCollectedAt, lastCollectedAt)
@@ -113,11 +127,16 @@ func TestNewSnapshotMessage_UsesNormalizedRuntimeContract(t *testing.T) {
 	message := NewSnapshotMessage(&SnapshotPayload{
 		Devices: map[string]DeviceRuntimeDTO{
 			deviceID: {
-				DeviceID:         deviceID,
+				DeviceID:          deviceID,
 				OperationalStatus: "up",
 				Reachability:      "up",
 				Health:            "warning",
 				Freshness:         "fresh",
+				PrimaryHealth:     "up_fresh",
+				RuntimeFlags:      []string{},
+				FieldStates:       map[string]string{"uptime": "ok", "cpu": "ok", "memory": "ok"},
+				NetworkReachable:  "true",
+				SNMPReachable:     "true",
 				PrimaryReason:     "ok",
 				MetricsStatus:     "available",
 				MetricsReason:     "ok",
@@ -178,6 +197,15 @@ func TestNewSnapshotMessage_UsesNormalizedRuntimeContract(t *testing.T) {
 	}
 	if got := metric["last_collected_at"]; got != lastCollectedAt {
 		t.Fatalf("last_collected_at = %#v, want %q", got, lastCollectedAt)
+	}
+	if got := metric["primary_health"]; got != "up_fresh" {
+		t.Fatalf("primary_health = %#v, want up_fresh", got)
+	}
+	if _, ok := metric["runtime_flags"].([]any); !ok {
+		t.Fatalf("runtime_flags = %#v, want array", metric["runtime_flags"])
+	}
+	if fields, ok := metric["field_states"].(map[string]any); !ok || fields["cpu"] != "ok" {
+		t.Fatalf("field_states = %#v, want cpu=ok", metric["field_states"])
 	}
 }
 
