@@ -9,6 +9,7 @@ import (
 
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/ws"
 )
 
@@ -21,6 +22,7 @@ type pipelineRuntimeState struct {
 	hostnames          map[uuid.UUID]string
 	hostnameObservedAt map[uuid.UUID]time.Time
 	alerts             map[uuid.UUID][]domain.AlertState
+	lastPollingHealth  polling.HealthSnapshot
 	prevCounters       map[uuid.UUID]map[string]collector.CounterBaseline
 	prevHashes         *sectionHashes
 	now                func() time.Time

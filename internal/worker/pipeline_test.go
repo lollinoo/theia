@@ -35,6 +35,7 @@ type pipelineTestScheduler struct {
 	startCalls  int
 	stopCalls   int
 	startErr    error
+	health      polling.HealthSnapshot
 }
 
 func newPipelineTestScheduler() *pipelineTestScheduler {
@@ -79,7 +80,9 @@ func (s *pipelineTestScheduler) Status() string {
 }
 
 func (s *pipelineTestScheduler) PollingHealth() polling.HealthSnapshot {
-	return polling.HealthSnapshot{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.health
 }
 
 type fakeTopologyService struct {

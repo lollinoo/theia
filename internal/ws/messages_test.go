@@ -2,9 +2,11 @@ package ws
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/polling"
 )
 
 func TestParseClientControlMessage_SubscribeDetail(t *testing.T) {
@@ -206,6 +208,35 @@ func TestNewSnapshotMessage_UsesNormalizedRuntimeContract(t *testing.T) {
 	}
 	if fields, ok := metric["field_states"].(map[string]any); !ok || fields["cpu"] != "ok" {
 		t.Fatalf("field_states = %#v, want cpu=ok", metric["field_states"])
+	}
+}
+
+func TestNewRuntimeDeltaMessageUsesStableEnvelope(t *testing.T) {
+	delta := EmptySnapshot()
+	delta.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+
+	msg := NewRuntimeDeltaMessage(delta, 7, 8)
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	if !strings.Contains(string(raw), `"type":"runtime_delta"`) {
+		t.Fatalf("message = %s, want runtime_delta", raw)
+	}
+	if !strings.Contains(string(raw), `"base_version":7`) || !strings.Contains(string(raw), `"version":8`) {
+		t.Fatalf("message = %s, want versions", raw)
+	}
+}
+
+func TestNewPollingHealthChangedMessage(t *testing.T) {
+	msg := NewPollingHealthChangedMessage(polling.HealthSnapshot{
+		EssentialOverloaded: true,
+		ConfiguredWorkers:   64,
+		ActiveWorkers:       64,
+	})
+	if msg.Type != MessageTypePollingHealthChanged {
+		t.Fatalf("Type = %q, want polling_health_changed", msg.Type)
 	}
 }
 
