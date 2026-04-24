@@ -5,7 +5,9 @@ import {
   type DeviceMetricsDTO,
   type LinkMetricsDTO,
   type OperationalStatus,
+  type PrimaryHealth,
   type PrometheusStatusPayload,
+  type RuntimeFlag,
   type RuntimeReason,
   type SnapshotPayload,
   alertStatusForDevice,
@@ -24,6 +26,8 @@ export interface RuntimeDeviceModel {
   metrics: DeviceMetricsDTO | null;
   alertStatus: AlertStatus;
   runtimeStatus: OperationalStatus | null;
+  primaryHealth: PrimaryHealth | null;
+  runtimeFlags: RuntimeFlag[];
 }
 
 export interface RuntimeLinkModel {
@@ -164,6 +168,8 @@ export function buildRuntimeState({
       ),
       alertStatus: runtimeMetrics?.alert_status ?? alertStatusForDevice(device.id, firingAlerts),
       runtimeStatus: runtimeMetrics?.operational_status ?? null,
+      primaryHealth: runtimeMetrics?.primary_health ?? null,
+      runtimeFlags: runtimeMetrics?.runtime_flags ?? [],
     });
   }
 
@@ -196,4 +202,23 @@ export function buildRuntimeState({
     linksById,
     interfaceMetricsByDeviceId,
   };
+}
+
+export function primaryHealthPriority(value: PrimaryHealth | null): number {
+  switch (value) {
+    case 'quarantined':
+      return 0;
+    case 'unreachable':
+      return 1;
+    case 'snmp_degraded':
+      return 2;
+    case 'up_stale':
+      return 3;
+    case 'up_fresh':
+      return 4;
+    case 'probing':
+      return 5;
+    default:
+      return 6;
+  }
 }

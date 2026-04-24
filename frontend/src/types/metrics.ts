@@ -1,10 +1,13 @@
 export type WSMessageType =
   | 'snapshot'
   | 'snapshot_delta'
+  | 'runtime_delta'
+  | 'topology_delta'
   | 'metrics'
   | 'link_metrics'
   | 'alert'
   | 'prometheus_status'
+  | 'polling_health_changed'
   | 'resync_required'
   | 'topology_changed';
 type APIRecord = Record<string, unknown>;
@@ -25,6 +28,22 @@ export type HealthStatus = 'healthy' | 'warning' | 'critical' | 'unknown';
 export type FreshnessStatus = 'fresh' | 'stale' | 'awaiting_poll' | 'unmonitored';
 export type MetricsStatus = 'available' | 'partial' | 'unavailable' | 'unmonitored';
 export type LinkMetricsStatus = 'available' | 'partial' | 'unavailable';
+export type PrimaryHealth =
+  | 'probing'
+  | 'up_fresh'
+  | 'up_stale'
+  | 'snmp_degraded'
+  | 'unreachable'
+  | 'quarantined';
+export type RuntimeFlag =
+  | 'deadline_missed'
+  | 'overloaded'
+  | 'background_pending'
+  | 'partial_telemetry'
+  | 'degraded_risk'
+  | 'persistence_lagging';
+export type FieldState = 'ok' | 'missing' | 'error' | 'stale';
+export type ReachabilityEvidence = 'true' | 'false' | 'unknown';
 
 const runtimeReasons = [
   'ok',
@@ -44,10 +63,33 @@ const freshnessStatuses = ['fresh', 'stale', 'awaiting_poll', 'unmonitored'] as 
 const metricsStatuses = ['available', 'partial', 'unavailable', 'unmonitored'] as const;
 const linkMetricsStatuses = ['available', 'partial', 'unavailable'] as const;
 const alertStatuses = ['normal', 'degraded', 'down'] as const;
+const primaryHealthStates = [
+  'probing',
+  'up_fresh',
+  'up_stale',
+  'snmp_degraded',
+  'unreachable',
+  'quarantined',
+] as const;
+const runtimeFlags = [
+  'deadline_missed',
+  'overloaded',
+  'background_pending',
+  'partial_telemetry',
+  'degraded_risk',
+  'persistence_lagging',
+] as const;
+const fieldStates = ['ok', 'missing', 'error', 'stale'] as const;
+const reachabilityEvidenceStates = ['true', 'false', 'unknown'] as const;
 
 export interface DeviceRuntimeDTO {
   device_id: string;
   operational_status: OperationalStatus;
+  primary_health: PrimaryHealth;
+  runtime_flags: RuntimeFlag[];
+  field_states: Record<'uptime' | 'cpu' | 'memory', FieldState>;
+  network_reachable: ReachabilityEvidence;
+  snmp_reachable: ReachabilityEvidence;
   reachability: ReachabilityStatus;
   health: HealthStatus;
   freshness: FreshnessStatus;
@@ -119,6 +161,15 @@ export interface SnapshotDeltaEnvelopePayload {
   delta: SnapshotPayload;
 }
 
+export interface PollingHealthPayload {
+  essential_overloaded: boolean;
+  degraded_risk: boolean;
+  essential_queue_lag_seconds: number;
+  deadline_miss_total: number;
+  active_workers: number;
+  configured_workers: number;
+}
+
 export interface WSMessage {
   type: WSMessageType;
   payload: unknown;
@@ -130,8 +181,13 @@ export interface SnapshotWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
 }
 
 export interface SnapshotDeltaWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
-  type: 'snapshot_delta';
+  type: 'snapshot_delta' | 'runtime_delta';
   payload: SnapshotDeltaEnvelopePayload;
+}
+
+export interface PollingHealthChangedWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'polling_health_changed';
+  payload: PollingHealthPayload;
 }
 
 export interface PrometheusStatusWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
@@ -217,6 +273,33 @@ function readRequiredEnum<T extends string>(
   throw new Error(`invalid required field: ${key}`);
 }
 
+function readRuntimeFlags(record: APIRecord, key: string): RuntimeFlag[] {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    throw new Error(`invalid required field: ${key}`);
+  }
+
+  return value.map((entry) => {
+    if (typeof entry === 'string' && runtimeFlags.includes(entry as RuntimeFlag)) {
+      return entry as RuntimeFlag;
+    }
+    throw new Error(`invalid required field: ${key}`);
+  });
+}
+
+function readFieldStates(record: APIRecord, key: string): Record<'uptime' | 'cpu' | 'memory', FieldState> {
+  const value = record[key];
+  if (!isRecord(value)) {
+    throw new Error(`invalid required field: ${key}`);
+  }
+
+  return {
+    uptime: readRequiredEnum(value, 'uptime', fieldStates),
+    cpu: readRequiredEnum(value, 'cpu', fieldStates),
+    memory: readRequiredEnum(value, 'memory', fieldStates),
+  };
+}
+
 function readRequiredCount(record: APIRecord, key: string): number {
   const value = record[key];
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
@@ -234,6 +317,15 @@ export function parseDeviceRuntime(value: unknown): DeviceRuntimeDTO {
     return {
       device_id: readRequiredString(value, 'device_id'),
       operational_status: readRequiredEnum(value, 'operational_status', operationalStatuses),
+      primary_health: readRequiredEnum(value, 'primary_health', primaryHealthStates),
+      runtime_flags: readRuntimeFlags(value, 'runtime_flags'),
+      field_states: readFieldStates(value, 'field_states'),
+      network_reachable: readRequiredEnum(
+        value,
+        'network_reachable',
+        reachabilityEvidenceStates,
+      ),
+      snmp_reachable: readRequiredEnum(value, 'snmp_reachable', reachabilityEvidenceStates),
       reachability: readRequiredEnum(value, 'reachability', reachabilityStatuses),
       health: readRequiredEnum(value, 'health', healthStatuses),
       freshness: readRequiredEnum(value, 'freshness', freshnessStatuses),
@@ -365,6 +457,7 @@ export function parseWSMessage(
   | SnapshotWSMessage
   | SnapshotDeltaWSMessage
   | PrometheusStatusWSMessage
+  | PollingHealthChangedWSMessage
   | ResyncRequiredWSMessage
   | AlertWSMessage {
   if (!isRecord(value)) {
@@ -375,10 +468,13 @@ export function parseWSMessage(
   if (
     type !== 'snapshot' &&
     type !== 'snapshot_delta' &&
+    type !== 'runtime_delta' &&
+    type !== 'topology_delta' &&
     type !== 'metrics' &&
     type !== 'link_metrics' &&
     type !== 'alert' &&
     type !== 'prometheus_status' &&
+    type !== 'polling_health_changed' &&
     type !== 'resync_required' &&
     type !== 'topology_changed'
   ) {
@@ -409,7 +505,7 @@ export function parseWSMessage(
     };
   }
 
-  if (type === 'snapshot_delta') {
+  if (type === 'snapshot_delta' || type === 'runtime_delta') {
     const payload = isRecord(value.payload) ? value.payload : {};
     if ('delta' in payload || 'version' in payload || 'base_version' in payload) {
       const baseVersion =
@@ -435,6 +531,26 @@ export function parseWSMessage(
         delta: parseSnapshotPayload(value.payload),
       },
     } as SnapshotDeltaWSMessage;
+  }
+
+  if (type === 'polling_health_changed') {
+    const payload = isRecord(value.payload) ? value.payload : {};
+    return {
+      type,
+      payload: {
+        essential_overloaded: payload.essential_overloaded === true,
+        degraded_risk: payload.degraded_risk === true,
+        essential_queue_lag_seconds:
+          typeof payload.essential_queue_lag_seconds === 'number'
+            ? payload.essential_queue_lag_seconds
+            : 0,
+        deadline_miss_total:
+          typeof payload.deadline_miss_total === 'number' ? payload.deadline_miss_total : 0,
+        active_workers: typeof payload.active_workers === 'number' ? payload.active_workers : 0,
+        configured_workers:
+          typeof payload.configured_workers === 'number' ? payload.configured_workers : 0,
+      },
+    } as PollingHealthChangedWSMessage;
   }
 
   if (type === 'prometheus_status') {
@@ -508,7 +624,7 @@ export function parseWSMessage(
     } as ResyncRequiredWSMessage;
   }
 
-  if (type === 'topology_changed') {
+  if (type === 'topology_changed' || type === 'topology_delta') {
     return {
       type,
       payload: null,

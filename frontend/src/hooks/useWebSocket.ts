@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   type AlertDTO,
   type AlertWSMessage,
+  type PollingHealthPayload,
   type PrometheusStatusPayload,
   type ResyncRequiredPayload,
   type ResyncRequiredWSMessage,
@@ -18,6 +19,7 @@ interface UseWebSocketResult {
   connected: boolean;
   reconnecting: boolean;
   prometheusStatus: PrometheusStatusPayload | null;
+  pollingHealth: PollingHealthPayload | null;
 }
 
 type DetailControlType = 'subscribe_detail' | 'unsubscribe_detail';
@@ -49,6 +51,7 @@ export function useWebSocket(
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [prometheusStatus, setPrometheusStatus] = useState<PrometheusStatusPayload | null>(null);
+  const [pollingHealth, setPollingHealth] = useState<PollingHealthPayload | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const detailDeviceIdRef = useRef<string | null>(detailDeviceId);
@@ -150,7 +153,7 @@ export function useWebSocket(
             snapshotVersionRef.current = payload.version;
             awaitingResyncRef.current = false;
             setSnapshot(payload.snapshot);
-          } else if (message.type === 'snapshot_delta') {
+          } else if (message.type === 'snapshot_delta' || message.type === 'runtime_delta') {
             const payload = (message as SnapshotDeltaWSMessage).payload;
             setSnapshot((prev) => {
               if (prev === null) {
@@ -176,6 +179,8 @@ export function useWebSocket(
             });
           } else if (message.type === 'prometheus_status') {
             setPrometheusStatus(message.payload as PrometheusStatusPayload);
+          } else if (message.type === 'polling_health_changed') {
+            setPollingHealth(message.payload as PollingHealthPayload);
           } else if (message.type === 'alert') {
             const payload = (message as AlertWSMessage).payload;
             if (
@@ -197,7 +202,7 @@ export function useWebSocket(
                 detail: (message as ResyncRequiredWSMessage).payload,
               }),
             );
-          } else if (message.type === 'topology_changed') {
+          } else if (message.type === 'topology_changed' || message.type === 'topology_delta') {
             window.dispatchEvent(new Event('topology-changed'));
           }
         } catch (error) {
@@ -267,5 +272,6 @@ export function useWebSocket(
     connected,
     reconnecting,
     prometheusStatus,
+    pollingHealth,
   };
 }

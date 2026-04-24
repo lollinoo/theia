@@ -39,6 +39,11 @@ function mockMetrics(overrides: Partial<DeviceMetricsDTO> = {}): DeviceMetricsDT
   return {
     device_id: 'dev-1',
     operational_status: 'up',
+    primary_health: 'up_fresh',
+    runtime_flags: [],
+    field_states: { uptime: 'missing', cpu: 'ok', memory: 'ok' },
+    network_reachable: 'true',
+    snmp_reachable: 'true',
     reachability: 'up',
     cpu_percent: 42,
     mem_percent: 68,

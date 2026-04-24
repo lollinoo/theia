@@ -6,6 +6,11 @@ function makeDeviceRuntime(overrides: Record<string, unknown> = {}) {
   return {
     device_id: 'dev-1',
     operational_status: 'up',
+    primary_health: 'up_fresh',
+    runtime_flags: [],
+    field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+    network_reachable: 'true',
+    snmp_reachable: 'true',
     reachability: 'up',
     health: 'healthy',
     freshness: 'fresh',
@@ -276,6 +281,85 @@ describe('useWebSocket', () => {
 
     expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(90);
     expect(result.current.snapshot!.devices['dev-2'].cpu_percent).toBe(75);
+  });
+
+  it('handles runtime_delta message by merging into existing snapshot', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 1,
+          snapshot: {
+            devices: {
+              'dev-1': makeDeviceRuntime({ cpu_percent: 50 }),
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 1,
+          version: 2,
+          delta: {
+            devices: {
+              'dev-1': makeDeviceRuntime({
+                cpu_percent: null,
+                mem_percent: 42,
+                primary_health: 'snmp_degraded',
+                runtime_flags: ['partial_telemetry'],
+              }),
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBeNull();
+    expect(result.current.snapshot!.devices['dev-1'].mem_percent).toBe(42);
+    expect(result.current.snapshot!.devices['dev-1'].runtime_flags).toEqual(['partial_telemetry']);
+  });
+
+  it('exposes polling health changes', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'polling_health_changed',
+        payload: {
+          essential_overloaded: true,
+          degraded_risk: false,
+          essential_queue_lag_seconds: 1.25,
+          deadline_miss_total: 3,
+          active_workers: 64,
+          configured_workers: 64,
+        },
+      });
+    });
+
+    expect(result.current.pollingHealth).toEqual({
+      essential_overloaded: true,
+      degraded_risk: false,
+      essential_queue_lag_seconds: 1.25,
+      deadline_miss_total: 3,
+      active_workers: 64,
+      configured_workers: 64,
+    });
   });
 
   it('handles snapshot_delta message with targeted links by merging into existing snapshot', () => {

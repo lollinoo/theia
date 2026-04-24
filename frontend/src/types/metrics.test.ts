@@ -15,6 +15,11 @@ function makeDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRun
   return {
     device_id: 'dev-1',
     operational_status: 'up',
+    primary_health: 'up_fresh',
+    runtime_flags: [],
+    field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+    network_reachable: 'true',
+    snmp_reachable: 'true',
     reachability: 'up',
     health: 'healthy',
     freshness: 'fresh',
@@ -80,6 +85,47 @@ describe('parseWSMessage', () => {
     expect(payload.base_version).toBe(10);
     expect(payload.version).toBe(11);
     expect(payload.delta.devices['dev-1'].cpu_percent).toBe(90);
+  });
+
+  it('parses runtime_delta with polling runtime fields', () => {
+    const message = parseWSMessage({
+      type: 'runtime_delta',
+      payload: {
+        base_version: 1,
+        version: 2,
+        delta: {
+          devices: {
+            'dev-1': {
+              device_id: 'dev-1',
+              operational_status: 'up',
+              primary_health: 'snmp_degraded',
+              runtime_flags: ['deadline_missed', 'partial_telemetry'],
+              field_states: { uptime: 'ok', cpu: 'missing', memory: 'ok' },
+              network_reachable: 'true',
+              snmp_reachable: 'false',
+              reachability: 'soft_down',
+              health: 'unknown',
+              freshness: 'fresh',
+              primary_reason: 'ok',
+              metrics_status: 'partial',
+              metrics_reason: 'ok',
+              alert_status: 'normal',
+              firing_alert_count: 0,
+              last_collected_at: null,
+              last_polled_at: '2026-04-24T10:00:00Z',
+              expected_poll_interval_seconds: 10,
+              cpu_percent: null,
+              mem_percent: 42,
+              temp_celsius: null,
+              uptime_secs: 123,
+            },
+          },
+          links: {},
+        },
+      },
+    });
+
+    expect(message.type).toBe('runtime_delta');
   });
 
   it('parses a sparse snapshot_delta payload without a versioned envelope', () => {
@@ -322,6 +368,11 @@ describe('parseDeviceRuntime', () => {
     const runtime = parseDeviceRuntime({
       device_id: 'dev-1',
       operational_status: 'probing',
+      primary_health: 'probing',
+      runtime_flags: ['background_pending'],
+      field_states: { uptime: 'missing', cpu: 'missing', memory: 'missing' },
+      network_reachable: 'unknown',
+      snmp_reachable: 'unknown',
       reachability: 'soft_down',
       health: 'warning',
       freshness: 'awaiting_poll',

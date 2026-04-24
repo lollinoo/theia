@@ -5,6 +5,7 @@ import {
   type AlertStatus,
   type DeviceMetricsDTO,
   type FreshnessStatus,
+  type RuntimeFlag,
   formatUptime,
   metricColor,
 } from '../types/metrics';
@@ -119,6 +120,17 @@ function sameSelfLinks(previous: Link[] | undefined, next: Link[] | undefined): 
   });
 }
 
+function sameRuntimeFlags(
+  previous: RuntimeFlag[] | undefined,
+  next: RuntimeFlag[] | undefined,
+): boolean {
+  if (previous?.length !== next?.length) {
+    return false;
+  }
+
+  return (previous ?? []).every((flag, index) => flag === next?.[index]);
+}
+
 function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): Readout['tone'] {
   switch (tier) {
     case 'Fresh':
@@ -155,6 +167,23 @@ function readoutToneClass(tone: Readout['tone']): string {
       return 'text-on-bg-secondary';
     default:
       return 'text-on-bg';
+  }
+}
+
+function runtimeBadgeLabel(flag: RuntimeFlag): string {
+  switch (flag) {
+    case 'deadline_missed':
+      return 'Late';
+    case 'overloaded':
+      return 'Overload';
+    case 'background_pending':
+      return 'Background';
+    case 'partial_telemetry':
+      return 'Partial';
+    case 'degraded_risk':
+      return 'Risk';
+    case 'persistence_lagging':
+      return 'Persisting';
   }
 }
 
@@ -258,6 +287,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     selected,
     highlighted: data.highlighted === true,
   });
+  const runtimeBadges = metrics?.runtime_flags.map(runtimeBadgeLabel) ?? [];
 
   if (data.isGhost) {
     return (
@@ -406,6 +436,19 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               ) : null}
             </div>
 
+            {runtimeBadges.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {runtimeBadges.map((badge) => (
+                  <span
+                    key={badge}
+                    className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-warning"
+                  >
+                    {badge}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+
             {renderModel.showOperationalReadouts ? (
               <div className="mt-3 grid grid-cols-3 gap-1.5">
                 {readouts.map((readout) => (
@@ -482,6 +525,19 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                   <div className="min-w-0 truncate text-on-bg-secondary">{pollingEvery}</div>
                 </div>
               ) : null}
+
+              {runtimeBadges.length > 0 ? (
+                <div className="mt-2 flex w-full flex-wrap justify-center gap-1.5">
+                  {runtimeBadges.map((badge) => (
+                    <span
+                      key={badge}
+                      className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-warning"
+                    >
+                      {badge}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
         )}
@@ -518,6 +574,8 @@ const DeviceCard = memo(
       pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
       pd.metrics?.uptime_secs === nd.metrics?.uptime_secs &&
       pd.metrics?.health === nd.metrics?.health &&
+      pd.metrics?.primary_health === nd.metrics?.primary_health &&
+      sameRuntimeFlags(pd.metrics?.runtime_flags, nd.metrics?.runtime_flags) &&
       pd.metrics?.freshness === nd.metrics?.freshness &&
       pd.metrics?.last_polled_at === nd.metrics?.last_polled_at &&
       pd.metrics?.expected_poll_interval_seconds === nd.metrics?.expected_poll_interval_seconds &&

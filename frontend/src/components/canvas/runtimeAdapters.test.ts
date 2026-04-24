@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
-import { buildRuntimeState } from './runtimeAdapters';
+import { buildRuntimeState, primaryHealthPriority } from './runtimeAdapters';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -50,6 +50,11 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
       'dev-1': {
         device_id: 'dev-1',
         operational_status: 'up',
+        primary_health: 'up_fresh',
+        runtime_flags: [],
+        field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+        network_reachable: 'true',
+        snmp_reachable: 'true',
         reachability: 'up',
         health: 'warning',
         freshness: 'fresh',
@@ -69,6 +74,11 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
       'dev-2': {
         device_id: 'dev-2',
         operational_status: 'up',
+        primary_health: 'up_fresh',
+        runtime_flags: [],
+        field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+        network_reachable: 'true',
+        snmp_reachable: 'true',
         reachability: 'up',
         health: 'healthy',
         freshness: 'fresh',
@@ -134,6 +144,11 @@ describe('buildRuntimeState', () => {
           'dev-3': {
             device_id: 'dev-3',
             operational_status: 'up',
+            primary_health: 'up_fresh',
+            runtime_flags: [],
+            field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+            network_reachable: 'true',
+            snmp_reachable: 'true',
             reachability: 'up',
             health: 'healthy',
             freshness: 'fresh',
@@ -174,6 +189,11 @@ describe('buildRuntimeState', () => {
     expect(runtime.devicesById.get('dev-1')?.metrics).toEqual({
       device_id: 'dev-1',
       operational_status: 'up',
+      primary_health: 'up_fresh',
+      runtime_flags: [],
+      field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+      network_reachable: 'true',
+      snmp_reachable: 'true',
       reachability: 'up',
       health: 'warning',
       freshness: 'fresh',
@@ -190,6 +210,41 @@ describe('buildRuntimeState', () => {
       temp_celsius: null,
       uptime_secs: 900,
     });
+  });
+
+  it('exposes primary health and runtime flags on device models', () => {
+    const runtime = buildRuntimeState({
+      devices: [mockDevice()],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            primary_health: 'snmp_degraded',
+            runtime_flags: ['deadline_missed', 'partial_telemetry'],
+          },
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    expect(runtime.devicesById.get('dev-1')).toMatchObject({
+      primaryHealth: 'snmp_degraded',
+      runtimeFlags: ['deadline_missed', 'partial_telemetry'],
+    });
+  });
+
+  it('orders primary health states from most urgent to least urgent', () => {
+    expect([
+      primaryHealthPriority('quarantined'),
+      primaryHealthPriority('unreachable'),
+      primaryHealthPriority('snmp_degraded'),
+      primaryHealthPriority('up_stale'),
+      primaryHealthPriority('up_fresh'),
+      primaryHealthPriority('probing'),
+      primaryHealthPriority(null),
+    ]).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
 
   it('keeps shared link telemetry on the link model without inventing endpoint copies', () => {
