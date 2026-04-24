@@ -24,6 +24,7 @@ import (
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
+	"github.com/lollinoo/theia/internal/polling"
 )
 
 // stalenessTickInterval is how often the background goroutine checks all
@@ -84,6 +85,11 @@ type DeviceState struct {
 	// Reachability dimension (computed from poll success/failure).
 	Reachability        ReachabilityStatus
 	ConsecutiveFailures int
+	PrimaryHealth       polling.PrimaryHealth
+	NetworkReachable    polling.TriState
+	SNMPReachable       polling.TriState
+	FieldStates         map[string]polling.FieldState
+	RuntimeFlags        map[polling.RuntimeFlag]bool
 
 	// Staleness dimension (computed by background tick per D-09).
 	Stale            bool
@@ -104,6 +110,18 @@ type StateUpdate struct {
 	PollSuccess      bool          // false => SNMP timeout/error
 	ExpectedInterval time.Duration // 2x this value is the stale threshold
 	Timestamp        time.Time     // when the poll completed
+	Essential        *EssentialUpdate
+}
+
+type EssentialUpdate struct {
+	PollStatus       polling.PollStatus
+	NetworkReachable polling.TriState
+	SNMPReachable    polling.TriState
+	Uptime           polling.FieldState
+	CPU              polling.FieldState
+	Memory           polling.FieldState
+	DeadlineMissed   bool
+	Overloaded       bool
 }
 
 // Store is the centralized in-memory state for all devices. Concurrency via
@@ -152,20 +170,24 @@ func (s *Store) Update(u StateUpdate) {
 	prev, existed := s.devices[u.DeviceID]
 	next := prev
 
-	switch u.VolatilityClass {
-	case domain.VolatilityClassPerformance:
-		applyFreshnessMetadata(&next, u)
-		applyPerformanceUpdate(&next, u)
-	case domain.VolatilityClassOperational:
-		applyOperationalUpdate(&next, prev, u)
-	case domain.VolatilityClassStatic:
-		applyStaticUpdate(&next, u)
-	default:
-		// Preserve the Phase 38 contract for pre-cutover callers that have not
-		// started stamping volatility yet. Phase 42 collectors set an explicit
-		// volatility class and bypass this path.
-		applyFreshnessMetadata(&next, u)
-		applyLegacyUpdate(&next, prev, existed, u)
+	if u.Essential != nil {
+		applyEssentialUpdate(&next, prev, u)
+	} else {
+		switch u.VolatilityClass {
+		case domain.VolatilityClassPerformance:
+			applyFreshnessMetadata(&next, u)
+			applyPerformanceUpdate(&next, u)
+		case domain.VolatilityClassOperational:
+			applyOperationalUpdate(&next, prev, u)
+		case domain.VolatilityClassStatic:
+			applyStaticUpdate(&next, u)
+		default:
+			// Preserve the Phase 38 contract for pre-cutover callers that have not
+			// started stamping volatility yet. Phase 42 collectors set an explicit
+			// volatility class and bypass this path.
+			applyFreshnessMetadata(&next, u)
+			applyLegacyUpdate(&next, prev, existed, u)
+		}
 	}
 
 	// If this is the first observation and the update did not establish
@@ -201,6 +223,8 @@ func (s *Store) Snapshot() map[uuid.UUID]DeviceState {
 		cp := ds
 		cp.Metrics = cloneMetrics(ds.Metrics)
 		cp.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
+		cp.FieldStates = cloneFieldStates(ds.FieldStates)
+		cp.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
 		out[id] = cp
 	}
 	return out
@@ -216,6 +240,8 @@ func (s *Store) GetDevice(id uuid.UUID) (DeviceState, bool) {
 	}
 	ds.Metrics = cloneMetrics(ds.Metrics)
 	ds.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
+	ds.FieldStates = cloneFieldStates(ds.FieldStates)
+	ds.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
 	return ds, true
 }
 
@@ -325,6 +351,12 @@ func (s *Store) markStale(now time.Time) {
 		threshold := ds.LastPolledAt.Add(2 * ds.ExpectedInterval)
 		if now.After(threshold) {
 			ds.Stale = true
+			if ds.PrimaryHealth == polling.PrimaryHealthUpFresh {
+				ds.PrimaryHealth = polling.PrimaryHealthUpStale
+			}
+			if ds.RuntimeFlags == nil {
+				ds.RuntimeFlags = map[polling.RuntimeFlag]bool{}
+			}
 			s.devices[id] = ds
 			newlyStale = append(newlyStale, id)
 		}
@@ -382,6 +414,52 @@ func applyFreshnessMetadata(next *DeviceState, update StateUpdate) {
 		next.ExpectedInterval = update.ExpectedInterval
 	}
 	next.Stale = false
+}
+
+func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdate) {
+	applyFreshnessMetadata(next, update)
+	essential := update.Essential
+	next.NetworkReachable = essential.NetworkReachable
+	next.SNMPReachable = essential.SNMPReachable
+	next.FieldStates = map[string]polling.FieldState{
+		"uptime": essential.Uptime,
+		"cpu":    essential.CPU,
+		"memory": essential.Memory,
+	}
+	next.RuntimeFlags = cloneRuntimeFlags(prev.RuntimeFlags)
+	setFlag(next.RuntimeFlags, polling.FlagDeadlineMissed, essential.DeadlineMissed)
+	setFlag(next.RuntimeFlags, polling.FlagOverloaded, essential.Overloaded)
+	setFlag(next.RuntimeFlags, polling.FlagPartialTelemetry, essential.PollStatus == polling.PollStatusPartial)
+
+	if update.Metrics != nil {
+		merged := cloneMetrics(next.Metrics)
+		merged.DeviceID = update.DeviceID
+		merged.CPUPercent = cloneFloat64Ptr(update.Metrics.CPUPercent)
+		merged.MemPercent = cloneFloat64Ptr(update.Metrics.MemPercent)
+		merged.UptimeSecs = cloneFloat64Ptr(update.Metrics.UptimeSecs)
+		merged.CollectedAt = update.Metrics.CollectedAt
+		next.Metrics = merged
+	}
+
+	switch {
+	case essential.SNMPReachable == polling.TriStateTrue:
+		next.Reachability = ReachabilityUp
+		next.ConsecutiveFailures = 0
+		next.PrimaryHealth = polling.PrimaryHealthUpFresh
+		evaluateHealth(next, &next.Metrics)
+	case essential.NetworkReachable == polling.TriStateTrue:
+		next.ConsecutiveFailures = prev.ConsecutiveFailures + 1
+		next.Reachability = ReachabilitySoftDown
+		next.PrimaryHealth = polling.PrimaryHealthSNMPDegraded
+	default:
+		next.ConsecutiveFailures = prev.ConsecutiveFailures + 1
+		if next.ConsecutiveFailures >= 3 {
+			next.Reachability = ReachabilityHardDown
+		} else {
+			next.Reachability = ReachabilitySoftDown
+		}
+		next.PrimaryHealth = polling.PrimaryHealthUnreachable
+	}
 }
 
 func applyPerformanceUpdate(next *DeviceState, update StateUpdate) {
@@ -494,6 +572,35 @@ func cloneLinkMetrics(in []domain.LinkMetrics) []domain.LinkMetrics {
 	return out
 }
 
+func cloneFieldStates(in map[string]polling.FieldState) map[string]polling.FieldState {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]polling.FieldState, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneRuntimeFlags(in map[polling.RuntimeFlag]bool) map[polling.RuntimeFlag]bool {
+	out := make(map[polling.RuntimeFlag]bool, len(in)+2)
+	for key, value := range in {
+		if value {
+			out[key] = true
+		}
+	}
+	return out
+}
+
+func setFlag(flags map[polling.RuntimeFlag]bool, flag polling.RuntimeFlag, enabled bool) {
+	if enabled {
+		flags[flag] = true
+		return
+	}
+	delete(flags, flag)
+}
+
 func linkMetricsEqual(a, b []domain.LinkMetrics) bool {
 	if len(a) != len(b) {
 		return false
@@ -563,6 +670,12 @@ func deviceStateEqual(a, b DeviceState) bool {
 	if a.Reachability != b.Reachability {
 		return false
 	}
+	if a.PrimaryHealth != b.PrimaryHealth || a.NetworkReachable != b.NetworkReachable || a.SNMPReachable != b.SNMPReachable {
+		return false
+	}
+	if !fieldStatesEqual(a.FieldStates, b.FieldStates) || !runtimeFlagsEqual(a.RuntimeFlags, b.RuntimeFlags) {
+		return false
+	}
 	if a.ConsecutiveFailures != b.ConsecutiveFailures {
 		return false
 	}
@@ -589,6 +702,30 @@ func deviceStateEqual(a, b DeviceState) bool {
 	}
 	if !linkMetricsEqual(a.LinkMetrics, b.LinkMetrics) {
 		return false
+	}
+	return true
+}
+
+func fieldStatesEqual(a, b map[string]polling.FieldState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, left := range a {
+		if b[key] != left {
+			return false
+		}
+	}
+	return true
+}
+
+func runtimeFlagsEqual(a, b map[polling.RuntimeFlag]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, left := range a {
+		if b[key] != left {
+			return false
+		}
 	}
 	return true
 }
