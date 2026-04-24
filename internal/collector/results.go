@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/state"
 )
@@ -31,6 +32,54 @@ type SNMPClient interface {
 
 // NewSNMPClientFunc constructs an SNMP client for a single device poll.
 type NewSNMPClientFunc func(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (SNMPClient, error)
+
+// GetDeviceID returns the device identifier for this essential result.
+func (r EssentialResult) GetDeviceID() uuid.UUID {
+	return r.DeviceID
+}
+
+// GetVolatilityClass returns the performance volatility class constant.
+func (r EssentialResult) GetVolatilityClass() domain.VolatilityClass {
+	return domain.VolatilityClassPerformance
+}
+
+// GetCollectedAt returns when the essential result was collected.
+func (r EssentialResult) GetCollectedAt() time.Time {
+	return r.CollectedAt
+}
+
+func (r EssentialResult) ToStoreUpdate(expectedInterval time.Duration, deadlineMissed bool) state.StateUpdate {
+	return state.StateUpdate{
+		DeviceID:         r.DeviceID,
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		Metrics:          r.toMetrics(),
+		PollSuccess:      r.SNMPReachable == polling.TriStateTrue,
+		ExpectedInterval: expectedInterval,
+		Timestamp:        r.CollectedAt,
+		Essential: &state.EssentialUpdate{
+			PollStatus:       r.PollStatus,
+			NetworkReachable: r.NetworkReachable,
+			SNMPReachable:    r.SNMPReachable,
+			Uptime:           r.Uptime,
+			CPU:              r.CPU,
+			Memory:           r.Memory,
+			DeadlineMissed:   deadlineMissed,
+		},
+	}
+}
+
+func (r EssentialResult) toMetrics() *domain.DeviceMetrics {
+	if r.SNMPReachable != polling.TriStateTrue {
+		return nil
+	}
+	return &domain.DeviceMetrics{
+		DeviceID:    r.DeviceID,
+		CPUPercent:  cloneFloat64Ptr(r.CPUPercent),
+		MemPercent:  cloneFloat64Ptr(r.MemPercent),
+		UptimeSecs:  cloneFloat64Ptr(r.UptimeSecs),
+		CollectedAt: r.CollectedAt,
+	}
+}
 
 // InterfaceCounterSnapshot stores the raw octet counters and discovered link
 // speed metadata for one interface at a single collection time.

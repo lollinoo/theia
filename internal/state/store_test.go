@@ -12,9 +12,173 @@ import (
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
+	"github.com/lollinoo/theia/internal/polling"
 )
 
 // --- Concurrent access tests (STATE-01, T-38-01) ---
+
+func TestStoreUpdateEssentialAppliesCoherentPartialResult(t *testing.T) {
+	store := NewStore()
+	deviceID := uuid.New()
+	collectedAt := time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)
+	cpu := 42.0
+	uptime := 120.0
+
+	store.Update(StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        collectedAt,
+		PollSuccess:      true,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &cpu,
+			UptimeSecs:  &uptime,
+			CollectedAt: collectedAt,
+		},
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusPartial,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateTrue,
+			Uptime:           polling.FieldStateOK,
+			CPU:              polling.FieldStateOK,
+			Memory:           polling.FieldStateMissing,
+			DeadlineMissed:   true,
+		},
+	})
+
+	got, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected device state")
+	}
+	if got.PrimaryHealth != polling.PrimaryHealthUpFresh {
+		t.Fatalf("PrimaryHealth = %q, want up_fresh", got.PrimaryHealth)
+	}
+	if !got.RuntimeFlags[polling.FlagPartialTelemetry] {
+		t.Fatalf("RuntimeFlags missing partial_telemetry: %#v", got.RuntimeFlags)
+	}
+	if !got.RuntimeFlags[polling.FlagDeadlineMissed] {
+		t.Fatalf("RuntimeFlags missing deadline_missed: %#v", got.RuntimeFlags)
+	}
+	if got.FieldStates["memory"] != polling.FieldStateMissing {
+		t.Fatalf("memory field state = %q, want missing", got.FieldStates["memory"])
+	}
+	if got.Metrics.TempCelsius != nil {
+		t.Fatalf("TempCelsius = %#v, want nil for essential update", got.Metrics.TempCelsius)
+	}
+}
+
+func TestStoreSnapshotClonesEssentialRuntimeMaps(t *testing.T) {
+	store := NewStore()
+	deviceID := uuid.New()
+	collectedAt := time.Date(2026, 4, 24, 10, 5, 0, 0, time.UTC)
+
+	store.Update(StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        collectedAt,
+		PollSuccess:      true,
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusPartial,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateTrue,
+			Uptime:           polling.FieldStateOK,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateMissing,
+			DeadlineMissed:   true,
+		},
+	})
+
+	snap := store.Snapshot()
+	got := snap[deviceID]
+	got.FieldStates["cpu"] = polling.FieldStateOK
+	delete(got.RuntimeFlags, polling.FlagDeadlineMissed)
+
+	again := store.Snapshot()[deviceID]
+	if again.FieldStates["cpu"] != polling.FieldStateError {
+		t.Fatalf("snapshot mutation corrupted FieldStates: cpu = %q, want error", again.FieldStates["cpu"])
+	}
+	if !again.RuntimeFlags[polling.FlagDeadlineMissed] {
+		t.Fatalf("snapshot mutation corrupted RuntimeFlags: %#v", again.RuntimeFlags)
+	}
+}
+
+func TestStoreGetDeviceClonesEssentialRuntimeMaps(t *testing.T) {
+	store := NewStore()
+	deviceID := uuid.New()
+	collectedAt := time.Date(2026, 4, 24, 10, 10, 0, 0, time.UTC)
+
+	store.Update(StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        collectedAt,
+		PollSuccess:      true,
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusPartial,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateTrue,
+			Uptime:           polling.FieldStateOK,
+			CPU:              polling.FieldStateOK,
+			Memory:           polling.FieldStateMissing,
+			DeadlineMissed:   true,
+		},
+	})
+
+	got, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected device state")
+	}
+	got.FieldStates["memory"] = polling.FieldStateOK
+	delete(got.RuntimeFlags, polling.FlagPartialTelemetry)
+
+	again, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected device state on second read")
+	}
+	if again.FieldStates["memory"] != polling.FieldStateMissing {
+		t.Fatalf("GetDevice mutation corrupted FieldStates: memory = %q, want missing", again.FieldStates["memory"])
+	}
+	if !again.RuntimeFlags[polling.FlagPartialTelemetry] {
+		t.Fatalf("GetDevice mutation corrupted RuntimeFlags: %#v", again.RuntimeFlags)
+	}
+}
+
+func TestStalenessTransitionsPrimaryHealthUpFreshToUpStale(t *testing.T) {
+	store := NewStore()
+	deviceID := uuid.New()
+	collectedAt := time.Date(2026, 4, 24, 10, 15, 0, 0, time.UTC)
+
+	store.Update(StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        collectedAt,
+		PollSuccess:      true,
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusComplete,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateTrue,
+			Uptime:           polling.FieldStateOK,
+			CPU:              polling.FieldStateOK,
+			Memory:           polling.FieldStateOK,
+		},
+	})
+	<-store.Changes()
+
+	store.markStale(collectedAt.Add(21 * time.Second))
+
+	got, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected device state")
+	}
+	if got.PrimaryHealth != polling.PrimaryHealthUpStale {
+		t.Fatalf("PrimaryHealth = %q, want up_stale", got.PrimaryHealth)
+	}
+	if !got.Stale {
+		t.Fatal("Stale = false, want true")
+	}
+	if got.RuntimeFlags == nil {
+		t.Fatal("RuntimeFlags = nil, want initialized map")
+	}
+}
 
 func TestStore_ConcurrentUpdateAndSnapshot(t *testing.T) {
 	s := NewStore()
