@@ -46,6 +46,10 @@ type Scheduler struct {
 	inFlightByClass map[domain.VolatilityClass]int
 	inFlightByKind  map[polling.TaskKind]int
 	runID           uint64
+
+	deadlineMissTotal uint64
+	lastWarnings      []polling.CapacityWarning
+	degradedRisk      bool
 }
 
 type reduePerformanceTaskRequest struct {
@@ -81,6 +85,22 @@ func (s *Scheduler) Status() string {
 		return "running"
 	}
 	return "stopped"
+}
+
+func (s *Scheduler) PollingHealth() polling.HealthSnapshot {
+	lag := s.queueLagForKind(polling.TaskKindEssential, s.now().UTC())
+	active := s.inFlightByKind[polling.TaskKindEssential]
+	configured := s.maxEssentialInFlight()
+
+	return polling.HealthSnapshot{
+		EssentialOverloaded:      lag > 0 && active >= configured,
+		DegradedRisk:             s.degradedRisk,
+		EssentialQueueLagSeconds: lag.Seconds(),
+		DeadlineMissTotal:        s.deadlineMissTotal,
+		ActiveWorkers:            active,
+		ConfiguredWorkers:        configured,
+		Warnings:                 append([]polling.CapacityWarning(nil), s.lastWarnings...),
+	}
 }
 
 func (s *Scheduler) Start(ctx context.Context) error {
@@ -240,6 +260,11 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 		delete(s.items, key)
 	}
 
+	shortest := shortestEssentialInterval(devices)
+	policy, warnings := polling.PolicyFromSettings(s.settingsRepo, managedDeviceCount(devices), 300*time.Millisecond, shortest)
+	s.lastWarnings = warnings
+	s.degradedRisk = policy.DegradedRisk
+
 	return nil
 }
 
@@ -318,6 +343,11 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 			item.task = task
 			s.inFlight++
 			s.incrementInFlight(task)
+			if task.Kind == polling.TaskKindEssential && task.DeadlineMissed {
+				s.deadlineMissTotal++
+				observability.Default().IncPollingDeadlineMiss()
+			}
+			observability.Default().SetPollingEssentialOverloaded(s.PollingHealth().EssentialOverloaded)
 			observability.Default().IncSchedulerTaskDispatch(taskVolatilityForMetrics(task))
 		case <-ctx.Done():
 			s.pushReadyFront(item)
@@ -680,6 +710,33 @@ func scheduledBackgroundVolatilityClassesForDevice(device domain.Device) []domai
 	return scheduledVolatilityClasses()
 }
 
+func managedDeviceCount(devices []domain.Device) int {
+	count := 0
+	for _, device := range devices {
+		if device.Managed && !domain.IsVirtualNoIPDevice(device) {
+			count++
+		}
+	}
+	return count
+}
+
+func shortestEssentialInterval(devices []domain.Device) time.Duration {
+	var shortest time.Duration
+	for _, device := range devices {
+		if !device.Managed || domain.IsVirtualNoIPDevice(device) {
+			continue
+		}
+		interval := EssentialInterval(device)
+		if interval <= 0 {
+			continue
+		}
+		if shortest == 0 || interval < shortest {
+			shortest = interval
+		}
+	}
+	return shortest
+}
+
 func normalizeTask(task PollTask) PollTask {
 	if task.Kind == "" {
 		task.Kind = task.Key.Kind
@@ -760,6 +817,9 @@ func (s *Scheduler) resetRuntimeState() {
 	s.inFlight = 0
 	s.inFlightByClass = make(map[domain.VolatilityClass]int)
 	s.inFlightByKind = make(map[polling.TaskKind]int)
+	s.deadlineMissTotal = 0
+	s.lastWarnings = nil
+	s.degradedRisk = false
 
 	for {
 		select {
@@ -791,6 +851,7 @@ drainRedueRequests:
 
 func (s *Scheduler) recordMetrics() {
 	observability.Default().SetSchedulerInFlight(s.inFlight)
+	observability.Default().SetPollingEssentialOverloaded(s.PollingHealth().EssentialOverloaded)
 	for _, volatility := range scheduledVolatilityClasses() {
 		priority := VolatilityPriority(volatility)
 		depth := 0
@@ -826,6 +887,39 @@ func (s *Scheduler) queueLag(volatility domain.VolatilityClass, now time.Time) t
 		return 0
 	}
 	return now.Sub(oldestDue)
+}
+
+func (s *Scheduler) queueLagForKind(kind polling.TaskKind, now time.Time) time.Duration {
+	var oldest *time.Time
+	consider := func(item *heapItem) {
+		if item == nil || normalizeTask(item.task).Kind != kind {
+			return
+		}
+		dueAt := item.dueAt
+		if oldest == nil || dueAt.Before(*oldest) {
+			oldest = &dueAt
+		}
+	}
+
+	for priority := range s.ready {
+		for _, item := range s.ready[priority] {
+			consider(item)
+		}
+	}
+	for _, item := range s.items {
+		if item == nil || !item.inFlight {
+			continue
+		}
+		if item.interval > 0 && now.Before(item.dueAt.Add(item.interval)) {
+			continue
+		}
+		consider(item)
+	}
+
+	if oldest == nil || oldest.After(now) {
+		return 0
+	}
+	return now.Sub(*oldest)
 }
 
 func (s *Scheduler) recordBackpressure(reason string) {

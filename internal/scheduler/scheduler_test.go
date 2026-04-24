@@ -744,6 +744,46 @@ func TestSchedulerDoesNotQueueOverlappingEssentialTasks(t *testing.T) {
 	}
 }
 
+func TestSchedulerHealthReportsEssentialOverload(t *testing.T) {
+	device := domain.Device{
+		ID:                   uuid.New(),
+		Hostname:             "edge-overload",
+		IP:                   "10.0.0.2",
+		Managed:              true,
+		PollClass:            domain.PollClassCore,
+		PollIntervalOverride: schedulerIntPtr(10),
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{devices: []domain.Device{device}}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers: "1",
+		},
+	})
+	now := time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)
+	scheduler.now = func() time.Time { return now }
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("refreshDevices: %v", err)
+	}
+	item := scheduler.items[NewEssentialTaskKey(device.ID)]
+	item.dueAt = now.Add(-30 * time.Second)
+	heap.Fix(&scheduler.heap, item.index)
+	scheduler.moveDueTasksToReady(now)
+	scheduler.dispatchReady(context.Background(), now)
+
+	health := scheduler.PollingHealth()
+	if !health.EssentialOverloaded {
+		t.Fatalf("EssentialOverloaded = false, want true")
+	}
+	if health.EssentialQueueLagSeconds <= 0 {
+		t.Fatalf("EssentialQueueLagSeconds = %f, want positive", health.EssentialQueueLagSeconds)
+	}
+	if health.ActiveWorkers != 1 {
+		t.Fatalf("ActiveWorkers = %d, want 1", health.ActiveWorkers)
+	}
+	if health.ConfiguredWorkers != 1 {
+		t.Fatalf("ConfiguredWorkers = %d, want 1", health.ConfiguredWorkers)
+	}
+}
+
 func TestSchedulerDispatchReady_RespectsPerClassBudgets(t *testing.T) {
 	scheduler := NewScheduler(
 		&fakeDeviceSource{},

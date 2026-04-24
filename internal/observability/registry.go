@@ -86,6 +86,8 @@ type Registry struct {
 	schedulerTaskDispatchTotal map[domain.VolatilityClass]uint64
 	schedulerBackpressureTotal map[schedulerBackpressureKey]uint64
 	schedulerTaskDuration      map[domain.VolatilityClass]*histogram
+	pollingEssentialOverloaded float64
+	pollingDeadlineMissTotal   uint64
 	pollResultsTotal           map[taskResultKey]uint64
 	discoveryNeighbors         map[deviceProtocolKey]float64
 	linkUpsertsTotal           map[linkUpsertKey]uint64
@@ -207,6 +209,16 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_scheduler_task_duration_seconds",
 		"Task completion latency by volatility class.",
 		sortedVolatilityHistogramRows(r.schedulerTaskDuration),
+	)
+	writeGaugeSingle(&b,
+		"theia_polling_essential_overloaded",
+		"Whether the essential lane is overloaded.",
+		r.pollingEssentialOverloaded,
+	)
+	writeCounterSingle(&b,
+		"theia_polling_deadline_miss_total",
+		"Total essential polling deadline misses.",
+		r.pollingDeadlineMissTotal,
 	)
 	writeCounterVec(&b,
 		"theia_poll_results_total",
@@ -332,6 +344,22 @@ func (r *Registry) ObserveSchedulerTaskDuration(volatility domain.VolatilityClas
 		r.schedulerTaskDuration[volatility] = h
 	}
 	h.observe(duration.Seconds())
+}
+
+func (r *Registry) SetPollingEssentialOverloaded(overloaded bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if overloaded {
+		r.pollingEssentialOverloaded = 1
+		return
+	}
+	r.pollingEssentialOverloaded = 0
+}
+
+func (r *Registry) IncPollingDeadlineMiss() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pollingDeadlineMissTotal++
 }
 
 func (r *Registry) IncPollResult(volatility domain.VolatilityClass, success bool) {
