@@ -43,6 +43,8 @@ function resolveRuntimeDevice(runtimeState: RuntimeState, device: Device): Runti
       metrics: null,
       alertStatus: 'normal',
       runtimeStatus: null,
+      primaryHealth: null,
+      runtimeFlags: [],
     }
   );
 }

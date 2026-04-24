@@ -35,6 +35,11 @@ function mockMetrics(overrides: Partial<DeviceMetricsDTO> = {}): DeviceMetricsDT
   return {
     device_id: 'dev-1',
     operational_status: 'up',
+    primary_health: 'up_fresh',
+    runtime_flags: [],
+    field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+    network_reachable: 'true',
+    snmp_reachable: 'true',
     reachability: 'up',
     cpu_percent: 42,
     mem_percent: 68,
@@ -186,6 +191,17 @@ describe('DeviceCard', () => {
     expect(screen.getByText('Polling every 5m')).toBeInTheDocument();
     expect(screen.getByText('UP')).toBeInTheDocument();
     expect(screen.getAllByText('--')).toHaveLength(3);
+  });
+
+  it('renders runtime state badges from polling flags', () => {
+    renderDeviceCard({
+      metrics: mockMetrics({
+        runtime_flags: ['deadline_missed', 'partial_telemetry'],
+      }),
+    });
+
+    expect(screen.getByText('Late')).toBeInTheDocument();
+    expect(screen.getByText('Partial')).toBeInTheDocument();
   });
 
   it('does not derive freshness text from a client timer', async () => {
