@@ -3,16 +3,17 @@ package scheduler
 import "time"
 
 type heapItem struct {
-	task         PollTask
-	dueAt        time.Time
-	dispatchedAt time.Time
-	runID        uint64
-	interval     time.Duration
-	queued       bool
-	inFlight     bool
-	pending      bool
-	disabled     bool
-	index        int
+	task           PollTask
+	dueAt          time.Time
+	dispatchedAt   time.Time
+	runID          uint64
+	interval       time.Duration
+	queued         bool
+	inFlight       bool
+	pending        bool
+	disabled       bool
+	skippedWindows int
+	index          int
 }
 
 type taskHeap []*heapItem
@@ -26,8 +27,8 @@ func (h taskHeap) Less(i, j int) bool {
 		return h[i].dueAt.Before(h[j].dueAt)
 	}
 
-	leftPriority := VolatilityPriority(h[i].task.VolatilityClass)
-	rightPriority := VolatilityPriority(h[j].task.VolatilityClass)
+	leftPriority := heapPriority(h[i].task)
+	rightPriority := heapPriority(h[j].task)
 	if leftPriority != rightPriority {
 		return leftPriority < rightPriority
 	}
