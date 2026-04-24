@@ -155,6 +155,120 @@ func TestSettingsHandler_NumericSetting_InvalidValue_400(t *testing.T) {
 	}
 }
 
+func TestSettingsHandler_PollingPolicyIntegerSetting_ValidValue_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"32"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPollingEssentialWorkers, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	got, _ := repo.Get(domain.SettingPollingEssentialWorkers)
+	if got != "32" {
+		t.Fatalf("expected polling_essential_workers=32, got %s", got)
+	}
+}
+
+func TestSettingsHandler_PollingPolicyIntegerSetting_InvalidValue_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"abc"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPollingEssentialWorkers, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "must be a valid integer") {
+		t.Errorf("expected error about invalid integer, got: %s", rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_PollingPolicyFloatSetting_ValidValue_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"1.75"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPollingCapacitySafetyMargin, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	got, _ := repo.Get(domain.SettingPollingCapacitySafetyMargin)
+	if got != "1.75" {
+		t.Fatalf("expected polling_capacity_safety_margin=1.75, got %s", got)
+	}
+}
+
+func TestSettingsHandler_PollingPolicyFloatSetting_InvalidValue_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"abc"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPollingCapacitySafetyMargin, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "must be a valid float") {
+		t.Errorf("expected error about invalid float, got: %s", rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_PollingPolicyBooleanSetting_ValidValue_200(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"true"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPollingForceOverCapacity, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	got, _ := repo.Get(domain.SettingPollingForceOverCapacity)
+	if got != "true" {
+		t.Fatalf("expected polling_force_over_capacity=true, got %s", got)
+	}
+}
+
+func TestSettingsHandler_PollingPolicyBooleanSetting_InvalidValue_400(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"sometimes"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPollingForceOverCapacity, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "must be a valid boolean") {
+		t.Errorf("expected error about invalid boolean, got: %s", rec.Body.String())
+	}
+}
+
 func TestSettingsHandler_URLSetting_InvalidScheme_400(t *testing.T) {
 	repo := newMockSettingsRepo()
 	h := NewSettingsHandler(repo)
