@@ -20,6 +20,8 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.IncSchedulerTaskDispatch(domain.VolatilityClassStatic)
 	registry.IncSchedulerBackpressure(domain.VolatilityClassStatic, "class_limit")
 	registry.ObserveSchedulerTaskDuration(domain.VolatilityClassStatic, 250*time.Millisecond)
+	registry.SetPollingEssentialOverloaded(true)
+	registry.IncPollingDeadlineMiss()
 	registry.IncPollResult(domain.VolatilityClassStatic, true)
 	registry.SetDiscoveryNeighborCounts(deviceID, map[domain.DiscoveryProtocol]int{
 		domain.DiscoveryProtocolLLDP: 2,
@@ -53,6 +55,8 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_scheduler_queue_lag_seconds{volatility_class="static"} 15`)
 	assertContainsMetric(t, body, `theia_scheduler_task_dispatch_total{volatility_class="static"} 1`)
 	assertContainsMetric(t, body, `theia_scheduler_backpressure_total{reason="class_limit",volatility_class="static"} 1`)
+	assertContainsMetric(t, body, `theia_polling_essential_overloaded 1`)
+	assertContainsMetric(t, body, `theia_polling_deadline_miss_total 1`)
 	assertContainsMetric(t, body, `theia_poll_results_total{outcome="success",volatility_class="static"} 1`)
 	assertContainsMetric(t, body, `theia_discovery_neighbors{device_id="`+deviceID.String()+`",protocol="lldp"} 2`)
 	assertContainsMetric(t, body, `theia_link_upserts_total{protocol="lldp",result="created"} 1`)
