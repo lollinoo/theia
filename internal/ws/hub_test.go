@@ -146,6 +146,21 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestHubOverviewDeltaUsesRuntimeDeltaEnvelope(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+
+	hub.BroadcastOverviewDelta(EmptySnapshot(), 1, 2, EmptySnapshot())
+
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), MessageTypeRuntimeDelta) {
+		t.Fatalf("expected overview delta to use runtime_delta, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), MessageTypeSnapshotDelta) {
+		t.Fatalf("expected overview delta not to use snapshot_delta, got %s", string(payload))
+	}
+}
+
 func TestHubEnqueue_RecordsClientBufferBackpressure(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {

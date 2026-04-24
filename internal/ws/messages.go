@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 )
 
 const (
@@ -15,6 +16,12 @@ const (
 	MessageTypeSnapshot = "snapshot"
 	// MessageTypeSnapshotDelta pushes only changed entries since the last broadcast.
 	MessageTypeSnapshotDelta = "snapshot_delta"
+	// MessageTypeRuntimeDelta pushes runtime-only changes using the modernized envelope.
+	MessageTypeRuntimeDelta = "runtime_delta"
+	// MessageTypeTopologyDelta pushes topology-only changes.
+	MessageTypeTopologyDelta = "topology_delta"
+	// MessageTypePollingHealthChanged notifies clients when polling health changes.
+	MessageTypePollingHealthChanged = "polling_health_changed"
 	// MessageTypeMetrics carries device metrics-only payloads.
 	MessageTypeMetrics = "metrics"
 	// MessageTypeLinkMetrics carries link metrics-only payloads.
@@ -66,6 +73,14 @@ type SnapshotDeltaMessagePayload struct {
 	Delta       *SnapshotPayload `json:"delta"`
 }
 
+type RuntimeDeltaMessagePayload struct {
+	BaseVersion uint64           `json:"base_version"`
+	Version     uint64           `json:"version"`
+	Delta       *SnapshotPayload `json:"delta"`
+}
+
+type PollingHealthChangedPayload = polling.HealthSnapshot
+
 // AlertMessagePayload is the versioned alert-only payload sent to clients.
 type AlertMessagePayload struct {
 	Version uint64     `json:"version"`
@@ -96,6 +111,24 @@ func NewSnapshotDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64
 			Version:     version,
 			Delta:       CloneSnapshot(delta),
 		},
+	}
+}
+
+func NewRuntimeDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64) Message {
+	return Message{
+		Type: MessageTypeRuntimeDelta,
+		Payload: RuntimeDeltaMessagePayload{
+			BaseVersion: baseVersion,
+			Version:     version,
+			Delta:       CloneSnapshot(delta),
+		},
+	}
+}
+
+func NewPollingHealthChangedMessage(snapshot polling.HealthSnapshot) Message {
+	return Message{
+		Type:    MessageTypePollingHealthChanged,
+		Payload: PollingHealthChangedPayload(snapshot),
 	}
 }
 

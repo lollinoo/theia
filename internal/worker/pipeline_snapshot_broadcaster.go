@@ -9,6 +9,7 @@ import (
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
+	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/ws"
 )
 
@@ -112,6 +113,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastLoop(ctx context.Context) {
 			if err := b.broadcastDirty(ctx, dirtyDevices, alertsDirty, topologyDirty, forceFull); err != nil {
 				log.Printf("pipeline: event-driven broadcast failed: %v", err)
 			}
+			b.broadcastPollingHealthIfChanged()
 			resetDirtyState()
 		}
 	}
@@ -262,6 +264,49 @@ func (b *pipelineSnapshotBroadcaster) broadcastAlertsIfDirty(alertsDirty bool) {
 		Type:    ws.MessageTypeAlert,
 		Payload: p.runtime.getAlerts(),
 	})
+}
+
+func (b *pipelineSnapshotBroadcaster) broadcastPollingHealthIfChanged() {
+	p := b.pipeline
+	if p == nil || p.runtime == nil || p.hub == nil {
+		return
+	}
+
+	health := p.PollingHealth()
+	p.runtime.mu.Lock()
+	changed := !pollingHealthEqual(health, p.runtime.lastPollingHealth)
+	if changed {
+		p.runtime.lastPollingHealth = clonePollingHealth(health)
+	}
+	p.runtime.mu.Unlock()
+
+	if changed {
+		p.hub.Broadcast(ws.NewPollingHealthChangedMessage(health))
+	}
+}
+
+func pollingHealthEqual(a, b polling.HealthSnapshot) bool {
+	if a.EssentialOverloaded != b.EssentialOverloaded ||
+		a.DegradedRisk != b.DegradedRisk ||
+		a.EssentialQueueLagSeconds != b.EssentialQueueLagSeconds ||
+		a.DeadlineMissTotal != b.DeadlineMissTotal ||
+		a.ActiveWorkers != b.ActiveWorkers ||
+		a.ConfiguredWorkers != b.ConfiguredWorkers ||
+		len(a.Warnings) != len(b.Warnings) {
+		return false
+	}
+
+	for i := range a.Warnings {
+		if a.Warnings[i] != b.Warnings[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func clonePollingHealth(health polling.HealthSnapshot) polling.HealthSnapshot {
+	health.Warnings = append([]polling.CapacityWarning(nil), health.Warnings...)
+	return health
 }
 
 func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshot(_ context.Context, reason string, topologyChanged bool) error {
