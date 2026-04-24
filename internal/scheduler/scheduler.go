@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -171,6 +172,30 @@ func (s *Scheduler) ReduePerformanceTask(device domain.Device, changedAt time.Ti
 	}
 }
 
+func (s *Scheduler) ScheduleBootstrap(device domain.Device, dueAt time.Time) bool {
+	if !s.running.Load() {
+		return false
+	}
+
+	if dueAt.IsZero() {
+		dueAt = s.now().UTC()
+	}
+	request := reduePerformanceTaskRequest{
+		device:    device,
+		changedAt: dueAt.UTC(),
+	}
+
+	select {
+	case s.redueRequests <- request:
+		return true
+	case <-s.done:
+		return false
+	default:
+		observability.Default().IncSchedulerBackpressure(domain.VolatilityClassStatic, "bootstrap_queue_full")
+		return false
+	}
+}
+
 func (s *Scheduler) run(ctx context.Context) {
 	defer close(s.done)
 	defer s.running.Store(false)
@@ -213,7 +238,7 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 		return err
 	}
 
-	seen := make(map[TaskKey]struct{}, len(devices)*4)
+	seen := make(map[TaskKey]struct{}, len(devices)*5)
 
 	for _, device := range devices {
 		if !device.Managed {
@@ -234,6 +259,16 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 			EssentialInterval(device),
 			now,
 		)
+
+		if shouldScheduleBootstrapTask(device) {
+			bootstrapKey := NewBootstrapTaskKey(device.ID)
+			seen[bootstrapKey] = struct{}{}
+			if item, ok := s.items[bootstrapKey]; ok {
+				s.applyBootstrapSchedule(item, device, item.dueAt, domain.StaticClassInterval)
+			} else {
+				s.scheduleBootstrapItem(device, now)
+			}
+		}
 
 		for _, volatility := range scheduledBackgroundVolatilityClassesForDevice(device) {
 			key := NewBackgroundTaskKey(device.ID, volatility)
@@ -487,6 +522,11 @@ func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskReque
 		changedAt = changedAt.UTC()
 	}
 
+	if shouldScheduleBootstrapTask(device) {
+		s.scheduleBootstrapItem(device, changedAt)
+		return
+	}
+
 	key := NewTaskKey(device.ID, domain.VolatilityClassPerformance)
 	interval := EffectiveInterval(device, domain.VolatilityClassPerformance)
 
@@ -525,6 +565,61 @@ func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskReque
 	}
 	s.items[key] = item
 	s.pushReadyFront(item)
+}
+
+func (s *Scheduler) scheduleBootstrapItem(device domain.Device, dueAt time.Time) {
+	key := NewBootstrapTaskKey(device.ID)
+	interval := domain.StaticClassInterval
+
+	if item, ok := s.items[key]; ok {
+		s.applyBootstrapSchedule(item, device, dueAt, interval)
+		switch {
+		case item.inFlight:
+			item.pending = true
+		case item.queued:
+			s.removeReadyItem(item)
+			s.pushReadyFront(item)
+		case item.index >= 0:
+			heap.Fix(&s.heap, item.index)
+		default:
+			s.pushReadyFront(item)
+		}
+		return
+	}
+
+	item := &heapItem{
+		task: PollTask{
+			Key:              key,
+			Kind:             polling.TaskKindBootstrap,
+			Lane:             polling.LaneBootstrap,
+			Device:           device,
+			PollClass:        device.PollClass,
+			VolatilityClass:  domain.VolatilityClassStatic,
+			ExpectedInterval: interval,
+			DueAt:            dueAt,
+			DeadlineAt:       dueAt.Add(interval),
+		},
+		dueAt:    dueAt,
+		interval: interval,
+		index:    -1,
+	}
+	s.items[key] = item
+	s.pushReadyFront(item)
+}
+
+func (s *Scheduler) applyBootstrapSchedule(item *heapItem, device domain.Device, dueAt time.Time, interval time.Duration) {
+	item.disabled = false
+	item.task.Key = NewBootstrapTaskKey(device.ID)
+	item.task.Kind = polling.TaskKindBootstrap
+	item.task.Lane = polling.LaneBootstrap
+	item.task.Device = device
+	item.task.PollClass = device.PollClass
+	item.task.VolatilityClass = domain.VolatilityClassStatic
+	item.task.ExpectedInterval = interval
+	item.interval = interval
+	item.dueAt = dueAt
+	item.task.DueAt = dueAt
+	item.task.DeadlineAt = dueAt.Add(interval)
 }
 
 func (s *Scheduler) applyPerformanceRedue(item *heapItem, device domain.Device, changedAt time.Time, interval time.Duration) {
@@ -782,6 +877,19 @@ func taskVolatilityForMetrics(task PollTask) domain.VolatilityClass {
 		return task.VolatilityClass
 	}
 	return domain.VolatilityClassPerformance
+}
+
+func shouldScheduleBootstrapTask(device domain.Device) bool {
+	if !device.Managed || device.DeviceType == domain.DeviceTypeVirtual {
+		return false
+	}
+	if strings.TrimSpace(device.IP) == "" {
+		return false
+	}
+	if device.MetricsSource == domain.MetricsSourcePrometheus || device.MetricsSource == domain.MetricsSourceNone {
+		return false
+	}
+	return domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState) == domain.TopologyBootstrapStatePending
 }
 
 func resetSchedulerTimer(timer *time.Timer, delay time.Duration) {

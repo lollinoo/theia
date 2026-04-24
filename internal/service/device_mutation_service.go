@@ -115,6 +115,16 @@ func (m *deviceMutationService) AddDevice(
 		return device, nil
 	}
 
+	if m.parent.bootstrapScheduler != nil &&
+		device.TopologyBootstrapState == domain.TopologyBootstrapStatePending &&
+		strings.TrimSpace(device.IP) != "" &&
+		device.MetricsSource != domain.MetricsSourcePrometheus &&
+		device.MetricsSource != domain.MetricsSourceNone &&
+		m.parent.bootstrapScheduler.ScheduleBootstrap(*device, m.now().UTC()) {
+		m.parent.populateEffectiveTopologyDiscoveryMode(device)
+		return device, nil
+	}
+
 	m.probeWg.Add(1)
 	go func() {
 		defer m.probeWg.Done()

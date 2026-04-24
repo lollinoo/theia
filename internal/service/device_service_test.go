@@ -313,6 +313,17 @@ func (f *fakePollRescheduler) ReduePerformanceTask(device domain.Device, changed
 	})
 }
 
+type recordingBootstrapScheduler struct {
+	devices []domain.Device
+	dueAt   []time.Time
+}
+
+func (r *recordingBootstrapScheduler) ScheduleBootstrap(device domain.Device, dueAt time.Time) bool {
+	r.devices = append(r.devices, device)
+	r.dueAt = append(r.dueAt, dueAt)
+	return true
+}
+
 type schedulerDeviceSource struct {
 	repo *mockDeviceRepo
 }
@@ -428,6 +439,41 @@ func TestAddDevice_BootstrapOnceStartsPendingAndEffectiveModeFollowsDefault(t *t
 	}
 	if device.TopologyDiscoveryMode != domain.TopologyDiscoveryModeInherit {
 		t.Fatalf("expected persisted topology mode inherit, got %s", device.TopologyDiscoveryMode)
+	}
+}
+
+func TestAddDeviceSchedulesBootstrapInsteadOfStartingDiscoveryGoroutine(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	scheduler := &recordingBootstrapScheduler{}
+	discoverCalled := false
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		discoverCalled = true
+		return &snmp.DiscoveryResult{SysName: "edge-bootstrap"}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil, WithBootstrapScheduler(scheduler))
+
+	device, err := svc.AddDevice(context.Background(), "10.0.0.10", "edge-bootstrap",
+		domain.DeviceTypeRouter,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourceSNMP, "", "", domain.TopologyDiscoveryModeBootstrapOnce, nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	if len(scheduler.devices) != 1 || scheduler.devices[0].ID != device.ID {
+		t.Fatalf("scheduled devices = %#v, want device %s", scheduler.devices, device.ID)
+	}
+	if scheduler.dueAt[0].IsZero() {
+		t.Fatal("expected bootstrap due time to be populated")
+	}
+	svc.WaitForProbes()
+	if discoverCalled {
+		t.Fatal("discoverFunc was called; bootstrap add should not start a direct probe goroutine")
 	}
 }
 
