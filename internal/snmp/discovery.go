@@ -874,6 +874,100 @@ func PollDeviceMetrics(client ClientInterface, perfOIDs vendor.PerformanceOIDs) 
 	return
 }
 
+type EssentialMetricField struct {
+	Value *float64
+	State string
+	Error string
+}
+
+type EssentialMetricsResult struct {
+	Uptime *EssentialMetricField
+	CPU    *EssentialMetricField
+	Memory *EssentialMetricField
+}
+
+// PollEssentialMetrics collects the small SNMP field set needed by the
+// essential scheduler lane. It deliberately avoids table walks, counters, and
+// temperature probes so the poll stays cheap under degraded conditions.
+func PollEssentialMetrics(client ClientInterface, perfOIDs vendor.PerformanceOIDs) EssentialMetricsResult {
+	result := EssentialMetricsResult{
+		Uptime: &EssentialMetricField{State: "missing"},
+		CPU:    &EssentialMetricField{State: "missing"},
+		Memory: &EssentialMetricField{State: "missing"},
+	}
+
+	if pdus, err := client.Get([]string{OidSysUpTime}); err == nil {
+		for _, pdu := range pdus {
+			if pdu.Name == OidSysUpTime {
+				if v := uint32FromPDU(pdu); v > 0 {
+					secs := float64(v) / 100.0
+					result.Uptime = &EssentialMetricField{Value: &secs, State: "ok"}
+				}
+			}
+		}
+	} else {
+		result.Uptime = &EssentialMetricField{State: "error", Error: err.Error()}
+	}
+
+	if cpuOID := strings.TrimSpace(perfOIDs.CPUOID); isEssentialScalarOID(cpuOID) {
+		if pdus, err := client.Get([]string{cpuOID}); err == nil {
+			for _, pdu := range pdus {
+				if pdu.Name == cpuOID {
+					if value := float64FromPDU(pdu); value != nil {
+						result.CPU = &EssentialMetricField{Value: value, State: "ok"}
+					}
+				}
+			}
+		} else {
+			result.CPU = &EssentialMetricField{State: "error", Error: err.Error()}
+		}
+	}
+
+	usedOID := strings.TrimSpace(perfOIDs.MemoryUsedOID)
+	totalOID := strings.TrimSpace(perfOIDs.MemoryTotalOID)
+	if isEssentialScalarOID(usedOID) && isEssentialScalarOID(totalOID) {
+		used, total, err := readMemoryPair(client, usedOID, totalOID)
+		if err != nil {
+			result.Memory = &EssentialMetricField{State: "error", Error: err.Error()}
+			return result
+		}
+		if used != nil && total != nil && *total > 0 {
+			percent := (*used / *total) * 100
+			result.Memory = &EssentialMetricField{Value: &percent, State: "ok"}
+		}
+	}
+
+	return result
+}
+
+func isEssentialScalarOID(oid string) bool {
+	switch strings.TrimSpace(oid) {
+	case "", OidHrProcessorLoad, OidHrStorageUsed, OidHrStorageSize:
+		return false
+	default:
+		return true
+	}
+}
+
+func readMemoryPair(client ClientInterface, usedOID string, totalOID string) (*float64, *float64, error) {
+	pdus, err := client.Get([]string{usedOID, totalOID})
+	if err != nil {
+		return nil, nil, err
+	}
+	var used *float64
+	var total *float64
+	for _, pdu := range pdus {
+		value := float64FromPDU(pdu)
+		switch pdu.Name {
+		case usedOID:
+			used = value
+		case totalOID:
+			total = value
+		}
+	}
+	return used, total, nil
+}
+
 // pollMemoryPercent looks up the hrStorageRam entry and returns used/total*100.
 func pollMemoryPercent(client ClientInterface) *float64 {
 	types := make(map[int]string)
@@ -1026,4 +1120,33 @@ func uint64FromPDU(pdu gosnmp.SnmpPDU) uint64 {
 		}
 	}
 	return 0
+}
+
+func float64FromPDU(pdu gosnmp.SnmpPDU) *float64 {
+	switch v := pdu.Value.(type) {
+	case float64:
+		return &v
+	case float32:
+		value := float64(v)
+		return &value
+	case int:
+		value := float64(v)
+		return &value
+	case int32:
+		value := float64(v)
+		return &value
+	case int64:
+		value := float64(v)
+		return &value
+	case uint:
+		value := float64(v)
+		return &value
+	case uint32:
+		value := float64(v)
+		return &value
+	case uint64:
+		value := float64(v)
+		return &value
+	}
+	return nil
 }

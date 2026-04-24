@@ -32,6 +32,162 @@ func (m *MockClient) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
 	return nil, nil
 }
 
+func TestPollEssentialMetricsDoesNotWalkTemperatureOrCounters(t *testing.T) {
+	t.Parallel()
+
+	var getOIDs []string
+	var walkedRoots []string
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			getOIDs = append(getOIDs, oids...)
+			return []gosnmp.SnmpPDU{
+				{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(12000)},
+			}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			walkedRoots = append(walkedRoots, rootOid)
+			return nil, nil
+		},
+	}
+
+	result := PollEssentialMetrics(client, vendor.PerformanceOIDs{
+		CPUOID:           ".1.3.6.1.4.1.9999.1.0",
+		MemoryUsedOID:    ".1.3.6.1.4.1.9999.2.0",
+		MemoryTotalOID:   ".1.3.6.1.4.1.9999.3.0",
+		TemperatureOID:   ".1.3.6.1.4.1.9999.4.0",
+		TemperatureScale: 1,
+	})
+
+	if result.Uptime == nil || result.Uptime.State != "ok" {
+		t.Fatalf("uptime = %#v, want ok", result.Uptime)
+	}
+	for _, oid := range getOIDs {
+		if oid == ".1.3.6.1.4.1.9999.4.0" {
+			t.Fatalf("essential helper requested temperature oid %q", oid)
+		}
+	}
+	if len(walkedRoots) != 0 {
+		t.Fatalf("essential helper walked roots %v, want none", walkedRoots)
+	}
+}
+
+func TestPollEssentialMetricsScalarOIDsCanComplete(t *testing.T) {
+	var walkedRoots []string
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysUpTime:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(12300)})
+				case ".1.3.6.1.4.1.9999.1.0":
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: ".1.3.6.1.4.1.9999.1.0", Type: gosnmp.Integer, Value: 25})
+				case ".1.3.6.1.4.1.9999.2.7":
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: ".1.3.6.1.4.1.9999.2.7", Type: gosnmp.Integer, Value: 40})
+				case ".1.3.6.1.4.1.9999.3.7":
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: ".1.3.6.1.4.1.9999.3.7", Type: gosnmp.Integer, Value: 80})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			walkedRoots = append(walkedRoots, rootOid)
+			return nil, nil
+		},
+	}
+
+	result := PollEssentialMetrics(client, vendor.PerformanceOIDs{
+		CPUOID:         ".1.3.6.1.4.1.9999.1.0",
+		MemoryUsedOID:  ".1.3.6.1.4.1.9999.2.7",
+		MemoryTotalOID: ".1.3.6.1.4.1.9999.3.7",
+	})
+
+	assertEssentialField(t, result.Uptime, "ok", 123)
+	assertEssentialField(t, result.CPU, "ok", 25)
+	assertEssentialField(t, result.Memory, "ok", 50)
+	if len(walkedRoots) != 0 {
+		t.Fatalf("essential helper walked roots %v, want none", walkedRoots)
+	}
+}
+
+func TestPollEssentialMetricsDefaultColumnRootsStayMissingWithoutWalks(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	var getOIDs []string
+	var walkedRoots []string
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			getOIDs = append(getOIDs, oids...)
+			return []gosnmp.SnmpPDU{
+				{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(9000)},
+			}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			walkedRoots = append(walkedRoots, rootOid)
+			return nil, nil
+		},
+	}
+
+	result := PollEssentialMetrics(client, registry.ResolvePerformanceOIDs("default"))
+
+	assertEssentialField(t, result.Uptime, "ok", 90)
+	assertEssentialField(t, result.CPU, "missing", 0)
+	assertEssentialField(t, result.Memory, "missing", 0)
+	if len(walkedRoots) != 0 {
+		t.Fatalf("essential helper walked roots %v, want none", walkedRoots)
+	}
+	for _, oid := range getOIDs {
+		switch oid {
+		case OidHrProcessorLoad, OidHrStorageUsed, OidHrStorageSize:
+			t.Fatalf("essential helper requested table column root %q", oid)
+		}
+	}
+}
+
+func TestPollEssentialMetricsMemoryGetErrorIsPreserved(t *testing.T) {
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			if len(oids) == 2 {
+				return nil, assertiveError("memory timeout")
+			}
+			return []gosnmp.SnmpPDU{
+				{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(9000)},
+			}, nil
+		},
+	}
+
+	result := PollEssentialMetrics(client, vendor.PerformanceOIDs{
+		MemoryUsedOID:  ".1.3.6.1.4.1.9999.2.0",
+		MemoryTotalOID: ".1.3.6.1.4.1.9999.3.0",
+	})
+
+	if result.Memory == nil || result.Memory.State != "error" || result.Memory.Error != "memory timeout" {
+		t.Fatalf("memory = %#v, want error with message", result.Memory)
+	}
+}
+
+func assertEssentialField(t *testing.T, field *EssentialMetricField, wantState string, wantValue float64) {
+	t.Helper()
+	if field == nil {
+		t.Fatalf("field = nil, want state %q", wantState)
+	}
+	if field.State != wantState {
+		t.Fatalf("field state = %q, want %q", field.State, wantState)
+	}
+	if wantState != "ok" {
+		if field.Value != nil {
+			t.Fatalf("field value = %v, want nil", *field.Value)
+		}
+		return
+	}
+	if field.Value == nil || *field.Value != wantValue {
+		t.Fatalf("field value = %v, want %v", field.Value, wantValue)
+	}
+}
+
 func TestPollOperationalStatus_Success(t *testing.T) {
 	t.Parallel()
 
