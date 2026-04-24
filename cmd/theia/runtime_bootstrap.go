@@ -19,6 +19,7 @@ import (
 	"github.com/lollinoo/theia/internal/config"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
@@ -107,7 +108,8 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	log.Printf("Config loaded: driver=%s listen=%s log_level=%s", cfg.DBDriver, cfg.ListenAddr, cfg.LogLevel)
+	logging.Configure(cfg.LogLevel)
+	logging.Infof("Config loaded: driver=%s listen=%s log_level=%s", cfg.DBDriver, cfg.ListenAddr, cfg.LogLevel)
 
 	paths := resolveRuntimePaths(cfg)
 	runtimeDriver := runtimeDBDriver(cfg.DBDriver)
