@@ -125,36 +125,41 @@ type clientControlPayload struct {
 
 // SnapshotPayload contains the complete live state sent to clients.
 type SnapshotPayload struct {
-	Devices        map[string]DeviceRuntimeDTO   `json:"devices"`
-	Links          map[string]LinkRuntimeDTO     `json:"links"`
-	DeviceMetrics  map[string]DeviceRuntimeDTO   `json:"-"`
-	LinkMetrics    map[string][]LinkRuntimeDTO   `json:"-"`
-	DeviceStatuses map[string]string             `json:"-"`
+	Devices        map[string]DeviceRuntimeDTO `json:"devices"`
+	Links          map[string]LinkRuntimeDTO   `json:"links"`
+	DeviceMetrics  map[string]DeviceRuntimeDTO `json:"-"`
+	LinkMetrics    map[string][]LinkRuntimeDTO `json:"-"`
+	DeviceStatuses map[string]string           `json:"-"`
 }
 
 type DeviceMetricsDTO = DeviceRuntimeDTO
 type LinkMetricsDTO = LinkRuntimeDTO
 
 type DeviceRuntimeDTO struct {
-	DeviceID                    string   `json:"device_id"`
-	OperationalStatus           string   `json:"operational_status"`
-	Reachability                string   `json:"reachability"`
-	Health                      string   `json:"health"`
-	Freshness                   string   `json:"freshness"`
-	PrimaryReason               string   `json:"primary_reason"`
-	MetricsStatus               string   `json:"metrics_status"`
-	MetricsReason               string   `json:"metrics_reason"`
-	AlertStatus                 string   `json:"alert_status"`
-	FiringAlertCount            int      `json:"firing_alert_count"`
-	LastCollectedAt             *string  `json:"last_collected_at"`
-	LastPolledAt                *string  `json:"last_polled_at"`
-	ExpectedPollIntervalSeconds *float64 `json:"expected_poll_interval_seconds"`
-	CPUPercent                  *float64 `json:"cpu_percent"`
-	MemPercent                  *float64 `json:"mem_percent"`
-	TempCelsius                 *float64 `json:"temp_celsius"`
-	UptimeSecs                  *float64 `json:"uptime_secs"`
-	CollectedAt                 string   `json:"-"`
-	Stale                       *bool    `json:"-"`
+	DeviceID                    string            `json:"device_id"`
+	OperationalStatus           string            `json:"operational_status"`
+	PrimaryHealth               string            `json:"primary_health"`
+	RuntimeFlags                []string          `json:"runtime_flags"`
+	FieldStates                 map[string]string `json:"field_states"`
+	NetworkReachable            string            `json:"network_reachable"`
+	SNMPReachable               string            `json:"snmp_reachable"`
+	Reachability                string            `json:"reachability"`
+	Health                      string            `json:"health"`
+	Freshness                   string            `json:"freshness"`
+	PrimaryReason               string            `json:"primary_reason"`
+	MetricsStatus               string            `json:"metrics_status"`
+	MetricsReason               string            `json:"metrics_reason"`
+	AlertStatus                 string            `json:"alert_status"`
+	FiringAlertCount            int               `json:"firing_alert_count"`
+	LastCollectedAt             *string           `json:"last_collected_at"`
+	LastPolledAt                *string           `json:"last_polled_at"`
+	ExpectedPollIntervalSeconds *float64          `json:"expected_poll_interval_seconds"`
+	CPUPercent                  *float64          `json:"cpu_percent"`
+	MemPercent                  *float64          `json:"mem_percent"`
+	TempCelsius                 *float64          `json:"temp_celsius"`
+	UptimeSecs                  *float64          `json:"uptime_secs"`
+	CollectedAt                 string            `json:"-"`
+	Stale                       *bool             `json:"-"`
 }
 
 type LinkRuntimeDTO struct {
@@ -209,14 +214,14 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	for key, value := range snapshot.Devices {
-		cloned.Devices[key] = value
+		cloned.Devices[key] = cloneDeviceRuntimeDTO(value)
 	}
 
 	for key, value := range snapshot.Links {
 		cloned.Links[key] = value
 	}
 	for key, value := range snapshot.DeviceMetrics {
-		cloned.DeviceMetrics[key] = value
+		cloned.DeviceMetrics[key] = cloneDeviceRuntimeDTO(value)
 	}
 	for key, value := range snapshot.LinkMetrics {
 		cloned.LinkMetrics[key] = append([]LinkRuntimeDTO(nil), value...)
@@ -226,6 +231,18 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	return cloned
+}
+
+func cloneDeviceRuntimeDTO(value DeviceRuntimeDTO) DeviceRuntimeDTO {
+	value.RuntimeFlags = append(make([]string, 0, len(value.RuntimeFlags)), value.RuntimeFlags...)
+	if value.FieldStates != nil {
+		cloned := make(map[string]string, len(value.FieldStates))
+		for key, state := range value.FieldStates {
+			cloned[key] = state
+		}
+		value.FieldStates = cloned
+	}
+	return value
 }
 
 func parseClientControlMessage(raw []byte) (clientControlMessage, error) {
@@ -310,14 +327,14 @@ func DeviceMetricsToDTOs(metrics map[string]domain.DeviceMetrics) map[string]Dev
 		collectedAt := formatTimestamp(metric.CollectedAt)
 		stale := false
 		dto := DeviceRuntimeDTO{
-			DeviceID:       deviceID,
-			CPUPercent:     metric.CPUPercent,
-			MemPercent:     metric.MemPercent,
-			TempCelsius:    metric.TempCelsius,
-			UptimeSecs:     metric.UptimeSecs,
+			DeviceID:        deviceID,
+			CPUPercent:      metric.CPUPercent,
+			MemPercent:      metric.MemPercent,
+			TempCelsius:     metric.TempCelsius,
+			UptimeSecs:      metric.UptimeSecs,
 			LastCollectedAt: nil,
-			CollectedAt:    collectedAt,
-			Stale:          &stale,
+			CollectedAt:     collectedAt,
+			Stale:           &stale,
 		}
 		if collectedAt != "" {
 			dto.LastCollectedAt = &collectedAt
@@ -339,17 +356,17 @@ func LinkMetricsToDTOs(metrics map[string][]domain.LinkMetrics) map[string][]Lin
 			}
 			collectedAt := formatTimestamp(metric.CollectedAt)
 			dto := LinkRuntimeDTO{
-				LinkID:        metric.LinkID,
+				LinkID:         metric.LinkID,
 				SourceDeviceID: deviceID,
-				SourceIfName:  metric.IfName,
-				MetricsStatus: "available",
-				MetricsReason: "ok",
-				TxBps:         metric.TxBps,
-				RxBps:         metric.RxBps,
-				Utilization:   metric.Utilization,
-				DeviceID:      deviceID,
-				IfName:        metric.IfName,
-				CollectedAt:   collectedAt,
+				SourceIfName:   metric.IfName,
+				MetricsStatus:  "available",
+				MetricsReason:  "ok",
+				TxBps:          metric.TxBps,
+				RxBps:          metric.RxBps,
+				Utilization:    metric.Utilization,
+				DeviceID:       deviceID,
+				IfName:         metric.IfName,
+				CollectedAt:    collectedAt,
 			}
 			if collectedAt != "" {
 				dto.LastCollectedAt = &collectedAt

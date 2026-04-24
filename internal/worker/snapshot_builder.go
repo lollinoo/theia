@@ -277,9 +277,14 @@ func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 	}
 
 	for id, dm := range snapshot.Devices {
-		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
+		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
 			dm.DeviceID,
 			dm.OperationalStatus,
+			dm.PrimaryHealth,
+			strings.Join(dm.RuntimeFlags, ","),
+			fieldStateHashPart(dm.FieldStates),
+			dm.NetworkReachable,
+			dm.SNMPReachable,
 			dm.Reachability,
 			dm.Health,
 			dm.Freshness,
@@ -319,6 +324,14 @@ func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 	}
 
 	return sh
+}
+
+func fieldStateHashPart(fields map[string]string) string {
+	return strings.Join([]string{
+		fields["uptime"],
+		fields["cpu"],
+		fields["memory"],
+	}, ",")
 }
 
 func buildDelta(current *ws.SnapshotPayload, currentHashes, previousHashes *sectionHashes) *ws.SnapshotPayload {
