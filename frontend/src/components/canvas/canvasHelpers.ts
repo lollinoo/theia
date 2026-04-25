@@ -107,7 +107,7 @@ export function viewportSize(): { width: number; height: number } {
   };
 }
 
-type DeviceContextMenuItemId = 'winbox' | 'grafana' | 'interface-stats' | 'configure';
+type DeviceContextMenuItemId = 'winbox' | 'grafana' | 'configure';
 
 export type DeviceContextMenuItem = ContextMenuItem & { id: DeviceContextMenuItemId };
 
@@ -118,7 +118,6 @@ interface BuildDeviceContextMenuItemsOptions {
   winboxTitle?: string;
   onOpenWinbox: () => void;
   onOpenGrafana: () => void;
-  onOpenInterfaceStats: () => void;
   onConfigure: () => void;
 }
 
@@ -129,7 +128,6 @@ export function buildDeviceContextMenuItems({
   winboxTitle,
   onOpenWinbox,
   onOpenGrafana,
-  onOpenInterfaceStats,
   onConfigure,
 }: BuildDeviceContextMenuItemsOptions): DeviceContextMenuItem[] {
   const allItems: DeviceContextMenuItem[] = [
@@ -146,12 +144,6 @@ export function buildDeviceContextMenuItems({
       label: grafanaEnabled ? 'Open in Grafana' : 'Open in Grafana (not configured)',
       icon: 'hub',
       onClick: onOpenGrafana,
-    },
-    {
-      id: 'interface-stats',
-      label: 'Per-Interface Stats',
-      icon: 'devices',
-      onClick: onOpenInterfaceStats,
     },
     {
       id: 'configure',

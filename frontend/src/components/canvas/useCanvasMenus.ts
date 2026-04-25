@@ -120,6 +120,7 @@ export function useCanvasMenus({ reactFlow }: UseCanvasMenusParams): UseCanvasMe
     if (panelContent.type === 'addDevice') return 'Add Device';
     if (panelContent.type === 'create-link') return 'Create Link';
     if (panelContent.type === 'link-details') return 'Link Details';
+    if (panelContent.type === 'deviceDetails') return 'Device Details';
     if (panelContent.type === 'deviceConfig') {
       const data = panelContent.data as { device?: Device } | undefined;
       if (data?.device) {

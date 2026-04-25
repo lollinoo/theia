@@ -11,13 +11,22 @@ describe('getCanvasDetailDeviceId', () => {
     ).toBe('dev-1');
   });
 
-  it('returns device ID for device-scoped interfaceStats', () => {
+  it('returns device ID for deviceDetails', () => {
+    expect(
+      getCanvasDetailDeviceId({
+        type: 'deviceDetails',
+        data: { deviceId: 'dev-1' },
+      }),
+    ).toBe('dev-1');
+  });
+
+  it('does not subscribe detail telemetry for removed device-scoped interfaceStats', () => {
     expect(
       getCanvasDetailDeviceId({
         type: 'interfaceStats',
         data: { deviceId: 'dev-2' },
       }),
-    ).toBe('dev-2');
+    ).toBeNull();
   });
 
   it('link-scoped interfaceStats returns null', () => {

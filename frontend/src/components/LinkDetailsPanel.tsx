@@ -194,6 +194,7 @@ export function LinkDetailsPanel({
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
+    if (readOnly) return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -210,6 +211,7 @@ export function LinkDetailsPanel({
   }
 
   async function handleDelete() {
+    if (readOnly) return;
     setDeleting(true);
     try {
       await deleteLink(link.id);

@@ -8,6 +8,7 @@ import { AlertsPanel } from '../AlertsPanel';
 import { BulkEditPanel } from '../BulkEditPanel';
 import type { DeviceNode } from '../DeviceCard';
 import { DeviceConfigPanel } from '../DeviceConfigPanel';
+import { DeviceDetailsPanel } from '../DeviceDetailsPanel';
 import { LinkCreatePanel } from '../LinkCreatePanel';
 import { LinkDetailsPanel } from '../LinkDetailsPanel';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -63,7 +64,7 @@ export function CanvasPanels({
     <>
       {panelContent?.type === 'interfaceStats' &&
         (() => {
-          const data = panelContent.data as { linkId?: string; deviceId?: string } | undefined;
+          const data = panelContent.data as { linkId?: string } | undefined;
           const link = data?.linkId
             ? topologyLinks.find((candidate) => candidate.id === data.linkId)
             : undefined;
@@ -81,19 +82,30 @@ export function CanvasPanels({
               />
             );
           }
-          const currentDevice = data?.deviceId
-            ? devices.find((d) => d.id === data.deviceId)
-            : undefined;
-          if (currentDevice) {
-            return (
-              <DeviceInterfaceStatsPanelRoute device={currentDevice} runtimeState={runtimeState} />
-            );
-          }
           return <div className="text-on-bg-secondary text-sm">No data available.</div>;
         })()}
       {panelContent?.type === 'alerts' && (
         <AlertsPanel model={buildAlertsPanelModel({ alerts, runtimeState })} />
       )}
+      {panelContent?.type === 'deviceDetails' &&
+        (() => {
+          const data = panelContent.data as { deviceId?: string } | undefined;
+          const device = data?.deviceId
+            ? devices.find((candidate) => candidate.id === data.deviceId)
+            : undefined;
+          if (!device) return null;
+          return (
+            <DeviceDetailsPanel
+              device={device}
+              detailMetrics={runtimeState.devicesById.get(device.id)?.metrics ?? null}
+              interfaceStats={
+                device.device_type !== 'virtual' ? (
+                  <DeviceInterfaceStatsPanelRoute device={device} runtimeState={runtimeState} />
+                ) : undefined
+              }
+            />
+          );
+        })()}
       {panelContent?.type === 'settings' && (
         <SettingsPanel onAreasChange={onAreasChange} onSettingsChange={onSettingsChange} />
       )}
@@ -139,7 +151,7 @@ export function CanvasPanels({
             return (
               <LinkDetailsPanel
                 link={liveLink}
-                readOnly={data.readOnly === true}
+                readOnly={!editMode}
                 devices={devices}
                 onUpdated={() => {
                   setPanelContent(null);
@@ -165,7 +177,6 @@ export function CanvasPanels({
             return (
               <DeviceConfigPanel
                 device={device}
-                detailMetrics={runtimeState.devicesById.get(device.id)?.metrics ?? null}
                 readOnly={!editMode}
                 isVirtual={device.device_type === 'virtual'}
                 onDeviceUpdated={(updated) => {

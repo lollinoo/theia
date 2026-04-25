@@ -155,12 +155,13 @@ vi.mock('./Toolbar', () => ({
 vi.mock('./canvas/CanvasPanels', () => ({
   CanvasPanels: ({
     panelContent,
+    editMode,
   }: {
     panelContent: { type: string; data?: { link?: { id?: string }; readOnly?: boolean } } | null;
+    editMode?: boolean;
   }) => (
     <div data-testid="panel-state">
-      {panelContent?.type}:{panelContent?.data?.readOnly === true ? 'view' : 'edit'}:
-      {panelContent?.data?.link?.id}
+      {panelContent?.type}:{editMode ? 'edit' : 'view'}:{panelContent?.data?.link?.id}
     </div>
   ),
 }));
@@ -271,5 +272,25 @@ describe('Canvas link details edge clicks', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Trigger edge click' }));
 
     expect(screen.getByTestId('panel-state')).toHaveTextContent('link-details:edit:link-1');
+  });
+
+  it('updates open link details when edit mode is toggled', async () => {
+    render(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger edge click' }));
+    expect(screen.getByTestId('panel-state')).toHaveTextContent('link-details:view:link-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable edit mode' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('panel-state')).toHaveTextContent('link-details:edit:link-1');
+    });
   });
 });

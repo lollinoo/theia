@@ -1,46 +1,29 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { buildDeviceContextMenuItems } from './canvas/canvasHelpers';
+
+function buildItems(isVirtual: boolean) {
+  return buildDeviceContextMenuItems({
+    isVirtual,
+    grafanaEnabled: true,
+    winboxDisabled: false,
+    onOpenWinbox: vi.fn(),
+    onOpenGrafana: vi.fn(),
+    onConfigure: vi.fn(),
+  });
+}
 
 describe('Canvas context menu filtering', () => {
-  // Replicate the filtering logic from Canvas.tsx
-  const allItems = [
-    { id: 'winbox', label: 'Open in WinBox' },
-    { id: 'grafana', label: 'Open in Grafana' },
-    { id: 'interface-stats', label: 'Per-Interface Stats' },
-    { id: 'configure', label: 'Configure' },
-  ];
+  it('shows only Configure for virtual devices', () => {
+    const items = buildItems(true);
 
-  function filterMenuItems(deviceType: string) {
-    const isVirtual = deviceType === 'virtual';
-    const virtualItemIds = new Set(['configure']);
-    return isVirtual ? allItems.filter((item) => virtualItemIds.has(item.id)) : allItems;
-  }
-
-  it('shows only Configure for virtual devices with IP', () => {
-    const items = filterMenuItems('virtual');
-    expect(items).toHaveLength(1);
-    expect(items.map((i) => i.id)).toEqual(['configure']);
+    expect(items.map((item) => item.id)).toEqual(['configure']);
   });
 
-  it('shows only Configure for virtual devices without IP', () => {
-    const items = filterMenuItems('virtual');
-    expect(items).toHaveLength(1);
-    expect(items.map((i) => i.id)).toEqual(['configure']);
-  });
+  it('does not expose a device-scoped Per-Interface Stats item for physical devices', () => {
+    const items = buildItems(false);
 
-  it('shows only Configure for virtual devices with undefined IP', () => {
-    const items = filterMenuItems('virtual');
-    expect(items).toHaveLength(1);
-    expect(items.map((i) => i.id)).toEqual(['configure']);
-  });
-
-  it('shows all 4 items for physical devices', () => {
-    const items = filterMenuItems('router');
-    expect(items).toHaveLength(4);
-    expect(items.map((i) => i.id)).toEqual(['winbox', 'grafana', 'interface-stats', 'configure']);
-  });
-
-  it('shows all 4 items for switch devices', () => {
-    const items = filterMenuItems('switch');
-    expect(items).toHaveLength(4);
+    expect(items.map((item) => item.id)).toEqual(['winbox', 'grafana', 'configure']);
+    expect(items.map((item) => item.label)).not.toContain('Per-Interface Stats');
   });
 });

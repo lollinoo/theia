@@ -173,6 +173,7 @@ describe('Canvas detail subscription', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger node click' }));
     expect(onDetailDeviceChange.mock.calls).toEqual([['dev-1']]);
+    expect(screen.getByTestId('panel-state')).toHaveTextContent('deviceDetails');
 
     onDetailDeviceChange.mockClear();
 

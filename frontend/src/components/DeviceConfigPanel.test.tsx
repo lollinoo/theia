@@ -362,6 +362,18 @@ describe('DeviceConfigPanel', () => {
     expect(screen.getByText('Save Changes')).toBeInTheDocument();
   });
 
+  it('keeps live telemetry out of the configuration panel', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Live Detail Telemetry')).not.toBeInTheDocument();
+  });
+
   it('renders saved notes preview and editable textarea', () => {
     render(
       <DeviceConfigPanel

@@ -343,6 +343,39 @@ describe('panelAdapters', () => {
     });
   });
 
+  it('does not report inventory interface status as up when runtime telemetry is missing', () => {
+    const device = mockDevice({ status: 'up' });
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            metrics_status: 'unavailable',
+            metrics_reason: 'no_data',
+          }),
+        },
+        links: {},
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildDeviceInterfacePanelModel({
+      device,
+      runtimeState,
+      loadingInterfaces: false,
+      interfaces: [mockInterface({ oper_status: 'up' })],
+    });
+
+    expect(model.sections[0]).toMatchObject({
+      availabilityReason: 'no_data',
+      metricsUnavailableMessage: 'No runtime telemetry',
+      statusLabel: 'unknown',
+      statusTone: 'neutral',
+    });
+  });
+
   it('keeps indexed interface runtime visible when device-level metrics are unavailable', () => {
     const device = mockDevice({ status: 'up' });
     const runtimeState = buildRuntimeState({
