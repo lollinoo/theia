@@ -10,7 +10,7 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { usePositions } from '../hooks/usePositions';
@@ -43,6 +43,34 @@ import { minimapColorForDevice } from './deviceVisualState';
 const nodeTypes = { device: DeviceCard };
 const edgeTypes = { link: LinkEdge };
 const emptyAlerts: AlertDTO[] = [];
+const minimapStyle = {
+  backgroundColor: 'var(--nt-surface-container)',
+  border: '1px solid var(--nt-outline)',
+  borderRadius: 16,
+  boxShadow: 'var(--nt-shadow-floating)',
+};
+const minimapMaskColor = 'var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))';
+
+function topologyMinimapNodeColor(node: DeviceNode): string {
+  const data = node.data;
+  return minimapColorForDevice({
+    device: data.device,
+    metrics: data.metrics,
+    isGhost: !!data.isGhost,
+  });
+}
+
+const TopologyMiniMap = memo(function TopologyMiniMap() {
+  return (
+    <MiniMap<DeviceNode>
+      pannable
+      zoomable
+      nodeColor={topologyMinimapNodeColor}
+      style={minimapStyle}
+      maskColor={minimapMaskColor}
+    />
+  );
+});
 
 interface CanvasProps {
   snapshot: SnapshotPayload | null;
@@ -710,25 +738,7 @@ export default function Canvas({
         className="bg-transparent"
       >
         <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(n) => {
-            const d = (n as DeviceNode).data;
-            return minimapColorForDevice({
-              device: d.device,
-              metrics: d.metrics,
-              isGhost: !!d.isGhost,
-            });
-          }}
-          style={{
-            backgroundColor: 'var(--nt-surface-container)',
-            border: '1px solid var(--nt-outline)',
-            borderRadius: 16,
-            boxShadow: 'var(--nt-shadow-floating)',
-          }}
-          maskColor="var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))"
-        />
+        <TopologyMiniMap />
       </ReactFlow>
     </div>
   );

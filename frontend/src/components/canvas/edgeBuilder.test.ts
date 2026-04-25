@@ -255,6 +255,26 @@ describe('buildEdgeData', () => {
     expect(result.inertVirtualLink).toBe(true);
   });
 
+  it('suppresses the no-IP virtual endpoint status while preserving the physical endpoint status', () => {
+    const source = mockDevice({ id: 'dev-1', device_type: 'router', status: 'down' });
+    const target = mockDevice({ id: 'dev-2', device_type: 'virtual', ip: '', status: 'down' });
+    const devicesByID = new Map([
+      ['dev-1', source],
+      ['dev-2', target],
+    ]);
+    const link = mockLink({
+      source_if_speed: 1_000_000_000,
+      source_if_oper_status: 'up',
+    });
+
+    const result = buildEdgeData(link, devicesByID);
+
+    expect(result.sourceIsVirtual).toBe(false);
+    expect(result.targetIsVirtual).toBe(true);
+    expect(result.sourceDeviceStatus).toBe('down');
+    expect(result.targetDeviceStatus).toBeUndefined();
+  });
+
   it('virtual target: targetIfStatus is undefined, sourceIfStatus shows real status', () => {
     const source = mockDevice({ id: 'dev-1', device_type: 'router' });
     const target = mockDevice({ id: 'dev-2', device_type: 'virtual' });

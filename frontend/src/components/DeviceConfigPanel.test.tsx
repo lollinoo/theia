@@ -381,6 +381,29 @@ describe('DeviceConfigPanel', () => {
     expect(screen.getByLabelText('Device Notes')).toHaveValue('Check transceiver levels weekly');
   });
 
+  it('preserves unsaved Edit Device input when only runtime status changes', () => {
+    const { rerender } = render(
+      <DeviceConfigPanel
+        device={mockDevice({ tags: { display_name: 'Core router' } })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    const displayNameInput = screen.getByDisplayValue('Core router');
+    fireEvent.change(displayNameInput, { target: { value: 'Unsaved local edit' } });
+
+    rerender(
+      <DeviceConfigPanel
+        device={mockDevice({ status: 'down', tags: { display_name: 'Core router' } })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByDisplayValue('Unsaved local edit')).toBeInTheDocument();
+  });
+
   it('submits trimmed notes and clears blank notes as null', async () => {
     const { updateDevice } = await import('../api/client');
     (updateDevice as ReturnType<typeof vi.fn>)

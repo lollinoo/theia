@@ -72,6 +72,25 @@ const DEFAULT_POLLING_DURATION_BY_CLASS: Record<DevicePollClass, string> = {
 
 const POLLING_OVERRIDE_ERROR = 'Polling override must be an integer between 5 and 3600 seconds';
 
+function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
+  return JSON.stringify({
+    id: device.id,
+    isVirtual,
+    hostname: device.hostname,
+    ip: device.ip,
+    displayName: device.tags?.display_name ?? '',
+    notes: device.notes ?? '',
+    vendor: device.vendor ?? '',
+    metricsSource: device.metrics_source ?? 'snmp',
+    topologyDiscoveryMode: device.topology_discovery_mode ?? 'inherit',
+    areaIds: device.area_ids ?? [],
+    prometheusLabelName: device.prometheus_label_name || 'instance',
+    prometheusLabelValue: device.prometheus_label_value || '',
+    virtualSubtype: device.tags?.virtual_subtype ?? 'internet',
+    pollIntervalOverride: device.poll_interval_override ?? null,
+  });
+}
+
 interface DeviceConfigPanelProps {
   device: Device;
   detailMetrics: DeviceMetricsDTO | null;
@@ -134,6 +153,7 @@ export function DeviceConfigPanel({
   const usesPrometheus =
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
+  const deviceConfigSyncKey = buildDeviceConfigSyncKey(device, Boolean(isVirtual));
 
   function updateForm(update: Partial<DeviceFormModel>) {
     setForm((current) => ({ ...current, ...update }));
@@ -243,7 +263,8 @@ export function DeviceConfigPanel({
       });
   }, [device.id, grafanaKey]);
 
-  // Sync inputs when the `device` prop updates from parent
+  // Sync inputs when saved configuration changes. Runtime-only updates such as
+  // status changes should not reset in-progress edits.
   useEffect(() => {
     setForm(createDeviceConfigFormModel(device, Boolean(isVirtual)));
     syncPollingState(device.poll_interval_override);
@@ -251,7 +272,7 @@ export function DeviceConfigPanel({
     setTopologyDiscoveryError(null);
     setTopologyDiscoveryRunning(false);
     setFieldErrors({});
-  }, [device, isVirtual]);
+  }, [deviceConfigSyncKey, isVirtual]);
 
   function applyProfile(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId);

@@ -38,6 +38,10 @@ export interface LinkEdgeData {
   targetIfStatus?: string;
   sourceDeviceStatus?: string;
   targetDeviceStatus?: string;
+  sourceDeviceAlertStatus?: AlertStatus;
+  targetDeviceAlertStatus?: AlertStatus;
+  sourceIsVirtual?: boolean;
+  targetIsVirtual?: boolean;
   areaColor?: string;
   emphasis?: EdgeEmphasis;
   [key: string]: unknown;
@@ -81,6 +85,8 @@ interface NormalizedLinkState {
   alertStatus: AlertStatus | undefined;
   sourceDeviceStatus: string | undefined;
   targetDeviceStatus: string | undefined;
+  sourceDeviceAlertStatus: AlertStatus | undefined;
+  targetDeviceAlertStatus: AlertStatus | undefined;
   sourceIfStatus: string | undefined;
   targetIfStatus: string | undefined;
   utilization: number | null;
@@ -108,17 +114,12 @@ interface ResolveLinkBadgePresentationOptions {
 }
 
 const LINK_BADGE_STACK_ORDER: readonly LinkBadgeKind[] = ['rate', 'throughput'];
-const LINK_BADGE_MIN_SCREEN_LENGTH = {
-  low: 120,
-  medium: 96,
-} as const;
 const INERT_VIRTUAL_UTIL_WARNING_THRESHOLD = 0.75;
 const INERT_VIRTUAL_UTIL_CRITICAL_THRESHOLD = 0.8;
 
 // Centralized zoom matrix for link telemetry badges.
-// Low: keep the rate badge always, and keep TX/RX visible while the edge still spans 120px on screen.
-// Medium: keep the full RATE+TX/RX stack once the edge spans 96px on screen.
-// High: always keep the full RATE+TX/RX stack.
+// Throughput remains visible whenever runtime telemetry is available; the band is
+// still exposed for callers that need zoom metadata.
 export const LINK_BADGE_ZOOM_THRESHOLDS = {
   medium: 0.92,
   high: 1.2,
@@ -245,12 +246,22 @@ export function buildLinkTelemetryBadges({
 
 export function normalizeLinkStateForColor(data: LinkEdgeData | undefined): NormalizedLinkState {
   const inertVirtualLink = data?.inertVirtualLink === true;
+  const suppressSourceVirtualEndpoint = inertVirtualLink && data?.sourceIsVirtual === true;
+  const suppressTargetVirtualEndpoint = inertVirtualLink && data?.targetIsVirtual === true;
 
   return {
     inertVirtualLink,
     alertStatus: data?.alertStatus,
-    sourceDeviceStatus: inertVirtualLink ? undefined : data?.sourceDeviceStatus,
-    targetDeviceStatus: inertVirtualLink ? undefined : data?.targetDeviceStatus,
+    sourceDeviceStatus: suppressSourceVirtualEndpoint ? undefined : data?.sourceDeviceStatus,
+    targetDeviceStatus: suppressTargetVirtualEndpoint ? undefined : data?.targetDeviceStatus,
+    sourceDeviceAlertStatus:
+      inertVirtualLink && !suppressSourceVirtualEndpoint
+        ? data?.sourceDeviceAlertStatus
+        : undefined,
+    targetDeviceAlertStatus:
+      inertVirtualLink && !suppressTargetVirtualEndpoint
+        ? data?.targetDeviceAlertStatus
+        : undefined,
     sourceIfStatus: normalizeInterfaceStatusForLink(data?.sourceIfStatus),
     targetIfStatus: normalizeInterfaceStatusForLink(data?.targetIfStatus),
     utilization: data?.utilization ?? data?.metrics?.utilization ?? null,
@@ -270,6 +281,8 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
     alertStatus,
     sourceDeviceStatus,
     targetDeviceStatus,
+    sourceDeviceAlertStatus,
+    targetDeviceAlertStatus,
     sourceIfStatus,
     targetIfStatus,
     utilization,
@@ -282,10 +295,18 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   const tgtDevProbing = targetDeviceStatus === 'probing';
   const srcDevInactive = srcDevDown || srcDevProbing;
   const tgtDevInactive = tgtDevDown || tgtDevProbing;
+  const sourceDeviceAlertDown = sourceDeviceAlertStatus === 'down';
+  const targetDeviceAlertDown = targetDeviceAlertStatus === 'down';
+  const sourceDeviceAlertWarn = sourceDeviceAlertStatus === 'degraded';
+  const targetDeviceAlertWarn = targetDeviceAlertStatus === 'degraded';
   const bothDevDown = srcDevDown && tgtDevDown;
   const oneDevDown = (srcDevDown || tgtDevDown) && !bothDevDown;
   const bothDevInactive = srcDevInactive && tgtDevInactive && !bothDevDown;
   const oneDevInactive = srcDevInactive !== tgtDevInactive;
+  const inertDeviceDown = inertVirtualLink && (srcDevDown || tgtDevDown);
+  const inertDeviceWarning =
+    inertVirtualLink &&
+    (srcDevProbing || tgtDevProbing || sourceDeviceAlertWarn || targetDeviceAlertWarn);
 
   const sourceIfKnown = sourceIfStatus != null;
   const targetIfKnown = targetIfStatus != null;
@@ -320,6 +341,9 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
 
   if (
     alertStatus === 'down' ||
+    sourceDeviceAlertDown ||
+    targetDeviceAlertDown ||
+    inertDeviceDown ||
     bothDevDown ||
     bothIfDown ||
     inertUtilDown ||
@@ -337,6 +361,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   if (
     speedMismatch ||
     alertStatus === 'degraded' ||
+    inertDeviceWarning ||
     oneDevDown ||
     bothDevInactive ||
     oneDevInactive ||
@@ -429,7 +454,6 @@ export function resolveNegotiationIndicatorClassName(): string {
 
 export function resolveLinkBadgeVisibility({
   zoom,
-  pathLength,
   bandwidthLabel,
   throughputLabel,
 }: ResolveLinkBadgeVisibilityOptions): LinkBadgeVisibility {
@@ -440,14 +464,8 @@ export function resolveLinkBadgeVisibility({
         ? 'medium'
         : 'low';
 
-  const screenLength = pathLength > 0 ? pathLength * zoom : 0;
   const showRate = Boolean(bandwidthLabel);
-  const showThroughput =
-    Boolean(throughputLabel) &&
-    (!showRate ||
-      zoomBand === 'high' ||
-      (zoomBand === 'medium' && screenLength >= LINK_BADGE_MIN_SCREEN_LENGTH.medium) ||
-      (zoomBand === 'low' && screenLength >= LINK_BADGE_MIN_SCREEN_LENGTH.low));
+  const showThroughput = Boolean(throughputLabel);
 
   return {
     zoomBand,

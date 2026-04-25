@@ -175,24 +175,41 @@ export function buildEdgeData(
   });
 
   if (isVirtualLink) {
+    const suppressSourceDeviceState = inertVirtualLink && sourceIsVirtual;
+    const suppressTargetDeviceState = inertVirtualLink && targetIsVirtual;
+
     return {
       link,
       ...telemetryBadges,
       inertVirtualLink,
+      sourceIsVirtual: !!sourceIsVirtual,
+      targetIsVirtual: !!targetIsVirtual,
       onContextMenu,
       metrics: existingData?.metrics,
       throughputLabel: existingData?.throughputLabel,
       utilization: existingData?.utilization,
       sourceIfStatus: sourceIsVirtual ? undefined : sourceIfOperStatus,
       targetIfStatus: targetIsVirtual ? undefined : targetIfOperStatus,
-      sourceDeviceStatus: existingData?.sourceDeviceStatus ?? sourceDevice?.status,
-      targetDeviceStatus: existingData?.targetDeviceStatus ?? targetDevice?.status,
+      sourceDeviceStatus: suppressSourceDeviceState
+        ? undefined
+        : (existingData?.sourceDeviceStatus ?? sourceDevice?.status),
+      targetDeviceStatus: suppressTargetDeviceState
+        ? undefined
+        : (existingData?.targetDeviceStatus ?? targetDevice?.status),
+      sourceDeviceAlertStatus: suppressSourceDeviceState
+        ? undefined
+        : existingData?.sourceDeviceAlertStatus,
+      targetDeviceAlertStatus: suppressTargetDeviceState
+        ? undefined
+        : existingData?.targetDeviceAlertStatus,
     };
   }
 
   return {
     link,
     ...telemetryBadges,
+    sourceIsVirtual: false,
+    targetIsVirtual: false,
     onContextMenu,
     metrics: existingData?.metrics,
     throughputLabel: existingData?.throughputLabel,
@@ -201,6 +218,8 @@ export function buildEdgeData(
     targetIfStatus: targetIfOperStatus,
     sourceDeviceStatus: existingData?.sourceDeviceStatus ?? sourceDevice?.status,
     targetDeviceStatus: existingData?.targetDeviceStatus ?? targetDevice?.status,
+    sourceDeviceAlertStatus: existingData?.sourceDeviceAlertStatus,
+    targetDeviceAlertStatus: existingData?.targetDeviceAlertStatus,
   };
 }
 
