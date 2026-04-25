@@ -125,6 +125,27 @@ export function useWebSocket(
       const ws = new WebSocket(buildWebSocketURL(url));
       socketRef.current = ws;
 
+      function dispatchResyncRequired(payload: ResyncRequiredPayload): void {
+        window.dispatchEvent(
+          new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
+            detail: payload,
+          }),
+        );
+      }
+
+      function requestClientResync(): void {
+        if (awaitingResyncRef.current) {
+          return;
+        }
+        awaitingResyncRef.current = true;
+        resetAlertState();
+        dispatchResyncRequired({
+          scope: 'overview',
+          reason: 'client_resync_scheduled',
+        });
+        ws.close();
+      }
+
       ws.onopen = () => {
         if (disposed.current) {
           ws.close();
@@ -169,7 +190,7 @@ export function useWebSocket(
                   snapshotVersionRef.current !== payload.base_version ||
                   payload.version === undefined
                 ) {
-                  awaitingResyncRef.current = true;
+                  requestClientResync();
                   return prev;
                 }
                 snapshotVersionRef.current = payload.version;
@@ -197,11 +218,7 @@ export function useWebSocket(
           } else if (message.type === 'resync_required') {
             awaitingResyncRef.current = true;
             resetAlertState();
-            window.dispatchEvent(
-              new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
-                detail: (message as ResyncRequiredWSMessage).payload,
-              }),
-            );
+            dispatchResyncRequired((message as ResyncRequiredWSMessage).payload);
           } else if (message.type === 'topology_changed' || message.type === 'topology_delta') {
             window.dispatchEvent(new Event('topology-changed'));
           }

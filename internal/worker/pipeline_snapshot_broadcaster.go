@@ -25,8 +25,8 @@ func (b *pipelineSnapshotBroadcaster) broadcastLoop(ctx context.Context) {
 	}
 
 	stateChanges := p.stateStore.Changes()
-	b.broadcastOnce(ctx)
 	drainBroadcastLoopInputs(stateChanges, p.deviceChangeNotify, p.linkChangeNotify, p.topologyNotify, p.alertNotify)
+	b.broadcastOnce(ctx)
 
 	flushTimer := time.NewTimer(time.Hour)
 	if !flushTimer.Stop() {

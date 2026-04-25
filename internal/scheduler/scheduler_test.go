@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -167,15 +168,11 @@ func TestRefreshDevices_SchedulesOperationalOnlyForVirtualIPDevices(t *testing.T
 		t.Fatalf("refreshDevices() error = %v", err)
 	}
 
-	if got := len(scheduler.items); got != 2 {
-		t.Fatalf("len(items) = %d, want essential + operational task", got)
+	if got := len(scheduler.items); got != 1 {
+		t.Fatalf("len(items) = %d, want operational task only", got)
 	}
 
-	essentialKey := NewEssentialTaskKey(virtualWithIP.ID)
-	essentialItem := mustSchedulerItem(t, scheduler, essentialKey)
-	if essentialItem.task.Kind != polling.TaskKindEssential {
-		t.Fatalf("essential kind = %q, want essential", essentialItem.task.Kind)
-	}
+	assertSchedulerKeyMissing(t, scheduler, NewEssentialTaskKey(virtualWithIP.ID))
 
 	operationalKey := NewTaskKey(virtualWithIP.ID, domain.VolatilityClassOperational)
 	item := mustSchedulerItem(t, scheduler, operationalKey)
@@ -682,7 +679,14 @@ func TestSchedulerReduePerformanceTask_IgnoresUnmanagedDevice(t *testing.T) {
 }
 
 func TestSchedulerDispatchesPriorityOrder(t *testing.T) {
-	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingMaxWorkersPerDevice:   "3",
+			domain.SettingPollingMaxWorkersPerSubnet:   "3",
+			domain.SettingPollingMaxWorkersPerSite:     "3",
+			domain.SettingPollingMaxInflightPerProfile: "3",
+		},
+	})
 	now := time.Unix(1_700_000_000, 0).UTC()
 	deviceID := uuid.MustParse("50000000-0000-0000-0000-000000000001")
 
@@ -830,6 +834,131 @@ func TestSchedulerHealthReportsEssentialOverload(t *testing.T) {
 	}
 	if health.ConfiguredWorkers != 1 {
 		t.Fatalf("ConfiguredWorkers = %d, want 1", health.ConfiguredWorkers)
+	}
+}
+
+func TestSchedulerPollingHealthIsSafeDuringRuntimeMutations(t *testing.T) {
+	devices := make([]domain.Device, 0, 16)
+	for i := 0; i < 16; i++ {
+		devices = append(devices, domain.Device{
+			ID:                   uuid.New(),
+			Hostname:             "edge-race",
+			IP:                   "10.64.0.10",
+			Managed:              true,
+			PollClass:            domain.PollClassCore,
+			PollIntervalOverride: schedulerIntPtr(1),
+		})
+	}
+	sched := NewScheduler(&fakeDeviceSource{devices: devices}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingSNMPWorkerPoolPerformance:    "4",
+			domain.SettingSNMPWorkerPoolOperational:    "2",
+			domain.SettingSNMPWorkerPoolStatic:         "2",
+			domain.SettingPollingMaxWorkersPerDevice:   "4",
+			domain.SettingPollingMaxWorkersPerSubnet:   "16",
+			domain.SettingPollingMaxWorkersPerSite:     "16",
+			domain.SettingPollingMaxInflightPerProfile: "16",
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case task := <-sched.Tasks():
+				sched.Complete(Completion{
+					RunID:      task.RunID,
+					Key:        task.Key,
+					FinishedAt: time.Now().UTC(),
+				})
+			case <-stop:
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = sched.PollingHealth()
+			}
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	sched.Stop()
+	close(stop)
+	wg.Wait()
+}
+
+func TestSchedulerDispatchReady_RespectsPollingIsolationBudgets(t *testing.T) {
+	areaID := uuid.New()
+	sharedCreds := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+	}
+	deviceA := domain.Device{
+		ID:              uuid.New(),
+		Hostname:        "edge-a",
+		IP:              "10.10.20.10",
+		Managed:         true,
+		PollClass:       domain.PollClassCore,
+		AreaIDs:         []uuid.UUID{areaID},
+		SNMPCredentials: sharedCreds,
+	}
+	deviceB := domain.Device{
+		ID:              uuid.New(),
+		Hostname:        "edge-b",
+		IP:              "10.10.20.11",
+		Managed:         true,
+		PollClass:       domain.PollClassCore,
+		AreaIDs:         []uuid.UUID{areaID},
+		SNMPCredentials: sharedCreds,
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{devices: []domain.Device{deviceA, deviceB}}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingSNMPWorkerPoolPerformance:    "8",
+			domain.SettingSNMPWorkerPoolOperational:    "8",
+			domain.SettingSNMPWorkerPoolStatic:         "8",
+			domain.SettingPollingMaxWorkersPerDevice:   "1",
+			domain.SettingPollingMaxWorkersPerSubnet:   "1",
+			domain.SettingPollingMaxWorkersPerSite:     "1",
+			domain.SettingPollingMaxInflightPerProfile: "1",
+		},
+	})
+	now := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("refreshDevices: %v", err)
+	}
+	for _, key := range []TaskKey{
+		NewEssentialTaskKey(deviceA.ID),
+		NewEssentialTaskKey(deviceB.ID),
+		NewTaskKey(deviceA.ID, domain.VolatilityClassPerformance),
+	} {
+		item := mustSchedulerItem(t, scheduler, key)
+		item.dueAt = now
+		heap.Fix(&scheduler.heap, item.index)
+	}
+
+	scheduler.moveDueTasksToReady(now)
+	scheduler.dispatchReady(context.Background(), now)
+
+	if scheduler.inFlight != 1 {
+		t.Fatalf("inFlight = %d, want 1 due to site/subnet/profile/device isolation budgets", scheduler.inFlight)
 	}
 }
 

@@ -6,11 +6,15 @@ import (
 	"errors"
 	"log"
 	"math/rand"
+	"net"
+	"net/netip"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
@@ -39,14 +43,19 @@ type Scheduler struct {
 	heap            taskHeap
 	ready           [3][]*heapItem
 
-	running         atomic.Bool
-	lifecycleMu     sync.Mutex
-	cancel          context.CancelFunc
-	done            chan struct{}
-	inFlight        int
-	inFlightByClass map[domain.VolatilityClass]int
-	inFlightByKind  map[polling.TaskKind]int
-	runID           uint64
+	running           atomic.Bool
+	lifecycleMu       sync.Mutex
+	mu                sync.RWMutex
+	cancel            context.CancelFunc
+	done              chan struct{}
+	inFlight          int
+	inFlightByClass   map[domain.VolatilityClass]int
+	inFlightByKind    map[polling.TaskKind]int
+	inFlightByDevice  map[string]int
+	inFlightBySite    map[string]int
+	inFlightBySubnet  map[string]int
+	inFlightByProfile map[string]int
+	runID             uint64
 
 	deadlineMissTotal uint64
 	lastWarnings      []polling.CapacityWarning
@@ -60,18 +69,22 @@ type reduePerformanceTaskRequest struct {
 
 func NewScheduler(source DeviceSource, settingsRepo domain.SettingsRepository) *Scheduler {
 	scheduler := &Scheduler{
-		source:          source,
-		settingsRepo:    settingsRepo,
-		refreshInterval: defaultInventoryRefreshInterval,
-		tasks:           make(chan PollTask, defaultTaskBuffer),
-		completions:     make(chan Completion, defaultTaskBuffer),
-		redueRequests:   make(chan reduePerformanceTaskRequest, defaultTaskBuffer),
-		now:             time.Now,
-		rnd:             rand.New(rand.NewSource(1)),
-		items:           make(map[TaskKey]*heapItem),
-		done:            make(chan struct{}),
-		inFlightByClass: make(map[domain.VolatilityClass]int),
-		inFlightByKind:  make(map[polling.TaskKind]int),
+		source:            source,
+		settingsRepo:      settingsRepo,
+		refreshInterval:   defaultInventoryRefreshInterval,
+		tasks:             make(chan PollTask, defaultTaskBuffer),
+		completions:       make(chan Completion, defaultTaskBuffer),
+		redueRequests:     make(chan reduePerformanceTaskRequest, defaultTaskBuffer),
+		now:               time.Now,
+		rnd:               rand.New(rand.NewSource(1)),
+		items:             make(map[TaskKey]*heapItem),
+		done:              make(chan struct{}),
+		inFlightByClass:   make(map[domain.VolatilityClass]int),
+		inFlightByKind:    make(map[polling.TaskKind]int),
+		inFlightByDevice:  make(map[string]int),
+		inFlightBySite:    make(map[string]int),
+		inFlightBySubnet:  make(map[string]int),
+		inFlightByProfile: make(map[string]int),
 	}
 	heap.Init(&scheduler.heap)
 	return scheduler
@@ -89,7 +102,13 @@ func (s *Scheduler) Status() string {
 }
 
 func (s *Scheduler) PollingHealth() polling.HealthSnapshot {
-	lag := s.queueLagForKind(polling.TaskKindEssential, s.now().UTC())
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pollingHealthLocked(s.now().UTC())
+}
+
+func (s *Scheduler) pollingHealthLocked(now time.Time) polling.HealthSnapshot {
+	lag := s.queueLagForKind(polling.TaskKindEssential, now)
 	active := s.inFlightByKind[polling.TaskKindEssential]
 	configured := s.maxEssentialInFlight()
 
@@ -120,10 +139,13 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	s.runID++
 	s.running.Store(true)
 
-	if err := s.refreshDevices(s.now().UTC()); err != nil {
+	now := s.now().UTC()
+	s.mu.Lock()
+	if err := s.refreshDevices(now); err != nil {
 		log.Printf("scheduler: initial refresh failed: %v", err)
 	}
-	s.recordMetrics()
+	s.recordMetricsLocked(now)
+	s.mu.Unlock()
 
 	go s.run(derived)
 	return nil
@@ -141,7 +163,9 @@ func (s *Scheduler) Stop() {
 	s.cancel()
 	<-s.done
 	s.cancel = nil
+	s.mu.Lock()
 	s.resetRuntimeState()
+	s.mu.Unlock()
 	s.done = make(chan struct{})
 }
 
@@ -208,26 +232,36 @@ func (s *Scheduler) run(ctx context.Context) {
 
 	for {
 		now := s.now().UTC()
+		s.mu.Lock()
 		s.moveDueTasksToReady(now)
 		s.dispatchReady(ctx, now)
-		s.recordMetrics()
-		resetSchedulerTimer(timer, s.nextWakeDelay(now))
+		s.recordMetricsLocked(now)
+		delay := s.nextWakeDelay(now)
+		s.mu.Unlock()
+		resetSchedulerTimer(timer, delay)
 
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
 		case <-refreshTicker.C:
-			if err := s.refreshDevices(s.now().UTC()); err != nil {
+			now := s.now().UTC()
+			s.mu.Lock()
+			if err := s.refreshDevices(now); err != nil {
 				log.Printf("scheduler: refresh failed: %v", err)
 			}
-			s.recordMetrics()
+			s.recordMetricsLocked(now)
+			s.mu.Unlock()
 		case request := <-s.redueRequests:
+			s.mu.Lock()
 			s.handleReduePerformanceTask(request)
-			s.recordMetrics()
+			s.recordMetricsLocked(s.now().UTC())
+			s.mu.Unlock()
 		case completion := <-s.completions:
+			s.mu.Lock()
 			s.handleCompletion(completion)
-			s.recordMetrics()
+			s.recordMetricsLocked(s.now().UTC())
+			s.mu.Unlock()
 		}
 	}
 }
@@ -248,17 +282,19 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 			continue
 		}
 
-		essentialKey := NewEssentialTaskKey(device.ID)
-		seen[essentialKey] = struct{}{}
-		s.upsertScheduledItem(
-			device,
-			essentialKey,
-			polling.TaskKindEssential,
-			polling.LaneEssential,
-			"",
-			EssentialInterval(device),
-			now,
-		)
+		if shouldScheduleEssentialTask(device) {
+			essentialKey := NewEssentialTaskKey(device.ID)
+			seen[essentialKey] = struct{}{}
+			s.upsertScheduledItem(
+				device,
+				essentialKey,
+				polling.TaskKindEssential,
+				polling.LaneEssential,
+				"",
+				EssentialInterval(device),
+				now,
+			)
+		}
 
 		if shouldScheduleBootstrapTask(device) {
 			bootstrapKey := NewBootstrapTaskKey(device.ID)
@@ -382,7 +418,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 				s.deadlineMissTotal++
 				observability.Default().IncPollingDeadlineMiss()
 			}
-			observability.Default().SetPollingEssentialOverloaded(s.PollingHealth().EssentialOverloaded)
+			observability.Default().SetPollingEssentialOverloaded(s.pollingHealthLocked(now).EssentialOverloaded)
 			observability.Default().IncSchedulerTaskDispatch(taskVolatilityForMetrics(task))
 		case <-ctx.Done():
 			s.pushReadyFront(item)
@@ -467,6 +503,7 @@ func (s *Scheduler) popReady() *heapItem {
 
 func (s *Scheduler) popReadyEligible() *heapItem {
 	budgets := s.classBudgets()
+	policy, _ := polling.PolicyFromSettings(s.settingsRepo, 0, 0, 0)
 	blockedClasses := make(map[domain.VolatilityClass]struct{})
 	blockedKinds := make(map[polling.TaskKind]struct{})
 
@@ -477,7 +514,7 @@ func (s *Scheduler) popReadyEligible() *heapItem {
 
 		for index, item := range s.ready[priority] {
 			item.task = normalizeTask(item.task)
-			if !s.canDispatch(item.task, budgets) {
+			if !s.canDispatch(item.task, budgets, policy) {
 				if item.task.Kind == polling.TaskKindEssential {
 					blockedKinds[item.task.Kind] = struct{}{}
 				} else {
@@ -726,19 +763,22 @@ func (s *Scheduler) maxEssentialInFlight() int {
 	return limit
 }
 
-func (s *Scheduler) canDispatch(task PollTask, budgets map[domain.VolatilityClass]int) bool {
+func (s *Scheduler) canDispatch(task PollTask, budgets map[domain.VolatilityClass]int, policy polling.Policy) bool {
 	if task.Kind == polling.TaskKindEssential {
-		return s.inFlightByKind[polling.TaskKindEssential] < s.maxEssentialInFlight()
+		return s.inFlightByKind[polling.TaskKindEssential] < s.maxEssentialInFlight() &&
+			s.withinIsolationBudgets(task, policy)
 	}
-	return s.inFlightByClass[task.VolatilityClass] < budgets[task.VolatilityClass]
+	return s.inFlightByClass[task.VolatilityClass] < budgets[task.VolatilityClass] &&
+		s.withinIsolationBudgets(task, policy)
 }
 
 func (s *Scheduler) incrementInFlight(task PollTask) {
 	if task.Kind == polling.TaskKindEssential {
 		s.inFlightByKind[polling.TaskKindEssential]++
-		return
+	} else {
+		s.inFlightByClass[task.VolatilityClass]++
 	}
-	s.inFlightByClass[task.VolatilityClass]++
+	s.incrementIsolationCounts(task)
 }
 
 func (s *Scheduler) decrementInFlight(task PollTask) {
@@ -746,11 +786,67 @@ func (s *Scheduler) decrementInFlight(task PollTask) {
 		if s.inFlightByKind[polling.TaskKindEssential] > 0 {
 			s.inFlightByKind[polling.TaskKindEssential]--
 		}
-		return
-	}
-	if s.inFlightByClass[task.VolatilityClass] > 0 {
+	} else if s.inFlightByClass[task.VolatilityClass] > 0 {
 		s.inFlightByClass[task.VolatilityClass]--
 	}
+	s.decrementIsolationCounts(task)
+}
+
+func (s *Scheduler) withinIsolationBudgets(task PollTask, policy polling.Policy) bool {
+	deviceKey := task.Device.ID.String()
+	if deviceKey != "" && policy.MaxWorkersPerDevice > 0 && s.inFlightByDevice[deviceKey] >= policy.MaxWorkersPerDevice {
+		return false
+	}
+	if policy.MaxWorkersPerSite > 0 {
+		for _, siteKey := range taskSiteKeys(task) {
+			if s.inFlightBySite[siteKey] >= policy.MaxWorkersPerSite {
+				return false
+			}
+		}
+	}
+	if subnetKey := taskSubnetKey(task); subnetKey != "" && policy.MaxWorkersPerSubnet > 0 && s.inFlightBySubnet[subnetKey] >= policy.MaxWorkersPerSubnet {
+		return false
+	}
+	if profileKey := taskProfileKey(task); profileKey != "" && policy.MaxInflightPerProfile > 0 && s.inFlightByProfile[profileKey] >= policy.MaxInflightPerProfile {
+		return false
+	}
+	return true
+}
+
+func (s *Scheduler) incrementIsolationCounts(task PollTask) {
+	incrementCount(s.inFlightByDevice, task.Device.ID.String())
+	for _, siteKey := range taskSiteKeys(task) {
+		incrementCount(s.inFlightBySite, siteKey)
+	}
+	incrementCount(s.inFlightBySubnet, taskSubnetKey(task))
+	incrementCount(s.inFlightByProfile, taskProfileKey(task))
+}
+
+func (s *Scheduler) decrementIsolationCounts(task PollTask) {
+	decrementCount(s.inFlightByDevice, task.Device.ID.String())
+	for _, siteKey := range taskSiteKeys(task) {
+		decrementCount(s.inFlightBySite, siteKey)
+	}
+	decrementCount(s.inFlightBySubnet, taskSubnetKey(task))
+	decrementCount(s.inFlightByProfile, taskProfileKey(task))
+}
+
+func incrementCount(counts map[string]int, key string) {
+	if key == "" {
+		return
+	}
+	counts[key]++
+}
+
+func decrementCount(counts map[string]int, key string) {
+	if key == "" {
+		return
+	}
+	if counts[key] <= 1 {
+		delete(counts, key)
+		return
+	}
+	counts[key]--
 }
 
 func (s *Scheduler) markElapsedInFlightWindows(now time.Time) {
@@ -808,7 +904,7 @@ func scheduledBackgroundVolatilityClassesForDevice(device domain.Device) []domai
 func managedDeviceCount(devices []domain.Device) int {
 	count := 0
 	for _, device := range devices {
-		if device.Managed && !domain.IsVirtualNoIPDevice(device) {
+		if shouldScheduleEssentialTask(device) {
 			count++
 		}
 	}
@@ -818,7 +914,7 @@ func managedDeviceCount(devices []domain.Device) int {
 func shortestEssentialInterval(devices []domain.Device) time.Duration {
 	var shortest time.Duration
 	for _, device := range devices {
-		if !device.Managed || domain.IsVirtualNoIPDevice(device) {
+		if !shouldScheduleEssentialTask(device) {
 			continue
 		}
 		interval := EssentialInterval(device)
@@ -879,6 +975,69 @@ func taskVolatilityForMetrics(task PollTask) domain.VolatilityClass {
 	return domain.VolatilityClassPerformance
 }
 
+func shouldScheduleEssentialTask(device domain.Device) bool {
+	return device.Managed && !domain.IsVirtualNoIPDevice(device) && !domain.IsVirtualWithIPDevice(device)
+}
+
+func taskSiteKeys(task PollTask) []string {
+	if len(task.Device.AreaIDs) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(task.Device.AreaIDs))
+	for _, areaID := range task.Device.AreaIDs {
+		if areaID == uuid.Nil {
+			continue
+		}
+		keys = append(keys, areaID.String())
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func taskSubnetKey(task PollTask) string {
+	rawIP := strings.TrimSpace(task.Device.IP)
+	if rawIP == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(rawIP); err == nil {
+		rawIP = host
+	}
+	rawIP = strings.Trim(rawIP, "[]")
+	addr, err := netip.ParseAddr(rawIP)
+	if err != nil {
+		return ""
+	}
+	bits := 64
+	if addr.Is4() {
+		bits = 24
+	}
+	return netip.PrefixFrom(addr, bits).Masked().String()
+}
+
+func taskProfileKey(task PollTask) string {
+	creds := task.Device.SNMPCredentials
+	switch creds.Version {
+	case domain.SNMPVersionV2c:
+		if creds.V2c == nil {
+			return ""
+		}
+		return "2c|" + creds.V2c.Community
+	case domain.SNMPVersionV3:
+		if creds.V3 == nil {
+			return ""
+		}
+		return strings.Join([]string{
+			"3",
+			creds.V3.Username,
+			creds.V3.SecurityLevel,
+			creds.V3.AuthProtocol,
+			creds.V3.PrivProtocol,
+		}, "|")
+	default:
+		return ""
+	}
+}
+
 func shouldScheduleBootstrapTask(device domain.Device) bool {
 	if !device.Managed || device.DeviceType == domain.DeviceTypeVirtual {
 		return false
@@ -925,6 +1084,10 @@ func (s *Scheduler) resetRuntimeState() {
 	s.inFlight = 0
 	s.inFlightByClass = make(map[domain.VolatilityClass]int)
 	s.inFlightByKind = make(map[polling.TaskKind]int)
+	s.inFlightByDevice = make(map[string]int)
+	s.inFlightBySite = make(map[string]int)
+	s.inFlightBySubnet = make(map[string]int)
+	s.inFlightByProfile = make(map[string]int)
 	s.deadlineMissTotal = 0
 	s.lastWarnings = nil
 	s.degradedRisk = false
@@ -951,15 +1114,22 @@ drainRedueRequests:
 		select {
 		case <-s.redueRequests:
 		default:
-			s.recordMetrics()
+			s.recordMetricsLocked(s.now().UTC())
 			return
 		}
 	}
 }
 
 func (s *Scheduler) recordMetrics() {
+	now := s.now().UTC()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	s.recordMetricsLocked(now)
+}
+
+func (s *Scheduler) recordMetricsLocked(now time.Time) {
 	observability.Default().SetSchedulerInFlight(s.inFlight)
-	observability.Default().SetPollingEssentialOverloaded(s.PollingHealth().EssentialOverloaded)
+	observability.Default().SetPollingEssentialOverloaded(s.pollingHealthLocked(now).EssentialOverloaded)
 	for _, volatility := range scheduledVolatilityClasses() {
 		priority := VolatilityPriority(volatility)
 		depth := 0
@@ -967,7 +1137,7 @@ func (s *Scheduler) recordMetrics() {
 			depth = len(s.ready[priority])
 		}
 		observability.Default().SetSchedulerReadyDepth(volatility, depth)
-		observability.Default().SetSchedulerQueueLag(volatility, s.queueLag(volatility, s.now().UTC()))
+		observability.Default().SetSchedulerQueueLag(volatility, s.queueLag(volatility, now))
 	}
 }
 
