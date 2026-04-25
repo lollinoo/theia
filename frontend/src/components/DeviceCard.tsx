@@ -155,6 +155,18 @@ function freshnessMeta(freshness: FreshnessStatus): { tone: Readout['tone']; tex
   }
 }
 
+function runtimeTelemetryMeta(metrics: DeviceMetricsDTO): { tone: Readout['tone']; text: string } {
+  if (
+    metrics.primary_health === 'snmp_degraded' ||
+    metrics.reachability === 'soft_down' ||
+    metrics.snmp_reachable === 'false'
+  ) {
+    return { tone: 'warning', text: 'SNMP unreachable' };
+  }
+
+  return freshnessMeta(metrics.freshness);
+}
+
 function readoutToneClass(tone: Readout['tone']): string {
   switch (tone) {
     case 'ok':
@@ -247,7 +259,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const isVirtual = data.isVirtual === true;
   const headerState = resolveDeviceVisualState(data.device, metrics, monitoringState);
   const freshness =
-    monitoringState === 'monitorable' && metrics ? freshnessMeta(metrics.freshness) : null;
+    monitoringState === 'monitorable' && metrics ? runtimeTelemetryMeta(metrics) : null;
   const pollingEvery =
     monitoringState === 'monitorable' && metrics
       ? formatPollingEvery(
@@ -575,6 +587,9 @@ const DeviceCard = memo(
       pd.metrics?.uptime_secs === nd.metrics?.uptime_secs &&
       pd.metrics?.health === nd.metrics?.health &&
       pd.metrics?.primary_health === nd.metrics?.primary_health &&
+      pd.metrics?.reachability === nd.metrics?.reachability &&
+      pd.metrics?.network_reachable === nd.metrics?.network_reachable &&
+      pd.metrics?.snmp_reachable === nd.metrics?.snmp_reachable &&
       sameRuntimeFlags(pd.metrics?.runtime_flags, nd.metrics?.runtime_flags) &&
       pd.metrics?.freshness === nd.metrics?.freshness &&
       pd.metrics?.last_polled_at === nd.metrics?.last_polled_at &&

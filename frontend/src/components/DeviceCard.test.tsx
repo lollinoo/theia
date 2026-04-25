@@ -193,6 +193,24 @@ describe('DeviceCard', () => {
     expect(screen.getAllByText('--')).toHaveLength(3);
   });
 
+  it('surfaces SNMP reachability ahead of fresh cached telemetry copy', () => {
+    renderDeviceCard({
+      metrics: mockMetrics({
+        health: 'healthy',
+        primary_health: 'snmp_degraded',
+        field_states: { uptime: 'error', cpu: 'ok', memory: 'ok' },
+        network_reachable: 'true',
+        snmp_reachable: 'false',
+        reachability: 'up',
+        freshness: 'fresh',
+      }),
+    });
+
+    expect(screen.getByText('Warning')).toBeInTheDocument();
+    expect(screen.getByText('SNMP unreachable')).toBeInTheDocument();
+    expect(screen.queryByText('Fresh telemetry')).toBeNull();
+  });
+
   it('renders runtime state badges from polling flags', () => {
     renderDeviceCard({
       metrics: mockMetrics({

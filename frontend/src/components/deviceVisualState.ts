@@ -332,6 +332,23 @@ export function resolveDeviceStatusDotStyles(status: DeviceVisualStatus): Device
   };
 }
 
+function hasRuntimeReachabilityFailure(metrics?: DeviceVisualMetrics): boolean {
+  return (
+    metrics?.primary_health === 'unreachable' ||
+    metrics?.primary_health === 'quarantined' ||
+    metrics?.reachability === 'hard_down' ||
+    metrics?.network_reachable === 'false'
+  );
+}
+
+function hasSnmpReachabilityWarning(metrics?: DeviceVisualMetrics): boolean {
+  return (
+    metrics?.primary_health === 'snmp_degraded' ||
+    metrics?.reachability === 'soft_down' ||
+    metrics?.snmp_reachable === 'false'
+  );
+}
+
 export function resolveDeviceVisualState(
   device: DeviceVisualInput,
   metrics?: DeviceVisualMetrics,
@@ -356,6 +373,22 @@ export function resolveDeviceVisualState(
 
   if (device.status !== 'up') {
     return operationalStatus;
+  }
+
+  if (hasRuntimeReachabilityFailure(metrics)) {
+    return {
+      dotStatus: 'critical',
+      label: 'Critical',
+      labelClass: healthLabelClass('critical'),
+    };
+  }
+
+  if (metrics?.health !== 'critical' && hasSnmpReachabilityWarning(metrics)) {
+    return {
+      dotStatus: 'degraded',
+      label: 'Warning',
+      labelClass: healthLabelClass('warning'),
+    };
   }
 
   switch (metrics?.health) {
@@ -383,14 +416,6 @@ export function resolveDeviceVisualState(
           dotStatus: 'up',
           label: 'Up',
           labelClass: healthLabelClass('healthy'),
-        };
-      }
-
-      if (metrics?.primary_health === 'snmp_degraded') {
-        return {
-          dotStatus: 'degraded',
-          label: 'Warning',
-          labelClass: healthLabelClass('warning'),
         };
       }
 
