@@ -74,6 +74,108 @@ const POLLING_PRESETS = [
 
 const PRESET_VALUES = new Set(POLLING_PRESETS.map((p) => p.value).filter((v) => v !== 'custom'));
 
+type WorkerSettingKey =
+  | 'polling_essential_workers'
+  | 'snmp_worker_pool_performance_size'
+  | 'snmp_worker_pool_operational_size'
+  | 'snmp_worker_pool_static_size'
+  | 'polling_max_workers_per_device'
+  | 'polling_max_workers_per_site'
+  | 'polling_max_workers_per_subnet'
+  | 'polling_max_inflight_per_snmp_profile';
+
+interface WorkerSetting {
+  key: WorkerSettingKey;
+  label: string;
+  defaultValue: string;
+}
+
+interface WorkerSettingGroup {
+  title: string;
+  settings: readonly WorkerSetting[];
+}
+
+const WORKER_SETTING_GROUPS: readonly WorkerSettingGroup[] = [
+  {
+    title: 'Worker Pools',
+    settings: [
+      {
+        key: 'polling_essential_workers',
+        label: 'Essential Workers',
+        defaultValue: '64',
+      },
+      {
+        key: 'snmp_worker_pool_performance_size',
+        label: 'Performance Pool',
+        defaultValue: '3',
+      },
+      {
+        key: 'snmp_worker_pool_operational_size',
+        label: 'Operational Pool',
+        defaultValue: '1',
+      },
+      {
+        key: 'snmp_worker_pool_static_size',
+        label: 'Static Pool',
+        defaultValue: '1',
+      },
+    ],
+  },
+  {
+    title: 'Isolation Limits',
+    settings: [
+      {
+        key: 'polling_max_workers_per_device',
+        label: 'Max Workers Per Device',
+        defaultValue: '1',
+      },
+      {
+        key: 'polling_max_workers_per_site',
+        label: 'Max Workers Per Site',
+        defaultValue: '16',
+      },
+      {
+        key: 'polling_max_workers_per_subnet',
+        label: 'Max Workers Per Subnet',
+        defaultValue: '8',
+      },
+      {
+        key: 'polling_max_inflight_per_snmp_profile',
+        label: 'Max Inflight Per SNMP Profile',
+        defaultValue: '16',
+      },
+    ],
+  },
+] as const;
+
+const WORKER_SETTINGS = WORKER_SETTING_GROUPS.flatMap((group) => group.settings);
+
+function createDefaultWorkerSettings(): Record<WorkerSettingKey, string> {
+  const values = {} as Record<WorkerSettingKey, string>;
+  for (const setting of WORKER_SETTINGS) {
+    values[setting.key] = setting.defaultValue;
+  }
+  return values;
+}
+
+function createWorkerSavedFlags(): Record<WorkerSettingKey, boolean> {
+  const flags = {} as Record<WorkerSettingKey, boolean>;
+  for (const setting of WORKER_SETTINGS) {
+    flags[setting.key] = false;
+  }
+  return flags;
+}
+
+function createWorkerTimerRefs(): Record<WorkerSettingKey, number | null> {
+  const refs = {} as Record<WorkerSettingKey, number | null>;
+  for (const setting of WORKER_SETTINGS) {
+    refs[setting.key] = null;
+  }
+  return refs;
+}
+
+const DEFAULT_WORKER_SETTINGS = createDefaultWorkerSettings();
+
 interface SavedIndicatorProps {
   visible: boolean;
 }
@@ -117,6 +219,11 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const [savedBridgeSecret, setSavedBridgeSecret] = useState(false);
   const [bridgePort, setBridgePort] = useState('1337');
   const [savedBridgePort, setSavedBridgePort] = useState(false);
+  const [workerSectionOpen, setWorkerSectionOpen] = useState(false);
+  const [workerSettings, setWorkerSettings] =
+    useState<Record<WorkerSettingKey, string>>(DEFAULT_WORKER_SETTINGS);
+  const [savedWorkerSettings, setSavedWorkerSettings] =
+    useState<Record<WorkerSettingKey, boolean>>(createWorkerSavedFlags);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const pollingTimerRef = useRef<number | null>(null);
@@ -135,6 +242,10 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const savedBridgeSecretTimerRef = useRef<number | null>(null);
   const bridgePortTimerRef = useRef<number | null>(null);
   const savedBridgePortTimerRef = useRef<number | null>(null);
+  const workerTimerRefs = useRef<Record<WorkerSettingKey, number | null>>(createWorkerTimerRefs());
+  const savedWorkerTimerRefs = useRef<Record<WorkerSettingKey, number | null>>(
+    createWorkerTimerRefs(),
+  );
 
   useEffect(() => {
     fetchSettings()
@@ -157,6 +268,15 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         setDeviceBackupRetention(settings['device_backup_retention_count'] ?? '5');
         setBridgeSecret(settings['bridge_secret'] ?? '');
         setBridgePort(settings['bridge_port'] ?? '1337');
+        setWorkerSettings((prev) => {
+          const next = { ...prev };
+          for (const group of WORKER_SETTING_GROUPS) {
+            for (const setting of group.settings) {
+              next[setting.key] = settings[setting.key] ?? setting.defaultValue;
+            }
+          }
+          return next;
+        });
       })
       .catch(() => {
         /* non-fatal */
@@ -180,6 +300,42 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
     setter(true);
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => setter(false), 2000);
+  }
+
+  function showWorkerSaved(key: WorkerSettingKey) {
+    setSavedWorkerSettings((prev) => ({ ...prev, [key]: true }));
+    if (savedWorkerTimerRefs.current[key] !== null) {
+      window.clearTimeout(savedWorkerTimerRefs.current[key]);
+    }
+    savedWorkerTimerRefs.current[key] = window.setTimeout(() => {
+      setSavedWorkerSettings((prev) => ({ ...prev, [key]: false }));
+    }, 2000);
+  }
+
+  function validatePositiveInteger(value: string): string | null {
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) return 'Must be a positive integer';
+    if (parseInt(trimmed, 10) <= 0) return 'Must be greater than 0';
+    return null;
+  }
+
+  function handleWorkerSettingChange(key: WorkerSettingKey, value: string) {
+    setWorkerSettings((prev) => ({ ...prev, [key]: value }));
+    if (workerTimerRefs.current[key] !== null) {
+      window.clearTimeout(workerTimerRefs.current[key]);
+    }
+
+    const err = validatePositiveInteger(value);
+    if (err) {
+      setFieldError(key, err);
+      return;
+    }
+
+    setFieldError(key, null);
+    const normalized = String(parseInt(value, 10));
+    workerTimerRefs.current[key] = window.setTimeout(() => {
+      void updateSetting(key, normalized).then(() => showWorkerSaved(key));
+    }, 500);
   }
 
   function schedulePollingUpdate(rawValue: string) {
@@ -311,6 +467,40 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
     }
   }
 
+  function renderWorkerSettingField(setting: WorkerSetting) {
+    const inputId = `worker-setting-${setting.key}`;
+    return (
+      <div key={setting.key} className="space-y-1">
+        <div className="flex items-center justify-between gap-3">
+          <label htmlFor={inputId} className="text-[11px] font-medium text-on-bg-secondary">
+            {setting.label}
+          </label>
+          {savedWorkerSettings[setting.key] && (
+            <span className="text-[10px] text-status-up font-medium">Saved</span>
+          )}
+        </div>
+        <input
+          id={inputId}
+          type="number"
+          min={1}
+          step={1}
+          value={workerSettings[setting.key]}
+          onChange={(e) => handleWorkerSettingChange(setting.key, e.target.value)}
+          onBlur={() =>
+            setFieldError(setting.key, validatePositiveInteger(workerSettings[setting.key]))
+          }
+          className={`w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors[setting.key] ? ' border-status-down' : ' border-outline-subtle'}`}
+        />
+        <p className="break-all font-mono text-[10px] leading-relaxed text-on-bg-muted">
+          {setting.key}
+        </p>
+        {fieldErrors[setting.key] && (
+          <p className="text-[10px] text-status-down">{fieldErrors[setting.key]}</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 p-4 transition-colors duration-200">
       <div className="space-y-3">
@@ -363,6 +553,40 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
               )}
             </div>
             <span className="text-xs text-on-bg-secondary">sec</span>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6">
+        <button
+          type="button"
+          onClick={() => setWorkerSectionOpen((prev) => !prev)}
+          className="flex w-full items-center justify-between rounded-lg bg-surface-high px-3 py-2.5 text-left transition-colors hover:bg-elevated/50"
+        >
+          <span className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Polling Workers
+          </span>
+          <svg
+            className={`w-4 h-4 text-on-bg-secondary transition-transform duration-200 ${workerSectionOpen ? 'rotate-180' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        {workerSectionOpen && (
+          <div className="mt-2 space-y-3 transition-colors duration-200">
+            {WORKER_SETTING_GROUPS.map((group) => (
+              <div key={group.title} className="rounded-lg bg-surface-high p-3 space-y-3">
+                <h3 className="text-[11px] font-medium uppercase tracking-widest text-on-bg-secondary">
+                  {group.title}
+                </h3>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {group.settings.map((setting) => renderWorkerSettingField(setting))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
