@@ -110,6 +110,30 @@ describe('deviceVisualState', () => {
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-probing)');
   });
 
+  it('uses SNMP reachability before cached healthy metrics', () => {
+    const device = mockDevice({ status: 'up' });
+    const metrics = mockMetrics({
+      operational_status: 'up',
+      primary_health: 'snmp_degraded',
+      field_states: { uptime: 'error', cpu: 'ok', memory: 'ok' },
+      network_reachable: 'true',
+      snmp_reachable: 'false',
+      reachability: 'up',
+      health: 'healthy',
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      cpu_percent: 0,
+      mem_percent: 4.5,
+      uptime_secs: 15143983,
+    });
+
+    expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
+      dotStatus: 'degraded',
+      label: 'Warning',
+    });
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-probing)');
+  });
+
   it('uses primary up health when reachable SNMP devices only have partial telemetry', () => {
     const device = mockDevice({ status: 'up' });
     const metrics = mockMetrics({
