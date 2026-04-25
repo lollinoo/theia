@@ -17,12 +17,17 @@ import (
 type scriptedPerformanceClient struct {
 	getResponses      map[string][]gosnmp.SnmpPDU
 	bulkWalkResponses map[string][]gosnmp.SnmpPDU
+	getErr            error
+	bulkWalkErr       error
 	connectErr        error
 	connectCalls      int
 	closeCalls        int
 }
 
 func (c *scriptedPerformanceClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
+	if c.getErr != nil {
+		return nil, c.getErr
+	}
 	var pdus []gosnmp.SnmpPDU
 	for _, oid := range oids {
 		pdus = append(pdus, c.getResponses[oid]...)
@@ -31,6 +36,9 @@ func (c *scriptedPerformanceClient) Get(oids []string) ([]gosnmp.SnmpPDU, error)
 }
 
 func (c *scriptedPerformanceClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	if c.bulkWalkErr != nil {
+		return nil, c.bulkWalkErr
+	}
 	return c.bulkWalkResponses[rootOID], nil
 }
 
@@ -199,6 +207,40 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 				}
 				if client.closeCalls != 0 {
 					t.Fatalf("close calls = %d, want 0", client.closeCalls)
+				}
+			},
+		},
+		{
+			name: "all SNMP reads failing returns error instead of no data success",
+			device: domain.Device{
+				ID:     uuid.New(),
+				IP:     "192.0.2.14",
+				Vendor: "default",
+				SNMPCredentials: domain.SNMPCredentials{
+					Version: domain.SNMPVersionV2c,
+					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+				},
+			},
+			newClient: func() *scriptedPerformanceClient {
+				return &scriptedPerformanceClient{
+					getErr:      errors.New("get timeout"),
+					bulkWalkErr: errors.New("walk timeout"),
+				}
+			},
+			assert: func(t *testing.T, result PerformanceResult, client *scriptedPerformanceClient, _ []ctorCall) {
+				t.Helper()
+
+				if result.Err == nil {
+					t.Fatal("Err = nil, want all-read failure")
+				}
+				if result.Metrics.CPUPercent != nil || result.Metrics.MemPercent != nil || result.Metrics.TempCelsius != nil || result.Metrics.UptimeSecs != nil {
+					t.Fatalf("Metrics = %#v, want zero value pointers", result.Metrics)
+				}
+				if len(result.Counters) != 0 {
+					t.Fatalf("counter count = %d, want 0", len(result.Counters))
+				}
+				if client.closeCalls != 1 {
+					t.Fatalf("close calls = %d, want 1", client.closeCalls)
 				}
 			},
 		},

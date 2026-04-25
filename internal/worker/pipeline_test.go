@@ -167,6 +167,7 @@ type fakeSNMPClient struct {
 	walkResponses map[string][]gosnmp.SnmpPDU
 	getErr        map[string]error
 	walkErr       map[string]error
+	connectDelay  time.Duration
 }
 
 type spyPipelineTaskRunner struct {
@@ -185,8 +186,13 @@ func (s *spyPipelineTaskRunner) topologyDiscoveryMode(domain.Device) domain.Topo
 
 func (s *spyPipelineTaskRunner) publishSubscribedDetailDelta(domain.Device) {}
 
-func (c *fakeSNMPClient) Connect() error { return nil }
-func (c *fakeSNMPClient) Close() error   { return nil }
+func (c *fakeSNMPClient) Connect() error {
+	if c.connectDelay > 0 {
+		time.Sleep(c.connectDelay)
+	}
+	return nil
+}
+func (c *fakeSNMPClient) Close() error { return nil }
 
 func (c *fakeSNMPClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
 	var out []gosnmp.SnmpPDU
@@ -345,6 +351,51 @@ func TestPipelineRunsEssentialTaskWithEssentialTimeoutProfile(t *testing.T) {
 	}
 }
 
+func TestPipelineRunsPerformanceTaskWithBackgroundTimeoutProfile(t *testing.T) {
+	device := domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "edge-performance",
+		IP:            "10.0.0.2",
+		Managed:       true,
+		PollClass:     domain.PollClassCore,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Vendor:        "default",
+	}
+	stateStore := state.NewStore()
+	var gotTimeout time.Duration
+	gotRetries := -1
+	settingsRepo := newMockWorkerSettingsRepo()
+	_ = settingsRepo.Set(domain.SettingSNMPTimeout, "10")
+	_ = settingsRepo.Set(domain.SettingSNMPRetries, "2")
+	pipeline := NewPipelineOrchestrator(nil, stateStore, nil, nil, nil, nil, nil, nil, nil, nil, settingsRepo, nil, nil, nil)
+	pipeline.performance = collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(_ string, _ domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+		gotTimeout = timeout
+		gotRetries = retries
+		return &fakeSNMPClient{
+			getResponses: map[string][]gosnmp.SnmpPDU{
+				snmp.OidSysUpTime: {{Name: snmp.OidSysUpTime, Value: uint32(3_000)}},
+			},
+		}, nil
+	})
+
+	task := scheduler.PollTask{
+		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
+		Kind:             polling.TaskKindBackground,
+		Lane:             polling.LaneBackground,
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		Device:           device,
+		ExpectedInterval: 30 * time.Second,
+	}
+
+	pipeline.runTask(context.Background(), task)
+	if gotTimeout != 5*time.Second {
+		t.Fatalf("performance timeout = %v, want 5s background profile", gotTimeout)
+	}
+	if gotRetries != 1 {
+		t.Fatalf("performance retries = %d, want 1 background retry", gotRetries)
+	}
+}
+
 func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t *testing.T) {
 	deviceID := uuid.New()
 	linkID := uuid.New()
@@ -439,6 +490,72 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 	}
 	if sched.completions[0].Key != task.Key {
 		t.Fatalf("expected completion key %+v, got %+v", task.Key, sched.completions[0].Key)
+	}
+}
+
+func TestPipelineOrchestratorPerformanceTaskCompletionUsesWallClockFinish(t *testing.T) {
+	deviceID := uuid.New()
+	task := scheduler.PollTask{
+		RunID:            17,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device: domain.Device{
+			ID:                  deviceID,
+			IP:                  "192.0.2.17",
+			Managed:             true,
+			Status:              domain.DeviceStatusUnknown,
+			MetricsSource:       domain.MetricsSourceSNMP,
+			Vendor:              "default",
+			PrometheusLabelName: "instance",
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+			},
+		},
+	}
+	client := &fakeSNMPClient{
+		connectDelay: 30 * time.Millisecond,
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysUpTime: {{Name: snmp.OidSysUpTime, Value: uint32(3_000)}},
+		},
+		walkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Value: 55},
+			},
+		},
+	}
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		return client, nil
+	})
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		state.NewStore(),
+		newPipelineTestCache([]domain.Device{task.Device}, nil),
+		ws.NewHub(),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		collector.NewPrometheusCollector(&fakePrometheusClient{}),
+		&fakeTopologyService{},
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	startedAt := time.Now().UTC()
+	pipeline.taskRunner.runTask(context.Background(), task)
+
+	sched.mu.Lock()
+	defer sched.mu.Unlock()
+	if len(sched.completions) != 1 {
+		t.Fatalf("expected one scheduler completion, got %d", len(sched.completions))
+	}
+	if !sched.completions[0].FinishedAt.After(startedAt.Add(20 * time.Millisecond)) {
+		t.Fatalf("FinishedAt = %s, want wall-clock completion after delayed SNMP connect", sched.completions[0].FinishedAt.Format(time.RFC3339Nano))
 	}
 }
 

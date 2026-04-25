@@ -81,6 +81,81 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	}
 }
 
+func TestEssentialCollectorSysUpTimeFailureDoesNotMarkSNMPReachable(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+	client := &scriptedEssentialClient{
+		getErrs: map[string]error{
+			snmp.OidSysUpTime: assertiveError("request timeout"),
+		},
+	}
+	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+	collector.networkProbe = func(context.Context, string, time.Duration) error {
+		return assertiveError("tcp probe failed")
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.2"}, time.Second, 0)
+
+	if result.Err == nil {
+		t.Fatal("Err = nil, want sysUpTime failure")
+	}
+	if result.PollStatus != polling.PollStatusFailed {
+		t.Fatalf("PollStatus = %q, want failed", result.PollStatus)
+	}
+	if result.SNMPReachable != polling.TriStateFalse {
+		t.Fatalf("SNMPReachable = %q, want false", result.SNMPReachable)
+	}
+	if result.NetworkReachable != polling.TriStateUnknown {
+		t.Fatalf("NetworkReachable = %q, want unknown", result.NetworkReachable)
+	}
+	if result.Uptime != polling.FieldStateError {
+		t.Fatalf("Uptime = %q, want error", result.Uptime)
+	}
+}
+
+func TestEssentialCollectorSysUpTimeFailureRecordsReachableNetworkProbe(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+	client := &scriptedEssentialClient{
+		getErrs: map[string]error{
+			snmp.OidSysUpTime: assertiveError("request timeout"),
+		},
+	}
+	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration) error {
+		if target != "10.0.0.3" {
+			t.Fatalf("target = %q, want 10.0.0.3", target)
+		}
+		if timeout != time.Second {
+			t.Fatalf("timeout = %s, want 1s", timeout)
+		}
+		return nil
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0)
+
+	if result.Err == nil {
+		t.Fatal("Err = nil, want sysUpTime failure")
+	}
+	if result.PollStatus != polling.PollStatusFailed {
+		t.Fatalf("PollStatus = %q, want failed", result.PollStatus)
+	}
+	if result.NetworkReachable != polling.TriStateTrue {
+		t.Fatalf("NetworkReachable = %q, want true", result.NetworkReachable)
+	}
+	if result.SNMPReachable != polling.TriStateFalse {
+		t.Fatalf("SNMPReachable = %q, want false", result.SNMPReachable)
+	}
+}
+
 func TestEssentialCollectorCompleteResult(t *testing.T) {
 	registry := essentialTestRegistry(t, vendor.PerformanceOIDs{
 		CPUOID:         ".1.3.6.1.4.1.9999.1.0",

@@ -2,10 +2,12 @@ package sqlite
 
 import (
 	"database/sql"
+	"encoding/json"
 	"io/fs"
 	"strings"
 	"testing"
 
+	"github.com/lollinoo/theia/internal/domain"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -222,6 +224,147 @@ func TestMigration000014_DeviceDataIntegrity(t *testing.T) {
 	if prometheusLabelName != "instance" {
 		t.Errorf("expected prometheus_label_name %q, got %q", "instance", prometheusLabelName)
 	}
+}
+
+func TestMigrateDeviceSNMPCredentialsSkipsEmptyCredentialShells(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db, testKey); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	deviceID := "00000000-0000-0000-0000-000000000123"
+	const rawCreds = `{"version":""}`
+	_, err := db.Exec(
+		`INSERT INTO devices (
+			id, hostname, ip, snmp_credentials_json, device_type, status,
+			sys_name, sys_descr, sys_object_id, hardware_model, vendor,
+			managed, tags_json, metrics_source, prometheus_label_name,
+			prometheus_label_value, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+		deviceID, "virtual", "", rawCreds,
+		"virtual", "unknown",
+		"", "", "", "",
+		"default", 1, `{}`,
+		"none", "instance", "",
+	)
+	if err != nil {
+		t.Fatalf("inserting device: %v", err)
+	}
+
+	updated, err := migrateDeviceSNMPCredentials(db, testKey)
+	if err != nil {
+		t.Fatalf("migrateDeviceSNMPCredentials: %v", err)
+	}
+	if updated != 0 {
+		t.Fatalf("updated = %d, want 0", updated)
+	}
+
+	var got string
+	if err := db.QueryRow(`SELECT snmp_credentials_json FROM devices WHERE id = ?`, deviceID).Scan(&got); err != nil {
+		t.Fatalf("querying credentials: %v", err)
+	}
+	if got != rawCreds {
+		t.Fatalf("snmp_credentials_json = %s, want %s", got, rawCreds)
+	}
+}
+
+func TestMigrateDeviceSNMPCredentialsSkipsCredentialsEncryptedWithDifferentKey(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db, testKey); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	rawCreds := encryptedSNMPCredentialsJSON(t, []byte("old-encryption-key-32-byte-value"))
+	deviceID := "00000000-0000-0000-0000-000000000124"
+	_, err := db.Exec(
+		`INSERT INTO devices (
+			id, hostname, ip, snmp_credentials_json, device_type, status,
+			sys_name, sys_descr, sys_object_id, hardware_model, vendor,
+			managed, tags_json, metrics_source, prometheus_label_name,
+			prometheus_label_value, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+		deviceID, "router", "192.0.2.124", rawCreds,
+		"router", "unknown",
+		"", "", "", "",
+		"default", 1, `{}`,
+		"snmp", "instance", "192.0.2.124",
+	)
+	if err != nil {
+		t.Fatalf("inserting device: %v", err)
+	}
+
+	updated, err := migrateDeviceSNMPCredentials(db, testKey)
+	if err != nil {
+		t.Fatalf("migrateDeviceSNMPCredentials: %v", err)
+	}
+	if updated != 0 {
+		t.Fatalf("updated = %d, want 0", updated)
+	}
+
+	var got string
+	if err := db.QueryRow(`SELECT snmp_credentials_json FROM devices WHERE id = ?`, deviceID).Scan(&got); err != nil {
+		t.Fatalf("querying credentials: %v", err)
+	}
+	if got != rawCreds {
+		t.Fatalf("snmp_credentials_json was re-encrypted with the wrong key")
+	}
+}
+
+func TestMigrateSNMPProfileCredentialsSkipsCredentialsEncryptedWithDifferentKey(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db, testKey); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	rawCreds := encryptedSNMPCredentialsJSON(t, []byte("old-encryption-key-32-byte-value"))
+	profileID := "00000000-0000-0000-0000-000000000125"
+	_, err := db.Exec(
+		`INSERT INTO snmp_profiles (id, name, description, credentials_json, created_at, updated_at)
+		 VALUES (?, 'old-key-profile', '', ?, datetime('now'), datetime('now'))`,
+		profileID, rawCreds,
+	)
+	if err != nil {
+		t.Fatalf("inserting profile: %v", err)
+	}
+
+	updated, err := migrateSNMPProfileCredentials(db, testKey)
+	if err != nil {
+		t.Fatalf("migrateSNMPProfileCredentials: %v", err)
+	}
+	if updated != 0 {
+		t.Fatalf("updated = %d, want 0", updated)
+	}
+
+	var got string
+	if err := db.QueryRow(`SELECT credentials_json FROM snmp_profiles WHERE id = ?`, profileID).Scan(&got); err != nil {
+		t.Fatalf("querying credentials: %v", err)
+	}
+	if got != rawCreds {
+		t.Fatalf("credentials_json was re-encrypted with the wrong key")
+	}
+}
+
+func encryptedSNMPCredentialsJSON(t *testing.T, key []byte) string {
+	t.Helper()
+	creds := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV3,
+		V3: &domain.SNMPv3Credentials{
+			Username:      "snmp-user",
+			AuthProtocol:  "SHA",
+			AuthPassword:  "auth-secret",
+			PrivProtocol:  "AES",
+			PrivPassword:  "priv-secret",
+			SecurityLevel: "authPriv",
+		},
+	}
+	if err := encryptSNMPCredentials(&creds, key); err != nil {
+		t.Fatalf("encrypting credentials: %v", err)
+	}
+	raw, err := json.Marshal(creds)
+	if err != nil {
+		t.Fatalf("marshalling credentials: %v", err)
+	}
+	return string(raw)
 }
 
 func TestMigration000015_AddsScaleIndexes(t *testing.T) {

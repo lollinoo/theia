@@ -50,7 +50,7 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			p.scheduler.Complete(scheduler.Completion{
 				RunID:      task.RunID,
 				Key:        task.Key,
-				FinishedAt: finishedAt,
+				FinishedAt: time.Now().UTC(),
 			})
 		}
 	}()
@@ -110,7 +110,8 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			return
 		}
 
-		result := p.performance.Poll(ctx, task.Device, r.snmpTimeout(), r.snmpRetries())
+		profile := r.timeoutProfile(polling.LaneBackground)
+		result := p.performance.Poll(ctx, task.Device, profile.Timeout, profile.Retries)
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 
@@ -143,7 +144,8 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			return
 		}
 
-		result := p.operational.Poll(ctx, task.Device, r.snmpTimeout(), r.snmpRetries())
+		profile := r.timeoutProfile(polling.LaneBackground)
+		result := p.operational.Poll(ctx, task.Device, profile.Timeout, profile.Retries)
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 		p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))
@@ -154,7 +156,8 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			return
 		}
 
-		result := p.staticCollector.Poll(ctx, task.Device, r.snmpTimeout(), r.snmpRetries(), r.topologyDiscoveryMode(task.Device))
+		profile := r.timeoutProfile(polling.LaneBackground)
+		result := p.staticCollector.Poll(ctx, task.Device, profile.Timeout, profile.Retries, r.topologyDiscoveryMode(task.Device))
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 		p.stateStore.Update(state.StateUpdate{
@@ -250,7 +253,8 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 		}
 	}
 
-	if err := service.ProbeVirtualReachability(ctx, task.Device.IP, r.snmpTimeout()); err != nil {
+	profile := r.timeoutProfile(polling.LaneBackground)
+	if err := service.ProbeVirtualReachability(ctx, task.Device.IP, profile.Timeout); err != nil {
 		result.Err = err
 	} else {
 		result.Reachable = true

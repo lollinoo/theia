@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -341,6 +342,15 @@ func migrateDeviceSNMPCredentials(db *sql.DB, key []byte) (int, error) {
 			continue
 		}
 
+		if !hasSensitiveSNMPCredentials(&creds) {
+			continue
+		}
+
+		if hasUndecryptableEncryptedSNMPCredentials(&creds, key) {
+			log.Printf("Warning: skipping device %s SNMP migration (credentials look encrypted but cannot be decrypted with current key)", r.id)
+			continue
+		}
+
 		// Check if already encrypted by attempting decrypt
 		if isAlreadyEncrypted(&creds, key) {
 			continue
@@ -398,6 +408,15 @@ func migrateSNMPProfileCredentials(db *sql.DB, key []byte) (int, error) {
 			continue
 		}
 
+		if !hasSensitiveSNMPCredentials(&creds) {
+			continue
+		}
+
+		if hasUndecryptableEncryptedSNMPCredentials(&creds, key) {
+			log.Printf("Warning: skipping profile %s SNMP migration (credentials look encrypted but cannot be decrypted with current key)", r.id)
+			continue
+		}
+
 		if isAlreadyEncrypted(&creds, key) {
 			continue
 		}
@@ -419,6 +438,52 @@ func migrateSNMPProfileCredentials(db *sql.DB, key []byte) (int, error) {
 		updated++
 	}
 	return updated, nil
+}
+
+func hasSensitiveSNMPCredentials(creds *domain.SNMPCredentials) bool {
+	if creds == nil {
+		return false
+	}
+	if creds.V2c != nil && creds.V2c.Community != "" {
+		return true
+	}
+	if creds.V3 != nil {
+		return creds.V3.AuthPassword != "" || creds.V3.PrivPassword != ""
+	}
+	return false
+}
+
+func hasUndecryptableEncryptedSNMPCredentials(creds *domain.SNMPCredentials, key []byte) bool {
+	if creds == nil {
+		return false
+	}
+	if creds.V2c != nil && isUndecryptableEncryptedSNMPField(creds.V2c.Community, key) {
+		return true
+	}
+	if creds.V3 != nil {
+		return isUndecryptableEncryptedSNMPField(creds.V3.AuthPassword, key) ||
+			isUndecryptableEncryptedSNMPField(creds.V3.PrivPassword, key)
+	}
+	return false
+}
+
+func isUndecryptableEncryptedSNMPField(value string, key []byte) bool {
+	if !looksLikeEncryptedSNMPField(value) {
+		return false
+	}
+	_, ok := tryDecryptField(value, key)
+	return !ok
+}
+
+func looksLikeEncryptedSNMPField(value string) bool {
+	if value == "" {
+		return false
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return false
+	}
+	return len(ciphertext) >= 12+16
 }
 
 // isAlreadyEncrypted checks if any sensitive field in the credentials is already encrypted.

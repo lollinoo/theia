@@ -45,7 +45,7 @@ metrics:
     uptime: 'sysUpTime{%[1]s=~"%[2]s"}'
 
 snmp:
-  cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+  cpu_oid: ".1.3.6.1.2.1.25.3.3.1.2"
   temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
   temperature_scale: 1.0
 `

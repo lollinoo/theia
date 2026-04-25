@@ -25,6 +25,7 @@ func ComputeCounterRates(
 	collectedAt time.Time,
 	expectedInterval time.Duration,
 ) (metrics []domain.LinkMetrics, next map[string]CounterBaseline) {
+	_ = expectedInterval
 	next = cloneCounterBaselines(previous)
 	metrics = make([]domain.LinkMetrics, 0, len(current))
 
@@ -43,11 +44,6 @@ func ComputeCounterRates(
 
 		if prev.NeedsWarmup {
 			next[counter.IfName] = baseline
-			continue
-		}
-
-		if expectedInterval > 0 && collectedAt.Sub(prev.SampledAt) > 3*expectedInterval {
-			next[counter.IfName] = warmupBaseline(baseline)
 			continue
 		}
 

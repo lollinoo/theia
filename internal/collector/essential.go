@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -30,16 +31,18 @@ type EssentialResult struct {
 }
 
 type EssentialCollector struct {
-	registry  *vendor.Registry
-	newClient NewSNMPClientFunc
-	now       func() time.Time
+	registry     *vendor.Registry
+	newClient    NewSNMPClientFunc
+	networkProbe func(context.Context, string, time.Duration) error
+	now          func() time.Time
 }
 
 func NewEssentialCollector(registry *vendor.Registry, newClient NewSNMPClientFunc) *EssentialCollector {
 	return &EssentialCollector{
-		registry:  registry,
-		newClient: newClient,
-		now:       time.Now,
+		registry:     registry,
+		newClient:    newClient,
+		networkProbe: probeEssentialTCPReachability,
+		now:          time.Now,
 	}
 }
 
@@ -112,13 +115,78 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 	}
 
 	metrics := snmp.PollEssentialMetrics(client, c.registry.ResolvePerformanceOIDs(vendorName))
-	result.SNMPReachable = polling.TriStateTrue
-	result.NetworkReachable = polling.TriStateTrue
 	result.Uptime, result.UptimeSecs = convertEssentialField(metrics.Uptime)
 	result.CPU, result.CPUPercent = convertEssentialField(metrics.CPU)
 	result.Memory, result.MemPercent = convertEssentialField(metrics.Memory)
+	if !essentialMetricsHaveSuccessfulRead(metrics) {
+		if c.networkProbe != nil {
+			if err := c.networkProbe(ctx, device.IP, timeout); err == nil {
+				result.NetworkReachable = polling.TriStateTrue
+			}
+		}
+		result.SNMPReachable = polling.TriStateFalse
+		result.PollStatus = polling.PollStatusFailed
+		result.Err = essentialMetricsFailure(metrics)
+		return result
+	}
+
+	result.SNMPReachable = polling.TriStateTrue
+	result.NetworkReachable = polling.TriStateTrue
 	result.PollStatus = essentialPollStatus(result)
 	return result
+}
+
+func essentialMetricsHaveSuccessfulRead(metrics snmp.EssentialMetricsResult) bool {
+	return essentialFieldOK(metrics.Uptime) ||
+		essentialFieldOK(metrics.CPU) ||
+		essentialFieldOK(metrics.Memory)
+}
+
+func essentialFieldOK(field *snmp.EssentialMetricField) bool {
+	return field != nil && field.State == "ok"
+}
+
+func essentialMetricsFailure(metrics snmp.EssentialMetricsResult) error {
+	for _, field := range []*snmp.EssentialMetricField{metrics.Uptime, metrics.CPU, metrics.Memory} {
+		if field != nil && field.State == "error" && field.Error != "" {
+			return fmt.Errorf("essential SNMP read: %s", field.Error)
+		}
+	}
+	return errors.New("essential SNMP read returned no data")
+}
+
+var essentialTCPReachabilityPorts = []string{"22", "8291", "80", "443"}
+
+func probeEssentialTCPReachability(ctx context.Context, target string, timeout time.Duration) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return errors.New("network probe target is empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+
+	var lastErr error
+	for _, port := range essentialTCPReachabilityPorts {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		dialer := net.Dialer{Timeout: timeout}
+		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(target, port))
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("network probe failed")
 }
 
 func convertEssentialField(field *snmp.EssentialMetricField) (polling.FieldState, *float64) {
