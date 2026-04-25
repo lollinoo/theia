@@ -619,6 +619,7 @@ export default function Canvas({
           setNodes={setNodes}
           reactFlow={reactFlow}
           runtimeState={runtimeState}
+          editMode={editMode}
           onAreasChange={onAreasChange}
           onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {

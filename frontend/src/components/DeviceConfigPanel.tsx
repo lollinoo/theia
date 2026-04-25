@@ -94,6 +94,7 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
 interface DeviceConfigPanelProps {
   device: Device;
   detailMetrics: DeviceMetricsDTO | null;
+  readOnly?: boolean;
   onDeviceUpdated: (updated: Device) => void;
   onDeviceDeleted: () => void;
   onSettingsChange?: () => void;
@@ -104,6 +105,7 @@ interface DeviceConfigPanelProps {
 export function DeviceConfigPanel({
   device,
   detailMetrics,
+  readOnly = false,
   onDeviceUpdated,
   onDeviceDeleted,
   onSettingsChange,
@@ -149,6 +151,7 @@ export function DeviceConfigPanel({
   const savedPollingTimerRef = useRef<number | null>(null);
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const editSavedTimerRef = useRef<number | null>(null);
+  const winBoxAvailabilityCallbackRef = useRef(onWinBoxAvailabilityChange);
 
   const usesPrometheus =
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
@@ -208,12 +211,18 @@ export function DeviceConfigPanel({
     );
   }
 
-  async function loadAssignments() {
+  useEffect(() => {
+    winBoxAvailabilityCallbackRef.current = onWinBoxAvailabilityChange;
+  }, [onWinBoxAvailabilityChange]);
+
+  async function loadAssignments(deviceId = device.id) {
     setAssignmentsLoading(true);
     try {
-      const nextAssignments = await fetchDeviceCredentialProfiles(device.id);
+      const nextAssignments = await fetchDeviceCredentialProfiles(deviceId);
       setAssignments(nextAssignments);
-      onWinBoxAvailabilityChange?.(nextAssignments.some((assignment) => assignment.is_winbox));
+      winBoxAvailabilityCallbackRef.current?.(
+        nextAssignments.some((assignment) => assignment.is_winbox),
+      );
     } catch {
       // non-fatal — section shows empty
     } finally {
@@ -233,7 +242,6 @@ export function DeviceConfigPanel({
         .catch(() => {
           /* non-fatal */
         });
-      void loadAssignments();
     }
     fetchAreas()
       .then(setAreas)
@@ -248,6 +256,42 @@ export function DeviceConfigPanel({
         setPrometheusAvailable(false);
       });
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setShowAddSelect(false);
+    setRemovingId(null);
+
+    if (isVirtual) {
+      setAssignments([]);
+      setAssignmentsLoading(false);
+      winBoxAvailabilityCallbackRef.current?.(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setAssignments([]);
+    setAssignmentsLoading(true);
+    fetchDeviceCredentialProfiles(device.id)
+      .then((nextAssignments) => {
+        if (cancelled) return;
+        setAssignments(nextAssignments);
+        winBoxAvailabilityCallbackRef.current?.(
+          nextAssignments.some((assignment) => assignment.is_winbox),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setAssignments([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAssignmentsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [device.id, isVirtual]);
 
   useEffect(() => {
     fetchSettings()
@@ -290,6 +334,7 @@ export function DeviceConfigPanel({
   }
 
   function schedulePollingUpdate(rawValue: string, isDelete = false) {
+    if (readOnly) return;
     if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
     pollingTimerRef.current = window.setTimeout(() => {
       const pollIntervalOverride = isDelete ? null : Number.parseInt(rawValue, 10);
@@ -313,6 +358,7 @@ export function DeviceConfigPanel({
   }
 
   function handlePollingChange(value: string) {
+    if (readOnly) return;
     setPollingValue(value);
     setFieldError('polling', null);
     if (value === 'default') {
@@ -325,6 +371,7 @@ export function DeviceConfigPanel({
   }
 
   function handleCustomPollingChange(rawValue: string) {
+    if (readOnly) return;
     setCustomPolling(rawValue);
 
     if (!/^\d+$/.test(rawValue)) {
@@ -345,6 +392,7 @@ export function DeviceConfigPanel({
   }
 
   function scheduleGrafanaUpdate(value: string) {
+    if (readOnly) return;
     if (grafanaTimerRef.current !== null) window.clearTimeout(grafanaTimerRef.current);
     grafanaTimerRef.current = null;
 
@@ -364,6 +412,7 @@ export function DeviceConfigPanel({
 
   async function handleEditSave(e: React.FormEvent) {
     e.preventDefault();
+    if (readOnly) return;
 
     // Validate before API call
     const errors: Record<string, string> = {};
@@ -424,6 +473,7 @@ export function DeviceConfigPanel({
   }
 
   async function handleDelete() {
+    if (readOnly) return;
     setDeleteLoading(true);
     try {
       await deleteDevice(device.id);
@@ -435,6 +485,7 @@ export function DeviceConfigPanel({
   }
 
   async function handleRunTopologyDiscovery() {
+    if (readOnly) return;
     setTopologyDiscoveryRunning(true);
     setTopologyDiscoveryError(null);
     setTopologyDiscoveryMessage(null);
@@ -457,33 +508,36 @@ export function DeviceConfigPanel({
   }
 
   async function handleAssign(profileId: string) {
+    if (readOnly) return;
     try {
       await assignCredentialProfile(device.id, profileId);
       setShowAddSelect(false);
-      void loadAssignments();
+      void loadAssignments(device.id);
     } catch {
       // non-fatal
     }
   }
 
   async function handleUnassign(profileId: string) {
+    if (readOnly) return;
     try {
       await unassignCredentialProfile(device.id, profileId);
       setRemovingId(null);
-      void loadAssignments();
+      void loadAssignments(device.id);
     } catch {
       // non-fatal
     }
   }
 
   async function handleToggleWinBox(profileId: string, currentlyDesignated: boolean) {
+    if (readOnly) return;
     try {
       if (currentlyDesignated) {
         await clearWinBoxProfile(device.id);
       } else {
         await setWinBoxProfile(device.id, profileId);
       }
-      void loadAssignments();
+      void loadAssignments(device.id);
     } catch {
       // non-fatal
     }
@@ -497,7 +551,7 @@ export function DeviceConfigPanel({
     discoveryState === 'pending' ||
     discoveryState === 'followup_scheduled';
   const discoveryRunDisabled =
-    discoveryBusy || form.metricsMode === 'prometheus' || form.ip.trim() === '';
+    readOnly || discoveryBusy || form.metricsMode === 'prometheus' || form.ip.trim() === '';
   const effectiveTopologyDiscoveryMode = device.effective_topology_discovery_mode || 'off';
   const configuredTopologyDiscoveryMode =
     form.topologyDiscoveryMode === 'inherit'
@@ -582,8 +636,9 @@ export function DeviceConfigPanel({
           </div>
           <select
             value={pollingValue}
+            disabled={readOnly}
             onChange={(e) => handlePollingChange(e.target.value)}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           >
             {POLLING_PRESETS.map((p) => (
               <option key={p.value} value={p.value}>
@@ -598,8 +653,9 @@ export function DeviceConfigPanel({
               max={3600}
               value={customPolling}
               placeholder="Seconds (5-3600)"
+              disabled={readOnly}
               onChange={(e) => handleCustomPollingChange(e.target.value)}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
             />
           )}
           {fieldErrors['polling'] && (
@@ -622,10 +678,11 @@ export function DeviceConfigPanel({
             id="device-topology-discovery-mode"
             aria-label="Topology Discovery"
             value={form.topologyDiscoveryMode}
+            disabled={readOnly}
             onChange={(e) =>
               updateForm({ topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode })
             }
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           >
             {TOPOLOGY_DISCOVERY_MODE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -720,12 +777,13 @@ export function DeviceConfigPanel({
             type="url"
             value={grafanaUrl}
             placeholder="Leave blank to use default"
+            disabled={readOnly}
             onChange={(e) => {
               setGrafanaUrl(e.target.value);
               scheduleGrafanaUpdate(e.target.value);
             }}
             onBlur={handleBlur('grafanaUrl', () => validateURL(grafanaUrl, 'Grafana URL'))}
-            className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['grafanaUrl'] ? ' border-status-down' : ' border-outline-subtle'}`}
+            className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60${fieldErrors['grafanaUrl'] ? ' border-status-down' : ' border-outline-subtle'}`}
           />
           {fieldErrors['grafanaUrl'] && (
             <p className="mt-1 text-xs text-status-down">{fieldErrors['grafanaUrl']}</p>
@@ -761,526 +819,533 @@ export function DeviceConfigPanel({
           </div>
         )}
 
-        <input
-          type="text"
-          value={form.displayName}
-          onChange={(e) => {
-            updateForm({ displayName: e.target.value });
-            setFieldError('displayName', null);
-          }}
-          onBlur={handleBlur('displayName', () => validateDisplayNameField(form.displayName))}
-          placeholder={
-            isVirtual
-              ? 'e.g. ISP Gateway'
-              : device.sys_name
-                ? `Override "${device.sys_name}"`
-                : 'Custom name (optional)'
-          }
-          required={isVirtual}
-          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['displayName'] ? ' border-status-down' : ' border-outline-subtle'}`}
-        />
-        {fieldErrors['displayName'] && (
-          <p className="mt-1 text-xs text-status-down">{fieldErrors['displayName']}</p>
-        )}
-
-        <input
-          type="text"
-          value={form.ip}
-          onChange={(e) => {
-            updateForm({ ip: e.target.value });
-            setFieldError('ip', null);
-          }}
-          onBlur={handleBlur('ip', () => validateIPOrHostname(form.ip.trim()))}
-          placeholder="IP Address"
-          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['ip'] ? ' border-status-down' : ' border-outline-subtle'}`}
-        />
-        {fieldErrors['ip'] && <p className="mt-1 text-xs text-status-down">{fieldErrors['ip']}</p>}
-
-        <div className="space-y-2 rounded-lg bg-surface-high p-3">
-          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Saved Notes
-          </p>
-          <p className="whitespace-pre-wrap text-sm text-on-bg">
-            {device.notes?.trim() ? device.notes : 'No notes saved.'}
-          </p>
-        </div>
-
-        <div className="space-y-1">
-          <label
-            htmlFor="device-notes"
-            className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
-          >
-            Device Notes
-          </label>
-          <textarea
-            id="device-notes"
-            value={form.notes}
-            onChange={(e) => updateForm({ notes: e.target.value })}
-            rows={5}
-            placeholder="Add internal notes for this device (optional)"
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-          />
-        </div>
-
-        <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Areas
-          </label>
-          {form.areaIds.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {form.areaIds.map((id) => {
-                const area = areas.find((a) => a.id === id);
-                if (!area) return null;
-                return (
-                  <span
-                    key={id}
-                    className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-on-bg"
-                    style={{
-                      backgroundColor: `${area.color}25`,
-                      border: `1px solid ${area.color}60`,
-                    }}
-                  >
-                    <span
-                      className="inline-block h-2 w-2 rounded-full"
-                      style={{ backgroundColor: area.color }}
-                    />
-                    {area.name}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })
-                      }
-                      className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
-                    >
-                      <svg
-                        className="w-3 h-3"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-          )}
-          <select
-            value=""
-            disabled={areas.filter((a) => !form.areaIds.includes(a.id)).length === 0}
+        <fieldset disabled={readOnly} className="space-y-3 disabled:opacity-70">
+          <input
+            type="text"
+            value={form.displayName}
             onChange={(e) => {
-              if (e.target.value) {
-                updateForm({ areaIds: [...form.areaIds, e.target.value] });
-              }
+              updateForm({ displayName: e.target.value });
+              setFieldError('displayName', null);
             }}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:opacity-50"
-          >
-            <option value="">
-              {areas.length === 0
-                ? 'No areas created'
-                : areas.filter((a) => !form.areaIds.includes(a.id)).length === 0
-                  ? 'All areas assigned'
-                  : form.areaIds.length === 0
-                    ? 'Unassigned - select area...'
-                    : 'Add another area...'}
-            </option>
-            {areas
-              .filter((a) => !form.areaIds.includes(a.id))
-              .map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-          </select>
-        </div>
+            onBlur={handleBlur('displayName', () => validateDisplayNameField(form.displayName))}
+            placeholder={
+              isVirtual
+                ? 'e.g. ISP Gateway'
+                : device.sys_name
+                  ? `Override "${device.sys_name}"`
+                  : 'Custom name (optional)'
+            }
+            required={isVirtual}
+            className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed${fieldErrors['displayName'] ? ' border-status-down' : ' border-outline-subtle'}`}
+          />
+          {fieldErrors['displayName'] && (
+            <p className="mt-1 text-xs text-status-down">{fieldErrors['displayName']}</p>
+          )}
 
-        {/* Vendor, SSH, Metrics Source, Prometheus, SNMP — physical devices only */}
-        {!isVirtual && (
-          <>
-            <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-                Vendor
-              </label>
-              <select
-                value={form.vendor}
-                onChange={(e) => updateForm({ vendor: e.target.value })}
-                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-              >
-                <option value="">— Select vendor —</option>
-                <option value="mikrotik">MikroTik</option>
-              </select>
-              <p className="text-xs text-on-bg-secondary/70">
-                Vendor tag determines backup commands and metric queries.
-              </p>
-            </div>
+          <input
+            type="text"
+            value={form.ip}
+            onChange={(e) => {
+              updateForm({ ip: e.target.value });
+              setFieldError('ip', null);
+            }}
+            onBlur={handleBlur('ip', () => validateIPOrHostname(form.ip.trim()))}
+            placeholder="IP Address"
+            className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['ip'] ? ' border-status-down' : ' border-outline-subtle'}`}
+          />
+          {fieldErrors['ip'] && (
+            <p className="mt-1 text-xs text-status-down">{fieldErrors['ip']}</p>
+          )}
 
-            {/* Credentials section */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-                  Credentials
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowAddSelect((v) => !v)}
-                  className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg-secondary hover:text-on-bg"
+          <div className="space-y-2 rounded-lg bg-surface-high p-3">
+            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+              Saved Notes
+            </p>
+            <p className="whitespace-pre-wrap text-sm text-on-bg">
+              {device.notes?.trim() ? device.notes : 'No notes saved.'}
+            </p>
+          </div>
+
+          <div className="space-y-1">
+            <label
+              htmlFor="device-notes"
+              className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
+            >
+              Device Notes
+            </label>
+            <textarea
+              id="device-notes"
+              value={form.notes}
+              onChange={(e) => updateForm({ notes: e.target.value })}
+              rows={5}
+              placeholder="Add internal notes for this device (optional)"
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+              Areas
+            </label>
+            {form.areaIds.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {form.areaIds.map((id) => {
+                  const area = areas.find((a) => a.id === id);
+                  if (!area) return null;
+                  return (
+                    <span
+                      key={id}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-on-bg"
+                      style={{
+                        backgroundColor: `${area.color}25`,
+                        border: `1px solid ${area.color}60`,
+                      }}
+                    >
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ backgroundColor: area.color }}
+                      />
+                      {area.name}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })
+                        }
+                        className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
+                      >
+                        <svg
+                          className="w-3 h-3"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            <select
+              value=""
+              disabled={areas.filter((a) => !form.areaIds.includes(a.id)).length === 0}
+              onChange={(e) => {
+                if (e.target.value) {
+                  updateForm({ areaIds: [...form.areaIds, e.target.value] });
+                }
+              }}
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:opacity-50"
+            >
+              <option value="">
+                {areas.length === 0
+                  ? 'No areas created'
+                  : areas.filter((a) => !form.areaIds.includes(a.id)).length === 0
+                    ? 'All areas assigned'
+                    : form.areaIds.length === 0
+                      ? 'Unassigned - select area...'
+                      : 'Add another area...'}
+              </option>
+              {areas
+                .filter((a) => !form.areaIds.includes(a.id))
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          {/* Vendor, SSH, Metrics Source, Prometheus, SNMP — physical devices only */}
+          {!isVirtual && (
+            <>
+              <div className="space-y-1">
+                <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                  Vendor
+                </label>
+                <select
+                  value={form.vendor}
+                  onChange={(e) => updateForm({ vendor: e.target.value })}
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                 >
-                  + Add
-                </button>
+                  <option value="">— Select vendor —</option>
+                  <option value="mikrotik">MikroTik</option>
+                </select>
+                <p className="text-xs text-on-bg-secondary/70">
+                  Vendor tag determines backup commands and metric queries.
+                </p>
               </div>
 
-              {showAddSelect && (
-                <div className="flex items-center gap-2">
-                  <select
-                    defaultValue=""
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        void handleAssign(e.target.value);
-                      }
-                    }}
-                    className="flex-1 rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                  >
-                    <option value="" disabled>
-                      Select a profile...
-                    </option>
-                    {credentialProfiles
-                      .filter((p) => !assignments.some((a) => a.profile_id === p.id))
-                      .map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                  </select>
+              {/* Credentials section */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                    Credentials
+                  </p>
                   <button
                     type="button"
-                    onClick={() => setShowAddSelect(false)}
+                    onClick={() => setShowAddSelect((v) => !v)}
                     className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg-secondary hover:text-on-bg"
                   >
-                    Dismiss
+                    + Add
                   </button>
                 </div>
-              )}
 
-              {assignmentsLoading && (
-                <p className="text-xs text-on-bg-secondary">Loading credentials...</p>
-              )}
+                {showAddSelect && (
+                  <div className="flex items-center gap-2">
+                    <select
+                      defaultValue=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          void handleAssign(e.target.value);
+                        }
+                      }}
+                      className="flex-1 rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                    >
+                      <option value="" disabled>
+                        Select a profile...
+                      </option>
+                      {credentialProfiles
+                        .filter((p) => !assignments.some((a) => a.profile_id === p.id))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddSelect(false)}
+                      className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg-secondary hover:text-on-bg"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
 
-              {!assignmentsLoading && assignments.length === 0 && (
-                <p className="text-xs text-on-bg-secondary">
-                  No credentials assigned. Add a profile to enable WinBox launch.
-                </p>
-              )}
+                {assignmentsLoading && (
+                  <p className="text-xs text-on-bg-secondary">Loading credentials...</p>
+                )}
 
-              {!assignmentsLoading &&
-                assignments.map((assignment) => (
-                  <div key={assignment.profile_id} className="rounded-lg bg-surface-high p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm font-medium text-on-bg truncate">
-                          {assignment.name}
-                        </span>
-                        <span className="text-xs font-medium px-2 py-0.5 bg-surface rounded-full text-on-bg-secondary shrink-0">
-                          {assignment.role}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0 ml-2">
-                        {/* WinBox key toggle */}
-                        <button
-                          type="button"
-                          title={
-                            assignment.is_winbox
-                              ? 'Clear WinBox designation'
-                              : 'Designate as WinBox profile'
-                          }
-                          onClick={() => {
-                            void handleToggleWinBox(assignment.profile_id, assignment.is_winbox);
-                          }}
-                          className={`p-1 rounded-md transition-colors${assignment.is_winbox ? ' text-primary' : ' text-on-bg-secondary hover:text-on-bg'}`}
-                        >
-                          <MaterialIcon name="key" size={18} />
-                        </button>
-                        {/* Remove button */}
-                        <button
-                          type="button"
-                          title="Remove assignment"
-                          onClick={() => setRemovingId(assignment.profile_id)}
-                          className="p-1 rounded-md text-on-bg-secondary hover:text-status-down transition-colors"
-                        >
-                          <MaterialIcon name="remove" size={18} />
-                        </button>
-                      </div>
-                    </div>
+                {!assignmentsLoading && assignments.length === 0 && (
+                  <p className="text-xs text-on-bg-secondary">
+                    No credentials assigned. Add a profile to enable WinBox launch.
+                  </p>
+                )}
 
-                    {/* Inline removal confirmation */}
-                    {removingId === assignment.profile_id && (
-                      <div className="mt-2 border border-status-down/30 bg-status-down/10 rounded-lg px-3 py-2 flex items-center justify-between">
-                        <p className="text-xs text-status-down">Delete this profile?</p>
-                        <div className="flex gap-2">
+                {!assignmentsLoading &&
+                  assignments.map((assignment) => (
+                    <div key={assignment.profile_id} className="rounded-lg bg-surface-high p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-sm font-medium text-on-bg truncate">
+                            {assignment.name}
+                          </span>
+                          <span className="text-xs font-medium px-2 py-0.5 bg-surface rounded-full text-on-bg-secondary shrink-0">
+                            {assignment.role}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0 ml-2">
+                          {/* WinBox key toggle */}
                           <button
                             type="button"
-                            onClick={() => setRemovingId(null)}
-                            className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg hover:bg-elevated"
-                          >
-                            Keep Profile
-                          </button>
-                          <button
-                            type="button"
+                            title={
+                              assignment.is_winbox
+                                ? 'Clear WinBox designation'
+                                : 'Designate as WinBox profile'
+                            }
                             onClick={() => {
-                              void handleUnassign(assignment.profile_id);
+                              void handleToggleWinBox(assignment.profile_id, assignment.is_winbox);
                             }}
-                            className="px-2 py-1 text-xs rounded bg-status-down text-white hover:opacity-90"
+                            className={`p-1 rounded-md transition-colors${assignment.is_winbox ? ' text-primary' : ' text-on-bg-secondary hover:text-on-bg'}`}
                           >
-                            Delete
+                            <MaterialIcon name="key" size={18} />
+                          </button>
+                          {/* Remove button */}
+                          <button
+                            type="button"
+                            title="Remove assignment"
+                            onClick={() => setRemovingId(assignment.profile_id)}
+                            className="p-1 rounded-md text-on-bg-secondary hover:text-status-down transition-colors"
+                          >
+                            <MaterialIcon name="remove" size={18} />
                           </button>
                         </div>
                       </div>
-                    )}
-                  </div>
-                ))}
-            </div>
 
-            {prometheusAvailable === false && (
-              <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
-                Prometheus is not configured or unreachable. Only SNMP Direct is available.
-              </p>
-            )}
-
-            <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-                Metrics Source
-              </label>
-              <select
-                value={form.metricsMode}
-                onChange={(e) => {
-                  const val = e.target.value as 'prometheus' | 'snmp' | 'prometheus_snmp_fallback';
-                  if (
-                    (val === 'prometheus' || val === 'prometheus_snmp_fallback') &&
-                    !prometheusAvailable
-                  )
-                    return;
-                  updateForm({ metricsMode: val as MetricsSource });
-                }}
-                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-              >
-                <option value="snmp">SNMP Direct</option>
-                <option value="prometheus" disabled={!prometheusAvailable}>
-                  Prometheus{!prometheusAvailable ? ' (unavailable)' : ''}
-                </option>
-                <option value="prometheus_snmp_fallback" disabled={!prometheusAvailable}>
-                  Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
-                </option>
-              </select>
-              {form.metricsMode === 'prometheus' && (
-                <p className="text-xs text-on-bg-secondary/70">
-                  Metrics from Prometheus only. No fallback if Prometheus is unreachable.
-                </p>
-              )}
-              {form.metricsMode === 'prometheus_snmp_fallback' && (
-                <p className="text-xs text-on-bg-secondary/70">
-                  Falls back to SNMP if Prometheus is unavailable or has no data for this device.
-                </p>
-              )}
-            </div>
-
-            {/* Prometheus Target — visible when metrics source uses Prometheus */}
-            {usesPrometheus && (
-              <div className="space-y-2 bg-surface-high rounded-lg p-3">
-                <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-                  Prometheus Target
-                </p>
-                <div className="space-y-1">
-                  <label className="text-xs text-on-bg-secondary">Label</label>
-                  <select
-                    value={form.prometheus.labelName}
-                    onChange={(e) => updatePrometheus({ labelName: e.target.value })}
-                    className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                  >
-                    <option value="instance">instance (IP address)</option>
-                    <option value="identity">identity</option>
-                    <option value="vendor">vendor</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-on-bg-secondary">
-                    Value
-                    {form.prometheus.labelName === 'instance' ? ' (defaults to IP if blank)' : ''}
-                  </label>
-                  <input
-                    type="text"
-                    value={form.prometheus.labelValue}
-                    onChange={(e) => {
-                      updatePrometheus({ labelValue: e.target.value });
-                      setFieldError('prometheusLabelValue', null);
-                    }}
-                    onBlur={handleBlur('prometheusLabelValue', () =>
-                      validateMaxLength(
-                        form.prometheus.labelValue,
-                        MAX_STRING_LENGTH,
-                        'Label value',
-                      ),
-                    )}
-                    placeholder={
-                      form.prometheus.labelName === 'instance'
-                        ? form.ip || device.ip
-                        : 'e.g. my-router'
-                    }
-                    className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['prometheusLabelValue'] ? ' border-status-down' : ' border-outline-subtle'}`}
-                  />
-                  {fieldErrors['prometheusLabelValue'] && (
-                    <p className="mt-1 text-xs text-status-down">
-                      {fieldErrors['prometheusLabelValue']}
-                    </p>
-                  )}
-                </div>
+                      {/* Inline removal confirmation */}
+                      {removingId === assignment.profile_id && (
+                        <div className="mt-2 border border-status-down/30 bg-status-down/10 rounded-lg px-3 py-2 flex items-center justify-between">
+                          <p className="text-xs text-status-down">Delete this profile?</p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setRemovingId(null)}
+                              className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg hover:bg-elevated"
+                            >
+                              Keep Profile
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void handleUnassign(assignment.profile_id);
+                              }}
+                              className="px-2 py-1 text-xs rounded bg-status-down text-white hover:opacity-90"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
               </div>
-            )}
 
-            {/* SNMP Credentials — visible when metrics source uses SNMP */}
-            {usesSNMP && (
-              <>
-                {profiles.length > 0 && (
-                  <select
-                    defaultValue=""
-                    onChange={(e) => {
-                      applyProfile(e.target.value);
-                      e.target.value = '';
-                    }}
-                    className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                  >
-                    <option value="" disabled>
-                      Load credentials from profile...
-                    </option>
-                    {profiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} (SNMP {p.snmp.version})
-                      </option>
-                    ))}
-                  </select>
-                )}
+              {prometheusAvailable === false && (
+                <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
+                  Prometheus is not configured or unreachable. Only SNMP Direct is available.
+                </p>
+              )}
 
+              <div className="space-y-1">
+                <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                  Metrics Source
+                </label>
                 <select
-                  value={form.snmp.version}
-                  onChange={(e) =>
-                    updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })
-                  }
+                  value={form.metricsMode}
+                  onChange={(e) => {
+                    const val = e.target.value as
+                      | 'prometheus'
+                      | 'snmp'
+                      | 'prometheus_snmp_fallback';
+                    if (
+                      (val === 'prometheus' || val === 'prometheus_snmp_fallback') &&
+                      !prometheusAvailable
+                    )
+                      return;
+                    updateForm({ metricsMode: val as MetricsSource });
+                  }}
                   className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                 >
-                  <option value="2c">SNMP v2c</option>
-                  <option value="3">SNMP v3</option>
+                  <option value="snmp">SNMP Direct</option>
+                  <option value="prometheus" disabled={!prometheusAvailable}>
+                    Prometheus{!prometheusAvailable ? ' (unavailable)' : ''}
+                  </option>
+                  <option value="prometheus_snmp_fallback" disabled={!prometheusAvailable}>
+                    Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
+                  </option>
                 </select>
-
-                {form.snmp.version !== '3' && (
-                  <>
-                    <input
-                      type="text"
-                      value={form.snmp.community}
-                      onChange={(e) => {
-                        updateSnmp({ community: e.target.value });
-                        setFieldError('community', null);
-                      }}
-                      onBlur={handleBlur('community', () =>
-                        validateMaxLength(
-                          form.snmp.community,
-                          MAX_STRING_LENGTH,
-                          'Community string',
-                        ),
-                      )}
-                      placeholder="SNMP Community (leave blank to keep current)"
-                      className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['community'] ? ' border-status-down' : ' border-outline-subtle'}`}
-                    />
-                    {fieldErrors['community'] && (
-                      <p className="mt-1 text-xs text-status-down">{fieldErrors['community']}</p>
-                    )}
-                  </>
+                {form.metricsMode === 'prometheus' && (
+                  <p className="text-xs text-on-bg-secondary/70">
+                    Metrics from Prometheus only. No fallback if Prometheus is unreachable.
+                  </p>
                 )}
+                {form.metricsMode === 'prometheus_snmp_fallback' && (
+                  <p className="text-xs text-on-bg-secondary/70">
+                    Falls back to SNMP if Prometheus is unavailable or has no data for this device.
+                  </p>
+                )}
+              </div>
 
-                {form.snmp.version === '3' && (
-                  <div className="space-y-2 bg-surface-high rounded-lg p-3">
-                    <p className="text-xs text-on-bg-secondary">
-                      SNMPv3 Credentials (leave blank to keep current)
-                    </p>
-                    <input
-                      type="text"
-                      value={form.snmp.username}
-                      onChange={(e) => {
-                        updateSnmp({ username: e.target.value });
-                        setFieldError('username', null);
-                      }}
-                      onBlur={handleBlur('username', () =>
-                        validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username'),
-                      )}
-                      placeholder="Username"
-                      className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['username'] ? ' border-status-down' : ' border-outline-subtle'}`}
-                    />
-                    {fieldErrors['username'] && (
-                      <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
-                    )}
+              {/* Prometheus Target — visible when metrics source uses Prometheus */}
+              {usesPrometheus && (
+                <div className="space-y-2 bg-surface-high rounded-lg p-3">
+                  <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                    Prometheus Target
+                  </p>
+                  <div className="space-y-1">
+                    <label className="text-xs text-on-bg-secondary">Label</label>
                     <select
-                      value={form.snmp.securityLevel}
-                      onChange={(e) => updateSnmp({ securityLevel: e.target.value })}
+                      value={form.prometheus.labelName}
+                      onChange={(e) => updatePrometheus({ labelName: e.target.value })}
                       className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
                     >
-                      <option value="noAuthNoPriv">No Auth, No Privacy</option>
-                      <option value="authNoPriv">Auth, No Privacy</option>
-                      <option value="authPriv">Auth + Privacy</option>
+                      <option value="instance">instance (IP address)</option>
+                      <option value="identity">identity</option>
+                      <option value="vendor">vendor</option>
                     </select>
-                    {(form.snmp.securityLevel === 'authNoPriv' ||
-                      form.snmp.securityLevel === 'authPriv') && (
-                      <>
-                        <select
-                          value={form.snmp.authProtocol}
-                          onChange={(e) => updateSnmp({ authProtocol: e.target.value })}
-                          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                        >
-                          <option value="SHA">SHA</option>
-                          <option value="MD5">MD5</option>
-                          <option value="SHA-224">SHA-224</option>
-                          <option value="SHA-256">SHA-256</option>
-                          <option value="SHA-384">SHA-384</option>
-                          <option value="SHA-512">SHA-512</option>
-                        </select>
-                        <input
-                          type="password"
-                          value={form.snmp.authPassword}
-                          onChange={(e) => updateSnmp({ authPassword: e.target.value })}
-                          placeholder="Auth Key"
-                          autoComplete="new-password"
-                          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                        />
-                      </>
-                    )}
-                    {form.snmp.securityLevel === 'authPriv' && (
-                      <>
-                        <select
-                          value={form.snmp.privProtocol}
-                          onChange={(e) => updateSnmp({ privProtocol: e.target.value })}
-                          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                        >
-                          <option value="AES">AES</option>
-                          <option value="DES">DES</option>
-                        </select>
-                        <input
-                          type="password"
-                          value={form.snmp.privPassword}
-                          onChange={(e) => updateSnmp({ privPassword: e.target.value })}
-                          placeholder="Encryption Key"
-                          autoComplete="new-password"
-                          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                        />
-                      </>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-on-bg-secondary">
+                      Value
+                      {form.prometheus.labelName === 'instance' ? ' (defaults to IP if blank)' : ''}
+                    </label>
+                    <input
+                      type="text"
+                      value={form.prometheus.labelValue}
+                      onChange={(e) => {
+                        updatePrometheus({ labelValue: e.target.value });
+                        setFieldError('prometheusLabelValue', null);
+                      }}
+                      onBlur={handleBlur('prometheusLabelValue', () =>
+                        validateMaxLength(
+                          form.prometheus.labelValue,
+                          MAX_STRING_LENGTH,
+                          'Label value',
+                        ),
+                      )}
+                      placeholder={
+                        form.prometheus.labelName === 'instance'
+                          ? form.ip || device.ip
+                          : 'e.g. my-router'
+                      }
+                      className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['prometheusLabelValue'] ? ' border-status-down' : ' border-outline-subtle'}`}
+                    />
+                    {fieldErrors['prometheusLabelValue'] && (
+                      <p className="mt-1 text-xs text-status-down">
+                        {fieldErrors['prometheusLabelValue']}
+                      </p>
                     )}
                   </div>
-                )}
-              </>
-            )}
-          </>
-        )}
+                </div>
+              )}
+
+              {/* SNMP Credentials — visible when metrics source uses SNMP */}
+              {usesSNMP && (
+                <>
+                  {profiles.length > 0 && (
+                    <select
+                      defaultValue=""
+                      onChange={(e) => {
+                        applyProfile(e.target.value);
+                        e.target.value = '';
+                      }}
+                      className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                    >
+                      <option value="" disabled>
+                        Load credentials from profile...
+                      </option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} (SNMP {p.snmp.version})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  <select
+                    value={form.snmp.version}
+                    onChange={(e) =>
+                      updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })
+                    }
+                    className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                  >
+                    <option value="2c">SNMP v2c</option>
+                    <option value="3">SNMP v3</option>
+                  </select>
+
+                  {form.snmp.version !== '3' && (
+                    <>
+                      <input
+                        type="text"
+                        value={form.snmp.community}
+                        onChange={(e) => {
+                          updateSnmp({ community: e.target.value });
+                          setFieldError('community', null);
+                        }}
+                        onBlur={handleBlur('community', () =>
+                          validateMaxLength(
+                            form.snmp.community,
+                            MAX_STRING_LENGTH,
+                            'Community string',
+                          ),
+                        )}
+                        placeholder="SNMP Community (leave blank to keep current)"
+                        className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['community'] ? ' border-status-down' : ' border-outline-subtle'}`}
+                      />
+                      {fieldErrors['community'] && (
+                        <p className="mt-1 text-xs text-status-down">{fieldErrors['community']}</p>
+                      )}
+                    </>
+                  )}
+
+                  {form.snmp.version === '3' && (
+                    <div className="space-y-2 bg-surface-high rounded-lg p-3">
+                      <p className="text-xs text-on-bg-secondary">
+                        SNMPv3 Credentials (leave blank to keep current)
+                      </p>
+                      <input
+                        type="text"
+                        value={form.snmp.username}
+                        onChange={(e) => {
+                          updateSnmp({ username: e.target.value });
+                          setFieldError('username', null);
+                        }}
+                        onBlur={handleBlur('username', () =>
+                          validateMaxLength(form.snmp.username, MAX_STRING_LENGTH, 'Username'),
+                        )}
+                        placeholder="Username"
+                        className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors['username'] ? ' border-status-down' : ' border-outline-subtle'}`}
+                      />
+                      {fieldErrors['username'] && (
+                        <p className="mt-1 text-xs text-status-down">{fieldErrors['username']}</p>
+                      )}
+                      <select
+                        value={form.snmp.securityLevel}
+                        onChange={(e) => updateSnmp({ securityLevel: e.target.value })}
+                        className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                      >
+                        <option value="noAuthNoPriv">No Auth, No Privacy</option>
+                        <option value="authNoPriv">Auth, No Privacy</option>
+                        <option value="authPriv">Auth + Privacy</option>
+                      </select>
+                      {(form.snmp.securityLevel === 'authNoPriv' ||
+                        form.snmp.securityLevel === 'authPriv') && (
+                        <>
+                          <select
+                            value={form.snmp.authProtocol}
+                            onChange={(e) => updateSnmp({ authProtocol: e.target.value })}
+                            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                          >
+                            <option value="SHA">SHA</option>
+                            <option value="MD5">MD5</option>
+                            <option value="SHA-224">SHA-224</option>
+                            <option value="SHA-256">SHA-256</option>
+                            <option value="SHA-384">SHA-384</option>
+                            <option value="SHA-512">SHA-512</option>
+                          </select>
+                          <input
+                            type="password"
+                            value={form.snmp.authPassword}
+                            onChange={(e) => updateSnmp({ authPassword: e.target.value })}
+                            placeholder="Auth Key"
+                            autoComplete="new-password"
+                            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                          />
+                        </>
+                      )}
+                      {form.snmp.securityLevel === 'authPriv' && (
+                        <>
+                          <select
+                            value={form.snmp.privProtocol}
+                            onChange={(e) => updateSnmp({ privProtocol: e.target.value })}
+                            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                          >
+                            <option value="AES">AES</option>
+                            <option value="DES">DES</option>
+                          </select>
+                          <input
+                            type="password"
+                            value={form.snmp.privPassword}
+                            onChange={(e) => updateSnmp({ privPassword: e.target.value })}
+                            placeholder="Encryption Key"
+                            autoComplete="new-password"
+                            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+                          />
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </fieldset>
 
         {editError && (
           <p className="rounded-lg border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs text-status-down">
@@ -1290,7 +1355,7 @@ export function DeviceConfigPanel({
 
         <button
           type="submit"
-          disabled={editLoading}
+          disabled={readOnly || editLoading}
           className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
         >
           {editLoading ? 'Saving...' : 'Save Changes'}
@@ -1305,8 +1370,9 @@ export function DeviceConfigPanel({
         {!confirmDelete ? (
           <button
             type="button"
+            disabled={readOnly}
             onClick={() => setConfirmDelete(true)}
-            className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20"
+            className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Delete Device
           </button>
@@ -1316,14 +1382,15 @@ export function DeviceConfigPanel({
             <div className="flex gap-2">
               <button
                 type="button"
+                disabled={readOnly}
                 onClick={() => setConfirmDelete(false)}
-                className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated"
+                className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                disabled={deleteLoading}
+                disabled={readOnly || deleteLoading}
                 onClick={() => {
                   void handleDelete();
                 }}
