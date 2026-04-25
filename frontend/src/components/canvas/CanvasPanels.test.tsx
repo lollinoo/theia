@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import type React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
@@ -18,6 +19,18 @@ vi.mock('../DeviceConfigPanel', () => ({
       <button type="button" onClick={() => props.onWinBoxAvailabilityChange?.(true)}>
         Notify WinBox
       </button>
+    </div>
+  ),
+}));
+
+vi.mock('../DeviceDetailsPanel', () => ({
+  DeviceDetailsPanel: (props: {
+    device: { hostname: string };
+    interfaceStats?: React.ReactNode;
+  }) => (
+    <div>
+      <div>Details device:{props.device.hostname}</div>
+      {props.interfaceStats}
     </div>
   ),
 }));
@@ -210,7 +223,7 @@ describe('CanvasPanels', () => {
     expect(screen.getByText('Device config read-only:false')).toBeInTheDocument();
   });
 
-  it('renders link details in read-only mode when requested by panel content', () => {
+  it('renders link details in read-only mode when edit mode is disabled', () => {
     const sourceDevice = mockDevice();
     const targetDevice = mockDevice({
       id: 'dev-2',
@@ -228,7 +241,7 @@ describe('CanvasPanels', () => {
 
     render(
       <CanvasPanels
-        panelContent={{ type: 'link-details', data: { link: mockLink(), readOnly: true } }}
+        panelContent={{ type: 'link-details', data: { link: mockLink() } }}
         setPanelContent={vi.fn()}
         devices={[sourceDevice, targetDevice]}
         topologyLinks={[mockLink()]}
@@ -241,6 +254,73 @@ describe('CanvasPanels', () => {
     );
 
     expect(screen.getByText('Link Details Read Only:ether2')).toBeInTheDocument();
+  });
+
+  it('updates link details read-only state when edit mode changes', () => {
+    const sourceDevice = mockDevice();
+    const targetDevice = mockDevice({
+      id: 'dev-2',
+      hostname: 'router-02',
+      ip: '10.0.0.2',
+      sys_name: 'router-02',
+    });
+    const runtimeState = buildRuntimeState({
+      devices: [sourceDevice, targetDevice],
+      links: [mockLink()],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+    const sharedProps = {
+      panelContent: { type: 'link-details', data: { link: mockLink() } },
+      setPanelContent: vi.fn(),
+      devices: [sourceDevice, targetDevice],
+      topologyLinks: [mockLink()],
+      loadTopology: vi.fn().mockResolvedValue(undefined),
+      setDevices: vi.fn(),
+      setNodes: vi.fn(),
+      reactFlow: {} as never,
+      runtimeState,
+    };
+
+    const { rerender } = render(<CanvasPanels {...sharedProps} editMode={false} />);
+
+    expect(screen.getByText('Link Details Read Only:ether2')).toBeInTheDocument();
+
+    rerender(<CanvasPanels {...sharedProps} editMode />);
+
+    expect(screen.getByText('Link Details Editable:ether2')).toBeInTheDocument();
+  });
+
+  it('renders live device details from a deviceDetails panel target', () => {
+    const staleDevice = mockDevice({ hostname: 'stale-router' });
+    const liveDevice = mockDevice({ hostname: 'live-router' });
+    const runtimeState = buildRuntimeState({
+      devices: [liveDevice],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+      <CanvasPanels
+        panelContent={{
+          type: 'deviceDetails',
+          data: { deviceId: staleDevice.id, device: staleDevice },
+        }}
+        setPanelContent={vi.fn()}
+        devices={[liveDevice]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+      />,
+    );
+
+    expect(screen.getByText('Details device:live-router')).toBeInTheDocument();
   });
 
   it('prefers the live topology link over stale panel data for link details', () => {
@@ -347,7 +427,7 @@ describe('CanvasPanels', () => {
     expect(screen.getByText('Link interface model:ether1')).toBeInTheDocument();
   });
 
-  it('routes device interface panels by device id against live device state', () => {
+  it('does not render the removed device-scoped interface stats panel', () => {
     const staleDevice = mockDevice({ id: 'dev-2' });
     const liveDevice = mockDevice({ id: 'dev-2', hostname: 'live-router-02' });
     const runtimeState = buildRuntimeState({
@@ -375,6 +455,6 @@ describe('CanvasPanels', () => {
       />,
     );
 
-    expect(screen.getByText('Device interface model:dev-2')).toBeInTheDocument();
+    expect(screen.queryByText('Device interface model:dev-2')).not.toBeInTheDocument();
   });
 });

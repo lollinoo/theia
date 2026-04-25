@@ -161,7 +161,7 @@ export default function Canvas({
   );
   const openSelfLinkDetails = useCallback(
     (link: Link) => {
-      setPanelContent({ type: 'link-details', data: { link, readOnly: true } });
+      setPanelContent({ type: 'link-details', data: { link } });
     },
     [setPanelContent],
   );
@@ -541,10 +541,6 @@ export default function Canvas({
               if (gUrl) window.open(gUrl, '_blank');
               setDeviceMenu(null);
             },
-            onOpenInterfaceStats: () => {
-              if (d) setPanelContent({ type: 'interfaceStats', data: { deviceId: d.id } });
-              setDeviceMenu(null);
-            },
             onConfigure: () => {
               if (d) setPanelContent({ type: 'deviceConfig', data: { deviceId: d.id } });
               setDeviceMenu(null);
@@ -592,8 +588,7 @@ export default function Canvas({
                   icon: 'search',
                   onClick: () => {
                     const el = edges.find((e) => e.id === edgeMenu.edgeID)?.data?.link;
-                    if (el)
-                      setPanelContent({ type: 'link-details', data: { link: el, readOnly: true } });
+                    if (el) setPanelContent({ type: 'link-details', data: { link: el } });
                     setEdgeMenu(null);
                   },
                 },
@@ -697,7 +692,7 @@ export default function Canvas({
             });
           } else {
             const cd = devices.find((d) => d.id === node.id);
-            if (cd) setPanelContent({ type: 'deviceConfig', data: { deviceId: cd.id } });
+            if (cd) setPanelContent({ type: 'deviceDetails', data: { deviceId: cd.id } });
           }
         }}
         onEdgeClick={(_ev, edge) => {
@@ -705,7 +700,7 @@ export default function Canvas({
           if (!lk) return;
           setPanelContent({
             type: 'link-details',
-            data: { link: lk, readOnly: !editMode },
+            data: { link: lk },
           });
         }}
         onNodeDragStop={(_ev, node) => {

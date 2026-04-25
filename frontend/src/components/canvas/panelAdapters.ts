@@ -263,7 +263,15 @@ function buildInterfaceSection({
   const speedLabel =
     interfaceInfo && interfaceInfo.speed > 0 ? formatBandwidth(interfaceInfo.speed) : null;
   const deviceDown = availabilityReason === 'device_unreachable';
-  const statusLabel = interfaceInfo ? (deviceDown ? 'down' : interfaceInfo.oper_status) : null;
+  const runtimeStatusUnavailable =
+    availabilityReason !== null && metricsUnavailableMessage !== null;
+  const statusLabel = interfaceInfo
+    ? deviceDown
+      ? 'down'
+      : runtimeStatusUnavailable
+        ? 'unknown'
+        : interfaceInfo.oper_status
+    : null;
   const statusTone =
     deviceDown || statusLabel === 'down' ? 'down' : statusLabel === 'up' ? 'up' : 'neutral';
 

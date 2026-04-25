@@ -27,7 +27,6 @@ import type {
   SNMPProfile,
   TopologyDiscoveryMode,
 } from '../types/api';
-import { type DeviceMetricsDTO, formatUptime } from '../types/metrics';
 import {
   TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyBootstrapState,
@@ -93,7 +92,6 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
 
 interface DeviceConfigPanelProps {
   device: Device;
-  detailMetrics: DeviceMetricsDTO | null;
   readOnly?: boolean;
   onDeviceUpdated: (updated: Device) => void;
   onDeviceDeleted: () => void;
@@ -104,7 +102,6 @@ interface DeviceConfigPanelProps {
 
 export function DeviceConfigPanel({
   device,
-  detailMetrics,
   readOnly = false,
   onDeviceUpdated,
   onDeviceDeleted,
@@ -561,61 +558,9 @@ export function DeviceConfigPanel({
     discoveryState,
     device.last_topology_discovery_at,
   );
-  const hasDetailMetrics = detailMetrics !== null;
 
   return (
     <div className="space-y-6 p-4 transition-colors duration-200">
-      {hasDetailMetrics && (
-        <div className="space-y-3" data-testid="device-detail-runtime">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-              Live Detail Telemetry
-            </p>
-            <span className="text-xs text-on-bg-secondary/70">
-              {detailMetrics?.freshness ?? 'unknown'}
-            </span>
-          </div>
-          <div className="space-y-2 rounded-lg bg-surface-high p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
-                Operational status
-              </span>
-              <span className="text-sm text-on-bg">
-                {detailMetrics?.operational_status ?? '\u2014'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
-                Expected interval
-              </span>
-              <span className="text-sm text-on-bg">
-                {detailMetrics?.expected_poll_interval_seconds != null
-                  ? `${detailMetrics.expected_poll_interval_seconds}s`
-                  : '\u2014'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
-                Last poll
-              </span>
-              <span className="text-sm text-on-bg">
-                {detailMetrics?.last_polled_at ?? '\u2014'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs uppercase tracking-widest text-on-bg-secondary">
-                Runtime uptime
-              </span>
-              <span className="text-sm text-on-bg">
-                {detailMetrics?.uptime_secs != null
-                  ? formatUptime(detailMetrics.uptime_secs)
-                  : '\u2014'}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Polling Override — physical devices only */}
       {!isVirtual && (
         <div className="space-y-3">
