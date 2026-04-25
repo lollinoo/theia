@@ -34,6 +34,10 @@ const apiMocks = vi.hoisted(() => ({
   fetchSettings: vi.fn(),
 }));
 
+const xyflowMocks = vi.hoisted(() => ({
+  MiniMap: vi.fn(() => null),
+}));
+
 vi.mock('@xyflow/react', async () => {
   const ReactModule = await import('react');
 
@@ -41,7 +45,7 @@ vi.mock('@xyflow/react', async () => {
     ConnectionMode: { Loose: 'loose' },
     SelectionMode: { Partial: 'partial' },
     Background: () => null,
-    MiniMap: () => null,
+    MiniMap: xyflowMocks.MiniMap,
     ReactFlow: ({
       children,
       onNodeClick,
@@ -148,6 +152,7 @@ describe('Canvas detail subscription', () => {
   beforeEach(() => {
     apiMocks.fetchSettings.mockReset();
     apiMocks.fetchSettings.mockResolvedValue({});
+    xyflowMocks.MiniMap.mockClear();
   });
 
   it('does not emit transient nulls when panel detail target changes', () => {
@@ -173,5 +178,31 @@ describe('Canvas detail subscription', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open alerts' }));
     expect(onDetailDeviceChange.mock.calls).toEqual([[null]]);
+  });
+
+  it('does not re-render the minimap for runtime-only snapshot prop changes', () => {
+    const { rerender } = render(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(xyflowMocks.MiniMap).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <Canvas
+        snapshot={{ devices: {}, links: {} }}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(xyflowMocks.MiniMap).toHaveBeenCalledTimes(1);
   });
 });

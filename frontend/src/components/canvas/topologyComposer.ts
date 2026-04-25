@@ -35,6 +35,10 @@ function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeD
     edgeDataById.set(linkId, {
       sourceDeviceStatus: runtimeLink.sourceDeviceStatus,
       targetDeviceStatus: runtimeLink.targetDeviceStatus,
+      sourceDeviceAlertStatus: runtimeState.devicesById.get(runtimeLink.link.source_device_id)
+        ?.alertStatus,
+      targetDeviceAlertStatus: runtimeState.devicesById.get(runtimeLink.link.target_device_id)
+        ?.alertStatus,
       metrics: runtimeLink.metrics,
       throughputLabel: runtimeLink.metricsUsable ? runtimeLink.throughputLabel : undefined,
       utilization: runtimeLink.metricsUsable ? runtimeLink.utilization : null,

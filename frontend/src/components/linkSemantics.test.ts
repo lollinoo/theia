@@ -153,7 +153,7 @@ describe('linkSemantics', () => {
     ).toBe('up');
   });
 
-  it('uses a deterministic zoom visibility matrix for the stacked badge group', () => {
+  it('keeps throughput visible across zoom levels whenever telemetry is available', () => {
     expect(
       resolveLinkBadgeVisibility({
         zoom: 0.8,
@@ -177,7 +177,7 @@ describe('linkSemantics', () => {
     ).toMatchObject({
       zoomBand: 'low',
       showRate: true,
-      showThroughput: false,
+      showThroughput: true,
     });
 
     expect(
@@ -191,6 +191,72 @@ describe('linkSemantics', () => {
       zoomBand: 'medium',
       showRate: true,
       showThroughput: true,
+    });
+  });
+
+  it('colors inert virtual links critical when the physical endpoint is down', () => {
+    expect(
+      resolveEdgeTone({
+        inertVirtualLink: true,
+        sourceIsVirtual: false,
+        targetIsVirtual: true,
+        sourceDeviceStatus: 'down',
+        sourceIfStatus: 'up',
+      }),
+    ).toMatchObject({
+      color: 'var(--color-edge-critical)',
+      semanticState: 'critical',
+    });
+  });
+
+  it('colors inert virtual links warning when the physical endpoint has a degraded alert', () => {
+    expect(
+      resolveEdgeTone({
+        inertVirtualLink: true,
+        sourceIsVirtual: false,
+        targetIsVirtual: true,
+        sourceDeviceStatus: 'up',
+        sourceDeviceAlertStatus: 'degraded',
+        sourceIfStatus: 'up',
+      }),
+    ).toMatchObject({
+      color: 'var(--color-edge-warning)',
+      semanticState: 'warning',
+    });
+  });
+
+  it('keeps the inert virtual rate badge aligned with the physical endpoint alert color', () => {
+    const edgeTone = resolveEdgeTone({
+      inertVirtualLink: true,
+      sourceIsVirtual: false,
+      targetIsVirtual: true,
+      sourceDeviceStatus: 'down',
+      sourceIfStatus: 'up',
+    });
+
+    const presentation = resolveLinkBadgePresentation({
+      data: {
+        inertVirtualLink: true,
+        sourceIsVirtual: false,
+        targetIsVirtual: true,
+        bandwidthLabel: '1 Gbps',
+        negotiationState: 'not_applicable',
+        sourceDeviceStatus: 'down',
+        sourceIfStatus: 'up',
+      },
+      zoom: 0.5,
+      path: 'M0 0 C0 0 200 0 200 0',
+      fallbackX: 100,
+      fallbackY: 0,
+      edgeTone,
+      isActive: false,
+      isConnected: false,
+      isMuted: false,
+    });
+
+    expect(presentation.items[0]).toMatchObject({
+      key: 'rate',
+      className: 'border-status-down/35 text-status-down',
     });
   });
 

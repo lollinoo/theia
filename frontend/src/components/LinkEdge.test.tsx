@@ -24,10 +24,12 @@ describe('LinkEdge', () => {
     expect(normalizeInterfaceStatusForLink('down')).toBe('down');
   });
 
-  it('ignores device status but preserves physical interface telemetry for inert virtual links', () => {
+  it('preserves physical endpoint status and interface telemetry for inert virtual links', () => {
     expect(
       normalizeLinkStateForColor({
         inertVirtualLink: true,
+        sourceIsVirtual: false,
+        targetIsVirtual: true,
         alertStatus: 'degraded',
         sourceDeviceStatus: 'down',
         targetDeviceStatus: 'probing',
@@ -38,8 +40,10 @@ describe('LinkEdge', () => {
     ).toEqual({
       inertVirtualLink: true,
       alertStatus: 'degraded',
-      sourceDeviceStatus: undefined,
+      sourceDeviceStatus: 'down',
       targetDeviceStatus: undefined,
+      sourceDeviceAlertStatus: undefined,
+      targetDeviceAlertStatus: undefined,
       sourceIfStatus: 'down',
       targetIfStatus: 'up',
       utilization: 0.9,
