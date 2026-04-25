@@ -254,14 +254,12 @@ export function normalizeLinkStateForColor(data: LinkEdgeData | undefined): Norm
     alertStatus: data?.alertStatus,
     sourceDeviceStatus: suppressSourceVirtualEndpoint ? undefined : data?.sourceDeviceStatus,
     targetDeviceStatus: suppressTargetVirtualEndpoint ? undefined : data?.targetDeviceStatus,
-    sourceDeviceAlertStatus:
-      inertVirtualLink && !suppressSourceVirtualEndpoint
-        ? data?.sourceDeviceAlertStatus
-        : undefined,
-    targetDeviceAlertStatus:
-      inertVirtualLink && !suppressTargetVirtualEndpoint
-        ? data?.targetDeviceAlertStatus
-        : undefined,
+    sourceDeviceAlertStatus: suppressSourceVirtualEndpoint
+      ? undefined
+      : data?.sourceDeviceAlertStatus,
+    targetDeviceAlertStatus: suppressTargetVirtualEndpoint
+      ? undefined
+      : data?.targetDeviceAlertStatus,
     sourceIfStatus: normalizeInterfaceStatusForLink(data?.sourceIfStatus),
     targetIfStatus: normalizeInterfaceStatusForLink(data?.targetIfStatus),
     utilization: data?.utilization ?? data?.metrics?.utilization ?? null,
@@ -299,14 +297,13 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   const targetDeviceAlertDown = targetDeviceAlertStatus === 'down';
   const sourceDeviceAlertWarn = sourceDeviceAlertStatus === 'degraded';
   const targetDeviceAlertWarn = targetDeviceAlertStatus === 'degraded';
+  const deviceAlertWarning = sourceDeviceAlertWarn || targetDeviceAlertWarn;
   const bothDevDown = srcDevDown && tgtDevDown;
   const oneDevDown = (srcDevDown || tgtDevDown) && !bothDevDown;
   const bothDevInactive = srcDevInactive && tgtDevInactive && !bothDevDown;
   const oneDevInactive = srcDevInactive !== tgtDevInactive;
   const inertDeviceDown = inertVirtualLink && (srcDevDown || tgtDevDown);
-  const inertDeviceWarning =
-    inertVirtualLink &&
-    (srcDevProbing || tgtDevProbing || sourceDeviceAlertWarn || targetDeviceAlertWarn);
+  const inertDeviceWarning = inertVirtualLink && (srcDevProbing || tgtDevProbing);
 
   const sourceIfKnown = sourceIfStatus != null;
   const targetIfKnown = targetIfStatus != null;
@@ -361,6 +358,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   if (
     speedMismatch ||
     alertStatus === 'degraded' ||
+    deviceAlertWarning ||
     inertDeviceWarning ||
     oneDevDown ||
     bothDevInactive ||

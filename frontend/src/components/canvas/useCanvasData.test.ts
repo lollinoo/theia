@@ -125,6 +125,7 @@ function renderUseCanvasData(
         ...hook,
         nodes,
         edges,
+        setNodesForTest: setNodes,
       };
     },
     {
@@ -591,6 +592,49 @@ describe('useCanvasData', () => {
     expect(fetchDevices).not.toHaveBeenCalled();
     expect(fetchLinks).not.toHaveBeenCalled();
     expect(computeForceLayout).not.toHaveBeenCalled();
+  });
+
+  it('preserves measured node dimensions across runtime-only snapshot updates', async () => {
+    const { result, rerender } = renderUseCanvasData(mockSnapshot());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      result.current.setNodesForTest((currentNodes) =>
+        currentNodes.map((node) => ({
+          ...node,
+          width: 268,
+          height: 142,
+          measured: { width: 268, height: 142 },
+        })),
+      );
+    });
+
+    rerender({
+      currentSnapshot: mockSnapshot({
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            cpu_percent: 83,
+            mem_percent: 72,
+          },
+        },
+      }),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes[0]).toMatchObject({
+      width: 268,
+      height: 142,
+      measured: { width: 268, height: 142 },
+    });
   });
 
   it('shows reconnect-only recovery copy when reconnect is the sole structural cause', async () => {
