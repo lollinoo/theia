@@ -54,7 +54,7 @@ func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.D
 		Timeouts: map[Lane]TimeoutProfile{
 			LaneEssential: {
 				Timeout: durationMSSetting(repo, domain.SettingPollingEssentialTimeoutMillis, 1200*time.Millisecond),
-				Retries: intSetting(repo, domain.SettingPollingEssentialRetries, 1),
+				Retries: nonNegativeIntSetting(repo, domain.SettingPollingEssentialRetries, 1),
 			},
 			LaneBackground: {Timeout: 5 * time.Second, Retries: 1},
 			LaneBootstrap:  {Timeout: 10 * time.Second, Retries: 1},
@@ -125,6 +125,21 @@ func intSetting(repo SettingsGetter, key string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func nonNegativeIntSetting(repo SettingsGetter, key string, fallback int) int {
+	if repo == nil {
+		return fallback
+	}
+	value, err := repo.Get(key)
+	if err != nil {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed < 0 {
 		return fallback
 	}
 	return parsed

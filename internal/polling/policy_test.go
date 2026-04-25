@@ -35,6 +35,18 @@ func TestPolicyFromSettingsUsesDefaults(t *testing.T) {
 	}
 }
 
+func TestPolicyFromSettingsAllowsZeroEssentialRetries(t *testing.T) {
+	settings := fakeSettings{
+		domain.SettingPollingEssentialRetries: "0",
+	}
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+
+	if policy.Timeouts[LaneEssential].Retries != 0 {
+		t.Fatalf("essential retries = %d, want 0", policy.Timeouts[LaneEssential].Retries)
+	}
+}
+
 func TestPolicyWarnsWhenIntervalCannotOutrunTimeout(t *testing.T) {
 	settings := fakeSettings{
 		domain.SettingPollingEssentialTimeoutMillis: "10000",
