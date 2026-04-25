@@ -121,6 +121,48 @@ describe('linkSemantics', () => {
     });
   });
 
+  it('colors physical links warning when a ping-reachable endpoint is SNMP degraded without alerts', () => {
+    expect(
+      resolveEdgeTone({
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        sourceDeviceAlertStatus: 'normal',
+        targetDeviceAlertStatus: 'normal',
+        sourceDeviceHealth: 'unknown',
+        sourceDevicePrimaryHealth: 'snmp_degraded',
+        sourceDeviceReachability: 'up',
+        sourceDeviceNetworkReachable: 'true',
+        sourceDeviceSnmpReachable: 'false',
+        sourceIfStatus: 'up',
+        targetIfStatus: 'up',
+        negotiationState: 'matched',
+      }),
+    ).toMatchObject({
+      color: 'var(--color-edge-warning)',
+      semanticState: 'warning',
+    });
+  });
+
+  it('colors physical links critical when runtime reachability reports the endpoint unreachable', () => {
+    expect(
+      resolveEdgeTone({
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        sourceDeviceHealth: 'unknown',
+        sourceDevicePrimaryHealth: 'unreachable',
+        sourceDeviceReachability: 'hard_down',
+        sourceDeviceNetworkReachable: 'false',
+        sourceDeviceSnmpReachable: 'false',
+        sourceIfStatus: 'up',
+        targetIfStatus: 'up',
+        negotiationState: 'matched',
+      }),
+    ).toMatchObject({
+      color: 'var(--color-edge-critical)',
+      semanticState: 'critical',
+    });
+  });
+
   it('keeps inert virtual links green below the 75% utilization warning threshold', () => {
     expect(
       resolveEdgeTone({
