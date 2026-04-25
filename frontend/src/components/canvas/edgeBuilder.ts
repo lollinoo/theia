@@ -202,6 +202,32 @@ export function buildEdgeData(
       targetDeviceAlertStatus: suppressTargetDeviceState
         ? undefined
         : existingData?.targetDeviceAlertStatus,
+      sourceDeviceHealth: suppressSourceDeviceState ? undefined : existingData?.sourceDeviceHealth,
+      targetDeviceHealth: suppressTargetDeviceState ? undefined : existingData?.targetDeviceHealth,
+      sourceDevicePrimaryHealth: suppressSourceDeviceState
+        ? undefined
+        : existingData?.sourceDevicePrimaryHealth,
+      targetDevicePrimaryHealth: suppressTargetDeviceState
+        ? undefined
+        : existingData?.targetDevicePrimaryHealth,
+      sourceDeviceReachability: suppressSourceDeviceState
+        ? undefined
+        : existingData?.sourceDeviceReachability,
+      targetDeviceReachability: suppressTargetDeviceState
+        ? undefined
+        : existingData?.targetDeviceReachability,
+      sourceDeviceNetworkReachable: suppressSourceDeviceState
+        ? undefined
+        : existingData?.sourceDeviceNetworkReachable,
+      targetDeviceNetworkReachable: suppressTargetDeviceState
+        ? undefined
+        : existingData?.targetDeviceNetworkReachable,
+      sourceDeviceSnmpReachable: suppressSourceDeviceState
+        ? undefined
+        : existingData?.sourceDeviceSnmpReachable,
+      targetDeviceSnmpReachable: suppressTargetDeviceState
+        ? undefined
+        : existingData?.targetDeviceSnmpReachable,
     };
   }
 
@@ -220,6 +246,16 @@ export function buildEdgeData(
     targetDeviceStatus: existingData?.targetDeviceStatus ?? targetDevice?.status,
     sourceDeviceAlertStatus: existingData?.sourceDeviceAlertStatus,
     targetDeviceAlertStatus: existingData?.targetDeviceAlertStatus,
+    sourceDeviceHealth: existingData?.sourceDeviceHealth,
+    targetDeviceHealth: existingData?.targetDeviceHealth,
+    sourceDevicePrimaryHealth: existingData?.sourceDevicePrimaryHealth,
+    targetDevicePrimaryHealth: existingData?.targetDevicePrimaryHealth,
+    sourceDeviceReachability: existingData?.sourceDeviceReachability,
+    targetDeviceReachability: existingData?.targetDeviceReachability,
+    sourceDeviceNetworkReachable: existingData?.sourceDeviceNetworkReachable,
+    targetDeviceNetworkReachable: existingData?.targetDeviceNetworkReachable,
+    sourceDeviceSnmpReachable: existingData?.sourceDeviceSnmpReachable,
+    targetDeviceSnmpReachable: existingData?.targetDeviceSnmpReachable,
   };
 }
 

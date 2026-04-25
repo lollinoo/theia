@@ -44,6 +44,8 @@ describe('LinkEdge', () => {
       targetDeviceStatus: undefined,
       sourceDeviceAlertStatus: undefined,
       targetDeviceAlertStatus: undefined,
+      sourceDeviceRuntime: {},
+      targetDeviceRuntime: {},
       sourceIfStatus: 'down',
       targetIfStatus: 'up',
       utilization: 0.9,

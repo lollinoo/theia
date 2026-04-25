@@ -32,13 +32,24 @@ function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeD
   const edgeDataById = new Map<string, LinkEdgeData>();
 
   for (const [linkId, runtimeLink] of runtimeState.linksById.entries()) {
+    const sourceRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.source_device_id);
+    const targetRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.target_device_id);
+
     edgeDataById.set(linkId, {
       sourceDeviceStatus: runtimeLink.sourceDeviceStatus,
       targetDeviceStatus: runtimeLink.targetDeviceStatus,
-      sourceDeviceAlertStatus: runtimeState.devicesById.get(runtimeLink.link.source_device_id)
-        ?.alertStatus,
-      targetDeviceAlertStatus: runtimeState.devicesById.get(runtimeLink.link.target_device_id)
-        ?.alertStatus,
+      sourceDeviceAlertStatus: sourceRuntimeDevice?.alertStatus,
+      targetDeviceAlertStatus: targetRuntimeDevice?.alertStatus,
+      sourceDeviceHealth: sourceRuntimeDevice?.metrics?.health,
+      targetDeviceHealth: targetRuntimeDevice?.metrics?.health,
+      sourceDevicePrimaryHealth: sourceRuntimeDevice?.primaryHealth ?? undefined,
+      targetDevicePrimaryHealth: targetRuntimeDevice?.primaryHealth ?? undefined,
+      sourceDeviceReachability: sourceRuntimeDevice?.metrics?.reachability,
+      targetDeviceReachability: targetRuntimeDevice?.metrics?.reachability,
+      sourceDeviceNetworkReachable: sourceRuntimeDevice?.metrics?.network_reachable,
+      targetDeviceNetworkReachable: targetRuntimeDevice?.metrics?.network_reachable,
+      sourceDeviceSnmpReachable: sourceRuntimeDevice?.metrics?.snmp_reachable,
+      targetDeviceSnmpReachable: targetRuntimeDevice?.metrics?.snmp_reachable,
       metrics: runtimeLink.metrics,
       throughputLabel: runtimeLink.metricsUsable ? runtimeLink.throughputLabel : undefined,
       utilization: runtimeLink.metricsUsable ? runtimeLink.utilization : null,

@@ -51,6 +51,11 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
       'dev-1': {
         device_id: 'dev-1',
         operational_status: 'up',
+        primary_health: 'up_fresh',
+        runtime_flags: [],
+        field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+        network_reachable: 'true',
+        snmp_reachable: 'true',
         reachability: 'up',
         health: 'healthy',
         freshness: 'fresh',
@@ -70,6 +75,11 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
       'dev-2': {
         device_id: 'dev-2',
         operational_status: 'up',
+        primary_health: 'up_fresh',
+        runtime_flags: [],
+        field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+        network_reachable: 'true',
+        snmp_reachable: 'true',
         reachability: 'up',
         health: 'warning',
         freshness: 'fresh',
@@ -183,6 +193,43 @@ describe('composeCanvasTopology', () => {
     expect(edges[0]?.data).toMatchObject({
       sourceDeviceStatus: 'probing',
       targetDeviceStatus: 'down',
+    });
+  });
+
+  it('hydrates edge endpoint reachability from runtime device models', () => {
+    const baseSnapshot = mockSnapshot();
+    const { edges } = buildSubject({
+      snapshot: mockSnapshot({
+        devices: {
+          ...baseSnapshot.devices,
+          'dev-1': {
+            ...baseSnapshot.devices['dev-1'],
+            health: 'unknown',
+            primary_health: 'snmp_degraded',
+            network_reachable: 'true',
+            snmp_reachable: 'false',
+            reachability: 'up',
+            metrics_status: 'unavailable',
+            metrics_reason: 'no_data',
+            cpu_percent: null,
+            mem_percent: null,
+            uptime_secs: null,
+          },
+        },
+      }),
+    });
+
+    expect(edges[0]?.data).toMatchObject({
+      sourceDeviceHealth: 'unknown',
+      sourceDevicePrimaryHealth: 'snmp_degraded',
+      sourceDeviceReachability: 'up',
+      sourceDeviceNetworkReachable: 'true',
+      sourceDeviceSnmpReachable: 'false',
+      targetDeviceHealth: 'warning',
+      targetDevicePrimaryHealth: 'up_fresh',
+      targetDeviceReachability: 'up',
+      targetDeviceNetworkReachable: 'true',
+      targetDeviceSnmpReachable: 'true',
     });
   });
 

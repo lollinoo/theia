@@ -1,6 +1,6 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { Link } from '../types/api';
-import { type AlertStatus, type LinkMetricsDTO } from '../types/metrics';
+import { type AlertStatus, type DeviceMetricsDTO, type LinkMetricsDTO } from '../types/metrics';
 import {
   type EdgeBadgeAnchor,
   computeLinkBadgeAnchor,
@@ -17,6 +17,18 @@ export type LinkNegotiationState =
   | 'not_applicable';
 export type LinkBadgeKind = 'rate' | 'throughput';
 export type LinkBadgeZoomBand = 'low' | 'medium' | 'high';
+type DeviceEndpointHealth = DeviceMetricsDTO['health'];
+type DeviceEndpointPrimaryHealth = DeviceMetricsDTO['primary_health'];
+type DeviceEndpointReachability = DeviceMetricsDTO['reachability'];
+type DeviceEndpointReachabilityEvidence = DeviceMetricsDTO['network_reachable'];
+
+interface DeviceEndpointRuntimeState {
+  health?: DeviceEndpointHealth;
+  primaryHealth?: DeviceEndpointPrimaryHealth;
+  reachability?: DeviceEndpointReachability;
+  networkReachable?: DeviceEndpointReachabilityEvidence;
+  snmpReachable?: DeviceEndpointReachabilityEvidence;
+}
 
 export interface LinkEdgeData {
   link?: Link;
@@ -40,6 +52,16 @@ export interface LinkEdgeData {
   targetDeviceStatus?: string;
   sourceDeviceAlertStatus?: AlertStatus;
   targetDeviceAlertStatus?: AlertStatus;
+  sourceDeviceHealth?: DeviceEndpointHealth;
+  targetDeviceHealth?: DeviceEndpointHealth;
+  sourceDevicePrimaryHealth?: DeviceEndpointPrimaryHealth;
+  targetDevicePrimaryHealth?: DeviceEndpointPrimaryHealth;
+  sourceDeviceReachability?: DeviceEndpointReachability;
+  targetDeviceReachability?: DeviceEndpointReachability;
+  sourceDeviceNetworkReachable?: DeviceEndpointReachabilityEvidence;
+  targetDeviceNetworkReachable?: DeviceEndpointReachabilityEvidence;
+  sourceDeviceSnmpReachable?: DeviceEndpointReachabilityEvidence;
+  targetDeviceSnmpReachable?: DeviceEndpointReachabilityEvidence;
   sourceIsVirtual?: boolean;
   targetIsVirtual?: boolean;
   areaColor?: string;
@@ -87,6 +109,8 @@ interface NormalizedLinkState {
   targetDeviceStatus: string | undefined;
   sourceDeviceAlertStatus: AlertStatus | undefined;
   targetDeviceAlertStatus: AlertStatus | undefined;
+  sourceDeviceRuntime: DeviceEndpointRuntimeState;
+  targetDeviceRuntime: DeviceEndpointRuntimeState;
   sourceIfStatus: string | undefined;
   targetIfStatus: string | undefined;
   utilization: number | null;
@@ -159,6 +183,46 @@ export function normalizeInterfaceStatusForLink(status: string | undefined): str
     return undefined;
   }
   return normalized;
+}
+
+function normalizeEndpointRuntimeState({
+  suppressed,
+  health,
+  primaryHealth,
+  reachability,
+  networkReachable,
+  snmpReachable,
+}: DeviceEndpointRuntimeState & { suppressed: boolean }): DeviceEndpointRuntimeState {
+  if (suppressed) {
+    return {};
+  }
+
+  const runtime: DeviceEndpointRuntimeState = {};
+  if (health !== undefined) runtime.health = health;
+  if (primaryHealth !== undefined) runtime.primaryHealth = primaryHealth;
+  if (reachability !== undefined) runtime.reachability = reachability;
+  if (networkReachable !== undefined) runtime.networkReachable = networkReachable;
+  if (snmpReachable !== undefined) runtime.snmpReachable = snmpReachable;
+  return runtime;
+}
+
+function isEndpointRuntimeCritical(runtime: DeviceEndpointRuntimeState): boolean {
+  return (
+    runtime.health === 'critical' ||
+    runtime.primaryHealth === 'unreachable' ||
+    runtime.primaryHealth === 'quarantined' ||
+    runtime.reachability === 'hard_down' ||
+    runtime.networkReachable === 'false'
+  );
+}
+
+function isEndpointRuntimeWarning(runtime: DeviceEndpointRuntimeState): boolean {
+  return (
+    runtime.health === 'warning' ||
+    runtime.primaryHealth === 'snmp_degraded' ||
+    runtime.reachability === 'soft_down' ||
+    runtime.snmpReachable === 'false'
+  );
 }
 
 export function buildLinkTelemetryBadges({
@@ -260,6 +324,22 @@ export function normalizeLinkStateForColor(data: LinkEdgeData | undefined): Norm
     targetDeviceAlertStatus: suppressTargetVirtualEndpoint
       ? undefined
       : data?.targetDeviceAlertStatus,
+    sourceDeviceRuntime: normalizeEndpointRuntimeState({
+      suppressed: suppressSourceVirtualEndpoint,
+      health: data?.sourceDeviceHealth,
+      primaryHealth: data?.sourceDevicePrimaryHealth,
+      reachability: data?.sourceDeviceReachability,
+      networkReachable: data?.sourceDeviceNetworkReachable,
+      snmpReachable: data?.sourceDeviceSnmpReachable,
+    }),
+    targetDeviceRuntime: normalizeEndpointRuntimeState({
+      suppressed: suppressTargetVirtualEndpoint,
+      health: data?.targetDeviceHealth,
+      primaryHealth: data?.targetDevicePrimaryHealth,
+      reachability: data?.targetDeviceReachability,
+      networkReachable: data?.targetDeviceNetworkReachable,
+      snmpReachable: data?.targetDeviceSnmpReachable,
+    }),
     sourceIfStatus: normalizeInterfaceStatusForLink(data?.sourceIfStatus),
     targetIfStatus: normalizeInterfaceStatusForLink(data?.targetIfStatus),
     utilization: data?.utilization ?? data?.metrics?.utilization ?? null,
@@ -281,6 +361,8 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
     targetDeviceStatus,
     sourceDeviceAlertStatus,
     targetDeviceAlertStatus,
+    sourceDeviceRuntime,
+    targetDeviceRuntime,
     sourceIfStatus,
     targetIfStatus,
     utilization,
@@ -298,6 +380,11 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   const sourceDeviceAlertWarn = sourceDeviceAlertStatus === 'degraded';
   const targetDeviceAlertWarn = targetDeviceAlertStatus === 'degraded';
   const deviceAlertWarning = sourceDeviceAlertWarn || targetDeviceAlertWarn;
+  const endpointRuntimeCritical =
+    isEndpointRuntimeCritical(sourceDeviceRuntime) ||
+    isEndpointRuntimeCritical(targetDeviceRuntime);
+  const endpointRuntimeWarning =
+    isEndpointRuntimeWarning(sourceDeviceRuntime) || isEndpointRuntimeWarning(targetDeviceRuntime);
   const bothDevDown = srcDevDown && tgtDevDown;
   const oneDevDown = (srcDevDown || tgtDevDown) && !bothDevDown;
   const bothDevInactive = srcDevInactive && tgtDevInactive && !bothDevDown;
@@ -340,6 +427,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
     alertStatus === 'down' ||
     sourceDeviceAlertDown ||
     targetDeviceAlertDown ||
+    endpointRuntimeCritical ||
     inertDeviceDown ||
     bothDevDown ||
     bothIfDown ||
@@ -359,6 +447,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
     speedMismatch ||
     alertStatus === 'degraded' ||
     deviceAlertWarning ||
+    endpointRuntimeWarning ||
     inertDeviceWarning ||
     oneDevDown ||
     bothDevInactive ||
