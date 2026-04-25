@@ -1428,8 +1428,8 @@ func TestPipelineOrchestratorBroadcastLoopSendsSnapshotThenDelta(t *testing.T) {
 
 	secondMessages := drainBroadcastCh(hub)
 	secondTypes := broadcastMessageTypes(t, secondMessages)
-	if len(secondTypes) == 0 || secondTypes[0] != ws.MessageTypeSnapshotDelta {
-		t.Fatalf("expected second broadcast to be snapshot_delta, got %v", secondTypes)
+	if len(secondTypes) == 0 || secondTypes[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("expected second broadcast to be runtime_delta, got %v", secondTypes)
 	}
 	var delta wsVersionedSnapshotDeltaMessage
 	if err := json.Unmarshal(secondMessages[0], &delta); err != nil {
@@ -1471,8 +1471,8 @@ func TestPipelineOrchestratorBroadcastLoop_EventDrivenStateChangeSendsDelta(t *t
 	})
 
 	types := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
-	if len(types) == 0 || types[0] != ws.MessageTypeSnapshotDelta {
-		t.Fatalf("expected state change to broadcast snapshot_delta, got %v", types)
+	if len(types) == 0 || types[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("expected state change to broadcast runtime_delta, got %v", types)
 	}
 }
 
@@ -1713,8 +1713,8 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshBroadcastsAlertMessage(t 
 
 	messages := waitForBroadcastMessages(t, hub, time.Second)
 	types := broadcastMessageTypes(t, messages)
-	if len(types) != 2 || types[0] != ws.MessageTypeSnapshotDelta || types[1] != ws.MessageTypeAlert {
-		t.Fatalf("expected alert-only refresh to broadcast snapshot_delta then alert, got %v", types)
+	if len(types) != 2 || types[0] != ws.MessageTypeRuntimeDelta || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected alert-only refresh to broadcast runtime_delta then alert, got %v", types)
 	}
 
 	var deltaMessage wsVersionedSnapshotDeltaMessage
