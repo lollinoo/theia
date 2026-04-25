@@ -840,8 +840,8 @@ func TestPipelineOrchestratorWorkerCount_UsesVolatilityBudgets(t *testing.T) {
 		nil,
 	)
 
-	if got := pipeline.workerCount(); got != 7 {
-		t.Fatalf("workerCount() = %d, want 7", got)
+	if got := pipeline.workerCount(); got != 71 {
+		t.Fatalf("workerCount() = %d, want background plus essential workers", got)
 	}
 }
 
@@ -1162,6 +1162,61 @@ func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *st
 	return pipeline, hub, store, topologyNotify, deviceID
 }
 
+func TestPipelineWorkerCountIncludesEssentialWorkers(t *testing.T) {
+	settingsRepo := newMockWorkerSettingsRepo()
+	_ = settingsRepo.Set(domain.SettingPollingEssentialWorkers, "12")
+	_ = settingsRepo.Set(domain.SettingSNMPWorkerPoolPerformance, "3")
+	_ = settingsRepo.Set(domain.SettingSNMPWorkerPoolOperational, "2")
+	_ = settingsRepo.Set(domain.SettingSNMPWorkerPoolStatic, "1")
+
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		state.NewStore(),
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		settingsRepo,
+		nil,
+		nil,
+		nil,
+	)
+
+	if got := pipeline.workerCount(); got != 18 {
+		t.Fatalf("workerCount() = %d, want essential workers plus background workers", got)
+	}
+}
+
+func TestPipelineBroadcastCoalesceWindowUsesPollingPolicySetting(t *testing.T) {
+	settingsRepo := newMockWorkerSettingsRepo()
+	_ = settingsRepo.Set(domain.SettingPollingWebSocketCoalesceMS, "750")
+
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		state.NewStore(),
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		settingsRepo,
+		nil,
+		nil,
+		nil,
+	)
+
+	if pipeline.broadcastCoalesceWindow != 750*time.Millisecond {
+		t.Fatalf("broadcastCoalesceWindow = %v, want 750ms", pipeline.broadcastCoalesceWindow)
+	}
+}
+
 func broadcastMessageTypes(t *testing.T, raw [][]byte) []string {
 	t.Helper()
 
@@ -1473,6 +1528,39 @@ func TestPipelineOrchestratorBroadcastLoop_EventDrivenStateChangeSendsDelta(t *t
 	types := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
 	if len(types) == 0 || types[0] != ws.MessageTypeRuntimeDelta {
 		t.Fatalf("expected state change to broadcast runtime_delta, got %v", types)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastLoop_DrainsStaleQueuedStateChangesBeforeInitialSnapshot(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
+	pipeline.fullResyncInterval = time.Hour
+
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  floatPtr(62),
+			CollectedAt: time.Date(2026, 4, 25, 9, 30, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 25, 9, 30, 0, 0, time.UTC),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pipeline.broadcaster.broadcastLoop(ctx)
+
+	initialTypes := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
+	if len(initialTypes) == 0 || initialTypes[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected initial broadcast to be snapshot, got %v", initialTypes)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if messages := drainBroadcastCh(hub); len(messages) != 0 {
+		t.Fatalf("expected stale pre-start state change to be included in initial snapshot only, got %v", broadcastMessageTypes(t, messages))
 	}
 }
 

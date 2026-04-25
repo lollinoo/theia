@@ -1175,4 +1175,53 @@ describe('useWebSocket', () => {
 
     expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(50);
   });
+
+  it('requests a fresh websocket snapshot when a versioned delta base does not match', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 3,
+          snapshot: {
+            devices: {
+              'dev-1': makeDeviceRuntime(),
+            },
+            links: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 2,
+          version: 4,
+          delta: {
+            devices: {
+              'dev-1': makeDeviceRuntime({
+                cpu_percent: 99,
+                last_collected_at: '2026-01-01T00:01:00Z',
+                last_polled_at: '2026-01-01T00:01:00Z',
+              }),
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    expect(mockInstance.close).toHaveBeenCalled();
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'backend-resync-required',
+        detail: {
+          scope: 'overview',
+          reason: 'client_resync_scheduled',
+        },
+      }),
+    );
+  });
 });

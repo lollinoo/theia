@@ -122,7 +122,7 @@ func NewPipelineOrchestrator(
 		deviceChangeNotify:      deviceChangeNotify,
 		linkChangeNotify:        linkChangeNotify,
 		alertNotify:             make(chan struct{}, 1),
-		broadcastCoalesceWindow: pipelineBroadcastCoalesceWindow,
+		broadcastCoalesceWindow: pollingPolicyFromSettings(settingsRepo).WebSocketCoalesce,
 		fullResyncInterval:      pipelineFullResyncInterval,
 		done:                    make(chan struct{}),
 		healthDone:              make(chan struct{}),
@@ -261,11 +261,19 @@ func (p *PipelineOrchestrator) PollingHealth() polling.HealthSnapshot {
 }
 
 func (p *PipelineOrchestrator) workerCount() int {
-	count := pollingbudget.Total(p.settingsRepo)
+	count := pollingbudget.Total(p.settingsRepo) + pollingPolicyFromSettings(p.settingsRepo).EssentialWorkers
 	if count <= 0 {
 		return 5
 	}
 	return count
+}
+
+func pollingPolicyFromSettings(settingsRepo domain.SettingsRepository) polling.Policy {
+	policy, _ := polling.PolicyFromSettings(settingsRepo, 0, 0, 0)
+	if policy.WebSocketCoalesce <= 0 {
+		policy.WebSocketCoalesce = pipelineBroadcastCoalesceWindow
+	}
+	return policy
 }
 
 func (p *PipelineOrchestrator) broadcastLoop(ctx context.Context) {
