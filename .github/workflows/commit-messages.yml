@@ -47,7 +47,10 @@ jobs:
           if [ "${EVENT_NAME}" = "pull_request" ]; then
             RANGE_START="${PR_BASE_SHA}"
             RANGE_END="${PR_HEAD_SHA}"
-          elif [ -n "${BEFORE_SHA}" ] && [ "${BEFORE_SHA}" != "${ZERO_SHA}" ]; then
+          elif [ -n "${BEFORE_SHA}" ] &&
+            [ "${BEFORE_SHA}" != "${ZERO_SHA}" ] &&
+            git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null &&
+            git merge-base --is-ancestor "${BEFORE_SHA}" "${AFTER_SHA}"; then
             RANGE_START="${BEFORE_SHA}"
             RANGE_END="${AFTER_SHA}"
           else
