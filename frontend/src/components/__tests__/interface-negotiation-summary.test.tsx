@@ -122,4 +122,65 @@ describe('InterfaceStatsPanel autonegotiation summary', () => {
     ).toBeInTheDocument();
     expect(summaryCard).toHaveClass('border-outline-subtle');
   });
+
+  it('renders endpoint alert negotiation variants with alert colors', () => {
+    const { rerender } = render(
+      <InterfaceStatsPanel
+        model={mockModel({
+          negotiation: {
+            sourceLabel: 'Unknown',
+            targetLabel: 'Unknown',
+            summaryLabel: 'Autonegotiation',
+            detailLabel: 'Waiting for interface speed data from one or both ends.',
+            tone: 'warning',
+          },
+        })}
+      />,
+    );
+
+    let summaryCard = screen
+      .getByText('Waiting for interface speed data from one or both ends.')
+      .closest('div.rounded-xl');
+    expect(summaryCard).toHaveClass('border-warning/35');
+
+    rerender(
+      <InterfaceStatsPanel
+        model={mockModel({
+          negotiation: {
+            sourceLabel: 'Unknown',
+            targetLabel: 'Unknown',
+            summaryLabel: 'Autonegotiation',
+            detailLabel: 'Waiting for interface speed data from one or both ends.',
+            tone: 'critical',
+          },
+        })}
+      />,
+    );
+
+    summaryCard = screen
+      .getByText('Waiting for interface speed data from one or both ends.')
+      .closest('div.rounded-xl');
+    expect(summaryCard).toHaveClass('border-status-down/35');
+  });
+
+  it('renders healthy endpoint negotiation variants with up colors', () => {
+    render(
+      <InterfaceStatsPanel
+        model={mockModel({
+          negotiation: {
+            sourceLabel: 'Unknown',
+            targetLabel: 'Unknown',
+            summaryLabel: 'Autonegotiation',
+            detailLabel: 'Waiting for interface speed data from one or both ends.',
+            tone: 'up',
+          },
+        })}
+      />,
+    );
+
+    const summaryCard = screen
+      .getByText('Waiting for interface speed data from one or both ends.')
+      .closest('div.rounded-xl');
+    expect(summaryCard).toHaveClass('border-status-up/30');
+  });
 });

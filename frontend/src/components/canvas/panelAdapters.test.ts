@@ -610,6 +610,245 @@ describe('panelAdapters', () => {
     });
   });
 
+  it('colors virtual-to-physical negotiation warning when the physical endpoint is SNMP degraded', () => {
+    const source = mockDevice();
+    const target = mockDevice({
+      id: 'dev-2',
+      hostname: 'cloud-edge',
+      ip: '',
+      device_type: 'virtual',
+      sys_name: 'cloud-edge',
+    });
+    const link = mockLink({
+      source_if_speed: 0,
+      target_if_speed: 0,
+      target_if_oper_status: 'unknown',
+    });
+    const runtimeState = buildRuntimeState({
+      devices: [source, target],
+      links: [link],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            health: 'warning',
+            primary_health: 'snmp_degraded',
+            snmp_reachable: 'false',
+            alert_status: 'degraded',
+            firing_alert_count: 1,
+          }),
+          'dev-2': mockRuntimeDevice({
+            device_id: 'dev-2',
+            operational_status: 'unmonitored',
+            primary_health: 'probing',
+            reachability: 'unmonitored',
+            health: 'unknown',
+            metrics_status: 'unmonitored',
+            metrics_reason: 'unmonitored',
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildLinkInterfacePanelModel({
+      link,
+      sourceDevice: source,
+      targetDevice: target,
+      sourceInterfaces: [],
+      targetInterfaces: [],
+      runtimeState,
+    });
+
+    expect(model.negotiation).toMatchObject({
+      sourceLabel: 'Unknown',
+      targetLabel: 'Unknown',
+      tone: 'warning',
+    });
+  });
+
+  it('colors virtual-to-physical negotiation critical when the physical endpoint is down', () => {
+    const source = mockDevice();
+    const target = mockDevice({
+      id: 'dev-2',
+      hostname: 'cloud-edge',
+      ip: '',
+      device_type: 'virtual',
+      sys_name: 'cloud-edge',
+    });
+    const link = mockLink({
+      source_if_speed: 0,
+      target_if_speed: 0,
+      target_if_oper_status: 'unknown',
+    });
+    const runtimeState = buildRuntimeState({
+      devices: [source, target],
+      links: [link],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            operational_status: 'down',
+            health: 'critical',
+            primary_health: 'unreachable',
+            reachability: 'hard_down',
+            network_reachable: 'false',
+            snmp_reachable: 'false',
+            primary_reason: 'device_unreachable',
+            metrics_status: 'unavailable',
+            metrics_reason: 'device_unreachable',
+            alert_status: 'down',
+            firing_alert_count: 1,
+          }),
+          'dev-2': mockRuntimeDevice({
+            device_id: 'dev-2',
+            operational_status: 'unmonitored',
+            primary_health: 'probing',
+            reachability: 'unmonitored',
+            health: 'unknown',
+            metrics_status: 'unmonitored',
+            metrics_reason: 'unmonitored',
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildLinkInterfacePanelModel({
+      link,
+      sourceDevice: source,
+      targetDevice: target,
+      sourceInterfaces: [],
+      targetInterfaces: [],
+      runtimeState,
+    });
+
+    expect(model.negotiation).toMatchObject({
+      sourceLabel: 'Unknown',
+      targetLabel: 'Unknown',
+      tone: 'critical',
+    });
+  });
+
+  it('colors virtual-to-physical negotiation up when the physical endpoint and link are healthy', () => {
+    const source = mockDevice();
+    const target = mockDevice({
+      id: 'dev-2',
+      hostname: 'cloud-edge',
+      ip: '',
+      device_type: 'virtual',
+      sys_name: 'cloud-edge',
+    });
+    const link = mockLink({
+      source_if_speed: 0,
+      target_if_speed: 0,
+      target_if_oper_status: 'unknown',
+    });
+    const runtimeState = buildRuntimeState({
+      devices: [source, target],
+      links: [link],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            operational_status: 'up',
+            health: 'healthy',
+            primary_health: 'up_fresh',
+            reachability: 'up',
+            network_reachable: 'true',
+            snmp_reachable: 'true',
+            alert_status: 'normal',
+          }),
+          'dev-2': mockRuntimeDevice({
+            device_id: 'dev-2',
+            operational_status: 'unmonitored',
+            primary_health: 'probing',
+            reachability: 'unmonitored',
+            health: 'unknown',
+            metrics_status: 'unmonitored',
+            metrics_reason: 'unmonitored',
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildLinkInterfacePanelModel({
+      link,
+      sourceDevice: source,
+      targetDevice: target,
+      sourceInterfaces: [],
+      targetInterfaces: [],
+      runtimeState,
+    });
+
+    expect(model.negotiation).toMatchObject({
+      sourceLabel: 'Unknown',
+      targetLabel: 'Unknown',
+      tone: 'up',
+    });
+  });
+
+  it('colors virtual-with-ip-to-physical negotiation up when both endpoints and the link are healthy', () => {
+    const source = mockDevice();
+    const target = mockDevice({
+      id: 'dev-2',
+      hostname: 'probe-endpoint',
+      ip: '10.0.0.20',
+      device_type: 'virtual',
+      sys_name: 'probe-endpoint',
+    });
+    const link = mockLink({
+      source_if_speed: 0,
+      target_if_speed: 0,
+      target_if_oper_status: 'unknown',
+    });
+    const runtimeState = buildRuntimeState({
+      devices: [source, target],
+      links: [link],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            operational_status: 'up',
+            health: 'healthy',
+            primary_health: 'up_fresh',
+            reachability: 'up',
+            network_reachable: 'true',
+            snmp_reachable: 'true',
+            alert_status: 'normal',
+          }),
+          'dev-2': mockRuntimeDevice({
+            device_id: 'dev-2',
+            operational_status: 'up',
+            health: 'healthy',
+            primary_health: 'up_fresh',
+            reachability: 'up',
+            network_reachable: 'true',
+            snmp_reachable: 'true',
+            alert_status: 'normal',
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildLinkInterfacePanelModel({
+      link,
+      sourceDevice: source,
+      targetDevice: target,
+      sourceInterfaces: [],
+      targetInterfaces: [],
+      runtimeState,
+    });
+
+    expect(model.negotiation).toMatchObject({
+      sourceLabel: 'Unknown',
+      targetLabel: 'Unknown',
+      tone: 'up',
+    });
+  });
+
   it('keeps shared link runtime visible when a device-level upstream outage does not apply to the link', () => {
     const source = mockDevice();
     const target = mockDevice({

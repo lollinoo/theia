@@ -23,6 +23,7 @@ import {
 } from './runtimeAdapters';
 
 const UNKNOWN_UTILIZATION_COLOR = 'var(--color-status-unknown)';
+type EndpointNegotiationTone = Extract<LinkNegotiationModel['tone'], 'up' | 'warning' | 'critical'>;
 
 export interface AdaptedInterfaceStats {
   txLabel: string;
@@ -294,6 +295,7 @@ function buildInterfaceSection({
 function buildNegotiationModel(
   sourceInterfaceInfo: InterfaceInfo | null,
   targetInterfaceInfo: InterfaceInfo | null,
+  endpointTone: EndpointNegotiationTone | null = null,
 ): LinkNegotiationModel {
   const sourceSpeed = sourceInterfaceInfo?.speed ?? 0;
   const targetSpeed = targetInterfaceInfo?.speed ?? 0;
@@ -306,7 +308,7 @@ function buildNegotiationModel(
       targetLabel,
       summaryLabel: `Matched at ${formatBandwidth(sourceSpeed)}`,
       detailLabel: 'Both interfaces report the same negotiated speed.',
-      tone: 'matched',
+      tone: endpointTone ?? 'matched',
     };
   }
 
@@ -316,7 +318,7 @@ function buildNegotiationModel(
       targetLabel,
       summaryLabel: `${formatBandwidth(sourceSpeed)} vs ${formatBandwidth(targetSpeed)}`,
       detailLabel: 'The two ends report different negotiated speeds.',
-      tone: 'mismatch',
+      tone: endpointTone ?? 'mismatch',
     };
   }
 
@@ -326,7 +328,7 @@ function buildNegotiationModel(
       targetLabel,
       summaryLabel: sourceSpeed > 0 ? sourceLabel : targetLabel,
       detailLabel: 'Only one side exposed a negotiated speed.',
-      tone: 'partial',
+      tone: endpointTone ?? 'partial',
     };
   }
 
@@ -335,8 +337,134 @@ function buildNegotiationModel(
     targetLabel,
     summaryLabel: 'Autonegotiation',
     detailLabel: 'Waiting for interface speed data from one or both ends.',
-    tone: 'unknown',
+    tone: endpointTone ?? 'unknown',
   };
+}
+
+function endpointNegotiationTone(
+  runtimeDevice: RuntimeDeviceModel,
+): Exclude<EndpointNegotiationTone, 'up'> | null {
+  const metrics = runtimeDevice.metrics;
+  if (runtimeDevice.device.device_type === 'virtual' && !runtimeDevice.device.ip) {
+    return null;
+  }
+
+  if (
+    runtimeDevice.alertStatus === 'down' ||
+    runtimeDevice.device.status === 'down' ||
+    runtimeDevice.runtimeStatus === 'down' ||
+    runtimeDevice.primaryHealth === 'unreachable' ||
+    runtimeDevice.primaryHealth === 'quarantined' ||
+    metrics?.health === 'critical' ||
+    metrics?.reachability === 'hard_down' ||
+    metrics?.network_reachable === 'false'
+  ) {
+    return 'critical';
+  }
+
+  if (
+    runtimeDevice.alertStatus === 'degraded' ||
+    runtimeDevice.device.status === 'probing' ||
+    runtimeDevice.runtimeStatus === 'probing' ||
+    runtimeDevice.primaryHealth === 'snmp_degraded' ||
+    metrics?.health === 'warning' ||
+    metrics?.reachability === 'soft_down' ||
+    metrics?.snmp_reachable === 'false'
+  ) {
+    return 'warning';
+  }
+
+  return null;
+}
+
+function isNoIpVirtualEndpoint(runtimeDevice: RuntimeDeviceModel): boolean {
+  return runtimeDevice.device.device_type === 'virtual' && !runtimeDevice.device.ip;
+}
+
+function isIpVirtualEndpoint(runtimeDevice: RuntimeDeviceModel): boolean {
+  return runtimeDevice.device.device_type === 'virtual' && !!runtimeDevice.device.ip;
+}
+
+function hasHealthyRuntimeEndpoint(runtimeDevice: RuntimeDeviceModel): boolean {
+  return (
+    runtimeDevice.alertStatus === 'normal' &&
+    runtimeDevice.device.status === 'up' &&
+    (runtimeDevice.runtimeStatus === null || runtimeDevice.runtimeStatus === 'up') &&
+    (runtimeDevice.primaryHealth === null ||
+      runtimeDevice.primaryHealth === 'up_fresh' ||
+      runtimeDevice.primaryHealth === 'up_stale') &&
+    (runtimeDevice.metrics === null ||
+      ((runtimeDevice.metrics.health === 'healthy' || runtimeDevice.metrics.health === 'unknown') &&
+        (runtimeDevice.metrics.reachability === 'up' ||
+          runtimeDevice.metrics.reachability === 'unknown') &&
+        (runtimeDevice.metrics.network_reachable === 'true' ||
+          runtimeDevice.metrics.network_reachable === 'unknown') &&
+        (runtimeDevice.metrics.snmp_reachable === 'true' ||
+          runtimeDevice.metrics.snmp_reachable === 'unknown')))
+  );
+}
+
+function isHealthyPhysicalEndpoint(
+  runtimeDevice: RuntimeDeviceModel,
+  interfaceInfo: InterfaceInfo | null,
+): boolean {
+  if (runtimeDevice.device.device_type === 'virtual') {
+    return false;
+  }
+
+  return hasHealthyRuntimeEndpoint(runtimeDevice) && interfaceInfo?.oper_status === 'up';
+}
+
+function isHealthyIpVirtualEndpoint(runtimeDevice: RuntimeDeviceModel): boolean {
+  return isIpVirtualEndpoint(runtimeDevice) && hasHealthyRuntimeEndpoint(runtimeDevice);
+}
+
+function linkEndpointNegotiationTone(
+  sourceDevice: RuntimeDeviceModel,
+  targetDevice: RuntimeDeviceModel,
+  sourceInterfaceInfo: InterfaceInfo | null,
+  targetInterfaceInfo: InterfaceInfo | null,
+): EndpointNegotiationTone | null {
+  const sourceTone = endpointNegotiationTone(sourceDevice);
+  const targetTone = endpointNegotiationTone(targetDevice);
+
+  if (sourceTone === 'critical' || targetTone === 'critical') {
+    return 'critical';
+  }
+
+  if (sourceTone === 'warning' || targetTone === 'warning') {
+    return 'warning';
+  }
+
+  if (
+    isNoIpVirtualEndpoint(sourceDevice) &&
+    isHealthyPhysicalEndpoint(targetDevice, targetInterfaceInfo)
+  ) {
+    return 'up';
+  }
+
+  if (
+    isNoIpVirtualEndpoint(targetDevice) &&
+    isHealthyPhysicalEndpoint(sourceDevice, sourceInterfaceInfo)
+  ) {
+    return 'up';
+  }
+
+  if (
+    isHealthyIpVirtualEndpoint(sourceDevice) &&
+    isHealthyPhysicalEndpoint(targetDevice, targetInterfaceInfo)
+  ) {
+    return 'up';
+  }
+
+  if (
+    isHealthyIpVirtualEndpoint(targetDevice) &&
+    isHealthyPhysicalEndpoint(sourceDevice, sourceInterfaceInfo)
+  ) {
+    return 'up';
+  }
+
+  return null;
 }
 
 function adaptAlert(deviceMap: Map<string, Device>, alert: AlertDTO): AlertsPanelAlertModel {
@@ -518,7 +646,16 @@ export function buildLinkInterfacePanelModel({
 
   return {
     linkId: link.id,
-    negotiation: buildNegotiationModel(sourceInterfaceInfo, targetInterfaceInfo),
+    negotiation: buildNegotiationModel(
+      sourceInterfaceInfo,
+      targetInterfaceInfo,
+      linkEndpointNegotiationTone(
+        runtimeSource,
+        runtimeTarget,
+        sourceInterfaceInfo,
+        targetInterfaceInfo,
+      ),
+    ),
     source: buildInterfaceSection({
       deviceLabel: labelForDevice(runtimeSource.device),
       ifName: link.source_if_name,
