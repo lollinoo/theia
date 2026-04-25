@@ -319,6 +319,42 @@ describe('linkSemantics', () => {
     });
   });
 
+  it('keeps the virtual rate badge aligned with an up virtual-to-physical link', () => {
+    const edgeTone = resolveEdgeTone({
+      sourceIsVirtual: true,
+      targetIsVirtual: false,
+      sourceDeviceStatus: 'up',
+      targetDeviceStatus: 'up',
+      targetIfStatus: 'up',
+      negotiationState: 'not_applicable',
+    });
+
+    const presentation = resolveLinkBadgePresentation({
+      data: {
+        sourceIsVirtual: true,
+        targetIsVirtual: false,
+        bandwidthLabel: '1 Gbps',
+        negotiationState: 'not_applicable',
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        targetIfStatus: 'up',
+      },
+      zoom: 1.3,
+      path: 'M0 0 C0 0 200 0 200 0',
+      fallbackX: 100,
+      fallbackY: 0,
+      edgeTone,
+      isActive: false,
+      isConnected: false,
+      isMuted: false,
+    });
+
+    expect(presentation.items[0]).toMatchObject({
+      key: 'rate',
+      className: 'border-status-up/35 text-status-up',
+    });
+  });
+
   it('never materializes a third inline badge even when throughput telemetry exists', () => {
     const edgeTone = resolveEdgeTone({
       sourceDeviceStatus: 'up',

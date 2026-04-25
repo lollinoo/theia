@@ -513,6 +513,8 @@ export function resolveInlineBadgeTone(
   switch (data?.negotiationState) {
     case 'matched':
       return 'up';
+    case 'not_applicable':
+      return edgeState === 'up' ? 'up' : 'neutral';
     case 'mismatch':
     case 'partial':
     case 'unknown':

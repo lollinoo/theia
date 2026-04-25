@@ -105,7 +105,12 @@ interface InterfaceStatsPanelProps {
 function negotiationToneClass(tone: LinkInterfacePanelModel['negotiation']['tone']): string {
   switch (tone) {
     case 'matched':
+    case 'up':
       return 'border-status-up/30 bg-status-up/10 text-status-up';
+    case 'critical':
+      return 'border-status-down/35 bg-status-down/10 text-status-down';
+    case 'warning':
+      return 'border-warning/35 bg-warning/10 text-warning';
     case 'mismatch':
     case 'partial':
       return 'border-status-probing/30 bg-status-probing/10 text-status-probing';

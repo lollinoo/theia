@@ -98,4 +98,18 @@ describe('LinkEdge render', () => {
     expect(screen.getByText('1 Gbps')).toBeInTheDocument();
     expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
   });
+
+  it('renders virtual-to-physical up rate badges with the up tone', () => {
+    renderEdge(
+      { id: 'edge-4' },
+      {
+        sourceIsVirtual: true,
+        targetIsVirtual: false,
+        negotiationState: 'not_applicable',
+        targetIfStatus: 'up',
+      },
+    );
+
+    expect(screen.getByTestId('edge-4-badge-rate')).toHaveClass('border-status-up/35');
+  });
 });

@@ -46,7 +46,7 @@ export interface LinkNegotiationModel {
   targetLabel: string;
   summaryLabel: string;
   detailLabel: string;
-  tone: 'matched' | 'mismatch' | 'partial' | 'unknown';
+  tone: 'matched' | 'mismatch' | 'partial' | 'unknown' | 'up' | 'warning' | 'critical';
 }
 
 export interface LinkInterfacePanelModel {
