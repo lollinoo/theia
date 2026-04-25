@@ -287,7 +287,10 @@ function readRuntimeFlags(record: APIRecord, key: string): RuntimeFlag[] {
   });
 }
 
-function readFieldStates(record: APIRecord, key: string): Record<'uptime' | 'cpu' | 'memory', FieldState> {
+function readFieldStates(
+  record: APIRecord,
+  key: string,
+): Record<'uptime' | 'cpu' | 'memory', FieldState> {
   const value = record[key];
   if (!isRecord(value)) {
     throw new Error(`invalid required field: ${key}`);
@@ -320,11 +323,7 @@ export function parseDeviceRuntime(value: unknown): DeviceRuntimeDTO {
       primary_health: readRequiredEnum(value, 'primary_health', primaryHealthStates),
       runtime_flags: readRuntimeFlags(value, 'runtime_flags'),
       field_states: readFieldStates(value, 'field_states'),
-      network_reachable: readRequiredEnum(
-        value,
-        'network_reachable',
-        reachabilityEvidenceStates,
-      ),
+      network_reachable: readRequiredEnum(value, 'network_reachable', reachabilityEvidenceStates),
       snmp_reachable: readRequiredEnum(value, 'snmp_reachable', reachabilityEvidenceStates),
       reachability: readRequiredEnum(value, 'reachability', reachabilityStatuses),
       health: readRequiredEnum(value, 'health', healthStatuses),
