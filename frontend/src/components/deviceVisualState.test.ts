@@ -145,6 +145,29 @@ describe('deviceVisualState', () => {
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-down)');
   });
 
+  it('uses runtime operational down before unknown metric health', () => {
+    const device = mockDevice({ status: 'up' });
+    const metrics = mockMetrics({
+      operational_status: 'down',
+      primary_health: 'unreachable',
+      network_reachable: 'false',
+      snmp_reachable: 'false',
+      reachability: 'hard_down',
+      health: 'unknown',
+      metrics_status: 'unavailable',
+      metrics_reason: 'device_unreachable',
+      cpu_percent: null,
+      mem_percent: null,
+      uptime_secs: null,
+    });
+
+    expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
+      dotStatus: 'down',
+      label: 'Down',
+    });
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-down)');
+  });
+
   it('gives down nodes a dedicated frame glow without reusing it for critical', () => {
     expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain(
       'var(--nt-node-down-ring)',

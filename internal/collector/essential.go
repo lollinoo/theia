@@ -97,7 +97,7 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 	}
 	if err := client.Connect(); err != nil {
 		result.Err = fmt.Errorf("connect SNMP client: %w", err)
-		result.SNMPReachable = polling.TriStateFalse
+		c.markSNMPFailureNetworkEvidence(ctx, device.IP, timeout, &result)
 		return result
 	}
 	defer func() {
@@ -119,12 +119,7 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 	result.CPU, result.CPUPercent = convertEssentialField(metrics.CPU)
 	result.Memory, result.MemPercent = convertEssentialField(metrics.Memory)
 	if !essentialMetricsHaveSuccessfulRead(metrics) {
-		if c.networkProbe != nil {
-			if err := c.networkProbe(ctx, device.IP, timeout); err == nil {
-				result.NetworkReachable = polling.TriStateTrue
-			}
-		}
-		result.SNMPReachable = polling.TriStateFalse
+		c.markSNMPFailureNetworkEvidence(ctx, device.IP, timeout, &result)
 		result.PollStatus = polling.PollStatusFailed
 		result.Err = essentialMetricsFailure(metrics)
 		return result
@@ -134,6 +129,18 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 	result.NetworkReachable = polling.TriStateTrue
 	result.PollStatus = essentialPollStatus(result)
 	return result
+}
+
+func (c *EssentialCollector) markSNMPFailureNetworkEvidence(ctx context.Context, target string, timeout time.Duration, result *EssentialResult) {
+	result.SNMPReachable = polling.TriStateFalse
+	if c == nil || c.networkProbe == nil {
+		return
+	}
+	if err := c.networkProbe(ctx, target, timeout); err == nil {
+		result.NetworkReachable = polling.TriStateTrue
+		return
+	}
+	result.NetworkReachable = polling.TriStateFalse
 }
 
 func essentialMetricsHaveSuccessfulRead(metrics snmp.EssentialMetricsResult) bool {
