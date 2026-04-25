@@ -277,7 +277,7 @@ func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 	}
 
 	for id, dm := range snapshot.Devices {
-		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
+		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
 			dm.DeviceID,
 			dm.OperationalStatus,
 			dm.PrimaryHealth,
