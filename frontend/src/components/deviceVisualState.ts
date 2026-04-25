@@ -339,10 +339,7 @@ export function resolveDeviceVisualState(
 ): DeviceVisualState {
   const operationalStatus = resolveDeviceOperationalStatusState(device, monitoringStateOverride);
 
-  if (
-    operationalStatus.dotStatus === 'unmonitored' ||
-    device.device_type === 'virtual'
-  ) {
+  if (operationalStatus.dotStatus === 'unmonitored' || device.device_type === 'virtual') {
     return operationalStatus;
   }
 
