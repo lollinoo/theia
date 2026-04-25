@@ -262,6 +262,11 @@ function mergeNodePresentationState(
       ...node,
       selected: currentNode.selected,
       dragging: currentNode.dragging,
+      width: currentNode.width,
+      height: currentNode.height,
+      initialWidth: currentNode.initialWidth,
+      initialHeight: currentNode.initialHeight,
+      measured: currentNode.measured,
       data: {
         ...node.data,
         highlighted: currentNode.data.highlighted,

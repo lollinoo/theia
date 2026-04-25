@@ -104,6 +104,23 @@ describe('linkSemantics', () => {
     });
   });
 
+  it('colors physical links warning when both reachable endpoints have degraded device alerts', () => {
+    expect(
+      resolveEdgeTone({
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        sourceDeviceAlertStatus: 'degraded',
+        targetDeviceAlertStatus: 'degraded',
+        sourceIfStatus: 'up',
+        targetIfStatus: 'up',
+        negotiationState: 'matched',
+      }),
+    ).toMatchObject({
+      color: 'var(--color-edge-warning)',
+      semanticState: 'warning',
+    });
+  });
+
   it('keeps inert virtual links green below the 75% utilization warning threshold', () => {
     expect(
       resolveEdgeTone({
