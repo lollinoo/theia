@@ -1979,7 +1979,7 @@ func TestBuildSnapshot_SNMPLinkRates_ResetDiscarded(t *testing.T) {
 	assertSNMPLinkMetricsPresent(t, snapshot, devID)
 }
 
-func TestBuildSnapshot_SNMPLinkRates_GapRequiresWarmup(t *testing.T) {
+func TestBuildSnapshot_SNMPLinkRates_DelayedSampleEmitsRate(t *testing.T) {
 	calls := 0
 	mc, settingsRepo, devID, deviceIP := newSNMPLinkRateTestCollector(t, func(target string, creds domain.SNMPCredentials) ([]SNMPIfCounter, error) {
 		calls++
@@ -1988,8 +1988,6 @@ func TestBuildSnapshot_SNMPLinkRates_GapRequiresWarmup(t *testing.T) {
 			return []SNMPIfCounter{{IfName: "ether1", InOctets: 1_100, OutOctets: 2_100}}, nil
 		case 2:
 			return []SNMPIfCounter{{IfName: "ether1", InOctets: 1_200, OutOctets: 2_200}}, nil
-		case 3:
-			return []SNMPIfCounter{{IfName: "ether1", InOctets: 2_200, OutOctets: 3_200}}, nil
 		default:
 			return nil, fmt.Errorf("unexpected poll %d", calls)
 		}
@@ -2005,12 +2003,8 @@ func TestBuildSnapshot_SNMPLinkRates_GapRequiresWarmup(t *testing.T) {
 	}
 
 	snapshot, _, _ := mc.buildSnapshot(context.Background())
-	assertNoSNMPLinkMetrics(t, snapshot, devID)
+	assertSNMPLinkMetricsPresent(t, snapshot, devID)
 
-	snapshot, _, _ = mc.buildSnapshot(context.Background())
-	assertNoSNMPLinkMetrics(t, snapshot, devID)
-
-	time.Sleep(5 * time.Millisecond)
 	snapshot, _, _ = mc.buildSnapshot(context.Background())
 	assertSNMPLinkMetricsPresent(t, snapshot, devID)
 }

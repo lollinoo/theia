@@ -32,7 +32,7 @@ snmp:
     sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
     if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
   performance:
-    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    cpu_oid: ".1.3.6.1.2.1.25.3.3.1.2"
     temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
     temperature_scale: 1.0
 `
@@ -263,7 +263,7 @@ snmp:
   performance:
     temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
     temperature_scale: 1.0
-    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    cpu_oid: ".1.3.6.1.2.1.25.3.3.1.2"
 `
 	mikrotikYAML := `
 vendor:
@@ -300,7 +300,7 @@ snmp:
 	if s.Performance.TemperatureScale != 0.1 {
 		t.Errorf("expected 0.1 scale, got %f", s.Performance.TemperatureScale)
 	}
-	if s.Performance.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+	if s.Performance.CPUOID != ".1.3.6.1.2.1.25.3.3.1.2" {
 		t.Errorf("expected default cpu OID, got %q", s.Performance.CPUOID)
 	}
 }
@@ -357,7 +357,7 @@ snmp:
     sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
     if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
   performance:
-    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    cpu_oid: ".1.3.6.1.2.1.25.3.3.1.2"
     temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
     temperature_scale: 1.0
 
@@ -464,7 +464,7 @@ snmp:
     sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
     if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
   performance:
-    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    cpu_oid: ".1.3.6.1.2.1.25.3.3.1.2"
     memory_used_oid: ".1.3.6.1.2.1.25.2.3.1.6"
     memory_total_oid: ".1.3.6.1.2.1.25.2.3.1.5"
     temperature_oid: ".1.3.6.1.2.1.99.1.1.1.4"
@@ -496,7 +496,7 @@ snmp:
 
 	// mikrotik does not set CPUOID — must fall back to default's value
 	p := reg.ResolvePerformanceOIDs("mikrotik")
-	if p.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+	if p.CPUOID != ".1.3.6.1.2.1.25.3.3.1.2" {
 		t.Errorf("expected default CPUOID for mikrotik (fallback), got %q", p.CPUOID)
 	}
 	// mikrotik overrides TemperatureOID
@@ -510,7 +510,7 @@ snmp:
 
 	// Non-existent vendor — must return default values without panic
 	pDefault := reg.ResolvePerformanceOIDs("nonexistent")
-	if pDefault.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+	if pDefault.CPUOID != ".1.3.6.1.2.1.25.3.3.1.2" {
 		t.Errorf("expected default CPUOID for nonexistent vendor, got %q", pDefault.CPUOID)
 	}
 	if pDefault.TemperatureOID != ".1.3.6.1.2.1.99.1.1.1.4" {
@@ -519,7 +519,7 @@ snmp:
 
 	// Default vendor — returns default performance group untouched
 	pExplicitDefault := reg.ResolvePerformanceOIDs("default")
-	if pExplicitDefault.CPUOID != ".1.3.6.1.2.1.25.3.2.1.5" {
+	if pExplicitDefault.CPUOID != ".1.3.6.1.2.1.25.3.3.1.2" {
 		t.Errorf("expected default CPUOID for explicit default vendor, got %q", pExplicitDefault.CPUOID)
 	}
 }
@@ -542,7 +542,7 @@ snmp:
     sys_uptime_oid: ".1.3.6.1.2.1.1.3.0"
     if_oper_status_oid: ".1.3.6.1.2.1.2.2.1.8"
   performance:
-    cpu_oid: ".1.3.6.1.2.1.25.3.2.1.5"
+    cpu_oid: ".1.3.6.1.2.1.25.3.3.1.2"
 `
 	mikrotikYAML := `
 vendor:

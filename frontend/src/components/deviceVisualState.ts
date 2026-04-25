@@ -367,6 +367,22 @@ export function resolveDeviceVisualState(
         labelClass: healthLabelClass('critical'),
       };
     default:
+      if (metrics?.primary_health === 'up_fresh' || metrics?.primary_health === 'up_stale') {
+        return {
+          dotStatus: 'up',
+          label: 'Up',
+          labelClass: healthLabelClass('healthy'),
+        };
+      }
+
+      if (metrics?.primary_health === 'snmp_degraded') {
+        return {
+          dotStatus: 'degraded',
+          label: 'Warning',
+          labelClass: healthLabelClass('warning'),
+        };
+      }
+
       return {
         dotStatus: 'unknown',
         label: 'Unknown',

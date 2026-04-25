@@ -67,6 +67,113 @@ func TestStoreUpdateEssentialAppliesCoherentPartialResult(t *testing.T) {
 	}
 }
 
+func TestStoreUpdateEssentialPreservesPerformanceMetricsWhenFieldsAreMissing(t *testing.T) {
+	store := NewStore()
+	deviceID := uuid.New()
+	performanceAt := time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)
+	cpu := 37.0
+	mem := 44.0
+	uptime := 1200.0
+
+	store.Update(StateUpdate{
+		DeviceID:         deviceID,
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        performanceAt,
+		PollSuccess:      true,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &cpu,
+			MemPercent:  &mem,
+			UptimeSecs:  &uptime,
+			CollectedAt: performanceAt,
+		},
+	})
+
+	essentialAt := performanceAt.Add(5 * time.Second)
+	freshUptime := 1205.0
+	store.Update(StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        essentialAt,
+		PollSuccess:      true,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			UptimeSecs:  &freshUptime,
+			CollectedAt: essentialAt,
+		},
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusPartial,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateTrue,
+			Uptime:           polling.FieldStateOK,
+			CPU:              polling.FieldStateMissing,
+			Memory:           polling.FieldStateMissing,
+		},
+	})
+
+	got, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected device state")
+	}
+	if got.Metrics.CPUPercent == nil || *got.Metrics.CPUPercent != cpu {
+		t.Fatalf("CPUPercent = %#v, want preserved %v", got.Metrics.CPUPercent, cpu)
+	}
+	if got.Metrics.MemPercent == nil || *got.Metrics.MemPercent != mem {
+		t.Fatalf("MemPercent = %#v, want preserved %v", got.Metrics.MemPercent, mem)
+	}
+	if got.Metrics.UptimeSecs == nil || *got.Metrics.UptimeSecs != freshUptime {
+		t.Fatalf("UptimeSecs = %#v, want refreshed %v", got.Metrics.UptimeSecs, freshUptime)
+	}
+	if got.FieldStates["cpu"] != polling.FieldStateOK {
+		t.Fatalf("cpu field state = %q, want ok while CPUPercent is preserved", got.FieldStates["cpu"])
+	}
+	if got.FieldStates["memory"] != polling.FieldStateOK {
+		t.Fatalf("memory field state = %q, want ok while MemPercent is preserved", got.FieldStates["memory"])
+	}
+	if got.RuntimeFlags[polling.FlagPartialTelemetry] {
+		t.Fatalf("partial_telemetry flag set despite merged metric fields being ok: %#v", got.RuntimeFlags)
+	}
+}
+
+func TestStorePerformanceUpdateMarksMetricFieldStatesOK(t *testing.T) {
+	store := NewStore()
+	deviceID := uuid.New()
+	collectedAt := time.Date(2026, 4, 24, 10, 1, 0, 0, time.UTC)
+	cpu := 37.0
+	mem := 44.0
+	uptime := 1200.0
+
+	store.Update(StateUpdate{
+		DeviceID:         deviceID,
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        collectedAt,
+		PollSuccess:      true,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &cpu,
+			MemPercent:  &mem,
+			UptimeSecs:  &uptime,
+			CollectedAt: collectedAt,
+		},
+	})
+
+	got, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected device state")
+	}
+	if got.FieldStates["cpu"] != polling.FieldStateOK {
+		t.Fatalf("cpu field state = %q, want ok", got.FieldStates["cpu"])
+	}
+	if got.FieldStates["memory"] != polling.FieldStateOK {
+		t.Fatalf("memory field state = %q, want ok", got.FieldStates["memory"])
+	}
+	if got.FieldStates["uptime"] != polling.FieldStateOK {
+		t.Fatalf("uptime field state = %q, want ok", got.FieldStates["uptime"])
+	}
+}
+
 func TestStoreSnapshotClonesEssentialRuntimeMaps(t *testing.T) {
 	store := NewStore()
 	deviceID := uuid.New()
@@ -721,6 +828,78 @@ func TestReachability_ThreeFailuresIsHardDown(t *testing.T) {
 	}
 	if ds.ConsecutiveFailures != 3 {
 		t.Errorf("ConsecutiveFailures = %d, want 3", ds.ConsecutiveFailures)
+	}
+}
+
+func TestEssentialSNMPFailureWithUnknownNetworkDoesNotMarkDeviceDown(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+
+	for i := 0; i < 3; i++ {
+		s.Update(StateUpdate{
+			DeviceID:         id,
+			ExpectedInterval: time.Second,
+			Timestamp:        time.Now(),
+			PollSuccess:      false,
+			Essential: &EssentialUpdate{
+				PollStatus:       polling.PollStatusFailed,
+				NetworkReachable: polling.TriStateUnknown,
+				SNMPReachable:    polling.TriStateFalse,
+				Uptime:           polling.FieldStateError,
+				CPU:              polling.FieldStateMissing,
+				Memory:           polling.FieldStateMissing,
+			},
+		})
+	}
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	if ds.Reachability != ReachabilityUnknown {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilityUnknown)
+	}
+	if ds.ConsecutiveFailures != 0 {
+		t.Fatalf("ConsecutiveFailures = %d, want 0 without network-down evidence", ds.ConsecutiveFailures)
+	}
+	if ds.PrimaryHealth != polling.PrimaryHealthSNMPDegraded {
+		t.Fatalf("PrimaryHealth = %q, want %q", ds.PrimaryHealth, polling.PrimaryHealthSNMPDegraded)
+	}
+}
+
+func TestEssentialSNMPFailureWithReachableNetworkKeepsDeviceReachable(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+
+	for i := 0; i < 3; i++ {
+		s.Update(StateUpdate{
+			DeviceID:         id,
+			ExpectedInterval: time.Second,
+			Timestamp:        time.Now(),
+			PollSuccess:      false,
+			Essential: &EssentialUpdate{
+				PollStatus:       polling.PollStatusFailed,
+				NetworkReachable: polling.TriStateTrue,
+				SNMPReachable:    polling.TriStateFalse,
+				Uptime:           polling.FieldStateError,
+				CPU:              polling.FieldStateMissing,
+				Memory:           polling.FieldStateMissing,
+			},
+		})
+	}
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	if ds.Reachability != ReachabilityUp {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilityUp)
+	}
+	if ds.ConsecutiveFailures != 0 {
+		t.Fatalf("ConsecutiveFailures = %d, want 0 when network is reachable", ds.ConsecutiveFailures)
+	}
+	if ds.PrimaryHealth != polling.PrimaryHealthSNMPDegraded {
+		t.Fatalf("PrimaryHealth = %q, want %q", ds.PrimaryHealth, polling.PrimaryHealthSNMPDegraded)
 	}
 }
 

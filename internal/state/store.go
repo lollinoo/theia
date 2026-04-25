@@ -51,6 +51,7 @@ const (
 type ReachabilityStatus string
 
 const (
+	ReachabilityUnknown  ReachabilityStatus = "unknown"
 	ReachabilityUp       ReachabilityStatus = "up"
 	ReachabilitySoftDown ReachabilityStatus = "soft_down"
 	ReachabilityHardDown ReachabilityStatus = "hard_down"
@@ -421,25 +422,28 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 	essential := update.Essential
 	next.NetworkReachable = essential.NetworkReachable
 	next.SNMPReachable = essential.SNMPReachable
-	next.FieldStates = map[string]polling.FieldState{
-		"uptime": essential.Uptime,
-		"cpu":    essential.CPU,
-		"memory": essential.Memory,
-	}
+	next.FieldStates = mergeEssentialFieldStates(prev.FieldStates, next.Metrics, essential)
 	next.RuntimeFlags = cloneRuntimeFlags(prev.RuntimeFlags)
 	setFlag(next.RuntimeFlags, polling.FlagDeadlineMissed, essential.DeadlineMissed)
 	setFlag(next.RuntimeFlags, polling.FlagOverloaded, essential.Overloaded)
-	setFlag(next.RuntimeFlags, polling.FlagPartialTelemetry, essential.PollStatus == polling.PollStatusPartial)
 
 	if update.Metrics != nil {
 		merged := cloneMetrics(next.Metrics)
 		merged.DeviceID = update.DeviceID
-		merged.CPUPercent = cloneFloat64Ptr(update.Metrics.CPUPercent)
-		merged.MemPercent = cloneFloat64Ptr(update.Metrics.MemPercent)
-		merged.UptimeSecs = cloneFloat64Ptr(update.Metrics.UptimeSecs)
+		if update.Metrics.CPUPercent != nil {
+			merged.CPUPercent = cloneFloat64Ptr(update.Metrics.CPUPercent)
+		}
+		if update.Metrics.MemPercent != nil {
+			merged.MemPercent = cloneFloat64Ptr(update.Metrics.MemPercent)
+		}
+		if update.Metrics.UptimeSecs != nil {
+			merged.UptimeSecs = cloneFloat64Ptr(update.Metrics.UptimeSecs)
+		}
 		merged.CollectedAt = update.Metrics.CollectedAt
 		next.Metrics = merged
+		next.FieldStates = mergeEssentialFieldStates(prev.FieldStates, next.Metrics, essential)
 	}
+	setFlag(next.RuntimeFlags, polling.FlagPartialTelemetry, essential.PollStatus == polling.PollStatusPartial && hasPartialTelemetryFields(next.FieldStates))
 
 	switch {
 	case essential.SNMPReachable == polling.TriStateTrue:
@@ -448,10 +452,10 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 		next.PrimaryHealth = polling.PrimaryHealthUpFresh
 		evaluateHealth(next, &next.Metrics)
 	case essential.NetworkReachable == polling.TriStateTrue:
-		next.ConsecutiveFailures = prev.ConsecutiveFailures + 1
-		next.Reachability = ReachabilitySoftDown
+		next.ConsecutiveFailures = 0
+		next.Reachability = ReachabilityUp
 		next.PrimaryHealth = polling.PrimaryHealthSNMPDegraded
-	default:
+	case essential.NetworkReachable == polling.TriStateFalse:
 		next.ConsecutiveFailures = prev.ConsecutiveFailures + 1
 		if next.ConsecutiveFailures >= 3 {
 			next.Reachability = ReachabilityHardDown
@@ -459,7 +463,47 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 			next.Reachability = ReachabilitySoftDown
 		}
 		next.PrimaryHealth = polling.PrimaryHealthUnreachable
+	default:
+		next.ConsecutiveFailures = 0
+		next.Reachability = ReachabilityUnknown
+		if essential.SNMPReachable == polling.TriStateFalse {
+			next.PrimaryHealth = polling.PrimaryHealthSNMPDegraded
+		} else {
+			next.PrimaryHealth = polling.PrimaryHealthProbing
+		}
 	}
+}
+
+func mergeEssentialFieldStates(prev map[string]polling.FieldState, metrics domain.DeviceMetrics, essential *EssentialUpdate) map[string]polling.FieldState {
+	fields := map[string]polling.FieldState{
+		"uptime": polling.FieldStateMissing,
+		"cpu":    polling.FieldStateMissing,
+		"memory": polling.FieldStateMissing,
+	}
+	for key, value := range prev {
+		fields[key] = value
+	}
+
+	fields["uptime"] = mergeEssentialFieldState(essential.Uptime, metrics.UptimeSecs)
+	fields["cpu"] = mergeEssentialFieldState(essential.CPU, metrics.CPUPercent)
+	fields["memory"] = mergeEssentialFieldState(essential.Memory, metrics.MemPercent)
+	return fields
+}
+
+func mergeEssentialFieldState(observed polling.FieldState, existingValue *float64) polling.FieldState {
+	if observed == polling.FieldStateMissing && existingValue != nil {
+		return polling.FieldStateOK
+	}
+	return observed
+}
+
+func hasPartialTelemetryFields(fields map[string]polling.FieldState) bool {
+	for _, key := range []string{"uptime", "cpu", "memory"} {
+		if fields[key] != polling.FieldStateOK {
+			return true
+		}
+	}
+	return false
 }
 
 func applyPerformanceUpdate(next *DeviceState, update StateUpdate) {
@@ -491,7 +535,28 @@ func applyPerformanceUpdate(next *DeviceState, update StateUpdate) {
 	}
 	merged.CollectedAt = update.Metrics.CollectedAt
 	next.Metrics = merged
+	markMetricFieldStates(next, update.Metrics)
 	evaluateHealth(next, &next.Metrics)
+}
+
+func markMetricFieldStates(next *DeviceState, metrics *domain.DeviceMetrics) {
+	if metrics == nil {
+		return
+	}
+	fields := cloneFieldStates(next.FieldStates)
+	if fields == nil {
+		fields = make(map[string]polling.FieldState, 3)
+	}
+	if metrics.UptimeSecs != nil {
+		fields["uptime"] = polling.FieldStateOK
+	}
+	if metrics.CPUPercent != nil {
+		fields["cpu"] = polling.FieldStateOK
+	}
+	if metrics.MemPercent != nil {
+		fields["memory"] = polling.FieldStateOK
+	}
+	next.FieldStates = fields
 }
 
 func applyOperationalUpdate(next *DeviceState, prev DeviceState, update StateUpdate) {

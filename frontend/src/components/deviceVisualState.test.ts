@@ -86,6 +86,54 @@ describe('deviceVisualState', () => {
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-critical)');
   });
 
+  it('uses primary health when reachable SNMP devices report unknown legacy health', () => {
+    const device = mockDevice({ status: 'up' });
+    const metrics = mockMetrics({
+      operational_status: 'up',
+      primary_health: 'snmp_degraded',
+      field_states: { uptime: 'error', cpu: 'missing', memory: 'missing' },
+      network_reachable: 'true',
+      snmp_reachable: 'false',
+      reachability: 'up',
+      health: 'unknown',
+      metrics_status: 'unavailable',
+      metrics_reason: 'no_data',
+      cpu_percent: null,
+      mem_percent: null,
+      uptime_secs: null,
+    });
+
+    expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
+      dotStatus: 'degraded',
+      label: 'Warning',
+    });
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-probing)');
+  });
+
+  it('uses primary up health when reachable SNMP devices only have partial telemetry', () => {
+    const device = mockDevice({ status: 'up' });
+    const metrics = mockMetrics({
+      operational_status: 'up',
+      primary_health: 'up_fresh',
+      field_states: { uptime: 'ok', cpu: 'missing', memory: 'missing' },
+      network_reachable: 'true',
+      snmp_reachable: 'true',
+      reachability: 'up',
+      health: 'unknown',
+      metrics_status: 'partial',
+      metrics_reason: 'ok',
+      cpu_percent: null,
+      mem_percent: null,
+      uptime_secs: 12345,
+    });
+
+    expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
+      dotStatus: 'up',
+      label: 'Up',
+    });
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-up)');
+  });
+
   it('keeps down devices on the dedicated down color', () => {
     const device = mockDevice({ status: 'down' });
     const metrics = mockMetrics({ health: 'critical' });

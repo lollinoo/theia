@@ -11,6 +11,8 @@ import (
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
+const deprecatedHrDeviceStatusCPUOID = ".1.3.6.1.2.1.25.3.2.1.5"
+
 func loadBootstrapVendorRegistry() (*vendor.Registry, string, error) {
 	if envVendors := os.Getenv("THEIA_VENDORS_DIR"); envVendors != "" {
 		registry, err := vendor.LoadRegistryFromYAML(envVendors)
@@ -103,8 +105,19 @@ func mergeMissingVendorConfigFields(dst *vendor.VendorConfig, defaults vendor.Ve
 		dst.SNMP.Static.SoftwareVersionOID = defaults.SNMP.Static.SoftwareVersionOID
 		changed = true
 	}
+	if shouldSyncCPUOID(dst.SNMP.Performance.CPUOID, defaults.SNMP.Performance.CPUOID) {
+		dst.SNMP.Performance.CPUOID = defaults.SNMP.Performance.CPUOID
+		changed = true
+	}
 
 	return changed
+}
+
+func shouldSyncCPUOID(existing string, defaultOID string) bool {
+	if defaultOID == "" {
+		return false
+	}
+	return existing == "" || existing == deprecatedHrDeviceStatusCPUOID
 }
 
 // loadRegistryFromDB builds a vendor registry from DB records.

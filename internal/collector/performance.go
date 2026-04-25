@@ -117,8 +117,19 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	sort.Slice(result.Counters, func(i, j int) bool {
 		return result.Counters[i].IfName < result.Counters[j].IfName
 	})
+	if performanceResultHasNoSNMPData(result) {
+		result.Err = errors.New("performance poll returned no SNMP data")
+	}
 
 	return result
+}
+
+func performanceResultHasNoSNMPData(result PerformanceResult) bool {
+	return result.Metrics.CPUPercent == nil &&
+		result.Metrics.MemPercent == nil &&
+		result.Metrics.UptimeSecs == nil &&
+		result.Metrics.TempCelsius == nil &&
+		len(result.Counters) == 0
 }
 
 func indexInterfaceSpeeds(interfaces []domain.Interface) (map[string]int64, map[string]int64) {

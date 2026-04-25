@@ -105,3 +105,60 @@ func TestSeedVendorConfigs_SyncsMissingDefaultsWithoutOverwritingCustomizations(
 		t.Fatalf("CPU query = %q, want preserved custom value", merged.Metrics.Prometheus.CPU)
 	}
 }
+
+func TestSeedVendorConfigs_ReplacesDeprecatedDefaultCPUOID(t *testing.T) {
+	db := openVendorConfigTestDB(t)
+	repo := sqlite.NewVendorConfigRepo(db)
+
+	yamlRegistry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	currentJSON, err := yamlRegistry.ExportConfig("default")
+	if err != nil {
+		t.Fatalf("ExportConfig(default) error = %v", err)
+	}
+
+	var stale vendor.VendorConfig
+	if err := json.Unmarshal(currentJSON, &stale); err != nil {
+		t.Fatalf("json.Unmarshal(currentJSON) error = %v", err)
+	}
+	stale.SNMP.Performance.CPUOID = ".1.3.6.1.2.1.25.3.2.1.5"
+	stale.Metrics.Prometheus.CPU = "custom_cpu_query"
+
+	staleJSON, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatalf("json.Marshal(stale) error = %v", err)
+	}
+
+	if err := repo.Upsert(&domain.VendorConfigRecord{
+		Name:        "default",
+		DisplayName: "Generic / Default",
+		ConfigJSON:  string(staleJSON),
+	}); err != nil {
+		t.Fatalf("repo.Upsert(stale) error = %v", err)
+	}
+
+	seedVendorConfigs(yamlRegistry, repo)
+
+	record, err := repo.GetByName("default")
+	if err != nil {
+		t.Fatalf("repo.GetByName(default) error = %v", err)
+	}
+	if record == nil {
+		t.Fatal("repo.GetByName(default) returned nil")
+	}
+
+	var merged vendor.VendorConfig
+	if err := json.Unmarshal([]byte(record.ConfigJSON), &merged); err != nil {
+		t.Fatalf("json.Unmarshal(merged) error = %v", err)
+	}
+
+	if merged.SNMP.Performance.CPUOID != ".1.3.6.1.2.1.25.3.3.1.2" {
+		t.Fatalf("CPUOID = %q, want corrected hrProcessorLoad OID", merged.SNMP.Performance.CPUOID)
+	}
+	if merged.Metrics.Prometheus.CPU != "custom_cpu_query" {
+		t.Fatalf("CPU query = %q, want preserved custom value", merged.Metrics.Prometheus.CPU)
+	}
+}

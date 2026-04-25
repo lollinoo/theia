@@ -12,6 +12,21 @@ import (
 // Reuses the helper from detector_test.go (same package).
 var testDiscoveryRegistry = testRegistry
 
+func TestEmbeddedDefaultCPUOIDUsesHostResourcesProcessorLoad(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	perfOIDs := registry.ResolvePerformanceOIDs("default")
+	if OidHrProcessorLoad != ".1.3.6.1.2.1.25.3.3.1.2" {
+		t.Fatalf("OidHrProcessorLoad = %q, want HOST-RESOURCES-MIB hrProcessorLoad", OidHrProcessorLoad)
+	}
+	if perfOIDs.CPUOID != OidHrProcessorLoad {
+		t.Fatalf("embedded default cpu_oid = %q, want %q", perfOIDs.CPUOID, OidHrProcessorLoad)
+	}
+}
+
 // MockClient implements ClientInterface for testing
 type MockClient struct {
 	GetFunc      func(oids []string) ([]gosnmp.SnmpPDU, error)

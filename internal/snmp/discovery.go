@@ -52,7 +52,7 @@ const (
 
 	// OIDs for live device metrics (HOST-RESOURCES-MIB, ENTITY-SENSOR-MIB)
 	OidSysUpTime           = ".1.3.6.1.2.1.1.3.0"
-	OidHrProcessorLoad     = ".1.3.6.1.2.1.25.3.2.1.5"
+	OidHrProcessorLoad     = ".1.3.6.1.2.1.25.3.3.1.2"
 	OidHrStorageType       = ".1.3.6.1.2.1.25.2.3.1.2"
 	OidHrStorageAllocUnits = ".1.3.6.1.2.1.25.2.3.1.4"
 	OidHrStorageSize       = ".1.3.6.1.2.1.25.2.3.1.5"

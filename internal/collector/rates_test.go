@@ -70,13 +70,13 @@ func TestComputeCounterRates_ResetDiscardsAndRequiresWarmup(t *testing.T) {
 	}
 }
 
-func TestComputeCounterRates_GapDiscardsAndRequiresWarmup(t *testing.T) {
-	collectedAt := time.Date(2026, 4, 12, 14, 0, 4, 0, time.UTC)
+func TestComputeCounterRates_DelayedSampleStillEmitsRate(t *testing.T) {
+	collectedAt := time.Date(2026, 4, 12, 14, 2, 0, 0, time.UTC)
 	previous := map[string]CounterBaseline{
 		"ether1": {
 			InOctets:  100,
 			OutOctets: 200,
-			SampledAt: collectedAt.Add(-4 * time.Second),
+			SampledAt: collectedAt.Add(-2 * time.Minute),
 		},
 	}
 
@@ -89,32 +89,17 @@ func TestComputeCounterRates_GapDiscardsAndRequiresWarmup(t *testing.T) {
 		},
 	}, previous, collectedAt, time.Second)
 
-	if len(metrics) != 0 {
-		t.Fatalf("expected gap sample to be discarded, got %d metrics", len(metrics))
+	if len(metrics) != 1 {
+		t.Fatalf("expected delayed sample to emit one metric, got %d", len(metrics))
 	}
-
-	baseline := next["ether1"]
-	if !baseline.NeedsWarmup {
-		t.Fatal("expected gap to require warmup")
+	if metrics[0].RxBps == nil || *metrics[0].RxBps != 6.666666666666667 {
+		t.Fatalf("RxBps = %#v, want 6.666666666666667", metrics[0].RxBps)
 	}
-	if !baseline.SampledAt.Equal(collectedAt) {
-		t.Fatalf("unexpected baseline time: got %v want %v", baseline.SampledAt, collectedAt)
+	if metrics[0].TxBps == nil || *metrics[0].TxBps != 6.666666666666667 {
+		t.Fatalf("TxBps = %#v, want 6.666666666666667", metrics[0].TxBps)
 	}
-
-	warmMetrics, warmNext := ComputeCounterRates([]InterfaceCounterSnapshot{
-		{
-			IfName:    "ether1",
-			InOctets:  300,
-			OutOctets: 400,
-			SpeedBps:  1_000_000_000,
-		},
-	}, next, collectedAt.Add(time.Second), time.Second)
-
-	if len(warmMetrics) != 0 {
-		t.Fatalf("expected warmup sample to emit no metrics, got %d", len(warmMetrics))
-	}
-	if warmNext["ether1"].NeedsWarmup {
-		t.Fatal("expected warmup sample to clear NeedsWarmup")
+	if next["ether1"].NeedsWarmup {
+		t.Fatal("expected delayed sample to keep baseline ready")
 	}
 }
 
