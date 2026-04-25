@@ -9,10 +9,12 @@ import { buildRuntimeState } from './runtimeAdapters';
 vi.mock('../DeviceConfigPanel', () => ({
   DeviceConfigPanel: (props: {
     device: { hostname: string };
+    readOnly?: boolean;
     onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void;
   }) => (
     <div>
       <div>Config device:{props.device.hostname}</div>
+      <div>Device config read-only:{String(props.readOnly)}</div>
       <button type="button" onClick={() => props.onWinBoxAvailabilityChange?.(true)}>
         Notify WinBox
       </button>
@@ -161,6 +163,51 @@ describe('CanvasPanels', () => {
     );
 
     expect(screen.getByText('Config device:live-router')).toBeInTheDocument();
+  });
+
+  it('passes device config panels as read-only unless edit mode is enabled', () => {
+    const device = mockDevice();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const { rerender } = render(
+      <CanvasPanels
+        panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+        editMode={false}
+      />,
+    );
+
+    expect(screen.getByText('Device config read-only:true')).toBeInTheDocument();
+
+    rerender(
+      <CanvasPanels
+        panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+        editMode
+      />,
+    );
+
+    expect(screen.getByText('Device config read-only:false')).toBeInTheDocument();
   });
 
   it('renders link details in read-only mode when requested by panel content', () => {

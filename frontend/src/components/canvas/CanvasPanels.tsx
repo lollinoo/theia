@@ -37,6 +37,7 @@ interface CanvasPanelsProps {
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   runtimeState: RuntimeState;
+  editMode?: boolean;
   onAreasChange?: () => void;
   onSettingsChange?: () => void;
   onWinBoxAvailabilityChange?: (deviceId: string, hasWinboxProfile: boolean) => void;
@@ -53,6 +54,7 @@ export function CanvasPanels({
   setNodes,
   reactFlow,
   runtimeState,
+  editMode = false,
   onAreasChange,
   onSettingsChange,
   onWinBoxAvailabilityChange,
@@ -164,6 +166,7 @@ export function CanvasPanels({
               <DeviceConfigPanel
                 device={device}
                 detailMetrics={runtimeState.devicesById.get(device.id)?.metrics ?? null}
+                readOnly={!editMode}
                 isVirtual={device.device_type === 'virtual'}
                 onDeviceUpdated={(updated) => {
                   setDevices((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));

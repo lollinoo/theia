@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDevice } from '../api/client';
+import { assignCredentialProfile, createDevice, setWinBoxProfile } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import { AddDevicePanel } from './AddDevicePanel';
 
@@ -8,6 +8,8 @@ import { AddDevicePanel } from './AddDevicePanel';
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
   fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
+  assignCredentialProfile: vi.fn().mockResolvedValue(undefined),
+  setWinBoxProfile: vi.fn().mockResolvedValue(undefined),
   fetchAreas: vi.fn().mockResolvedValue([]),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   createDevice: vi.fn().mockResolvedValue({
@@ -196,6 +198,80 @@ describe('virtual mode', () => {
         }),
       );
     });
+  });
+
+  it('assigns selected credentials after creating a physical device', async () => {
+    const { fetchCredentialProfiles } = await import('../api/client');
+    (fetchCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: 'p1',
+        name: 'Admin SSH',
+        description: '',
+        username: 'admin',
+        port: 22,
+        auth_method: 'password',
+        role: 'Admin',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 'p2',
+        name: 'Read SSH',
+        description: '',
+        username: 'read',
+        port: 22,
+        auth_method: 'password',
+        role: 'Read',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+    const onDeviceAdded = vi.fn();
+
+    render(<AddDevicePanel onDeviceAdded={onDeviceAdded} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin SSH')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText('Assign Admin SSH'));
+    fireEvent.click(screen.getByLabelText('Use Admin SSH for WinBox'));
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(createDevice).toHaveBeenCalled();
+      expect(assignCredentialProfile).toHaveBeenCalledWith('new-dev', 'p1');
+      expect(setWinBoxProfile).toHaveBeenCalledWith('new-dev', 'p1');
+      expect(onDeviceAdded).toHaveBeenCalled();
+    });
+  });
+
+  it('hides SSH credentials selection for virtual nodes', async () => {
+    const { fetchCredentialProfiles } = await import('../api/client');
+    (fetchCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: 'p1',
+        name: 'Admin SSH',
+        description: '',
+        username: 'admin',
+        port: 22,
+        auth_method: 'password',
+        role: 'Admin',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin SSH')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Virtual Node'));
+
+    expect(screen.queryByText('Admin SSH')).not.toBeInTheDocument();
   });
 });
 

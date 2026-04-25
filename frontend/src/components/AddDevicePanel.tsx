@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
-import { checkPrometheusHealth, createDevice, fetchAreas, fetchSNMPProfiles } from '../api/client';
+import {
+  assignCredentialProfile,
+  checkPrometheusHealth,
+  createDevice,
+  fetchAreas,
+  fetchCredentialProfiles,
+  fetchSNMPProfiles,
+  setWinBoxProfile,
+} from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
-import type { Area, SNMPProfile, TopologyDiscoveryMode } from '../types/api';
+import type { Area, CredentialProfile, SNMPProfile, TopologyDiscoveryMode } from '../types/api';
 import {
   TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyDiscoveryMode,
@@ -38,6 +46,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
   // profiles
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
+  const [credentialProfiles, setCredentialProfiles] = useState<CredentialProfile[]>([]);
+  const [selectedCredentialProfileIds, setSelectedCredentialProfileIds] = useState<string[]>([]);
+  const [winboxCredentialProfileId, setWinboxCredentialProfileId] = useState('');
 
   // areas
   const [areas, setAreas] = useState<Area[]>([]);
@@ -88,6 +99,10 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
 
   function handleModeSwitch(mode: DeviceFormModel['mode']) {
     setForm((current) => resetDeviceFormMode(current, mode));
+    if (mode === 'virtual') {
+      setSelectedCredentialProfileIds([]);
+      setWinboxCredentialProfileId('');
+    }
     setError(null);
     setFieldErrors({});
   }
@@ -95,6 +110,11 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   useEffect(() => {
     fetchSNMPProfiles()
       .then(setProfiles)
+      .catch(() => {
+        /* non-fatal */
+      });
+    fetchCredentialProfiles()
+      .then(setCredentialProfiles)
       .catch(() => {
         /* non-fatal */
       });
@@ -131,6 +151,32 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       return; // guard against selecting unavailable option
     }
     updateForm({ metricsMode: value });
+  }
+
+  function toggleCredentialProfile(profileId: string) {
+    setSelectedCredentialProfileIds((current) => {
+      if (current.includes(profileId)) {
+        if (winboxCredentialProfileId === profileId) {
+          setWinboxCredentialProfileId('');
+        }
+        return current.filter((id) => id !== profileId);
+      }
+      return [...current, profileId];
+    });
+  }
+
+  async function assignSelectedCredentials(deviceId: string) {
+    if (selectedCredentialProfileIds.length === 0) return;
+
+    for (const profileId of selectedCredentialProfileIds) {
+      await assignCredentialProfile(deviceId, profileId);
+    }
+    if (
+      winboxCredentialProfileId &&
+      selectedCredentialProfileIds.includes(winboxCredentialProfileId)
+    ) {
+      await setWinBoxProfile(deviceId, winboxCredentialProfileId);
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -206,7 +252,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     setLoading(true);
     setError(null);
     try {
-      await createDevice(buildCreateDevicePayload(form));
+      const created = await createDevice(buildCreateDevicePayload(form));
+      await assignSelectedCredentials(created.id);
       onDeviceAdded();
     } catch (err) {
       if (err instanceof ServerError) {
@@ -690,6 +737,53 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             <p className="text-xs text-on-bg-secondary/70">
               Vendor tag determines backup commands and metric queries.
             </p>
+          </div>
+
+          <div className="space-y-3 bg-surface-high rounded-lg p-3">
+            <p className={labelClass}>Credentials</p>
+            {credentialProfiles.length === 0 ? (
+              <p className="text-xs text-on-bg-secondary">
+                No credential profiles available. Create one in Settings to assign it here.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {credentialProfiles.map((profile) => {
+                  const selected = selectedCredentialProfileIds.includes(profile.id);
+                  return (
+                    <div key={profile.id} className="rounded-lg bg-elevated px-3 py-2">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => toggleCredentialProfile(profile.id)}
+                          aria-label={`Assign ${profile.name}`}
+                          className="h-4 w-4 accent-primary"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-on-bg">
+                          {profile.name}
+                        </span>
+                        <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-xs text-on-bg-secondary">
+                          {profile.role}
+                        </span>
+                      </label>
+                      {selected && (
+                        <label className="mt-2 flex items-center gap-2 pl-6 text-xs text-on-bg-secondary">
+                          <input
+                            type="radio"
+                            name="add-device-winbox-profile"
+                            checked={winboxCredentialProfileId === profile.id}
+                            onChange={() => setWinboxCredentialProfileId(profile.id)}
+                            aria-label={`Use ${profile.name} for WinBox`}
+                            className="h-3.5 w-3.5 accent-primary"
+                          />
+                          WinBox
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </>
       )}

@@ -404,6 +404,26 @@ describe('DeviceConfigPanel', () => {
     expect(screen.getByDisplayValue('Unsaved local edit')).toBeInTheDocument();
   });
 
+  it('keeps edit controls read-only when readOnly is true', async () => {
+    const { updateDevice } = await import('../api/client');
+    const { container } = render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        readOnly
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByDisplayValue('10.0.0.1')).toBeDisabled();
+    expect(screen.getByLabelText('Device Notes')).toBeDisabled();
+    expect(screen.getByText('Save Changes')).toBeDisabled();
+
+    fireEvent.submit(container.querySelector('form')!);
+
+    expect(updateDevice).not.toHaveBeenCalled();
+  });
+
   it('submits trimmed notes and clears blank notes as null', async () => {
     const { updateDevice } = await import('../api/client');
     (updateDevice as ReturnType<typeof vi.fn>)
@@ -892,6 +912,42 @@ describe('DeviceConfigPanel — Credentials section', () => {
     await waitFor(() => {
       expect(screen.getByText('Admin')).toBeInTheDocument();
     });
+  });
+
+  it('reloads assigned credential profiles when switching to another selected device', async () => {
+    const { fetchDeviceCredentialProfiles } = await import('../api/client');
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockImplementation(
+      async (deviceId: string) =>
+        deviceId === 'dev-1'
+          ? [{ profile_id: 'p1', name: 'Admin SSH', role: 'Admin', is_winbox: true }]
+          : [{ profile_id: 'p2', name: 'Read SSH', role: 'Read', is_winbox: false }],
+    );
+
+    const { rerender } = render(
+      <DeviceConfigPanel
+        device={mockDevice({ id: 'dev-1', hostname: 'router-01' })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin SSH')).toBeInTheDocument();
+    });
+
+    rerender(
+      <DeviceConfigPanel
+        device={mockDevice({ id: 'dev-2', hostname: 'router-02' })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchDeviceCredentialProfiles).toHaveBeenCalledWith('dev-2');
+      expect(screen.getByText('Read SSH')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Admin SSH')).not.toBeInTheDocument();
   });
 
   it('shows empty state when no profiles assigned', async () => {
