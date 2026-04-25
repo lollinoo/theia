@@ -19,14 +19,14 @@ func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthOnlyWhenChanged(t *te
 		ActiveWorkers:       64,
 	}
 	broadcaster.broadcastPollingHealthIfChanged()
-	first := <-pipeline.hub.broadcast
+	first := <-pipeline.hub.BroadcastCh()
 	if !strings.Contains(string(first), ws.MessageTypePollingHealthChanged) {
 		t.Fatalf("expected polling_health_changed broadcast, got %s", string(first))
 	}
 
 	broadcaster.broadcastPollingHealthIfChanged()
 	select {
-	case payload := <-pipeline.hub.broadcast:
+	case payload := <-pipeline.hub.BroadcastCh():
 		t.Fatalf("unexpected duplicate polling health broadcast: %s", string(payload))
 	default:
 	}
@@ -37,7 +37,7 @@ func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthOnlyWhenChanged(t *te
 		ActiveWorkers:       63,
 	}
 	broadcaster.broadcastPollingHealthIfChanged()
-	third := <-pipeline.hub.broadcast
+	third := <-pipeline.hub.BroadcastCh()
 	if !strings.Contains(string(third), `"active_workers":63`) {
 		t.Fatalf("expected updated polling health payload, got %s", string(third))
 	}
