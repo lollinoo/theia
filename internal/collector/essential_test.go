@@ -67,6 +67,17 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return &scriptedEssentialClient{connectErr: assertiveError("timeout")}, nil
 	})
+	probeCalls := 0
+	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration) error {
+		probeCalls++
+		if target != "10.0.0.1" {
+			t.Fatalf("target = %q, want 10.0.0.1", target)
+		}
+		if timeout != time.Second {
+			t.Fatalf("timeout = %s, want 1s", timeout)
+		}
+		return assertiveError("tcp probe failed")
+	}
 
 	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.1"}, time.Second, 0)
 
@@ -79,9 +90,15 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	if result.SNMPReachable != polling.TriStateFalse {
 		t.Fatalf("SNMPReachable = %q, want false", result.SNMPReachable)
 	}
+	if result.NetworkReachable != polling.TriStateFalse {
+		t.Fatalf("NetworkReachable = %q, want false", result.NetworkReachable)
+	}
+	if probeCalls != 1 {
+		t.Fatalf("network probe calls = %d, want 1", probeCalls)
+	}
 }
 
-func TestEssentialCollectorSysUpTimeFailureDoesNotMarkSNMPReachable(t *testing.T) {
+func TestEssentialCollectorSysUpTimeFailureRecordsUnreachableNetworkProbe(t *testing.T) {
 	registry, err := vendor.LoadRegistryFromEmbedded()
 	if err != nil {
 		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
@@ -109,8 +126,8 @@ func TestEssentialCollectorSysUpTimeFailureDoesNotMarkSNMPReachable(t *testing.T
 	if result.SNMPReachable != polling.TriStateFalse {
 		t.Fatalf("SNMPReachable = %q, want false", result.SNMPReachable)
 	}
-	if result.NetworkReachable != polling.TriStateUnknown {
-		t.Fatalf("NetworkReachable = %q, want unknown", result.NetworkReachable)
+	if result.NetworkReachable != polling.TriStateFalse {
+		t.Fatalf("NetworkReachable = %q, want false", result.NetworkReachable)
 	}
 	if result.Uptime != polling.FieldStateError {
 		t.Fatalf("Uptime = %q, want error", result.Uptime)

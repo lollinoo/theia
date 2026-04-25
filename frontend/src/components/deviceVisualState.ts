@@ -341,9 +341,23 @@ export function resolveDeviceVisualState(
 
   if (
     operationalStatus.dotStatus === 'unmonitored' ||
-    device.status !== 'up' ||
     device.device_type === 'virtual'
   ) {
+    return operationalStatus;
+  }
+
+  if (
+    metrics?.operational_status === 'down' ||
+    metrics?.operational_status === 'probing' ||
+    metrics?.operational_status === 'unknown'
+  ) {
+    return resolveDeviceOperationalStatusState(
+      { ...device, status: metrics.operational_status },
+      monitoringStateOverride,
+    );
+  }
+
+  if (device.status !== 'up') {
     return operationalStatus;
   }
 

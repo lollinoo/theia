@@ -464,6 +464,15 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 		}
 		next.PrimaryHealth = polling.PrimaryHealthUnreachable
 	default:
+		if essential.SNMPReachable == polling.TriStateFalse && isDownReachability(prev.Reachability) {
+			next.ConsecutiveFailures = prev.ConsecutiveFailures
+			next.Reachability = prev.Reachability
+			if prev.NetworkReachable == polling.TriStateFalse {
+				next.NetworkReachable = polling.TriStateFalse
+			}
+			next.PrimaryHealth = polling.PrimaryHealthUnreachable
+			return
+		}
 		next.ConsecutiveFailures = 0
 		next.Reachability = ReachabilityUnknown
 		if essential.SNMPReachable == polling.TriStateFalse {
@@ -472,6 +481,10 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 			next.PrimaryHealth = polling.PrimaryHealthProbing
 		}
 	}
+}
+
+func isDownReachability(reachability ReachabilityStatus) bool {
+	return reachability == ReachabilitySoftDown || reachability == ReachabilityHardDown
 }
 
 func mergeEssentialFieldStates(prev map[string]polling.FieldState, metrics domain.DeviceMetrics, essential *EssentialUpdate) map[string]polling.FieldState {
@@ -560,7 +573,13 @@ func markMetricFieldStates(next *DeviceState, metrics *domain.DeviceMetrics) {
 }
 
 func applyOperationalUpdate(next *DeviceState, prev DeviceState, update StateUpdate) {
-	applyReachabilityUpdate(next, prev, update.PollSuccess)
+	if !update.PollSuccess && prev.NetworkReachable == polling.TriStateTrue && prev.SNMPReachable == polling.TriStateFalse {
+		next.Reachability = ReachabilityUp
+		next.ConsecutiveFailures = 0
+		next.PrimaryHealth = polling.PrimaryHealthSNMPDegraded
+	} else {
+		applyReachabilityUpdate(next, prev, update.PollSuccess)
+	}
 
 	if update.Metrics != nil && update.Metrics.UptimeSecs != nil {
 		merged := cloneMetrics(next.Metrics)
