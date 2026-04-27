@@ -298,7 +298,8 @@ func newTestService(snmpResult *snmp.DiscoveryResult, snmpErr error) (*DeviceSer
 }
 
 type fakePollRescheduler struct {
-	calls []pollRescheduleCall
+	calls          []pollRescheduleCall
+	reconcileCalls []pollReconcileCall
 }
 
 type pollRescheduleCall struct {
@@ -306,8 +307,20 @@ type pollRescheduleCall struct {
 	changedAt time.Time
 }
 
+type pollReconcileCall struct {
+	device    domain.Device
+	changedAt time.Time
+}
+
 func (f *fakePollRescheduler) ReduePerformanceTask(device domain.Device, changedAt time.Time) {
 	f.calls = append(f.calls, pollRescheduleCall{
+		device:    device,
+		changedAt: changedAt,
+	})
+}
+
+func (f *fakePollRescheduler) ReconcileDeviceTasks(device domain.Device, changedAt time.Time) {
+	f.reconcileCalls = append(f.reconcileCalls, pollReconcileCall{
 		device:    device,
 		changedAt: changedAt,
 	})
@@ -1992,6 +2005,57 @@ func TestUpdateDevice_PollingEnabledTriState(t *testing.T) {
 	stillDisabled, _ := repo.GetByID(device.ID)
 	if domain.DevicePollingEnabled(*stillDisabled) {
 		t.Fatalf("keep update changed polling_enabled back to true")
+	}
+}
+
+func TestUpdateDevice_PollingEnabledChangeReconcilesScheduler(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	enabled := true
+	device := &domain.Device{
+		ID:             uuid.New(),
+		IP:             "10.0.0.42",
+		Hostname:       "poll-reconcile-router",
+		Managed:        true,
+		PollingEnabled: &enabled,
+		Status:         domain.DeviceStatusUp,
+		PollClass:      domain.PollClassCore,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	disabled := false
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{PollingEnabled: &disabled}); err != nil {
+		t.Fatalf("disable update failed: %v", err)
+	}
+	if got := len(rescheduler.reconcileCalls); got != 1 {
+		t.Fatalf("reconcile call count after disable = %d, want 1", got)
+	}
+	if domain.DevicePollingEnabled(rescheduler.reconcileCalls[0].device) {
+		t.Fatalf("reconciled device polling_enabled = true, want false")
+	}
+	if rescheduler.reconcileCalls[0].changedAt.IsZero() || rescheduler.reconcileCalls[0].changedAt.Location() != time.UTC {
+		t.Fatalf("changedAt = %v, want non-zero UTC timestamp", rescheduler.reconcileCalls[0].changedAt)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{PollingEnabled: &disabled}); err != nil {
+		t.Fatalf("second disable update failed: %v", err)
+	}
+	if got := len(rescheduler.reconcileCalls); got != 1 {
+		t.Fatalf("reconcile call count after unchanged disable = %d, want 1", got)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{PollingEnabled: &enabled}); err != nil {
+		t.Fatalf("enable update failed: %v", err)
+	}
+	if got := len(rescheduler.reconcileCalls); got != 2 {
+		t.Fatalf("reconcile call count after enable = %d, want 2", got)
+	}
+	if !domain.DevicePollingEnabled(rescheduler.reconcileCalls[1].device) {
+		t.Fatalf("reconciled device polling_enabled = false, want true")
 	}
 }
 
