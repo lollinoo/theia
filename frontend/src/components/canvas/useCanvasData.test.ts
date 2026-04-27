@@ -383,6 +383,38 @@ describe('useCanvasData', () => {
     });
   });
 
+  it('counts runtime-synthesized alerts in the toolbar summary', async () => {
+    const { result } = renderUseCanvasData(
+      mockSnapshot({
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'down',
+            primary_health: 'unreachable',
+            reachability: 'hard_down',
+            health: 'critical',
+            primary_reason: 'device_unreachable',
+            metrics_status: 'unavailable',
+            metrics_reason: 'device_unreachable',
+            alert_status: 'normal',
+            firing_alert_count: 0,
+          },
+        },
+      }),
+      null,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.runtimeSummary).toEqual({
+      alertCount: 1,
+      prometheusDiagnosticsVisible: false,
+    });
+  });
+
   it('counts normalized and raw firing alerts together during mixed runtime coverage', async () => {
     vi.mocked(fetchDevices).mockResolvedValue([
       mockDevice(),

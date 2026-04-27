@@ -443,6 +443,100 @@ describe('panelAdapters', () => {
     expect(model.activeAlertCount).toBe(3);
   });
 
+  it('synthesizes visible device runtime alerts when the Prometheus alert feed is empty', () => {
+    const runtimeState = buildRuntimeState({
+      devices: [mockDevice({ tags: { display_name: 'Core Router' } })],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            operational_status: 'down',
+            primary_health: 'unreachable',
+            reachability: 'hard_down',
+            health: 'critical',
+            primary_reason: 'device_unreachable',
+            metrics_status: 'unavailable',
+            metrics_reason: 'device_unreachable',
+            alert_status: 'normal',
+            firing_alert_count: 0,
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildAlertsPanelModel({
+      alerts: [],
+      runtimeState,
+    });
+
+    expect(model.firingAlerts).toEqual([
+      {
+        deviceId: 'dev-1',
+        deviceLabel: 'Core Router',
+        alertName: 'DeviceUnreachable',
+        severity: 'critical',
+        state: 'firing',
+        summary: 'Device cannot be reached by runtime polling.',
+      },
+    ]);
+    expect(model.activeAlertCount).toBe(1);
+  });
+
+  it('surfaces runtime flags and link telemetry issues as visible alerts', () => {
+    const source = mockDevice({ tags: { display_name: 'Core Router' } });
+    const target = mockDevice({
+      id: 'dev-2',
+      ip: '10.0.0.2',
+      sys_name: 'switch-01',
+      tags: { display_name: 'Edge Switch' },
+    });
+    const runtimeState = buildRuntimeState({
+      devices: [source, target],
+      links: [mockLink()],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': mockRuntimeDevice({
+            primary_health: 'snmp_degraded',
+            reachability: 'soft_down',
+            health: 'warning',
+            metrics_status: 'partial',
+            runtime_flags: ['deadline_missed', 'partial_telemetry'],
+          }),
+          'dev-2': mockRuntimeDevice({
+            device_id: 'dev-2',
+          }),
+        },
+        links: {
+          'link-1': mockRuntimeLink({
+            metrics_status: 'unavailable',
+            metrics_reason: 'upstream_unavailable',
+            tx_bps: null,
+            rx_bps: null,
+            utilization: null,
+          }),
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildAlertsPanelModel({
+      alerts: [],
+      runtimeState,
+    });
+
+    expect(model.firingAlerts.map((alert) => alert.alertName)).toEqual([
+      'SNMPDegraded',
+      'DeviceHealthWarning',
+      'PollingDeadlineMissed',
+      'PartialTelemetry',
+      'LinkTelemetryUnavailable',
+    ]);
+    expect(model.activeAlertCount).toBe(5);
+  });
+
   it('caps rendered runtime-backed firing rows to the normalized device alert count', () => {
     const alerts = [
       mockAlert({ alert_name: 'DeviceDown', summary: 'router unreachable' }),
