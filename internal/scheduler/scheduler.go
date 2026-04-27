@@ -181,6 +181,9 @@ func (s *Scheduler) ReduePerformanceTask(device domain.Device, changedAt time.Ti
 	if !s.running.Load() {
 		return
 	}
+	if !shouldScheduleRecurringDevice(device) || device.DeviceType == domain.DeviceTypeVirtual {
+		return
+	}
 
 	if changedAt.IsZero() {
 		changedAt = s.now()
@@ -275,10 +278,7 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 	seen := make(map[TaskKey]struct{}, len(devices)*5)
 
 	for _, device := range devices {
-		if !device.Managed {
-			continue
-		}
-		if domain.IsVirtualNoIPDevice(device) {
+		if !shouldScheduleRecurringDevice(device) {
 			continue
 		}
 
@@ -545,7 +545,7 @@ func (s *Scheduler) popReadyEligible() *heapItem {
 
 func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskRequest) {
 	device := request.device
-	if !device.Managed {
+	if !shouldScheduleRecurringDevice(device) {
 		return
 	}
 	if device.DeviceType == domain.DeviceTypeVirtual {
@@ -976,7 +976,11 @@ func taskVolatilityForMetrics(task PollTask) domain.VolatilityClass {
 }
 
 func shouldScheduleEssentialTask(device domain.Device) bool {
-	return device.Managed && !domain.IsVirtualNoIPDevice(device) && !domain.IsVirtualWithIPDevice(device)
+	return shouldScheduleRecurringDevice(device) && !domain.IsVirtualWithIPDevice(device)
+}
+
+func shouldScheduleRecurringDevice(device domain.Device) bool {
+	return device.Managed && domain.DevicePollingEnabled(device) && !domain.IsVirtualNoIPDevice(device)
 }
 
 func taskSiteKeys(task PollTask) []string {
@@ -1039,7 +1043,10 @@ func taskProfileKey(task PollTask) string {
 }
 
 func shouldScheduleBootstrapTask(device domain.Device) bool {
-	if !device.Managed || device.DeviceType == domain.DeviceTypeVirtual {
+	if !shouldScheduleRecurringDevice(device) {
+		return false
+	}
+	if device.DeviceType == domain.DeviceTypeVirtual {
 		return false
 	}
 	if strings.TrimSpace(device.IP) == "" {
