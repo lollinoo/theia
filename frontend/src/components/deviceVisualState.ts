@@ -3,7 +3,12 @@ import type { Device, DeviceStatus } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 
 export type DeviceMonitoringState = 'monitorable' | 'unmonitored';
-export type DeviceVisualStatus = DeviceStatus | 'degraded' | 'critical' | 'unmonitored';
+export type DeviceVisualStatus =
+  | DeviceStatus
+  | 'degraded'
+  | 'critical'
+  | 'polling_disabled'
+  | 'unmonitored';
 
 type DeviceVisualLabel =
   | 'Up'
@@ -12,11 +17,13 @@ type DeviceVisualLabel =
   | 'Unknown'
   | 'Warning'
   | 'Critical'
+  | 'Polling off'
   | 'Unmonitored';
 
 type DeviceMonitoringInput = Pick<Device, 'device_type' | 'ip'> &
-  Partial<Pick<Device, 'poll_class' | 'poll_interval_override'>>;
-type DeviceVisualInput = Pick<Device, 'device_type' | 'ip' | 'status'>;
+  Partial<Pick<Device, 'poll_class' | 'poll_interval_override' | 'polling_enabled'>>;
+type DeviceVisualInput = Pick<Device, 'device_type' | 'ip' | 'status'> &
+  Partial<Pick<Device, 'polling_enabled'>>;
 type DeviceVisualMetrics = DeviceMetricsDTO | null | undefined;
 export type DeviceAddressState = 'address' | 'missing' | 'unmonitored';
 
@@ -65,12 +72,20 @@ export function isDeviceMonitorable(
   return (monitoringStateOverride ?? resolveDeviceMonitoringState(device)) === 'monitorable';
 }
 
+function isDevicePollingEnabled(device: Partial<Pick<Device, 'polling_enabled'>>): boolean {
+  return device.polling_enabled !== false;
+}
+
 export function sanitizeDeviceMetricsForDisplay(
   device: DeviceMonitoringInput,
   metrics?: DeviceVisualMetrics,
   monitoringStateOverride?: DeviceMonitoringState,
 ): DeviceMetricsDTO | null {
-  if (!isDeviceMonitorable(device, monitoringStateOverride) || !metrics) {
+  if (
+    !isDeviceMonitorable(device, monitoringStateOverride) ||
+    !isDevicePollingEnabled(device) ||
+    !metrics
+  ) {
     return null;
   }
 
@@ -140,6 +155,14 @@ export function resolveDeviceOperationalStatusState(
     };
   }
 
+  if (!isDevicePollingEnabled(device)) {
+    return {
+      dotStatus: 'polling_disabled',
+      label: 'Polling off',
+      labelClass: unmonitoredLabelClass(),
+    };
+  }
+
   return {
     dotStatus: device.status,
     label: statusLabel(device.status),
@@ -158,6 +181,7 @@ function badgeClassForStatus(status: DeviceVisualStatus): string {
     case 'degraded':
     case 'probing':
       return 'border-warning/30 bg-warning/10 text-warning';
+    case 'polling_disabled':
     case 'unmonitored':
       return 'border-outline-strong bg-surface-container text-on-bg-secondary';
     default:
@@ -193,6 +217,8 @@ function panelClassForStatus(status: DeviceVisualStatus): string {
     case 'degraded':
     case 'probing':
       return 'border-warning/30 bg-warning/10';
+    case 'polling_disabled':
+      return 'border-outline-strong bg-surface-container-high';
     default:
       return 'border-outline bg-surface-container';
   }
@@ -302,6 +328,7 @@ function dotClassForStatus(status: DeviceVisualStatus): string {
       return 'bg-status-probing motion-reduce:animate-none animate-pulse';
     case 'unknown':
       return 'bg-status-unknown';
+    case 'polling_disabled':
     case 'unmonitored':
       return 'border border-outline-strong bg-surface-container-high';
   }
@@ -320,6 +347,7 @@ function dotStyleForStatus(status: DeviceVisualStatus): CSSProperties {
       return { boxShadow: 'var(--nt-glow-status-warning)' };
     case 'unknown':
       return { boxShadow: 'var(--nt-glow-status-unknown)' };
+    case 'polling_disabled':
     case 'unmonitored':
       return { boxShadow: 'none' };
   }
@@ -356,7 +384,11 @@ export function resolveDeviceVisualState(
 ): DeviceVisualState {
   const operationalStatus = resolveDeviceOperationalStatusState(device, monitoringStateOverride);
 
-  if (operationalStatus.dotStatus === 'unmonitored' || device.device_type === 'virtual') {
+  if (
+    operationalStatus.dotStatus === 'unmonitored' ||
+    operationalStatus.dotStatus === 'polling_disabled' ||
+    device.device_type === 'virtual'
+  ) {
     return operationalStatus;
   }
 
@@ -472,6 +504,7 @@ export function minimapColorForDevice({
       return 'var(--color-status-probing)';
     case 'degraded':
       return 'var(--color-status-probing)';
+    case 'polling_disabled':
     case 'unmonitored':
       return 'var(--nt-on-bg-muted)';
     default:

@@ -75,7 +75,7 @@ describe('parseDevicesResponse', () => {
 
   it('defaults polling_enabled to true when omitted', () => {
     const resource = deviceResource('router-2', 'router');
-    delete (resource.attributes as Record<string, unknown>).polling_enabled;
+    (resource.attributes as Record<string, unknown>).polling_enabled = undefined;
 
     const devices = parseDevicesResponse({ data: [resource] });
 

@@ -361,7 +361,9 @@ describe('DeviceConfigPanel — polling override', () => {
 
     expect(screen.getByRole('switch', { name: 'Continuous Polling' })).not.toBeChecked();
     expect(screen.getByDisplayValue('30 seconds')).toBeDisabled();
-    expect(screen.getByText('Continuous polling is suspended for this device.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Continuous polling is suspended for this device.'),
+    ).toBeInTheDocument();
   });
 
   it('keeps manual actions enabled when continuous polling is suspended', () => {

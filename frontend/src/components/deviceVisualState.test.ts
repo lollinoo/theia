@@ -240,6 +240,24 @@ describe('deviceVisualState', () => {
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--nt-on-bg-muted)');
   });
 
+  it('renders polling-disabled devices as muted and suppresses cached metrics', () => {
+    const device = mockDevice({ polling_enabled: false });
+    const metrics = mockMetrics({
+      cpu_percent: 42,
+      mem_percent: 68,
+      uptime_secs: 86400,
+      health: 'healthy',
+      freshness: 'fresh',
+    });
+
+    expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
+      dotStatus: 'polling_disabled',
+      label: 'Polling off',
+    });
+    expect(sanitizeDeviceMetricsForDisplay(device, metrics)).toBeNull();
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--nt-on-bg-muted)');
+  });
+
   it('uses operational status directly for virtual nodes with IP even without health metrics', () => {
     const device = mockDevice({
       device_type: 'virtual',
