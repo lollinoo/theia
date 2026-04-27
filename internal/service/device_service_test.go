@@ -298,7 +298,8 @@ func newTestService(snmpResult *snmp.DiscoveryResult, snmpErr error) (*DeviceSer
 }
 
 type fakePollRescheduler struct {
-	calls []pollRescheduleCall
+	calls          []pollRescheduleCall
+	reconcileCalls []pollReconcileCall
 }
 
 type pollRescheduleCall struct {
@@ -306,8 +307,20 @@ type pollRescheduleCall struct {
 	changedAt time.Time
 }
 
+type pollReconcileCall struct {
+	device    domain.Device
+	changedAt time.Time
+}
+
 func (f *fakePollRescheduler) ReduePerformanceTask(device domain.Device, changedAt time.Time) {
 	f.calls = append(f.calls, pollRescheduleCall{
+		device:    device,
+		changedAt: changedAt,
+	})
+}
+
+func (f *fakePollRescheduler) ReconcileDeviceTasks(device domain.Device, changedAt time.Time) {
+	f.reconcileCalls = append(f.reconcileCalls, pollReconcileCall{
 		device:    device,
 		changedAt: changedAt,
 	})
@@ -629,6 +642,45 @@ func TestRunTopologyDiscoveryNow_SetsPendingAndTriggersReprobe(t *testing.T) {
 	}
 	if updated.LastTopologyDiscoveryResult != "no_neighbors" {
 		t.Fatalf("expected manual discovery to record no_neighbors, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
+func TestRunTopologyDiscoveryNow_AllowsPollingDisabledDevice(t *testing.T) {
+	repo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	discoverCalls := 0
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		discoverCalls++
+		return &snmp.DiscoveryResult{}, nil
+	}
+	svc := NewDeviceService(repo, linkRepo, settingsRepo, discoverFn, nil)
+	disabled := false
+	device := &domain.Device{
+		ID:             uuid.New(),
+		Hostname:       "manual-topology-router",
+		IP:             "10.0.0.42",
+		Managed:        true,
+		PollingEnabled: &disabled,
+		DeviceType:     domain.DeviceTypeRouter,
+		MetricsSource:  domain.MetricsSourceSNMP,
+		Status:         domain.DeviceStatusUp,
+		Tags:           map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.RunTopologyDiscoveryNow(context.Background(), device.ID); err != nil {
+		t.Fatalf("RunTopologyDiscoveryNow failed: %v", err)
+	}
+	svc.WaitForProbes()
+	if discoverCalls == 0 {
+		t.Fatalf("manual topology discovery did not run discovery")
 	}
 }
 
@@ -1901,6 +1953,109 @@ func TestUpdateDevice_PollIntervalOverrideTriState(t *testing.T) {
 	}
 	if updated.PollIntervalOverride == nil || *updated.PollIntervalOverride != 30 {
 		t.Fatalf("expected set to store override=30, got %#v", updated.PollIntervalOverride)
+	}
+}
+
+func TestUpdateDevice_PollingEnabledTriState(t *testing.T) {
+	repo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		return &snmp.DiscoveryResult{}, nil
+	}
+	svc := NewDeviceService(repo, linkRepo, settingsRepo, discoverFn, nil)
+	enabled := true
+	device := &domain.Device{
+		ID:             uuid.New(),
+		Hostname:       "poll-toggle-router",
+		IP:             "10.0.0.41",
+		Managed:        true,
+		PollingEnabled: &enabled,
+		Status:         domain.DeviceStatusUp,
+		Tags:           map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{}); err != nil {
+		t.Fatalf("keep update failed: %v", err)
+	}
+	kept, _ := repo.GetByID(device.ID)
+	if !domain.DevicePollingEnabled(*kept) {
+		t.Fatalf("keep update changed polling_enabled to false")
+	}
+
+	disabled := false
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{PollingEnabled: &disabled}); err != nil {
+		t.Fatalf("disable update failed: %v", err)
+	}
+	disabledDevice, _ := repo.GetByID(device.ID)
+	if domain.DevicePollingEnabled(*disabledDevice) {
+		t.Fatalf("disable update left polling_enabled true")
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{}); err != nil {
+		t.Fatalf("second keep update failed: %v", err)
+	}
+	stillDisabled, _ := repo.GetByID(device.ID)
+	if domain.DevicePollingEnabled(*stillDisabled) {
+		t.Fatalf("keep update changed polling_enabled back to true")
+	}
+}
+
+func TestUpdateDevice_PollingEnabledChangeReconcilesScheduler(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	enabled := true
+	device := &domain.Device{
+		ID:             uuid.New(),
+		IP:             "10.0.0.42",
+		Hostname:       "poll-reconcile-router",
+		Managed:        true,
+		PollingEnabled: &enabled,
+		Status:         domain.DeviceStatusUp,
+		PollClass:      domain.PollClassCore,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	disabled := false
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{PollingEnabled: &disabled}); err != nil {
+		t.Fatalf("disable update failed: %v", err)
+	}
+	if got := len(rescheduler.reconcileCalls); got != 1 {
+		t.Fatalf("reconcile call count after disable = %d, want 1", got)
+	}
+	if domain.DevicePollingEnabled(rescheduler.reconcileCalls[0].device) {
+		t.Fatalf("reconciled device polling_enabled = true, want false")
+	}
+	if rescheduler.reconcileCalls[0].changedAt.IsZero() || rescheduler.reconcileCalls[0].changedAt.Location() != time.UTC {
+		t.Fatalf("changedAt = %v, want non-zero UTC timestamp", rescheduler.reconcileCalls[0].changedAt)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{PollingEnabled: &disabled}); err != nil {
+		t.Fatalf("second disable update failed: %v", err)
+	}
+	if got := len(rescheduler.reconcileCalls); got != 1 {
+		t.Fatalf("reconcile call count after unchanged disable = %d, want 1", got)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{PollingEnabled: &enabled}); err != nil {
+		t.Fatalf("enable update failed: %v", err)
+	}
+	if got := len(rescheduler.reconcileCalls); got != 2 {
+		t.Fatalf("reconcile call count after enable = %d, want 2", got)
+	}
+	if !domain.DevicePollingEnabled(rescheduler.reconcileCalls[1].device) {
+		t.Fatalf("reconciled device polling_enabled = false, want true")
 	}
 }
 

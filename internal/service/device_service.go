@@ -26,6 +26,7 @@ type SNMPPollFunc func(target string, creds domain.SNMPCredentials, vendorName s
 
 type pollRescheduler interface {
 	ReduePerformanceTask(device domain.Device, changedAt time.Time)
+	ReconcileDeviceTasks(device domain.Device, changedAt time.Time)
 }
 
 type bootstrapScheduler interface {
@@ -44,6 +45,7 @@ type DeviceUpdate struct {
 	PrometheusLabelName   *string
 	PrometheusLabelValue  *string
 	TopologyDiscoveryMode *domain.TopologyDiscoveryMode
+	PollingEnabled        *bool
 	PollIntervalOverride  **int        // nil=not set, *nil=clear, **value=set
 	AreaIDs               *[]uuid.UUID // nil=not set, non-nil=replace all area assignments
 }

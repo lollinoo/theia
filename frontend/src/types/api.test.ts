@@ -19,6 +19,7 @@ function deviceResource(id: string, deviceType: string) {
       backup_supported: true,
       poll_class: 'standard',
       poll_interval_override: null,
+      polling_enabled: true,
       metrics_source: 'prometheus',
       prometheus_label_name: 'instance',
       prometheus_label_value: `${id}.example.test:9100`,
@@ -70,5 +71,30 @@ describe('parseDevicesResponse', () => {
     expect(devices[0].topology_bootstrap_state).toBe('followup_scheduled');
     expect(devices[0].last_topology_discovery_at).toBe('2026-04-18T12:34:56Z');
     expect(devices[0].last_topology_discovery_result).toBe('ports_pending');
+  });
+
+  it('defaults polling_enabled to true when omitted', () => {
+    const resource = deviceResource('router-2', 'router');
+    delete (resource.attributes as Record<string, unknown>).polling_enabled;
+
+    const devices = parseDevicesResponse({ data: [resource] });
+
+    expect(devices[0].polling_enabled).toBe(true);
+  });
+
+  it('preserves explicit polling_enabled false', () => {
+    const devices = parseDevicesResponse({
+      data: [
+        {
+          ...deviceResource('router-3', 'router'),
+          attributes: {
+            ...deviceResource('router-3', 'router').attributes,
+            polling_enabled: false,
+          },
+        },
+      ],
+    });
+
+    expect(devices[0].polling_enabled).toBe(false);
   });
 });

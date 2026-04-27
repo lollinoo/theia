@@ -181,6 +181,9 @@ func (s *Scheduler) ReduePerformanceTask(device domain.Device, changedAt time.Ti
 	if !s.running.Load() {
 		return
 	}
+	if !shouldScheduleRecurringDevice(device) || device.DeviceType == domain.DeviceTypeVirtual {
+		return
+	}
 
 	if changedAt.IsZero() {
 		changedAt = s.now()
@@ -196,8 +199,30 @@ func (s *Scheduler) ReduePerformanceTask(device domain.Device, changedAt time.Ti
 	}
 }
 
+// ReconcileDeviceTasks immediately aligns scheduled recurring work for a device
+// with its current polling eligibility.
+func (s *Scheduler) ReconcileDeviceTasks(device domain.Device, changedAt time.Time) {
+	if changedAt.IsZero() {
+		changedAt = s.now().UTC()
+	} else {
+		changedAt = changedAt.UTC()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.removeDeviceTasksLocked(device.ID)
+	if shouldScheduleRecurringDevice(device) {
+		s.scheduleRecurringDeviceLocked(device, changedAt, nil)
+	}
+	s.recordMetricsLocked(changedAt)
+}
+
 func (s *Scheduler) ScheduleBootstrap(device domain.Device, dueAt time.Time) bool {
 	if !s.running.Load() {
+		return false
+	}
+	if !shouldScheduleBootstrapTask(device) {
 		return false
 	}
 
@@ -275,44 +300,10 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 	seen := make(map[TaskKey]struct{}, len(devices)*5)
 
 	for _, device := range devices {
-		if !device.Managed {
+		if !shouldScheduleRecurringDevice(device) {
 			continue
 		}
-		if domain.IsVirtualNoIPDevice(device) {
-			continue
-		}
-
-		if shouldScheduleEssentialTask(device) {
-			essentialKey := NewEssentialTaskKey(device.ID)
-			seen[essentialKey] = struct{}{}
-			s.upsertScheduledItem(
-				device,
-				essentialKey,
-				polling.TaskKindEssential,
-				polling.LaneEssential,
-				"",
-				EssentialInterval(device),
-				now,
-			)
-		}
-
-		if shouldScheduleBootstrapTask(device) {
-			bootstrapKey := NewBootstrapTaskKey(device.ID)
-			seen[bootstrapKey] = struct{}{}
-			if item, ok := s.items[bootstrapKey]; ok {
-				s.applyBootstrapSchedule(item, device, item.dueAt, domain.StaticClassInterval)
-			} else {
-				s.scheduleBootstrapItem(device, now)
-			}
-		}
-
-		for _, volatility := range scheduledBackgroundVolatilityClassesForDevice(device) {
-			key := NewBackgroundTaskKey(device.ID, volatility)
-			seen[key] = struct{}{}
-
-			interval := EffectiveInterval(device, volatility)
-			s.upsertScheduledItem(device, key, polling.TaskKindBackground, polling.LaneBackground, volatility, interval, now)
-		}
+		s.scheduleRecurringDeviceLocked(device, now, seen)
 	}
 
 	for key, item := range s.items {
@@ -337,6 +328,46 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 	s.degradedRisk = policy.DegradedRisk
 
 	return nil
+}
+
+func (s *Scheduler) scheduleRecurringDeviceLocked(device domain.Device, now time.Time, seen map[TaskKey]struct{}) {
+	if shouldScheduleEssentialTask(device) {
+		essentialKey := NewEssentialTaskKey(device.ID)
+		if seen != nil {
+			seen[essentialKey] = struct{}{}
+		}
+		s.upsertScheduledItem(
+			device,
+			essentialKey,
+			polling.TaskKindEssential,
+			polling.LaneEssential,
+			"",
+			EssentialInterval(device),
+			now,
+		)
+	}
+
+	if shouldScheduleBootstrapTask(device) {
+		bootstrapKey := NewBootstrapTaskKey(device.ID)
+		if seen != nil {
+			seen[bootstrapKey] = struct{}{}
+		}
+		if item, ok := s.items[bootstrapKey]; ok {
+			s.applyBootstrapSchedule(item, device, item.dueAt, domain.StaticClassInterval)
+		} else {
+			s.scheduleBootstrapItem(device, now)
+		}
+	}
+
+	for _, volatility := range scheduledBackgroundVolatilityClassesForDevice(device) {
+		key := NewBackgroundTaskKey(device.ID, volatility)
+		if seen != nil {
+			seen[key] = struct{}{}
+		}
+
+		interval := EffectiveInterval(device, volatility)
+		s.upsertScheduledItem(device, key, polling.TaskKindBackground, polling.LaneBackground, volatility, interval, now)
+	}
 }
 
 func (s *Scheduler) upsertScheduledItem(device domain.Device, key TaskKey, kind polling.TaskKind, lane polling.Lane, volatility domain.VolatilityClass, interval time.Duration, now time.Time) {
@@ -376,6 +407,26 @@ func (s *Scheduler) upsertScheduledItem(device domain.Device, key TaskKey, kind 
 
 	heap.Push(&s.heap, item)
 	s.items[key] = item
+}
+
+func (s *Scheduler) removeDeviceTasksLocked(deviceID uuid.UUID) {
+	for key, item := range s.items {
+		if key.DeviceID != deviceID {
+			continue
+		}
+		if item.queued {
+			s.removeReadyItem(item)
+		}
+		if item.index >= 0 {
+			heap.Remove(&s.heap, item.index)
+		}
+		item.pending = false
+		if item.inFlight {
+			item.disabled = true
+			continue
+		}
+		delete(s.items, key)
+	}
 }
 
 func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
@@ -545,7 +596,7 @@ func (s *Scheduler) popReadyEligible() *heapItem {
 
 func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskRequest) {
 	device := request.device
-	if !device.Managed {
+	if !shouldScheduleRecurringDevice(device) {
 		return
 	}
 	if device.DeviceType == domain.DeviceTypeVirtual {
@@ -976,7 +1027,11 @@ func taskVolatilityForMetrics(task PollTask) domain.VolatilityClass {
 }
 
 func shouldScheduleEssentialTask(device domain.Device) bool {
-	return device.Managed && !domain.IsVirtualNoIPDevice(device) && !domain.IsVirtualWithIPDevice(device)
+	return shouldScheduleRecurringDevice(device) && !domain.IsVirtualWithIPDevice(device)
+}
+
+func shouldScheduleRecurringDevice(device domain.Device) bool {
+	return device.Managed && domain.DevicePollingEnabled(device) && !domain.IsVirtualNoIPDevice(device)
 }
 
 func taskSiteKeys(task PollTask) []string {
@@ -1039,7 +1094,10 @@ func taskProfileKey(task PollTask) string {
 }
 
 func shouldScheduleBootstrapTask(device domain.Device) bool {
-	if !device.Managed || device.DeviceType == domain.DeviceTypeVirtual {
+	if !shouldScheduleRecurringDevice(device) {
+		return false
+	}
+	if device.DeviceType == domain.DeviceTypeVirtual {
 		return false
 	}
 	if strings.TrimSpace(device.IP) == "" {

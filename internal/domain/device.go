@@ -166,6 +166,7 @@ type Device struct {
 	DeviceType                     DeviceType             `json:"device_type"`
 	PollClass                      PollClass              `json:"poll_class"`
 	PollIntervalOverride           *int                   `json:"poll_interval_override"`
+	PollingEnabled                 *bool                  `json:"polling_enabled"`
 	Status                         DeviceStatus           `json:"status"`
 	SysName                        string                 `json:"sys_name"`
 	SysDescr                       string                 `json:"sys_descr"`
@@ -187,6 +188,18 @@ type Device struct {
 	LastTopologyDiscoveryResult    string                 `json:"last_topology_discovery_result"`
 	CreatedAt                      time.Time              `json:"created_at"`
 	UpdatedAt                      time.Time              `json:"updated_at"`
+}
+
+func DevicePollingEnabled(device Device) bool {
+	return device.PollingEnabled == nil || *device.PollingEnabled
+}
+
+func NormalizeDevicePollingEnabled(device *Device) {
+	if device == nil || device.PollingEnabled != nil {
+		return
+	}
+	enabled := true
+	device.PollingEnabled = &enabled
 }
 
 // DeviceRepository defines persistence operations for devices.

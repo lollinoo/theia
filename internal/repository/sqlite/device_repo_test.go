@@ -262,6 +262,65 @@ func TestDeviceRepo_PollIntervalOverrideRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDeviceRepo_PollingEnabledDefaultsTrueAndRoundTripsFalse(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		Hostname:  "polling-router",
+		IP:        "10.1.0.5",
+		PollClass: domain.PollClassCore,
+		Status:    domain.DeviceStatusUnknown,
+		Managed:   true,
+		Tags:      map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	got, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after Create failed: %v", err)
+	}
+	if !domain.DevicePollingEnabled(*got) {
+		t.Fatalf("PollingEnabled after Create = false, want true")
+	}
+
+	disabled := false
+	got.PollingEnabled = &disabled
+	if err := repo.Update(got); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after Update failed: %v", err)
+	}
+	if domain.DevicePollingEnabled(*updated) {
+		t.Fatalf("PollingEnabled after Update = true, want false")
+	}
+
+	all, err := repo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+	for _, candidate := range all {
+		if candidate.ID == device.ID {
+			if domain.DevicePollingEnabled(candidate) {
+				t.Fatalf("PollingEnabled from GetAll = true, want false")
+			}
+			return
+		}
+	}
+	t.Fatalf("device %s missing from GetAll", device.ID)
+}
+
 // ---------------------------------------------------------------------------
 // TestDeviceRepo_PollClassEmptyDefaultsToStandard (Phase 39 Plan 03)
 // ---------------------------------------------------------------------------
