@@ -107,6 +107,18 @@ func (s *pipelineRuntimeState) clearPrometheusHostnames() {
 	clear(s.hostnameObservedAt)
 }
 
+func (s *pipelineRuntimeState) resetDeviceRuntime(deviceID uuid.UUID) {
+	if s == nil || deviceID == uuid.Nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.prevCounters, deviceID)
+	delete(s.hostnames, deviceID)
+	delete(s.hostnameObservedAt, deviceID)
+}
+
 func (s *pipelineRuntimeState) prunePrometheusHostnames() {
 	cutoff := s.clockNow().Add(-prometheusEnrichmentRetention)
 
@@ -126,4 +138,16 @@ func (s *pipelineRuntimeState) clockNow() time.Time {
 		return s.now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (p *PipelineOrchestrator) ResetDeviceRuntime(deviceID uuid.UUID) {
+	if p == nil || deviceID == uuid.Nil {
+		return
+	}
+	if p.runtime != nil {
+		p.runtime.resetDeviceRuntime(deviceID)
+	}
+	if p.stateStore != nil {
+		p.stateStore.Remove(deviceID)
+	}
 }

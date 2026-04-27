@@ -180,6 +180,7 @@ export function CanvasPanels({
                 readOnly={!editMode}
                 isVirtual={device.device_type === 'virtual'}
                 onDeviceUpdated={(updated) => {
+                  const ipChanged = device.ip !== updated.ip;
                   setDevices((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
                   setNodes((prev) =>
                     prev.map((n) =>
@@ -195,7 +196,9 @@ export function CanvasPanels({
                                 updated.device_type === 'virtual'
                                   ? (updated.tags?.virtual_subtype ?? 'generic')
                                   : undefined,
-                              metrics: sanitizeDeviceMetricsForDisplay(updated, n.data.metrics),
+                              metrics: ipChanged
+                                ? null
+                                : sanitizeDeviceMetricsForDisplay(updated, n.data.metrics),
                             },
                           }
                         : n,

@@ -321,6 +321,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		deviceChangeNotify,
 		linkChangeNotify,
 	)
+	wireRuntimeResetter(deviceService, pipeline)
 	if err := pipeline.Start(ctx); err != nil {
 		return fmt.Errorf("start runtime pipeline: %w", err)
 	}
