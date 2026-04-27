@@ -43,6 +43,7 @@ export interface Device {
   device_type: DeviceType;
   poll_class: DevicePollClass;
   poll_interval_override: number | null;
+  polling_enabled: boolean;
   status: DeviceStatus;
   sys_name: string;
   sys_descr: string;
@@ -250,6 +251,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       device_type: parseDeviceType(attributes.device_type),
       poll_class: parseDevicePollClass(attributes.poll_class),
       poll_interval_override: readNullableNumber(attributes, 'poll_interval_override'),
+      polling_enabled: readBoolean(attributes, 'polling_enabled', true),
       status: parseDeviceStatus(attributes.status),
       sys_name: readString(attributes, 'sys_name'),
       sys_descr: readString(attributes, 'sys_descr'),

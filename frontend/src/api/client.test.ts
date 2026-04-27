@@ -46,6 +46,7 @@ function deviceResource(id: string, hostname: string, ip: string) {
       backup_supported: true,
       poll_class: 'standard',
       poll_interval_override: null,
+      polling_enabled: true,
       metrics_source: 'prometheus',
       prometheus_label_name: 'instance',
       prometheus_label_value: `${ip}:9100`,
@@ -301,6 +302,18 @@ describe('updateDevice', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, options] = fetchMock.mock.calls[0];
     expect(JSON.parse(options.body)).toEqual({ poll_interval_override: 30 });
+  });
+
+  it('sends boolean polling_enabled unchanged', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateDevice('uuid-1', { polling_enabled: false });
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual({ polling_enabled: false });
   });
 
   it('sends nullable notes unchanged', async () => {

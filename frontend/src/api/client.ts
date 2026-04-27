@@ -223,6 +223,7 @@ export async function updateDevice(
     prometheus_label_value: string;
     topology_discovery_mode: TopologyDiscoveryMode;
     poll_interval_override: number | null;
+    polling_enabled: boolean;
     area_ids: string[];
   }>,
 ): Promise<Device> {

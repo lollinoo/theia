@@ -55,6 +55,7 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     device_type: 'router',
     poll_class: 'core',
     poll_interval_override: null,
+    polling_enabled: true,
     status: 'up',
     sys_name: 'router-01',
     sys_descr: 'RouterOS',
@@ -290,6 +291,90 @@ describe('DeviceConfigPanel — polling override', () => {
       expect(screen.getByText('Display Name is required')).toBeInTheDocument();
     });
     expect(updateDevice).not.toHaveBeenCalled();
+  });
+
+  it('toggles continuous polling off and sends polling_enabled false', async () => {
+    const { updateDevice } = await import('../api/client');
+    const onDeviceUpdated = vi.fn();
+    (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockDevice({ polling_enabled: false }),
+    );
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={onDeviceUpdated}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Continuous Polling' }));
+
+    await waitFor(() => {
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', { polling_enabled: false });
+    });
+    await waitFor(() => {
+      expect(onDeviceUpdated).toHaveBeenCalledWith(mockDevice({ polling_enabled: false }));
+    });
+  });
+
+  it('cancels pending cadence save when continuous polling is suspended', async () => {
+    vi.useFakeTimers();
+    try {
+      const { updateDevice } = await import('../api/client');
+      (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockDevice({ polling_enabled: false }),
+      );
+
+      render(
+        <DeviceConfigPanel
+          device={mockDevice()}
+          onDeviceUpdated={vi.fn()}
+          onDeviceDeleted={vi.fn()}
+        />,
+      );
+
+      fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+      fireEvent.click(screen.getByRole('switch', { name: 'Continuous Polling' }));
+
+      expect(updateDevice).toHaveBeenCalledTimes(1);
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', { polling_enabled: false });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(updateDevice).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disables cadence override controls while continuous polling is suspended', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({ polling_enabled: false, poll_interval_override: 30 })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('switch', { name: 'Continuous Polling' })).not.toBeChecked();
+    expect(screen.getByDisplayValue('30 seconds')).toBeDisabled();
+    expect(screen.getByText('Continuous polling is suspended for this device.')).toBeInTheDocument();
+  });
+
+  it('keeps manual actions enabled when continuous polling is suspended', () => {
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({ polling_enabled: false })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Run Topology Discovery Now')).not.toBeDisabled();
+    expect(screen.getByText('Test SNMP Connectivity')).not.toBeDisabled();
   });
 
   it('persists a trimmed display name for virtual devices', async () => {
