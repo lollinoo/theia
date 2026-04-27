@@ -2,6 +2,7 @@ import type { Device, InterfaceInfo, Link } from '../../types/api';
 import {
   type AlertDTO,
   type LinkMetricsDTO,
+  type RuntimeFlag,
   type RuntimeReason,
   formatThroughput,
   utilizationColor,
@@ -24,6 +25,7 @@ import {
 
 const UNKNOWN_UTILIZATION_COLOR = 'var(--color-status-unknown)';
 type EndpointNegotiationTone = Extract<LinkNegotiationModel['tone'], 'up' | 'warning' | 'critical'>;
+type RuntimeAlertDraft = AlertsPanelAlertModel & { priority: number };
 
 export interface AdaptedInterfaceStats {
   txLabel: string;
@@ -479,6 +481,322 @@ function adaptAlert(deviceMap: Map<string, Device>, alert: AlertDTO): AlertsPane
   };
 }
 
+function runtimeAlert(
+  runtimeDevice: RuntimeDeviceModel,
+  alertName: string,
+  severity: string,
+  summary: string,
+  priority: number,
+): RuntimeAlertDraft {
+  return {
+    deviceId: runtimeDevice.device.id,
+    deviceLabel: labelForDevice(runtimeDevice.device),
+    alertName,
+    severity,
+    state: 'firing',
+    summary,
+    priority,
+  };
+}
+
+function runtimeFlagAlert(runtimeDevice: RuntimeDeviceModel, flag: RuntimeFlag): RuntimeAlertDraft {
+  switch (flag) {
+    case 'deadline_missed':
+      return runtimeAlert(
+        runtimeDevice,
+        'PollingDeadlineMissed',
+        'warning',
+        'Runtime polling missed its expected deadline.',
+        40,
+      );
+    case 'overloaded':
+      return runtimeAlert(
+        runtimeDevice,
+        'PollingOverloaded',
+        'critical',
+        'Runtime polling is overloaded.',
+        41,
+      );
+    case 'background_pending':
+      return runtimeAlert(
+        runtimeDevice,
+        'BackgroundPollingPending',
+        'warning',
+        'Background telemetry refresh is still pending.',
+        42,
+      );
+    case 'partial_telemetry':
+      return runtimeAlert(
+        runtimeDevice,
+        'PartialTelemetry',
+        'warning',
+        'Runtime telemetry is partial.',
+        43,
+      );
+    case 'degraded_risk':
+      return runtimeAlert(
+        runtimeDevice,
+        'PollingDegradedRisk',
+        'warning',
+        'Runtime polling is at risk of degraded coverage.',
+        44,
+      );
+    case 'persistence_lagging':
+      return runtimeAlert(
+        runtimeDevice,
+        'PersistenceLagging',
+        'warning',
+        'Runtime persistence is lagging behind live telemetry.',
+        45,
+      );
+  }
+}
+
+function shouldShowWarningHealth(runtimeDevice: RuntimeDeviceModel): boolean {
+  const metrics = runtimeDevice.metrics;
+
+  if (!metrics || metrics.health !== 'warning') {
+    return false;
+  }
+
+  return (
+    runtimeDevice.primaryHealth === 'snmp_degraded' ||
+    runtimeDevice.primaryHealth === 'up_stale' ||
+    metrics.reachability === 'soft_down' ||
+    metrics.freshness === 'stale' ||
+    metrics.metrics_status === 'partial' ||
+    runtimeDevice.runtimeFlags.length > 0
+  );
+}
+
+function runtimeDeviceAlerts(runtimeDevice: RuntimeDeviceModel): RuntimeAlertDraft[] {
+  const metrics = runtimeDevice.metrics;
+
+  if (!metrics || runtimeDevice.runtimeStatus === 'unmonitored') {
+    return [];
+  }
+
+  const alerts: RuntimeAlertDraft[] = [];
+  const deviceUnreachable =
+    runtimeDevice.primaryHealth === 'unreachable' ||
+    metrics.reachability === 'hard_down' ||
+    metrics.primary_reason === 'device_unreachable';
+
+  if (runtimeDevice.primaryHealth === 'quarantined') {
+    alerts.push(
+      runtimeAlert(
+        runtimeDevice,
+        'DeviceQuarantined',
+        'critical',
+        'Device is quarantined from runtime polling.',
+        10,
+      ),
+    );
+  } else if (deviceUnreachable) {
+    alerts.push(
+      runtimeAlert(
+        runtimeDevice,
+        'DeviceUnreachable',
+        'critical',
+        'Device cannot be reached by runtime polling.',
+        11,
+      ),
+    );
+  } else if (
+    runtimeDevice.primaryHealth === 'snmp_degraded' ||
+    metrics.reachability === 'soft_down' ||
+    metrics.snmp_reachable === 'false'
+  ) {
+    alerts.push(
+      runtimeAlert(runtimeDevice, 'SNMPDegraded', 'warning', 'SNMP reachability is degraded.', 20),
+    );
+  } else if (metrics.reachability === 'unknown') {
+    alerts.push(
+      runtimeAlert(
+        runtimeDevice,
+        'ReachabilityUnknown',
+        'warning',
+        'Runtime reachability is unknown.',
+        21,
+      ),
+    );
+  }
+
+  if (metrics.health === 'critical' && !deviceUnreachable) {
+    alerts.push(
+      runtimeAlert(
+        runtimeDevice,
+        'DeviceHealthCritical',
+        'critical',
+        'Runtime health is critical.',
+        30,
+      ),
+    );
+  } else if (shouldShowWarningHealth(runtimeDevice)) {
+    alerts.push(
+      runtimeAlert(
+        runtimeDevice,
+        'DeviceHealthWarning',
+        'warning',
+        'Runtime health is warning.',
+        31,
+      ),
+    );
+  }
+
+  if (runtimeDevice.primaryHealth === 'up_stale' || metrics.freshness === 'stale') {
+    alerts.push(
+      runtimeAlert(runtimeDevice, 'TelemetryStale', 'warning', 'Runtime telemetry is stale.', 35),
+    );
+  } else if (runtimeDevice.primaryHealth === 'probing' || metrics.freshness === 'awaiting_poll') {
+    alerts.push(
+      runtimeAlert(
+        runtimeDevice,
+        'AwaitingPoll',
+        'warning',
+        'Runtime is awaiting a successful poll.',
+        36,
+      ),
+    );
+  }
+
+  for (const flag of runtimeDevice.runtimeFlags) {
+    alerts.push(runtimeFlagAlert(runtimeDevice, flag));
+  }
+
+  if (
+    metrics.metrics_status === 'unavailable' &&
+    metrics.metrics_reason !== 'ok' &&
+    metrics.metrics_reason !== 'device_unreachable' &&
+    metrics.metrics_reason !== 'unmonitored'
+  ) {
+    alerts.push(
+      runtimeAlert(
+        runtimeDevice,
+        'TelemetryUnavailable',
+        'warning',
+        runtimeReasonMessage(metrics.metrics_reason),
+        50,
+      ),
+    );
+  } else if (
+    metrics.metrics_status === 'partial' &&
+    !runtimeDevice.runtimeFlags.includes('partial_telemetry')
+  ) {
+    alerts.push(
+      runtimeAlert(
+        runtimeDevice,
+        'PartialTelemetry',
+        'warning',
+        'Runtime telemetry is partial.',
+        51,
+      ),
+    );
+  }
+
+  return alerts;
+}
+
+function linkEndpointLabel(
+  deviceMap: Map<string, Device>,
+  deviceId: string,
+  ifName: string,
+): string {
+  const device = deviceMap.get(deviceId);
+  const deviceLabel = device ? labelForDevice(device) : deviceId.slice(0, 8);
+  return ifName ? `${deviceLabel} ${ifName}` : deviceLabel;
+}
+
+function runtimeLinkAlerts(
+  runtimeState: RuntimeState,
+  deviceMap: Map<string, Device>,
+): RuntimeAlertDraft[] {
+  const alerts: RuntimeAlertDraft[] = [];
+
+  for (const runtimeLink of runtimeState.linksById.values()) {
+    if (runtimeLink.metricsStatus === null) {
+      continue;
+    }
+
+    const sourceLabel = linkEndpointLabel(
+      deviceMap,
+      runtimeLink.link.source_device_id,
+      runtimeLink.link.source_if_name,
+    );
+    const targetLabel = linkEndpointLabel(
+      deviceMap,
+      runtimeLink.link.target_device_id,
+      runtimeLink.link.target_if_name,
+    );
+    const deviceId = `${runtimeLink.link.source_device_id}:${runtimeLink.link.id}`;
+    const deviceLabel = `${sourceLabel} to ${targetLabel}`;
+
+    if (runtimeLink.metricsStatus === 'unavailable') {
+      alerts.push({
+        deviceId,
+        deviceLabel,
+        alertName: 'LinkTelemetryUnavailable',
+        severity: 'warning',
+        state: 'firing',
+        summary:
+          runtimeLink.metricsReason && runtimeLink.metricsReason !== 'ok'
+            ? runtimeReasonMessage(runtimeLink.metricsReason)
+            : 'Link telemetry is unavailable.',
+        priority: 70,
+      });
+    } else if (runtimeLink.metricsStatus === 'partial') {
+      alerts.push({
+        deviceId,
+        deviceLabel,
+        alertName: 'LinkTelemetryPartial',
+        severity: 'warning',
+        state: 'firing',
+        summary: 'Link telemetry is partial.',
+        priority: 71,
+      });
+    }
+  }
+
+  return alerts;
+}
+
+function appendUniqueAlert(
+  alerts: RuntimeAlertDraft[],
+  seen: Set<string>,
+  alert: RuntimeAlertDraft,
+) {
+  const key = `${alert.deviceId}:${alert.alertName}`;
+  if (seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+  alerts.push(alert);
+}
+
+function runtimeDerivedAlerts(
+  runtimeState: RuntimeState,
+  deviceMap: Map<string, Device>,
+  existingAlerts: AlertsPanelAlertModel[],
+): AlertsPanelAlertModel[] {
+  const seen = new Set(existingAlerts.map((alert) => `${alert.deviceId}:${alert.alertName}`));
+  const derivedAlerts: RuntimeAlertDraft[] = [];
+
+  for (const runtimeDevice of runtimeState.devicesById.values()) {
+    for (const alert of runtimeDeviceAlerts(runtimeDevice)) {
+      appendUniqueAlert(derivedAlerts, seen, alert);
+    }
+  }
+
+  for (const alert of runtimeLinkAlerts(runtimeState, deviceMap)) {
+    appendUniqueAlert(derivedAlerts, seen, alert);
+  }
+
+  return derivedAlerts
+    .sort((a, b) => a.priority - b.priority || a.deviceLabel.localeCompare(b.deviceLabel))
+    .map(({ priority: _priority, ...alert }) => alert);
+}
+
 function syntheticRuntimeAlert(runtimeDevice: RuntimeDeviceModel): AlertsPanelAlertModel {
   const count = runtimeDevice.metrics?.firing_alert_count ?? 0;
   const severity = runtimeDevice.alertStatus === 'down' ? 'critical' : 'warning';
@@ -544,14 +862,19 @@ export function buildAlertsPanelModel({
     : alerts
         .filter((alert) => alert.state === 'firing')
         .map((alert) => adaptAlert(deviceMap, alert));
-  const activeAlertCount = countActiveAlertsFromRuntimeState(runtimeState, alerts);
+  const runtimeAlerts = runtimeDerivedAlerts(runtimeState, deviceMap, firingAlerts);
+  const allFiringAlerts = [...firingAlerts, ...runtimeAlerts];
+  const activeAlertCount = Math.max(
+    countActiveAlertsFromRuntimeState(runtimeState, alerts),
+    allFiringAlerts.length,
+  );
   const resolvedAlerts = alerts
     .filter((alert) => alert.state !== 'firing')
     .map((alert) => adaptAlert(deviceMap, alert));
 
   return {
     activeAlertCount,
-    firingAlerts,
+    firingAlerts: allFiringAlerts,
     resolvedAlerts,
     prometheusDiagnostics: runtimeState.prometheusDown
       ? {

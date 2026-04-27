@@ -25,7 +25,8 @@ import {
   measureCanvasWork,
 } from './canvasInstrumentation';
 import { alertStatusForLink } from './edgeBuilder';
-import { buildRuntimeState, countActiveAlertsFromRuntimeState } from './runtimeAdapters';
+import { buildAlertsPanelModel } from './panelAdapters';
+import { buildRuntimeState } from './runtimeAdapters';
 import { composeCanvasTopology } from './topologyComposer';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
 
@@ -315,9 +316,10 @@ export function useCanvasData({
       alerts,
       prometheusStatus,
     });
+    const alertsPanelModel = buildAlertsPanelModel({ alerts, runtimeState });
 
     return {
-      alertCount: countActiveAlertsFromRuntimeState(runtimeState, alerts),
+      alertCount: alertsPanelModel.activeAlertCount,
       prometheusDiagnosticsVisible: isPrometheusUnavailable(prometheusStatus),
     };
   }, [alerts, devices, prometheusStatus, snapshot, topologyLinks]);
