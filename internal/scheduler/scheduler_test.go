@@ -116,6 +116,97 @@ func TestRefreshDevices_SkipsUnmanagedDevices(t *testing.T) {
 	assertSchedulerKeyMissing(t, scheduler, NewEssentialTaskKey(unmanaged.ID))
 }
 
+func TestRefreshDevices_SkipsPollingDisabledDevices(t *testing.T) {
+	enabledDevice := domain.Device{
+		ID:             uuid.MustParse("21000000-0000-0000-0000-000000000001"),
+		Hostname:       "enabled-edge",
+		IP:             "192.0.2.11",
+		Managed:        true,
+		PollingEnabled: schedulerBoolPtr(true),
+		PollClass:      domain.PollClassStandard,
+	}
+	disabledDevice := domain.Device{
+		ID:                     uuid.MustParse("21000000-0000-0000-0000-000000000002"),
+		Hostname:               "disabled-edge",
+		IP:                     "192.0.2.12",
+		Managed:                true,
+		PollingEnabled:         schedulerBoolPtr(false),
+		PollClass:              domain.PollClassCore,
+		DeviceType:             domain.DeviceTypeRouter,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+	}
+	source := &fakeDeviceSource{devices: []domain.Device{enabledDevice, disabledDevice}}
+	scheduler := NewScheduler(source, nil)
+
+	if err := scheduler.refreshDevices(time.Unix(1_700_000_000, 0)); err != nil {
+		t.Fatalf("refreshDevices() error = %v", err)
+	}
+
+	if got := len(scheduler.items); got != 4 {
+		t.Fatalf("len(items) = %d, want only enabled device tasks", got)
+	}
+	for _, volatility := range allVolatilityClasses() {
+		assertSchedulerKeyMissing(t, scheduler, NewTaskKey(disabledDevice.ID, volatility))
+	}
+	assertSchedulerKeyMissing(t, scheduler, NewEssentialTaskKey(disabledDevice.ID))
+	assertSchedulerKeyMissing(t, scheduler, NewBootstrapTaskKey(disabledDevice.ID))
+}
+
+func TestRefreshDevices_RemovesKeysWhenPollingDisabled(t *testing.T) {
+	device := domain.Device{
+		ID:             uuid.MustParse("21000000-0000-0000-0000-000000000003"),
+		Hostname:       "toggle-edge",
+		IP:             "192.0.2.13",
+		Managed:        true,
+		PollingEnabled: schedulerBoolPtr(true),
+		PollClass:      domain.PollClassStandard,
+	}
+	source := &fakeDeviceSource{devices: []domain.Device{device}}
+	scheduler := NewScheduler(source, nil)
+	now := time.Unix(1_700_000_000, 0)
+
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("initial refreshDevices() error = %v", err)
+	}
+	if got := len(scheduler.items); got != 4 {
+		t.Fatalf("initial len(items) = %d, want 4", got)
+	}
+
+	source.devices[0].PollingEnabled = schedulerBoolPtr(false)
+	if err := scheduler.refreshDevices(now.Add(time.Minute)); err != nil {
+		t.Fatalf("second refreshDevices() error = %v", err)
+	}
+
+	if got := len(scheduler.items); got != 0 {
+		t.Fatalf("len(items) after disabling polling = %d, want 0", got)
+	}
+	if got := scheduler.heap.Len(); got != 0 {
+		t.Fatalf("heap.Len() after disabling polling = %d, want 0", got)
+	}
+}
+
+func TestSchedulerReduePerformanceTask_IgnoresPollingDisabledDevice(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	scheduler.running.Store(true)
+	device := domain.Device{
+		ID:             uuid.MustParse("21000000-0000-0000-0000-000000000004"),
+		Hostname:       "disabled-redue",
+		IP:             "192.0.2.14",
+		Managed:        true,
+		PollingEnabled: schedulerBoolPtr(false),
+		PollClass:      domain.PollClassCore,
+	}
+
+	scheduler.ReduePerformanceTask(device, time.Unix(1_700_000_000, 0))
+
+	select {
+	case request := <-scheduler.redueRequests:
+		t.Fatalf("unexpected redue request for polling disabled device: %+v", request.device)
+	default:
+	}
+}
+
 func TestRefreshDevices_SkipsVirtualNoIPDevices(t *testing.T) {
 	physical := domain.Device{
 		ID:        uuid.MustParse("20000000-0000-0000-0000-000000000011"),
@@ -649,6 +740,41 @@ func TestSchedulerScheduleBootstrapEnqueuesImmediateBootstrapTask(t *testing.T) 
 		}
 	default:
 		t.Fatal("expected bootstrap task to dispatch immediately")
+	}
+}
+
+func TestSchedulerScheduleBootstrap_IgnoresPollingDisabledDevice(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	scheduler.running.Store(true)
+	device := domain.Device{
+		ID:                     uuid.MustParse("44000000-0000-0000-0000-000000000011"),
+		Hostname:               "disabled-bootstrap",
+		IP:                     "10.0.0.11",
+		Managed:                true,
+		PollingEnabled:         schedulerBoolPtr(false),
+		DeviceType:             domain.DeviceTypeRouter,
+		PollClass:              domain.PollClassCore,
+		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+	}
+
+	scheduler.ScheduleBootstrap(device, time.Unix(1_700_000_223, 0).UTC())
+
+	select {
+	case request := <-scheduler.redueRequests:
+		scheduler.handleReduePerformanceTask(request)
+	default:
+	}
+
+	if got := len(scheduler.items); got != 0 {
+		t.Fatalf("len(items) = %d, want 0", got)
+	}
+	if got := scheduler.heap.Len(); got != 0 {
+		t.Fatalf("heap.Len() = %d, want 0", got)
+	}
+	for priority, queue := range scheduler.ready {
+		if got := len(queue); got != 0 {
+			t.Fatalf("ready[%d] len = %d, want 0", priority, got)
+		}
 	}
 }
 
@@ -1612,6 +1738,10 @@ func readyCountForKind(scheduler *Scheduler, kind polling.TaskKind) int {
 
 func schedulerIntPtr(value int) *int {
 	return &value
+}
+
+func schedulerBoolPtr(v bool) *bool {
+	return &v
 }
 
 type fakeSettingsRepo struct {
