@@ -6,41 +6,52 @@ import { DeviceInterfaceStatsPanel, InterfaceStatsPanel } from '../InterfaceStat
 import { buildDeviceInterfacePanelModel, buildLinkInterfacePanelModel } from './panelAdapters';
 import type { RuntimeState } from './runtimeAdapters';
 
-function useDeviceInterfaces(deviceId: string): {
+function useDeviceInterfaces(
+  deviceId: string,
+  enabled = true,
+): {
   interfaces: InterfaceInfo[];
   loading: boolean;
   error: boolean;
 } {
   const [state, setState] = useState({
     deviceId,
+    enabled,
     interfaces: [] as InterfaceInfo[],
-    loading: true,
+    loading: enabled,
     error: false,
   });
   const currentState =
-    state.deviceId === deviceId
+    state.deviceId === deviceId && state.enabled === enabled
       ? state
-      : { deviceId, interfaces: [] as InterfaceInfo[], loading: true, error: false };
+      : { deviceId, enabled, interfaces: [] as InterfaceInfo[], loading: enabled, error: false };
 
   useEffect(() => {
     let stale = false;
-    setState({ deviceId, interfaces: [], loading: true, error: false });
+    if (!enabled) {
+      setState({ deviceId, enabled, interfaces: [], loading: false, error: false });
+      return () => {
+        stale = true;
+      };
+    }
+
+    setState({ deviceId, enabled, interfaces: [], loading: true, error: false });
     fetchDeviceInterfaces(deviceId)
       .then((nextInterfaces) => {
         if (!stale) {
-          setState({ deviceId, interfaces: nextInterfaces, loading: false, error: false });
+          setState({ deviceId, enabled, interfaces: nextInterfaces, loading: false, error: false });
         }
       })
       .catch(() => {
         if (!stale) {
-          setState({ deviceId, interfaces: [], loading: false, error: true });
+          setState({ deviceId, enabled, interfaces: [], loading: false, error: true });
         }
       });
 
     return () => {
       stale = true;
     };
-  }, [deviceId]);
+  }, [deviceId, enabled]);
 
   return {
     interfaces: currentState.interfaces,
@@ -56,7 +67,10 @@ export function DeviceInterfaceStatsPanelRoute({
   device: Device;
   runtimeState: RuntimeState;
 }) {
-  const { interfaces, loading, error } = useDeviceInterfaces(device.id);
+  const { interfaces, loading, error } = useDeviceInterfaces(
+    device.id,
+    device.polling_enabled !== false,
+  );
 
   if (error) {
     return (
