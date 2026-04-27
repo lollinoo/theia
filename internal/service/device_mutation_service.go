@@ -80,6 +80,7 @@ func (m *deviceMutationService) AddDevice(
 	if deviceType == domain.DeviceTypeVirtual {
 		initialStatus = domain.DeviceStatusUnknown
 	}
+	pollingEnabled := true
 
 	device := &domain.Device{
 		ID:                     uuid.New(),
@@ -89,6 +90,7 @@ func (m *deviceMutationService) AddDevice(
 		SNMPCredentials:        creds,
 		DeviceType:             deviceType,
 		PollClass:              domain.ClassifyPollClass(deviceType),
+		PollingEnabled:         &pollingEnabled,
 		Status:                 initialStatus,
 		Vendor:                 vendor,
 		Managed:                true,
@@ -202,9 +204,13 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	if update.PollIntervalOverride != nil {
 		device.PollIntervalOverride = *update.PollIntervalOverride
 	}
+	if update.PollingEnabled != nil {
+		device.PollingEnabled = update.PollingEnabled
+	}
 	if update.AreaIDs != nil {
 		device.AreaIDs = *update.AreaIDs
 	}
+	domain.NormalizeDevicePollingEnabled(device)
 	domain.NormalizeVirtualNoIPDevice(device)
 
 	if err := m.deviceRepo.Update(device); err != nil {
@@ -251,6 +257,7 @@ func (m *deviceMutationService) GetDevice(ctx context.Context, id uuid.UUID) (*d
 	if err != nil {
 		return nil, err
 	}
+	domain.NormalizeDevicePollingEnabled(device)
 	domain.NormalizeVirtualNoIPDevice(device)
 	m.parent.populateEffectiveTopologyDiscoveryMode(device)
 	return device, nil
@@ -263,6 +270,7 @@ func (m *deviceMutationService) GetAllDevices(ctx context.Context) ([]domain.Dev
 		return nil, err
 	}
 	for i := range devices {
+		domain.NormalizeDevicePollingEnabled(&devices[i])
 		domain.NormalizeVirtualNoIPDevice(&devices[i])
 		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
 	}

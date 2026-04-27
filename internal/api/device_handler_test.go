@@ -653,6 +653,74 @@ func TestDeviceHandlerUpdate_PollIntervalOverrideSet(t *testing.T) {
 	}
 }
 
+func TestDeviceHandlerList_IncludesPollingEnabled(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+	enabled := false
+	device := &domain.Device{
+		ID:             uuid.New(),
+		IP:             "10.0.0.31",
+		Hostname:       "suspended-router",
+		Managed:        true,
+		PollingEnabled: &enabled,
+		Status:         domain.DeviceStatusUp,
+		Tags:           map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp jsonAPIList
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data[0].Attributes["polling_enabled"]; got != false {
+		t.Fatalf("polling_enabled = %#v, want false", got)
+	}
+}
+
+func TestDeviceHandlerUpdate_PollingEnabled(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, deviceRepo)
+
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/"+device.ID.String(),
+		strings.NewReader(`{"polling_enabled":false}`),
+	)
+	rec := httptest.NewRecorder()
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if domain.DevicePollingEnabled(*updated) {
+		t.Fatalf("PollingEnabled = true, want false")
+	}
+
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data.Attributes["polling_enabled"]; got != false {
+		t.Fatalf("response polling_enabled = %#v, want false", got)
+	}
+}
+
 func TestDeviceHandlerUpdate_PollIntervalOverrideClear(t *testing.T) {
 	handler, deviceRepo, _ := newTestDeviceHandler(t)
 	device := seedDevice(t, deviceRepo)

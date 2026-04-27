@@ -44,6 +44,7 @@ type DeviceUpdate struct {
 	PrometheusLabelName   *string
 	PrometheusLabelValue  *string
 	TopologyDiscoveryMode *domain.TopologyDiscoveryMode
+	PollingEnabled        *bool
 	PollIntervalOverride  **int        // nil=not set, *nil=clear, **value=set
 	AreaIDs               *[]uuid.UUID // nil=not set, non-nil=replace all area assignments
 }
