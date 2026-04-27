@@ -163,6 +163,7 @@ type updateDeviceRequest struct {
 	PrometheusLabelName   *string                      `json:"prometheus_label_name,omitempty"`
 	PrometheusLabelValue  *string                      `json:"prometheus_label_value,omitempty"`
 	TopologyDiscoveryMode *string                      `json:"topology_discovery_mode,omitempty"`
+	PollingEnabled        *bool                        `json:"polling_enabled,omitempty"`
 	PollIntervalOverride  optionalPollIntervalOverride `json:"poll_interval_override"`
 	AreaIDs               *[]string                    `json:"area_ids,omitempty"`
 }
@@ -443,6 +444,9 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.PollIntervalOverride.Set {
 		update.PollIntervalOverride = &req.PollIntervalOverride.Value
 	}
+	if req.PollingEnabled != nil {
+		update.PollingEnabled = req.PollingEnabled
+	}
 
 	if req.SNMP != nil {
 		creds, err := parseSNMPCreds(*req.SNMP)
@@ -663,6 +667,7 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 		"notes":                             d.Notes,
 		"device_type":                       string(d.DeviceType),
 		"poll_class":                        string(d.PollClass),
+		"polling_enabled":                   domain.DevicePollingEnabled(*d),
 		"poll_interval_override":            d.PollIntervalOverride,
 		"status":                            string(d.Status),
 		"sys_name":                          d.SysName,
