@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/scheduler"
@@ -25,6 +26,10 @@ type pendingRestoreCoordinator interface {
 	ApplyPendingRestore() (bool, error)
 }
 
+type deviceRuntimeResetter interface {
+	ResetDeviceRuntime(uuid.UUID)
+}
+
 var newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
 	return service.NewRestoreCoordinator(dbPath, deviceBackupDir, knownHostsPath)
 }
@@ -36,6 +41,10 @@ var newCollectorSNMPClient = func(target string, creds domain.SNMPCredentials, t
 func wirePollRescheduler(deviceService *service.DeviceService, sched *scheduler.Scheduler) {
 	deviceService.SetPollRescheduler(sched)
 	deviceService.SetBootstrapScheduler(sched)
+}
+
+func wireRuntimeResetter(deviceService *service.DeviceService, resetter deviceRuntimeResetter) {
+	deviceService.SetRuntimeResetter(resetter)
 }
 
 func applyPendingSQLiteRestore(dbPath, deviceBackupDir, knownHostsPath string) error {

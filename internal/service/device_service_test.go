@@ -302,6 +302,10 @@ type fakePollRescheduler struct {
 	reconcileCalls []pollReconcileCall
 }
 
+type recordingRuntimeResetter struct {
+	deviceIDs []uuid.UUID
+}
+
 type pollRescheduleCall struct {
 	device    domain.Device
 	changedAt time.Time
@@ -324,6 +328,10 @@ func (f *fakePollRescheduler) ReconcileDeviceTasks(device domain.Device, changed
 		device:    device,
 		changedAt: changedAt,
 	})
+}
+
+func (r *recordingRuntimeResetter) ResetDeviceRuntime(deviceID uuid.UUID) {
+	r.deviceIDs = append(r.deviceIDs, deviceID)
 }
 
 type recordingBootstrapScheduler struct {
@@ -417,6 +425,41 @@ func TestAddDevice_DerivesPollClassFromDeviceType(t *testing.T) {
 	}
 	if stored.PollClass != domain.PollClassCore {
 		t.Errorf("expected stored device PollClass core, got %s", stored.PollClass)
+	}
+}
+
+func TestAddDevice_UsesGlobalPollingIntervalAsInitialOverride(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingPollingInterval, "75"); err != nil {
+		t.Fatalf("Set setting failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		return nil, fmt.Errorf("should not be called")
+	}, nil)
+
+	device, err := svc.AddDevice(context.Background(), "10.0.9.254", "router1",
+		domain.DeviceTypeRouter,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourcePrometheus, "instance", "10.0.9.254", "", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+
+	if device.PollIntervalOverride == nil || *device.PollIntervalOverride != 75 {
+		t.Fatalf("returned PollIntervalOverride = %#v, want 75", device.PollIntervalOverride)
+	}
+
+	stored, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if stored.PollIntervalOverride == nil || *stored.PollIntervalOverride != 75 {
+		t.Fatalf("stored PollIntervalOverride = %#v, want 75", stored.PollIntervalOverride)
 	}
 }
 
@@ -1676,6 +1719,9 @@ func TestNewDeviceService_WiresCapabilityCollaborators(t *testing.T) {
 	if svc.mutation.pollRescheduler != &svc.pollRescheduler {
 		t.Fatal("expected mutation capability to share poll rescheduler reference")
 	}
+	if svc.mutation.runtimeResetter != &svc.runtimeResetter {
+		t.Fatal("expected mutation capability to share runtime resetter reference")
+	}
 	if svc.mutation.now == nil {
 		t.Fatal("expected mutation capability to have clock")
 	}
@@ -1715,6 +1761,107 @@ func TestUpdateDevice_ChangesFieldsWithoutReprobing(t *testing.T) {
 	}
 	if updated.Tags["site"] != "dc2" {
 		t.Errorf("expected tag site=dc2, got %s", updated.Tags["site"])
+	}
+}
+
+func TestUpdateDevice_IPChangeTriggersSchedulerRedue(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		IP:        "10.0.0.1",
+		Hostname:  "router-ip-change",
+		Managed:   true,
+		Status:    domain.DeviceStatusUp,
+		PollClass: domain.PollClassCore,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		IP: strPtr("10.0.0.2"),
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.calls); got != 1 {
+		t.Fatalf("redue call count = %d, want 1", got)
+	}
+	if rescheduler.calls[0].device.IP != "10.0.0.2" {
+		t.Fatalf("rescheduled IP = %q, want 10.0.0.2", rescheduler.calls[0].device.IP)
+	}
+	if rescheduler.calls[0].changedAt.IsZero() || rescheduler.calls[0].changedAt.Location() != time.UTC {
+		t.Fatalf("changedAt = %v, want non-zero UTC timestamp", rescheduler.calls[0].changedAt)
+	}
+}
+
+func TestUpdateDevice_IPChangeResetsRuntimeState(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	resetter := &recordingRuntimeResetter{}
+	svc.SetRuntimeResetter(resetter)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		IP:        "10.0.0.1",
+		Hostname:  "router-runtime-reset",
+		Managed:   true,
+		Status:    domain.DeviceStatusUp,
+		PollClass: domain.PollClassCore,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		IP: strPtr("10.0.0.2"),
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(resetter.deviceIDs); got != 1 {
+		t.Fatalf("runtime reset call count = %d, want 1", got)
+	}
+	if resetter.deviceIDs[0] != device.ID {
+		t.Fatalf("runtime reset device ID = %s, want %s", resetter.deviceIDs[0], device.ID)
+	}
+}
+
+func TestUpdateDevice_UnchangedIPDoesNotResetRuntimeState(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	resetter := &recordingRuntimeResetter{}
+	svc.SetRuntimeResetter(resetter)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		IP:        "10.0.0.1",
+		Hostname:  "router-runtime-keep",
+		Managed:   true,
+		Status:    domain.DeviceStatusUp,
+		PollClass: domain.PollClassCore,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		Hostname: strPtr("router-runtime-renamed"),
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(resetter.deviceIDs); got != 0 {
+		t.Fatalf("runtime reset call count = %d, want 0", got)
 	}
 }
 

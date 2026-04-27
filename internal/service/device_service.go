@@ -33,6 +33,10 @@ type bootstrapScheduler interface {
 	ScheduleBootstrap(device domain.Device, dueAt time.Time) bool
 }
 
+type runtimeResetter interface {
+	ResetDeviceRuntime(deviceID uuid.UUID)
+}
+
 // DeviceUpdate holds optional fields for partial device updates.
 type DeviceUpdate struct {
 	Hostname              *string
@@ -62,6 +66,7 @@ type DeviceService struct {
 	discoverFunc       DiscoverFunc
 	pollRescheduler    pollRescheduler
 	bootstrapScheduler bootstrapScheduler
+	runtimeResetter    runtimeResetter
 	now                func() time.Time
 	scheduleFunc       func(time.Duration, func())
 	delayedReprobe     func(context.Context, uuid.UUID) error
@@ -160,6 +165,10 @@ func (s *DeviceService) SetPollRescheduler(rescheduler pollRescheduler) {
 
 func (s *DeviceService) SetBootstrapScheduler(scheduler bootstrapScheduler) {
 	s.bootstrapScheduler = scheduler
+}
+
+func (s *DeviceService) SetRuntimeResetter(resetter runtimeResetter) {
+	s.runtimeResetter = resetter
 }
 
 // AddDevice creates a new device and triggers an async SNMP probe for

@@ -6,7 +6,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/ws"
 )
 
@@ -92,5 +94,65 @@ func TestPipelineRuntimeStatePrunePrometheusHostnamesDropsExpiredEntries(t *test
 	}
 	if _, ok := runtime.hostnameObservedAt[freshDeviceID]; !ok {
 		t.Fatal("expected fresh observation timestamp to remain")
+	}
+}
+
+func TestPipelineOrchestratorResetDeviceRuntimeClearsVolatileDeviceState(t *testing.T) {
+	deviceID := uuid.New()
+	store := state.NewStore()
+	cpu := 42.0
+	now := time.Date(2026, 4, 27, 8, 30, 0, 0, time.UTC)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &cpu,
+			CollectedAt: now,
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        now,
+	})
+	<-store.Changes()
+
+	pipeline := &PipelineOrchestrator{
+		stateStore: store,
+		runtime:    newPipelineRuntimeState(ws.PrometheusStatusPayload{}),
+	}
+	pipeline.runtime.prevCounters[deviceID] = map[string]collector.CounterBaseline{
+		"ether1": {InOctets: 100, OutOctets: 200, SampledAt: now},
+	}
+	pipeline.runtime.hostnames[deviceID] = "old-prom-host"
+	pipeline.runtime.hostnameObservedAt[deviceID] = now
+
+	pipeline.ResetDeviceRuntime(deviceID)
+
+	if _, ok := store.GetDevice(deviceID); ok {
+		t.Fatal("expected reset to remove device state from store")
+	}
+
+	pipeline.runtime.mu.RLock()
+	_, countersPresent := pipeline.runtime.prevCounters[deviceID]
+	hostname := pipeline.runtime.hostnames[deviceID]
+	_, hostnameObserved := pipeline.runtime.hostnameObservedAt[deviceID]
+	pipeline.runtime.mu.RUnlock()
+	if countersPresent {
+		t.Fatal("expected reset to remove interface counter baselines")
+	}
+	if hostname != "" {
+		t.Fatalf("expected reset to remove prometheus hostname, got %q", hostname)
+	}
+	if hostnameObserved {
+		t.Fatal("expected reset to remove prometheus hostname observation timestamp")
+	}
+
+	select {
+	case ids := <-store.Changes():
+		if len(ids) != 1 || ids[0] != deviceID {
+			t.Fatalf("reset emitted changed device IDs = %v, want [%s]", ids, deviceID)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected reset to emit a state change")
 	}
 }

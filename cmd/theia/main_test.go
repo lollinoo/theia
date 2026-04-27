@@ -11,6 +11,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/google/uuid"
 	"github.com/gosnmp/gosnmp"
 
 	"github.com/lollinoo/theia/internal/collector"
@@ -356,6 +357,10 @@ func (stubDeviceSource) GetDevices() ([]domain.Device, error) {
 	return nil, nil
 }
 
+type stubRuntimeResetter struct{}
+
+func (stubRuntimeResetter) ResetDeviceRuntime(uuid.UUID) {}
+
 func TestWirePollRescheduler_AttachesSchedulerToDeviceService(t *testing.T) {
 	deviceService := service.NewDeviceService(nil, nil, nil, nil, nil)
 	sched := scheduler.NewScheduler(stubDeviceSource{}, nil)
@@ -394,5 +399,29 @@ func TestWirePollRescheduler_AttachesSchedulerToDeviceService(t *testing.T) {
 	}
 	if bootstrapScheduler != sched {
 		t.Fatalf("attached bootstrap scheduler = %p, want %p", bootstrapScheduler, sched)
+	}
+}
+
+func TestWireRuntimeResetter_AttachesPipelineToDeviceService(t *testing.T) {
+	deviceService := service.NewDeviceService(nil, nil, nil, nil, nil)
+	resetter := &stubRuntimeResetter{}
+
+	wireRuntimeResetter(deviceService, resetter)
+
+	field := reflect.ValueOf(deviceService).Elem().FieldByName("runtimeResetter")
+	if !field.IsValid() {
+		t.Fatal("runtimeResetter field missing on DeviceService")
+	}
+	if field.IsNil() {
+		t.Fatal("runtimeResetter field is nil after wireRuntimeResetter")
+	}
+
+	attached := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
+	attachedResetter, ok := attached.(*stubRuntimeResetter)
+	if !ok {
+		t.Fatalf("runtimeResetter concrete type = %T, want *stubRuntimeResetter", attached)
+	}
+	if attachedResetter != resetter {
+		t.Fatalf("attached runtime resetter = %p, want %p", attachedResetter, resetter)
 	}
 }

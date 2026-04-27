@@ -2,15 +2,17 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../../types/api';
-import type { AlertDTO } from '../../types/metrics';
+import type { AlertDTO, DeviceMetricsDTO } from '../../types/metrics';
+import type { DeviceNode } from '../DeviceCard';
 import type { AlertsPanelModel } from '../panelModels';
 import { CanvasPanels } from './CanvasPanels';
 import { buildRuntimeState } from './runtimeAdapters';
 
 vi.mock('../DeviceConfigPanel', () => ({
   DeviceConfigPanel: (props: {
-    device: { hostname: string };
+    device: Device;
     readOnly?: boolean;
+    onDeviceUpdated?: (device: Device) => void;
     onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void;
   }) => (
     <div>
@@ -18,6 +20,18 @@ vi.mock('../DeviceConfigPanel', () => ({
       <div>Device config read-only:{String(props.readOnly)}</div>
       <button type="button" onClick={() => props.onWinBoxAvailabilityChange?.(true)}>
         Notify WinBox
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          props.onDeviceUpdated?.({
+            ...props.device,
+            ip: '10.0.0.2',
+            prometheus_label_value: '10.0.0.2:9100',
+          })
+        }
+      >
+        Save IP change
       </button>
     </div>
   ),
@@ -111,6 +125,34 @@ function mockAlert(overrides: Partial<AlertDTO> = {}): AlertDTO {
     alert_name: 'DeviceDown',
     state: 'firing',
     summary: 'router unreachable',
+    ...overrides,
+  };
+}
+
+function mockMetrics(overrides: Partial<DeviceMetricsDTO> = {}): DeviceMetricsDTO {
+  return {
+    device_id: 'dev-1',
+    operational_status: 'up',
+    primary_health: 'up_fresh',
+    runtime_flags: [],
+    field_states: { uptime: 'missing', cpu: 'ok', memory: 'ok' },
+    network_reachable: 'true',
+    snmp_reachable: 'true',
+    reachability: 'up',
+    health: 'healthy',
+    freshness: 'fresh',
+    primary_reason: 'ok',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    alert_status: 'normal',
+    firing_alert_count: 0,
+    last_collected_at: '2026-04-27T08:30:00Z',
+    last_polled_at: '2026-04-27T08:30:00Z',
+    expected_poll_interval_seconds: 30,
+    cpu_percent: 42,
+    mem_percent: 68,
+    temp_celsius: null,
+    uptime_secs: null,
     ...overrides,
   };
 }
@@ -221,6 +263,57 @@ describe('CanvasPanels', () => {
     );
 
     expect(screen.getByText('Device config read-only:false')).toBeInTheDocument();
+  });
+
+  it('clears node metrics immediately when a device config update changes the IP', () => {
+    const device = mockDevice();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+    const setNodes = vi.fn();
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={setNodes}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+        editMode
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save IP change' }));
+
+    const updateNodes = setNodes.mock.calls[0]?.[0] as
+      | ((nodes: DeviceNode[]) => DeviceNode[])
+      | undefined;
+    if (!updateNodes) {
+      throw new Error('expected setNodes updater to be called');
+    }
+    const previousNode: DeviceNode = {
+      id: device.id,
+      type: 'device',
+      position: { x: 0, y: 0 },
+      data: {
+        device,
+        pinned: false,
+        metrics: mockMetrics(),
+      },
+    };
+
+    const [updatedNode] = updateNodes([previousNode]);
+
+    expect(updatedNode.data.device.ip).toBe('10.0.0.2');
+    expect(updatedNode.data.metrics).toBeNull();
   });
 
   it('renders link details in read-only mode when edit mode is disabled', () => {

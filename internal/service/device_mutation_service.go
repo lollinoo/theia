@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ type deviceMutationService struct {
 	settingsRepo    domain.SettingsRepository
 	discoverFunc    DiscoverFunc
 	pollRescheduler *pollRescheduler
+	runtimeResetter *runtimeResetter
 	now             func() time.Time
 	probeWg         *sync.WaitGroup
 }
@@ -31,6 +33,7 @@ func newDeviceMutationService(parent *DeviceService) *deviceMutationService {
 		settingsRepo:    parent.settingsRepo,
 		discoverFunc:    parent.discoverFunc,
 		pollRescheduler: &parent.pollRescheduler,
+		runtimeResetter: &parent.runtimeResetter,
 		now:             parent.now,
 		probeWg:         &parent.probeWg,
 	}
@@ -81,6 +84,7 @@ func (m *deviceMutationService) AddDevice(
 		initialStatus = domain.DeviceStatusUnknown
 	}
 	pollingEnabled := true
+	pollIntervalOverride := initialPollIntervalOverride(m.settingsRepo, deviceType)
 
 	device := &domain.Device{
 		ID:                     uuid.New(),
@@ -90,6 +94,7 @@ func (m *deviceMutationService) AddDevice(
 		SNMPCredentials:        creds,
 		DeviceType:             deviceType,
 		PollClass:              domain.ClassifyPollClass(deviceType),
+		PollIntervalOverride:   pollIntervalOverride,
 		PollingEnabled:         &pollingEnabled,
 		Status:                 initialStatus,
 		Vendor:                 vendor,
@@ -142,6 +147,7 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	if err != nil {
 		return fmt.Errorf("getting device: %w", err)
 	}
+	previousIP := device.IP
 	previousOverride := clonePollIntervalOverride(device.PollIntervalOverride)
 	previousPollingEnabled := domain.DevicePollingEnabled(*device)
 	defaultTopologyMode := m.parent.defaultTopologyDiscoveryMode()
@@ -219,11 +225,19 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	}
 
 	changedAt := m.now().UTC()
+	ipChanged := update.IP != nil && previousIP != device.IP
+	if ipChanged {
+		if resetter := *m.runtimeResetter; resetter != nil {
+			resetter.ResetDeviceRuntime(device.ID)
+		}
+	}
+
 	if rescheduler := *m.pollRescheduler; rescheduler != nil {
 		if update.PollingEnabled != nil && previousPollingEnabled != domain.DevicePollingEnabled(*device) {
 			rescheduler.ReconcileDeviceTasks(*device, changedAt)
 		}
-		if update.PollIntervalOverride != nil && !pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride) && domain.DevicePollingEnabled(*device) {
+		pollIntervalChanged := update.PollIntervalOverride != nil && !pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride)
+		if (ipChanged || pollIntervalChanged) && domain.DevicePollingEnabled(*device) {
 			rescheduler.ReduePerformanceTask(*device, changedAt)
 		}
 	}
@@ -232,6 +246,30 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 		return nil
 	}
 	return m.parent.ReprobeDevice(ctx, id)
+}
+
+func initialPollIntervalOverride(settingsRepo domain.SettingsRepository, deviceType domain.DeviceType) *int {
+	if deviceType == domain.DeviceTypeVirtual {
+		return nil
+	}
+	seconds := configuredPollingIntervalSeconds(settingsRepo)
+	return &seconds
+}
+
+func configuredPollingIntervalSeconds(settingsRepo domain.SettingsRepository) int {
+	const fallback = 60
+	if settingsRepo == nil {
+		return fallback
+	}
+	value, err := settingsRepo.Get(domain.SettingPollingInterval)
+	if err != nil {
+		return fallback
+	}
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds <= 0 {
+		return fallback
+	}
+	return seconds
 }
 
 func (m *deviceMutationService) DeleteDevice(ctx context.Context, id uuid.UUID) error {
