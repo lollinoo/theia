@@ -87,6 +87,7 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
     prometheusLabelValue: device.prometheus_label_value || '',
     virtualSubtype: device.tags?.virtual_subtype ?? 'internet',
     pollIntervalOverride: device.poll_interval_override ?? null,
+    pollingEnabled: device.polling_enabled !== false,
   });
 }
 
@@ -113,6 +114,7 @@ export function DeviceConfigPanel({
 
   const [pollingValue, setPollingValue] = useState('default');
   const [customPolling, setCustomPolling] = useState('');
+  const [pollingEnabled, setPollingEnabled] = useState(device.polling_enabled !== false);
   const [grafanaUrl, setGrafanaUrl] = useState('');
 
   const [form, setForm] = useState(() => createDeviceConfigFormModel(device, Boolean(isVirtual)));
@@ -309,6 +311,7 @@ export function DeviceConfigPanel({
   useEffect(() => {
     setForm(createDeviceConfigFormModel(device, Boolean(isVirtual)));
     syncPollingState(device.poll_interval_override);
+    setPollingEnabled(device.polling_enabled !== false);
     setTopologyDiscoveryMessage(null);
     setTopologyDiscoveryError(null);
     setTopologyDiscoveryRunning(false);
@@ -332,6 +335,7 @@ export function DeviceConfigPanel({
 
   function schedulePollingUpdate(rawValue: string, isDelete = false) {
     if (readOnly) return;
+    if (!pollingEnabled) return;
     if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
     pollingTimerRef.current = window.setTimeout(() => {
       const pollIntervalOverride = isDelete ? null : Number.parseInt(rawValue, 10);
@@ -352,6 +356,32 @@ export function DeviceConfigPanel({
           );
         });
     }, 500);
+  }
+
+  async function handlePollingEnabledChange(enabled: boolean) {
+    if (readOnly) return;
+    if (pollingTimerRef.current !== null) {
+      window.clearTimeout(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+    const previous = pollingEnabled;
+    setPollingEnabled(enabled);
+    setFieldError('polling', null);
+    try {
+      const updated = await updateDevice(device.id, { polling_enabled: enabled });
+      showSaved(setSavedPolling, savedPollingTimerRef);
+      onDeviceUpdated(updated);
+    } catch (error) {
+      setPollingEnabled(previous);
+      if (error instanceof ValidationError || error instanceof ServerError) {
+        setFieldError('polling', error.message);
+        return;
+      }
+      setFieldError(
+        'polling',
+        error instanceof Error ? error.message : 'Failed to update polling state',
+      );
+    }
   }
 
   function handlePollingChange(value: string) {
@@ -579,9 +609,30 @@ export function DeviceConfigPanel({
               Default cadence: every {defaultPollingDuration} ({pollClass} class)
             </p>
           </div>
+          <label className="flex items-center justify-between gap-3 rounded-lg bg-surface-high px-3 py-2">
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-on-bg">Continuous Polling</span>
+              <span className="block text-xs text-on-bg-secondary">
+                {pollingEnabled
+                  ? 'Backend recurring polling is active.'
+                  : 'Continuous polling is suspended for this device.'}
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              aria-label="Continuous Polling"
+              checked={pollingEnabled}
+              disabled={readOnly}
+              onChange={(e) => {
+                void handlePollingEnabledChange(e.target.checked);
+              }}
+              className="h-5 w-9 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-60"
+            />
+          </label>
           <select
             value={pollingValue}
-            disabled={readOnly}
+            disabled={readOnly || !pollingEnabled}
             onChange={(e) => handlePollingChange(e.target.value)}
             className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -598,7 +649,7 @@ export function DeviceConfigPanel({
               max={3600}
               value={customPolling}
               placeholder="Seconds (5-3600)"
-              disabled={readOnly}
+              disabled={readOnly || !pollingEnabled}
               onChange={(e) => handleCustomPollingChange(e.target.value)}
               className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
             />
