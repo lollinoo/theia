@@ -253,8 +253,20 @@ function ghostFrameStyle(color?: string): CSSProperties | undefined {
   };
 }
 
+function PollingDisabledNotice({ className = '' }: { className?: string }) {
+  return (
+    <div
+      className={`rounded-2xl border border-outline-strong bg-surface-container-high px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-on-bg-secondary ${className}`}
+    >
+      Continuous polling disabled
+    </div>
+  );
+}
+
 function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const monitoringState = data.monitoringState ?? resolveDeviceMonitoringState(data.device);
+  const isPollingDisabled =
+    monitoringState === 'monitorable' && data.device.polling_enabled === false;
   const metrics = sanitizeDeviceMetricsForDisplay(data.device, data.metrics, monitoringState);
   const isVirtual = data.isVirtual === true;
   const headerState = resolveDeviceVisualState(data.device, metrics, monitoringState);
@@ -461,7 +473,9 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               </div>
             ) : null}
 
-            {renderModel.showOperationalReadouts ? (
+            {isPollingDisabled ? (
+              <PollingDisabledNotice className="mt-3" />
+            ) : renderModel.showOperationalReadouts ? (
               <div className="mt-3 grid grid-cols-3 gap-1.5">
                 {readouts.map((readout) => (
                   <div
@@ -538,6 +552,8 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
               ) : null}
 
+              {isPollingDisabled ? <PollingDisabledNotice className="mt-3 w-full" /> : null}
+
               {runtimeBadges.length > 0 ? (
                 <div className="mt-2 flex w-full flex-wrap justify-center gap-1.5">
                   {runtimeBadges.map((badge) => (
@@ -571,6 +587,7 @@ const DeviceCard = memo(
       pd.device.hardware_model === nd.device.hardware_model &&
       pd.device.tags?.display_name === nd.device.tags?.display_name &&
       pd.device.ip === nd.device.ip &&
+      pd.device.polling_enabled === nd.device.polling_enabled &&
       pd.device.area_ids?.length === nd.device.area_ids?.length &&
       pd.highlighted === nd.highlighted &&
       pd.alertStatus === nd.alertStatus &&

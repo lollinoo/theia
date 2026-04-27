@@ -193,6 +193,27 @@ describe('DeviceCard', () => {
     expect(screen.getAllByText('--')).toHaveLength(3);
   });
 
+  it('shows polling disabled state instead of stale telemetry when continuous polling is off', () => {
+    renderDeviceCard({
+      device: mockDevice({ polling_enabled: false }),
+      metrics: mockMetrics({
+        cpu_percent: 42,
+        mem_percent: 68,
+        uptime_secs: 86400,
+        freshness: 'fresh',
+        expected_poll_interval_seconds: 30,
+      }),
+    });
+
+    expect(screen.getByText('Polling off')).toBeInTheDocument();
+    expect(screen.getByText('Continuous polling disabled')).toBeInTheDocument();
+    expect(screen.queryByText('Fresh telemetry')).toBeNull();
+    expect(screen.queryByText('Polling every 30s')).toBeNull();
+    expect(screen.queryByText('42%')).toBeNull();
+    expect(screen.queryByText('68%')).toBeNull();
+    expect(screen.queryByText('1d')).toBeNull();
+  });
+
   it('surfaces SNMP reachability ahead of fresh cached telemetry copy', () => {
     renderDeviceCard({
       metrics: mockMetrics({

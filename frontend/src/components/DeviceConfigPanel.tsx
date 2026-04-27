@@ -622,6 +622,7 @@ export function DeviceConfigPanel({
               type="checkbox"
               role="switch"
               aria-label="Continuous Polling"
+              aria-checked={pollingEnabled}
               checked={pollingEnabled}
               disabled={readOnly}
               onChange={(e) => {
