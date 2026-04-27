@@ -83,6 +83,34 @@ function mockLink(overrides: Partial<Link> = {}): Link {
 }
 
 describe('DeviceInterfaceStatsPanelRoute', () => {
+  it('clears loaded interfaces immediately when device polling is disabled', async () => {
+    const enabledDevice = mockDevice({ polling_enabled: true });
+    const disabledDevice = mockDevice({ polling_enabled: false });
+    const runtimeState = buildRuntimeState({
+      devices: [enabledDevice],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+    vi.mocked(fetchDeviceInterfaces).mockResolvedValueOnce([mockInterface({ if_name: 'ether1' })]);
+
+    const { rerender } = render(
+      <DeviceInterfaceStatsPanelRoute device={enabledDevice} runtimeState={runtimeState} />,
+    );
+
+    await screen.findByText('ether1');
+    vi.mocked(fetchDeviceInterfaces).mockClear();
+
+    rerender(
+      <DeviceInterfaceStatsPanelRoute device={disabledDevice} runtimeState={runtimeState} />,
+    );
+
+    expect(screen.queryByText('ether1')).not.toBeInTheDocument();
+    expect(screen.getByText('empty')).toBeInTheDocument();
+    expect(fetchDeviceInterfaces).not.toHaveBeenCalled();
+  });
+
   it('clears stale interfaces when switching devices before the next fetch resolves', async () => {
     const dev1 = mockDevice();
     const dev2 = mockDevice({
