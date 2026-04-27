@@ -119,13 +119,13 @@ func seedCopyTestSource(t *testing.T, db testExecer) {
 			id, hostname, ip, snmp_credentials_json, device_type, status, sys_name, sys_descr,
 			sys_object_id, hardware_model, vendor, managed, tags_json, created_at, updated_at,
 			metrics_source, prometheus_label_name, prometheus_label_value, sys_name_lookup,
-			poll_class, poll_interval_override, notes
+			poll_class, poll_interval_override, polling_enabled, notes
 		) VALUES (
 			'dev-1', 'core-router', '192.0.2.10', '{"version":"2c","v2c":{"community":"secret"}}',
 			'router', 'up', 'core-router.example.com', 'RouterOS', '1.3.6.1.4.1.14988',
 			'CCR2004', 'mikrotik', 1, '{"role":"core"}', '2026-04-10 00:00:00',
 			'2026-04-10 00:00:00', 'prometheus', 'instance', 'core-router:9100', 'core-router',
-			'core', 45, 'Primary aggregation node'
+			'core', 45, 0, 'Primary aggregation node'
 		)`,
 		`INSERT INTO interfaces (
 			id, device_id, if_index, if_name, if_descr, speed, admin_status, oper_status, created_at, updated_at
@@ -196,6 +196,7 @@ func assertCopyTargetState(
 	var winbox bool
 	var pollClass string
 	var pollIntervalOverride sql.NullInt64
+	var pollingEnabled int64
 	var notes sql.NullString
 	var areaCount, linkCount, backupFileCount, instanceBackupCount, vendorConfigCount int
 
@@ -220,11 +221,14 @@ func assertCopyTargetState(
 		t.Fatalf("is_winbox = %v, want %v", winbox, wantWinbox)
 	}
 
-	if err := db.QueryRow(`SELECT poll_class, poll_interval_override FROM devices WHERE id = 'dev-1'`).Scan(&pollClass, &pollIntervalOverride); err != nil {
+	if err := db.QueryRow(`SELECT poll_class, poll_interval_override, polling_enabled FROM devices WHERE id = 'dev-1'`).Scan(&pollClass, &pollIntervalOverride, &pollingEnabled); err != nil {
 		t.Fatalf("querying copied poll fields: %v", err)
 	}
 	if pollClass != wantPollClass {
 		t.Fatalf("poll_class = %q, want %q", pollClass, wantPollClass)
+	}
+	if pollingEnabled != 0 {
+		t.Fatalf("polling_enabled = %d, want 0", pollingEnabled)
 	}
 	switch {
 	case wantPollIntervalOverride == nil && pollIntervalOverride.Valid:
