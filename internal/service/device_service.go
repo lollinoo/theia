@@ -26,6 +26,7 @@ type SNMPPollFunc func(target string, creds domain.SNMPCredentials, vendorName s
 
 type pollRescheduler interface {
 	ReduePerformanceTask(device domain.Device, changedAt time.Time)
+	ReconcileDeviceTasks(device domain.Device, changedAt time.Time)
 }
 
 type bootstrapScheduler interface {

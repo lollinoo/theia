@@ -143,6 +143,7 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 		return fmt.Errorf("getting device: %w", err)
 	}
 	previousOverride := clonePollIntervalOverride(device.PollIntervalOverride)
+	previousPollingEnabled := domain.DevicePollingEnabled(*device)
 	defaultTopologyMode := m.parent.defaultTopologyDiscoveryMode()
 	previousConfiguredMode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
 	previousEffectiveMode := domain.ResolveTopologyDiscoveryMode(device, defaultTopologyMode)
@@ -216,20 +217,17 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	if err := m.deviceRepo.Update(device); err != nil {
 		return err
 	}
-	if update.PollIntervalOverride == nil || *m.pollRescheduler == nil {
-		if !shouldTriggerTopologyProbe {
-			return nil
+
+	changedAt := m.now().UTC()
+	if rescheduler := *m.pollRescheduler; rescheduler != nil {
+		if update.PollingEnabled != nil && previousPollingEnabled != domain.DevicePollingEnabled(*device) {
+			rescheduler.ReconcileDeviceTasks(*device, changedAt)
 		}
-		return m.parent.ReprobeDevice(ctx, id)
-	}
-	if pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride) {
-		if !shouldTriggerTopologyProbe {
-			return nil
+		if update.PollIntervalOverride != nil && !pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride) && domain.DevicePollingEnabled(*device) {
+			rescheduler.ReduePerformanceTask(*device, changedAt)
 		}
-		return m.parent.ReprobeDevice(ctx, id)
 	}
 
-	(*m.pollRescheduler).ReduePerformanceTask(*device, m.now().UTC())
 	if !shouldTriggerTopologyProbe {
 		return nil
 	}

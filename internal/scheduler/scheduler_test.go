@@ -757,7 +757,9 @@ func TestSchedulerScheduleBootstrap_IgnoresPollingDisabledDevice(t *testing.T) {
 		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
 	}
 
-	scheduler.ScheduleBootstrap(device, time.Unix(1_700_000_223, 0).UTC())
+	if scheduler.ScheduleBootstrap(device, time.Unix(1_700_000_223, 0).UTC()) {
+		t.Fatal("ScheduleBootstrap returned true, want false")
+	}
 
 	select {
 	case request := <-scheduler.redueRequests:
@@ -774,6 +776,49 @@ func TestSchedulerScheduleBootstrap_IgnoresPollingDisabledDevice(t *testing.T) {
 	for priority, queue := range scheduler.ready {
 		if got := len(queue); got != 0 {
 			t.Fatalf("ready[%d] len = %d, want 0", priority, got)
+		}
+	}
+}
+
+func TestSchedulerReconcileDeviceTasks_DisabledRemovesQueuedHeapAndBootstrapWork(t *testing.T) {
+	device := domain.Device{
+		ID:                     uuid.MustParse("44000000-0000-0000-0000-000000000012"),
+		Hostname:               "toggle-bootstrap",
+		IP:                     "10.0.0.12",
+		Managed:                true,
+		PollingEnabled:         schedulerBoolPtr(true),
+		DeviceType:             domain.DeviceTypeRouter,
+		PollClass:              domain.PollClassCore,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{devices: []domain.Device{device}}, nil)
+	now := time.Unix(1_700_000_300, 0).UTC()
+
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("refreshDevices() error = %v", err)
+	}
+	if got := len(scheduler.items); got != 5 {
+		t.Fatalf("initial len(items) = %d, want 5", got)
+	}
+
+	queued := mustSchedulerItem(t, scheduler, NewTaskKey(device.ID, domain.VolatilityClassPerformance))
+	heap.Remove(&scheduler.heap, queued.index)
+	scheduler.enqueueReady(queued)
+
+	disabled := device
+	disabled.PollingEnabled = schedulerBoolPtr(false)
+	scheduler.ReconcileDeviceTasks(disabled, now.Add(time.Second))
+
+	if got := len(scheduler.items); got != 0 {
+		t.Fatalf("len(items) after reconcile = %d, want 0", got)
+	}
+	if got := scheduler.heap.Len(); got != 0 {
+		t.Fatalf("heap.Len() after reconcile = %d, want 0", got)
+	}
+	for priority, queue := range scheduler.ready {
+		if got := len(queue); got != 0 {
+			t.Fatalf("ready[%d] len after reconcile = %d, want 0", priority, got)
 		}
 	}
 }
