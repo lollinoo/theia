@@ -396,10 +396,10 @@ describe('linkSemantics', () => {
     expect(presentation.items.map((item) => item.key)).toEqual(['rate', 'throughput']);
   });
 
-  it('uses enterprise NOC stroke widths two pixels thicker than the previous baseline', () => {
+  it('uses enterprise NOC stroke widths with another two pixels of link weight', () => {
     expect(resolveEdgeTone(undefined)).toMatchObject({
       semanticState: 'neutral',
-      width: 3.8,
+      width: 5.8,
     });
 
     expect(
@@ -411,7 +411,7 @@ describe('linkSemantics', () => {
       }),
     ).toMatchObject({
       semanticState: 'up',
-      width: 4.05,
+      width: 6.05,
     });
 
     expect(
@@ -423,7 +423,7 @@ describe('linkSemantics', () => {
       }),
     ).toMatchObject({
       semanticState: 'warning',
-      width: 4.35,
+      width: 6.35,
     });
 
     expect(
@@ -434,7 +434,7 @@ describe('linkSemantics', () => {
       }),
     ).toMatchObject({
       semanticState: 'critical',
-      width: 4.7,
+      width: 6.7,
     });
   });
 });

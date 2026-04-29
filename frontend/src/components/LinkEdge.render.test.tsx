@@ -125,7 +125,7 @@ describe('LinkEdge render', () => {
 
     expect(screen.getByText('1 Gbps')).toBeInTheDocument();
     expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
-    expect(screen.getByTestId('edge-thick')).toHaveStyle({ strokeWidth: '4.75' });
+    expect(screen.getByTestId('edge-thick')).toHaveStyle({ strokeWidth: '6.75' });
   });
 
   it('renders larger zoom-resilient telemetry badge pills at low zoom', () => {

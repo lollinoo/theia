@@ -1,4 +1,4 @@
-import { Handle, type Node, type NodeProps, Position } from '@xyflow/react';
+import { Handle, type Node, type NodeProps, Position, useStore } from '@xyflow/react';
 import { type CSSProperties, memo } from 'react';
 import type { Device, Link } from '../types/api';
 import {
@@ -176,6 +176,48 @@ function readoutToneClass(tone: ReadoutTone): string {
 }
 
 const compactPercentFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const DEVICE_NODE_MIN_READABLE_ZOOM = 0.62;
+const DEVICE_NODE_MAX_READABILITY_SCALE = 1.28;
+
+export function resolveDeviceNodeReadabilityScale(zoom: number): number {
+  const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+
+  if (safeZoom >= 1) {
+    return 1;
+  }
+
+  const scale = Math.min(
+    DEVICE_NODE_MAX_READABILITY_SCALE,
+    1 / Math.sqrt(Math.max(safeZoom, DEVICE_NODE_MIN_READABLE_ZOOM)),
+  );
+  return Number(scale.toFixed(2));
+}
+
+function scaledPx(basePx: number, scale: number): string {
+  return `${Number((basePx * scale).toFixed(2))}px`;
+}
+
+function readableFontStyle(scale: number, basePx: number): CSSProperties | undefined {
+  return scale > 1 ? { fontSize: scaledPx(basePx, scale) } : undefined;
+}
+
+function readableHeightStyle(scale: number, basePx: number): CSSProperties | undefined {
+  return scale > 1 ? { height: scaledPx(basePx, scale) } : undefined;
+}
+
+function mergeReadableFontStyle(
+  baseStyle: CSSProperties | undefined,
+  scale: number,
+  basePx: number,
+): CSSProperties | undefined {
+  const fontStyle = readableFontStyle(scale, basePx);
+
+  if (!baseStyle) {
+    return fontStyle;
+  }
+
+  return fontStyle ? { ...baseStyle, ...fontStyle } : baseStyle;
+}
 
 function formatRuntimePercent(value: number | null | undefined): string {
   return value === null || value === undefined ? '-' : `${compactPercentFormatter.format(value)}%`;
@@ -225,6 +267,8 @@ function PollingDisabledNotice({ className = '' }: { className?: string }) {
 }
 
 function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
+  const zoom = useStore((state) => state.transform[2]);
+  const readabilityScale = resolveDeviceNodeReadabilityScale(zoom);
   const monitoringState = data.monitoringState ?? resolveDeviceMonitoringState(data.device);
   const isPollingDisabled =
     monitoringState === 'monitorable' && data.device.polling_enabled === false;
@@ -304,6 +348,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
   return (
     <div
+      data-testid="device-node-card"
       className={`group relative w-full rounded-[20px] border border-outline bg-surface transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-outline-strong ${isVirtual ? 'min-h-[160px] min-w-[200px] max-h-[235px] max-w-[285px]' : 'min-h-[140px]'} ${statusStyles.frameClass ?? ''}`}
       style={statusStyles.frameStyle}
       onContextMenu={(event) => {
@@ -382,14 +427,19 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           <div className="px-4 pb-3.5 pt-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="min-w-0 text-[15px] font-semibold leading-snug text-on-bg">
+                <div
+                  data-testid="physical-node-hostname"
+                  className="min-w-0 text-[15px] font-semibold leading-snug text-on-bg"
+                  style={readableFontStyle(readabilityScale, 15)}
+                >
                   <span className="line-clamp-2 break-words">{label}</span>
                 </div>
               </div>
 
               <div
+                data-testid="physical-node-status-badge"
                 className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyles.badgeClass}`}
-                style={statusStyles.badgeStyle}
+                style={mergeReadableFontStyle(statusStyles.badgeStyle, readabilityScale, 11)}
               >
                 <StatusDot status={headerState.dotStatus} />
                 <span>{headerState.label}</span>
@@ -398,11 +448,19 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
             <div className="mt-3 flex items-center justify-between gap-3">
               {addressState === 'address' ? (
-                <span className="min-w-0 truncate rounded-full border border-outline bg-surface-container px-2.5 py-1 font-mono text-[11px] font-medium text-on-bg">
+                <span
+                  data-testid="physical-node-address"
+                  className="min-w-0 truncate rounded-full border border-outline bg-surface-container px-2.5 py-1 font-mono text-[11px] font-medium text-on-bg"
+                  style={readableFontStyle(readabilityScale, 11)}
+                >
                   {addressLabel} {data.device.ip}
                 </span>
               ) : (
-                <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[11px] font-semibold text-on-bg-secondary">
+                <span
+                  data-testid="physical-node-address"
+                  className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[11px] font-semibold text-on-bg-secondary"
+                  style={readableFontStyle(readabilityScale, 11)}
+                >
                   No IP
                 </span>
               )}
@@ -410,7 +468,9 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               {renderModel.showFreshnessMeta ? (
                 <div className="min-w-0 truncate text-right">
                   <div
+                    data-testid="physical-node-freshness"
                     className={`truncate text-[11px] font-semibold ${readoutToneClass(freshness!.tone)}`}
+                    style={readableFontStyle(readabilityScale, 11)}
                   >
                     {freshness!.text}
                   </div>
@@ -422,32 +482,47 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               <div
                 className="mt-2 grid h-[40px] grid-cols-3 overflow-hidden rounded-xl border border-outline-subtle bg-surface-container/55"
                 data-testid="physical-runtime-readouts"
+                style={readableHeightStyle(readabilityScale, 40)}
               >
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
-                  <span className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary">
+                  <span
+                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    style={readableFontStyle(readabilityScale, 9)}
+                  >
                     CPU
                   </span>
                   <span
                     className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.cpuPercent)}`}
+                    style={readableFontStyle(readabilityScale, 12)}
                   >
                     {formatRuntimePercent(operationalReadouts.cpuPercent)}
                   </span>
                 </div>
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
-                  <span className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary">
+                  <span
+                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    style={readableFontStyle(readabilityScale, 9)}
+                  >
                     MEM
                   </span>
                   <span
                     className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.memPercent)}`}
+                    style={readableFontStyle(readabilityScale, 12)}
                   >
                     {formatRuntimePercent(operationalReadouts.memPercent)}
                   </span>
                 </div>
                 <div className="flex min-w-0 flex-col justify-center px-2.5">
-                  <span className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary">
+                  <span
+                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    style={readableFontStyle(readabilityScale, 9)}
+                  >
                     Uptime
                   </span>
-                  <span className="mt-1 truncate font-mono text-[12px] font-semibold leading-none text-on-bg">
+                  <span
+                    className="mt-1 truncate font-mono text-[12px] font-semibold leading-none text-on-bg"
+                    style={readableFontStyle(readabilityScale, 12)}
+                  >
                     {formatRuntimeUptime(operationalReadouts.uptimeSecs)}
                   </span>
                 </div>
@@ -463,7 +538,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="mb-1.5 flex w-full justify-end">
                   <div
                     className={`inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
-                    style={statusStyles.badgeStyle}
+                    style={mergeReadableFontStyle(statusStyles.badgeStyle, readabilityScale, 10)}
                   >
                     <StatusDot status={headerState.dotStatus} />
                     <span className="truncate">{headerState.label}</span>
@@ -475,16 +550,25 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <VendorIcon vendor={data.device.vendor} size={20} />
               </div>
 
-              <div className="mt-2.5 max-w-full truncate text-[10px] uppercase tracking-[0.14em] text-on-bg-secondary">
+              <div
+                className="mt-2.5 max-w-full truncate text-[10px] uppercase tracking-[0.14em] text-on-bg-secondary"
+                style={readableFontStyle(readabilityScale, 10)}
+              >
                 {deviceTypeLabel(data.device, isVirtual, data.subtype)}
               </div>
-              <div className="mt-1.5 w-full max-w-full text-[17px] font-semibold leading-tight tracking-tight text-on-bg">
+              <div
+                className="mt-1.5 w-full max-w-full text-[17px] font-semibold leading-tight tracking-tight text-on-bg"
+                style={readableFontStyle(readabilityScale, 17)}
+              >
                 <span className="block w-full truncate">{label}</span>
               </div>
 
               <div className="mt-3 flex w-full flex-col items-center gap-1.5">
                 {renderModel.showVirtualAddressChip ? (
-                  <span className="inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-3 py-1 font-mono text-[11px] text-on-bg">
+                  <span
+                    className="inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-3 py-1 font-mono text-[11px] text-on-bg"
+                    style={readableFontStyle(readabilityScale, 11)}
+                  >
                     {addressLabel} {data.device.ip}
                   </span>
                 ) : null}
@@ -494,10 +578,16 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="mt-3 flex w-full items-center justify-between gap-2 text-[10px]">
                   <div
                     className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}
+                    style={readableFontStyle(readabilityScale, 10)}
                   >
                     {freshness!.text}
                   </div>
-                  <div className="min-w-0 truncate text-on-bg-secondary">{pollingEvery}</div>
+                  <div
+                    className="min-w-0 truncate text-on-bg-secondary"
+                    style={readableFontStyle(readabilityScale, 10)}
+                  >
+                    {pollingEvery}
+                  </div>
                 </div>
               ) : null}
 

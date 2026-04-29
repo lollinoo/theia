@@ -120,10 +120,10 @@ describe('FOUND-06: No hardcoded hex or fixed palette colors in canvas files', (
 });
 
 describe('Enterprise NOC React Flow link width contract', () => {
-  it('Canvas.tsx uses a 4px connection line for link creation previews', () => {
+  it('Canvas.tsx uses a 6px connection line for link creation previews', () => {
     const content = readFileSync(join(SRC_DIR, 'components/Canvas.tsx'), 'utf-8');
     expect(content).toContain(
-      "connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 4 }}",
+      "connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 6 }}",
     );
   });
 });
