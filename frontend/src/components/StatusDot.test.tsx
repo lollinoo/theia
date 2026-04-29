@@ -49,4 +49,36 @@ describe('StatusDot (COMP-11)', () => {
     expect(dot?.className).toContain('border-outline-strong');
     expect(dot?.className).toContain('bg-surface-container-high');
   });
+
+  it('preserves the approved UP, Warning, Critical, and Down dot styles', () => {
+    const up = render(<StatusDot status="up" />);
+    expect(up.container.querySelector('span')?.className).toContain('bg-status-up');
+    expect(up.container.querySelector('span')?.getAttribute('style')).toContain(
+      'var(--nt-glow-status-ok)',
+    );
+    up.unmount();
+
+    const warning = render(<StatusDot status="degraded" />);
+    expect(warning.container.querySelector('span')?.className).toContain('bg-warning');
+    expect(warning.container.querySelector('span')?.className).toContain('animate-pulse');
+    expect(warning.container.querySelector('span')?.getAttribute('style')).toContain(
+      'var(--nt-glow-status-warning)',
+    );
+    warning.unmount();
+
+    const critical = render(<StatusDot status="critical" />);
+    expect(critical.container.querySelector('span')?.className).toContain('bg-status-critical');
+    expect(critical.container.querySelector('span')?.className).not.toContain('animate-pulse');
+    expect(critical.container.querySelector('span')?.getAttribute('style')).toContain(
+      'var(--nt-node-critical-badge-border)',
+    );
+    critical.unmount();
+
+    const down = render(<StatusDot status="down" />);
+    expect(down.container.querySelector('span')?.className).toContain('bg-status-down');
+    expect(down.container.querySelector('span')?.className).toContain('animate-pulse');
+    expect(down.container.querySelector('span')?.getAttribute('style')).toContain(
+      'var(--nt-glow-status-down)',
+    );
+  });
 });
