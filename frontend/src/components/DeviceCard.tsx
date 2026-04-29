@@ -6,8 +6,6 @@ import {
   type DeviceMetricsDTO,
   type FreshnessStatus,
   type RuntimeFlag,
-  formatUptime,
-  metricColor,
 } from '../types/metrics';
 import { formatPollingEvery } from '../utils/freshness';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
@@ -18,7 +16,6 @@ import {
   resolveDeviceAddressState,
   resolveDeviceMonitoringState,
   resolveDeviceNodeStatusStyles,
-  resolveDeviceOperationalReadouts,
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
@@ -45,11 +42,7 @@ export interface DeviceNodeData {
 
 export type DeviceNode = Node<DeviceNodeData>;
 
-interface Readout {
-  label: string;
-  value: string;
-  tone?: 'default' | 'ok' | 'warning' | 'critical' | 'muted';
-}
+type ReadoutTone = 'default' | 'ok' | 'warning' | 'critical' | 'muted';
 
 const universalHandleClassName =
   '!h-2 !w-2 !rounded-full !border-2 !border-bg !bg-surface-container-high shadow-none';
@@ -79,10 +72,6 @@ function displayName(device: Device): string {
 
 function isMacAddress(value: string): boolean {
   return macAddressPattern.test(value) || dottedMacAddressPattern.test(value);
-}
-
-function formatPercent(value: number | null): string {
-  return value === null ? '--' : `${Math.round(value)}%`;
 }
 
 function deviceTypeLabel(device: Device, isVirtual: boolean, subtype?: string): string {
@@ -131,7 +120,7 @@ function sameRuntimeFlags(
   return (previous ?? []).every((flag, index) => flag === next?.[index]);
 }
 
-function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): Readout['tone'] {
+function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): ReadoutTone {
   switch (tier) {
     case 'Fresh':
       return 'ok';
@@ -142,7 +131,7 @@ function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): Readout['tone'] {
   }
 }
 
-function freshnessMeta(freshness: FreshnessStatus): { tone: Readout['tone']; text: string } {
+function freshnessMeta(freshness: FreshnessStatus): { tone: ReadoutTone; text: string } {
   switch (freshness) {
     case 'fresh':
       return { tone: freshnessTone('Fresh'), text: 'Fresh telemetry' };
@@ -155,7 +144,7 @@ function freshnessMeta(freshness: FreshnessStatus): { tone: Readout['tone']; tex
   }
 }
 
-function runtimeTelemetryMeta(metrics: DeviceMetricsDTO): { tone: Readout['tone']; text: string } {
+function runtimeTelemetryMeta(metrics: DeviceMetricsDTO): { tone: ReadoutTone; text: string } {
   if (
     metrics.primary_health === 'snmp_degraded' ||
     metrics.reachability === 'soft_down' ||
@@ -167,7 +156,7 @@ function runtimeTelemetryMeta(metrics: DeviceMetricsDTO): { tone: Readout['tone'
   return freshnessMeta(metrics.freshness);
 }
 
-function readoutToneClass(tone: Readout['tone']): string {
+function readoutToneClass(tone: ReadoutTone): string {
   switch (tone) {
     case 'ok':
       return 'text-status-up';
@@ -197,52 +186,6 @@ function runtimeBadgeLabel(flag: RuntimeFlag): string {
     case 'persistence_lagging':
       return 'Persisting';
   }
-}
-
-function buildReadouts({
-  cpuPercent,
-  memPercent,
-  uptimeSecs,
-  isDeviceDown,
-}: {
-  cpuPercent: number | null;
-  memPercent: number | null;
-  uptimeSecs: number | null;
-  isDeviceDown: boolean;
-}): Readout[] {
-  return [
-    {
-      label: 'CPU',
-      value: formatPercent(cpuPercent),
-      tone: isDeviceDown
-        ? 'critical'
-        : cpuPercent === null
-          ? 'muted'
-          : cpuPercent >= 85
-            ? 'critical'
-            : cpuPercent >= 60
-              ? 'warning'
-              : 'ok',
-    },
-    {
-      label: 'MEM',
-      value: formatPercent(memPercent),
-      tone: isDeviceDown
-        ? 'critical'
-        : memPercent === null
-          ? 'muted'
-          : memPercent >= 85
-            ? 'critical'
-            : memPercent >= 60
-              ? 'warning'
-              : 'default',
-    },
-    {
-      label: 'UP',
-      value: uptimeSecs === null ? '--' : formatUptime(uptimeSecs),
-      tone: isDeviceDown ? 'critical' : uptimeSecs === null ? 'muted' : 'default',
-    },
-  ];
 }
 
 function ghostFrameStyle(color?: string): CSSProperties | undefined {
@@ -286,11 +229,6 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     colors.length >= 2 ? `linear-gradient(90deg, ${colors.join(', ')})` : firstColor;
   const addressLabel = isMacAddress(data.device.ip) ? 'MAC' : 'IP';
   const addressState = resolveDeviceAddressState(data.device);
-  const { cpuPercent, memPercent, uptimeSecs, isDeviceDown } = resolveDeviceOperationalReadouts(
-    data.device,
-    metrics,
-    monitoringState,
-  );
   const renderModel = resolveDeviceCardRenderModel({
     device: data.device,
     monitoringState,
@@ -298,12 +236,6 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     hasFreshnessMeta: freshness !== null,
   });
   const isVirtualUnmonitored = renderModel.variant === 'virtual-unmonitored';
-  const readouts = buildReadouts({
-    cpuPercent,
-    memPercent,
-    uptimeSecs,
-    isDeviceDown,
-  });
   const selfLinks = data.selfLinks ?? [];
   const primarySelfLink = selfLinks[0];
   const statusStyles = resolveDeviceNodeStatusStyles({
@@ -420,18 +352,14 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         {renderModel.variant === 'physical' ? (
           <div className="px-4 pb-3.5 pt-3">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-on-bg-secondary">
-                  <VendorIcon vendor={data.device.vendor} size={16} />
-                  <span>{deviceTypeLabel(data.device, isVirtual, data.subtype)}</span>
-                </div>
-                <div className="mt-2 min-w-0 text-[15px] font-semibold leading-tight tracking-tight text-on-bg">
+              <div className="min-w-0 flex-1">
+                <div className="min-w-0 text-[15px] font-semibold leading-snug text-on-bg">
                   <span className="line-clamp-2 break-words">{label}</span>
                 </div>
               </div>
 
               <div
-                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyles.badgeClass}`}
                 style={statusStyles.badgeStyle}
               >
                 <StatusDot status={headerState.dotStatus} />
@@ -441,69 +369,25 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
             <div className="mt-3 flex items-center justify-between gap-3">
               {addressState === 'address' ? (
-                <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 font-mono text-[11px] text-on-bg">
+                <span className="min-w-0 truncate rounded-full border border-outline bg-surface-container px-2.5 py-1 font-mono text-[11px] font-medium text-on-bg">
                   {addressLabel} {data.device.ip}
                 </span>
               ) : (
-                <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
+                <span className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[11px] font-semibold text-on-bg-secondary">
                   No IP
                 </span>
               )}
 
               {renderModel.showFreshnessMeta ? (
-                <div className="min-w-0 text-right">
-                  <div className={`text-[10px] font-medium ${readoutToneClass(freshness!.tone)}`}>
+                <div className="min-w-0 truncate text-right">
+                  <div
+                    className={`truncate text-[11px] font-semibold ${readoutToneClass(freshness!.tone)}`}
+                  >
                     {freshness!.text}
                   </div>
-                  <div className="mt-0.5 text-[10px] text-on-bg-secondary">{pollingEvery}</div>
                 </div>
               ) : null}
             </div>
-
-            {runtimeBadges.length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {runtimeBadges.map((badge) => (
-                  <span
-                    key={badge}
-                    className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-warning"
-                  >
-                    {badge}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-
-            {isPollingDisabled ? (
-              <PollingDisabledNotice className="mt-3" />
-            ) : renderModel.showOperationalReadouts ? (
-              <div className="mt-3 grid grid-cols-3 gap-1.5">
-                {readouts.map((readout) => (
-                  <div
-                    key={readout.label}
-                    className="rounded-2xl border border-outline bg-surface-container px-2.5 py-2"
-                  >
-                    <div className="text-[9px] uppercase tracking-[0.16em] text-on-bg-secondary">
-                      {readout.label}
-                    </div>
-                    <div
-                      className={`mt-1 truncate font-mono text-[11px] font-semibold ${readoutToneClass(readout.tone)}`}
-                    >
-                      {readout.tone === 'default' &&
-                      readout.label === 'CPU' &&
-                      cpuPercent !== null ? (
-                        <span className={metricColor(cpuPercent)}>{readout.value}</span>
-                      ) : readout.tone === 'default' &&
-                        readout.label === 'MEM' &&
-                        memPercent !== null ? (
-                        <span className={metricColor(memPercent)}>{readout.value}</span>
-                      ) : (
-                        readout.value
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </div>
         ) : (
           <div

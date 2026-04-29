@@ -1,7 +1,7 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 import DeviceCard from './DeviceCard';
@@ -108,113 +108,60 @@ function renderDeviceCard(data: Partial<DeviceNodeData> = {}) {
 }
 
 describe('DeviceCard', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-04-13T12:00:00Z'));
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('renders compact overview name, type, and IP chip without redundant area badge', () => {
-    renderDeviceCard();
+  it('renders physical node card body with hostname, status, address, and telemetry only', () => {
+    renderDeviceCard({ metrics: mockMetrics() });
 
     expect(screen.getByText('router-01')).toBeInTheDocument();
-    expect(screen.getByText('Router')).toBeInTheDocument();
+    expect(screen.getByText('Up')).toBeInTheDocument();
     expect(screen.getByText('IP 10.0.0.1')).toBeInTheDocument();
-    expect(screen.queryByText(/global/i)).toBeNull();
+    expect(screen.getByText('Fresh telemetry')).toBeInTheDocument();
+
+    expect(screen.queryByText('Router')).toBeNull();
+    expect(screen.queryByText('CPU')).toBeNull();
+    expect(screen.queryByText('MEM')).toBeNull();
+    expect(screen.queryByText('UP')).toBeNull();
+    expect(screen.queryByText('Late')).toBeNull();
+    expect(screen.queryByText('Partial')).toBeNull();
+    expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
-  it('uses MAC chip label for MAC addresses', () => {
-    renderDeviceCard({ device: mockDevice({ ip: 'aa:bb:cc:dd:ee:ff' }) });
+  it('uses MAC chip label for MAC addresses without adding extra card body fields', () => {
+    renderDeviceCard({
+      device: mockDevice({ ip: 'aa:bb:cc:dd:ee:ff' }),
+      metrics: mockMetrics(),
+    });
 
     expect(screen.getByText('MAC aa:bb:cc:dd:ee:ff')).toBeInTheDocument();
     expect(screen.queryByText(/IP /)).toBeNull();
+    expect(screen.queryByText('Router')).toBeNull();
+    expect(screen.queryByText('CPU')).toBeNull();
   });
 
-  it('prefers tags.display_name when available', () => {
+  it('keeps existing no-IP semantics in the address slot', () => {
+    renderDeviceCard({
+      device: mockDevice({ ip: '' }),
+      metrics: mockMetrics(),
+    });
+
+    expect(screen.getByText('No IP')).toBeInTheDocument();
+    expect(screen.queryByText('Router')).toBeNull();
+  });
+
+  it('prefers tags.display_name as the hostname identity', () => {
     renderDeviceCard({
       device: mockDevice({
         tags: { display_name: 'Core Router' },
         sys_name: 'router-01',
       }),
+      metrics: mockMetrics(),
     });
 
     expect(screen.getByText('Core Router')).toBeInTheDocument();
+    expect(screen.queryByText('router-01')).toBeNull();
+    expect(screen.queryByText('Router')).toBeNull();
   });
 
-  it('keeps overview compact by removing verbose detail rows', () => {
-    renderDeviceCard({
-      device: mockDevice({
-        sys_descr: 'Very long system description',
-        hardware_model: 'CCR2004',
-      }),
-    });
-
-    expect(screen.queryByText('CCR2004')).toBeNull();
-    expect(screen.queryByText('Very long system description')).toBeNull();
-    expect(screen.queryByText('TEMP')).toBeNull();
-  });
-
-  it('renders CPU, MEM, and UP readouts with placeholders when metrics are absent', () => {
-    renderDeviceCard({ metrics: null });
-
-    expect(screen.getByText('CPU')).toBeInTheDocument();
-    expect(screen.getByText('MEM')).toBeInTheDocument();
-    expect(screen.getByText('UP')).toBeInTheDocument();
-    expect(screen.queryByText('TEMP')).toBeNull();
-    expect(screen.getAllByText('--')).toHaveLength(3);
-  });
-
-  it('renders CPU, MEM, and uptime readouts when metrics are present', () => {
-    renderDeviceCard({ metrics: mockMetrics({ cpu_percent: 42, mem_percent: 68 }) });
-
-    expect(screen.getByText('42%')).toBeInTheDocument();
-    expect(screen.getByText('68%')).toBeInTheDocument();
-    expect(screen.getByText('1d')).toBeInTheDocument();
-  });
-
-  it('renders freshness copy from the normalized runtime enum while preserving the uptime slot', () => {
-    renderDeviceCard({
-      metrics: mockMetrics({
-        freshness: 'stale',
-        cpu_percent: null,
-        mem_percent: null,
-        uptime_secs: null,
-        last_polled_at: '2026-04-13T11:59:20Z',
-        expected_poll_interval_seconds: 300,
-      }),
-    });
-
-    expect(screen.getByText('Stale telemetry')).toBeInTheDocument();
-    expect(screen.getByText('Polling every 5m')).toBeInTheDocument();
-    expect(screen.getByText('UP')).toBeInTheDocument();
-    expect(screen.getAllByText('--')).toHaveLength(3);
-  });
-
-  it('shows polling disabled state instead of stale telemetry when continuous polling is off', () => {
-    renderDeviceCard({
-      device: mockDevice({ polling_enabled: false }),
-      metrics: mockMetrics({
-        cpu_percent: 42,
-        mem_percent: 68,
-        uptime_secs: 86400,
-        freshness: 'fresh',
-        expected_poll_interval_seconds: 30,
-      }),
-    });
-
-    expect(screen.getByText('Polling off')).toBeInTheDocument();
-    expect(screen.getByText('Continuous polling disabled')).toBeInTheDocument();
-    expect(screen.queryByText('Fresh telemetry')).toBeNull();
-    expect(screen.queryByText('Polling every 30s')).toBeNull();
-    expect(screen.queryByText('42%')).toBeNull();
-    expect(screen.queryByText('68%')).toBeNull();
-    expect(screen.queryByText('1d')).toBeNull();
-  });
-
-  it('surfaces SNMP reachability ahead of fresh cached telemetry copy', () => {
+  it('surfaces SNMP reachability as telemetry while preserving the status dot label', () => {
     renderDeviceCard({
       metrics: mockMetrics({
         health: 'healthy',
@@ -230,38 +177,31 @@ describe('DeviceCard', () => {
     expect(screen.getByText('Warning')).toBeInTheDocument();
     expect(screen.getByText('SNMP unreachable')).toBeInTheDocument();
     expect(screen.queryByText('Fresh telemetry')).toBeNull();
+    expect(screen.queryByText('CPU')).toBeNull();
   });
 
-  it('renders runtime state badges from polling flags', () => {
+  it('shows polling disabled as status without a verbose card body notice', () => {
     renderDeviceCard({
-      metrics: mockMetrics({
-        runtime_flags: ['deadline_missed', 'partial_telemetry'],
-      }),
+      device: mockDevice({ polling_enabled: false }),
+      metrics: mockMetrics(),
     });
 
-    expect(screen.getByText('Late')).toBeInTheDocument();
-    expect(screen.getByText('Partial')).toBeInTheDocument();
+    expect(screen.getByText('Polling off')).toBeInTheDocument();
+    expect(screen.queryByText('Continuous polling disabled')).toBeNull();
+    expect(screen.queryByText('Fresh telemetry')).toBeNull();
+    expect(screen.queryByText('CPU')).toBeNull();
   });
 
-  it('does not derive freshness text from a client timer', async () => {
+  it('keeps long hostnames constrained inside the physical card', () => {
+    const longName = 'edge-router-with-a-very-long-hostname-for-small-screens';
     renderDeviceCard({
-      metrics: mockMetrics({
-        freshness: 'awaiting_poll',
-        cpu_percent: null,
-        mem_percent: null,
-        uptime_secs: null,
-        last_polled_at: '2026-04-13T12:00:00Z',
-        expected_poll_interval_seconds: 30,
-      }),
+      device: mockDevice({ sys_name: longName }),
+      metrics: mockMetrics(),
     });
 
-    expect(screen.getByText('Awaiting first poll')).toBeInTheDocument();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(7_000);
-    });
-
-    expect(screen.getByText('Awaiting first poll')).toBeInTheDocument();
+    const hostname = screen.getByText(longName);
+    expect(hostname.className).toContain('break-words');
+    expect(hostname.parentElement?.className).toContain('min-w-0');
   });
 
   it('renders ghost nodes as cross-area markers without overview metrics', () => {
@@ -458,16 +398,13 @@ describe('DeviceCard', () => {
     expect(screen.getByText(`IP ${longAddress}`).className).toContain('truncate');
   });
 
-  it('uses monospace for technical readouts and address chips', () => {
+  it('uses monospace for technical address and self-link values', () => {
     const { container } = renderDeviceCard({
-      metrics: mockMetrics({
-        cpu_percent: null,
-        mem_percent: null,
-        uptime_secs: 86400,
-      }),
+      metrics: mockMetrics(),
+      selfLinks: [mockLink()],
     });
 
-    expect(container.querySelectorAll('.font-mono').length).toBeGreaterThanOrEqual(3);
+    expect(container.querySelectorAll('.font-mono').length).toBeGreaterThanOrEqual(2);
   });
 
   it('keeps unmonitored virtual nodes off failure borders even if raw device data is down', () => {

@@ -28,12 +28,12 @@ describe('COMP-09 Metric values use font-mono (JetBrains Mono)', () => {
     expect(content).toContain('LinkDetailsPanel');
   });
 
-  it('DeviceCard.tsx contains font-mono for CPU/MEM/TEMP/UP metric values', () => {
+  it('DeviceCard.tsx contains font-mono for technical address and self-link values', () => {
     const content = readFileSync(join(COMPONENTS_DIR, 'DeviceCard.tsx'), 'utf-8');
-    // DeviceCard metric cells must use font-mono per COMP-01
+    // DeviceCard technical address chips and self-link summaries must use font-mono per COMP-01.
     const fontMonoMatches = content.match(/font-mono/g);
     expect(fontMonoMatches).not.toBeNull();
-    expect(fontMonoMatches!.length).toBeGreaterThanOrEqual(1);
+    expect(fontMonoMatches!.length).toBeGreaterThanOrEqual(2);
   });
 });
 
