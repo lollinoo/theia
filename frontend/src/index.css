@@ -7,39 +7,39 @@
 
 :root,
 [data-theme="dark"] {
-  --nt-bg: #0d121a;
-  --nt-surface: #141c28;
-  --nt-surface-container: #192435;
-  --nt-surface-container-high: #223148;
+  --nt-bg: #0b1118;
+  --nt-surface: #111a26;
+  --nt-surface-container: #172233;
+  --nt-surface-container-high: #202d41;
   --nt-surface-high: var(--nt-surface-container);
-  --nt-elevated: #2a3b58;
+  --nt-elevated: #26364f;
 
-  --nt-text-primary: #e6edf6;
-  --nt-text-secondary: #9caac1;
-  --nt-text-muted: #72819a;
+  --nt-text-primary: #edf4fb;
+  --nt-text-secondary: #b7c4d6;
+  --nt-text-muted: #8fa0b5;
   --nt-on-bg: var(--nt-text-primary);
   --nt-on-bg-secondary: var(--nt-text-secondary);
   --nt-on-bg-muted: var(--nt-text-muted);
 
-  --nt-outline: #2a3a50;
-  --nt-outline-strong: #405572;
+  --nt-outline: #2f4057;
+  --nt-outline-strong: #4c617d;
   --nt-outline-subtle: var(--nt-outline);
 
-  --nt-primary: #4fd6a8;
-  --nt-area-secondary: #5a88ff;
-  --nt-area-tertiary: #cf88ff;
+  --nt-primary: #4fd0a3;
+  --nt-area-secondary: #6f9bff;
+  --nt-area-tertiary: #ca8dff;
   --nt-secondary: var(--nt-area-secondary);
   --nt-tertiary: var(--nt-area-tertiary);
 
-  --nt-status-ok: #58d79d;
-  --nt-status-warning: #f0b65f;
-  --nt-status-critical: #ff7688;
-  --nt-status-unknown: #7f8ca3;
-  --nt-status-up: var(--nt-status-ok);
-  --nt-status-down: #ff4f64;
+  --nt-status-ok: #5bd69f;
+  --nt-status-warning: #e8b45f;
+  --nt-status-critical: #ff7d8d;
+  --nt-status-unknown: #9aa6b8;
+  --nt-status-up: #5bd69f;
+  --nt-status-down: #ff5b68;
   --nt-status-probing: var(--nt-status-warning);
-  --nt-warning: var(--nt-status-warning);
-  --nt-critical: var(--nt-status-critical);
+  --nt-warning: #e8b45f;
+  --nt-critical: #ff7d8d;
   --nt-node-critical-border: rgba(255, 118, 136, 0.78);
   --nt-node-critical-badge-border: rgba(255, 118, 136, 0.34);
   --nt-node-critical-badge-bg: rgba(255, 118, 136, 0.12);
@@ -53,29 +53,29 @@
   --nt-node-down-ring: rgba(255, 79, 100, 0.1);
   --nt-node-down-glow: rgba(255, 79, 100, 0.24);
 
-  --nt-edge-default: #64758d;
-  --nt-edge-muted: #4e5f79;
-  --nt-edge-active: #89cbff;
+  --nt-edge-default: #7f91a8;
+  --nt-edge-muted: #52657f;
+  --nt-edge-active: #8fcfff;
   --nt-edge-warning: var(--nt-status-warning);
   --nt-edge-critical: var(--nt-status-critical);
-  --nt-node-selected: #8bd5ff;
-  --nt-focus-ring: rgba(139, 213, 255, 0.34);
+  --nt-node-selected: #8fcfff;
+  --nt-focus-ring: rgba(143, 207, 255, 0.36);
 
-  --nt-glass-bg: rgba(20, 28, 40, 0.84);
-  --nt-glass-border: rgba(156, 170, 193, 0.14);
-  --nt-glass-backdrop: blur(18px);
-  --nt-minimap-mask: rgba(13, 18, 26, 0.62);
-  --nt-selection-fill: rgba(137, 203, 255, 0.12);
-  --nt-selection-stroke: rgba(137, 203, 255, 0.48);
+  --nt-glass-bg: rgba(17, 26, 38, 0.92);
+  --nt-glass-border: rgba(183, 196, 214, 0.18);
+  --nt-glass-backdrop: blur(14px);
+  --nt-minimap-mask: rgba(11, 17, 24, 0.7);
+  --nt-selection-fill: rgba(143, 207, 255, 0.14);
+  --nt-selection-stroke: rgba(143, 207, 255, 0.52);
   --nt-canvas-backdrop:
-    radial-gradient(circle at top, rgba(90, 136, 255, 0.14), transparent 34%),
-    linear-gradient(180deg, #101726 0%, #0d121a 58%, #0b1118 100%);
+    radial-gradient(circle at top, rgba(78, 105, 150, 0.16), transparent 32%),
+    linear-gradient(180deg, #0f1724 0%, #0b1118 62%, #080d13 100%);
 
-  --nt-shadow-panel: 0 28px 56px rgba(1, 7, 18, 0.42);
-  --nt-shadow-floating: 0 18px 42px rgba(1, 7, 18, 0.34);
-  --nt-shadow-pill: 0 16px 34px rgba(1, 7, 18, 0.28);
-  --nt-shadow-canvas: 0 30px 80px rgba(0, 0, 0, 0.3);
-  --nt-node-shadow: 0 18px 32px rgba(2, 7, 16, 0.26);
+  --nt-shadow-panel: 0 28px 56px rgba(1, 7, 18, 0.38);
+  --nt-shadow-floating: 0 18px 42px rgba(1, 7, 18, 0.3);
+  --nt-shadow-pill: 0 14px 30px rgba(1, 7, 18, 0.26);
+  --nt-shadow-canvas: 0 28px 72px rgba(0, 0, 0, 0.26);
+  --nt-node-shadow: 0 16px 28px rgba(2, 7, 16, 0.24);
 
   --nt-glow-shadow-opacity: 0.32;
   --nt-glow-bloom-opacity: 0.1;
@@ -88,39 +88,39 @@
 }
 
 [data-theme="light"] {
-  --nt-bg: #e5ebf2;
-  --nt-surface: #f4f7fb;
-  --nt-surface-container: #edf2f8;
+  --nt-bg: #e7edf4;
+  --nt-surface: #f8fafc;
+  --nt-surface-container: #eef3f8;
   --nt-surface-container-high: #ffffff;
   --nt-surface-high: var(--nt-surface-container);
   --nt-elevated: #ffffff;
 
-  --nt-text-primary: #172235;
-  --nt-text-secondary: #455469;
-  --nt-text-muted: #6d7b8f;
+  --nt-text-primary: #111827;
+  --nt-text-secondary: #334155;
+  --nt-text-muted: #59667a;
   --nt-on-bg: var(--nt-text-primary);
   --nt-on-bg-secondary: var(--nt-text-secondary);
   --nt-on-bg-muted: var(--nt-text-muted);
 
-  --nt-outline: #c3cfdf;
-  --nt-outline-strong: #9aaac0;
+  --nt-outline: #b7c3d3;
+  --nt-outline-strong: #7d8da3;
   --nt-outline-subtle: var(--nt-outline);
 
-  --nt-primary: #0f8e69;
-  --nt-area-secondary: #2168d8;
-  --nt-area-tertiary: #893cb6;
+  --nt-primary: #08775a;
+  --nt-area-secondary: #1d5fbf;
+  --nt-area-tertiary: #7e2fa8;
   --nt-secondary: var(--nt-area-secondary);
   --nt-tertiary: var(--nt-area-tertiary);
 
-  --nt-status-ok: #177e5d;
-  --nt-status-warning: #a56e18;
-  --nt-status-critical: #b84252;
-  --nt-status-unknown: #677487;
-  --nt-status-up: var(--nt-status-ok);
-  --nt-status-down: #c13f32;
+  --nt-status-ok: #0f6f4f;
+  --nt-status-warning: #84540a;
+  --nt-status-critical: #a43645;
+  --nt-status-unknown: #536176;
+  --nt-status-up: #0f6f4f;
+  --nt-status-down: #b42318;
   --nt-status-probing: var(--nt-status-warning);
-  --nt-warning: var(--nt-status-warning);
-  --nt-critical: var(--nt-status-critical);
+  --nt-warning: #84540a;
+  --nt-critical: #a43645;
   --nt-node-critical-border: rgba(184, 66, 82, 0.74);
   --nt-node-critical-badge-border: rgba(184, 66, 82, 0.32);
   --nt-node-critical-badge-bg: rgba(184, 66, 82, 0.1);
@@ -134,29 +134,29 @@
   --nt-node-down-ring: rgba(193, 63, 50, 0.08);
   --nt-node-down-glow: rgba(193, 63, 50, 0.14);
 
-  --nt-edge-default: #7d8ea6;
-  --nt-edge-muted: #b8c4d2;
-  --nt-edge-active: #255fd2;
+  --nt-edge-default: #52677f;
+  --nt-edge-muted: #8ea0b4;
+  --nt-edge-active: #1f5ec9;
   --nt-edge-warning: var(--nt-status-warning);
   --nt-edge-critical: var(--nt-status-critical);
-  --nt-node-selected: #2f7ce7;
-  --nt-focus-ring: rgba(47, 124, 231, 0.28);
+  --nt-node-selected: #1f5ec9;
+  --nt-focus-ring: rgba(31, 94, 201, 0.32);
 
-  --nt-glass-bg: rgba(255, 255, 255, 0.74);
-  --nt-glass-border: rgba(23, 34, 53, 0.08);
-  --nt-glass-backdrop: blur(14px);
-  --nt-minimap-mask: rgba(229, 235, 242, 0.72);
-  --nt-selection-fill: rgba(47, 124, 231, 0.1);
-  --nt-selection-stroke: rgba(47, 124, 231, 0.38);
+  --nt-glass-bg: rgba(248, 250, 252, 0.94);
+  --nt-glass-border: rgba(15, 23, 42, 0.16);
+  --nt-glass-backdrop: blur(10px);
+  --nt-minimap-mask: rgba(231, 237, 244, 0.78);
+  --nt-selection-fill: rgba(31, 94, 201, 0.12);
+  --nt-selection-stroke: rgba(31, 94, 201, 0.44);
   --nt-canvas-backdrop:
-    radial-gradient(circle at top, rgba(104, 136, 185, 0.18), transparent 34%),
-    linear-gradient(180deg, #eef3f8 0%, #e5ebf2 62%, #dfe6ee 100%);
+    radial-gradient(circle at top, rgba(96, 124, 166, 0.14), transparent 30%),
+    linear-gradient(180deg, #f3f6fa 0%, #e7edf4 64%, #dde6f0 100%);
 
-  --nt-shadow-panel: 0 22px 50px rgba(36, 56, 87, 0.14);
-  --nt-shadow-floating: 0 14px 28px rgba(36, 56, 87, 0.12);
-  --nt-shadow-pill: 0 12px 24px rgba(36, 56, 87, 0.1);
-  --nt-shadow-canvas: 0 24px 56px rgba(36, 56, 87, 0.1);
-  --nt-node-shadow: 0 12px 26px rgba(36, 56, 87, 0.08);
+  --nt-shadow-panel: 0 22px 46px rgba(30, 45, 70, 0.14);
+  --nt-shadow-floating: 0 14px 28px rgba(30, 45, 70, 0.12);
+  --nt-shadow-pill: 0 10px 20px rgba(30, 45, 70, 0.1);
+  --nt-shadow-canvas: 0 22px 52px rgba(30, 45, 70, 0.1);
+  --nt-node-shadow: 0 12px 24px rgba(30, 45, 70, 0.1);
 
   --nt-glow-shadow-opacity: 0.16;
   --nt-glow-bloom-opacity: 0.04;
@@ -225,7 +225,7 @@
 .react-flow {
   --xy-background-pattern-dots-color-default: var(--nt-edge-muted);
   --xy-edge-stroke-default: var(--nt-edge-default);
-  --xy-edge-stroke-width-default: 2;
+  --xy-edge-stroke-width-default: 4;
   --xy-node-background-color-default: var(--nt-surface);
   --xy-node-border-default: 1px solid var(--nt-outline);
   --xy-node-color-default: var(--nt-text-primary);
