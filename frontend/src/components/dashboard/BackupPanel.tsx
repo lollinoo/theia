@@ -99,7 +99,7 @@ export function BackupPanel({ device }: BackupPanelProps) {
 
       {/* Vendor backup support check */}
       {!backupSupported && (
-        <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs text-yellow-400">
+        <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
           Backups are not supported for this device's vendor.
         </div>
       )}
@@ -109,7 +109,7 @@ export function BackupPanel({ device }: BackupPanelProps) {
         <>
           <div className="rounded-lg bg-surface-high p-3">
             <div className="text-xs text-on-bg-secondary mb-1.5">Backup creates 4 files:</div>
-            <div className="text-[10px] text-on-bg-secondary/70 space-y-0.5">
+            <div className="text-[10px] text-on-bg-secondary space-y-0.5">
               <div>Export (default .rsc)</div>
               <div>Export Verbose (.rsc)</div>
               <div>Export Compact (.rsc)</div>
@@ -192,7 +192,7 @@ export function BackupPanel({ device }: BackupPanelProps) {
               <span className="text-on-bg font-mono text-[11px]">{formatSize(totalSize)}</span>
             </div>
             {latest.error_message && (
-              <div className="text-[10px] text-yellow-400 mt-1">{latest.error_message}</div>
+              <div className="text-[10px] text-warning mt-1">{latest.error_message}</div>
             )}
           </div>
         ) : (

@@ -526,7 +526,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <VendorIcon vendor={data.device.vendor} size={20} />
               </div>
 
-              <div className="mt-2.5 max-w-full truncate text-[10px] uppercase tracking-[0.22em] text-on-bg-secondary">
+              <div className="mt-2.5 max-w-full truncate text-[10px] uppercase tracking-[0.14em] text-on-bg-secondary">
                 {deviceTypeLabel(data.device, isVirtual, data.subtype)}
               </div>
               <div className="mt-1.5 w-full max-w-full text-[17px] font-semibold leading-tight tracking-tight text-on-bg">

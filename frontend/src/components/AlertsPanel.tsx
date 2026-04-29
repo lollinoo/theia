@@ -15,7 +15,7 @@ function severityBadge(severity: string) {
   }
   if (severity === 'warning') {
     return (
-      <span className="inline-flex items-center rounded-full bg-yellow-400/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-yellow-400">
+      <span className="inline-flex items-center rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning">
         Warning
       </span>
     );
@@ -64,7 +64,7 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
             Active ({activeAlertCount})
           </p>
           {hiddenActiveAlerts > 0 && (
-            <p className="text-[11px] text-on-bg-secondary/70">
+            <p className="text-[11px] text-on-bg-secondary">
               Showing {firingAlerts.length} alert row{firingAlerts.length === 1 ? '' : 's'} while
               normalized runtime reports {activeAlertCount} active alerts.
             </p>
@@ -80,7 +80,7 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
                 {severityBadge(alert.severity)}
               </div>
               <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
-              <p className="text-[11px] text-on-bg-secondary/70">{alert.deviceLabel}</p>
+              <p className="text-[11px] text-on-bg-secondary">{alert.deviceLabel}</p>
             </div>
           ))}
         </div>
@@ -88,7 +88,7 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
         <div className="flex flex-col items-center justify-center py-8 text-center">
           <MaterialIcon name="check_circle" className="text-status-up/50 mb-2" size={32} />
           <p className="text-sm text-on-bg-secondary">No active alerts</p>
-          <p className="text-xs text-on-bg-secondary/60 mt-0.5">All systems operational</p>
+          <p className="text-xs text-on-bg-secondary mt-0.5">All systems operational</p>
         </div>
       )}
 
@@ -109,7 +109,7 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
                 {severityBadge(alert.severity)}
               </div>
               <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
-              <p className="text-[11px] text-on-bg-secondary/70">{alert.deviceLabel}</p>
+              <p className="text-[11px] text-on-bg-secondary">{alert.deviceLabel}</p>
             </div>
           ))}
         </div>

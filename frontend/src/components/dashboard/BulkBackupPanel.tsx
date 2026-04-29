@@ -244,7 +244,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                 key={e.deviceId}
                 className={`flex items-center justify-between rounded-md border px-3 py-1.5 ${
                   e.phase === 'skipped'
-                    ? 'border-yellow-500/20 bg-yellow-500/5'
+                    ? 'border-warning/30 bg-warning/10'
                     : e.phase === 'failed'
                       ? 'border-status-down/20 bg-status-down/5'
                       : e.phase === 'success'
@@ -255,7 +255,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                 <span className="text-[10px] text-on-bg truncate mr-2">{e.deviceName}</span>
                 <div className="flex items-center gap-2 shrink-0">
                   {e.reason && e.phase === 'skipped' && (
-                    <span className="text-[9px] text-yellow-400 truncate max-w-[140px]">
+                    <span className="text-[9px] text-warning truncate max-w-[140px]">
                       {e.reason}
                     </span>
                   )}
@@ -271,7 +271,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                         : e.phase === 'failed'
                           ? 'text-status-down'
                           : e.phase === 'skipped'
-                            ? 'text-yellow-400'
+                            ? 'text-warning'
                             : e.phase === 'checking'
                               ? 'text-blue-400 animate-pulse'
                               : e.phase === 'running'

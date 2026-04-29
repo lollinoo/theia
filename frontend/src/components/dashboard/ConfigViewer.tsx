@@ -144,10 +144,10 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
 
       {/* Partial success warning */}
       {job.status === 'success' && job.error_message?.startsWith('partial:') && (
-        <div className="rounded-md border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-[10px] text-yellow-400">
+        <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[10px] text-warning">
           <div>Some backup types failed to export. Completed files are shown below.</div>
           {job.error_message.replace('partial: ', '').trim() && (
-            <div className="mt-1 text-yellow-400/70">
+            <div className="mt-1 text-warning">
               {job.error_message.replace('partial: ', '')}
             </div>
           )}
@@ -191,7 +191,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
       {activeTab === 'binary' ? (
         <div className="rounded-lg bg-surface-high p-4 text-center">
           <div className="text-xs text-on-bg-secondary mb-2">Binary backup file</div>
-          <div className="text-[10px] text-on-bg-secondary/70 font-mono mb-3">
+          <div className="text-[10px] text-on-bg-secondary font-mono mb-3">
             {activeFile?.file_name}
           </div>
           {activeFile && (
@@ -212,7 +212,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
             <code>
               {contentLines.map(({ key, line, number }) => (
                 <div key={key} className="flex hover:bg-elevated/30">
-                  <span className="select-none text-on-bg-secondary/50 text-right pr-3 pl-2 min-w-[3rem]">
+                  <span className="select-none text-on-bg-secondary text-right pr-3 pl-2 min-w-[3rem]">
                     {number}
                   </span>
                   <span className="pl-3 pr-3 text-on-bg whitespace-pre">{line}</span>

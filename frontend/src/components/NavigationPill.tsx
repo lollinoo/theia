@@ -40,7 +40,7 @@ function NavigationPill({
       {/* BRANDING */}
       <span className="px-2 text-sm font-semibold tracking-[0.14em] text-on-bg">THEIA</span>
       {version && version !== 'unknown' && (
-        <span className="text-[11px] text-on-bg-secondary/50">{`v${version}`}</span>
+        <span className="text-[11px] font-medium text-on-bg-secondary">{`v${version}`}</span>
       )}
 
       <div className="h-5 w-px bg-outline/40 mx-1" />
