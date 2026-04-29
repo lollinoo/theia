@@ -88,22 +88,22 @@
 }
 
 [data-theme="light"] {
-  --nt-bg: #e7edf4;
-  --nt-surface: #f8fafc;
-  --nt-surface-container: #eef3f8;
-  --nt-surface-container-high: #ffffff;
+  --nt-bg: #dde2e8;
+  --nt-surface: #f0f2f5;
+  --nt-surface-container: #e8eaee;
+  --nt-surface-container-high: #f7f8fa;
   --nt-surface-high: var(--nt-surface-container);
-  --nt-elevated: #ffffff;
+  --nt-elevated: #fbfcfd;
 
-  --nt-text-primary: #111827;
-  --nt-text-secondary: #334155;
-  --nt-text-muted: #59667a;
+  --nt-text-primary: #1a2332;
+  --nt-text-secondary: #38506a;
+  --nt-text-muted: #4d6781;
   --nt-on-bg: var(--nt-text-primary);
   --nt-on-bg-secondary: var(--nt-text-secondary);
   --nt-on-bg-muted: var(--nt-text-muted);
 
-  --nt-outline: #b7c3d3;
-  --nt-outline-strong: #7d8da3;
+  --nt-outline: #bcc8d6;
+  --nt-outline-strong: #8fa3b8;
   --nt-outline-subtle: var(--nt-outline);
 
   --nt-primary: #08775a;
@@ -134,29 +134,32 @@
   --nt-node-down-ring: rgba(193, 63, 50, 0.08);
   --nt-node-down-glow: rgba(193, 63, 50, 0.14);
 
-  --nt-edge-default: #52677f;
-  --nt-edge-muted: #8ea0b4;
+  --nt-edge-default: #6b8299;
+  --nt-edge-muted: #a0b4c5;
   --nt-edge-active: #1f5ec9;
   --nt-edge-warning: var(--nt-status-warning);
   --nt-edge-critical: var(--nt-status-critical);
   --nt-node-selected: #1f5ec9;
   --nt-focus-ring: rgba(31, 94, 201, 0.32);
 
-  --nt-glass-bg: rgba(248, 250, 252, 0.94);
-  --nt-glass-border: rgba(15, 23, 42, 0.16);
+  --nt-glass-bg: rgba(240, 242, 245, 0.96);
+  --nt-glass-border: rgba(20, 35, 55, 0.14);
   --nt-glass-backdrop: blur(10px);
-  --nt-minimap-mask: rgba(231, 237, 244, 0.78);
+  --nt-minimap-mask: rgba(212, 218, 226, 0.85);
   --nt-selection-fill: rgba(31, 94, 201, 0.12);
   --nt-selection-stroke: rgba(31, 94, 201, 0.44);
   --nt-canvas-backdrop:
-    radial-gradient(circle at top, rgba(96, 124, 166, 0.14), transparent 30%),
-    linear-gradient(180deg, #f3f6fa 0%, #e7edf4 64%, #dde6f0 100%);
+    radial-gradient(ellipse at 50% 0%, rgba(100, 120, 150, 0.13) 0%, transparent 55%),
+    linear-gradient(180deg, #dde2e8 0%, #d4dae2 100%);
 
-  --nt-shadow-panel: 0 22px 46px rgba(30, 45, 70, 0.14);
-  --nt-shadow-floating: 0 14px 28px rgba(30, 45, 70, 0.12);
-  --nt-shadow-pill: 0 10px 20px rgba(30, 45, 70, 0.1);
-  --nt-shadow-canvas: 0 22px 52px rgba(30, 45, 70, 0.1);
-  --nt-node-shadow: 0 12px 24px rgba(30, 45, 70, 0.1);
+  --nt-shadow-panel: 0 22px 46px rgba(20, 35, 55, 0.18);
+  --nt-shadow-floating: 0 14px 28px rgba(20, 35, 55, 0.14);
+  --nt-shadow-pill: 0 10px 20px rgba(20, 35, 55, 0.12);
+  --nt-shadow-canvas: 0 22px 52px rgba(20, 35, 55, 0.14);
+  --nt-node-shadow:
+    0 2px 4px rgba(20, 35, 55, 0.08),
+    0 8px 20px rgba(20, 35, 55, 0.12),
+    0 0 0 1px rgba(20, 35, 55, 0.06);
 
   --nt-glow-shadow-opacity: 0.16;
   --nt-glow-bloom-opacity: 0.04;

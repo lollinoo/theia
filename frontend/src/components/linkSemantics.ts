@@ -92,6 +92,7 @@ export interface LinkBadgePresentation {
   anchor: EdgeBadgeAnchor;
   items: LinkBadgeViewModel[];
   opacity: number;
+  scale: number;
   visibility: LinkBadgeVisibility;
 }
 
@@ -148,6 +149,8 @@ export const LINK_BADGE_ZOOM_THRESHOLDS = {
   medium: 0.92,
   high: 1.2,
 } as const;
+const LINK_BADGE_MIN_READABLE_ZOOM = 0.6;
+const LINK_BADGE_MAX_SCALE = 1.65;
 
 function formatSpeedBadge(speed: number): string {
   return speed > 0 ? `SPD ${formatBandwidth(speed)}` : 'SPD ?';
@@ -563,6 +566,20 @@ export function resolveLinkBadgeVisibility({
   };
 }
 
+export function resolveLinkBadgeScale(zoom: number): number {
+  const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+
+  if (safeZoom >= 1) {
+    return 1;
+  }
+
+  const scale = Math.min(
+    LINK_BADGE_MAX_SCALE,
+    1 / Math.max(safeZoom, LINK_BADGE_MIN_READABLE_ZOOM),
+  );
+  return Number(scale.toFixed(2));
+}
+
 function buildStackedLinkBadgeItems(
   data: LinkEdgeData | undefined,
   visibility: LinkBadgeVisibility,
@@ -635,6 +652,7 @@ export function resolveLinkBadgePresentation({
     }),
     items,
     opacity: isMuted ? 0.5 : isConnected ? 1 : isActive ? 0.96 : 0.9,
+    scale: resolveLinkBadgeScale(zoom),
     visibility,
   };
 }

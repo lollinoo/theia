@@ -138,10 +138,11 @@ function LinkEdgeInner({
       {badgePresentation.items.length > 0 ? (
         <EdgeLabelRenderer>
           <div
+            data-testid={`${id}-badge-stack`}
             className="pointer-events-none absolute top-0 left-0 z-10 flex flex-col items-center gap-1.5 transition-[opacity,transform] duration-150"
             style={{
               position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${badgePresentation.anchor.x}px, ${badgePresentation.anchor.y}px)`,
+              transform: `translate(-50%, -50%) translate(${badgePresentation.anchor.x}px, ${badgePresentation.anchor.y}px) scale(${badgePresentation.scale})`,
               opacity: badgePresentation.opacity,
             }}
           >
@@ -150,7 +151,7 @@ function LinkEdgeInner({
                 key={`${id}-${badge.key}`}
                 data-testid={`${id}-badge-${badge.key}`}
                 title={badge.title}
-                className={`inline-flex items-center gap-1.5 rounded-full border bg-surface-container-high px-2 py-1 text-[10px] font-semibold tracking-[0.08em] shadow-pill transition-[border-color,color] duration-150 ${badge.className}`}
+                className={`inline-flex min-h-7 items-center gap-2 whitespace-nowrap rounded-full border bg-surface-container-high px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none tracking-[0.06em] shadow-pill transition-[border-color,color] duration-150 ${badge.className}`}
                 style={badge.style}
               >
                 <span>{badge.text}</span>
@@ -158,7 +159,7 @@ function LinkEdgeInner({
                   <span
                     data-testid={`${id}-badge-${badge.key}-warning`}
                     title={badge.warningIndicator.title}
-                    className={`inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full border text-[9px] font-bold leading-none ${badge.warningIndicator.className}`}
+                    className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full border text-[10px] font-bold leading-none ${badge.warningIndicator.className}`}
                   >
                     {badge.warningIndicator.text}
                   </span>

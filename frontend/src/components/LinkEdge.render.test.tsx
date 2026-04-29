@@ -1,9 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import type { CSSProperties, ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
 
-const mockZoom = 1.3;
+let mockZoom = 1.3;
 
 vi.mock('@xyflow/react', async () => {
   const ReactModule = await import('react');
@@ -21,6 +21,10 @@ vi.mock('@xyflow/react', async () => {
     useStore: (selector: (state: { transform: [number, number, number] }) => unknown) =>
       selector({ transform: [0, 0, mockZoom] }),
   };
+});
+
+afterEach(() => {
+  mockZoom = 1.3;
 });
 
 function renderEdge(
@@ -122,5 +126,25 @@ describe('LinkEdge render', () => {
     expect(screen.getByText('1 Gbps')).toBeInTheDocument();
     expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
     expect(screen.getByTestId('edge-thick')).toHaveStyle({ strokeWidth: '4.75' });
+  });
+
+  it('renders larger zoom-resilient telemetry badge pills at low zoom', () => {
+    mockZoom = 0.6;
+
+    renderEdge({ id: 'edge-readable' }, { throughputLabel: 'TX: 500M / RX: 300M' });
+
+    expect(screen.getByTestId('edge-readable-badge-stack').style.transform).toContain(
+      'scale(1.65)',
+    );
+
+    for (const badgeKey of ['rate', 'throughput']) {
+      expect(screen.getByTestId(`edge-readable-badge-${badgeKey}`)).toHaveClass(
+        'min-h-7',
+        'px-2.5',
+        'py-1.5',
+        'text-[11px]',
+        'leading-none',
+      );
+    }
   });
 });

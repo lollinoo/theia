@@ -34,6 +34,19 @@ function token(block: string, name: string): string {
   return token(block, alias[1]);
 }
 
+function declaration(block: string, name: string): string {
+  const match = block.match(new RegExp(`${name}:\\s*([^;]+);`));
+  if (!match) {
+    throw new Error(`Missing declaration ${name}`);
+  }
+
+  return match[1].trim();
+}
+
+function compact(value: string): string {
+  return value.replace(/\s+/g, ' ');
+}
+
 function channelToLinear(value: number): number {
   const normalized = value / 255;
   if (normalized <= 0.03928) {
@@ -73,6 +86,68 @@ describe('enterprise NOC theme contrast contract', () => {
     expect(token(block, '--recursive-alias')).toBe('#123456');
   });
 
+  it('uses a warm greige light surface scale with real canvas depth', () => {
+    const lightSurfaceTokens = {
+      background: token(lightBlock, '--nt-bg'),
+      surface: token(lightBlock, '--nt-surface'),
+      surfaceContainer: token(lightBlock, '--nt-surface-container'),
+      surfaceContainerHigh: token(lightBlock, '--nt-surface-container-high'),
+      elevated: token(lightBlock, '--nt-elevated'),
+    };
+
+    expect(lightSurfaceTokens).toEqual({
+      background: '#dde2e8',
+      surface: '#f0f2f5',
+      surfaceContainer: '#e8eaee',
+      surfaceContainerHigh: '#f7f8fa',
+      elevated: '#fbfcfd',
+    });
+
+    for (const [label, value] of Object.entries(lightSurfaceTokens)) {
+      expect(value, `${label} should not be pure white`).not.toBe('#ffffff');
+    }
+
+    const backgroundLuminance = luminance(lightSurfaceTokens.background);
+    const surfaceLuminance = luminance(lightSurfaceTokens.surface);
+    const containerHighLuminance = luminance(lightSurfaceTokens.surfaceContainerHigh);
+    const elevatedLuminance = luminance(lightSurfaceTokens.elevated);
+
+    expect(backgroundLuminance, 'light canvas should move away from near-white glare').toBeLessThanOrEqual(
+      0.77,
+    );
+    expect(surfaceLuminance - backgroundLuminance, 'nodes need clear depth over canvas').toBeGreaterThanOrEqual(
+      0.12,
+    );
+    expect(containerHighLuminance - backgroundLuminance, 'raised layers need visible separation from canvas').toBeGreaterThanOrEqual(
+      0.18,
+    );
+    expect(elevatedLuminance - containerHighLuminance, 'raised surfaces should stay subtle').toBeLessThanOrEqual(
+      0.04,
+    );
+  });
+
+  it('keeps light-mode chrome layered without washing out controls', () => {
+    expect(token(lightBlock, '--nt-outline')).toBe('#bcc8d6');
+    expect(token(lightBlock, '--nt-outline-strong')).toBe('#8fa3b8');
+    expect(token(lightBlock, '--nt-edge-default')).toBe('#6b8299');
+    expect(token(lightBlock, '--nt-edge-muted')).toBe('#a0b4c5');
+    expect(declaration(lightBlock, '--nt-canvas-backdrop')).toContain(
+      'radial-gradient(ellipse at 50% 0%, rgba(100, 120, 150, 0.13) 0%, transparent 55%)',
+    );
+    expect(declaration(lightBlock, '--nt-canvas-backdrop')).toContain(
+      'linear-gradient(180deg, #dde2e8 0%, #d4dae2 100%)',
+    );
+    expect(declaration(lightBlock, '--nt-shadow-panel')).toBe(
+      '0 22px 46px rgba(20, 35, 55, 0.18)',
+    );
+    expect(declaration(lightBlock, '--nt-shadow-floating')).toBe(
+      '0 14px 28px rgba(20, 35, 55, 0.14)',
+    );
+    expect(compact(declaration(lightBlock, '--nt-node-shadow'))).toBe(
+      '0 2px 4px rgba(20, 35, 55, 0.08), 0 8px 20px rgba(20, 35, 55, 0.12), 0 0 0 1px rgba(20, 35, 55, 0.06)',
+    );
+  });
+
   it('keeps light-mode operational text readable on all primary surfaces', () => {
     const backgrounds = [
       token(lightBlock, '--nt-bg'),
@@ -98,6 +173,11 @@ describe('enterprise NOC theme contrast contract', () => {
         ).toBeGreaterThanOrEqual(minimum);
       }
     }
+
+    expect(token(lightBlock, '--nt-text-primary')).toBe('#1a2332');
+    expect(token(lightBlock, '--nt-text-secondary')).toBe('#38506a');
+    expect(token(lightBlock, '--nt-text-muted')).toBe('#4d6781');
+    expect(token(lightBlock, '--nt-text-primary')).not.toBe('#000000');
   });
 
   it('keeps dark-mode secondary and muted text readable on operational surfaces', () => {
