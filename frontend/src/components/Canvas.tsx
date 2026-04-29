@@ -729,7 +729,7 @@ export default function Canvas({
         panOnDrag
         zoomOnScroll
         zoomOnDoubleClick={false}
-        connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 2 }}
+        connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 4 }}
         proOptions={{ hideAttribution: false }}
         className="bg-transparent"
       >

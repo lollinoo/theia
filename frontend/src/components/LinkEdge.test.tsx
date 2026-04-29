@@ -100,6 +100,13 @@ describe('LinkEdge', () => {
     expect(content).not.toContain('bg-bg/95');
   });
 
+  it('keeps telemetry label pills on a solid tokenized surface', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    expect(content).toContain('bg-surface-container-high');
+    expect(content).toContain('shadow-pill');
+    expect(content).toContain('data-testid={`${id}-badge-${badge.key}`}');
+  });
+
   it('animates label pills with opacity and transform transitions', () => {
     const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
     expect(content).toContain('transition-[opacity,transform]');

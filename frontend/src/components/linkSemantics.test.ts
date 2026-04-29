@@ -387,4 +387,46 @@ describe('linkSemantics', () => {
 
     expect(presentation.items.map((item) => item.key)).toEqual(['rate', 'throughput']);
   });
+
+  it('uses enterprise NOC stroke widths two pixels thicker than the previous baseline', () => {
+    expect(resolveEdgeTone(undefined)).toMatchObject({
+      semanticState: 'neutral',
+      width: 3.8,
+    });
+
+    expect(
+      resolveEdgeTone({
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        sourceIfStatus: 'up',
+        targetIfStatus: 'up',
+      }),
+    ).toMatchObject({
+      semanticState: 'up',
+      width: 4.05,
+    });
+
+    expect(
+      resolveEdgeTone({
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+        sourceIfStatus: 'down',
+        targetIfStatus: 'up',
+      }),
+    ).toMatchObject({
+      semanticState: 'warning',
+      width: 4.35,
+    });
+
+    expect(
+      resolveEdgeTone({
+        alertStatus: 'down',
+        sourceDeviceStatus: 'up',
+        targetDeviceStatus: 'up',
+      }),
+    ).toMatchObject({
+      semanticState: 'critical',
+      width: 4.7,
+    });
+  });
 });

@@ -112,4 +112,15 @@ describe('LinkEdge render', () => {
 
     expect(screen.getByTestId('edge-4-badge-rate')).toHaveClass('border-status-up/35');
   });
+
+  it('renders thicker active strokes while keeping TX/RX telemetry visible on the edge', () => {
+    renderEdge(
+      { id: 'edge-thick', selected: true },
+      { throughputLabel: 'TX: 500M / RX: 300M' },
+    );
+
+    expect(screen.getByText('1 Gbps')).toBeInTheDocument();
+    expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
+    expect(screen.getByTestId('edge-thick')).toHaveStyle({ strokeWidth: '4.75' });
+  });
 });
