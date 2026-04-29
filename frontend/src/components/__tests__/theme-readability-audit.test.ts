@@ -15,29 +15,45 @@ const OPERATIONAL_FILES = [
   'components/dashboard/BulkBackupPanel.tsx',
 ];
 
+const CLASS_START = "(?:^|[\\s\"'`])";
+const CLASS_END = "(?=$|[\\s\"'`>])";
+const VARIANT_PREFIX = String.raw`(?:[a-z0-9_-]+:)*`;
+
 const DISALLOWED_PATTERNS: { pattern: RegExp; reason: string }[] = [
   {
-    pattern: /(?:^|[\s"'`])text-on-bg-secondary\/(?:[1-9]|[1-9][0-9])(?=$|[\s"'`>])/,
+    pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}text-on-bg-secondary/(?:[1-9]|[1-9][0-9])${CLASS_END}`,
+    ),
     reason: 'semi-transparent secondary text is too weak in light mode',
   },
   {
-    pattern: /(?:^|[\s"'`])text-on-bg-muted\/(?:[1-9]|[1-9][0-9])(?=$|[\s"'`>])/,
+    pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}text-on-bg-muted/(?:[1-9]|[1-9][0-9])${CLASS_END}`,
+    ),
     reason: 'semi-transparent muted text is too weak in light mode',
   },
   {
-    pattern: /(?:^|[\s"'`])text-yellow-(?:50|100|200|300|400|500|600|700|800|900|950)(?:\/(?:[1-9]|[1-9][0-9]|100))?(?=$|[\s"'`>])/,
+    pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}text-yellow-(?:50|100|200|300|400|500|600|700|800|900|950)(?:/(?:[1-9]|[1-9][0-9]|100))?${CLASS_END}`,
+    ),
     reason: 'fixed yellow palette bypasses theme tokens',
   },
   {
-    pattern: /(?:^|[\s"'`])bg-yellow-(?:50|100|200|300|400|500|600|700|800|900|950)(?:\/(?:[1-9]|[1-9][0-9]|100))?(?=$|[\s"'`>])/,
+    pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}bg-yellow-(?:50|100|200|300|400|500|600|700|800|900|950)(?:/(?:[1-9]|[1-9][0-9]|100))?${CLASS_END}`,
+    ),
     reason: 'fixed yellow background bypasses theme tokens',
   },
   {
-    pattern: /(?:^|[\s"'`])border-yellow-(?:50|100|200|300|400|500|600|700|800|900|950)(?:\/(?:[1-9]|[1-9][0-9]|100))?(?=$|[\s"'`>])/,
+    pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}border-yellow-(?:50|100|200|300|400|500|600|700|800|900|950)(?:/(?:[1-9]|[1-9][0-9]|100))?${CLASS_END}`,
+    ),
     reason: 'fixed yellow border bypasses theme tokens',
   },
   {
-    pattern: /(?:^|[\s"'`])tracking-\[(?:0\.[2-9]\d*|[1-9]\d*(?:\.\d+)?)em\](?=$|[\s"'`>])/,
+    pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}tracking-\\[(?:0\\.[2-9]\\d*|[1-9]\\d*(?:\\.\\d+)?)em\\]${CLASS_END}`,
+    ),
     reason: 'wide tracking hurts compact operational labels',
   },
 ];
@@ -52,6 +68,9 @@ describe('enterprise NOC readability audit', () => {
       'text-on-bg-secondary/10',
       'text-on-bg-secondary/40',
       'text-on-bg-secondary/90',
+      'hover:text-on-bg-secondary/50',
+      'dark:hover:text-on-bg-secondary/50',
+      'disabled:text-on-bg-muted/40',
       'text-on-bg-muted/20',
       'text-on-bg-muted/80',
     ]) {
@@ -78,8 +97,11 @@ describe('enterprise NOC readability audit', () => {
       'text-yellow-600/80',
       'bg-yellow-300',
       'bg-yellow-500/10',
+      'hover:bg-yellow-500/10',
+      'dark:hover:bg-yellow-500/10',
       'border-yellow-600',
       'border-yellow-700/30',
+      'focus:border-yellow-600',
     ]) {
       expect(yellowPatterns.some((pattern) => pattern.test(className))).toBe(true);
     }
@@ -94,7 +116,13 @@ describe('enterprise NOC readability audit', () => {
       rule.reason.includes('wide tracking'),
     ).map((rule) => rule.pattern);
 
-    for (const className of ['tracking-[0.20em]', 'tracking-[0.28em]', 'tracking-[0.30em]']) {
+    for (const className of [
+      'tracking-[0.20em]',
+      'tracking-[0.28em]',
+      'tracking-[0.30em]',
+      'sm:tracking-[0.30em]',
+      'dark:hover:tracking-[0.30em]',
+    ]) {
       expect(trackingPatterns.some((pattern) => pattern.test(className))).toBe(true);
     }
 
