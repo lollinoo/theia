@@ -147,9 +147,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
         <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[10px] text-warning">
           <div>Some backup types failed to export. Completed files are shown below.</div>
           {job.error_message.replace('partial: ', '').trim() && (
-            <div className="mt-1 text-warning">
-              {job.error_message.replace('partial: ', '')}
-            </div>
+            <div className="mt-1 text-warning">{job.error_message.replace('partial: ', '')}</div>
           )}
         </div>
       )}

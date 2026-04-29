@@ -15,8 +15,8 @@ const OPERATIONAL_FILES = [
   'components/dashboard/BulkBackupPanel.tsx',
 ];
 
-const CLASS_START = "(?:^|[\\s\"'`])";
-const CLASS_END = "(?=$|[\\s\"'`>])";
+const CLASS_START = '(?:^|[\\s"\'`])';
+const CLASS_END = '(?=$|[\\s"\'`>])';
 const VARIANT_PREFIX = String.raw`(?:[a-z0-9_-]+:)*`;
 
 const DISALLOWED_PATTERNS: { pattern: RegExp; reason: string }[] = [
