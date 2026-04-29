@@ -135,7 +135,7 @@ export function BackupPanel({ device }: BackupPanelProps) {
             triggerResult.status === 'failed'
               ? 'border-status-down/20 bg-status-down/5'
               : triggerResult.status === 'success'
-                ? 'border-green-500/20 bg-green-500/5'
+                ? 'border-status-up/20 bg-status-up/5'
                 : 'border-primary/20 bg-primary/5'
           }`}
         >
@@ -144,7 +144,7 @@ export function BackupPanel({ device }: BackupPanelProps) {
               triggerResult.status === 'failed'
                 ? 'text-status-down'
                 : triggerResult.status === 'success'
-                  ? 'text-green-400'
+                  ? 'text-status-up'
                   : 'text-primary'
             }`}
           >

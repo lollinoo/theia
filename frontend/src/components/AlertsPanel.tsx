@@ -47,11 +47,11 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
       {/* Prometheus diagnostics */}
       {prometheusDiagnostics && (
         <div className="space-y-2">
-          <div className="flex items-start gap-2.5 rounded-lg border border-red-500/25 bg-red-500/8 p-3">
-            <span className="mt-0.5 h-2 w-2 flex-none rounded-full bg-red-400 animate-pulse motion-reduce:animate-none" />
+          <div className="flex items-start gap-2.5 rounded-lg border border-status-down/25 bg-status-down/8 p-3">
+            <span className="mt-0.5 h-2 w-2 flex-none rounded-full bg-status-down animate-pulse motion-reduce:animate-none" />
             <div className="min-w-0">
-              <p className="text-sm font-medium text-red-300">{prometheusDiagnostics.title}</p>
-              <p className="mt-0.5 text-xs text-red-300/70">{prometheusDiagnostics.detail}</p>
+              <p className="text-sm font-medium text-status-down">{prometheusDiagnostics.title}</p>
+              <p className="mt-0.5 text-xs text-status-down">{prometheusDiagnostics.detail}</p>
             </div>
           </div>
         </div>

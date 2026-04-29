@@ -64,6 +64,24 @@ const DISALLOWED_PATTERNS: { pattern: RegExp; reason: string }[] = [
   },
   {
     pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}text-(?:red|green|blue)-(?:50|100|200|300|400|500|600|700|800|900|950)(?:/(?:[1-9]|[1-9][0-9]|100))?${CLASS_END}`,
+    ),
+    reason: 'fixed red/green/blue text palette bypasses theme tokens',
+  },
+  {
+    pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}bg-(?:red|green|blue)-(?:50|100|200|300|400|500|600|700|800|900|950)(?:/(?:[1-9]|[1-9][0-9]|100))?${CLASS_END}`,
+    ),
+    reason: 'fixed red/green/blue background palette bypasses theme tokens',
+  },
+  {
+    pattern: new RegExp(
+      `${CLASS_START}${VARIANT_PREFIX}border-(?:red|green|blue)-(?:50|100|200|300|400|500|600|700|800|900|950)(?:/(?:[1-9]|[1-9][0-9]|100))?${CLASS_END}`,
+    ),
+    reason: 'fixed red/green/blue border palette bypasses theme tokens',
+  },
+  {
+    pattern: new RegExp(
       `${CLASS_START}${VARIANT_PREFIX}tracking-\\[(?:0\\.[2-9]\\d*|[1-9]\\d*(?:\\.\\d+)?)em\\]${CLASS_END}`,
     ),
     reason: 'wide tracking hurts compact operational labels',
@@ -120,6 +138,47 @@ describe('enterprise NOC readability audit', () => {
 
     for (const className of ['text-warning', 'bg-warning/10', 'border-warning/30']) {
       expect(yellowPatterns.some((pattern) => pattern.test(className))).toBe(false);
+    }
+  });
+
+  it('flags fixed red green and blue Tailwind palette classes without blocking semantic tokens', () => {
+    const rgbPatterns = DISALLOWED_PATTERNS.filter((rule) =>
+      rule.reason.includes('fixed red/green/blue'),
+    ).map((rule) => rule.pattern);
+
+    for (const className of [
+      'text-red-300',
+      'text-red-300/70',
+      'text-green-400',
+      'text-blue-400',
+      'bg-red-500/8',
+      'bg-green-500/5',
+      'hover:bg-blue-500/10',
+      'border-red-500/25',
+      'border-green-500/20',
+      'focus:border-blue-600',
+    ]) {
+      expect(rgbPatterns.some((pattern) => pattern.test(className))).toBe(true);
+    }
+
+    for (const className of [
+      'text-status-down',
+      'text-critical',
+      'text-status-up',
+      'text-primary',
+      'text-warning',
+      'bg-status-down/5',
+      'bg-critical/10',
+      'bg-status-up/5',
+      'bg-primary/5',
+      'bg-warning/10',
+      'border-status-down/20',
+      'border-critical/25',
+      'border-status-up/20',
+      'border-primary/20',
+      'border-warning/30',
+    ]) {
+      expect(rgbPatterns.some((pattern) => pattern.test(className))).toBe(false);
     }
   });
 

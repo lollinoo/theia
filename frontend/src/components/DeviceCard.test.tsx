@@ -125,6 +125,21 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
+  it('renders physical node card body with explicit unmonitored telemetry when metrics are absent', () => {
+    renderDeviceCard({ metrics: null });
+
+    expect(screen.getByText('router-01')).toBeInTheDocument();
+    expect(screen.getByText('Up')).toBeInTheDocument();
+    expect(screen.getByText('IP 10.0.0.1')).toBeInTheDocument();
+    expect(screen.getByText('Unmonitored')).toBeInTheDocument();
+
+    expect(screen.queryByText('CPU')).toBeNull();
+    expect(screen.queryByText('MEM')).toBeNull();
+    expect(screen.queryByText('UP')).toBeNull();
+    expect(screen.queryByText('Fresh telemetry')).toBeNull();
+    expect(screen.queryByText('Polling every 30s')).toBeNull();
+  });
+
   it('uses MAC chip label for MAC addresses without adding extra card body fields', () => {
     renderDeviceCard({
       device: mockDevice({ ip: 'aa:bb:cc:dd:ee:ff' }),

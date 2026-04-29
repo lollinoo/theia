@@ -273,7 +273,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                           : e.phase === 'skipped'
                             ? 'text-warning'
                             : e.phase === 'checking'
-                              ? 'text-blue-400 animate-pulse'
+                              ? 'text-primary animate-pulse'
                               : e.phase === 'running'
                                 ? 'text-primary animate-pulse'
                                 : 'text-on-bg-secondary'

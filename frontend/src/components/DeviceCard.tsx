@@ -16,6 +16,7 @@ import {
   resolveDeviceAddressState,
   resolveDeviceMonitoringState,
   resolveDeviceNodeStatusStyles,
+  resolveDeviceOperationalStatusState,
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
@@ -210,11 +211,18 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const monitoringState = data.monitoringState ?? resolveDeviceMonitoringState(data.device);
   const isPollingDisabled =
     monitoringState === 'monitorable' && data.device.polling_enabled === false;
-  const metrics = sanitizeDeviceMetricsForDisplay(data.device, data.metrics, monitoringState);
   const isVirtual = data.isVirtual === true;
-  const headerState = resolveDeviceVisualState(data.device, metrics, monitoringState);
+  const metrics = sanitizeDeviceMetricsForDisplay(data.device, data.metrics, monitoringState);
+  const headerState =
+    metrics || isVirtual
+      ? resolveDeviceVisualState(data.device, metrics, monitoringState)
+      : resolveDeviceOperationalStatusState(data.device, monitoringState);
+  const telemetryFallback =
+    monitoringState === 'monitorable' && !isVirtual && !metrics
+      ? { tone: 'muted' as const, text: 'Unmonitored' }
+      : null;
   const freshness =
-    monitoringState === 'monitorable' && metrics ? runtimeTelemetryMeta(metrics) : null;
+    monitoringState === 'monitorable' && metrics ? runtimeTelemetryMeta(metrics) : telemetryFallback;
   const pollingEvery =
     monitoringState === 'monitorable' && metrics
       ? formatPollingEvery(
