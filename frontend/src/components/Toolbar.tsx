@@ -59,7 +59,7 @@ export function Toolbar({
         <div className="relative">
           <MaterialIcon name="notifications" />
           {alertCount > 0 && (
-            <span className="absolute -right-1.5 -top-1.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-status-down px-0.5 text-[9px] font-bold text-white">
+            <span className="absolute -right-1.5 -top-1.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-status-down px-0.5 text-[9px] font-bold text-surface-container-high">
               {alertCount > 99 ? '99+' : alertCount}
             </span>
           )}
