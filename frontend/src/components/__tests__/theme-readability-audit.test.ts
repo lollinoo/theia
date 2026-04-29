@@ -15,6 +15,18 @@ const OPERATIONAL_FILES = [
   'components/dashboard/BulkBackupPanel.tsx',
 ];
 
+const TASK7_SWEEP_FILES = [
+  'components/SidePanel.tsx',
+  'components/SettingsPanel.tsx',
+  'components/DeviceConfigPanel.tsx',
+  'components/LinkCreatePanel.tsx',
+  'components/LinkDetailsPanel.tsx',
+  'components/InterfaceStatsPanel.tsx',
+  'components/dashboard/DeviceTable.tsx',
+  'components/dashboard/DeviceRow.tsx',
+  'components/dashboard/FilterSelect.tsx',
+];
+
 const CLASS_START = '(?:^|[\\s"\'`])';
 const CLASS_END = '(?=$|[\\s"\'`>])';
 const VARIANT_PREFIX = String.raw`(?:[a-z0-9_-]+:)*`;
@@ -134,7 +146,7 @@ describe('enterprise NOC readability audit', () => {
   it('does not use pale or fixed-palette operational text in key UI files', () => {
     const violations: string[] = [];
 
-    for (const file of OPERATIONAL_FILES) {
+    for (const file of [...OPERATIONAL_FILES, ...TASK7_SWEEP_FILES]) {
       const fullPath = join(SRC_DIR, file);
       const lines = readFileSync(fullPath, 'utf-8').split('\n');
 

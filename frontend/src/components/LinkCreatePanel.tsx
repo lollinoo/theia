@@ -92,7 +92,7 @@ function SearchableDeviceSelect({
             )}
           </span>
         ) : (
-          <span className="text-on-bg-secondary/40">{placeholder}</span>
+          <span className="text-on-bg-muted">{placeholder}</span>
         )}
       </button>
       {open && (
