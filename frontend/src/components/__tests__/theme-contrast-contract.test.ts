@@ -20,11 +20,18 @@ function extractThemeBlock(marker: string): string {
 }
 
 function token(block: string, name: string): string {
-  const match = block.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6})`));
+  const match = block.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6}|var\\(--[\\w-]+\\))`));
   if (!match) {
-    throw new Error(`Missing hex token ${name}`);
+    throw new Error(`Missing token ${name}`);
   }
-  return match[1];
+
+  const value = match[1];
+  const alias = value.match(/^var\((--[\w-]+)\)$/);
+  if (!alias) {
+    return value;
+  }
+
+  return token(block, alias[1]);
 }
 
 function channelToLinear(value: number): number {
@@ -54,6 +61,16 @@ const darkBlock = extractThemeBlock(':root,\n[data-theme="dark"]');
 const lightBlock = extractThemeBlock('[data-theme="light"]');
 
 describe('enterprise NOC theme contrast contract', () => {
+  it('resolves recursive same-block token aliases', () => {
+    const block = `
+      --source: #123456;
+      --alias: var(--source);
+      --recursive-alias: var(--alias);
+    `;
+
+    expect(token(block, '--recursive-alias')).toBe('#123456');
+  });
+
   it('keeps light-mode operational text readable on all primary surfaces', () => {
     const backgrounds = [
       token(lightBlock, '--nt-bg'),
