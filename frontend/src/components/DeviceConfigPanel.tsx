@@ -667,7 +667,7 @@ export function DeviceConfigPanel({
             <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
               Topology Discovery
             </p>
-            <span className="text-xs text-on-bg-secondary/70">
+            <span className="text-xs text-on-bg-secondary">
               Effective: {formatTopologyDiscoveryMode(effectiveTopologyDiscoveryMode)}
             </span>
           </div>
@@ -737,7 +737,7 @@ export function DeviceConfigPanel({
           >
             {discoveryBusy ? 'Topology discovery running...' : 'Run Topology Discovery Now'}
           </button>
-          <p className="text-xs text-on-bg-secondary/70">
+          <p className="text-xs text-on-bg-secondary">
             {form.metricsMode === 'prometheus'
               ? 'Prometheus-only devices cannot run SNMP topology discovery until SNMP or fallback mode is enabled.'
               : form.ip.trim() === ''
@@ -809,7 +809,7 @@ export function DeviceConfigPanel({
 
         {device.sys_name && (
           <div className="bg-surface-high rounded-lg px-3 py-2">
-            <p className="text-[10px] uppercase tracking-widest text-on-bg-secondary/60 mb-0.5">
+            <p className="text-[10px] uppercase tracking-widest text-on-bg-secondary mb-0.5">
               Auto-discovered Hostname
             </p>
             <p className="text-sm font-mono text-on-bg">{device.sys_name}</p>
@@ -973,7 +973,7 @@ export function DeviceConfigPanel({
                   <option value="">— Select vendor —</option>
                   <option value="mikrotik">MikroTik</option>
                 </select>
-                <p className="text-xs text-on-bg-secondary/70">
+                <p className="text-xs text-on-bg-secondary">
                   Vendor tag determines backup commands and metric queries.
                 </p>
               </div>
@@ -1104,7 +1104,7 @@ export function DeviceConfigPanel({
               </div>
 
               {prometheusAvailable === false && (
-                <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
+                <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
                   Prometheus is not configured or unreachable. Only SNMP Direct is available.
                 </p>
               )}
@@ -1138,12 +1138,12 @@ export function DeviceConfigPanel({
                   </option>
                 </select>
                 {form.metricsMode === 'prometheus' && (
-                  <p className="text-xs text-on-bg-secondary/70">
+                  <p className="text-xs text-on-bg-secondary">
                     Metrics from Prometheus only. No fallback if Prometheus is unreachable.
                   </p>
                 )}
                 {form.metricsMode === 'prometheus_snmp_fallback' && (
-                  <p className="text-xs text-on-bg-secondary/70">
+                  <p className="text-xs text-on-bg-secondary">
                     Falls back to SNMP if Prometheus is unavailable or has no data for this device.
                   </p>
                 )}

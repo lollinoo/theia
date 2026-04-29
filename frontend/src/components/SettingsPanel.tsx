@@ -620,7 +620,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
             </option>
           ))}
         </select>
-        <p className="text-xs text-on-bg-secondary/70">
+        <p className="text-xs text-on-bg-secondary">
           Applies to devices using the per-device{' '}
           <span className="font-medium">Use global default</span> mode. Current default:{' '}
           <span className="font-medium">
@@ -703,7 +703,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
             </option>
           ))}
         </select>
-        <p className="text-xs text-on-bg-secondary/70">
+        <p className="text-xs text-on-bg-secondary">
           Affects backup filenames and zip timestamps.
         </p>
       </div>
@@ -722,7 +722,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
           onChange={(e) => handleBridgeSecretChange(e.target.value)}
           className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none font-mono"
         />
-        <p className="text-xs text-on-bg-secondary/70">
+        <p className="text-xs text-on-bg-secondary">
           Found in <span className="font-mono">~/.config/winbox-bridge/config.json</span> →{' '}
           <span className="font-mono">bridge_secret</span> field. Required to launch WinBox from
           Theia.
@@ -756,7 +756,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         {fieldErrors.bridgePort && (
           <p className="mt-1 text-xs text-status-down">{fieldErrors.bridgePort}</p>
         )}
-        <p className="text-xs text-on-bg-secondary/70">
+        <p className="text-xs text-on-bg-secondary">
           TCP port the WinBox bridge listens on. Default is <span className="font-mono">1337</span>.
           Must match <span className="font-mono">ListenPort</span> in the bridge&apos;s config.json.
         </p>
@@ -895,7 +895,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
               {import.meta.env.DEV ? 'dev' : 'production'}
             </span>
           </div>
-          <div className="space-y-0.5 text-xs text-on-bg-secondary/70">
+          <div className="space-y-0.5 text-xs text-on-bg-secondary">
             <p>Commit: {versionInfo.git_commit}</p>
             <p>
               Built:{' '}

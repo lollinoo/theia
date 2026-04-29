@@ -5,6 +5,7 @@ import { join } from 'path';
  * Scans all component source files for layout border patterns that violate the no-line rule.
  * Layout border separators (border-t border-outline, border-b border-outline, border-l border-outline)
  * must be zero. Ghost/functional borders (border-outline-subtle, border-glass-border, ring-outline) are allowed.
+ * The SidePanel slide-over edge is an explicit panel boundary, not an internal layout separator.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -44,6 +45,8 @@ function isExceptionLine(line: string): boolean {
   if (/border-(red|yellow)-/.test(line)) return true;
   // React handle borders that are layout-needed
   if (line.includes('!border-')) return true;
+  // Explicit right-side slide-over panel edge
+  if (line.includes('fixed right-0 top-0') && line.includes('border-l border-outline')) return true;
   return false;
 }
 

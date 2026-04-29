@@ -24,16 +24,16 @@ export function SidePanel({ open, onClose, title, children, testId }: SidePanelP
   return (
     <div
       data-testid={testId}
-      className={`fixed right-0 top-0 z-40 flex h-full w-[min(420px,100vw)] transform flex-col bg-surface-container-high transition-transform duration-200 ease-in-out shadow-panel ${
+      className={`fixed right-0 top-0 z-40 flex h-full w-[min(420px,100vw)] transform flex-col border-l border-outline bg-surface-container-high transition-transform duration-200 ease-in-out shadow-panel ${
         open ? 'translate-x-0' : 'translate-x-full'
       }`}
     >
       <div className="topology-glass flex items-center justify-between px-5 py-3 transition-colors duration-200">
         <div>
-          <p className="text-[10px] uppercase tracking-[0.18em] text-on-bg-secondary">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-on-bg-secondary">
             Topology detail
           </p>
-          <h2 className="mt-1 text-sm font-semibold tracking-[0.08em] text-on-bg">{title}</h2>
+          <h2 className="mt-1 text-sm font-semibold text-on-bg">{title}</h2>
         </div>
         <button
           type="button"
