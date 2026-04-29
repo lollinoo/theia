@@ -108,18 +108,21 @@ function renderDeviceCard(data: Partial<DeviceNodeData> = {}) {
 }
 
 describe('DeviceCard', () => {
-  it('renders physical node card body with hostname, status, address, and telemetry only', () => {
+  it('renders physical node card body with hostname, status, address, telemetry, and compact runtime readouts', () => {
     renderDeviceCard({ metrics: mockMetrics() });
 
     expect(screen.getByText('router-01')).toBeInTheDocument();
     expect(screen.getByText('Up')).toBeInTheDocument();
     expect(screen.getByText('IP 10.0.0.1')).toBeInTheDocument();
     expect(screen.getByText('Fresh telemetry')).toBeInTheDocument();
+    expect(screen.getByText('CPU')).toBeInTheDocument();
+    expect(screen.getByText('42%')).toBeInTheDocument();
+    expect(screen.getByText('MEM')).toBeInTheDocument();
+    expect(screen.getByText('68%')).toBeInTheDocument();
+    expect(screen.getByText('Uptime')).toBeInTheDocument();
+    expect(screen.getByText('1d')).toBeInTheDocument();
 
     expect(screen.queryByText('Router')).toBeNull();
-    expect(screen.queryByText('CPU')).toBeNull();
-    expect(screen.queryByText('MEM')).toBeNull();
-    expect(screen.queryByText('UP')).toBeNull();
     expect(screen.queryByText('Late')).toBeNull();
     expect(screen.queryByText('Partial')).toBeNull();
     expect(screen.queryByText(/Polling every/)).toBeNull();
@@ -140,6 +143,20 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('Polling every 30s')).toBeNull();
   });
 
+  it('enforces a 140px minimum height for physical node cards', () => {
+    const { container } = renderDeviceCard({ metrics: mockMetrics() });
+
+    const physicalCard = container.querySelector('.group');
+    expect(physicalCard?.className).toContain('min-h-[140px]');
+  });
+
+  it('places physical node runtime readouts in a roomier 40px band', () => {
+    const { container } = renderDeviceCard({ metrics: mockMetrics() });
+
+    const runtimeBand = container.querySelector('[data-testid="physical-runtime-readouts"]');
+    expect(runtimeBand?.className).toContain('h-[40px]');
+  });
+
   it('uses MAC chip label for MAC addresses without adding extra card body fields', () => {
     renderDeviceCard({
       device: mockDevice({ ip: 'aa:bb:cc:dd:ee:ff' }),
@@ -149,7 +166,7 @@ describe('DeviceCard', () => {
     expect(screen.getByText('MAC aa:bb:cc:dd:ee:ff')).toBeInTheDocument();
     expect(screen.queryByText(/IP /)).toBeNull();
     expect(screen.queryByText('Router')).toBeNull();
-    expect(screen.queryByText('CPU')).toBeNull();
+    expect(screen.getByText('CPU')).toBeInTheDocument();
   });
 
   it('keeps existing no-IP semantics in the address slot', () => {
@@ -191,8 +208,10 @@ describe('DeviceCard', () => {
 
     expect(screen.getByText('Warning')).toBeInTheDocument();
     expect(screen.getByText('SNMP unreachable')).toBeInTheDocument();
+    expect(screen.getByText('CPU')).toBeInTheDocument();
+    expect(screen.getByText('MEM')).toBeInTheDocument();
+    expect(screen.getByText('Uptime')).toBeInTheDocument();
     expect(screen.queryByText('Fresh telemetry')).toBeNull();
-    expect(screen.queryByText('CPU')).toBeNull();
   });
 
   it('shows polling disabled as status without a verbose card body notice', () => {

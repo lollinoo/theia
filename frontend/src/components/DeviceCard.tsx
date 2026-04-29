@@ -6,6 +6,8 @@ import {
   type DeviceMetricsDTO,
   type FreshnessStatus,
   type RuntimeFlag,
+  formatUptime,
+  metricColor,
 } from '../types/metrics';
 import { formatPollingEvery } from '../utils/freshness';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
@@ -16,6 +18,7 @@ import {
   resolveDeviceAddressState,
   resolveDeviceMonitoringState,
   resolveDeviceNodeStatusStyles,
+  resolveDeviceOperationalReadouts,
   resolveDeviceOperationalStatusState,
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
@@ -172,6 +175,20 @@ function readoutToneClass(tone: ReadoutTone): string {
   }
 }
 
+const compactPercentFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+
+function formatRuntimePercent(value: number | null | undefined): string {
+  return value === null || value === undefined ? '-' : `${compactPercentFormatter.format(value)}%`;
+}
+
+function formatRuntimeUptime(value: number | null | undefined): string {
+  return value === null || value === undefined ? '-' : formatUptime(value);
+}
+
+function runtimeMetricValueClass(value: number | null | undefined): string {
+  return value === null || value === undefined ? 'text-on-bg-secondary' : metricColor(value);
+}
+
 function runtimeBadgeLabel(flag: RuntimeFlag): string {
   switch (flag) {
     case 'deadline_missed':
@@ -243,6 +260,10 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     addressState,
     hasFreshnessMeta: freshness !== null,
   });
+  const operationalReadouts =
+    renderModel.variant === 'physical' && metrics
+      ? resolveDeviceOperationalReadouts(data.device, metrics, monitoringState)
+      : null;
   const isVirtualUnmonitored = renderModel.variant === 'virtual-unmonitored';
   const selfLinks = data.selfLinks ?? [];
   const primarySelfLink = selfLinks[0];
@@ -283,7 +304,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
   return (
     <div
-      className={`group relative w-full rounded-[20px] border border-outline bg-surface transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-outline-strong ${isVirtual ? 'min-h-[160px] min-w-[200px] max-h-[235px] max-w-[285px]' : ''} ${statusStyles.frameClass ?? ''}`}
+      className={`group relative w-full rounded-[20px] border border-outline bg-surface transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-outline-strong ${isVirtual ? 'min-h-[160px] min-w-[200px] max-h-[235px] max-w-[285px]' : 'min-h-[140px]'} ${statusStyles.frameClass ?? ''}`}
       style={statusStyles.frameStyle}
       onContextMenu={(event) => {
         if (!data.onContextMenu) return;
@@ -396,6 +417,42 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
               ) : null}
             </div>
+
+            {operationalReadouts ? (
+              <div
+                className="mt-2 grid h-[40px] grid-cols-3 overflow-hidden rounded-xl border border-outline-subtle bg-surface-container/55"
+                data-testid="physical-runtime-readouts"
+              >
+                <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
+                  <span className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary">
+                    CPU
+                  </span>
+                  <span
+                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.cpuPercent)}`}
+                  >
+                    {formatRuntimePercent(operationalReadouts.cpuPercent)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
+                  <span className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary">
+                    MEM
+                  </span>
+                  <span
+                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.memPercent)}`}
+                  >
+                    {formatRuntimePercent(operationalReadouts.memPercent)}
+                  </span>
+                </div>
+                <div className="flex min-w-0 flex-col justify-center px-2.5">
+                  <span className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary">
+                    Uptime
+                  </span>
+                  <span className="mt-1 truncate font-mono text-[12px] font-semibold leading-none text-on-bg">
+                    {formatRuntimeUptime(operationalReadouts.uptimeSecs)}
+                  </span>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div
