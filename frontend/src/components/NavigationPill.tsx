@@ -129,7 +129,7 @@ function NavigationPill({
       <button
         type="button"
         onClick={toggleTheme}
-        className="flex items-center rounded-full border border-transparent px-3 py-2 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        className="flex items-center rounded-full border border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
         title={resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}
       >
