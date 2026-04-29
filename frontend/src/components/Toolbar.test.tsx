@@ -66,4 +66,16 @@ describe('Toolbar (COMP-04)', () => {
     // The badge wraps the count text; if alertCount is 0 no badge span appears
     expect(html).not.toContain('bg-status-down');
   });
+
+  it('keeps all toolbar actions as icon buttons with accessible titles', () => {
+    render(<Toolbar {...defaultProps} alertCount={8} />);
+
+    expect(screen.getByTitle(/Edit Mode/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Search/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Add Device/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Create Link/)).toBeInTheDocument();
+    expect(screen.getByTitle('Alerts')).toBeInTheDocument();
+    expect(screen.getByTitle(/Settings/)).toBeInTheDocument();
+    expect(screen.getByText('8')).toBeInTheDocument();
+  });
 });

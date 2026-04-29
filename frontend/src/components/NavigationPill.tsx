@@ -51,7 +51,7 @@ function NavigationPill({
         onClick={() => onViewChange('hub')}
         className={`flex items-center rounded-full border px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
           isHub
-            ? 'border-outline bg-surface-container text-on-bg'
+            ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
             : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
         }`}
         aria-label="Area Hub"
@@ -72,7 +72,7 @@ function NavigationPill({
             onClick={() => onAreaSelect(null)}
             className={`rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
               isGlobal
-                ? 'border-outline bg-surface-container font-semibold text-on-bg'
+                ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
                 : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
             }`}
           >
@@ -88,12 +88,12 @@ function NavigationPill({
                 onClick={() => onAreaSelect(area.id)}
                 className={`flex items-center gap-1.5 rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
                   isActive
-                    ? 'border-outline bg-surface-container font-semibold text-on-bg'
+                    ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
                     : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
                 }`}
               >
                 <span
-                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  className="h-2 w-2 flex-shrink-0 rounded-full"
                   style={{
                     backgroundColor: adaptAreaColor(area.color, resolvedTheme),
                     boxShadow: isActive
@@ -116,7 +116,7 @@ function NavigationPill({
         onClick={() => onViewChange('dashboard')}
         className={`flex items-center rounded-full border px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
           isDashboard
-            ? 'border-outline bg-surface-container text-on-bg'
+            ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
             : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
         }`}
         aria-label="Devices Dashboard"

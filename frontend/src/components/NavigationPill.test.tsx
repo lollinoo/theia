@@ -104,4 +104,23 @@ describe('NavigationPill', () => {
     fireEvent.click(devicesButton);
     expect(onViewChange).toHaveBeenCalledWith('dashboard');
   });
+
+  it('preserves the enterprise navigation model with area filters and fixed action buttons', () => {
+    const { container } = render(
+      <NavigationPill
+        {...defaultProps}
+        activeView="canvas"
+        selectedAreaId={null}
+      />,
+    );
+
+    expect(screen.getByText('THEIA')).toBeInTheDocument();
+    expect(screen.getByLabelText('Area Hub')).toBeInTheDocument();
+    expect(screen.getByText('Global')).toBeInTheDocument();
+    expect(screen.getByText('Backbone')).toBeInTheDocument();
+    expect(screen.getByText('Distribution')).toBeInTheDocument();
+    expect(screen.getByLabelText('Devices Dashboard')).toBeInTheDocument();
+    expect(screen.getByLabelText('Switch to light theme')).toBeInTheDocument();
+    expect(container.firstElementChild?.className).toContain('topology-glass');
+  });
 });

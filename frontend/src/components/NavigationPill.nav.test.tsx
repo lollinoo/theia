@@ -66,4 +66,26 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
     // Should have dark:backdrop-blur not unconditional backdrop-blur
     expect(rootDiv.className).toContain('dark:backdrop-blur');
   });
+
+  it('keeps area filters horizontally constrained instead of replacing them with a new navigation layout', () => {
+    const { container } = render(
+      <NavigationPill
+        {...defaultProps}
+        areas={[
+          {
+            id: 'area-1',
+            name: 'Backbone',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+      />,
+    );
+
+    expect(container.innerHTML).toContain('overflow-x-auto');
+    expect(container.innerHTML).toContain('max-w-[56vw]');
+  });
 });
