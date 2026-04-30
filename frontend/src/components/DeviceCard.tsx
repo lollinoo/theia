@@ -283,7 +283,9 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       ? { tone: 'muted' as const, text: 'Unmonitored' }
       : null;
   const freshness =
-    monitoringState === 'monitorable' && metrics ? runtimeTelemetryMeta(metrics) : telemetryFallback;
+    monitoringState === 'monitorable' && metrics
+      ? runtimeTelemetryMeta(metrics)
+      : telemetryFallback;
   const pollingEvery =
     monitoringState === 'monitorable' && metrics
       ? formatPollingEvery(

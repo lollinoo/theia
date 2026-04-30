@@ -112,18 +112,22 @@ describe('enterprise NOC theme contrast contract', () => {
     const containerHighLuminance = luminance(lightSurfaceTokens.surfaceContainerHigh);
     const elevatedLuminance = luminance(lightSurfaceTokens.elevated);
 
-    expect(backgroundLuminance, 'light canvas should move away from near-white glare').toBeLessThanOrEqual(
-      0.77,
-    );
-    expect(surfaceLuminance - backgroundLuminance, 'nodes need clear depth over canvas').toBeGreaterThanOrEqual(
-      0.12,
-    );
-    expect(containerHighLuminance - backgroundLuminance, 'raised layers need visible separation from canvas').toBeGreaterThanOrEqual(
-      0.18,
-    );
-    expect(elevatedLuminance - containerHighLuminance, 'raised surfaces should stay subtle').toBeLessThanOrEqual(
-      0.04,
-    );
+    expect(
+      backgroundLuminance,
+      'light canvas should move away from near-white glare',
+    ).toBeLessThanOrEqual(0.77);
+    expect(
+      surfaceLuminance - backgroundLuminance,
+      'nodes need clear depth over canvas',
+    ).toBeGreaterThanOrEqual(0.12);
+    expect(
+      containerHighLuminance - backgroundLuminance,
+      'raised layers need visible separation from canvas',
+    ).toBeGreaterThanOrEqual(0.18);
+    expect(
+      elevatedLuminance - containerHighLuminance,
+      'raised surfaces should stay subtle',
+    ).toBeLessThanOrEqual(0.04);
   });
 
   it('keeps light-mode chrome layered without washing out controls', () => {
@@ -137,9 +141,7 @@ describe('enterprise NOC theme contrast contract', () => {
     expect(declaration(lightBlock, '--nt-canvas-backdrop')).toContain(
       'linear-gradient(180deg, #dde2e8 0%, #d4dae2 100%)',
     );
-    expect(declaration(lightBlock, '--nt-shadow-panel')).toBe(
-      '0 22px 46px rgba(20, 35, 55, 0.18)',
-    );
+    expect(declaration(lightBlock, '--nt-shadow-panel')).toBe('0 22px 46px rgba(20, 35, 55, 0.18)');
     expect(declaration(lightBlock, '--nt-shadow-floating')).toBe(
       '0 14px 28px rgba(20, 35, 55, 0.14)',
     );

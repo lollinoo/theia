@@ -118,10 +118,7 @@ describe('LinkEdge render', () => {
   });
 
   it('renders thicker active strokes while keeping TX/RX telemetry visible on the edge', () => {
-    renderEdge(
-      { id: 'edge-thick', selected: true },
-      { throughputLabel: 'TX: 500M / RX: 300M' },
-    );
+    renderEdge({ id: 'edge-thick', selected: true }, { throughputLabel: 'TX: 500M / RX: 300M' });
 
     expect(screen.getByText('1 Gbps')).toBeInTheDocument();
     expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();

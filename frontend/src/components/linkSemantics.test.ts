@@ -3,8 +3,8 @@ import {
   buildLinkTelemetryBadges,
   resolveEdgeTone,
   resolveInlineBadgeTone,
-  resolveLinkBadgeScale,
   resolveLinkBadgePresentation,
+  resolveLinkBadgeScale,
   resolveLinkBadgeVisibility,
 } from './linkSemantics';
 

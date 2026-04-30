@@ -107,11 +107,7 @@ describe('NavigationPill', () => {
 
   it('preserves the enterprise navigation model with area filters and fixed action buttons', () => {
     const { container } = render(
-      <NavigationPill
-        {...defaultProps}
-        activeView="canvas"
-        selectedAreaId={null}
-      />,
+      <NavigationPill {...defaultProps} activeView="canvas" selectedAreaId={null} />,
     );
 
     expect(screen.getByText('THEIA')).toBeInTheDocument();

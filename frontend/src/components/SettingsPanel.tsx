@@ -703,9 +703,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
             </option>
           ))}
         </select>
-        <p className="text-xs text-on-bg-secondary">
-          Affects backup filenames and zip timestamps.
-        </p>
+        <p className="text-xs text-on-bg-secondary">Affects backup filenames and zip timestamps.</p>
       </div>
 
       <div className="space-y-2">
