@@ -191,6 +191,18 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.data?.targetIfStatus === next.data?.targetIfStatus &&
     prev.data?.sourceDeviceStatus === next.data?.sourceDeviceStatus &&
     prev.data?.targetDeviceStatus === next.data?.targetDeviceStatus &&
+    prev.data?.sourceDeviceAlertStatus === next.data?.sourceDeviceAlertStatus &&
+    prev.data?.targetDeviceAlertStatus === next.data?.targetDeviceAlertStatus &&
+    prev.data?.sourceDeviceHealth === next.data?.sourceDeviceHealth &&
+    prev.data?.targetDeviceHealth === next.data?.targetDeviceHealth &&
+    prev.data?.sourceDevicePrimaryHealth === next.data?.sourceDevicePrimaryHealth &&
+    prev.data?.targetDevicePrimaryHealth === next.data?.targetDevicePrimaryHealth &&
+    prev.data?.sourceDeviceReachability === next.data?.sourceDeviceReachability &&
+    prev.data?.targetDeviceReachability === next.data?.targetDeviceReachability &&
+    prev.data?.sourceDeviceNetworkReachable === next.data?.sourceDeviceNetworkReachable &&
+    prev.data?.targetDeviceNetworkReachable === next.data?.targetDeviceNetworkReachable &&
+    prev.data?.sourceDeviceSnmpReachable === next.data?.sourceDeviceSnmpReachable &&
+    prev.data?.targetDeviceSnmpReachable === next.data?.targetDeviceSnmpReachable &&
     prev.data?.areaColor === next.data?.areaColor &&
     prev.data?.emphasis === next.data?.emphasis &&
     prev.source === next.source &&

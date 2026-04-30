@@ -11,6 +11,7 @@ import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { manualEdgeStorageKey, staleThresholdMs } from './canvasHelpers';
 import type { CanvasMeasurementRecord } from './canvasInstrumentation';
+import { buildTopologyEdges } from './edgeBuilder';
 import { useCanvasData } from './useCanvasData';
 
 vi.mock('../../api/client', () => ({
@@ -38,6 +39,11 @@ vi.mock('../../hooks/useAutoLayout', () => ({
 
 vi.mock('./edgeBuilder', () => ({
   alertStatusForLink: vi.fn(() => 'normal'),
+  buildEdgeData: vi.fn((link, _devicesById, existingData, onContextMenu) => ({
+    link,
+    ...existingData,
+    onContextMenu,
+  })),
   buildTopologyEdges: vi.fn(() => []),
   preferVisibleLinks: vi.fn((links) => links),
 }));
@@ -610,6 +616,7 @@ describe('useCanvasData', () => {
     vi.mocked(fetchDevices).mockClear();
     vi.mocked(fetchLinks).mockClear();
     vi.mocked(computeForceLayout).mockClear();
+    vi.mocked(buildTopologyEdges).mockClear();
 
     rerender({
       currentSnapshot: mockSnapshot({
@@ -630,6 +637,7 @@ describe('useCanvasData', () => {
     expect(fetchDevices).not.toHaveBeenCalled();
     expect(fetchLinks).not.toHaveBeenCalled();
     expect(computeForceLayout).not.toHaveBeenCalled();
+    expect(buildTopologyEdges).not.toHaveBeenCalled();
   });
 
   it('preserves measured node dimensions across runtime-only snapshot updates', async () => {

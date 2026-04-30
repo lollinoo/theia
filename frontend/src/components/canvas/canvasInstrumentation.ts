@@ -6,6 +6,7 @@ export type CanvasMetricName =
   | 'buildTopologyEdges'
   | 'composeCanvasTopology'
   | 'areaProjection'
+  | 'runtimePatch'
   | 'incrementalLayout'
   | 'computeForceLayout';
 

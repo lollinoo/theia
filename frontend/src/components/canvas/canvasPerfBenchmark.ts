@@ -1,6 +1,6 @@
 import type { AutoLayoutEdge, AutoLayoutNode } from '../../hooks/useAutoLayout';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
-import type { PrometheusStatusPayload } from '../../types/metrics';
+import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import { projectAreaTopology } from './areaProjection';
 import {
@@ -22,6 +22,12 @@ import {
 } from './incrementalLayout';
 import { buildTopologyNodes } from './nodeBuilder';
 import { buildRuntimeState } from './runtimeAdapters';
+import {
+  buildRuntimePatchPlan,
+  patchRuntimeDevices,
+  patchRuntimeEdges,
+  patchRuntimeNodes,
+} from './runtimePatches';
 import { composeCanvasTopology } from './topologyComposer';
 
 export const CANVAS_PERF_BENCHMARK_METRICS = [
@@ -29,6 +35,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'buildTopologyEdges',
   'composeCanvasTopology',
   'areaProjection',
+  'runtimePatch',
   'incrementalLayout',
   'computeForceLayout',
 ] as const satisfies CanvasMetricName[];
@@ -171,6 +178,46 @@ function buildIncrementalBenchmarkState(scenario: CanvasPerfScenario): {
   return { placementDeviceIds, effectivePositions };
 }
 
+function buildRuntimePatchSnapshot(scenario: CanvasPerfScenario): SnapshotPayload {
+  const nextDevices = { ...scenario.runtimeSnapshot.devices };
+  const firstRuntimeDevice = scenario.devices
+    .map((device) => scenario.runtimeSnapshot.devices[device.id])
+    .find((runtimeDevice) => runtimeDevice !== undefined);
+
+  if (firstRuntimeDevice) {
+    nextDevices[firstRuntimeDevice.device_id] = {
+      ...firstRuntimeDevice,
+      cpu_percent:
+        typeof firstRuntimeDevice.cpu_percent === 'number'
+          ? (firstRuntimeDevice.cpu_percent + 7) % 100
+          : 7,
+      health: firstRuntimeDevice.health === 'critical' ? 'warning' : 'critical',
+    };
+  }
+
+  const nextLinks = { ...scenario.runtimeSnapshot.links };
+  const firstRuntimeLink = scenario.links
+    .map((link) => scenario.runtimeSnapshot.links[link.id])
+    .find((runtimeLink) => runtimeLink !== undefined);
+
+  if (firstRuntimeLink) {
+    nextLinks[firstRuntimeLink.link_id] = {
+      ...firstRuntimeLink,
+      metrics_status: 'available',
+      metrics_reason: 'ok',
+      utilization:
+        typeof firstRuntimeLink.utilization === 'number'
+          ? Math.min(0.99, firstRuntimeLink.utilization + 0.08)
+          : 0.42,
+    };
+  }
+
+  return {
+    devices: nextDevices,
+    links: nextLinks,
+  };
+}
+
 function benchmarkOperations(
   samples: CanvasMetricSample[],
   scenarioName: CanvasPerfScenarioName,
@@ -242,6 +289,39 @@ function benchmarkOperations(
       selectedAreaId: scenario.selectedAreaId,
     }),
   );
+
+  measureLocalMetric(samples, scenarioName, 'runtimePatch', () => {
+    const nextSnapshot = buildRuntimePatchSnapshot(scenario);
+    const nextRuntimeState = buildRuntimeState({
+      devices: scenario.devices,
+      links: scenario.links,
+      snapshot: nextSnapshot,
+      alerts: scenario.alerts,
+      prometheusStatus,
+    });
+    const plan = buildRuntimePatchPlan({
+      previousSnapshot: scenario.runtimeSnapshot,
+      nextSnapshot,
+      links: scenario.links,
+    });
+
+    return {
+      devices: patchRuntimeDevices({
+        devices: runtimeDevices,
+        runtimeState: nextRuntimeState,
+        plan,
+      }),
+      nodes: patchRuntimeNodes({ nodes, runtimeState: nextRuntimeState, plan }),
+      edges: patchRuntimeEdges({
+        edges,
+        links: scenario.links,
+        runtimeState: nextRuntimeState,
+        alerts: scenario.alerts,
+        onEdgeContextMenu: noopEdgeMenu,
+        plan,
+      }),
+    };
+  });
 
   measureLocalMetric(samples, scenarioName, 'incrementalLayout', () => {
     const { placementDeviceIds: incrementalPlacementDeviceIds, effectivePositions } =

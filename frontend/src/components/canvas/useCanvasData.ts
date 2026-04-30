@@ -32,6 +32,13 @@ import {
 } from './incrementalLayout';
 import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
+import {
+  buildRuntimePatchPlan,
+  hasRuntimePatchWork,
+  patchRuntimeDevices,
+  patchRuntimeEdges,
+  patchRuntimeNodes,
+} from './runtimePatches';
 import { composeCanvasTopology } from './topologyComposer';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
 
@@ -246,6 +253,7 @@ export function useCanvasData({
   const [error, setError] = useState<string | null>(null);
 
   const snapshotRef = useRef<SnapshotPayload | null>(null);
+  const lastAppliedRuntimeSnapshotRef = useRef<SnapshotPayload | null>(null);
   const alertsRef = useRef<AlertDTO[]>(alerts);
   const devicesRef = useRef<Device[]>([]);
   const topologyLinksRef = useRef<Link[]>([]);
@@ -420,6 +428,7 @@ export function useCanvasData({
             });
             setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
             setEdges(nextEdges);
+            lastAppliedRuntimeSnapshotRef.current = snapshotRef.current;
             lastTopologyIdentityRef.current = topologyIdentity.signature;
             lastUsablePositionStateRef.current = usablePositionState;
             return;
@@ -478,6 +487,7 @@ export function useCanvasData({
             return mergeNodePresentationState(composedNodes, currentNodes);
           });
           setEdges(composedEdges);
+          lastAppliedRuntimeSnapshotRef.current = snapshotRef.current;
 
           const nextPositionPayload = buildPositionPayload(composedNodes);
           if (positionsChanged(nextPositionPayload, savedPositions)) {
@@ -703,6 +713,21 @@ export function useCanvasData({
     }
 
     measureCanvasWork('theia:canvas:snapshot-apply', 'snapshot', () => {
+      if (devicesRef.current.length === 0) {
+        return;
+      }
+
+      const patchPlan = buildRuntimePatchPlan({
+        previousSnapshot: lastAppliedRuntimeSnapshotRef.current,
+        nextSnapshot: snapshot,
+        links: topologyLinksRef.current,
+      });
+      lastAppliedRuntimeSnapshotRef.current = snapshot;
+
+      if (!hasRuntimePatchWork(patchPlan)) {
+        return;
+      }
+
       const runtimeState = buildRuntimeState({
         devices: devicesRef.current,
         links: topologyLinksRef.current,
@@ -710,40 +735,33 @@ export function useCanvasData({
         alerts: alertsRef.current,
         prometheusStatus,
       });
-      const { nodes: nextNodes, edges: nextEdges } = composeCanvasTopology({
-        devices: devicesRef.current,
-        links: topologyLinksRef.current,
-        runtimeState,
-        savedPositions: currentNodePositionsRef.current,
-        computedPositions: new Map(),
-        currentPositions: currentNodePositionsRef.current,
-        defaultPosition: undefined,
-        editMode,
-        openDeviceMenu,
-        openEdgeMenu,
-        openSelfLinkDetails,
-        placementDeviceIds: new Set(),
-        alerts: alertsRef.current,
-      });
 
-      setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
-      setEdges(nextEdges);
-      setDevices(
-        devicesRef.current.map(
-          (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
-        ),
+      setNodes((currentNodes) =>
+        patchRuntimeNodes({
+          nodes: currentNodes,
+          runtimeState,
+          plan: patchPlan,
+        }),
+      );
+      setEdges((currentEdges) =>
+        patchRuntimeEdges({
+          edges: currentEdges,
+          links: topologyLinksRef.current,
+          runtimeState,
+          alerts: alertsRef.current,
+          onEdgeContextMenu: openEdgeMenu,
+          plan: patchPlan,
+        }),
+      );
+      setDevices((currentDevices) =>
+        patchRuntimeDevices({
+          devices: currentDevices,
+          runtimeState,
+          plan: patchPlan,
+        }),
       );
     });
-  }, [
-    editMode,
-    openDeviceMenu,
-    openEdgeMenu,
-    openSelfLinkDetails,
-    prometheusStatus,
-    setEdges,
-    setNodes,
-    snapshot,
-  ]);
+  }, [openEdgeMenu, prometheusStatus, setEdges, setNodes, snapshot]);
 
   useEffect(() => {
     setNodes((currentNodes) => {

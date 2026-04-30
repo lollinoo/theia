@@ -131,6 +131,36 @@ describe('LinkEdge', () => {
     expect(content).toContain('stroke: haloColor');
   });
 
+  it('includes endpoint runtime health fields in the memo comparator', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    expect(content).toContain('prev.data?.sourceDeviceHealth === next.data?.sourceDeviceHealth');
+    expect(content).toContain(
+      'prev.data?.sourceDevicePrimaryHealth === next.data?.sourceDevicePrimaryHealth',
+    );
+    expect(content).toContain(
+      'prev.data?.sourceDeviceReachability === next.data?.sourceDeviceReachability',
+    );
+    expect(content).toContain(
+      'prev.data?.sourceDeviceNetworkReachable === next.data?.sourceDeviceNetworkReachable',
+    );
+    expect(content).toContain(
+      'prev.data?.sourceDeviceSnmpReachable === next.data?.sourceDeviceSnmpReachable',
+    );
+    expect(content).toContain('prev.data?.targetDeviceHealth === next.data?.targetDeviceHealth');
+    expect(content).toContain(
+      'prev.data?.targetDevicePrimaryHealth === next.data?.targetDevicePrimaryHealth',
+    );
+    expect(content).toContain(
+      'prev.data?.targetDeviceReachability === next.data?.targetDeviceReachability',
+    );
+    expect(content).toContain(
+      'prev.data?.targetDeviceNetworkReachable === next.data?.targetDeviceNetworkReachable',
+    );
+    expect(content).toContain(
+      'prev.data?.targetDeviceSnmpReachable === next.data?.targetDeviceSnmpReachable',
+    );
+  });
+
   it('renders a stacked negotiated-rate and throughput group without a standalone AUTO pill', () => {
     const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
     expect(content).toContain('data?.bandwidthLabel');
