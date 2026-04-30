@@ -149,8 +149,9 @@ export const LINK_BADGE_ZOOM_THRESHOLDS = {
   medium: 0.92,
   high: 1.2,
 } as const;
-const LINK_BADGE_MIN_READABLE_ZOOM = 0.6;
-const LINK_BADGE_MAX_SCALE = 1.65;
+const LINK_BADGE_SCALE_START_ZOOM = 0.9;
+const LINK_BADGE_MIN_SCALE_ZOOM = 0.6;
+const LINK_BADGE_MAX_SCALE = 1.2;
 
 function formatSpeedBadge(speed: number): string {
   return speed > 0 ? `SPD ${formatBandwidth(speed)}` : 'SPD ?';
@@ -573,10 +574,10 @@ export function resolveLinkBadgeScale(zoom: number): number {
     return 1;
   }
 
-  const scale = Math.min(
-    LINK_BADGE_MAX_SCALE,
-    1 / Math.max(safeZoom, LINK_BADGE_MIN_READABLE_ZOOM),
-  );
+  const zoomRange = LINK_BADGE_SCALE_START_ZOOM - LINK_BADGE_MIN_SCALE_ZOOM;
+  const scaleRange = LINK_BADGE_MAX_SCALE - 1;
+  const progress = Math.min(1, Math.max(0, (LINK_BADGE_SCALE_START_ZOOM - safeZoom) / zoomRange));
+  const scale = 1 + progress * scaleRange;
   return Number(scale.toFixed(2));
 }
 

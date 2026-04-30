@@ -302,13 +302,14 @@ export function resolveDeviceNodeStatusStyles({
     badgeStyle: badgeStyleForStatus(status),
     panelClass: panelClassForStatus(status),
     panelStyle: panelStyleForStatus(status),
-    frameClass: status === 'down' ? 'topology-node-down-fade' : undefined,
+    frameClass: status === 'down' ? 'topology-node-down-pulse' : undefined,
     frameStyle: {
       ...(tone.borderColor
         ? { borderColor: tone.borderColor }
         : focusVisible
           ? { borderColor: 'var(--color-node-selected)' }
           : {}),
+      ...(status === 'down' ? { backgroundColor: 'var(--nt-node-down-card-bg)' } : {}),
       boxShadow: shadowLayers.join(', '),
     },
   };

@@ -130,9 +130,7 @@ describe('LinkEdge render', () => {
 
     renderEdge({ id: 'edge-readable' }, { throughputLabel: 'TX: 500M / RX: 300M' });
 
-    expect(screen.getByTestId('edge-readable-badge-stack').style.transform).toContain(
-      'scale(1.65)',
-    );
+    expect(screen.getByTestId('edge-readable-badge-stack').style.transform).toContain('scale(1.2)');
 
     for (const badgeKey of ['rate', 'throughput']) {
       expect(screen.getByTestId(`edge-readable-badge-${badgeKey}`)).toHaveClass(

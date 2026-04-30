@@ -105,8 +105,8 @@ describe('DeviceCard zoom readability', () => {
   it('raises node content scale at low zoom without enlarging at normal zoom', () => {
     expect(resolveDeviceNodeReadabilityScale(1.3)).toBe(1);
     expect(resolveDeviceNodeReadabilityScale(1)).toBe(1);
-    expect(resolveDeviceNodeReadabilityScale(0.8)).toBe(1.12);
-    expect(resolveDeviceNodeReadabilityScale(0.6)).toBe(1.27);
+    expect(resolveDeviceNodeReadabilityScale(0.8)).toBe(1.04);
+    expect(resolveDeviceNodeReadabilityScale(0.6)).toBe(1.12);
   });
 
   it('applies readable low-zoom sizing to physical node content without scaling the frame', () => {
@@ -116,16 +116,16 @@ describe('DeviceCard zoom readability', () => {
 
     expect(screen.getByTestId('device-node-card').style.transform).toBe('');
     expect(screen.getByTestId('physical-node-hostname')).toHaveStyle({
-      fontSize: '19.05px',
+      fontSize: '16.8px',
     });
     expect(screen.getByTestId('physical-node-status-badge')).toHaveStyle({
-      fontSize: '13.97px',
+      fontSize: '12.32px',
     });
     expect(screen.getByTestId('physical-node-address')).toHaveStyle({
-      fontSize: '13.97px',
+      fontSize: '12.32px',
     });
     expect(screen.getByTestId('physical-runtime-readouts')).toHaveStyle({
-      height: '50.8px',
+      height: '44.8px',
     });
   });
 });

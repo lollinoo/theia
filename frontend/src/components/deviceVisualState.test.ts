@@ -192,15 +192,18 @@ describe('deviceVisualState', () => {
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-down)');
   });
 
-  it('gives down nodes a dedicated frame glow without reusing it for critical', () => {
+  it('gives down nodes a dedicated frame glow and card fill without reusing them for critical', () => {
     expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain(
       'var(--nt-node-down-ring)',
     );
     expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain(
       'var(--nt-node-down-glow)',
     );
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.backgroundColor).toBe(
+      'var(--nt-node-down-card-bg)',
+    );
     expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameClass).toBe(
-      'topology-node-down-fade',
+      'topology-node-down-pulse',
     );
     expect(
       resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow,
@@ -208,6 +211,9 @@ describe('deviceVisualState', () => {
     expect(
       resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow,
     ).not.toContain('var(--nt-node-down-glow)');
+    expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.backgroundColor).toBe(
+      undefined,
+    );
     expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameClass).toBeUndefined();
   });
 
@@ -216,6 +222,7 @@ describe('deviceVisualState', () => {
 
     expect(selectedDown.frameStyle.boxShadow).toContain('var(--color-focus-ring)');
     expect(selectedDown.frameStyle.boxShadow).toContain('var(--nt-node-down-glow)');
+    expect(selectedDown.frameStyle.backgroundColor).toBe('var(--nt-node-down-card-bg)');
   });
 
   it('keeps critical dots static while down dots keep the stronger active emphasis', () => {

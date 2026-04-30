@@ -176,8 +176,9 @@ function readoutToneClass(tone: ReadoutTone): string {
 }
 
 const compactPercentFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
-const DEVICE_NODE_MIN_READABLE_ZOOM = 0.62;
-const DEVICE_NODE_MAX_READABILITY_SCALE = 1.28;
+const DEVICE_NODE_SCALE_START_ZOOM = 0.9;
+const DEVICE_NODE_MIN_SCALE_ZOOM = 0.6;
+const DEVICE_NODE_MAX_READABILITY_SCALE = 1.12;
 
 export function resolveDeviceNodeReadabilityScale(zoom: number): number {
   const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
@@ -186,10 +187,10 @@ export function resolveDeviceNodeReadabilityScale(zoom: number): number {
     return 1;
   }
 
-  const scale = Math.min(
-    DEVICE_NODE_MAX_READABILITY_SCALE,
-    1 / Math.sqrt(Math.max(safeZoom, DEVICE_NODE_MIN_READABLE_ZOOM)),
-  );
+  const zoomRange = DEVICE_NODE_SCALE_START_ZOOM - DEVICE_NODE_MIN_SCALE_ZOOM;
+  const scaleRange = DEVICE_NODE_MAX_READABILITY_SCALE - 1;
+  const progress = Math.min(1, Math.max(0, (DEVICE_NODE_SCALE_START_ZOOM - safeZoom) / zoomRange));
+  const scale = 1 + progress * scaleRange;
   return Number(scale.toFixed(2));
 }
 

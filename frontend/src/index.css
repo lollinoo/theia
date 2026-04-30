@@ -48,6 +48,8 @@
   --nt-node-down-border: rgba(255, 79, 100, 0.92);
   --nt-node-down-badge-border: rgba(255, 79, 100, 0.44);
   --nt-node-down-badge-bg: rgba(255, 79, 100, 0.18);
+  --nt-node-down-card-bg: #2a1821;
+  --nt-node-down-card-pulse-bg: #351a25;
   --nt-node-down-panel-border: rgba(255, 79, 100, 0.3);
   --nt-node-down-panel-bg: rgba(255, 79, 100, 0.1);
   --nt-node-down-ring: rgba(255, 79, 100, 0.1);
@@ -129,6 +131,8 @@
   --nt-node-down-border: rgba(193, 63, 50, 0.88);
   --nt-node-down-badge-border: rgba(193, 63, 50, 0.4);
   --nt-node-down-badge-bg: rgba(193, 63, 50, 0.14);
+  --nt-node-down-card-bg: #f7dedb;
+  --nt-node-down-card-pulse-bg: #f3d0cc;
   --nt-node-down-panel-border: rgba(193, 63, 50, 0.28);
   --nt-node-down-panel-bg: rgba(193, 63, 50, 0.08);
   --nt-node-down-ring: rgba(193, 63, 50, 0.08);
@@ -267,13 +271,13 @@
 }
 
 @layer utilities {
-  @keyframes topology-node-down-fade {
+  @keyframes topology-node-down-pulse {
     0%, 100% {
-      opacity: 1;
+      background-color: var(--nt-node-down-card-bg);
     }
 
     38%, 62% {
-      opacity: 0.5;
+      background-color: var(--nt-node-down-card-pulse-bg);
     }
   }
 
@@ -306,14 +310,14 @@
     box-shadow: var(--nt-node-shadow);
   }
 
-  .topology-node-down-fade {
-    animation: topology-node-down-fade 1.35s ease-in-out infinite;
-    will-change: opacity;
+  .topology-node-down-pulse {
+    animation: topology-node-down-pulse 1.35s ease-in-out infinite;
+    will-change: background-color;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .topology-node-down-fade {
+  .topology-node-down-pulse {
     animation: none;
   }
 }

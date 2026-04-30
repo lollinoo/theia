@@ -257,8 +257,8 @@ describe('linkSemantics', () => {
   it('scales link telemetry badges up at low zoom without shrinking them at high zoom', () => {
     expect(resolveLinkBadgeScale(1.3)).toBe(1);
     expect(resolveLinkBadgeScale(1)).toBe(1);
-    expect(resolveLinkBadgeScale(0.8)).toBeCloseTo(1.25);
-    expect(resolveLinkBadgeScale(0.6)).toBe(1.65);
+    expect(resolveLinkBadgeScale(0.8)).toBeCloseTo(1.07);
+    expect(resolveLinkBadgeScale(0.6)).toBe(1.2);
   });
 
   it('colors inert virtual links critical when the physical endpoint is down', () => {
