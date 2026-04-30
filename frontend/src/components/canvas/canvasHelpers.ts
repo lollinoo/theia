@@ -21,12 +21,18 @@ export const topologyFitViewPadding: NonNullable<FitViewOptions['padding']> = {
 };
 
 export function buildPositionPayload(nodes: DeviceNode[]): PositionPayload[] {
-  return nodes.map((node) => ({
-    device_id: node.id,
-    x: node.position.x,
-    y: node.position.y,
-    pinned: node.data.pinned,
-  }));
+  return nodes
+    .filter((node) => !isGhostDeviceNode(node))
+    .map((node) => ({
+      device_id: node.id,
+      x: node.position.x,
+      y: node.position.y,
+      pinned: node.data.pinned,
+    }));
+}
+
+export function isGhostDeviceNode(node: DeviceNode): boolean {
+  return node.data.kind === 'ghost-device' || node.data.isGhost === true;
 }
 
 export function inferSpeedLabel(

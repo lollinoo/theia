@@ -4,7 +4,7 @@ import type { NodeProps } from '@xyflow/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
-import DeviceCard from './DeviceCard';
+import DeviceCard, { getDeviceRenderSignature } from './DeviceCard';
 import type { DeviceNode, DeviceNodeData } from './DeviceCard';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -128,6 +128,19 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
+  it('includes area membership content in the render signature even when cardinality is unchanged', () => {
+    const previous = makeNodeProps({
+      device: mockDevice({ area_ids: ['area-a', 'area-b'] }),
+      pinned: false,
+    });
+    const next = makeNodeProps({
+      device: mockDevice({ area_ids: ['area-a', 'area-c'] }),
+      pinned: false,
+    });
+
+    expect(getDeviceRenderSignature(previous)).not.toEqual(getDeviceRenderSignature(next));
+  });
+
   it('renders physical node card body with explicit unmonitored telemetry when metrics are absent', () => {
     renderDeviceCard({ metrics: null });
 
@@ -241,11 +254,27 @@ describe('DeviceCard', () => {
   it('renders ghost nodes as cross-area markers without overview metrics', () => {
     renderDeviceCard({
       device: mockDevice({ sys_name: 'Ghost-Router' }),
+      kind: 'ghost-device',
       isGhost: true,
     });
 
     expect(screen.getByText('cross-area')).toBeInTheDocument();
     expect(screen.getByText('Ghost-Router')).toBeInTheDocument();
+    expect(screen.queryByText('CPU')).toBeNull();
+  });
+
+  it('treats ghost-device kind as a visual navigation marker', () => {
+    const onGhostClick = vi.fn();
+
+    renderDeviceCard({
+      kind: 'ghost-device',
+      device: mockDevice({ id: 'ghost-1', sys_name: 'Ghost-Router' }),
+      onGhostClick,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /ghost-router/i }));
+
+    expect(onGhostClick).toHaveBeenCalledWith('ghost-1');
     expect(screen.queryByText('CPU')).toBeNull();
   });
 

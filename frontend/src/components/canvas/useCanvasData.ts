@@ -20,6 +20,7 @@ import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import {
   buildPositionPayload,
+  isGhostDeviceNode,
   manualEdgeStorageKey,
   topologyFitViewPadding,
   viewportSize,
@@ -29,7 +30,7 @@ import {
   measureCanvasAsyncWork,
   measureCanvasWork,
 } from './canvasInstrumentation';
-import { alertStatusForLink } from './edgeBuilder';
+import { alertStatusForLink, buildTopologyEdges } from './edgeBuilder';
 import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
 import { composeCanvasTopology } from './topologyComposer';
@@ -70,6 +71,7 @@ interface UseCanvasDataReturn {
   topologyRecoveryNotice: TopologyRecoveryNotice | null;
   dismissTopologyRecoveryNotice: () => void;
   retryTopologyRefresh: () => void;
+  updateNodePosition: (deviceId: string, position: { x: number; y: number }) => void;
 }
 
 type StructuralRefreshCause =
@@ -607,6 +609,39 @@ export function useCanvasData({
     void runStructuralRefresh(retryCauses);
   }, [runStructuralRefresh]);
 
+  const updateNodePosition = useCallback(
+    (deviceId: string, position: { x: number; y: number }) => {
+      let changed = false;
+      const nextNodes = nodesRef.current.map((node) =>
+        node.id === deviceId && !isGhostDeviceNode(node)
+          ? {
+              ...node,
+              position,
+              data: {
+                ...node.data,
+                pinned: true,
+              },
+            }
+          : node,
+      );
+      changed = nextNodes.some((node, index) => node !== nodesRef.current[index]);
+      if (!changed) {
+        return;
+      }
+
+      const devicesById = new Map(devicesRef.current.map((device) => [device.id, device]));
+      const links = topologyLinksRef.current;
+
+      setNodes(nextNodes);
+      setEdges((currentEdges) => {
+        const existingEdgeData = new Map(currentEdges.map((edge) => [edge.id, edge.data ?? {}]));
+        return buildTopologyEdges(links, devicesById, nextNodes, existingEdgeData, openEdgeMenu);
+      });
+      void savePositions(buildPositionPayload(nextNodes));
+    },
+    [openEdgeMenu, savePositions, setEdges, setNodes],
+  );
+
   const queueStructuralRefresh = useCallback(
     (cause: StructuralRefreshCause) => {
       pendingStructuralRefreshCausesRef.current.add(cause);
@@ -818,5 +853,6 @@ export function useCanvasData({
     topologyRecoveryNotice,
     dismissTopologyRecoveryNotice,
     retryTopologyRefresh,
+    updateNodePosition,
   };
 }

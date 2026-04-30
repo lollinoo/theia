@@ -116,6 +116,7 @@ export function buildTopologyNodes(
         y: resolvedPosition.y,
       },
       data: {
+        kind: 'device',
         device: deviceData,
         pinned: current?.pinned ?? saved?.pinned ?? false,
         highlighted: false,

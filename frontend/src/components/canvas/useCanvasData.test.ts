@@ -20,10 +20,15 @@ vi.mock('../../api/client', () => ({
   createLink: vi.fn(),
 }));
 
+const positionMocks = vi.hoisted(() => ({
+  fetchPositions: vi.fn(),
+  savePositions: vi.fn(),
+}));
+
 vi.mock('../../hooks/usePositions', () => ({
   usePositions: () => ({
-    fetchPositions: vi.fn().mockResolvedValue(new Map()),
-    savePositions: vi.fn(),
+    fetchPositions: positionMocks.fetchPositions,
+    savePositions: positionMocks.savePositions,
   }),
 }));
 
@@ -150,6 +155,7 @@ describe('useCanvasData', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-13T12:00:00Z'));
+    positionMocks.fetchPositions.mockResolvedValue(new Map());
     vi.mocked(fetchDevices).mockResolvedValue([mockDevice()]);
     vi.mocked(fetchLinks).mockResolvedValue([]);
     vi.mocked(fetchSettings).mockResolvedValue({});
@@ -667,6 +673,68 @@ describe('useCanvasData', () => {
       height: 142,
       measured: { width: 268, height: 142 },
     });
+  });
+
+  it('owns drag position persistence by patching canonical nodes in useCanvasData', async () => {
+    const { result } = renderUseCanvasData(mockSnapshot());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    positionMocks.savePositions.mockClear();
+
+    await act(async () => {
+      result.current.updateNodePosition('dev-1', { x: 321, y: 654 });
+    });
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.nodes[0]).toMatchObject({
+      id: 'dev-1',
+      position: { x: 321, y: 654 },
+      data: { pinned: true },
+    });
+    expect(positionMocks.savePositions).toHaveBeenCalledWith([
+      { device_id: 'dev-1', x: 321, y: 654, pinned: true },
+    ]);
+  });
+
+  it('ignores ghost node move requests before they can mutate canonical state', async () => {
+    const { result } = renderUseCanvasData(mockSnapshot());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      result.current.setNodesForTest([
+        {
+          ...result.current.nodes[0],
+          id: 'ghost-dev-1',
+          position: { x: 10, y: 20 },
+          data: {
+            ...result.current.nodes[0].data,
+            kind: 'ghost-device',
+            isGhost: true,
+            pinned: false,
+          },
+        },
+      ]);
+    });
+    positionMocks.savePositions.mockClear();
+
+    await act(async () => {
+      result.current.updateNodePosition('ghost-dev-1', { x: 321, y: 654 });
+    });
+
+    expect(result.current.nodes[0]).toMatchObject({
+      id: 'ghost-dev-1',
+      position: { x: 10, y: 20 },
+      data: { kind: 'ghost-device', isGhost: true, pinned: false },
+    });
+    expect(positionMocks.savePositions).not.toHaveBeenCalled();
   });
 
   it('shows reconnect-only recovery copy when reconnect is the sole structural cause', async () => {

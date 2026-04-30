@@ -26,6 +26,7 @@ import {
 import { VendorIcon } from './icons/VendorIcon';
 
 export interface DeviceNodeData {
+  kind?: 'device' | 'ghost-device';
   device: Device;
   pinned: boolean;
   highlighted?: boolean;
@@ -321,7 +322,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   });
   const runtimeBadges = metrics?.runtime_flags.map(runtimeBadgeLabel) ?? [];
 
-  if (data.isGhost) {
+  if (data.kind === 'ghost-device' || data.isGhost) {
     return (
       <>
         <Handle type="target" position={Position.Top} className={universalHandleClassName} />
@@ -616,51 +617,110 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   );
 }
 
+export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
+  const data = props.data;
+  const metrics = data.metrics;
+
+  return {
+    deviceId: data.device.id,
+    status: data.device.status,
+    vendor: data.device.vendor,
+    sysName: data.device.sys_name,
+    hardwareModel: data.device.hardware_model,
+    displayName: data.device.tags?.display_name,
+    ip: data.device.ip,
+    pollingEnabled: data.device.polling_enabled,
+    areaIds: data.device.area_ids ?? [],
+    highlighted: data.highlighted,
+    alertStatus: data.alertStatus,
+    areaColors: data.areaColors ?? [],
+    kind: data.kind,
+    isGhost: data.isGhost,
+    isVirtual: data.isVirtual,
+    monitoringState: data.monitoringState,
+    subtype: data.subtype,
+    selfLinks: data.selfLinks,
+    cpuPercent: metrics?.cpu_percent,
+    memPercent: metrics?.mem_percent,
+    tempCelsius: metrics?.temp_celsius,
+    uptimeSecs: metrics?.uptime_secs,
+    health: metrics?.health,
+    primaryHealth: metrics?.primary_health,
+    reachability: metrics?.reachability,
+    networkReachable: metrics?.network_reachable,
+    snmpReachable: metrics?.snmp_reachable,
+    runtimeFlags: metrics?.runtime_flags,
+    freshness: metrics?.freshness,
+    lastPolledAt: metrics?.last_polled_at,
+    expectedPollIntervalSeconds: metrics?.expected_poll_interval_seconds,
+    editMode: data.editMode,
+    positionAbsoluteX: props.positionAbsoluteX,
+    positionAbsoluteY: props.positionAbsoluteY,
+    width: props.width,
+    height: props.height,
+    selected: props.selected,
+  };
+}
+
+type DeviceRenderSignature = ReturnType<typeof getDeviceRenderSignature>;
+
+function sameStringArray(previous: string[] | undefined, next: string[] | undefined): boolean {
+  if (previous?.length !== next?.length) {
+    return false;
+  }
+
+  return (previous ?? []).every((value, index) => value === next?.[index]);
+}
+
+function sameDeviceRenderSignature(
+  previous: DeviceRenderSignature,
+  next: DeviceRenderSignature,
+): boolean {
+  return (
+    previous.deviceId === next.deviceId &&
+    previous.status === next.status &&
+    previous.vendor === next.vendor &&
+    previous.sysName === next.sysName &&
+    previous.hardwareModel === next.hardwareModel &&
+    previous.displayName === next.displayName &&
+    previous.ip === next.ip &&
+    previous.pollingEnabled === next.pollingEnabled &&
+    sameStringArray(previous.areaIds, next.areaIds) &&
+    previous.highlighted === next.highlighted &&
+    previous.alertStatus === next.alertStatus &&
+    sameStringArray(previous.areaColors, next.areaColors) &&
+    previous.kind === next.kind &&
+    previous.isGhost === next.isGhost &&
+    previous.isVirtual === next.isVirtual &&
+    previous.monitoringState === next.monitoringState &&
+    previous.subtype === next.subtype &&
+    sameSelfLinks(previous.selfLinks, next.selfLinks) &&
+    previous.cpuPercent === next.cpuPercent &&
+    previous.memPercent === next.memPercent &&
+    previous.tempCelsius === next.tempCelsius &&
+    previous.uptimeSecs === next.uptimeSecs &&
+    previous.health === next.health &&
+    previous.primaryHealth === next.primaryHealth &&
+    previous.reachability === next.reachability &&
+    previous.networkReachable === next.networkReachable &&
+    previous.snmpReachable === next.snmpReachable &&
+    sameRuntimeFlags(previous.runtimeFlags, next.runtimeFlags) &&
+    previous.freshness === next.freshness &&
+    previous.lastPolledAt === next.lastPolledAt &&
+    previous.expectedPollIntervalSeconds === next.expectedPollIntervalSeconds &&
+    previous.editMode === next.editMode &&
+    previous.positionAbsoluteX === next.positionAbsoluteX &&
+    previous.positionAbsoluteY === next.positionAbsoluteY &&
+    previous.width === next.width &&
+    previous.height === next.height &&
+    previous.selected === next.selected
+  );
+}
+
 const DeviceCard = memo(
   DeviceCardInner,
-  (prev: NodeProps<DeviceNode>, next: NodeProps<DeviceNode>) => {
-    const pd = prev.data;
-    const nd = next.data;
-    return (
-      pd.device.id === nd.device.id &&
-      pd.device.status === nd.device.status &&
-      pd.device.vendor === nd.device.vendor &&
-      pd.device.sys_name === nd.device.sys_name &&
-      pd.device.hardware_model === nd.device.hardware_model &&
-      pd.device.tags?.display_name === nd.device.tags?.display_name &&
-      pd.device.ip === nd.device.ip &&
-      pd.device.polling_enabled === nd.device.polling_enabled &&
-      pd.device.area_ids?.length === nd.device.area_ids?.length &&
-      pd.highlighted === nd.highlighted &&
-      pd.alertStatus === nd.alertStatus &&
-      pd.areaColors?.length === nd.areaColors?.length &&
-      (pd.areaColors ?? []).every((c, i) => c === nd.areaColors?.[i]) &&
-      pd.isGhost === nd.isGhost &&
-      pd.isVirtual === nd.isVirtual &&
-      pd.monitoringState === nd.monitoringState &&
-      pd.subtype === nd.subtype &&
-      sameSelfLinks(pd.selfLinks, nd.selfLinks) &&
-      pd.metrics?.cpu_percent === nd.metrics?.cpu_percent &&
-      pd.metrics?.mem_percent === nd.metrics?.mem_percent &&
-      pd.metrics?.temp_celsius === nd.metrics?.temp_celsius &&
-      pd.metrics?.uptime_secs === nd.metrics?.uptime_secs &&
-      pd.metrics?.health === nd.metrics?.health &&
-      pd.metrics?.primary_health === nd.metrics?.primary_health &&
-      pd.metrics?.reachability === nd.metrics?.reachability &&
-      pd.metrics?.network_reachable === nd.metrics?.network_reachable &&
-      pd.metrics?.snmp_reachable === nd.metrics?.snmp_reachable &&
-      sameRuntimeFlags(pd.metrics?.runtime_flags, nd.metrics?.runtime_flags) &&
-      pd.metrics?.freshness === nd.metrics?.freshness &&
-      pd.metrics?.last_polled_at === nd.metrics?.last_polled_at &&
-      pd.metrics?.expected_poll_interval_seconds === nd.metrics?.expected_poll_interval_seconds &&
-      pd.editMode === nd.editMode &&
-      prev.positionAbsoluteX === next.positionAbsoluteX &&
-      prev.positionAbsoluteY === next.positionAbsoluteY &&
-      prev.width === next.width &&
-      prev.height === next.height &&
-      prev.selected === next.selected
-    );
-  },
+  (prev: NodeProps<DeviceNode>, next: NodeProps<DeviceNode>) =>
+    sameDeviceRenderSignature(getDeviceRenderSignature(prev), getDeviceRenderSignature(next)),
 );
 
 export default DeviceCard;

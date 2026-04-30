@@ -117,4 +117,31 @@ describe('useAreaFilteredTopology', () => {
     const ids = result.current.filteredDevices.map((d) => d.id);
     expect(ids).not.toContain('d');
   });
+
+  it('updates filtering when area membership changes content with the same cardinality', () => {
+    const { result, rerender } = renderHook(
+      ({ devices }) => useAreaFilteredTopology(devices, allLinks, 'area-2'),
+      {
+        initialProps: {
+          devices: [
+            deviceA,
+            mockDevice({ id: 'b', area_ids: ['area-1', 'area-2'], sys_name: 'Router-B' }),
+            mockDevice({ id: 'c', area_ids: ['area-3', 'area-4'], sys_name: 'Router-C' }),
+          ],
+        },
+      },
+    );
+
+    expect(result.current.filteredDevices.map((device) => device.id)).toEqual(['b']);
+
+    rerender({
+      devices: [
+        deviceA,
+        mockDevice({ id: 'b', area_ids: ['area-1', 'area-3'], sys_name: 'Router-B' }),
+        mockDevice({ id: 'c', area_ids: ['area-2', 'area-4'], sys_name: 'Router-C' }),
+      ],
+    });
+
+    expect(result.current.filteredDevices.map((device) => device.id)).toEqual(['c']);
+  });
 });

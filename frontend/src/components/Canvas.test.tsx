@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildDeviceContextMenuItems } from './canvas/canvasHelpers';
+import type { DeviceNode } from './DeviceCard';
+import { buildDeviceContextMenuItems, buildPositionPayload } from './canvas/canvasHelpers';
 
 function buildItems(isVirtual: boolean) {
   return buildDeviceContextMenuItems({
@@ -25,5 +26,24 @@ describe('Canvas context menu filtering', () => {
 
     expect(items.map((item) => item.id)).toEqual(['winbox', 'grafana', 'configure']);
     expect(items.map((item) => item.label)).not.toContain('Per-Interface Stats');
+  });
+});
+
+describe('Canvas position payload', () => {
+  it('excludes ghost nodes from persisted positions', () => {
+    const realNode = {
+      id: 'real-device',
+      position: { x: 10, y: 20 },
+      data: { pinned: true },
+    } as DeviceNode;
+    const ghostNode = {
+      id: 'ghost-device',
+      position: { x: 30, y: 40 },
+      data: { pinned: false, kind: 'ghost-device', isGhost: true },
+    } as DeviceNode;
+
+    expect(buildPositionPayload([realNode, ghostNode])).toEqual([
+      { device_id: 'real-device', x: 10, y: 20, pinned: true },
+    ]);
   });
 });

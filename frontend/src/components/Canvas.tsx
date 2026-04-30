@@ -13,7 +13,6 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { usePositions } from '../hooks/usePositions';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
 import type { Area, Device, Link } from '../types/api';
 import {
@@ -33,11 +32,10 @@ import { CanvasOverlays } from './canvas/CanvasOverlays';
 import { CanvasPanels } from './canvas/CanvasPanels';
 import {
   buildDeviceContextMenuItems,
-  buildPositionPayload,
+  isGhostDeviceNode,
   topologyFitViewPadding,
 } from './canvas/canvasHelpers';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
-import { buildTopologyEdges } from './canvas/edgeBuilder';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
@@ -60,7 +58,7 @@ function topologyMinimapNodeColor(node: DeviceNode): string {
   return minimapColorForDevice({
     device: data.device,
     metrics: data.metrics,
-    isGhost: !!data.isGhost,
+    isGhost: isGhostDeviceNode(node),
   });
 }
 
@@ -108,7 +106,6 @@ export default function Canvas({
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const highlightTimerRef = useRef<number | null>(null);
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
-  const { savePositions } = usePositions();
   const { resolvedTheme } = useTheme();
   const {
     bridgeChecked,
@@ -191,6 +188,7 @@ export default function Canvas({
     topologyRecoveryNotice,
     dismissTopologyRecoveryNotice,
     retryTopologyRefresh,
+    updateNodePosition,
   } = useCanvasData({
     snapshot,
     alerts,
@@ -274,7 +272,7 @@ export default function Canvas({
     if (!selectedAreaId) {
       const selectedIds = new Set(
         nodesWithAreaColor
-          .filter((node) => node.selected && !node.data.isGhost)
+          .filter((node) => node.selected && !isGhostDeviceNode(node))
           .map((node) => node.id),
       );
       const emphasizedEdges = edgesWithAreaColor.map((edge) => {
@@ -325,6 +323,7 @@ export default function Canvas({
         position: basePos,
         draggable: false,
         data: {
+          kind: 'ghost-device',
           device,
           pinned: false,
           isGhost: true,
@@ -344,7 +343,9 @@ export default function Canvas({
     const filteredLinkIds = new Set(filteredLinks.map((l) => l.id));
     const areaEdges = edgesWithAreaColor.filter((e) => filteredLinkIds.has(e.id));
     const selectedIds = new Set(
-      allDisplayNodes.filter((node) => node.selected && !node.data.isGhost).map((node) => node.id),
+      allDisplayNodes
+        .filter((node) => node.selected && !isGhostDeviceNode(node))
+        .map((node) => node.id),
     );
     const emphasizedEdges = areaEdges.map((edge) => {
       if (selectedIds.size === 0) {
@@ -686,7 +687,7 @@ export default function Canvas({
           setShowShortcuts(false);
         }}
         onNodeClick={(_ev, node) => {
-          if (node.data.isGhost) return;
+          if (isGhostDeviceNode(node)) return;
           // Check if multiple nodes are selected (including the just-clicked one)
           const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
           if (selectedNodes.length > 1 && editMode) {
@@ -708,19 +709,8 @@ export default function Canvas({
           });
         }}
         onNodeDragStop={(_ev, node) => {
-          if (node.data.isGhost) return;
-          const updated = reactFlow
-            .getNodes()
-            .map((cn) =>
-              cn.id === node.id
-                ? { ...cn, position: node.position, data: { ...cn.data, pinned: true } }
-                : cn,
-            );
-          const dMap = new Map(devices.map((d) => [d.id, d]));
-          const eMap = new Map(edges.map((e) => [e.id, e.data ?? {}]));
-          setNodes(updated);
-          setEdges(buildTopologyEdges(topologyLinks, dMap, updated, eMap, openEdgeMenu));
-          void savePositions(buildPositionPayload(updated));
+          if (isGhostDeviceNode(node)) return;
+          updateNodePosition(node.id, node.position);
         }}
         selectionOnDrag={editMode}
         selectionMode={SelectionMode.Partial}
