@@ -10,6 +10,7 @@
     "format:check": "biome check --formatter-enabled=true --linter-enabled=false --organize-imports-enabled=false .",
     "lint": "biome lint .",
     "check": "biome check .",
+    "perf:canvas": "tsx scripts/canvas-perf.ts",
     "preview": "vite preview",
     "typecheck": "tsc -b tsconfig.app.json",
     "test": "vitest run",
@@ -37,12 +38,13 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^5.0.1",
+    "@vitest/coverage-v8": "^4.1.0",
     "jsdom": "^29.0.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^4.2.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.2",
     "vite": "^7.0.6",
-    "@vitest/coverage-v8": "^4.1.0",
     "vitest": "^4.1.0"
   }
 }

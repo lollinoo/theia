@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { Device, Link } from '../../types/api';
+import { projectAreaTopology } from './areaProjection';
 
 export interface FilteredTopology {
   filteredDevices: Device[];
@@ -21,35 +22,8 @@ export function useAreaFilteredTopology(
   links: Link[],
   selectedAreaId: string | null,
 ): FilteredTopology {
-  return useMemo(() => {
-    // No filter = show everything (Global view)
-    if (!selectedAreaId) {
-      return { filteredDevices: devices, filteredLinks: links, ghostDevices: [] };
-    }
-
-    // Devices in the selected area (per D-14: unassigned devices excluded)
-    const areaDeviceIds = new Set(
-      devices.filter((d) => d.area_ids?.includes(selectedAreaId)).map((d) => d.id),
-    );
-    const filteredDevices = devices.filter((d) => areaDeviceIds.has(d.id));
-
-    // Links where at least one endpoint is in the area
-    const filteredLinks = links.filter(
-      (l) => areaDeviceIds.has(l.source_device_id) || areaDeviceIds.has(l.target_device_id),
-    );
-
-    // Ghost devices: remote endpoints of cross-area links
-    const ghostDeviceIds = new Set<string>();
-    for (const link of filteredLinks) {
-      if (!areaDeviceIds.has(link.source_device_id)) {
-        ghostDeviceIds.add(link.source_device_id);
-      }
-      if (!areaDeviceIds.has(link.target_device_id)) {
-        ghostDeviceIds.add(link.target_device_id);
-      }
-    }
-    const ghostDevices = devices.filter((d) => ghostDeviceIds.has(d.id));
-
-    return { filteredDevices, filteredLinks, ghostDevices };
-  }, [devices, links, selectedAreaId]);
+  return useMemo(
+    () => projectAreaTopology({ devices, links, selectedAreaId }),
+    [devices, links, selectedAreaId],
+  );
 }

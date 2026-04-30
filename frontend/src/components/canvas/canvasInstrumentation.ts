@@ -1,3 +1,15 @@
+export type CanvasMetricName =
+  | 'topology-load'
+  | 'layout'
+  | 'snapshot-apply'
+  | 'buildTopologyNodes'
+  | 'buildTopologyEdges'
+  | 'composeCanvasTopology'
+  | 'areaProjection'
+  | 'computeForceLayout';
+
+export type CanvasPerfScenarioName = 'runtime' | 'small' | 'medium' | 'large' | 'stress';
+
 export type CanvasMeasurementName =
   | 'theia:canvas:topology-load'
   | 'theia:canvas:layout'
@@ -10,25 +22,138 @@ export type CanvasMeasurementTrigger =
   | 'snapshot'
   | 'manual_refresh';
 
-export interface CanvasMeasurementRecord {
-  name: CanvasMeasurementName;
-  trigger: CanvasMeasurementTrigger;
+export type CanvasRecordedMetricName = CanvasMetricName | CanvasMeasurementName;
+
+export interface CanvasMetricSample {
+  name: CanvasRecordedMetricName;
+  scenario: CanvasPerfScenarioName;
   durationMs: number;
+  timestamp: number;
+  metadata?: Record<string, unknown>;
+  trigger?: CanvasMeasurementTrigger;
+  recordedAt?: string;
+}
+
+export interface CanvasMeasurementRecord extends CanvasMetricSample {
+  name: CanvasMeasurementName;
+  scenario: 'runtime';
+  trigger: CanvasMeasurementTrigger;
   recordedAt: string;
 }
 
-const maxCanvasMeasurements = 50;
+export interface CanvasMetricAggregate {
+  count: number;
+  minMs: number;
+  maxMs: number;
+  avgMs: number;
+  p95Ms: number;
+}
 
-function pushCanvasMeasurement(record: CanvasMeasurementRecord): void {
+export interface CanvasMetricsExport {
+  version: 1;
+  generatedAt: string;
+  samples: CanvasMetricSample[];
+  aggregates: Record<string, CanvasMetricAggregate>;
+}
+
+const maxCanvasMetricSamples = 1000;
+let nodeCanvasMetrics: CanvasMetricSample[] = [];
+
+function metricSamples(): CanvasMetricSample[] {
+  if (typeof window === 'undefined') {
+    return nodeCanvasMetrics;
+  }
+
+  return window.__THEIA_CANVAS_METRICS__ ?? [];
+}
+
+function setMetricSamples(samples: CanvasMetricSample[]): void {
+  if (typeof window === 'undefined') {
+    nodeCanvasMetrics = samples;
+    return;
+  }
+
+  window.__THEIA_CANVAS_METRICS__ = samples;
+  installCanvasMetricWindowHelpers();
+}
+
+function installCanvasMetricWindowHelpers(): void {
   if (typeof window === 'undefined') {
     return;
   }
 
-  const nextBuffer = [...(window.__THEIA_CANVAS_METRICS__ ?? []), record];
-  if (nextBuffer.length > maxCanvasMeasurements) {
-    nextBuffer.splice(0, nextBuffer.length - maxCanvasMeasurements);
+  window.__THEIA_CANVAS_METRICS_EXPORT__ = exportCanvasMetrics;
+  window.__THEIA_CANVAS_METRICS_CLEAR__ = clearCanvasMetrics;
+}
+
+function normalizeMetricName(name: CanvasRecordedMetricName): CanvasMetricName {
+  if (name === 'theia:canvas:topology-load') return 'topology-load';
+  if (name === 'theia:canvas:layout') return 'layout';
+  if (name === 'theia:canvas:snapshot-apply') return 'snapshot-apply';
+  return name;
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundMetric(value: number): number {
+  return Number(value.toFixed(3));
+}
+
+export function recordCanvasMetric(sample: CanvasMetricSample): void {
+  const nextBuffer = [...metricSamples(), sample];
+  if (nextBuffer.length > maxCanvasMetricSamples) {
+    nextBuffer.splice(0, nextBuffer.length - maxCanvasMetricSamples);
   }
-  window.__THEIA_CANVAS_METRICS__ = nextBuffer;
+  setMetricSamples(nextBuffer);
+}
+
+export function aggregateCanvasMetricSamples(
+  samples: CanvasMetricSample[],
+): Record<string, CanvasMetricAggregate> {
+  const durationsByKey = new Map<string, number[]>();
+
+  for (const sample of samples) {
+    const key = `${sample.scenario}:${normalizeMetricName(sample.name)}`;
+    const durations = durationsByKey.get(key) ?? [];
+    durations.push(sample.durationMs);
+    durationsByKey.set(key, durations);
+  }
+
+  const aggregates: Record<string, CanvasMetricAggregate> = {};
+  for (const [key, durations] of durationsByKey.entries()) {
+    const sorted = [...durations].sort((a, b) => a - b);
+    const sum = sorted.reduce((total, value) => total + value, 0);
+    const p95Index = Math.max(0, Math.ceil(0.95 * sorted.length) - 1);
+
+    aggregates[key] = {
+      count: sorted.length,
+      minMs: roundMetric(sorted[0] ?? 0),
+      maxMs: roundMetric(sorted[sorted.length - 1] ?? 0),
+      avgMs: roundMetric(sum / sorted.length),
+      p95Ms: roundMetric(sorted[p95Index] ?? 0),
+    };
+  }
+
+  return aggregates;
+}
+
+export function exportCanvasMetrics(): CanvasMetricsExport {
+  const samples = [...metricSamples()];
+
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    samples,
+    aggregates: aggregateCanvasMetricSamples(samples),
+  };
+}
+
+export function clearCanvasMetrics(): void {
+  setMetricSamples([]);
 }
 
 function safeMark(markName: string): void {
@@ -60,21 +185,50 @@ function finalizeMeasurement(
   startedAt: number,
   markPrefix: string,
 ): void {
-  const endedAt =
-    typeof performance !== 'undefined' && typeof performance.now === 'function'
-      ? performance.now()
-      : Date.now();
-  const durationMs = Math.max(0, Number((endedAt - startedAt).toFixed(3)));
+  const endedAt = nowMs();
+  const durationMs = Math.max(0, roundMetric(endedAt - startedAt));
   const endMark = `${markPrefix}:end`;
+  const recordedAt = new Date().toISOString();
 
   safeMark(endMark);
   safeMeasure(markPrefix, `${markPrefix}:start`, endMark);
-  pushCanvasMeasurement({
+  recordCanvasMetric({
     name,
+    scenario: 'runtime',
     trigger,
     durationMs,
-    recordedAt: new Date().toISOString(),
+    timestamp: Date.now(),
+    recordedAt,
+    metadata: { trigger },
   });
+}
+
+export function measureCanvasMetric<T>(
+  name: CanvasMetricName,
+  scenario: CanvasPerfScenarioName,
+  work: () => T,
+  metadata?: Record<string, unknown>,
+): T {
+  const startedAt = nowMs();
+  const markPrefix = `theia:canvas:${scenario}:${name}:${Date.now()}`;
+  safeMark(`${markPrefix}:start`);
+
+  try {
+    return work();
+  } finally {
+    const endedAt = nowMs();
+    const durationMs = Math.max(0, roundMetric(endedAt - startedAt));
+    const endMark = `${markPrefix}:end`;
+    safeMark(endMark);
+    safeMeasure(markPrefix, `${markPrefix}:start`, endMark);
+    recordCanvasMetric({
+      name,
+      scenario,
+      durationMs,
+      timestamp: Date.now(),
+      metadata,
+    });
+  }
 }
 
 export function measureCanvasWork<T>(
@@ -82,10 +236,7 @@ export function measureCanvasWork<T>(
   trigger: CanvasMeasurementTrigger,
   work: () => T,
 ): T {
-  const startedAt =
-    typeof performance !== 'undefined' && typeof performance.now === 'function'
-      ? performance.now()
-      : Date.now();
+  const startedAt = nowMs();
   const markPrefix = `${name}:${trigger}:${Date.now()}`;
   safeMark(`${markPrefix}:start`);
 
@@ -101,10 +252,7 @@ export async function measureCanvasAsyncWork<T>(
   trigger: CanvasMeasurementTrigger,
   work: () => Promise<T>,
 ): Promise<T> {
-  const startedAt =
-    typeof performance !== 'undefined' && typeof performance.now === 'function'
-      ? performance.now()
-      : Date.now();
+  const startedAt = nowMs();
   const markPrefix = `${name}:${trigger}:${Date.now()}`;
   safeMark(`${markPrefix}:start`);
 
@@ -114,3 +262,5 @@ export async function measureCanvasAsyncWork<T>(
     finalizeMeasurement(name, trigger, startedAt, markPrefix);
   }
 }
+
+installCanvasMetricWindowHelpers();

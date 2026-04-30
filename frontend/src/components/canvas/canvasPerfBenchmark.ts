@@ -1,0 +1,269 @@
+import type { AutoLayoutEdge, AutoLayoutNode } from '../../hooks/useAutoLayout';
+import { computeForceLayout } from '../../hooks/useAutoLayout';
+import type { PrometheusStatusPayload } from '../../types/metrics';
+import type { DeviceNode } from '../DeviceCard';
+import { projectAreaTopology } from './areaProjection';
+import {
+  type CanvasMetricAggregate,
+  type CanvasMetricName,
+  type CanvasMetricSample,
+  aggregateCanvasMetricSamples,
+} from './canvasInstrumentation';
+import {
+  CANVAS_PERF_SCENARIOS,
+  type CanvasPerfScenario,
+  type CanvasPerfScenarioName,
+  generateCanvasPerfScenario,
+} from './canvasPerfScenarios';
+import { buildTopologyEdges } from './edgeBuilder';
+import { buildTopologyNodes } from './nodeBuilder';
+import { buildRuntimeState } from './runtimeAdapters';
+import { composeCanvasTopology } from './topologyComposer';
+
+export const CANVAS_PERF_BENCHMARK_METRICS = [
+  'buildTopologyNodes',
+  'buildTopologyEdges',
+  'composeCanvasTopology',
+  'areaProjection',
+  'computeForceLayout',
+] as const satisfies CanvasMetricName[];
+
+export interface CanvasPerfBenchmarkScenarioResult {
+  input: {
+    deviceCount: number;
+    linkCount: number;
+  };
+  metrics: Record<string, CanvasMetricAggregate>;
+}
+
+export interface CanvasPerfBenchmarkResult {
+  version: 1;
+  generatedAt: string;
+  iterations: number;
+  scenarios: Record<CanvasPerfScenarioName, CanvasPerfBenchmarkScenarioResult>;
+}
+
+export interface RunCanvasPerfBenchmarkOptions {
+  iterations?: number;
+  warmupIterations?: number;
+  iterationsByScenario?: Partial<Record<CanvasPerfScenarioName, number>>;
+  scenarioNames?: CanvasPerfScenarioName[];
+}
+
+const defaultIterationsByScenario: Record<CanvasPerfScenarioName, number> = {
+  small: 50,
+  medium: 30,
+  large: 15,
+  stress: 5,
+};
+
+const prometheusStatus: PrometheusStatusPayload = {
+  enabled: true,
+  available: true,
+};
+
+const noopDeviceMenu = (() => undefined) as unknown as (
+  event: React.MouseEvent,
+  deviceId: string,
+) => void;
+const noopEdgeMenu = (() => undefined) as unknown as (
+  event: MouseEvent | React.MouseEvent<SVGPathElement>,
+  edgeId: string,
+) => void;
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function measureLocalMetric<T>(
+  samples: CanvasMetricSample[],
+  scenario: CanvasPerfScenarioName,
+  name: (typeof CANVAS_PERF_BENCHMARK_METRICS)[number],
+  work: () => T,
+): T {
+  const startedAt = nowMs();
+  try {
+    return work();
+  } finally {
+    const durationMs = Number(Math.max(0, nowMs() - startedAt).toFixed(3));
+    samples.push({
+      name,
+      scenario,
+      durationMs,
+      timestamp: Date.now(),
+    });
+  }
+}
+
+function buildCurrentPositions(
+  nodes: DeviceNode[],
+): Map<string, { x: number; y: number; pinned?: boolean }> {
+  return new Map(
+    nodes.map((node) => [
+      node.id,
+      {
+        x: node.position.x,
+        y: node.position.y,
+        pinned: node.data.pinned,
+      },
+    ]),
+  );
+}
+
+function buildLayoutInputs(scenario: CanvasPerfScenario): {
+  layoutNodes: AutoLayoutNode[];
+  layoutEdges: AutoLayoutEdge[];
+} {
+  return {
+    layoutNodes: scenario.devices.map((device) => {
+      const position = scenario.positions.get(device.id);
+      return {
+        id: device.id,
+        x: position?.x,
+        y: position?.y,
+        pinned: position?.pinned,
+      };
+    }),
+    layoutEdges: scenario.links
+      .filter((link) => link.source_device_id !== link.target_device_id)
+      .map((link) => ({
+        source: link.source_device_id,
+        target: link.target_device_id,
+      })),
+  };
+}
+
+function benchmarkOperations(
+  samples: CanvasMetricSample[],
+  scenarioName: CanvasPerfScenarioName,
+  scenario: CanvasPerfScenario,
+): void {
+  const runtimeState = buildRuntimeState({
+    devices: scenario.devices,
+    links: scenario.links,
+    snapshot: scenario.runtimeSnapshot,
+    alerts: scenario.alerts,
+    prometheusStatus,
+  });
+  const runtimeDevices = scenario.devices.map(
+    (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
+  );
+  const devicesById = new Map(runtimeDevices.map((device) => [device.id, device]));
+  const currentPositions = new Map(scenario.positions);
+  const placementDeviceIds = new Set<string>();
+
+  const nodes = measureLocalMetric(samples, scenarioName, 'buildTopologyNodes', () =>
+    buildTopologyNodes(
+      runtimeDevices,
+      scenario.positions,
+      new Map(),
+      { x: 120, y: 120 },
+      false,
+      noopDeviceMenu,
+      scenario.runtimeSnapshot,
+      scenario.alerts,
+      scenario.links,
+      undefined,
+      currentPositions,
+      placementDeviceIds,
+    ),
+  );
+
+  const edges = measureLocalMetric(samples, scenarioName, 'buildTopologyEdges', () =>
+    buildTopologyEdges(
+      scenario.links,
+      devicesById,
+      nodes,
+      undefined,
+      noopEdgeMenu,
+      scenario.alerts,
+    ),
+  );
+
+  measureLocalMetric(samples, scenarioName, 'composeCanvasTopology', () =>
+    composeCanvasTopology({
+      devices: scenario.devices,
+      links: scenario.links,
+      runtimeState,
+      savedPositions: scenario.positions,
+      computedPositions: new Map(),
+      currentPositions: buildCurrentPositions(nodes),
+      defaultPosition: { x: 120, y: 120 },
+      editMode: false,
+      openDeviceMenu: noopDeviceMenu,
+      openEdgeMenu: noopEdgeMenu,
+      placementDeviceIds,
+      alerts: scenario.alerts,
+    }),
+  );
+
+  measureLocalMetric(samples, scenarioName, 'areaProjection', () =>
+    projectAreaTopology({
+      devices: scenario.devices,
+      links: scenario.links,
+      selectedAreaId: scenario.selectedAreaId,
+    }),
+  );
+
+  const { layoutNodes, layoutEdges } = buildLayoutInputs(scenario);
+  measureLocalMetric(samples, scenarioName, 'computeForceLayout', () =>
+    computeForceLayout(layoutNodes, layoutEdges, 2400, 1600),
+  );
+
+  void edges;
+}
+
+function metricsForScenario(
+  samples: CanvasMetricSample[],
+  scenarioName: CanvasPerfScenarioName,
+): Record<string, CanvasMetricAggregate> {
+  const aggregateByKey = aggregateCanvasMetricSamples(samples);
+  return Object.fromEntries(
+    CANVAS_PERF_BENCHMARK_METRICS.map((metricName) => [
+      metricName,
+      aggregateByKey[`${scenarioName}:${metricName}`],
+    ]),
+  );
+}
+
+export function runCanvasPerfBenchmark(
+  options: RunCanvasPerfBenchmarkOptions = {},
+): CanvasPerfBenchmarkResult {
+  const scenarioNames =
+    options.scenarioNames ?? (Object.keys(CANVAS_PERF_SCENARIOS) as CanvasPerfScenarioName[]);
+  const warmupIterations = options.warmupIterations ?? 3;
+  const benchmarkIterations = options.iterations ?? 20;
+  const scenarios = {} as Record<CanvasPerfScenarioName, CanvasPerfBenchmarkScenarioResult>;
+
+  for (const scenarioName of scenarioNames) {
+    const scenario = generateCanvasPerfScenario(scenarioName);
+    const measuredSamples: CanvasMetricSample[] = [];
+    const warmupSamples: CanvasMetricSample[] = [];
+    const iterations =
+      options.iterationsByScenario?.[scenarioName] ??
+      options.iterations ??
+      defaultIterationsByScenario[scenarioName];
+
+    for (let index = 0; index < warmupIterations; index += 1) {
+      benchmarkOperations(warmupSamples, scenarioName, scenario);
+    }
+
+    for (let index = 0; index < iterations; index += 1) {
+      benchmarkOperations(measuredSamples, scenarioName, scenario);
+    }
+
+    scenarios[scenarioName] = {
+      input: CANVAS_PERF_SCENARIOS[scenarioName],
+      metrics: metricsForScenario(measuredSamples, scenarioName),
+    };
+  }
+
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    iterations: benchmarkIterations,
+    scenarios,
+  };
+}
