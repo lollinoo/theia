@@ -2,11 +2,6 @@ import type { ReactFlowInstance } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createLink, fetchDevices, fetchLinks, fetchSettings } from '../../api/client';
-import {
-  type AutoLayoutEdge,
-  type AutoLayoutNode,
-  computeForceLayout,
-} from '../../hooks/useAutoLayout';
 import { type PositionState, usePositions } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import {
@@ -31,6 +26,10 @@ import {
   measureCanvasWork,
 } from './canvasInstrumentation';
 import { alertStatusForLink, buildTopologyEdges } from './edgeBuilder';
+import {
+  buildIncrementalLayoutInputs,
+  computeIncrementalLayoutPositions,
+} from './incrementalLayout';
 import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
 import { composeCanvasTopology } from './topologyComposer';
@@ -195,63 +194,6 @@ function positionsChanged(
   }
 
   return false;
-}
-
-function buildLayoutInputs(
-  devices: Device[],
-  links: Link[],
-  placementDeviceIds: Set<string>,
-  effectivePositions: Map<string, PositionState>,
-): { layoutNodes: AutoLayoutNode[]; layoutEdges: AutoLayoutEdge[] } {
-  if (placementDeviceIds.size === 0) {
-    return {
-      layoutNodes: [],
-      layoutEdges: [],
-    };
-  }
-
-  const layoutDeviceIds = new Set(placementDeviceIds);
-
-  for (const link of links) {
-    const sourceNeedsPlacement = placementDeviceIds.has(link.source_device_id);
-    const targetNeedsPlacement = placementDeviceIds.has(link.target_device_id);
-
-    if (sourceNeedsPlacement === targetNeedsPlacement) {
-      continue;
-    }
-
-    const anchorDeviceId = sourceNeedsPlacement ? link.target_device_id : link.source_device_id;
-    const anchorPosition = effectivePositions.get(anchorDeviceId);
-
-    if (hasUsablePosition(anchorPosition)) {
-      layoutDeviceIds.add(anchorDeviceId);
-    }
-  }
-
-  return {
-    layoutNodes: devices
-      .filter((device) => layoutDeviceIds.has(device.id))
-      .map((device) => {
-        const position = effectivePositions.get(device.id);
-        const needsPlacement = placementDeviceIds.has(device.id);
-
-        return {
-          id: device.id,
-          x: position?.x,
-          y: position?.y,
-          pinned: !needsPlacement && hasUsablePosition(position),
-        };
-      }),
-    layoutEdges: links
-      .filter(
-        (link) =>
-          layoutDeviceIds.has(link.source_device_id) && layoutDeviceIds.has(link.target_device_id),
-      )
-      .map((link) => ({
-        source: link.source_device_id,
-        target: link.target_device_id,
-      })),
-  };
 }
 
 function mergeNodePresentationState(
@@ -490,16 +432,22 @@ export function useCanvasData({
             currentNodePositionsRef.current.keys(),
           );
           const { width, height } = viewportSize();
-          const { layoutNodes, layoutEdges } = buildLayoutInputs(
-            fetchedDevices,
-            fetchedLinks,
+          const { layoutNodes, layoutEdges } = buildIncrementalLayoutInputs({
+            devices: fetchedDevices,
+            links: fetchedLinks,
             placementDeviceIds,
             effectivePositions,
-          );
+          });
           const computedPositions =
             layoutNodes.length > 0
               ? measureCanvasWork('theia:canvas:layout', trigger, () =>
-                  computeForceLayout(layoutNodes, layoutEdges, width, height),
+                  computeIncrementalLayoutPositions({
+                    layoutNodes,
+                    layoutEdges,
+                    placementDeviceIds,
+                    width,
+                    height,
+                  }),
                 )
               : new Map();
 

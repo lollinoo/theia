@@ -6,6 +6,7 @@ export type CanvasMetricName =
   | 'buildTopologyEdges'
   | 'composeCanvasTopology'
   | 'areaProjection'
+  | 'incrementalLayout'
   | 'computeForceLayout';
 
 export type CanvasPerfScenarioName = 'runtime' | 'small' | 'medium' | 'large' | 'stress';

@@ -4,6 +4,19 @@ import { CANVAS_PERF_BENCHMARK_METRICS, runCanvasPerfBenchmark } from './canvasP
 import { CANVAS_PERF_SCENARIOS, type CanvasPerfScenarioName } from './canvasPerfScenarios';
 
 describe('canvasPerfBenchmark', () => {
+  it('tracks the incremental layout path separately from full force layout', () => {
+    expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('computeForceLayout');
+    expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('incrementalLayout');
+
+    const result = runCanvasPerfBenchmark({
+      iterations: 1,
+      warmupIterations: 0,
+      scenarioNames: ['small'],
+    });
+
+    expect(result.scenarios.small.metrics.incrementalLayout.count).toBe(1);
+  });
+
   it('produces aggregate metrics for every official scenario and benchmarked function', () => {
     const result = runCanvasPerfBenchmark({
       iterations: 1,

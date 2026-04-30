@@ -16,6 +16,10 @@ import {
   generateCanvasPerfScenario,
 } from './canvasPerfScenarios';
 import { buildTopologyEdges } from './edgeBuilder';
+import {
+  buildIncrementalLayoutInputs,
+  computeIncrementalLayoutPositions,
+} from './incrementalLayout';
 import { buildTopologyNodes } from './nodeBuilder';
 import { buildRuntimeState } from './runtimeAdapters';
 import { composeCanvasTopology } from './topologyComposer';
@@ -25,6 +29,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'buildTopologyEdges',
   'composeCanvasTopology',
   'areaProjection',
+  'incrementalLayout',
   'computeForceLayout',
 ] as const satisfies CanvasMetricName[];
 
@@ -135,6 +140,37 @@ function buildLayoutInputs(scenario: CanvasPerfScenario): {
   };
 }
 
+function buildIncrementalBenchmarkState(scenario: CanvasPerfScenario): {
+  placementDeviceIds: Set<string>;
+  effectivePositions: Map<string, { x: number; y: number; pinned?: boolean }>;
+} {
+  const placementDeviceIds = new Set<string>();
+  const placementInterval = Math.max(5, Math.floor(scenario.devices.length / 20));
+
+  scenario.devices.forEach((device, index) => {
+    if (index > 0 && index % placementInterval === 0) {
+      placementDeviceIds.add(device.id);
+    }
+  });
+
+  if (placementDeviceIds.size === 0 && scenario.devices.length > 1) {
+    placementDeviceIds.add(scenario.devices[1]!.id);
+  }
+
+  const effectivePositions = new Map<string, { x: number; y: number; pinned?: boolean }>();
+  scenario.devices.forEach((device, index) => {
+    if (placementDeviceIds.has(device.id)) return;
+
+    effectivePositions.set(device.id, {
+      x: 120 + (index % 30) * 180,
+      y: 120 + Math.floor(index / 30) * 140,
+      pinned: true,
+    });
+  });
+
+  return { placementDeviceIds, effectivePositions };
+}
+
 function benchmarkOperations(
   samples: CanvasMetricSample[],
   scenarioName: CanvasPerfScenarioName,
@@ -206,6 +242,25 @@ function benchmarkOperations(
       selectedAreaId: scenario.selectedAreaId,
     }),
   );
+
+  measureLocalMetric(samples, scenarioName, 'incrementalLayout', () => {
+    const { placementDeviceIds: incrementalPlacementDeviceIds, effectivePositions } =
+      buildIncrementalBenchmarkState(scenario);
+    const { layoutNodes, layoutEdges } = buildIncrementalLayoutInputs({
+      devices: scenario.devices,
+      links: scenario.links,
+      placementDeviceIds: incrementalPlacementDeviceIds,
+      effectivePositions,
+    });
+
+    return computeIncrementalLayoutPositions({
+      layoutNodes,
+      layoutEdges,
+      placementDeviceIds: incrementalPlacementDeviceIds,
+      width: 2400,
+      height: 1600,
+    });
+  });
 
   const { layoutNodes, layoutEdges } = buildLayoutInputs(scenario);
   measureLocalMetric(samples, scenarioName, 'computeForceLayout', () =>
