@@ -31,7 +31,11 @@ import { Toolbar } from './Toolbar';
 import ZoomControls from './ZoomControls';
 import { CanvasOverlays } from './canvas/CanvasOverlays';
 import { CanvasPanels } from './canvas/CanvasPanels';
-import { buildDeviceContextMenuItems, buildPositionPayload } from './canvas/canvasHelpers';
+import {
+  buildDeviceContextMenuItems,
+  buildPositionPayload,
+  topologyFitViewPadding,
+} from './canvas/canvasHelpers';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import { buildTopologyEdges } from './canvas/edgeBuilder';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
@@ -372,7 +376,7 @@ export default function Canvas({
     if (prevAreaRef.current !== selectedAreaId && displayNodes.length > 0) {
       prevAreaRef.current = selectedAreaId;
       window.requestAnimationFrame(() => {
-        reactFlow.fitView({ padding: 0.18, duration: 280 });
+        reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
       });
     }
   }, [selectedAreaId, displayNodes.length, reactFlow]);
@@ -660,7 +664,7 @@ export default function Canvas({
           void reactFlow.zoomOut({ duration: 200 });
         }}
         onFitView={() => {
-          void reactFlow.fitView({ padding: 0.18, duration: 280 });
+          void reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
         }}
       />
 
@@ -725,6 +729,7 @@ export default function Canvas({
         minZoom={0.1}
         maxZoom={2}
         fitView
+        fitViewOptions={{ padding: topologyFitViewPadding }}
         nodesDraggable={editMode}
         panOnDrag
         zoomOnScroll

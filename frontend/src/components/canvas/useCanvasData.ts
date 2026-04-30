@@ -18,7 +18,12 @@ import {
 } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { buildPositionPayload, manualEdgeStorageKey, viewportSize } from './canvasHelpers';
+import {
+  buildPositionPayload,
+  manualEdgeStorageKey,
+  topologyFitViewPadding,
+  viewportSize,
+} from './canvasHelpers';
 import {
   type CanvasMeasurementTrigger,
   measureCanvasAsyncWork,
@@ -531,7 +536,7 @@ export function useCanvasData({
 
           if (trigger === 'initial_load' || shouldAutoFitView) {
             window.requestAnimationFrame(() => {
-              reactFlow.fitView({ padding: 0.18, duration: 320 });
+              reactFlow.fitView({ padding: topologyFitViewPadding, duration: 320 });
             });
           }
 

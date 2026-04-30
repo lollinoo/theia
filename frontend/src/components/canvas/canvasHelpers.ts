@@ -1,3 +1,4 @@
+import type { FitViewOptions } from '@xyflow/react';
 import type { PositionPayload } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import type { LinkMetricsDTO } from '../../types/metrics';
@@ -12,6 +13,12 @@ export const manualEdgeStorageKey = 'theia-manual-edges';
 
 export const defaultPollingIntervalMs = 60_000;
 export const staleThresholdMs = defaultPollingIntervalMs * 2;
+export const topologyFitViewPadding: NonNullable<FitViewOptions['padding']> = {
+  top: '96px',
+  right: 0.08,
+  bottom: 0.08,
+  left: 0.08,
+};
 
 export function buildPositionPayload(nodes: DeviceNode[]): PositionPayload[] {
   return nodes.map((node) => ({

@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
+import { topologyFitViewPadding } from './canvasHelpers';
 
 interface UseCanvasMenusParams {
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
@@ -90,7 +91,7 @@ export function useCanvasMenus({ reactFlow }: UseCanvasMenusParams): UseCanvasMe
         key: '0',
         description: 'Fit view',
         handler: () => {
-          void reactFlow.fitView({ padding: 0.18, duration: 280 });
+          void reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
         },
       },
       help: {

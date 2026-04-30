@@ -757,6 +757,10 @@ describe('useCanvasData', () => {
       y: 420,
     });
     expect(reactFlow.fitView).toHaveBeenCalledTimes(1);
+    expect(reactFlow.fitView).toHaveBeenCalledWith({
+      padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+      duration: 320,
+    });
   });
 
   it('coalesces reconnect, resync, and topology-changed events into one structural refresh pass', async () => {
