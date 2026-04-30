@@ -232,13 +232,46 @@ function fallbackInterfaceInfo({
   };
 }
 
-function sortDeviceInterfaces(interfaces: InterfaceInfo[]): InterfaceInfo[] {
+function linkedInterfaceNamesForDevice(deviceId: string, links: Link[]): Set<string> {
+  const names = new Set<string>();
+
+  for (const link of links) {
+    if (link.source_device_id === deviceId) {
+      const sourceIfName = normalizeInterfaceName(link.source_if_name);
+      if (sourceIfName) {
+        names.add(sourceIfName);
+      }
+    }
+
+    if (link.target_device_id === deviceId) {
+      const targetIfName = normalizeInterfaceName(link.target_if_name);
+      if (targetIfName) {
+        names.add(targetIfName);
+      }
+    }
+  }
+
+  return names;
+}
+
+function sortDeviceInterfaces(
+  interfaces: InterfaceInfo[],
+  linkedInterfaceNames: Set<string>,
+): InterfaceInfo[] {
   return interfaces
     .filter((iface) => {
       const lower = iface.if_name.toLowerCase();
       return !lower.startsWith('lo') && lower !== 'null' && !lower.startsWith('null');
     })
     .sort((left, right) => {
+      const leftLinked =
+        left.in_use || linkedInterfaceNames.has(normalizeInterfaceName(left.if_name));
+      const rightLinked =
+        right.in_use || linkedInterfaceNames.has(normalizeInterfaceName(right.if_name));
+      if (leftLinked !== rightLinked) {
+        return leftLinked ? -1 : 1;
+      }
+
       const leftUp = left.oper_status === 'up';
       const rightUp = right.oper_status === 'up';
       if (leftUp !== rightUp) {
@@ -891,15 +924,18 @@ export function buildDeviceInterfacePanelModel({
   runtimeState,
   loadingInterfaces,
   interfaces,
+  links = [],
 }: {
   device: Device;
   runtimeState: RuntimeState;
   loadingInterfaces: boolean;
   interfaces: InterfaceInfo[];
+  links?: Link[];
 }): DeviceInterfacePanelModel {
   const runtimeDevice = resolveRuntimeDevice(runtimeState, device);
   const deviceLabel = labelForDevice(runtimeDevice.device);
-  const sections = sortDeviceInterfaces(interfaces).map((iface) => {
+  const linkedInterfaceNames = linkedInterfaceNamesForDevice(runtimeDevice.device.id, links);
+  const sections = sortDeviceInterfaces(interfaces, linkedInterfaceNames).map((iface) => {
     const availability = interfaceMetricsAvailability(runtimeState, runtimeDevice, iface.if_name);
 
     return buildInterfaceSection({

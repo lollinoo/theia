@@ -100,7 +100,11 @@ export function CanvasPanels({
               detailMetrics={runtimeState.devicesById.get(device.id)?.metrics ?? null}
               interfaceStats={
                 device.device_type !== 'virtual' ? (
-                  <DeviceInterfaceStatsPanelRoute device={device} runtimeState={runtimeState} />
+                  <DeviceInterfaceStatsPanelRoute
+                    device={device}
+                    runtimeState={runtimeState}
+                    links={topologyLinks}
+                  />
                 ) : undefined
               }
             />

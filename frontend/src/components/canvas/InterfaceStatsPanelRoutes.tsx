@@ -63,9 +63,11 @@ function useDeviceInterfaces(
 export function DeviceInterfaceStatsPanelRoute({
   device,
   runtimeState,
+  links = [],
 }: {
   device: Device;
   runtimeState: RuntimeState;
+  links?: Link[];
 }) {
   const { interfaces, loading, error } = useDeviceInterfaces(
     device.id,
@@ -85,6 +87,7 @@ export function DeviceInterfaceStatsPanelRoute({
         runtimeState,
         loadingInterfaces: loading,
         interfaces,
+        links,
       })}
     />
   );

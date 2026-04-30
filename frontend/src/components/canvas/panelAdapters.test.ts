@@ -306,6 +306,38 @@ describe('panelAdapters', () => {
     });
   });
 
+  it('prioritizes device interfaces used by topology links', () => {
+    const device = mockDevice();
+    const linkedInterface = mockLink({ source_if_name: 'ether3' });
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [linkedInterface],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const model = buildDeviceInterfacePanelModel({
+      device,
+      runtimeState,
+      loadingInterfaces: false,
+      links: [linkedInterface],
+      interfaces: [
+        mockInterface({ if_name: 'ether1', oper_status: 'up', in_use: false }),
+        mockInterface({ if_name: 'ether3', oper_status: 'down', in_use: false }),
+        mockInterface({ if_name: 'ether2', oper_status: 'up', in_use: false }),
+        mockInterface({ if_name: 'ether4', oper_status: 'down', in_use: true }),
+      ],
+    });
+
+    expect(model.sections.map((section) => section.ifName)).toEqual([
+      'ether3',
+      'ether4',
+      'ether1',
+      'ether2',
+    ]);
+  });
+
   it('precomputes device interface unavailable state in the final section model', () => {
     const device = mockDevice({ status: 'up' });
     const runtimeState = buildRuntimeState({
