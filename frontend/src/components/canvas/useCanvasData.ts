@@ -1,9 +1,15 @@
 import type { ReactFlowInstance } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { createLink, fetchDevices, fetchLinks, fetchSettings } from '../../api/client';
+import {
+  createLink,
+  fetchCanvasTopology,
+  fetchDevices,
+  fetchLinks,
+  fetchSettings,
+} from '../../api/client';
 import { type PositionState, usePositions } from '../../hooks/usePositions';
-import type { Device, Link } from '../../types/api';
+import type { Device, DevicePosition, Link } from '../../types/api';
 import {
   type AlertDTO,
   type PrometheusStatusPayload,
@@ -100,6 +106,19 @@ interface LoadTopologyOptions {
   suppressBlockingError?: boolean;
   rethrowOnError?: boolean;
 }
+
+type CanvasTopologySource =
+  | {
+      status: 'ok';
+      devices: Device[];
+      links: Link[];
+      positions: Map<string, PositionState>;
+      etag?: string;
+    }
+  | {
+      status: 'not-modified';
+      etag?: string;
+    };
 
 const structuralRefreshDebounceMs = 250;
 const topologyRefreshRetryActionLabel = 'Retry topology refresh';
@@ -203,6 +222,68 @@ function positionsChanged(
   return false;
 }
 
+function toPositionMap(positions: Iterable<DevicePosition>): Map<string, PositionState> {
+  return new Map(
+    Array.from(positions).map((position) => [
+      position.device_id,
+      {
+        x: position.x,
+        y: position.y,
+        pinned: position.pinned,
+      },
+    ]),
+  );
+}
+
+function isCanvasTopologyUnsupported(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('status' in error)) {
+    return false;
+  }
+
+  const status = (error as { status?: unknown }).status;
+  return status === 404 || status === 405 || status === 501;
+}
+
+async function loadCanvasTopologySource(
+  fetchPositions: () => Promise<Map<string, PositionState>>,
+  etag: string | null,
+): Promise<CanvasTopologySource> {
+  try {
+    const result = await fetchCanvasTopology(etag ?? undefined);
+    if (result.status === 'not-modified') {
+      return {
+        status: 'not-modified',
+        etag: result.etag,
+      };
+    }
+
+    return {
+      status: 'ok',
+      devices: result.topology.devices,
+      links: result.topology.links,
+      positions: toPositionMap(Object.values(result.topology.positions)),
+      etag: result.etag,
+    };
+  } catch (error) {
+    if (!isCanvasTopologyUnsupported(error)) {
+      throw error;
+    }
+  }
+
+  const [devices, links, positions] = await Promise.all([
+    fetchDevices(),
+    fetchLinks(),
+    fetchPositions(),
+  ]);
+
+  return {
+    status: 'ok',
+    devices,
+    links,
+    positions,
+  };
+}
+
 function mergeNodePresentationState(
   nextNodes: DeviceNode[],
   currentNodes: DeviceNode[],
@@ -259,6 +340,7 @@ export function useCanvasData({
   const topologyLinksRef = useRef<Link[]>([]);
   const nodesRef = useRef<DeviceNode[]>(nodes);
   const lastTopologyIdentityRef = useRef<string | null>(null);
+  const lastCanvasTopologyEtagRef = useRef<string | null>(null);
   const lastUsablePositionStateRef = useRef('');
   const currentNodePositionsRef = useRef<Map<string, PositionState>>(new Map());
   const grafanaUrlRef = useRef<string>('');
@@ -332,11 +414,20 @@ export function useCanvasData({
         setError(null);
 
         try {
-          const [fetchedDevices, fetchedLinks, savedPositions] = await Promise.all([
-            fetchDevices(),
-            fetchLinks(),
-            fetchPositions(),
-          ]);
+          const topologySource = await loadCanvasTopologySource(
+            fetchPositions,
+            lastCanvasTopologyEtagRef.current,
+          );
+          if (topologySource.status === 'not-modified') {
+            lastCanvasTopologyEtagRef.current =
+              topologySource.etag ?? lastCanvasTopologyEtagRef.current;
+            return;
+          }
+
+          lastCanvasTopologyEtagRef.current = topologySource.etag ?? null;
+          const fetchedDevices = topologySource.devices;
+          const fetchedLinks = topologySource.links;
+          const savedPositions = topologySource.positions;
 
           const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
           const structureChanged = lastTopologyIdentityRef.current !== topologyIdentity.signature;

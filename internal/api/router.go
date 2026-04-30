@@ -36,6 +36,13 @@ func NewRouter(
 	deviceHandler := NewDeviceHandler(deviceService, credentialProfileRepo, vendorRegistry)
 	linkHandler := NewLinkHandler(linkRepo, deviceService)
 	positionHandler := NewPositionHandler(positionRepo)
+	canvasTopologyHandler := NewCanvasTopologyHandler(
+		deviceService,
+		linkRepo,
+		positionRepo,
+		areaRepo,
+		vendorRegistry,
+	)
 	settingsHandler := NewSettingsHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	areaHandler := NewAreaHandler(areaRepo)
@@ -47,6 +54,15 @@ func NewRouter(
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandler(instanceBackupService)
 	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo)
+
+	// Canvas topology read model route
+	mux.HandleFunc("/api/v1/topology/canvas", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		canvasTopologyHandler.HandleGet(w, r)
+	})
 
 	// Device routes
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseDevicesResponse } from './api';
+import { parseCanvasTopologyResponse, parseDevicesResponse } from './api';
 
 function deviceResource(id: string, deviceType: string) {
   return {
@@ -96,5 +96,81 @@ describe('parseDevicesResponse', () => {
     });
 
     expect(devices[0].polling_enabled).toBe(false);
+  });
+});
+
+describe('parseCanvasTopologyResponse', () => {
+  it('parses the versioned canvas read model into frontend topology types', () => {
+    const payload = {
+      schema_version: 1,
+      topology_version: 'topo-abc123',
+      runtime_version: 'rt-456',
+      generated_at: '2026-04-30T12:00:00Z',
+      devices: [deviceResource('router-1', 'router')],
+      links: [
+        {
+          id: 'link-1',
+          source_device_id: 'router-1',
+          source_if_name: 'ether1',
+          target_device_id: 'router-2',
+          target_if_name: 'ether2',
+          discovery_protocol: 'lldp',
+          source_if_speed: 1000000000,
+          source_if_oper_status: 'up',
+          target_if_speed: 100000000,
+          target_if_oper_status: 'down',
+        },
+      ],
+      positions: {
+        'router-1': {
+          x: 120,
+          y: 240,
+          pinned: true,
+          updated_at: '2026-04-30T12:01:00Z',
+        },
+      },
+      areas: [
+        {
+          id: 'area-1',
+          name: 'Backbone',
+          description: 'Core links',
+          color: '#2979FF',
+          device_count: 1,
+          created_at: '2026-04-30T12:00:00Z',
+          updated_at: '2026-04-30T12:00:00Z',
+        },
+      ],
+      capabilities: {
+        supports_topology_delta: false,
+        supports_position_revision: false,
+        supports_area_filtering: true,
+      },
+      settings: {
+        layout: {
+          version: 1,
+        },
+      },
+    };
+
+    const topology = parseCanvasTopologyResponse(payload);
+
+    expect(topology.schema_version).toBe(1);
+    expect(topology.topology_version).toBe('topo-abc123');
+    expect(topology.devices[0].hostname).toBe('router-1.example.test');
+    expect(topology.links[0]).toMatchObject({
+      id: 'link-1',
+      source_if_speed: 1000000000,
+      target_if_oper_status: 'down',
+    });
+    expect(topology.positions['router-1']).toEqual({
+      device_id: 'router-1',
+      x: 120,
+      y: 240,
+      pinned: true,
+      updated_at: '2026-04-30T12:01:00Z',
+    });
+    expect(topology.areas[0].name).toBe('Backbone');
+    expect(topology.capabilities.supports_area_filtering).toBe(true);
+    expect(topology.settings.layout.version).toBe(1);
   });
 });

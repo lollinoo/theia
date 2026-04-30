@@ -3,7 +3,13 @@ import type { ReactFlowInstance } from '@xyflow/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createLink, fetchDevices, fetchLinks, fetchSettings } from '../../api/client';
+import {
+  createLink,
+  fetchCanvasTopology,
+  fetchDevices,
+  fetchLinks,
+  fetchSettings,
+} from '../../api/client';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
 import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
@@ -15,6 +21,7 @@ import { buildTopologyEdges } from './edgeBuilder';
 import { useCanvasData } from './useCanvasData';
 
 vi.mock('../../api/client', () => ({
+  fetchCanvasTopology: vi.fn(),
   fetchDevices: vi.fn(),
   fetchLinks: vi.fn(),
   fetchSettings: vi.fn(),
@@ -162,6 +169,7 @@ describe('useCanvasData', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-13T12:00:00Z'));
     positionMocks.fetchPositions.mockResolvedValue(new Map());
+    vi.mocked(fetchCanvasTopology).mockRejectedValue({ status: 404 });
     vi.mocked(fetchDevices).mockResolvedValue([mockDevice()]);
     vi.mocked(fetchLinks).mockResolvedValue([]);
     vi.mocked(fetchSettings).mockResolvedValue({});
@@ -638,6 +646,92 @@ describe('useCanvasData', () => {
     expect(fetchLinks).not.toHaveBeenCalled();
     expect(computeForceLayout).not.toHaveBeenCalled();
     expect(buildTopologyEdges).not.toHaveBeenCalled();
+  });
+
+  it('uses the canvas topology read model when available and skips legacy roundtrips', async () => {
+    vi.mocked(fetchCanvasTopology).mockResolvedValue({
+      status: 'ok',
+      etag: '"canvas-topology-1"',
+      topology: {
+        schema_version: 1,
+        topology_version: 'topo-abc123',
+        generated_at: '2026-04-30T12:00:00Z',
+        devices: [mockDevice()],
+        links: [],
+        positions: {
+          'dev-1': {
+            device_id: 'dev-1',
+            x: 222,
+            y: 333,
+            pinned: true,
+          },
+        },
+        areas: [],
+        capabilities: {
+          supports_topology_delta: false,
+          supports_position_revision: false,
+          supports_area_filtering: true,
+        },
+        settings: { layout: { version: 1 } },
+      },
+    });
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenCalledWith(undefined);
+    expect(fetchDevices).not.toHaveBeenCalled();
+    expect(fetchLinks).not.toHaveBeenCalled();
+    expect(positionMocks.fetchPositions).not.toHaveBeenCalled();
+    expect(result.current.nodes[0].position).toEqual({ x: 222, y: 333 });
+  });
+
+  it('skips structural recomposition when the canvas read model is not modified', async () => {
+    vi.mocked(fetchCanvasTopology)
+      .mockResolvedValueOnce({
+        status: 'ok',
+        etag: '"canvas-topology-1"',
+        topology: {
+          schema_version: 1,
+          topology_version: 'topo-abc123',
+          generated_at: '2026-04-30T12:00:00Z',
+          devices: [mockDevice()],
+          links: [],
+          positions: {},
+          areas: [],
+          capabilities: {
+            supports_topology_delta: false,
+            supports_position_revision: false,
+            supports_area_filtering: true,
+          },
+          settings: { layout: { version: 1 } },
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'not-modified',
+        etag: '"canvas-topology-1"',
+      });
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    vi.mocked(buildTopologyEdges).mockClear();
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenLastCalledWith('"canvas-topology-1"');
+    expect(buildTopologyEdges).not.toHaveBeenCalled();
+    expect(result.current.nodes).toHaveLength(1);
   });
 
   it('preserves measured node dimensions across runtime-only snapshot updates', async () => {

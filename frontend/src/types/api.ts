@@ -90,6 +90,29 @@ export interface DevicePosition {
   updated_at?: string;
 }
 
+export interface CanvasTopologyCapabilities {
+  supports_topology_delta: boolean;
+  supports_position_revision: boolean;
+  supports_area_filtering: boolean;
+}
+
+export interface CanvasTopologyResponse {
+  schema_version: 1;
+  topology_version: string;
+  runtime_version?: string;
+  generated_at: string;
+  devices: Device[];
+  links: Link[];
+  positions: Record<string, DevicePosition>;
+  areas: Area[];
+  capabilities: CanvasTopologyCapabilities;
+  settings: {
+    layout: {
+      version: number;
+    };
+  };
+}
+
 export interface InterfaceInfo {
   if_name: string;
   if_descr: string;
@@ -306,6 +329,80 @@ export function parseLinksResponse(payload: unknown): Link[] {
       target_if_oper_status: readString(resource, 'target_if_oper_status'),
     };
   });
+}
+
+function parsePositionResource(resource: unknown, fallbackDeviceId = ''): DevicePosition {
+  if (!isRecord(resource)) {
+    throw new Error('invalid position resource');
+  }
+
+  return {
+    device_id: readString(resource, 'device_id', fallbackDeviceId),
+    x: readNumber(resource, 'x'),
+    y: readNumber(resource, 'y'),
+    pinned: readBoolean(resource, 'pinned'),
+    updated_at: readString(resource, 'updated_at'),
+  };
+}
+
+function parseCanvasTopologyPositions(payload: unknown): Record<string, DevicePosition> {
+  if (Array.isArray(payload)) {
+    return Object.fromEntries(
+      payload.map((resource) => {
+        const position = parsePositionResource(resource);
+        return [position.device_id, position];
+      }),
+    );
+  }
+
+  if (!isRecord(payload)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(payload).map(([deviceId, resource]) => {
+      const position = parsePositionResource(resource, deviceId);
+      return [position.device_id || deviceId, position];
+    }),
+  );
+}
+
+export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyResponse {
+  if (!isRecord(payload)) {
+    throw new Error('invalid canvas topology response');
+  }
+
+  const capabilities = isRecord(payload.capabilities) ? payload.capabilities : {};
+  const settings = isRecord(payload.settings) ? payload.settings : {};
+  const layout = isRecord(settings.layout) ? settings.layout : {};
+
+  return {
+    schema_version: 1,
+    topology_version: readString(payload, 'topology_version'),
+    runtime_version:
+      typeof payload.runtime_version === 'string' ? payload.runtime_version : undefined,
+    generated_at: readString(payload, 'generated_at'),
+    devices: parseDevicesResponse({
+      data: Array.isArray(payload.devices) ? payload.devices : [],
+    }),
+    links: parseLinksResponse({
+      data: Array.isArray(payload.links) ? payload.links : [],
+    }),
+    positions: parseCanvasTopologyPositions(payload.positions),
+    areas: parseAreasResponse({
+      data: Array.isArray(payload.areas) ? payload.areas : [],
+    }),
+    capabilities: {
+      supports_topology_delta: readBoolean(capabilities, 'supports_topology_delta'),
+      supports_position_revision: readBoolean(capabilities, 'supports_position_revision'),
+      supports_area_filtering: readBoolean(capabilities, 'supports_area_filtering'),
+    },
+    settings: {
+      layout: {
+        version: readNumber(layout, 'version', 1),
+      },
+    },
+  };
 }
 
 export function parseInterfacesResponse(payload: unknown): InterfaceInfo[] {
@@ -639,17 +736,5 @@ export function parsePositionsResponse(payload: unknown): DevicePosition[] {
 
   const data = Array.isArray(payload.data) ? payload.data : [];
 
-  return data.map((resource) => {
-    if (!isRecord(resource)) {
-      throw new Error('invalid position resource');
-    }
-
-    return {
-      device_id: readString(resource, 'device_id'),
-      x: readNumber(resource, 'x'),
-      y: readNumber(resource, 'y'),
-      pinned: readBoolean(resource, 'pinned'),
-      updated_at: readString(resource, 'updated_at'),
-    };
-  });
+  return data.map((resource) => parsePositionResource(resource));
 }

@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
-	"github.com/google/uuid"
 )
 
 // LinkHandler provides HTTP handlers for link CRUD operations and the
@@ -52,16 +52,16 @@ type interfaceResponse struct {
 // the frontend can render bandwidth labels and link coloring without fetching
 // /devices/{id}/interfaces for every linked device on page load.
 type enrichedLinkResponse struct {
-	ID                  string `json:"id"`
-	SourceDeviceID      string `json:"source_device_id"`
-	SourceIfName        string `json:"source_if_name"`
-	TargetDeviceID      string `json:"target_device_id"`
-	TargetIfName        string `json:"target_if_name"`
-	DiscoveryProtocol   string `json:"discovery_protocol"`
-	SourceIfSpeed       int64  `json:"source_if_speed"`
-	SourceIfOperStatus  string `json:"source_if_oper_status"`
-	TargetIfSpeed       int64  `json:"target_if_speed"`
-	TargetIfOperStatus  string `json:"target_if_oper_status"`
+	ID                 string `json:"id"`
+	SourceDeviceID     string `json:"source_device_id"`
+	SourceIfName       string `json:"source_if_name"`
+	TargetDeviceID     string `json:"target_device_id"`
+	TargetIfName       string `json:"target_if_name"`
+	DiscoveryProtocol  string `json:"discovery_protocol"`
+	SourceIfSpeed      int64  `json:"source_if_speed"`
+	SourceIfOperStatus string `json:"source_if_oper_status"`
+	TargetIfSpeed      int64  `json:"target_if_speed"`
+	TargetIfOperStatus string `json:"target_if_oper_status"`
 }
 
 // HandleList handles GET /api/v1/links
@@ -76,55 +76,14 @@ func (h *LinkHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 		links = []domain.Link{}
 	}
 
-	// Build a device map so we can look up interface speed/oper_status per link endpoint.
-	// GetAllDevices uses the in-memory cache so this is cheap.
+	// GetAllDevices uses the in-memory cache so interface enrichment is cheap.
 	devices, err := h.deviceService.GetAllDevices(r.Context())
 	if err != nil {
 		// Non-fatal: fall back to links without enrichment.
 		devices = nil
 	}
-	type ifInfo struct {
-		speed      int64
-		operStatus string
-	}
-	// Map: deviceID -> ifName -> ifInfo
-	deviceIfMap := make(map[string]map[string]ifInfo, len(devices))
-	for i := range devices {
-		d := &devices[i]
-		idStr := d.ID.String()
-		ifMap := make(map[string]ifInfo, len(d.Interfaces))
-		for _, iface := range d.Interfaces {
-			ifMap[iface.IfName] = ifInfo{speed: iface.Speed, operStatus: iface.OperStatus}
-		}
-		deviceIfMap[idStr] = ifMap
-	}
 
-	enriched := make([]enrichedLinkResponse, 0, len(links))
-	for _, link := range links {
-		resp := enrichedLinkResponse{
-			ID:                link.ID.String(),
-			SourceDeviceID:    link.SourceDeviceID.String(),
-			SourceIfName:      link.SourceIfName,
-			TargetDeviceID:    link.TargetDeviceID.String(),
-			TargetIfName:      link.TargetIfName,
-			DiscoveryProtocol: string(link.DiscoveryProtocol),
-		}
-		if ifMap, ok := deviceIfMap[resp.SourceDeviceID]; ok {
-			if info, ok := ifMap[link.SourceIfName]; ok {
-				resp.SourceIfSpeed = info.speed
-				resp.SourceIfOperStatus = info.operStatus
-			}
-		}
-		if ifMap, ok := deviceIfMap[resp.TargetDeviceID]; ok {
-			if info, ok := ifMap[link.TargetIfName]; ok {
-				resp.TargetIfSpeed = info.speed
-				resp.TargetIfOperStatus = info.operStatus
-			}
-		}
-		enriched = append(enriched, resp)
-	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": enriched})
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": buildEnrichedLinkResponses(links, devices)})
 }
 
 // HandleCreate handles POST /api/v1/links

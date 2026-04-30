@@ -3,6 +3,7 @@ import {
   type BackupFile,
   type BackupJob,
   type BackupStatus,
+  type CanvasTopologyResponse,
   type CredentialProfile,
   type Device,
   type DeviceCredentialProfile,
@@ -17,6 +18,7 @@ import {
   type WinBoxCredentials,
   parseAreaResponse,
   parseAreasResponse,
+  parseCanvasTopologyResponse,
   parseCredentialProfileResponse,
   parseCredentialProfilesResponse,
   parseDeviceCredentialProfilesResponse,
@@ -56,6 +58,70 @@ async function requestJSON(path: string): Promise<unknown> {
   }
 
   return payload;
+}
+
+export class CanvasTopologyFetchError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'CanvasTopologyFetchError';
+    this.status = status;
+  }
+}
+
+export type CanvasTopologyFetchResult =
+  | {
+      status: 'ok';
+      topology: CanvasTopologyResponse;
+      etag?: string;
+    }
+  | {
+      status: 'not-modified';
+      etag?: string;
+    };
+
+export async function fetchCanvasTopology(
+  ifNoneMatch?: string,
+): Promise<CanvasTopologyFetchResult> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+  if (ifNoneMatch) {
+    headers['If-None-Match'] = ifNoneMatch;
+  }
+
+  const response = await fetch('/api/v1/topology/canvas', { headers });
+  const etag = response.headers.get('ETag') ?? undefined;
+
+  if (response.status === 304) {
+    return {
+      status: 'not-modified',
+      etag,
+    };
+  }
+
+  const payload = (await response.json().catch(() => null)) as ErrorPayload | unknown;
+
+  if (!response.ok) {
+    const errorMessage =
+      typeof payload === 'object' &&
+      payload !== null &&
+      'error' in payload &&
+      typeof payload.error === 'string'
+        ? payload.error
+        : response.statusText;
+    throw new CanvasTopologyFetchError(
+      response.status,
+      `/api/v1/topology/canvas failed: ${response.status} ${errorMessage}`,
+    );
+  }
+
+  return {
+    status: 'ok',
+    topology: parseCanvasTopologyResponse(payload),
+    etag,
+  };
 }
 
 export interface HealthVersion {

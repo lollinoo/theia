@@ -4,6 +4,7 @@ import {
   createDevice,
   deleteDevice,
   fetchBackupJobs,
+  fetchCanvasTopology,
   fetchDevices,
   fetchLinks,
   fetchSettings,
@@ -256,6 +257,66 @@ describe('fetchSettings', () => {
     );
 
     await expect(fetchSettings()).rejects.toThrow('Failed to fetch settings');
+  });
+});
+
+describe('fetchCanvasTopology', () => {
+  it('fetches the canvas read model with an optional ETag validator', async () => {
+    const payload = {
+      schema_version: 1,
+      topology_version: 'topo-abc123',
+      generated_at: '2026-04-30T12:00:00Z',
+      devices: [deviceResource('uuid-1', 'router-01', '10.0.0.1')],
+      links: [],
+      positions: {},
+      areas: [],
+      capabilities: {
+        supports_topology_delta: false,
+        supports_position_revision: false,
+        supports_area_filtering: true,
+      },
+      settings: { layout: { version: 1 } },
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ...mockResponse(payload),
+      headers: new Headers({ ETag: '"canvas-topology-1"' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchCanvasTopology('"previous"');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/topology/canvas', {
+      headers: {
+        Accept: 'application/json',
+        'If-None-Match': '"previous"',
+      },
+    });
+    expect(result).toMatchObject({
+      status: 'ok',
+      etag: '"canvas-topology-1"',
+      topology: {
+        schema_version: 1,
+        topology_version: 'topo-abc123',
+      },
+    });
+  });
+
+  it('returns not-modified when the backend responds with 304', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 304,
+        statusText: 'Not Modified',
+        json: () => Promise.resolve(null),
+        headers: new Headers({ ETag: '"canvas-topology-1"' }),
+      }),
+    );
+
+    await expect(fetchCanvasTopology('"canvas-topology-1"')).resolves.toEqual({
+      status: 'not-modified',
+      etag: '"canvas-topology-1"',
+    });
   });
 });
 
