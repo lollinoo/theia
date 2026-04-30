@@ -41,6 +41,8 @@ const (
 )
 
 const (
+	CanvasTopologyEndpoint = "/api/v1/topology/canvas"
+
 	ResyncScopeOverview          = "overview"
 	ResyncReasonClientResync     = "client_resync_scheduled"
 	ResyncReasonStateChangesDrop = "state_changes_dropped"
@@ -77,6 +79,12 @@ type RuntimeDeltaMessagePayload struct {
 	BaseVersion uint64           `json:"base_version"`
 	Version     uint64           `json:"version"`
 	Delta       *SnapshotPayload `json:"delta"`
+}
+
+type TopologyChangedPayload struct {
+	TopologyVersion     uint64 `json:"topology_version"`
+	Reason              string `json:"reason,omitempty"`
+	RecommendedEndpoint string `json:"recommended_endpoint,omitempty"`
 }
 
 type PollingHealthChangedPayload = polling.HealthSnapshot
@@ -121,6 +129,17 @@ func NewRuntimeDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64)
 			BaseVersion: baseVersion,
 			Version:     version,
 			Delta:       CloneSnapshot(delta),
+		},
+	}
+}
+
+func NewTopologyChangedMessage(topologyVersion uint64, reason string) Message {
+	return Message{
+		Type: MessageTypeTopologyChanged,
+		Payload: TopologyChangedPayload{
+			TopologyVersion:     topologyVersion,
+			Reason:              reason,
+			RecommendedEndpoint: CanvasTopologyEndpoint,
 		},
 	}
 }

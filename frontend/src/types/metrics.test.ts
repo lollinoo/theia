@@ -656,6 +656,26 @@ describe('parseSnapshotPayload', () => {
     ).toBe('');
   });
 
+  it('parses versioned topology_changed invalidation payloads', () => {
+    const message = parseWSMessage({
+      type: 'topology_changed',
+      payload: {
+        topology_version: 12,
+        reason: 'topology_dirty',
+        recommended_endpoint: '/api/v1/topology/canvas',
+      },
+    });
+
+    expect(message).toEqual({
+      type: 'topology_changed',
+      payload: {
+        topology_version: 12,
+        reason: 'topology_dirty',
+        recommended_endpoint: '/api/v1/topology/canvas',
+      },
+    });
+  });
+
   it('fails snapshot parsing when link map keys do not match link_id', () => {
     expect(() =>
       parseWSMessage({

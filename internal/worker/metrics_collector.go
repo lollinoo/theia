@@ -62,8 +62,9 @@ type MetricsCollector struct {
 
 	// prevHashes stores per-section FNV-64a hashes from the previous collection cycle.
 	// nil on the first cycle — causes a full snapshot broadcast instead of a delta.
-	prevHashes *sectionHashes
-	version    uint64
+	prevHashes      *sectionHashes
+	version         uint64
+	topologyVersion uint64
 }
 
 // NewMetricsCollector creates a background collector for live Prometheus data.
@@ -241,7 +242,6 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 	defer cancel()
 
 	snapshot, promNowAvailable, promErr := c.buildSnapshot(collectCtx)
-	broadcastedSnapshot := false
 
 	// Compute hashes for the current snapshot to drive delta detection.
 	currentHashes := computeSnapshotHashes(snapshot)
@@ -261,7 +261,6 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 		version := c.version
 		c.mu.Unlock()
 		c.hub.Broadcast(ws.NewSnapshotMessage(snapshot, version))
-		broadcastedSnapshot = true
 	} else {
 		delta := buildDelta(snapshot, currentHashes, prev)
 		if delta != nil {
@@ -272,7 +271,6 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 			version := c.version
 			c.mu.Unlock()
 			c.hub.Broadcast(ws.NewSnapshotDeltaMessage(delta, baseVersion, version))
-			broadcastedSnapshot = true
 		}
 		// If delta is nil, nothing changed — skip broadcast entirely.
 	}
@@ -296,9 +294,9 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 		})
 	}
 
-	// Drain topology notify channel and broadcast topology_changed event.
-	// This runs after the snapshot broadcast so the frontend receives fresh
-	// snapshot data before the topology_changed event triggers loadTopology.
+	// Drain topology notify channel and broadcast topology_changed as a
+	// structural invalidation. The frontend reloads the canvas read model over
+	// HTTP instead of expecting a forced runtime snapshot here.
 	if c.topologyNotify != nil {
 		drained := false
 		for {
@@ -311,17 +309,11 @@ func (c *MetricsCollector) collectAndBroadcast(ctx context.Context) {
 		}
 	topologyDrained:
 		if drained {
-			if !broadcastedSnapshot {
-				c.mu.Lock()
-				c.version++
-				version := c.version
-				c.mu.Unlock()
-				c.hub.Broadcast(ws.NewSnapshotMessage(snapshot, version))
-			}
-			c.hub.Broadcast(ws.Message{
-				Type:    ws.MessageTypeTopologyChanged,
-				Payload: nil,
-			})
+			c.mu.Lock()
+			c.topologyVersion++
+			topologyVersion := c.topologyVersion
+			c.mu.Unlock()
+			c.hub.Broadcast(ws.NewTopologyChangedMessage(topologyVersion, refreshReloadReasonTopologyDrainFallback))
 		}
 	}
 }

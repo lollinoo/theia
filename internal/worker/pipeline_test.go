@@ -1380,6 +1380,15 @@ type wsVersionedAlertMessage struct {
 	} `json:"payload"`
 }
 
+type wsTopologyChangedMessage struct {
+	Type    string `json:"type"`
+	Payload struct {
+		TopologyVersion     uint64 `json:"topology_version"`
+		Reason              string `json:"reason"`
+		RecommendedEndpoint string `json:"recommended_endpoint"`
+	} `json:"payload"`
+}
+
 func newDetailSubscriptionTestDevice() domain.Device {
 	return domain.Device{
 		ID:     uuid.New(),
@@ -1868,7 +1877,7 @@ func TestMergeSnapshotPayload_RefreshesCompatibilityViewsAfterDelta(t *testing.T
 	}
 }
 
-func TestPipelineOrchestratorBroadcastLoop_LinkChangeForcesFullSnapshotAndTopologyChanged(t *testing.T) {
+func TestPipelineOrchestratorBroadcastLoop_LinkChangeBroadcastsTopologyInvalidationOnly(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
 	pipeline.fullResyncInterval = time.Hour
@@ -1886,12 +1895,24 @@ func TestPipelineOrchestratorBroadcastLoop_LinkChangeForcesFullSnapshotAndTopolo
 		LinkID: uuid.New(),
 	}
 
-	types := broadcastMessageTypes(t, waitForBroadcastMessages(t, hub, time.Second))
-	if len(types) < 2 {
-		t.Fatalf("expected snapshot and topology_changed after link change, got %v", types)
+	messages := waitForBroadcastMessages(t, hub, time.Second)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 1 || types[0] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology_changed invalidation only after link change, got %v", types)
 	}
-	if types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeTopologyChanged {
-		t.Fatalf("expected full snapshot then topology_changed, got %v", types)
+
+	var message wsTopologyChangedMessage
+	if err := json.Unmarshal(messages[0], &message); err != nil {
+		t.Fatalf("decode topology_changed: %v", err)
+	}
+	if message.Payload.TopologyVersion == 0 {
+		t.Fatal("expected topology_changed payload to include a topology version")
+	}
+	if message.Payload.Reason != refreshReloadReasonTopologyDirty {
+		t.Fatalf("topology_changed reason = %q, want %q", message.Payload.Reason, refreshReloadReasonTopologyDirty)
+	}
+	if message.Payload.RecommendedEndpoint != "/api/v1/topology/canvas" {
+		t.Fatalf("recommended endpoint = %q, want /api/v1/topology/canvas", message.Payload.RecommendedEndpoint)
 	}
 }
 
@@ -2109,7 +2130,7 @@ func TestPipelineOrchestratorTopologyChangedFiresAfterSnapshot(t *testing.T) {
 	}
 }
 
-func TestPipelineOrchestratorTopologyChangedForcesSnapshotWhenOverviewDeltaNil(t *testing.T) {
+func TestPipelineOrchestratorTopologyChangedInvalidatesWithoutForcedSnapshotWhenOverviewDeltaNil(t *testing.T) {
 	pipeline, hub, _, topologyNotify, _ := newBroadcastTestPipeline(t)
 
 	pipeline.broadcaster.broadcastOnce(context.Background())
@@ -2119,14 +2140,8 @@ func TestPipelineOrchestratorTopologyChangedForcesSnapshotWhenOverviewDeltaNil(t
 	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
-	if len(types) < 2 {
-		t.Fatalf("expected forced snapshot and topology_changed, got %v", types)
-	}
-	if types[0] != ws.MessageTypeSnapshot {
-		t.Fatalf("expected forced full snapshot before topology_changed, got %v", types)
-	}
-	if types[1] != ws.MessageTypeTopologyChanged {
-		t.Fatalf("expected topology_changed after forced snapshot, got %v", types)
+	if len(types) != 1 || types[0] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology_changed invalidation without forced snapshot, got %v", types)
 	}
 }
 
@@ -2166,18 +2181,15 @@ func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing
 	}
 
 	topologyTypes := broadcastMessageTypes(t, drainBroadcastCh(hub))
-	if len(topologyTypes) < 2 {
-		t.Fatalf("expected topology refresh snapshot and topology_changed, got %v", topologyTypes)
-	}
-	if topologyTypes[0] != ws.MessageTypeSnapshot || topologyTypes[1] != ws.MessageTypeTopologyChanged {
-		t.Fatalf("expected topology refresh snapshot before topology_changed, got %v", topologyTypes)
+	if len(topologyTypes) != 1 || topologyTypes[0] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology refresh invalidation only, got %v", topologyTypes)
 	}
 	topologyMetrics := string(topologyRegistry.MarshalPrometheus())
 	if !strings.Contains(topologyMetrics, `theia_refresh_topology_reload_total{reason="topology_dirty"} 1`) {
 		t.Fatalf("expected topology_dirty reload reason metric, got:\n%s", topologyMetrics)
 	}
-	if !strings.Contains(topologyMetrics, `theia_refresh_snapshot_build_seconds_count{mode="full",result="success"} 1`) {
-		t.Fatalf("expected topology refresh full snapshot build metric, got:\n%s", topologyMetrics)
+	if strings.Contains(topologyMetrics, `theia_refresh_snapshot_build_seconds_count{mode="full",result="success"} 1`) {
+		t.Fatalf("expected topology invalidation not to build a full snapshot, got:\n%s", topologyMetrics)
 	}
 
 	fullResyncRegistry := observability.ResetDefaultForTest()
@@ -2377,11 +2389,11 @@ func TestPipelineOrchestratorBroadcastDirty_TopologyAndAlertsDirtyAlsoBroadcasts
 	}
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
-	if len(types) < 3 {
-		t.Fatalf("expected snapshot, topology_changed, and alert, got %v", types)
+	if len(types) < 2 {
+		t.Fatalf("expected topology_changed and alert, got %v", types)
 	}
-	if types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeTopologyChanged || types[2] != ws.MessageTypeAlert {
-		t.Fatalf("expected snapshot before topology_changed before alert, got %v", types)
+	if types[0] != ws.MessageTypeTopologyChanged || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected topology_changed before alert, got %v", types)
 	}
 }
 

@@ -14,6 +14,7 @@ import {
   type SnapshotDeltaWSMessage,
   type SnapshotPayload,
   type SnapshotWSMessage,
+  type TopologyChangedWSMessage,
   mergeSnapshotDelta,
   parseWSMessage,
 } from '../types/metrics';
@@ -342,6 +343,10 @@ export function useWebSocket(
             resetAlertState();
             dispatchResyncRequired((message as ResyncRequiredWSMessage).payload);
           } else if (message.type === 'topology_changed' || message.type === 'topology_delta') {
+            const topologyPayload =
+              message.type === 'topology_changed'
+                ? (message as TopologyChangedWSMessage).payload
+                : null;
             topologyChangedCountRef.current += 1;
             updateCanvasDiagnosticsState({
               websocket: {
@@ -355,9 +360,14 @@ export function useWebSocket(
               message: 'Topology change notification received',
               metadata: {
                 type: message.type,
+                ...(topologyPayload ?? {}),
               },
             });
-            window.dispatchEvent(new Event('topology-changed'));
+            window.dispatchEvent(
+              new CustomEvent('topology-changed', {
+                detail: topologyPayload,
+              }),
+            );
           }
         } catch (error) {
           console.error('Failed to parse WebSocket message', error);

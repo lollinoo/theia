@@ -165,14 +165,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 		p.hub.BroadcastOverviewSnapshot(snapshot, version)
 	default:
 		delta := buildDelta(snapshot, currentHashes, previousHashes)
-		if delta == nil && drainedTopology {
-			p.runtime.mu.Lock()
-			p.runtime.overviewVersion = currentVersion + 1
-			version := p.runtime.overviewVersion
-			p.runtime.mu.Unlock()
-			observability.Default().IncRefreshTopologyReload(refreshReloadReasonTopologyDrainFallback)
-			p.hub.BroadcastOverviewSnapshot(snapshot, version)
-		} else if delta != nil {
+		if delta != nil {
 			p.runtime.mu.Lock()
 			baseVersion := p.runtime.overviewVersion
 			p.runtime.overviewVersion = baseVersion + 1
@@ -183,10 +176,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	}
 
 	if drainedTopology {
-		p.hub.Broadcast(ws.Message{
-			Type:    ws.MessageTypeTopologyChanged,
-			Payload: nil,
-		})
+		b.broadcastTopologyInvalidation(refreshReloadReasonTopologyDrainFallback)
 	}
 }
 
@@ -204,9 +194,8 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 		return nil
 	}
 	if topologyDirty {
-		if err := b.broadcastFullSnapshot(ctx, refreshReloadReasonTopologyDirty, true); err != nil {
-			return err
-		}
+		observability.Default().IncRefreshTopologyReload(refreshReloadReasonTopologyDirty)
+		b.broadcastTopologyInvalidation(refreshReloadReasonTopologyDirty)
 		b.broadcastAlertsIfDirty(alertsDirty)
 		return nil
 	}
@@ -327,10 +316,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshot(_ context.Context, r
 	p.hub.BroadcastOverviewSnapshot(snapshot, version)
 
 	if topologyChanged {
-		p.hub.Broadcast(ws.Message{
-			Type:    ws.MessageTypeTopologyChanged,
-			Payload: nil,
-		})
+		b.broadcastTopologyInvalidation(refreshReloadReasonTopologyDirty)
 	}
 
 	return nil
@@ -354,13 +340,24 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResync(_ context.
 	p.hub.BroadcastOverviewResync(resyncReason, snapshot, version)
 
 	if topologyChanged {
-		p.hub.Broadcast(ws.Message{
-			Type:    ws.MessageTypeTopologyChanged,
-			Payload: nil,
-		})
+		b.broadcastTopologyInvalidation(refreshReloadReasonTopologyDirty)
 	}
 
 	return nil
+}
+
+func (b *pipelineSnapshotBroadcaster) broadcastTopologyInvalidation(reason string) {
+	p := b.pipeline
+	if p == nil || p.runtime == nil || p.hub == nil {
+		return
+	}
+
+	p.runtime.mu.Lock()
+	p.runtime.topologyVersion++
+	version := p.runtime.topologyVersion
+	p.runtime.mu.Unlock()
+
+	p.hub.Broadcast(ws.NewTopologyChangedMessage(version, reason))
 }
 
 func (b *pipelineSnapshotBroadcaster) buildFullOverviewSnapshot() (_ *ws.SnapshotPayload, err error) {

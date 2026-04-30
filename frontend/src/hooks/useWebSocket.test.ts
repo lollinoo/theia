@@ -257,6 +257,37 @@ describe('useWebSocket', () => {
     });
   });
 
+  it('dispatches topology-changed with versioned invalidation detail', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'topology_changed',
+        payload: {
+          topology_version: 12,
+          reason: 'topology_dirty',
+          recommended_endpoint: '/api/v1/topology/canvas',
+        },
+      });
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'topology-changed',
+        detail: {
+          topology_version: 12,
+          reason: 'topology_dirty',
+          recommended_endpoint: '/api/v1/topology/canvas',
+        },
+      }),
+    );
+  });
+
   it('handles snapshot message', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 

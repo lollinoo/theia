@@ -17,6 +17,7 @@ type pipelineRuntimeState struct {
 	mu                 sync.RWMutex
 	lastSnapshot       *ws.SnapshotPayload
 	overviewVersion    uint64
+	topologyVersion    uint64
 	alertVersion       uint64
 	promStatus         ws.PrometheusStatusPayload
 	hostnames          map[uuid.UUID]string

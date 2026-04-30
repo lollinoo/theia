@@ -2274,7 +2274,7 @@ func TestCollectAndBroadcast_TopologyChangedEvent(t *testing.T) {
 	}
 }
 
-func TestCollectAndBroadcast_TopologyChangedWithoutDelta_ForcesSnapshotFirst(t *testing.T) {
+func TestCollectAndBroadcast_TopologyChangedWithoutDeltaBroadcastsInvalidationOnly(t *testing.T) {
 	mc, hub := newMockCollector(t)
 	topologyNotify := make(chan struct{}, 1)
 	mc.topologyNotify = topologyNotify
@@ -2286,14 +2286,8 @@ func TestCollectAndBroadcast_TopologyChangedWithoutDelta_ForcesSnapshotFirst(t *
 	mc.collectAndBroadcast(context.Background())
 
 	types := broadcastTypesFromRawMessages(t, drainBroadcastCh(hub))
-	if len(types) < 2 {
-		t.Fatalf("expected forced snapshot and topology_changed, got %v", types)
-	}
-	if types[0] != ws.MessageTypeSnapshot {
-		t.Fatalf("expected forced snapshot before topology_changed, got %v", types)
-	}
-	if types[1] != ws.MessageTypeTopologyChanged {
-		t.Fatalf("expected topology_changed after forced snapshot, got %v", types)
+	if len(types) != 1 || types[0] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology_changed invalidation without forced snapshot, got %v", types)
 	}
 }
 

@@ -150,6 +150,12 @@ export interface ResyncRequiredPayload {
   reason: 'client_resync_scheduled' | 'state_changes_dropped' | 'hub_buffer_full';
 }
 
+export interface TopologyChangedPayload {
+  topology_version?: number | string;
+  reason?: string;
+  recommended_endpoint?: string;
+}
+
 export interface SnapshotEnvelopePayload {
   version: number | null;
   snapshot: SnapshotPayload;
@@ -203,6 +209,11 @@ export interface ResyncRequiredWSMessage extends Omit<WSMessage, 'type' | 'paylo
 export interface AlertWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'alert';
   payload: AlertEnvelopePayload;
+}
+
+export interface TopologyChangedWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'topology_changed';
+  payload: TopologyChangedPayload;
 }
 
 export interface AlertEnvelopePayload {
@@ -458,7 +469,8 @@ export function parseWSMessage(
   | PrometheusStatusWSMessage
   | PollingHealthChangedWSMessage
   | ResyncRequiredWSMessage
-  | AlertWSMessage {
+  | AlertWSMessage
+  | TopologyChangedWSMessage {
   if (!isRecord(value)) {
     throw new Error('invalid websocket message');
   }
@@ -623,7 +635,26 @@ export function parseWSMessage(
     } as ResyncRequiredWSMessage;
   }
 
-  if (type === 'topology_changed' || type === 'topology_delta') {
+  if (type === 'topology_changed') {
+    const payload = isRecord(value.payload) ? value.payload : {};
+    const topologyVersion = payload.topology_version;
+    return {
+      type,
+      payload: {
+        topology_version:
+          typeof topologyVersion === 'number' || typeof topologyVersion === 'string'
+            ? topologyVersion
+            : undefined,
+        reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+        recommended_endpoint:
+          typeof payload.recommended_endpoint === 'string'
+            ? payload.recommended_endpoint
+            : undefined,
+      },
+    } as TopologyChangedWSMessage;
+  }
+
+  if (type === 'topology_delta') {
     return {
       type,
       payload: null,

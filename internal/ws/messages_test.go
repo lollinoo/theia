@@ -229,6 +229,24 @@ func TestNewRuntimeDeltaMessageUsesStableEnvelope(t *testing.T) {
 	}
 }
 
+func TestNewTopologyChangedMessageUsesVersionedInvalidationEnvelope(t *testing.T) {
+	msg := NewTopologyChangedMessage(12, "topology_dirty")
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	if !strings.Contains(string(raw), `"type":"topology_changed"`) {
+		t.Fatalf("message = %s, want topology_changed", raw)
+	}
+	if !strings.Contains(string(raw), `"topology_version":12`) {
+		t.Fatalf("message = %s, want topology_version", raw)
+	}
+	if !strings.Contains(string(raw), `"recommended_endpoint":"/api/v1/topology/canvas"`) {
+		t.Fatalf("message = %s, want recommended endpoint", raw)
+	}
+}
+
 func TestNewPollingHealthChangedMessage(t *testing.T) {
 	msg := NewPollingHealthChangedMessage(polling.HealthSnapshot{
 		EssentialOverloaded: true,
