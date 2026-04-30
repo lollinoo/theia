@@ -2877,8 +2877,49 @@ func TestAddDevice_VirtualWithIP(t *testing.T) {
 	if device.IP != "10.0.0.99" {
 		t.Errorf("expected IP 10.0.0.99, got %s", device.IP)
 	}
+	if device.MetricsSource != domain.MetricsSourceNone {
+		t.Errorf("expected metrics source none for virtual device with IP, got %s", device.MetricsSource)
+	}
 	if snmpCalled {
 		t.Error("discoverFunc was called for virtual device — should have been skipped")
+	}
+}
+
+func TestGetAllDevices_NormalizesLegacyVirtualWithIPMetricsSource(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+
+	legacyVirtual := &domain.Device{
+		ID:                   uuid.New(),
+		Hostname:             "support-node",
+		IP:                   "10.0.0.99",
+		DeviceType:           domain.DeviceTypeVirtual,
+		Managed:              true,
+		Status:               domain.DeviceStatusUnknown,
+		MetricsSource:        domain.MetricsSourcePrometheus,
+		PrometheusLabelName:  "instance",
+		PrometheusLabelValue: "10.0.0.99",
+	}
+	if err := deviceRepo.Create(legacyVirtual); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	devices, err := svc.GetAllDevices(context.Background())
+	if err != nil {
+		t.Fatalf("GetAllDevices failed: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+	if devices[0].MetricsSource != domain.MetricsSourceNone {
+		t.Fatalf("expected returned metrics source none for legacy virtual node with IP, got %s", devices[0].MetricsSource)
+	}
+
+	stored, err := deviceRepo.GetByID(legacyVirtual.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if stored.MetricsSource != domain.MetricsSourcePrometheus {
+		t.Fatalf("expected repo metrics source to remain unchanged during read normalization, got %s", stored.MetricsSource)
 	}
 }
 

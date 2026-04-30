@@ -48,6 +48,40 @@ func TestNormalizeDeviceRuntimeDTO_VirtualNoIPIsUnmonitored(t *testing.T) {
 	}
 }
 
+func TestNormalizeDeviceRuntimeDTO_VirtualWithIPIsReachabilityOnly(t *testing.T) {
+	deviceID := uuid.New()
+	lastPolledAt := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+
+	dto := normalizeDeviceRuntimeDTO(
+		domain.Device{
+			ID:            deviceID,
+			IP:            "192.0.2.20",
+			DeviceType:    domain.DeviceTypeVirtual,
+			MetricsSource: domain.MetricsSourcePrometheus,
+		},
+		state.DeviceState{
+			Reachability:     state.ReachabilityUp,
+			LastPolledAt:     lastPolledAt,
+			ExpectedInterval: time.Minute,
+		},
+		nil,
+		ws.PrometheusStatusPayload{},
+	)
+
+	if dto.OperationalStatus != "up" {
+		t.Fatalf("OperationalStatus = %q, want up", dto.OperationalStatus)
+	}
+	if dto.MetricsStatus != "unmonitored" {
+		t.Fatalf("MetricsStatus = %q, want unmonitored", dto.MetricsStatus)
+	}
+	if dto.MetricsReason != normalizedReasonUnmonitored {
+		t.Fatalf("MetricsReason = %q, want %q", dto.MetricsReason, normalizedReasonUnmonitored)
+	}
+	if dto.CPUPercent != nil || dto.MemPercent != nil || dto.TempCelsius != nil || dto.UptimeSecs != nil {
+		t.Fatalf("expected no scalar telemetry for reachability-only virtual node, got %#v", dto)
+	}
+}
+
 func TestNormalizeDeviceRuntimeDTO_PrometheusOutageUsesUpstreamUnavailableReason(t *testing.T) {
 	deviceID := uuid.New()
 
@@ -72,6 +106,35 @@ func TestNormalizeDeviceRuntimeDTO_PrometheusOutageUsesUpstreamUnavailableReason
 	}
 	if dto.MetricsReason != normalizedReasonUpstreamUnavailable {
 		t.Fatalf("MetricsReason = %q, want %q", dto.MetricsReason, normalizedReasonUpstreamUnavailable)
+	}
+}
+
+func TestNormalizeDeviceRuntimeDTO_CoreMetricsAvailableWithoutTemperature(t *testing.T) {
+	deviceID := uuid.New()
+	collectedAt := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+
+	dto := normalizeDeviceRuntimeDTO(
+		domain.Device{ID: deviceID, IP: "192.0.2.30", MetricsSource: domain.MetricsSourceSNMP},
+		state.DeviceState{
+			Metrics: domain.DeviceMetrics{
+				DeviceID:    deviceID,
+				CPUPercent:  floatPtr(11),
+				MemPercent:  floatPtr(22),
+				UptimeSecs:  floatPtr(3600),
+				CollectedAt: collectedAt,
+			},
+			Reachability: state.ReachabilityUp,
+			LastPolledAt: collectedAt,
+		},
+		nil,
+		ws.PrometheusStatusPayload{},
+	)
+
+	if dto.MetricsStatus != "available" {
+		t.Fatalf("MetricsStatus = %q, want available", dto.MetricsStatus)
+	}
+	if dto.MetricsReason != normalizedReasonOK {
+		t.Fatalf("MetricsReason = %q, want %q", dto.MetricsReason, normalizedReasonOK)
 	}
 }
 

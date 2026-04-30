@@ -44,6 +44,9 @@ func normalizeDeviceRuntimeDTO(device domain.Device, deviceState state.DeviceSta
 			AlertStatus:       string(domain.AlertStatusNormal),
 		}
 	}
+	if domain.IsVirtualWithIPDevice(device) {
+		return normalizeVirtualWithIPDeviceRuntimeDTO(device, deviceState, alerts)
+	}
 
 	health := string(deviceState.Health)
 	if health == "" {
@@ -81,6 +84,44 @@ func normalizeDeviceRuntimeDTO(device domain.Device, deviceState state.DeviceSta
 		TempCelsius:                 deviceState.Metrics.TempCelsius,
 		UptimeSecs:                  deviceState.Metrics.UptimeSecs,
 		CollectedAt:                 stringValue(timestampPtr(deviceState.Metrics.CollectedAt)),
+		Stale:                       staleCompatibilityPtr(freshness),
+	}
+}
+
+func normalizeVirtualWithIPDeviceRuntimeDTO(device domain.Device, deviceState state.DeviceState, alerts []domain.AlertState) ws.DeviceRuntimeDTO {
+	device.MetricsSource = domain.MetricsSourceNone
+	deviceState.Metrics = domain.DeviceMetrics{}
+
+	deviceID := device.ID.String()
+	health := string(deviceState.Health)
+	if health == "" {
+		health = string(state.HealthStatusUnknown)
+	}
+
+	freshness := normalizeDeviceFreshness(deviceState)
+	reachability := normalizeDeviceReachability(deviceState)
+	primaryReason := normalizeDevicePrimaryReason(device, deviceState, ws.PrometheusStatusPayload{}, freshness)
+	operationalStatus := normalizeOperationalStatus(device, deviceState, freshness, primaryReason)
+	alertStatus, firingAlertCount := summarizeAlerts(alerts)
+
+	return ws.DeviceRuntimeDTO{
+		DeviceID:                    deviceID,
+		OperationalStatus:           operationalStatus,
+		PrimaryHealth:               string(primaryHealthForDTO(deviceState)),
+		RuntimeFlags:                runtimeFlagsForDTO(deviceState.RuntimeFlags),
+		FieldStates:                 fieldStatesForDTO(nil),
+		NetworkReachable:            string(reachabilityEvidenceForDTO(deviceState.NetworkReachable)),
+		SNMPReachable:               string(polling.TriStateUnknown),
+		Reachability:                reachability,
+		Health:                      health,
+		Freshness:                   freshness,
+		PrimaryReason:               primaryReason,
+		MetricsStatus:               "unmonitored",
+		MetricsReason:               normalizedReasonUnmonitored,
+		AlertStatus:                 string(alertStatus),
+		FiringAlertCount:            firingAlertCount,
+		LastPolledAt:                timestampPtr(deviceState.LastPolledAt),
+		ExpectedPollIntervalSeconds: durationSecondsPtr(deviceState.ExpectedInterval),
 		Stale:                       staleCompatibilityPtr(freshness),
 	}
 }
@@ -250,7 +291,7 @@ func normalizeDeviceMetricsStatus(device domain.Device, deviceState state.Device
 		}
 		return "unavailable", normalizedReasonNoData
 	}
-	if metricCount < 4 {
+	if metricCount < 3 {
 		return "partial", normalizedReasonOK
 	}
 	return "available", normalizedReasonOK
@@ -316,7 +357,7 @@ func summarizeAlerts(alerts []domain.AlertState) (domain.AlertStatus, int) {
 }
 
 func isUnsupportedDevice(device domain.Device) bool {
-	return device.MetricsSource == domain.MetricsSourceNone && !domain.IsVirtualNoIPDevice(device)
+	return device.MetricsSource == domain.MetricsSourceNone && device.DeviceType != domain.DeviceTypeVirtual
 }
 
 func isPrometheusBlocked(device domain.Device, deviceState state.DeviceState, promStatus ws.PrometheusStatusPayload) bool {
@@ -340,9 +381,6 @@ func deviceMetricCount(metrics domain.DeviceMetrics) int {
 		count++
 	}
 	if metrics.MemPercent != nil {
-		count++
-	}
-	if metrics.TempCelsius != nil {
 		count++
 	}
 	if metrics.UptimeSecs != nil {

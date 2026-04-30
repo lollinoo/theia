@@ -70,7 +70,7 @@ func (m *deviceMutationService) AddDevice(
 		prometheusLabelValue = ip
 	}
 
-	if deviceType == domain.DeviceTypeVirtual && ip == "" {
+	if deviceType == domain.DeviceTypeVirtual {
 		metricsSource = domain.MetricsSourceNone
 	}
 
@@ -111,7 +111,7 @@ func (m *deviceMutationService) AddDevice(
 	if domain.ResolveTopologyDiscoveryMode(device, m.parent.defaultTopologyDiscoveryMode()) == domain.TopologyDiscoveryModeBootstrapOnce {
 		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
 	}
-	domain.NormalizeVirtualNoIPDevice(device)
+	domain.NormalizeVirtualDevice(device)
 
 	if err := m.deviceRepo.Create(device); err != nil {
 		return nil, fmt.Errorf("creating device: %w", err)
@@ -218,7 +218,7 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 		device.AreaIDs = *update.AreaIDs
 	}
 	domain.NormalizeDevicePollingEnabled(device)
-	domain.NormalizeVirtualNoIPDevice(device)
+	domain.NormalizeVirtualDevice(device)
 
 	if err := m.deviceRepo.Update(device); err != nil {
 		return err
@@ -294,7 +294,7 @@ func (m *deviceMutationService) GetDevice(ctx context.Context, id uuid.UUID) (*d
 		return nil, err
 	}
 	domain.NormalizeDevicePollingEnabled(device)
-	domain.NormalizeVirtualNoIPDevice(device)
+	domain.NormalizeVirtualDevice(device)
 	m.parent.populateEffectiveTopologyDiscoveryMode(device)
 	return device, nil
 }
@@ -307,7 +307,7 @@ func (m *deviceMutationService) GetAllDevices(ctx context.Context) ([]domain.Dev
 	}
 	for i := range devices {
 		domain.NormalizeDevicePollingEnabled(&devices[i])
-		domain.NormalizeVirtualNoIPDevice(&devices[i])
+		domain.NormalizeVirtualDevice(&devices[i])
 		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
 	}
 	return devices, nil

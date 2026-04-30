@@ -337,7 +337,7 @@ func (c *MetricsCollector) buildSnapshot(ctx context.Context) (*ws.SnapshotPaylo
 	}
 	devices = cloneDevices(devices)
 	for i := range devices {
-		domain.NormalizeVirtualNoIPDevice(&devices[i])
+		domain.NormalizeVirtualDevice(&devices[i])
 	}
 
 	links, err := c.cache.GetLinks()
