@@ -1,5 +1,9 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  exportCanvasDiagnostics,
+  resetCanvasDiagnostics,
+} from '../components/canvas/canvasDiagnostics';
 import { useWebSocket } from './useWebSocket';
 
 function makeDeviceRuntime(overrides: Record<string, unknown> = {}) {
@@ -82,6 +86,7 @@ let mockInstances: MockWebSocket[] = [];
 beforeEach(() => {
   mockInstances = [];
   vi.useFakeTimers();
+  resetCanvasDiagnostics();
 
   // Replace the global WebSocket with our MockWebSocket class.
   // When the hook calls `new WebSocket(url)`, it will construct a MockWebSocket.
@@ -111,6 +116,71 @@ describe('useWebSocket', () => {
     });
 
     expect(result.current.connected).toBe(true);
+  });
+
+  it('records websocket snapshot, delta and rejected delta diagnostics', () => {
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 7,
+          snapshot: {
+            devices: { 'dev-1': makeDeviceRuntime() },
+            links: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 7,
+          version: 8,
+          delta: {
+            devices: {
+              'dev-1': makeDeviceRuntime({
+                cpu_percent: 51,
+                last_collected_at: '2026-01-01T00:01:00Z',
+                last_polled_at: '2026-01-01T00:01:00Z',
+              }),
+            },
+            links: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 6,
+          version: 9,
+          delta: {
+            devices: {},
+            links: {},
+          },
+        },
+      });
+    });
+
+    const exported = exportCanvasDiagnostics();
+
+    expect(exported.diagnostics.websocket).toMatchObject({
+      connected: true,
+      lastMessageType: 'runtime_delta',
+      lastAppliedSnapshotVersion: '7',
+      lastAppliedDeltaVersion: '8',
+      lastRejectedDeltaReason: 'base_version_mismatch',
+      resyncRequiredCount: 1,
+    });
+    expect(exported.events.map((event) => event.event)).toEqual(
+      expect.arrayContaining([
+        'websocket.connected',
+        'runtime.snapshot.applied',
+        'runtime.delta.applied',
+        'runtime.delta.rejected',
+      ]),
+    );
   });
 
   it('handles prometheus_status message', () => {

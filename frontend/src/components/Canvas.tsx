@@ -28,8 +28,13 @@ import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
 import { Toolbar } from './Toolbar';
 import ZoomControls from './ZoomControls';
+import { CanvasDiagnosticsPanel } from './canvas/CanvasDiagnosticsPanel';
 import { CanvasOverlays } from './canvas/CanvasOverlays';
 import { CanvasPanels } from './canvas/CanvasPanels';
+import {
+  recordCanvasDiagnosticEvent,
+  updateCanvasDiagnosticsState,
+} from './canvas/canvasDiagnostics';
 import {
   buildDeviceContextMenuItems,
   isGhostDeviceNode,
@@ -52,6 +57,7 @@ const minimapStyle = {
   boxShadow: 'var(--nt-shadow-floating)',
 };
 const minimapMaskColor = 'var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))';
+const canvasDiagnosticsStorageKey = 'theia.canvas.diagnostics';
 
 function topologyMinimapNodeColor(node: DeviceNode): string {
   const data = node.data;
@@ -73,6 +79,20 @@ const TopologyMiniMap = memo(function TopologyMiniMap() {
     />
   );
 });
+
+function initialCanvasDiagnosticsVisible(): boolean {
+  const queryEnabled = new URLSearchParams(window.location.search).get('canvasDiagnostics') === '1';
+  const storageEnabled = window.localStorage.getItem(canvasDiagnosticsStorageKey) === 'true';
+  if (queryEnabled) {
+    window.localStorage.setItem(canvasDiagnosticsStorageKey, 'true');
+  }
+  return queryEnabled || storageEnabled;
+}
+
+function isCanvasDiagnosticsShortcut(event: KeyboardEvent): boolean {
+  const isPhysicalD = event.code === 'KeyD' || event.key.toLowerCase() === 'd';
+  return event.altKey && (event.ctrlKey || event.metaKey) && isPhysicalD;
+}
 
 interface CanvasProps {
   snapshot: SnapshotPayload | null;
@@ -104,7 +124,9 @@ export default function Canvas({
   const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
   const highlightTimerRef = useRef<number | null>(null);
+  const lastProjectionDiagnosticsSignatureRef = useRef<string>('');
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
   const { resolvedTheme } = useTheme();
   const {
@@ -151,6 +173,26 @@ export default function Canvas({
   );
 
   useKeyboardShortcuts(shortcuts);
+
+  useEffect(() => {
+    const handleDiagnosticsShortcut = (event: KeyboardEvent) => {
+      if (!isCanvasDiagnosticsShortcut(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      setDiagnosticsVisible((current) => {
+        const next = !current;
+        window.localStorage.setItem(canvasDiagnosticsStorageKey, String(next));
+        return next;
+      });
+    };
+
+    window.addEventListener('keydown', handleDiagnosticsShortcut, true);
+    return () => {
+      window.removeEventListener('keydown', handleDiagnosticsShortcut, true);
+    };
+  }, []);
 
   const openEdgeMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => {
@@ -371,6 +413,60 @@ export default function Canvas({
     onAreaSelect,
   ]);
 
+  useEffect(() => {
+    const selectedEdgeCount = displayEdges.filter((edge) => edge.selected).length;
+    updateCanvasDiagnosticsState({
+      graph: {
+        canonicalNodeCount: nodes.length,
+        canonicalEdgeCount: edges.length,
+        displayedNodeCount: displayNodes.length,
+        displayedEdgeCount: displayEdges.length,
+        ghostNodeCount: ghostDevices.length,
+        selectedAreaId,
+        selectedNodeCount,
+        selectedEdgeCount,
+      },
+    });
+
+    const projectionSignature = [
+      selectedAreaId ?? 'global',
+      nodes.length,
+      edges.length,
+      displayNodes.length,
+      displayEdges.length,
+      ghostDevices.length,
+      selectedNodeCount,
+      selectedEdgeCount,
+    ].join(':');
+    if (lastProjectionDiagnosticsSignatureRef.current === projectionSignature) {
+      return;
+    }
+    lastProjectionDiagnosticsSignatureRef.current = projectionSignature;
+    recordCanvasDiagnosticEvent({
+      level: 'info',
+      source: 'projection',
+      event: 'projection.area.changed',
+      message: 'Canvas area projection changed',
+      metadata: {
+        selectedAreaId,
+        canonicalNodeCount: nodes.length,
+        canonicalEdgeCount: edges.length,
+        displayedNodeCount: displayNodes.length,
+        displayedEdgeCount: displayEdges.length,
+        ghostNodeCount: ghostDevices.length,
+      },
+    });
+  }, [
+    selectedAreaId,
+    nodes.length,
+    edges.length,
+    displayNodes.length,
+    displayEdges,
+    displayEdges.length,
+    ghostDevices.length,
+    selectedNodeCount,
+  ]);
+
   // fitView when selectedAreaId changes to re-center on filtered subset
   const prevAreaRef = useRef<string | null>(null);
   useEffect(() => {
@@ -378,6 +474,16 @@ export default function Canvas({
       prevAreaRef.current = selectedAreaId;
       window.requestAnimationFrame(() => {
         reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+        recordCanvasDiagnosticEvent({
+          level: 'debug',
+          source: 'reactflow',
+          event: 'reactflow.fit_view',
+          message: 'React Flow fitView requested after area change',
+          metadata: {
+            selectedAreaId,
+            displayedNodeCount: displayNodes.length,
+          },
+        });
       });
     }
   }, [selectedAreaId, displayNodes.length, reactFlow]);
@@ -666,6 +772,29 @@ export default function Canvas({
         }}
         onFitView={() => {
           void reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+          recordCanvasDiagnosticEvent({
+            level: 'debug',
+            source: 'reactflow',
+            event: 'reactflow.fit_view',
+            message: 'React Flow fitView requested from zoom controls',
+          });
+        }}
+      />
+      <CanvasDiagnosticsPanel
+        open={diagnosticsVisible}
+        onClose={() => {
+          window.localStorage.setItem(canvasDiagnosticsStorageKey, 'false');
+          setDiagnosticsVisible(false);
+        }}
+        onForceRefresh={() => window.__THEIA_CANVAS_FORCE_REFRESH__?.()}
+        onFitView={() => {
+          void reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+          recordCanvasDiagnosticEvent({
+            level: 'debug',
+            source: 'reactflow',
+            event: 'reactflow.fit_view',
+            message: 'React Flow fitView requested from diagnostics panel',
+          });
         }}
       />
 

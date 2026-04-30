@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import Canvas from './Canvas';
 
@@ -81,6 +81,10 @@ vi.mock('../contexts/ThemeContext', () => ({
 }));
 
 describe('Canvas zoom controls', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('fits the topology with a tight viewport padding from the bottom-left control', () => {
     xyflowMocks.fitView.mockClear();
 
@@ -101,5 +105,28 @@ describe('Canvas zoom controls', () => {
       padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
       duration: 280,
     });
+  });
+
+  it('opens diagnostics with the physical D key even when Ctrl+Alt changes event.key', () => {
+    render(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(screen.queryByLabelText('Canvas Diagnostics')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, {
+      key: '∂',
+      code: 'KeyD',
+      ctrlKey: true,
+      altKey: true,
+    });
+
+    expect(screen.getByLabelText('Canvas Diagnostics')).toBeInTheDocument();
   });
 });

@@ -15,6 +15,7 @@ import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
+import { exportCanvasDiagnostics, resetCanvasDiagnostics } from './canvasDiagnostics';
 import { manualEdgeStorageKey, staleThresholdMs } from './canvasHelpers';
 import type { CanvasMeasurementRecord } from './canvasInstrumentation';
 import { buildTopologyEdges } from './edgeBuilder';
@@ -180,6 +181,7 @@ describe('useCanvasData', () => {
     });
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     window.__THEIA_CANVAS_METRICS__ = [];
+    resetCanvasDiagnostics();
     window.localStorage.clear();
   });
 
@@ -217,6 +219,69 @@ describe('useCanvasData', () => {
       last_polled_at: '2026-04-13T11:59:45Z',
       expected_poll_interval_seconds: 60,
     });
+  });
+
+  it('records topology load diagnostics from the canvas read model', async () => {
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce({
+      status: 'ok',
+      etag: '"topo-1"',
+      topology: {
+        schema_version: 1,
+        topology_version: 'topo-1',
+        runtime_version: 'rt-1',
+        generated_at: '2026-04-13T12:00:00Z',
+        devices: [mockDevice()],
+        links: [],
+        positions: {},
+        areas: [],
+        capabilities: {
+          supports_topology_delta: false,
+          supports_position_revision: false,
+          supports_area_filtering: true,
+        },
+        settings: { layout: { version: 1 } },
+      },
+    });
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(exportCanvasDiagnostics().diagnostics.topology).toMatchObject({
+      topologyVersion: 'topo-1',
+      runtimeVersion: 'rt-1',
+      schemaVersion: 1,
+      lastTopologyLoadReason: 'initial_load',
+      lastTopologyLoadStatus: 'success',
+    });
+    expect(exportCanvasDiagnostics().events.map((event) => event.event)).toEqual(
+      expect.arrayContaining(['topology.load.started', 'topology.load.succeeded']),
+    );
+  });
+
+  it('records failed topology load diagnostics', async () => {
+    vi.mocked(fetchDevices).mockRejectedValueOnce(new Error('backend offline'));
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.error).toContain('backend offline');
+    expect(exportCanvasDiagnostics().diagnostics.topology).toMatchObject({
+      lastTopologyLoadReason: 'initial_load',
+      lastTopologyLoadStatus: 'error',
+      lastTopologyLoadError: 'backend offline',
+    });
+    expect(exportCanvasDiagnostics().events.map((event) => event.event)).toContain(
+      'topology.load.failed',
+    );
   });
 
   it('emits runtime-aware devices on initial load when snapshot overrides persisted status', async () => {

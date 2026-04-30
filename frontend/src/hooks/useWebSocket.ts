@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  getCanvasDiagnosticsSnapshot,
+  recordCanvasDiagnosticEvent,
+  updateCanvasDiagnosticsState,
+} from '../components/canvas/canvasDiagnostics';
+import {
   type AlertDTO,
   type AlertWSMessage,
   type PollingHealthPayload,
@@ -61,6 +66,9 @@ export function useWebSocket(
   const awaitingResyncRef = useRef(false);
 
   const reconnectAttemptRef = useRef(0);
+  const reconnectCountRef = useRef(0);
+  const resyncRequiredCountRef = useRef(0);
+  const topologyChangedCountRef = useRef(0);
   const disposed = useRef(false);
 
   function resetAlertState() {
@@ -138,6 +146,22 @@ export function useWebSocket(
           return;
         }
         awaitingResyncRef.current = true;
+        resyncRequiredCountRef.current += 1;
+        updateCanvasDiagnosticsState({
+          websocket: {
+            resyncRequiredCount: resyncRequiredCountRef.current,
+            lastRejectedDeltaReason: 'base_version_mismatch',
+          },
+        });
+        recordCanvasDiagnosticEvent({
+          level: 'warn',
+          source: 'runtime',
+          event: 'runtime.delta.rejected',
+          message: 'Runtime delta rejected because base version did not match',
+          metadata: {
+            reason: 'base_version_mismatch',
+          },
+        });
         resetAlertState();
         dispatchResyncRequired({
           scope: 'overview',
@@ -152,9 +176,24 @@ export function useWebSocket(
           return;
         }
         const wasReconnect = reconnectAttemptRef.current > 0;
+        if (wasReconnect) {
+          reconnectCountRef.current += 1;
+        }
         reconnectAttemptRef.current = 0;
         setConnected(true);
         setReconnecting(false);
+        updateCanvasDiagnosticsState({
+          websocket: {
+            connected: true,
+            reconnectCount: reconnectCountRef.current,
+          },
+        });
+        recordCanvasDiagnosticEvent({
+          level: 'info',
+          source: 'websocket',
+          event: wasReconnect ? 'websocket.reconnected' : 'websocket.connected',
+          message: wasReconnect ? 'Canvas WebSocket reconnected' : 'Canvas WebSocket connected',
+        });
         if (wasReconnect) {
           window.dispatchEvent(new Event('backend-reconnected'));
         }
@@ -168,17 +207,56 @@ export function useWebSocket(
         try {
           const raw = JSON.parse(event.data) as unknown;
           const message = parseWSMessage(raw);
+          const messageAt = new Date().toISOString();
+          updateCanvasDiagnosticsState({
+            websocket: {
+              lastMessageAt: messageAt,
+              lastMessageType: message.type,
+            },
+          });
 
           if (message.type === 'snapshot') {
             const payload = (message as SnapshotWSMessage).payload;
             snapshotVersionRef.current = payload.version;
             awaitingResyncRef.current = false;
+            updateCanvasDiagnosticsState({
+              websocket: {
+                lastAppliedSnapshotVersion:
+                  payload.version === null ? undefined : String(payload.version),
+                lastRejectedDeltaReason: undefined,
+              },
+            });
+            recordCanvasDiagnosticEvent({
+              level: 'info',
+              source: 'runtime',
+              event: 'runtime.snapshot.applied',
+              message: 'Runtime snapshot applied',
+              metadata: {
+                version: payload.version,
+                deviceCount: Object.keys(payload.snapshot.devices).length,
+                linkCount: Object.keys(payload.snapshot.links).length,
+              },
+            });
             setSnapshot(payload.snapshot);
           } else if (message.type === 'snapshot_delta' || message.type === 'runtime_delta') {
             const payload = (message as SnapshotDeltaWSMessage).payload;
             setSnapshot((prev) => {
               if (prev === null) {
                 // No base snapshot yet — ignore delta until a full snapshot arrives.
+                updateCanvasDiagnosticsState({
+                  websocket: {
+                    lastRejectedDeltaReason: 'missing_base_snapshot',
+                  },
+                });
+                recordCanvasDiagnosticEvent({
+                  level: 'warn',
+                  source: 'runtime',
+                  event: 'runtime.delta.rejected',
+                  message: 'Runtime delta rejected because no base snapshot is available',
+                  metadata: {
+                    reason: 'missing_base_snapshot',
+                  },
+                });
                 return null;
               }
               if (awaitingResyncRef.current) {
@@ -194,12 +272,43 @@ export function useWebSocket(
                   return prev;
                 }
                 snapshotVersionRef.current = payload.version;
+                updateCanvasDiagnosticsState({
+                  websocket: {
+                    lastAppliedDeltaVersion: String(payload.version),
+                    lastRejectedDeltaReason: undefined,
+                  },
+                });
               }
 
+              recordCanvasDiagnosticEvent({
+                level: 'debug',
+                source: 'runtime',
+                event: 'runtime.delta.applied',
+                message: 'Runtime delta applied',
+                metadata: {
+                  type: message.type,
+                  baseVersion: payload.base_version,
+                  version: payload.version,
+                  deviceCount: Object.keys(payload.delta.devices).length,
+                  linkCount: Object.keys(payload.delta.links).length,
+                },
+              });
               return mergeSnapshotDelta(prev, payload.delta);
             });
           } else if (message.type === 'prometheus_status') {
-            setPrometheusStatus(message.payload as PrometheusStatusPayload);
+            const payload = message.payload as PrometheusStatusPayload;
+            setPrometheusStatus(payload);
+            updateCanvasDiagnosticsState({
+              runtime: {
+                prometheusStatus:
+                  payload.enabled === false
+                    ? 'disabled'
+                    : payload.available
+                      ? 'available'
+                      : 'unavailable',
+                prometheusError: payload.error,
+              },
+            });
           } else if (message.type === 'polling_health_changed') {
             setPollingHealth(message.payload as PollingHealthPayload);
           } else if (message.type === 'alert') {
@@ -217,9 +326,37 @@ export function useWebSocket(
             setAlerts(payload.alerts);
           } else if (message.type === 'resync_required') {
             awaitingResyncRef.current = true;
+            resyncRequiredCountRef.current += 1;
+            updateCanvasDiagnosticsState({
+              websocket: {
+                resyncRequiredCount: resyncRequiredCountRef.current,
+              },
+            });
+            recordCanvasDiagnosticEvent({
+              level: 'warn',
+              source: 'websocket',
+              event: 'websocket.resync_required',
+              message: 'Backend requested a canvas runtime resync',
+              metadata: { ...(message as ResyncRequiredWSMessage).payload },
+            });
             resetAlertState();
             dispatchResyncRequired((message as ResyncRequiredWSMessage).payload);
           } else if (message.type === 'topology_changed' || message.type === 'topology_delta') {
+            topologyChangedCountRef.current += 1;
+            updateCanvasDiagnosticsState({
+              websocket: {
+                topologyChangedCount: topologyChangedCountRef.current,
+              },
+            });
+            recordCanvasDiagnosticEvent({
+              level: 'info',
+              source: 'topology',
+              event: 'topology.changed.received',
+              message: 'Topology change notification received',
+              metadata: {
+                type: message.type,
+              },
+            });
             window.dispatchEvent(new Event('topology-changed'));
           }
         } catch (error) {
@@ -237,6 +374,20 @@ export function useWebSocket(
         }
         if (disposed.current) return;
         setConnected(false);
+        updateCanvasDiagnosticsState({
+          websocket: {
+            connected: false,
+          },
+        });
+        recordCanvasDiagnosticEvent({
+          level: 'warn',
+          source: 'websocket',
+          event: 'websocket.disconnected',
+          message: 'Canvas WebSocket disconnected',
+          metadata: {
+            reconnectCount: getCanvasDiagnosticsSnapshot().websocket.reconnectCount,
+          },
+        });
         scheduleReconnect();
       };
     }
@@ -249,6 +400,11 @@ export function useWebSocket(
       setConnected(false);
       setReconnecting(false);
       snapshotVersionRef.current = null;
+      updateCanvasDiagnosticsState({
+        websocket: {
+          connected: false,
+        },
+      });
       resetAlertState();
       awaitingResyncRef.current = false;
 
