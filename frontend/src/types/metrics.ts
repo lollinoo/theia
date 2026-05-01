@@ -1,4 +1,5 @@
 export type WSMessageType =
+  | 'ready'
   | 'snapshot'
   | 'snapshot_delta'
   | 'runtime_delta'
@@ -156,14 +157,22 @@ export interface TopologyChangedPayload {
   recommended_endpoint?: string;
 }
 
+export interface ReadyPayload {
+  runtime_version?: number;
+  runtime_identity?: string;
+  alert_version?: number;
+}
+
 export interface SnapshotEnvelopePayload {
   version: number | null;
+  runtime_identity?: string;
   snapshot: SnapshotPayload;
 }
 
 export interface SnapshotDeltaEnvelopePayload {
   base_version?: number;
   version?: number;
+  runtime_identity?: string;
   delta: SnapshotPayload;
 }
 
@@ -214,6 +223,11 @@ export interface AlertWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
 export interface TopologyChangedWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'topology_changed';
   payload: TopologyChangedPayload;
+}
+
+export interface ReadyWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'ready';
+  payload: ReadyPayload;
 }
 
 export interface AlertEnvelopePayload {
@@ -470,13 +484,15 @@ export function parseWSMessage(
   | PollingHealthChangedWSMessage
   | ResyncRequiredWSMessage
   | AlertWSMessage
-  | TopologyChangedWSMessage {
+  | TopologyChangedWSMessage
+  | ReadyWSMessage {
   if (!isRecord(value)) {
     throw new Error('invalid websocket message');
   }
 
   const type = readString(value, 'type');
   if (
+    type !== 'ready' &&
     type !== 'snapshot' &&
     type !== 'snapshot_delta' &&
     type !== 'runtime_delta' &&
@@ -492,6 +508,25 @@ export function parseWSMessage(
     throw new Error(`unsupported websocket message type: ${type}`);
   }
 
+  if (type === 'ready') {
+    const payload = isRecord(value.payload) ? value.payload : {};
+    return {
+      type,
+      payload: {
+        runtime_version:
+          typeof payload.runtime_version === 'number' && Number.isFinite(payload.runtime_version)
+            ? payload.runtime_version
+            : undefined,
+        runtime_identity:
+          typeof payload.runtime_identity === 'string' ? payload.runtime_identity : undefined,
+        alert_version:
+          typeof payload.alert_version === 'number' && Number.isFinite(payload.alert_version)
+            ? payload.alert_version
+            : undefined,
+      },
+    } as ReadyWSMessage;
+  }
+
   if (type === 'snapshot') {
     const payload = isRecord(value.payload) ? value.payload : {};
     if ('version' in payload || 'snapshot' in payload) {
@@ -503,6 +538,8 @@ export function parseWSMessage(
         type,
         payload: {
           version,
+          runtime_identity:
+            typeof payload.runtime_identity === 'string' ? payload.runtime_identity : undefined,
           snapshot: parseSnapshotPayload(payload.snapshot),
         },
       };
@@ -532,6 +569,8 @@ export function parseWSMessage(
         payload: {
           base_version: baseVersion,
           version,
+          runtime_identity:
+            typeof payload.runtime_identity === 'string' ? payload.runtime_identity : undefined,
           delta: parseSnapshotPayload(payload.delta),
         },
       } as SnapshotDeltaWSMessage;

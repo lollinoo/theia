@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -34,6 +35,10 @@ const (
 	MessageTypeResyncRequired = "resync_required"
 	// MessageTypeTopologyChanged notifies clients that the topology has changed (new links discovered).
 	MessageTypeTopologyChanged = "topology_changed"
+	// MessageTypeHello lets clients announce the canvas versions they already have.
+	MessageTypeHello = "hello"
+	// MessageTypeReady confirms the server skipped an already-current runtime snapshot.
+	MessageTypeReady = "ready"
 	// MessageTypeSubscribeDetail registers a device-specific detail subscription for one client.
 	MessageTypeSubscribeDetail = "subscribe_detail"
 	// MessageTypeUnsubscribeDetail clears the active device-specific detail subscription for one client.
@@ -64,8 +69,9 @@ type ResyncRequiredPayload struct {
 
 // SnapshotMessagePayload is the versioned full overview payload sent to clients.
 type SnapshotMessagePayload struct {
-	Version  uint64           `json:"version"`
-	Snapshot *SnapshotPayload `json:"snapshot"`
+	Version         uint64           `json:"version"`
+	RuntimeIdentity string           `json:"runtime_identity,omitempty"`
+	Snapshot        *SnapshotPayload `json:"snapshot"`
 }
 
 // SnapshotDeltaMessagePayload is the versioned sparse overview delta payload.
@@ -76,15 +82,22 @@ type SnapshotDeltaMessagePayload struct {
 }
 
 type RuntimeDeltaMessagePayload struct {
-	BaseVersion uint64           `json:"base_version"`
-	Version     uint64           `json:"version"`
-	Delta       *SnapshotPayload `json:"delta"`
+	BaseVersion     uint64           `json:"base_version"`
+	Version         uint64           `json:"version"`
+	RuntimeIdentity string           `json:"runtime_identity,omitempty"`
+	Delta           *SnapshotPayload `json:"delta"`
 }
 
 type TopologyChangedPayload struct {
 	TopologyVersion     uint64 `json:"topology_version"`
 	Reason              string `json:"reason,omitempty"`
 	RecommendedEndpoint string `json:"recommended_endpoint,omitempty"`
+}
+
+type ReadyPayload struct {
+	RuntimeVersion  uint64 `json:"runtime_version"`
+	RuntimeIdentity string `json:"runtime_identity,omitempty"`
+	AlertVersion    uint64 `json:"alert_version"`
 }
 
 type PollingHealthChangedPayload = polling.HealthSnapshot
@@ -105,8 +118,9 @@ func NewSnapshotMessage(snapshot *SnapshotPayload, version uint64) Message {
 	return Message{
 		Type: MessageTypeSnapshot,
 		Payload: SnapshotMessagePayload{
-			Version:  version,
-			Snapshot: CloneSnapshot(snapshot),
+			Version:         version,
+			RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+			Snapshot:        CloneSnapshot(snapshot),
 		},
 	}
 }
@@ -122,13 +136,18 @@ func NewSnapshotDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64
 	}
 }
 
-func NewRuntimeDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64) Message {
+func NewRuntimeDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64, currentSnapshot ...*SnapshotPayload) Message {
+	runtimeIdentity := ""
+	if len(currentSnapshot) > 0 {
+		runtimeIdentity = RuntimeIdentityForSnapshot(currentSnapshot[0])
+	}
 	return Message{
 		Type: MessageTypeRuntimeDelta,
 		Payload: RuntimeDeltaMessagePayload{
-			BaseVersion: baseVersion,
-			Version:     version,
-			Delta:       CloneSnapshot(delta),
+			BaseVersion:     baseVersion,
+			Version:         version,
+			RuntimeIdentity: runtimeIdentity,
+			Delta:           CloneSnapshot(delta),
 		},
 	}
 }
@@ -142,6 +161,26 @@ func NewTopologyChangedMessage(topologyVersion uint64, reason string) Message {
 			RecommendedEndpoint: CanvasTopologyEndpoint,
 		},
 	}
+}
+
+func NewReadyMessage(runtimeVersion uint64, alertVersion uint64, runtimeIdentity string) Message {
+	return Message{
+		Type: MessageTypeReady,
+		Payload: ReadyPayload{
+			RuntimeVersion:  runtimeVersion,
+			RuntimeIdentity: runtimeIdentity,
+			AlertVersion:    alertVersion,
+		},
+	}
+}
+
+func RuntimeIdentityForSnapshot(snapshot *SnapshotPayload) string {
+	raw, err := json.Marshal(CloneSnapshot(snapshot))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("rt-sha256:%x", sum[:])
 }
 
 func NewPollingHealthChangedMessage(snapshot polling.HealthSnapshot) Message {
@@ -162,8 +201,13 @@ func NewAlertMessage(alerts []AlertDTO, version uint64) Message {
 }
 
 type clientControlMessage struct {
-	Type     string
-	DeviceID uuid.UUID
+	Type                string
+	DeviceID            uuid.UUID
+	CanvasSchemaVersion int
+	TopologyVersion     string
+	RuntimeIdentity     string
+	RuntimeVersion      *uint64
+	AlertVersion        *uint64
 }
 
 type clientControlEnvelope struct {
@@ -172,7 +216,12 @@ type clientControlEnvelope struct {
 }
 
 type clientControlPayload struct {
-	DeviceID string `json:"device_id"`
+	DeviceID            string  `json:"device_id"`
+	CanvasSchemaVersion int     `json:"canvas_schema_version"`
+	TopologyVersion     string  `json:"topology_version"`
+	RuntimeIdentity     string  `json:"runtime_identity"`
+	RuntimeVersion      *uint64 `json:"runtime_version"`
+	AlertVersion        *uint64 `json:"alert_version"`
 }
 
 // SnapshotPayload contains the complete live state sent to clients.
@@ -304,6 +353,15 @@ func parseClientControlMessage(raw []byte) (clientControlMessage, error) {
 	}
 
 	switch envelope.Type {
+	case MessageTypeHello:
+		return clientControlMessage{
+			Type:                envelope.Type,
+			CanvasSchemaVersion: envelope.Payload.CanvasSchemaVersion,
+			TopologyVersion:     envelope.Payload.TopologyVersion,
+			RuntimeIdentity:     envelope.Payload.RuntimeIdentity,
+			RuntimeVersion:      envelope.Payload.RuntimeVersion,
+			AlertVersion:        envelope.Payload.AlertVersion,
+		}, nil
 	case MessageTypeSubscribeDetail, MessageTypeUnsubscribeDetail:
 	default:
 		return clientControlMessage{}, fmt.Errorf("unsupported client control type %q", envelope.Type)

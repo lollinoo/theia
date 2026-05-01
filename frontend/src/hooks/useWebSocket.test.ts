@@ -118,6 +118,92 @@ describe('useWebSocket', () => {
     expect(result.current.connected).toBe(true);
   });
 
+  it('sends hello with known runtime version after reconnect', () => {
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 42,
+          runtime_identity: 'rt-sha256:abc',
+          snapshot: {
+            devices: {},
+            links: {},
+          },
+        },
+      });
+    });
+
+    const firstSocket = mockInstance;
+
+    act(() => {
+      firstSocket.simulateClose();
+      vi.advanceTimersByTime(1000);
+    });
+
+    const secondSocket = mockInstances[1];
+    expect(secondSocket).toBeDefined();
+    if (!secondSocket) {
+      throw new Error('expected reconnect socket instance');
+    }
+
+    act(() => {
+      secondSocket.simulateOpen();
+    });
+
+    expect(secondSocket.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'hello',
+        payload: {
+          canvas_schema_version: 1,
+          topology_version: undefined,
+          runtime_version: 42,
+          runtime_identity: 'rt-sha256:abc',
+          alert_version: undefined,
+          subscriptions: {
+            runtime: true,
+            topology: true,
+            alerts: true,
+            details_device_id: null,
+          },
+        },
+      }),
+    );
+  });
+
+  it('handles ready handshake without replacing the existing snapshot', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 42,
+          runtime_identity: 'rt-sha256:abc',
+          snapshot: {
+            devices: {
+              'dev-1': makeDeviceRuntime({ cpu_percent: 50 }),
+            },
+            links: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'ready',
+        payload: {
+          runtime_version: 42,
+          runtime_identity: 'rt-sha256:abc',
+          alert_version: 7,
+        },
+      });
+    });
+
+    expect(result.current.snapshot?.devices['dev-1'].cpu_percent).toBe(50);
+  });
+
   it('records websocket snapshot, delta and rejected delta diagnostics', () => {
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 

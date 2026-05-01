@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CanvasDiagnosticsPanel } from './CanvasDiagnosticsPanel';
@@ -31,6 +31,8 @@ describe('CanvasDiagnosticsPanel', () => {
         reconnectCount: 1,
         resyncRequiredCount: 2,
         topologyChangedCount: 3,
+        lastAppliedSnapshotVersion: '42',
+        lastAppliedDeltaVersion: '43',
       },
       graph: {
         canonicalNodeCount: 10,
@@ -72,6 +74,12 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(screen.getByText('topo-1')).toBeInTheDocument();
     expect(screen.getByText('rt-7')).toBeInTheDocument();
     expect(screen.getByText('runtime_delta')).toBeInTheDocument();
+    const snapshotVersionRow = screen.getByText('last applied snapshot version').closest('div');
+    const deltaVersionRow = screen.getByText('last applied delta version').closest('div');
+    expect(snapshotVersionRow).not.toBeNull();
+    expect(deltaVersionRow).not.toBeNull();
+    expect(within(snapshotVersionRow as HTMLElement).getByText('42')).toBeInTheDocument();
+    expect(within(deltaVersionRow as HTMLElement).getByText('43')).toBeInTheDocument();
     expect(screen.getByText('10')).toBeInTheDocument();
     expect(screen.getByText('area-1')).toBeInTheDocument();
     expect(screen.getAllByText('success').length).toBeGreaterThan(0);

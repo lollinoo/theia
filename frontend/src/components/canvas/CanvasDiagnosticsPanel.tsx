@@ -157,11 +157,11 @@ export function CanvasDiagnosticsPanel({
             value={snapshot.websocket.topologyChangedCount}
           />
           <DiagnosticsRow
-            label="snapshot version"
+            label="last applied snapshot version"
             value={snapshot.websocket.lastAppliedSnapshotVersion}
           />
           <DiagnosticsRow
-            label="delta version"
+            label="last applied delta version"
             value={snapshot.websocket.lastAppliedDeltaVersion}
           />
           <DiagnosticsRow

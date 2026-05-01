@@ -19,6 +19,7 @@ const (
 	maxMessageSize     = 4096
 	sendBufferSize     = 16
 	overviewBufferSize = 2
+	clientHelloBuffer  = 1
 
 	wsBackpressureScopeBroadcast    = "broadcast"
 	wsBackpressureScopeClientSend   = "client_send"
@@ -46,6 +47,7 @@ type Client struct {
 	closed         bool
 	send           chan []byte
 	overviewSend   chan []byte
+	hello          chan clientControlMessage
 	needsResync    bool
 	detailDeviceID uuid.UUID
 }
@@ -118,7 +120,7 @@ func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint6
 // If a client cannot keep up, it receives resync_required plus the supplied
 // fallback full snapshot instead of blocking the producer.
 func (h *Hub) BroadcastOverviewDelta(delta *SnapshotPayload, baseVersion, version uint64, fallbackSnapshot *SnapshotPayload) {
-	deltaMessage := NewRuntimeDeltaMessage(delta, baseVersion, version)
+	deltaMessage := NewRuntimeDeltaMessage(delta, baseVersion, version, fallbackSnapshot)
 	deltaPayload, err := json.Marshal(deltaMessage)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal overview delta: %v", err)
@@ -347,11 +349,24 @@ func (c *Client) readPump() {
 		}
 
 		switch cmd.Type {
+		case MessageTypeHello:
+			c.acceptHello(cmd)
 		case MessageTypeSubscribeDetail:
 			c.hub.SetDetailSubscription(c, cmd.DeviceID)
 		case MessageTypeUnsubscribeDetail:
 			c.hub.ClearDetailSubscription(c)
 		}
+	}
+}
+
+func (c *Client) acceptHello(cmd clientControlMessage) {
+	if c.hello == nil {
+		return
+	}
+
+	select {
+	case c.hello <- cmd:
+	default:
 	}
 }
 

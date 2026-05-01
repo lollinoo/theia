@@ -65,6 +65,26 @@ function makeSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
 }
 
 describe('parseWSMessage', () => {
+  it('parses ready handshake payloads', () => {
+    const message = parseWSMessage({
+      type: 'ready',
+      payload: {
+        runtime_version: 42,
+        runtime_identity: 'rt-sha256:abc',
+        alert_version: 7,
+      },
+    });
+
+    expect(message).toEqual({
+      type: 'ready',
+      payload: {
+        runtime_version: 42,
+        runtime_identity: 'rt-sha256:abc',
+        alert_version: 7,
+      },
+    });
+  });
+
   it('parses a versioned snapshot_delta envelope with normalized runtime records', () => {
     const message = parseWSMessage({
       type: 'snapshot_delta',

@@ -66,6 +66,41 @@ func TestParseClientControlMessage_RejectsBadSubscribeUUID(t *testing.T) {
 	}
 }
 
+func TestParseClientControlMessage_HelloAllowsKnownVersions(t *testing.T) {
+	cmd, err := parseClientControlMessage([]byte(`{
+		"type":"hello",
+		"payload":{
+			"canvas_schema_version":1,
+			"topology_version":"topo-123",
+			"runtime_version":42,
+			"runtime_identity":"rt-sha256:abc",
+			"alert_version":7
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parseClientControlMessage returned error: %v", err)
+	}
+
+	if cmd.Type != MessageTypeHello {
+		t.Fatalf("Type = %q, want %q", cmd.Type, MessageTypeHello)
+	}
+	if cmd.RuntimeVersion == nil || *cmd.RuntimeVersion != 42 {
+		t.Fatalf("RuntimeVersion = %#v, want 42", cmd.RuntimeVersion)
+	}
+	if cmd.AlertVersion == nil || *cmd.AlertVersion != 7 {
+		t.Fatalf("AlertVersion = %#v, want 7", cmd.AlertVersion)
+	}
+	if cmd.TopologyVersion != "topo-123" {
+		t.Fatalf("TopologyVersion = %q, want topo-123", cmd.TopologyVersion)
+	}
+	if cmd.RuntimeIdentity != "rt-sha256:abc" {
+		t.Fatalf("RuntimeIdentity = %q, want rt-sha256:abc", cmd.RuntimeIdentity)
+	}
+	if cmd.CanvasSchemaVersion != 1 {
+		t.Fatalf("CanvasSchemaVersion = %d, want 1", cmd.CanvasSchemaVersion)
+	}
+}
+
 func TestCloneSnapshot_PreservesNormalizedRuntimeFields(t *testing.T) {
 	deviceID := uuid.New().String()
 	lastCollectedAt := "2026-04-13T13:00:00Z"
@@ -209,13 +244,18 @@ func TestNewSnapshotMessage_UsesNormalizedRuntimeContract(t *testing.T) {
 	if fields, ok := metric["field_states"].(map[string]any); !ok || fields["cpu"] != "ok" {
 		t.Fatalf("field_states = %#v, want cpu=ok", metric["field_states"])
 	}
+	if _, ok := payload["runtime_identity"].(string); !ok {
+		t.Fatalf("payload.runtime_identity = %#v, want string", payload["runtime_identity"])
+	}
 }
 
 func TestNewRuntimeDeltaMessageUsesStableEnvelope(t *testing.T) {
 	delta := EmptySnapshot()
 	delta.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+	current := EmptySnapshot()
+	current.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
 
-	msg := NewRuntimeDeltaMessage(delta, 7, 8)
+	msg := NewRuntimeDeltaMessage(delta, 7, 8, current)
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -226,6 +266,9 @@ func TestNewRuntimeDeltaMessageUsesStableEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"base_version":7`) || !strings.Contains(string(raw), `"version":8`) {
 		t.Fatalf("message = %s, want versions", raw)
+	}
+	if !strings.Contains(string(raw), `"runtime_identity"`) {
+		t.Fatalf("message = %s, want runtime_identity", raw)
 	}
 }
 
@@ -244,6 +287,27 @@ func TestNewTopologyChangedMessageUsesVersionedInvalidationEnvelope(t *testing.T
 	}
 	if !strings.Contains(string(raw), `"recommended_endpoint":"/api/v1/topology/canvas"`) {
 		t.Fatalf("message = %s, want recommended endpoint", raw)
+	}
+}
+
+func TestNewReadyMessageUsesVersionedHandshakeEnvelope(t *testing.T) {
+	msg := NewReadyMessage(42, 7, "rt-sha256:abc")
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	if !strings.Contains(string(raw), `"type":"ready"`) {
+		t.Fatalf("message = %s, want ready", raw)
+	}
+	if !strings.Contains(string(raw), `"runtime_version":42`) {
+		t.Fatalf("message = %s, want runtime_version", raw)
+	}
+	if !strings.Contains(string(raw), `"alert_version":7`) {
+		t.Fatalf("message = %s, want alert_version", raw)
+	}
+	if !strings.Contains(string(raw), `"runtime_identity":"rt-sha256:abc"`) {
+		t.Fatalf("message = %s, want runtime_identity", raw)
 	}
 }
 
