@@ -12,10 +12,12 @@ import {
   type ReadyWSMessage,
   type ResyncRequiredPayload,
   type ResyncRequiredWSMessage,
+  type RuntimeDeltaWSMessage,
   type SnapshotDeltaWSMessage,
   type SnapshotPayload,
   type SnapshotWSMessage,
   type TopologyChangedWSMessage,
+  mergeRuntimeDeltaPatch,
   mergeSnapshotDelta,
   parseWSMessage,
 } from '../types/metrics';
@@ -375,7 +377,10 @@ export function useWebSocket(
             });
             setSnapshot(payload.snapshot);
           } else if (message.type === 'snapshot_delta' || message.type === 'runtime_delta') {
-            const payload = (message as SnapshotDeltaWSMessage).payload;
+            const payload =
+              message.type === 'runtime_delta'
+                ? (message as RuntimeDeltaWSMessage).payload
+                : (message as SnapshotDeltaWSMessage).payload;
             setSnapshot((prev) => {
               if (prev === null) {
                 // No base snapshot yet — ignore delta until a full snapshot arrives.
@@ -436,7 +441,9 @@ export function useWebSocket(
                   runtimeIdentity: payload.runtime_identity,
                 },
               });
-              return mergeSnapshotDelta(prev, payload.delta);
+              return message.type === 'runtime_delta'
+                ? mergeRuntimeDeltaPatch(prev, (payload as RuntimeDeltaWSMessage['payload']).delta)
+                : mergeSnapshotDelta(prev, (payload as SnapshotDeltaWSMessage['payload']).delta);
             });
           } else if (message.type === 'prometheus_status') {
             const payload = message.payload as PrometheusStatusPayload;

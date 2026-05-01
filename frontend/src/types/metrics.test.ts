@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   type DeviceRuntimeDTO,
   type LinkRuntimeDTO,
+  type RuntimeDeltaEnvelopePayload,
   type SnapshotDeltaEnvelopePayload,
   type SnapshotEnvelopePayload,
   type SnapshotPayload,
+  mergeRuntimeDeltaPatch,
   mergeSnapshotDelta,
   parseDeviceRuntime,
   parseLinkRuntime,
@@ -146,6 +148,41 @@ describe('parseWSMessage', () => {
     });
 
     expect(message.type).toBe('runtime_delta');
+  });
+
+  it('parses runtime_delta with partial runtime patches', () => {
+    const message = parseWSMessage({
+      type: 'runtime_delta',
+      payload: {
+        base_version: 1,
+        version: 2,
+        delta: {
+          devices: {
+            'dev-1': {
+              device_id: 'dev-1',
+              cpu_percent: null,
+            },
+          },
+          links: {
+            'link-1': {
+              link_id: 'link-1',
+              rx_bps: 250,
+            },
+          },
+        },
+      },
+    });
+
+    const payload = (message as { type: 'runtime_delta'; payload: RuntimeDeltaEnvelopePayload })
+      .payload;
+    expect(payload.delta.devices['dev-1']).toEqual({
+      device_id: 'dev-1',
+      cpu_percent: null,
+    });
+    expect(payload.delta.links['link-1']).toEqual({
+      link_id: 'link-1',
+      rx_bps: 250,
+    });
   });
 
   it('parses a sparse snapshot_delta payload without a versioned envelope', () => {
@@ -380,6 +417,51 @@ describe('mergeSnapshotDelta', () => {
     expect(result.devices['dev-1']).toEqual(delta.devices['dev-1']);
     expect(result.devices['dev-1'].last_polled_at).toBeNull();
     expect(result.devices['dev-1'].cpu_percent).toBeNull();
+  });
+});
+
+describe('mergeRuntimeDeltaPatch', () => {
+  it('merges partial device and link patches without dropping existing runtime fields', () => {
+    const existing = makeSnapshot({
+      devices: {
+        'dev-1': makeDeviceRuntime({
+          cpu_percent: 50,
+          mem_percent: 25,
+        }),
+      },
+      links: {
+        'link-1': makeLinkRuntime({
+          tx_bps: 100,
+          rx_bps: 200,
+        }),
+      },
+    });
+
+    const result = mergeRuntimeDeltaPatch(existing, {
+      devices: {
+        'dev-1': {
+          device_id: 'dev-1',
+          cpu_percent: null,
+        },
+      },
+      links: {
+        'link-1': {
+          link_id: 'link-1',
+          rx_bps: 250,
+        },
+      },
+    });
+
+    expect(result.devices['dev-1']).toEqual({
+      ...existing.devices['dev-1'],
+      cpu_percent: null,
+    });
+    expect(result.devices['dev-1'].mem_percent).toBe(25);
+    expect(result.links['link-1']).toEqual({
+      ...existing.links['link-1'],
+      rx_bps: 250,
+    });
+    expect(result.links['link-1'].tx_bps).toBe(100);
   });
 });
 

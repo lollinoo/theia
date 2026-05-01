@@ -348,7 +348,7 @@ func TestHandlerServeHTTP_DoesNotReceiveBroadcastBeforeBootstrapReady(t *testing
 	})
 
 	time.Sleep(50 * time.Millisecond)
-	hub.BroadcastOverviewDelta(EmptySnapshot(), 1, 2, snapshot)
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, snapshot)
 	time.Sleep(100 * time.Millisecond)
 	if err := conn.WriteJSON(map[string]any{
 		"type": "hello",

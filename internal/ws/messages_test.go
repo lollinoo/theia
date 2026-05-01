@@ -250,12 +250,17 @@ func TestNewSnapshotMessage_UsesNormalizedRuntimeContract(t *testing.T) {
 }
 
 func TestNewRuntimeDeltaMessageUsesStableEnvelope(t *testing.T) {
-	delta := EmptySnapshot()
-	delta.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
-	current := EmptySnapshot()
-	current.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+	delta := &RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{
+			"dev-1": {
+				"device_id":   "dev-1",
+				"cpu_percent": 42.5,
+			},
+		},
+		Links: map[string]map[string]any{},
+	}
 
-	msg := NewRuntimeDeltaMessage(delta, 7, 8, current)
+	msg := NewRuntimeDeltaMessage(delta, 7, 8)
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -267,8 +272,14 @@ func TestNewRuntimeDeltaMessageUsesStableEnvelope(t *testing.T) {
 	if !strings.Contains(string(raw), `"base_version":7`) || !strings.Contains(string(raw), `"version":8`) {
 		t.Fatalf("message = %s, want versions", raw)
 	}
-	if !strings.Contains(string(raw), `"runtime_identity"`) {
-		t.Fatalf("message = %s, want runtime_identity", raw)
+	if strings.Contains(string(raw), `"runtime_identity"`) {
+		t.Fatalf("message = %s, want runtime_delta without runtime_identity", raw)
+	}
+	if !strings.Contains(string(raw), `"cpu_percent":42.5`) {
+		t.Fatalf("message = %s, want changed runtime field", raw)
+	}
+	if strings.Contains(string(raw), `"primary_health"`) {
+		t.Fatalf("message = %s, want partial device patch without unchanged fields", raw)
 	}
 }
 

@@ -140,6 +140,14 @@ export interface SnapshotPayload {
   links: Record<string, LinkRuntimeDTO>;
 }
 
+export type DeviceRuntimePatch = Partial<DeviceRuntimeDTO> & Pick<DeviceRuntimeDTO, 'device_id'>;
+export type LinkRuntimePatch = Partial<LinkRuntimeDTO> & Pick<LinkRuntimeDTO, 'link_id'>;
+
+export interface RuntimePatchPayload {
+  devices: Record<string, DeviceRuntimePatch>;
+  links: Record<string, LinkRuntimePatch>;
+}
+
 export interface PrometheusStatusPayload {
   enabled?: boolean;
   available: boolean;
@@ -180,6 +188,13 @@ export interface SnapshotDeltaEnvelopePayload {
   delta: SnapshotPayload;
 }
 
+export interface RuntimeDeltaEnvelopePayload {
+  base_version?: number;
+  version?: number;
+  runtime_identity?: string;
+  delta: RuntimePatchPayload;
+}
+
 export interface PollingHealthPayload {
   essential_overloaded: boolean;
   degraded_risk: boolean;
@@ -200,8 +215,13 @@ export interface SnapshotWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
 }
 
 export interface SnapshotDeltaWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
-  type: 'snapshot_delta' | 'runtime_delta';
+  type: 'snapshot_delta';
   payload: SnapshotDeltaEnvelopePayload;
+}
+
+export interface RuntimeDeltaWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'runtime_delta';
+  payload: RuntimeDeltaEnvelopePayload;
 }
 
 export interface PollingHealthChangedWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
@@ -465,6 +485,181 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
   };
 }
 
+function parseDeviceRuntimePatch(value: unknown): DeviceRuntimePatch {
+  if (!isRecord(value)) {
+    throw new Error('invalid device runtime patch payload');
+  }
+
+  try {
+    const patch: DeviceRuntimePatch = {
+      device_id: readRequiredString(value, 'device_id'),
+    };
+
+    if ('operational_status' in value) {
+      patch.operational_status = readRequiredEnum(value, 'operational_status', operationalStatuses);
+    }
+    if ('primary_health' in value) {
+      patch.primary_health = readRequiredEnum(value, 'primary_health', primaryHealthStates);
+    }
+    if ('runtime_flags' in value) {
+      patch.runtime_flags = readRuntimeFlags(value, 'runtime_flags');
+    }
+    if ('field_states' in value) {
+      patch.field_states = readFieldStates(value, 'field_states');
+    }
+    if ('network_reachable' in value) {
+      patch.network_reachable = readRequiredEnum(
+        value,
+        'network_reachable',
+        reachabilityEvidenceStates,
+      );
+    }
+    if ('snmp_reachable' in value) {
+      patch.snmp_reachable = readRequiredEnum(value, 'snmp_reachable', reachabilityEvidenceStates);
+    }
+    if ('reachability' in value) {
+      patch.reachability = readRequiredEnum(value, 'reachability', reachabilityStatuses);
+    }
+    if ('health' in value) {
+      patch.health = readRequiredEnum(value, 'health', healthStatuses);
+    }
+    if ('freshness' in value) {
+      patch.freshness = readRequiredEnum(value, 'freshness', freshnessStatuses);
+    }
+    if ('primary_reason' in value) {
+      patch.primary_reason = readRequiredEnum(value, 'primary_reason', runtimeReasons);
+    }
+    if ('metrics_status' in value) {
+      patch.metrics_status = readRequiredEnum(value, 'metrics_status', metricsStatuses);
+    }
+    if ('metrics_reason' in value) {
+      patch.metrics_reason = readRequiredEnum(value, 'metrics_reason', runtimeReasons);
+    }
+    if ('alert_status' in value) {
+      patch.alert_status = readRequiredEnum(value, 'alert_status', alertStatuses);
+    }
+    if ('firing_alert_count' in value) {
+      patch.firing_alert_count = readRequiredCount(value, 'firing_alert_count');
+    }
+    if ('last_collected_at' in value) {
+      patch.last_collected_at = readRequiredNullableString(value, 'last_collected_at');
+    }
+    if ('last_polled_at' in value) {
+      patch.last_polled_at = readRequiredNullableString(value, 'last_polled_at');
+    }
+    if ('expected_poll_interval_seconds' in value) {
+      patch.expected_poll_interval_seconds = readRequiredNullableNumber(
+        value,
+        'expected_poll_interval_seconds',
+      );
+    }
+    if ('cpu_percent' in value) {
+      patch.cpu_percent = readRequiredNullableNumber(value, 'cpu_percent');
+    }
+    if ('mem_percent' in value) {
+      patch.mem_percent = readRequiredNullableNumber(value, 'mem_percent');
+    }
+    if ('temp_celsius' in value) {
+      patch.temp_celsius = readRequiredNullableNumber(value, 'temp_celsius');
+    }
+    if ('uptime_secs' in value) {
+      patch.uptime_secs = readRequiredNullableNumber(value, 'uptime_secs');
+    }
+
+    return patch;
+  } catch {
+    throw new Error('invalid device runtime patch payload');
+  }
+}
+
+function parseLinkRuntimePatch(value: unknown): LinkRuntimePatch {
+  if (!isRecord(value)) {
+    throw new Error('invalid link runtime patch payload');
+  }
+
+  try {
+    const patch: LinkRuntimePatch = {
+      link_id: readRequiredString(value, 'link_id'),
+    };
+
+    if ('source_device_id' in value) {
+      patch.source_device_id = readRequiredString(value, 'source_device_id');
+    }
+    if ('target_device_id' in value) {
+      patch.target_device_id = readRequiredString(value, 'target_device_id');
+    }
+    if ('source_if_name' in value) {
+      patch.source_if_name = readRequiredString(value, 'source_if_name', true);
+    }
+    if ('target_if_name' in value) {
+      patch.target_if_name = readRequiredString(value, 'target_if_name', true);
+    }
+    if ('metrics_status' in value) {
+      patch.metrics_status = readRequiredEnum(value, 'metrics_status', linkMetricsStatuses);
+    }
+    if ('metrics_reason' in value) {
+      patch.metrics_reason = readRequiredEnum(value, 'metrics_reason', runtimeReasons);
+    }
+    if ('last_collected_at' in value) {
+      patch.last_collected_at = readRequiredNullableString(value, 'last_collected_at');
+    }
+    if ('tx_bps' in value) {
+      patch.tx_bps = readRequiredNullableNumber(value, 'tx_bps');
+    }
+    if ('rx_bps' in value) {
+      patch.rx_bps = readRequiredNullableNumber(value, 'rx_bps');
+    }
+    if ('utilization' in value) {
+      patch.utilization = readRequiredNullableNumber(value, 'utilization');
+    }
+
+    return patch;
+  } catch {
+    throw new Error('invalid link runtime patch payload');
+  }
+}
+
+export function parseRuntimePatchPayload(value: unknown): RuntimePatchPayload {
+  if (!isRecord(value)) {
+    throw new Error('invalid runtime patch payload');
+  }
+
+  if (!('devices' in value) || !isRecord(value.devices)) {
+    throw new Error('invalid runtime patch payload');
+  }
+
+  if (!('links' in value) || !isRecord(value.links)) {
+    throw new Error('invalid runtime patch payload');
+  }
+
+  const devices = Object.fromEntries(
+    Object.entries(value.devices).map(([deviceId, runtime]) => {
+      const parsedRuntime = parseDeviceRuntimePatch(runtime);
+      if (parsedRuntime.device_id !== deviceId) {
+        throw new Error('invalid runtime patch payload');
+      }
+
+      return [deviceId, parsedRuntime] as const;
+    }),
+  );
+
+  const links = Object.fromEntries(
+    Object.entries(value.links).map(([linkId, runtime]) => {
+      const parsedRuntime = parseLinkRuntimePatch(runtime);
+      if (parsedRuntime.link_id !== linkId) {
+        throw new Error('invalid runtime patch payload');
+      }
+
+      return [linkId, parsedRuntime] as const;
+    }),
+  );
+
+  return {
+    devices,
+    links,
+  };
+}
+
 /**
  * Replaces atomic device/link records only for keys present in the delta.
  */
@@ -478,12 +673,50 @@ export function mergeSnapshotDelta(
   };
 }
 
+export function mergeRuntimeDeltaPatch(
+  existing: SnapshotPayload,
+  delta: RuntimePatchPayload,
+): SnapshotPayload {
+  const devices = { ...existing.devices };
+  const links = { ...existing.links };
+
+  for (const [deviceId, patch] of Object.entries(delta.devices)) {
+    const current = devices[deviceId];
+    if (!current) {
+      continue;
+    }
+    devices[deviceId] = {
+      ...current,
+      ...patch,
+      device_id: current.device_id,
+    };
+  }
+
+  for (const [linkId, patch] of Object.entries(delta.links)) {
+    const current = links[linkId];
+    if (!current) {
+      continue;
+    }
+    links[linkId] = {
+      ...current,
+      ...patch,
+      link_id: current.link_id,
+    };
+  }
+
+  return {
+    devices,
+    links,
+  };
+}
+
 export function parseWSMessage(
   value: unknown,
 ):
   | WSMessage
   | SnapshotWSMessage
   | SnapshotDeltaWSMessage
+  | RuntimeDeltaWSMessage
   | PrometheusStatusWSMessage
   | PollingHealthChangedWSMessage
   | ResyncRequiredWSMessage
@@ -557,7 +790,7 @@ export function parseWSMessage(
     };
   }
 
-  if (type === 'snapshot_delta' || type === 'runtime_delta') {
+  if (type === 'snapshot_delta') {
     const payload = isRecord(value.payload) ? value.payload : {};
     if ('delta' in payload || 'version' in payload || 'base_version' in payload) {
       const baseVersion =
@@ -585,6 +818,36 @@ export function parseWSMessage(
         delta: parseSnapshotPayload(value.payload),
       },
     } as SnapshotDeltaWSMessage;
+  }
+
+  if (type === 'runtime_delta') {
+    const payload = isRecord(value.payload) ? value.payload : {};
+    if ('delta' in payload || 'version' in payload || 'base_version' in payload) {
+      const baseVersion =
+        typeof payload.base_version === 'number' && Number.isFinite(payload.base_version)
+          ? payload.base_version
+          : undefined;
+      const version =
+        typeof payload.version === 'number' && Number.isFinite(payload.version)
+          ? payload.version
+          : undefined;
+      return {
+        type,
+        payload: {
+          base_version: baseVersion,
+          version,
+          runtime_identity:
+            typeof payload.runtime_identity === 'string' ? payload.runtime_identity : undefined,
+          delta: parseRuntimePatchPayload(payload.delta),
+        },
+      } as RuntimeDeltaWSMessage;
+    }
+    return {
+      type,
+      payload: {
+        delta: parseRuntimePatchPayload(value.payload),
+      },
+    } as RuntimeDeltaWSMessage;
   }
 
   if (type === 'polling_health_changed') {

@@ -363,6 +363,190 @@ func buildDelta(current *ws.SnapshotPayload, currentHashes, previousHashes *sect
 	return delta
 }
 
+func buildRuntimeDeltaPatch(delta *ws.SnapshotPayload, previous *ws.SnapshotPayload) *ws.RuntimeDeltaPayload {
+	if delta == nil {
+		return nil
+	}
+
+	patch := ws.EmptyRuntimeDeltaPayload()
+	for id, current := range delta.Devices {
+		var previousDevice ws.DeviceRuntimeDTO
+		if previous != nil {
+			previousDevice = previous.Devices[id]
+		}
+		if devicePatch := buildDeviceRuntimePatch(current, previousDevice); devicePatch != nil {
+			patch.Devices[id] = devicePatch
+		}
+	}
+	for id, current := range delta.Links {
+		var previousLink ws.LinkRuntimeDTO
+		if previous != nil {
+			previousLink = previous.Links[id]
+		}
+		if linkPatch := buildLinkRuntimePatch(current, previousLink); linkPatch != nil {
+			patch.Links[id] = linkPatch
+		}
+	}
+
+	if len(patch.Devices) == 0 && len(patch.Links) == 0 {
+		return nil
+	}
+	return patch
+}
+
+func buildDeviceRuntimePatch(current, previous ws.DeviceRuntimeDTO) map[string]any {
+	patch := map[string]any{"device_id": current.DeviceID}
+	changed := false
+	addString := func(key, currentValue, previousValue string) {
+		if currentValue != previousValue {
+			patch[key] = currentValue
+			changed = true
+		}
+	}
+	addInt := func(key string, currentValue, previousValue int) {
+		if currentValue != previousValue {
+			patch[key] = currentValue
+			changed = true
+		}
+	}
+	addStringPtr := func(key string, currentValue, previousValue *string) {
+		if !stringPtrRuntimeEqual(currentValue, previousValue) {
+			patch[key] = runtimeStringPtrValue(currentValue)
+			changed = true
+		}
+	}
+	addFloatPtr := func(key string, currentValue, previousValue *float64) {
+		if !floatPtrRuntimeEqual(currentValue, previousValue) {
+			patch[key] = runtimeFloatPtrValue(currentValue)
+			changed = true
+		}
+	}
+
+	addString("operational_status", current.OperationalStatus, previous.OperationalStatus)
+	addString("primary_health", current.PrimaryHealth, previous.PrimaryHealth)
+	if !stringSliceRuntimeEqual(current.RuntimeFlags, previous.RuntimeFlags) {
+		patch["runtime_flags"] = append([]string(nil), current.RuntimeFlags...)
+		changed = true
+	}
+	if !stringMapRuntimeEqual(current.FieldStates, previous.FieldStates) {
+		fields := make(map[string]string, len(current.FieldStates))
+		for key, value := range current.FieldStates {
+			fields[key] = value
+		}
+		patch["field_states"] = fields
+		changed = true
+	}
+	addString("network_reachable", current.NetworkReachable, previous.NetworkReachable)
+	addString("snmp_reachable", current.SNMPReachable, previous.SNMPReachable)
+	addString("reachability", current.Reachability, previous.Reachability)
+	addString("health", current.Health, previous.Health)
+	addString("freshness", current.Freshness, previous.Freshness)
+	addString("primary_reason", current.PrimaryReason, previous.PrimaryReason)
+	addString("metrics_status", current.MetricsStatus, previous.MetricsStatus)
+	addString("metrics_reason", current.MetricsReason, previous.MetricsReason)
+	addString("alert_status", current.AlertStatus, previous.AlertStatus)
+	addInt("firing_alert_count", current.FiringAlertCount, previous.FiringAlertCount)
+	addStringPtr("last_collected_at", current.LastCollectedAt, previous.LastCollectedAt)
+	addStringPtr("last_polled_at", current.LastPolledAt, previous.LastPolledAt)
+	addFloatPtr("expected_poll_interval_seconds", current.ExpectedPollIntervalSeconds, previous.ExpectedPollIntervalSeconds)
+	addFloatPtr("cpu_percent", current.CPUPercent, previous.CPUPercent)
+	addFloatPtr("mem_percent", current.MemPercent, previous.MemPercent)
+	addFloatPtr("temp_celsius", current.TempCelsius, previous.TempCelsius)
+	addFloatPtr("uptime_secs", current.UptimeSecs, previous.UptimeSecs)
+
+	if !changed {
+		return nil
+	}
+	return patch
+}
+
+func buildLinkRuntimePatch(current, previous ws.LinkRuntimeDTO) map[string]any {
+	patch := map[string]any{"link_id": current.LinkID}
+	changed := false
+	addString := func(key, currentValue, previousValue string) {
+		if currentValue != previousValue {
+			patch[key] = currentValue
+			changed = true
+		}
+	}
+	addStringPtr := func(key string, currentValue, previousValue *string) {
+		if !stringPtrRuntimeEqual(currentValue, previousValue) {
+			patch[key] = runtimeStringPtrValue(currentValue)
+			changed = true
+		}
+	}
+	addFloatPtr := func(key string, currentValue, previousValue *float64) {
+		if !floatPtrRuntimeEqual(currentValue, previousValue) {
+			patch[key] = runtimeFloatPtrValue(currentValue)
+			changed = true
+		}
+	}
+
+	addString("metrics_status", current.MetricsStatus, previous.MetricsStatus)
+	addString("metrics_reason", current.MetricsReason, previous.MetricsReason)
+	addStringPtr("last_collected_at", current.LastCollectedAt, previous.LastCollectedAt)
+	addFloatPtr("tx_bps", current.TxBps, previous.TxBps)
+	addFloatPtr("rx_bps", current.RxBps, previous.RxBps)
+	addFloatPtr("utilization", current.Utilization, previous.Utilization)
+
+	if !changed {
+		return nil
+	}
+	return patch
+}
+
+func stringPtrRuntimeEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func floatPtrRuntimeEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func stringSliceRuntimeEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringMapRuntimeEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if b[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func runtimeStringPtrValue(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func runtimeFloatPtrValue(value *float64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 func durationSecondsPtr(value time.Duration) *float64 {
 	if value <= 0 {
 		return nil

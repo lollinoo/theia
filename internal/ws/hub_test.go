@@ -130,7 +130,7 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshot(t *testing.T) {
 
 	fallback := EmptySnapshot()
 	fallback.DeviceStatuses["dev-1"] = "up"
-	hub.BroadcastOverviewDelta(EmptySnapshot(), 1, 2, fallback)
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
 
 	first := <-client.overviewSend
 	second := <-client.overviewSend
@@ -150,7 +150,7 @@ func TestHubOverviewDeltaUsesRuntimeDeltaEnvelope(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
 
-	hub.BroadcastOverviewDelta(EmptySnapshot(), 1, 2, EmptySnapshot())
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, EmptySnapshot())
 
 	payload := <-client.overviewSend
 	if !strings.Contains(string(payload), MessageTypeRuntimeDelta) {

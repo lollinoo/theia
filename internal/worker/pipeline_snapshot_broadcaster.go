@@ -141,6 +141,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	alerts := cloneAlertGroups(p.runtime.alerts)
 	promStatus := p.runtime.promStatus
 	previousHashes := p.runtime.prevHashes
+	previousSnapshot := ws.CloneSnapshot(p.runtime.lastSnapshot)
 	p.runtime.mu.RUnlock()
 
 	startedAt := time.Now()
@@ -166,12 +167,15 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	default:
 		delta := buildDelta(snapshot, currentHashes, previousHashes)
 		if delta != nil {
-			p.runtime.mu.Lock()
-			baseVersion := p.runtime.overviewVersion
-			p.runtime.overviewVersion = baseVersion + 1
-			version := p.runtime.overviewVersion
-			p.runtime.mu.Unlock()
-			p.hub.BroadcastOverviewDelta(delta, baseVersion, version, snapshot)
+			patch := buildRuntimeDeltaPatch(delta, previousSnapshot)
+			if patch != nil {
+				p.runtime.mu.Lock()
+				baseVersion := p.runtime.overviewVersion
+				p.runtime.overviewVersion = baseVersion + 1
+				version := p.runtime.overviewVersion
+				p.runtime.mu.Unlock()
+				p.hub.BroadcastOverviewDelta(patch, baseVersion, version, snapshot)
+			}
 		}
 	}
 
@@ -229,6 +233,12 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	}
 
 	p.runtime.mu.Lock()
+	patch := buildRuntimeDeltaPatch(delta, p.runtime.lastSnapshot)
+	if patch == nil {
+		p.runtime.mu.Unlock()
+		b.broadcastAlertsIfDirty(alertsDirty)
+		return nil
+	}
 	baseVersion := p.runtime.overviewVersion
 	merged := mergeSnapshotPayload(p.runtime.lastSnapshot, delta)
 	p.runtime.lastSnapshot = merged
@@ -237,7 +247,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
 
-	p.hub.BroadcastOverviewDelta(delta, baseVersion, version, merged)
+	p.hub.BroadcastOverviewDelta(patch, baseVersion, version, merged)
 	b.broadcastAlertsIfDirty(alertsDirty)
 
 	return nil
