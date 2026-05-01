@@ -71,6 +71,7 @@ export interface CanvasDiagnosticsSnapshot {
 }
 
 export interface CanvasDiagnosticEvent {
+  id: string;
   timestamp: string;
   level: CanvasDiagnosticLevel;
   source: CanvasDiagnosticSource;
@@ -91,7 +92,7 @@ type CanvasDiagnosticsState = Omit<CanvasDiagnosticsSnapshot, 'generatedAt' | 'p
 type CanvasDiagnosticsPatch = {
   [Section in keyof CanvasDiagnosticsState]?: Partial<CanvasDiagnosticsState[Section]>;
 };
-type CanvasDiagnosticEventInput = Omit<CanvasDiagnosticEvent, 'timestamp'> & {
+type CanvasDiagnosticEventInput = Omit<CanvasDiagnosticEvent, 'id' | 'timestamp'> & {
   timestamp?: string;
 };
 
@@ -134,11 +135,22 @@ function createInitialState(): CanvasDiagnosticsState {
 let diagnosticsState: CanvasDiagnosticsState = createInitialState();
 let diagnosticEvents: CanvasDiagnosticEvent[] = [];
 const listeners = new Set<() => void>();
+let diagnosticEventSequence = 0;
+let diagnosticsNotificationTimer: ReturnType<typeof setTimeout> | undefined;
 
-function notifyDiagnosticsListeners(): void {
-  for (const listener of listeners) {
+function flushDiagnosticsListeners(): void {
+  diagnosticsNotificationTimer = undefined;
+  for (const listener of Array.from(listeners)) {
     listener();
   }
+}
+
+function notifyDiagnosticsListeners(): void {
+  if (listeners.size === 0 || diagnosticsNotificationTimer !== undefined) {
+    return;
+  }
+
+  diagnosticsNotificationTimer = setTimeout(flushDiagnosticsListeners, 0);
 }
 
 function installCanvasDiagnosticsWindowHelpers(): void {
@@ -219,6 +231,7 @@ export function recordCanvasDiagnosticEvent(event: CanvasDiagnosticEventInput): 
   diagnosticEvents = [
     ...diagnosticEvents,
     {
+      id: `event-${diagnosticEventSequence}`,
       timestamp: event.timestamp ?? new Date().toISOString(),
       level: event.level,
       source: event.source,
@@ -227,6 +240,7 @@ export function recordCanvasDiagnosticEvent(event: CanvasDiagnosticEventInput): 
       metadata: sanitizeMetadata(event.metadata),
     },
   ];
+  diagnosticEventSequence += 1;
 
   if (diagnosticEvents.length > maxCanvasDiagnosticEvents) {
     diagnosticEvents.splice(0, diagnosticEvents.length - maxCanvasDiagnosticEvents);
@@ -245,6 +259,7 @@ export function clearCanvasDiagnosticEvents(): void {
 export function resetCanvasDiagnostics(): void {
   diagnosticsState = createInitialState();
   diagnosticEvents = [];
+  diagnosticEventSequence = 0;
   installCanvasDiagnosticsWindowHelpers();
   notifyDiagnosticsListeners();
 }

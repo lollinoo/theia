@@ -7,7 +7,13 @@ import {
   resetCanvasDiagnostics,
   updateCanvasDiagnosticsState,
 } from './canvasDiagnostics';
-import { clearCanvasMetrics, recordCanvasMetric } from './canvasInstrumentation';
+import {
+  clearCanvasMetrics,
+  finishCanvasRenderMetric,
+  recordCanvasMetric,
+  setCanvasRenderMetricsEnabled,
+  startCanvasRenderMetric,
+} from './canvasInstrumentation';
 
 describe('CanvasDiagnosticsPanel', () => {
   beforeEach(() => {
@@ -55,6 +61,8 @@ describe('CanvasDiagnosticsPanel', () => {
       durationMs: 3,
       timestamp: 1,
     });
+    setCanvasRenderMetricsEnabled(true);
+    finishCanvasRenderMetric(startCanvasRenderMetric('DeviceCard'), { deviceId: 'dev-1' });
     recordCanvasDiagnosticEvent({
       level: 'info',
       source: 'projection',
@@ -86,6 +94,7 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(screen.getByText('area-1')).toBeInTheDocument();
     expect(screen.getAllByText('success').length).toBeGreaterThan(0);
     expect(screen.getByText('runtime:areaProjection')).toBeInTheDocument();
+    expect(screen.getByText('DeviceCard renders')).toBeInTheDocument();
     expect(screen.getByText('projection.area.changed')).toBeInTheDocument();
   });
 

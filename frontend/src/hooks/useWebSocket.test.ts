@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
+import { type ReactNode, StrictMode, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   exportCanvasDiagnostics,
@@ -394,8 +395,8 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'runtime_delta',
         payload: {
-          base_version: 6,
-          version: 9,
+          base_version: 9,
+          version: 10,
           delta: {
             devices: {},
             links: {},
@@ -422,6 +423,48 @@ describe('useWebSocket', () => {
         'runtime.delta.rejected',
       ]),
     );
+  });
+
+  it('records each applied runtime delta once under React Strict Mode', () => {
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(StrictMode, null, children);
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'), { wrapper });
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 7,
+          snapshot: {
+            devices: { 'dev-1': makeDeviceRuntime() },
+            links: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 7,
+          version: 8,
+          delta: {
+            devices: {
+              'dev-1': makeDeviceRuntime({
+                cpu_percent: 51,
+                last_collected_at: '2026-01-01T00:01:00Z',
+                last_polled_at: '2026-01-01T00:01:00Z',
+              }),
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    const appliedEvents = exportCanvasDiagnostics().events.filter(
+      (event) => event.event === 'runtime.delta.applied',
+    );
+    expect(appliedEvents).toHaveLength(1);
   });
 
   it('handles prometheus_status message', () => {
@@ -673,6 +716,78 @@ describe('useWebSocket', () => {
     expect(result.current.snapshot!.devices['dev-1'].runtime_flags).toEqual(['partial_telemetry']);
   });
 
+  it('defers runtime snapshot publication while runtime updates are paused', () => {
+    const { result, rerender } = renderHook(
+      ({ paused }: { paused: boolean }) =>
+        useWebSocket('ws://localhost:8080/ws', null, { runtimeUpdatesPaused: paused }),
+      { initialProps: { paused: false } },
+    );
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 1,
+          snapshot: {
+            devices: {
+              'dev-1': makeDeviceRuntime({ cpu_percent: 50 }),
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    act(() => {
+      rerender({ paused: true });
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 1,
+          version: 2,
+          delta: {
+            devices: {
+              'dev-1': {
+                device_id: 'dev-1',
+                cpu_percent: 51,
+              },
+            },
+            links: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 2,
+          version: 3,
+          delta: {
+            devices: {
+              'dev-1': {
+                device_id: 'dev-1',
+                cpu_percent: 52,
+              },
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(50);
+    expect(exportCanvasDiagnostics().diagnostics.websocket.lastAppliedDeltaVersion).toBe('3');
+
+    act(() => {
+      rerender({ paused: false });
+    });
+
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(52);
+  });
+
   it('handles runtime_delta partial patches without dropping existing runtime fields', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
@@ -748,6 +863,44 @@ describe('useWebSocket', () => {
           configured_workers: 64,
         },
       });
+    });
+
+    expect(result.current.pollingHealth).toEqual({
+      essential_overloaded: true,
+      degraded_risk: false,
+      essential_queue_lag_seconds: 1.25,
+      deadline_miss_total: 3,
+      active_workers: 64,
+      configured_workers: 64,
+    });
+  });
+
+  it('defers polling health publication while runtime updates are paused', () => {
+    const { result, rerender } = renderHook(
+      ({ paused }: { paused: boolean }) =>
+        useWebSocket('ws://localhost:8080/ws', null, { runtimeUpdatesPaused: paused }),
+      { initialProps: { paused: true } },
+    );
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'polling_health_changed',
+        payload: {
+          essential_overloaded: true,
+          degraded_risk: false,
+          essential_queue_lag_seconds: 1.25,
+          deadline_miss_total: 3,
+          active_workers: 64,
+          configured_workers: 64,
+        },
+      });
+    });
+
+    expect(result.current.pollingHealth).toBeNull();
+
+    act(() => {
+      rerender({ paused: false });
     });
 
     expect(result.current.pollingHealth).toEqual({
@@ -1574,7 +1727,59 @@ describe('useWebSocket', () => {
     expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(50);
   });
 
-  it('requests a fresh websocket snapshot when a versioned delta base does not match', () => {
+  it('ignores stale runtime deltas after a newer HTTP bootstrap without reconnecting', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const { result } = renderHook(() =>
+      useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
+    );
+
+    act(() => {
+      publishCanvasRuntimeBootstrap({
+        snapshot: {
+          devices: {
+            'dev-1': makeDeviceRuntime({
+              cpu_percent: 70,
+              last_collected_at: '2026-01-01T00:02:00Z',
+              last_polled_at: '2026-01-01T00:02:00Z',
+            }),
+          },
+          links: {},
+        },
+        runtimeVersion: 10,
+        runtimeIdentity: 'rt-sha256:newer',
+      });
+    });
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 8,
+          version: 9,
+          delta: {
+            devices: {
+              'dev-1': makeDeviceRuntime({
+                cpu_percent: 99,
+                last_collected_at: '2026-01-01T00:01:00Z',
+                last_polled_at: '2026-01-01T00:01:00Z',
+              }),
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(70);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'backend-resync-required' }),
+    );
+    expect(exportCanvasDiagnostics().diagnostics.websocket.resyncRequiredCount).toBe(0);
+  });
+
+  it('requests a fresh websocket snapshot when a versioned delta base is ahead of the local base', () => {
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
@@ -1595,8 +1800,8 @@ describe('useWebSocket', () => {
       mockInstance.simulateMessage({
         type: 'runtime_delta',
         payload: {
-          base_version: 2,
-          version: 4,
+          base_version: 5,
+          version: 6,
           delta: {
             devices: {
               'dev-1': makeDeviceRuntime({

@@ -4,13 +4,13 @@ import {
   EdgeLabelRenderer,
   type EdgeProps,
   getBezierPath,
-  useStore,
 } from '@xyflow/react';
 import { memo, useMemo, useState } from 'react';
 import { buildSelfLoopPathModel } from './linkEdgeGeometry';
 import { type LinkEdgeData, resolveEdgeTone, resolveLinkBadgePresentation } from './linkSemantics';
 
 export type LinkEdgeType = Edge<LinkEdgeData>;
+const linkBadgeReadabilityScaleCssVar = 'var(--theia-link-badge-readability-scale, 1)';
 
 function LinkEdgeInner({
   id,
@@ -26,7 +26,6 @@ function LinkEdgeInner({
   data,
 }: EdgeProps<LinkEdgeType>) {
   const [hovered, setHovered] = useState(false);
-  const zoom = useStore((state) => state.transform[2]);
   const interactionMode = data?.interactionMode ?? 'idle';
   const isInteractive = interactionMode === 'interactive';
   const isActive = selected || hovered;
@@ -80,7 +79,7 @@ function LinkEdgeInner({
         ? null
         : resolveLinkBadgePresentation({
             data,
-            zoom,
+            zoom: 1,
             path: edgePath,
             fallbackX: labelX,
             fallbackY: labelYOffset,
@@ -90,18 +89,7 @@ function LinkEdgeInner({
             isConnected,
             isMuted,
           }),
-    [
-      data,
-      edgePath,
-      isActive,
-      isConnected,
-      isInteractive,
-      isMuted,
-      labelX,
-      labelYOffset,
-      tone,
-      zoom,
-    ],
+    [data, edgePath, isActive, isConnected, isInteractive, isMuted, labelX, labelYOffset, tone],
   );
 
   return (
@@ -161,7 +149,7 @@ function LinkEdgeInner({
             className="pointer-events-none absolute top-0 left-0 z-10 flex flex-col items-center gap-1.5 transition-[opacity,transform] duration-150"
             style={{
               position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${badgePresentation.anchor.x}px, ${badgePresentation.anchor.y}px) scale(${badgePresentation.scale})`,
+              transform: `translate(-50%, -50%) translate(${badgePresentation.anchor.x}px, ${badgePresentation.anchor.y}px) scale(${linkBadgeReadabilityScaleCssVar})`,
               opacity: badgePresentation.opacity,
             }}
           >

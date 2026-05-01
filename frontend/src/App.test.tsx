@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -45,9 +45,11 @@ vi.mock('./components/Canvas', () => ({
   default: ({
     onDevicesChange,
     onLinksChange,
+    onInteractionActiveChange,
   }: {
     onDevicesChange: (devices: Device[]) => void;
     onLinksChange: (links: Link[]) => void;
+    onInteractionActiveChange: (active: boolean) => void;
   }) => {
     useEffect(() => {
       onDevicesChange([
@@ -88,7 +90,16 @@ vi.mock('./components/Canvas', () => ({
       ]);
     }, [onDevicesChange, onLinksChange]);
 
-    return <div data-testid="canvas" />;
+    return (
+      <div data-testid="canvas">
+        <button type="button" onClick={() => onInteractionActiveChange(true)}>
+          Start interaction
+        </button>
+        <button type="button" onClick={() => onInteractionActiveChange(false)}>
+          End interaction
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -158,5 +169,57 @@ describe('App', () => {
     screen.getByRole('button', { name: 'Dashboard' }).click();
     expect(await screen.findByTestId('dashboard')).toHaveTextContent('devices:1');
     expect(screen.getByTestId('dashboard')).toHaveTextContent('status:down');
+  });
+
+  it('keeps websocket runtime updates paused briefly after canvas interaction ends', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    expect(useWebSocketMock).toHaveBeenLastCalledWith(
+      '/api/v1/ws',
+      null,
+      expect.objectContaining({ runtimeUpdatesPaused: false }),
+    );
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        screen.getByRole('button', { name: 'Start interaction' }).click();
+      });
+      expect(useWebSocketMock).toHaveBeenLastCalledWith(
+        '/api/v1/ws',
+        null,
+        expect.objectContaining({ runtimeUpdatesPaused: true }),
+      );
+
+      act(() => {
+        screen.getByRole('button', { name: 'End interaction' }).click();
+      });
+      expect(useWebSocketMock).toHaveBeenLastCalledWith(
+        '/api/v1/ws',
+        null,
+        expect.objectContaining({ runtimeUpdatesPaused: true }),
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(1499);
+      });
+      expect(useWebSocketMock).toHaveBeenLastCalledWith(
+        '/api/v1/ws',
+        null,
+        expect.objectContaining({ runtimeUpdatesPaused: true }),
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(useWebSocketMock).toHaveBeenLastCalledWith(
+        '/api/v1/ws',
+        null,
+        expect.objectContaining({ runtimeUpdatesPaused: false }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

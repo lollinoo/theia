@@ -4,6 +4,7 @@ import {
   ConnectionMode,
   type EdgeChange,
   MiniMap,
+  type OnMove,
   ReactFlow,
   SelectionMode,
   applyEdgeChanges,
@@ -21,7 +22,7 @@ import {
   type SnapshotPayload,
 } from '../types/metrics';
 import { ContextMenu } from './ContextMenu';
-import DeviceCard, { type DeviceNode } from './DeviceCard';
+import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
@@ -46,6 +47,7 @@ import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { minimapColorForDevice } from './deviceVisualState';
+import { resolveLinkBadgeScale } from './linkSemantics';
 
 const nodeTypes = { device: DeviceCard };
 const edgeTypes = { link: LinkEdge };
@@ -59,6 +61,8 @@ const minimapStyle = {
 const minimapMaskColor = 'var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))';
 const canvasDiagnosticsStorageKey = 'theia.canvas.diagnostics';
 const canvasInteractionIdleDelayMs = 140;
+const deviceNodeReadabilityScaleProperty = '--theia-device-node-readability-scale';
+const linkBadgeReadabilityScaleProperty = '--theia-link-badge-readability-scale';
 
 function topologyMinimapNodeColor(node: DeviceNode): string {
   const data = node.data;
@@ -172,8 +176,14 @@ export default function Canvas({
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
+  const canvasRootRef = useRef<HTMLDivElement | null>(null);
+  const deviceNodeReadabilityScaleRef = useRef('1');
+  const linkBadgeReadabilityScaleRef = useRef('1');
   const highlightTimerRef = useRef<number | null>(null);
   const interactionIdleTimerRef = useRef<number | null>(null);
+  const areaColorNodeCacheRef = useRef(
+    new Map<string, { source: DeviceNode; colorSignature: string; node: DeviceNode }>(),
+  );
   const lastProjectionDiagnosticsSignatureRef = useRef<string>('');
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
   const { resolvedTheme } = useTheme();
@@ -210,6 +220,37 @@ export default function Canvas({
 
   useEffect(() => () => onDetailDeviceChange?.(null), [onDetailDeviceChange]);
 
+  const setDeviceNodeReadabilityScale = useCallback((zoom: number) => {
+    const nextScale = String(resolveDeviceNodeReadabilityScale(zoom));
+    if (deviceNodeReadabilityScaleRef.current === nextScale) {
+      return;
+    }
+
+    deviceNodeReadabilityScaleRef.current = nextScale;
+    canvasRootRef.current?.style.setProperty(deviceNodeReadabilityScaleProperty, nextScale);
+  }, []);
+
+  const setLinkBadgeReadabilityScale = useCallback((zoom: number) => {
+    const nextScale = String(resolveLinkBadgeScale(zoom));
+    if (linkBadgeReadabilityScaleRef.current === nextScale) {
+      return;
+    }
+
+    linkBadgeReadabilityScaleRef.current = nextScale;
+    canvasRootRef.current?.style.setProperty(linkBadgeReadabilityScaleProperty, nextScale);
+  }, []);
+
+  useEffect(() => {
+    canvasRootRef.current?.style.setProperty(
+      deviceNodeReadabilityScaleProperty,
+      deviceNodeReadabilityScaleRef.current,
+    );
+    canvasRootRef.current?.style.setProperty(
+      linkBadgeReadabilityScaleProperty,
+      linkBadgeReadabilityScaleRef.current,
+    );
+  }, []);
+
   useEffect(() => {
     onInteractionActiveChange?.(canvasInteractionActive);
   }, [canvasInteractionActive, onInteractionActiveChange]);
@@ -233,6 +274,14 @@ export default function Canvas({
       setCanvasInteractionActive(false);
     }, canvasInteractionIdleDelayMs);
   }, []);
+
+  const handleCanvasMove = useCallback<OnMove>(
+    (_event, viewport) => {
+      setDeviceNodeReadabilityScale(viewport.zoom);
+      setLinkBadgeReadabilityScale(viewport.zoom);
+    },
+    [setDeviceNodeReadabilityScale, setLinkBadgeReadabilityScale],
+  );
 
   const handleSelectionChange = useCallback(
     ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => {
@@ -351,17 +400,38 @@ export default function Canvas({
 
   // Inject areaColors into node data based on device.area_ids
   const nodesWithAreaColor = useMemo(() => {
-    if (areaColorMap.size === 0) return nodes;
-    return nodes.map((n) => {
+    const previousCache = areaColorNodeCacheRef.current;
+    if (areaColorMap.size === 0) {
+      previousCache.clear();
+      return nodes;
+    }
+
+    const nextCache = new Map<
+      string,
+      { source: DeviceNode; colorSignature: string; node: DeviceNode }
+    >();
+    const nextNodes = nodes.map((n) => {
       const colors = (n.data.device.area_ids ?? [])
         .map((id) => areaColorMap.get(id))
         .filter((c): c is string => !!c);
       const newColors = colors.length > 0 ? colors : undefined;
+      const colorSignature = (newColors ?? []).join('\u0000');
+      const cached = previousCache.get(n.id);
+      if (cached?.source === n && cached.colorSignature === colorSignature) {
+        nextCache.set(n.id, cached);
+        return cached.node;
+      }
+
       const prev = n.data.areaColors;
-      if (prev?.length === newColors?.length && (prev ?? []).every((c, i) => c === newColors?.[i]))
-        return n;
-      return { ...n, data: { ...n.data, areaColors: newColors } };
+      const node =
+        prev?.length === newColors?.length && (prev ?? []).every((c, i) => c === newColors?.[i])
+          ? n
+          : { ...n, data: { ...n.data, areaColors: newColors } };
+      nextCache.set(n.id, { source: n, colorSignature, node });
+      return node;
     });
+    areaColorNodeCacheRef.current = nextCache;
+    return nextNodes;
   }, [nodes, areaColorMap]);
 
   // Inject areaColor into edge data when both endpoints share at least one area
@@ -675,6 +745,8 @@ export default function Canvas({
 
   return (
     <div
+      ref={canvasRootRef}
+      data-testid="topology-canvas-root"
       className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
     >
       {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
@@ -873,6 +945,7 @@ export default function Canvas({
         onConnectStart={beginCanvasInteraction}
         onConnectEnd={endCanvasInteraction}
         onMoveStart={beginCanvasInteraction}
+        onMove={handleCanvasMove}
         onMoveEnd={endCanvasInteraction}
         onSelectionChange={handleSelectionChange}
         onPaneClick={() => {

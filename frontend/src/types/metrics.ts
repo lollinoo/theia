@@ -677,19 +677,61 @@ export function mergeRuntimeDeltaPatch(
   existing: SnapshotPayload,
   delta: RuntimePatchPayload,
 ): SnapshotPayload {
-  const devices = { ...existing.devices };
-  const links = { ...existing.links };
+  let devices = existing.devices;
+  let links = existing.links;
+  let changed = false;
+
+  function mergeRecord<T extends object, K extends keyof T>(
+    current: T,
+    patch: Partial<T>,
+    idKey: K,
+  ): T {
+    const next = { ...current, ...patch, [idKey]: current[idKey] } as T;
+    const recordChanged = (Object.keys(patch) as Array<keyof T>).some(
+      (key) => !runtimePatchValueEqual(current[key], next[key]),
+    );
+    return recordChanged ? next : current;
+  }
+
+  function runtimePatchValueEqual(left: unknown, right: unknown): boolean {
+    if (Object.is(left, right)) {
+      return true;
+    }
+    if (left === null || right === null || left === undefined || right === undefined) {
+      return false;
+    }
+    if (Array.isArray(left) || Array.isArray(right)) {
+      if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+        return false;
+      }
+      return left.every((value, index) => runtimePatchValueEqual(value, right[index]));
+    }
+    if (typeof left === 'object' && typeof right === 'object') {
+      const leftRecord = left as Record<string, unknown>;
+      const rightRecord = right as Record<string, unknown>;
+      const leftKeys = Object.keys(leftRecord);
+      const rightKeys = Object.keys(rightRecord);
+      if (leftKeys.length !== rightKeys.length) {
+        return false;
+      }
+      return leftKeys.every((key) => runtimePatchValueEqual(leftRecord[key], rightRecord[key]));
+    }
+    return false;
+  }
 
   for (const [deviceId, patch] of Object.entries(delta.devices)) {
     const current = devices[deviceId];
     if (!current) {
       continue;
     }
-    devices[deviceId] = {
-      ...current,
-      ...patch,
-      device_id: current.device_id,
-    };
+    const next = mergeRecord(current, patch, 'device_id');
+    if (next !== current) {
+      if (devices === existing.devices) {
+        devices = { ...existing.devices };
+      }
+      devices[deviceId] = next;
+      changed = true;
+    }
   }
 
   for (const [linkId, patch] of Object.entries(delta.links)) {
@@ -697,17 +739,17 @@ export function mergeRuntimeDeltaPatch(
     if (!current) {
       continue;
     }
-    links[linkId] = {
-      ...current,
-      ...patch,
-      link_id: current.link_id,
-    };
+    const next = mergeRecord(current, patch, 'link_id');
+    if (next !== current) {
+      if (links === existing.links) {
+        links = { ...existing.links };
+      }
+      links[linkId] = next;
+      changed = true;
+    }
   }
 
-  return {
-    devices,
-    links,
-  };
+  return changed ? { devices, links } : existing;
 }
 
 export function parseWSMessage(

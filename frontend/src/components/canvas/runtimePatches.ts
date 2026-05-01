@@ -1,7 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import type { Device, Link } from '../../types/api';
-import type { AlertDTO, SnapshotPayload } from '../../types/metrics';
+import type { AlertDTO, DeviceMetricsDTO, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import type { LinkEdgeData } from '../linkSemantics';
@@ -52,11 +52,37 @@ function collectChangedRuntimeIds<T>(
   const ids = new Set([...Object.keys(previousRecords), ...Object.keys(nextRecords)]);
   const changedIds = new Set<string>();
   for (const id of ids) {
-    if (previousRecords[id] !== nextRecords[id]) {
+    if (!runtimeValueEqual(previousRecords[id], nextRecords[id])) {
       changedIds.add(id);
     }
   }
   return changedIds;
+}
+
+function runtimeValueEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (left === null || right === null || left === undefined || right === undefined) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    return left.every((value, index) => runtimeValueEqual(value, right[index]));
+  }
+  if (typeof left === 'object' && typeof right === 'object') {
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord);
+    const rightKeys = Object.keys(rightRecord);
+    if (leftKeys.length !== rightKeys.length) {
+      return false;
+    }
+    return leftKeys.every((key) => runtimeValueEqual(leftRecord[key], rightRecord[key]));
+  }
+  return false;
 }
 
 function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeData> {
@@ -88,6 +114,56 @@ function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeD
   }
 
   return edgeDataById;
+}
+
+function runtimeNodeDataChanged(
+  node: DeviceNode,
+  runtimeDevice: RuntimeState['devicesById'] extends Map<string, infer Model> ? Model : never,
+): boolean {
+  const isVirtual = runtimeDevice.device.device_type === 'virtual';
+  const subtype = isVirtual ? (runtimeDevice.device.tags?.virtual_subtype ?? 'generic') : undefined;
+
+  return (
+    !runtimeValueEqual(node.data.device, runtimeDevice.device) ||
+    !runtimeMetricRenderEqual(node.data.metrics, runtimeDevice.metrics) ||
+    node.data.alertStatus !== runtimeDevice.alertStatus ||
+    node.data.monitoringState !== runtimeDevice.monitoringState ||
+    node.data.isVirtual !== isVirtual ||
+    node.data.subtype !== subtype
+  );
+}
+
+function runtimeMetricRenderEqual(
+  previous: DeviceMetricsDTO | null | undefined,
+  next: DeviceMetricsDTO | null | undefined,
+): boolean {
+  if (previous === next) {
+    return true;
+  }
+  if (!previous || !next) {
+    return previous === next;
+  }
+
+  return (
+    previous.operational_status === next.operational_status &&
+    previous.primary_health === next.primary_health &&
+    runtimeValueEqual(previous.runtime_flags, next.runtime_flags) &&
+    runtimeValueEqual(previous.field_states, next.field_states) &&
+    previous.network_reachable === next.network_reachable &&
+    previous.snmp_reachable === next.snmp_reachable &&
+    previous.reachability === next.reachability &&
+    previous.cpu_percent === next.cpu_percent &&
+    previous.mem_percent === next.mem_percent &&
+    previous.uptime_secs === next.uptime_secs &&
+    previous.health === next.health &&
+    previous.freshness === next.freshness &&
+    previous.primary_reason === next.primary_reason &&
+    previous.metrics_status === next.metrics_status &&
+    previous.metrics_reason === next.metrics_reason &&
+    previous.alert_status === next.alert_status &&
+    previous.firing_alert_count === next.firing_alert_count &&
+    previous.expected_poll_interval_seconds === next.expected_poll_interval_seconds
+  );
 }
 
 export function buildRuntimePatchPlan({
@@ -131,6 +207,10 @@ export function patchRuntimeNodes({
 
     const runtimeDevice = runtimeState.devicesById.get(node.id);
     if (!runtimeDevice) {
+      return node;
+    }
+
+    if (!runtimeNodeDataChanged(node, runtimeDevice)) {
       return node;
     }
 
@@ -229,6 +309,7 @@ export function patchRuntimeEdges({
       parallelIndex: edge.data.parallelIndex,
       areaColor: edge.data.areaColor,
       emphasis: edge.data.emphasis,
+      interactionMode: edge.data.interactionMode,
     };
 
     changed = true;

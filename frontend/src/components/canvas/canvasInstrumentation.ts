@@ -8,7 +8,8 @@ export type CanvasMetricName =
   | 'areaProjection'
   | 'runtimePatch'
   | 'incrementalLayout'
-  | 'computeForceLayout';
+  | 'computeForceLayout'
+  | 'deviceCardRender';
 
 export type CanvasPerfScenarioName = 'runtime' | 'small' | 'medium' | 'large' | 'stress';
 
@@ -59,7 +60,20 @@ export interface CanvasMetricsExport {
 }
 
 const maxCanvasMetricSamples = 1000;
+const maxCanvasRenderMetricDurations = 1000;
 let nodeCanvasMetrics: CanvasMetricSample[] = [];
+let canvasRenderMetricsEnabled = false;
+let canvasRenderMetricSequence = 0;
+const canvasRenderMetricAggregates = new Map<
+  string,
+  { count: number; minMs: number; maxMs: number; totalMs: number; durations: number[] }
+>();
+
+export interface CanvasRenderMetricMeasurement {
+  component: string;
+  startedAt: number;
+  markPrefix: string;
+}
 
 function metricSamples(): CanvasMetricSample[] {
   if (typeof window === 'undefined') {
@@ -86,6 +100,8 @@ function installCanvasMetricWindowHelpers(): void {
 
   window.__THEIA_CANVAS_METRICS_EXPORT__ = exportCanvasMetrics;
   window.__THEIA_CANVAS_METRICS_CLEAR__ = clearCanvasMetrics;
+  window.__THEIA_CANVAS_RENDER_METRICS_ENABLE__ = () => setCanvasRenderMetricsEnabled(true);
+  window.__THEIA_CANVAS_RENDER_METRICS_DISABLE__ = () => setCanvasRenderMetricsEnabled(false);
 }
 
 function normalizeMetricName(name: CanvasRecordedMetricName): CanvasMetricName {
@@ -150,12 +166,25 @@ export function exportCanvasMetrics(): CanvasMetricsExport {
     version: 1,
     generatedAt: new Date().toISOString(),
     samples,
-    aggregates: aggregateCanvasMetricSamples(samples),
+    aggregates: {
+      ...aggregateCanvasMetricSamples(samples),
+      ...aggregateCanvasRenderMetricSamples(),
+    },
   };
 }
 
 export function clearCanvasMetrics(): void {
   setMetricSamples([]);
+  canvasRenderMetricAggregates.clear();
+}
+
+export function setCanvasRenderMetricsEnabled(enabled: boolean): void {
+  canvasRenderMetricsEnabled = enabled;
+  installCanvasMetricWindowHelpers();
+}
+
+export function isCanvasRenderMetricsEnabled(): boolean {
+  return canvasRenderMetricsEnabled;
 }
 
 function safeMark(markName: string): void {
@@ -231,6 +260,96 @@ export function measureCanvasMetric<T>(
       metadata,
     });
   }
+}
+
+export function startCanvasRenderMetric(component: string): CanvasRenderMetricMeasurement | null {
+  if (!isCanvasRenderMetricsEnabled()) {
+    return null;
+  }
+
+  const startedAt = nowMs();
+  canvasRenderMetricSequence += 1;
+  const markPrefix = `theia:canvas:render:${component}:${Date.now()}:${canvasRenderMetricSequence}`;
+  safeMark(`${markPrefix}:start`);
+  return { component, startedAt, markPrefix };
+}
+
+export function finishCanvasRenderMetric(
+  measurement: CanvasRenderMetricMeasurement | null,
+  metadata: Record<string, unknown> = {},
+): void {
+  if (measurement === null) {
+    return;
+  }
+
+  const endedAt = nowMs();
+  const durationMs = Math.max(0, roundMetric(endedAt - measurement.startedAt));
+  const endMark = `${measurement.markPrefix}:end`;
+  safeMark(endMark);
+  safeMeasure(measurement.markPrefix, `${measurement.markPrefix}:start`, endMark);
+  recordCanvasComponentRenderMetric(measurement.component, durationMs, metadata);
+}
+
+export function recordCanvasComponentRenderMetric(
+  component: string,
+  durationMs: number,
+  metadata: Record<string, unknown> = {},
+): void {
+  if (!isCanvasRenderMetricsEnabled()) {
+    return;
+  }
+
+  recordCanvasRenderMetric({
+    name: 'deviceCardRender',
+    scenario: 'runtime',
+    durationMs,
+    timestamp: Date.now(),
+    metadata: {
+      component,
+      ...metadata,
+    },
+  });
+}
+
+function recordCanvasRenderMetric(sample: CanvasMetricSample): void {
+  const key = `${sample.scenario}:${normalizeMetricName(sample.name)}`;
+  const aggregate = canvasRenderMetricAggregates.get(key) ?? {
+    count: 0,
+    minMs: sample.durationMs,
+    maxMs: sample.durationMs,
+    totalMs: 0,
+    durations: [],
+  };
+
+  aggregate.count += 1;
+  aggregate.minMs = Math.min(aggregate.minMs, sample.durationMs);
+  aggregate.maxMs = Math.max(aggregate.maxMs, sample.durationMs);
+  aggregate.totalMs += sample.durationMs;
+  aggregate.durations.push(sample.durationMs);
+
+  if (aggregate.durations.length > maxCanvasRenderMetricDurations) {
+    aggregate.durations.splice(0, aggregate.durations.length - maxCanvasRenderMetricDurations);
+  }
+
+  canvasRenderMetricAggregates.set(key, aggregate);
+}
+
+function aggregateCanvasRenderMetricSamples(): Record<string, CanvasMetricAggregate> {
+  const aggregates: Record<string, CanvasMetricAggregate> = {};
+
+  for (const [key, aggregate] of canvasRenderMetricAggregates.entries()) {
+    const sorted = [...aggregate.durations].sort((a, b) => a - b);
+    const p95Index = Math.max(0, Math.ceil(0.95 * sorted.length) - 1);
+    aggregates[key] = {
+      count: aggregate.count,
+      minMs: roundMetric(aggregate.minMs),
+      maxMs: roundMetric(aggregate.maxMs),
+      avgMs: roundMetric(aggregate.totalMs / aggregate.count),
+      p95Ms: roundMetric(sorted[p95Index] ?? 0),
+    };
+  }
+
+  return aggregates;
 }
 
 export function measureCanvasWork<T>(

@@ -121,6 +121,15 @@ func TestHubBroadcast_RecordsHubBufferBackpressure(t *testing.T) {
 	}
 }
 
+func TestHubOverviewBufferAbsorbsShortClientStalls(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+
+	if cap(client.overviewSend) < 32 {
+		t.Fatalf("overviewSend capacity = %d, want at least 32", cap(client.overviewSend))
+	}
+}
+
 func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshot(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
