@@ -144,12 +144,32 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 }
 
 type instrumentedSNMPBulkWalkClient struct {
-	delegate  snmp.ClientInterface
-	collector string
+	delegate         snmp.ClientInterface
+	collector        string
+	getOperations    map[string]string
+	earlyExitReasons map[string]string
 }
 
 func (c instrumentedSNMPBulkWalkClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
-	return c.delegate.Get(oids)
+	operation := c.getOperation(oids)
+	if operation == "" {
+		return c.delegate.Get(oids)
+	}
+
+	startedAt := time.Now()
+	pdus, err := c.delegate.Get(oids)
+	observability.Default().ObserveSNMPCollectorOperation(
+		c.collector,
+		operation,
+		classifySNMPCollectorResult(err),
+		time.Since(startedAt),
+	)
+	if err != nil {
+		if reason := c.earlyExitReasons[operation]; reason != "" {
+			observability.Default().IncSNMPCollectorEarlyExit(c.collector, reason)
+		}
+	}
+	return pdus, err
 }
 
 func (c instrumentedSNMPBulkWalkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
@@ -162,6 +182,13 @@ func (c instrumentedSNMPBulkWalkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpP
 		time.Since(startedAt),
 	)
 	return pdus, err
+}
+
+func (c instrumentedSNMPBulkWalkClient) getOperation(oids []string) string {
+	if len(oids) != 1 {
+		return ""
+	}
+	return c.getOperations[strings.TrimSpace(oids[0])]
 }
 
 func classifySNMPCollectorResult(err error) string {

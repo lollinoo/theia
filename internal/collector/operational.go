@@ -91,7 +91,21 @@ func (c *OperationalCollector) Poll(ctx context.Context, device domain.Device, t
 		return result
 	}
 
-	uptimeSecs, statuses, err := snmp.PollOperationalStatus(client, c.registry.ResolveOperationalOIDs(vendorName))
+	operationalOIDs := c.registry.ResolveOperationalOIDs(vendorName)
+	uptimeOID := strings.TrimSpace(operationalOIDs.SysUpTimeOID)
+	if uptimeOID == "" {
+		uptimeOID = snmp.OidSysUpTime
+	}
+	instrumentedClient := instrumentedSNMPBulkWalkClient{
+		delegate:      client,
+		collector:     "operational",
+		getOperations: map[string]string{uptimeOID: "sysuptime_probe"},
+		earlyExitReasons: map[string]string{
+			"sysuptime_probe": "sysuptime_probe_failed",
+		},
+	}
+
+	uptimeSecs, statuses, err := snmp.PollOperationalStatus(instrumentedClient, operationalOIDs)
 	if err != nil {
 		result.Err = fmt.Errorf("poll operational status: %w", err)
 		return result

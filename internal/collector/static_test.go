@@ -13,6 +13,7 @@ import (
 	"github.com/gosnmp/gosnmp"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/vendor"
 )
@@ -293,5 +294,68 @@ func TestStaticCollectorHasNoServiceOrRepositoryCollaborators(t *testing.T) {
 		if strings.Contains(fieldType, "service") || strings.Contains(fieldType, "repo") {
 			t.Fatalf("field %q type = %q, want no service or repository collaborator", typ.Field(i).Name, typ.Field(i).Type)
 		}
+	}
+}
+
+func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	client := &scriptedCollectorClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysName: {
+				{Name: snmp.OidSysName, Type: gosnmp.OctetString, Value: []byte("router-static")},
+			},
+			snmp.OidSysDescr: {
+				{Name: snmp.OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS")},
+			},
+			snmp.OidSysObjectID: {
+				{Name: snmp.OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"},
+			},
+		},
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfTable: {
+				{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+			},
+			snmp.OidIfXTable: {
+				{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+			},
+		},
+	}
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID: uuid.New(),
+		IP: "192.0.2.51",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}, time.Second, 1, domain.TopologyDiscoveryModeOff)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if len(client.bulkWalkCalls) == 0 {
+		t.Fatal("BulkWalk calls = 0, want static discovery walk attempts")
+	}
+
+	body := string(metrics.MarshalPrometheus())
+	if !strings.Contains(body, `theia_snmp_collector_operations_total{collector="static",operation="bulk_walk",result="success"}`) {
+		t.Fatalf("metrics output missing static bulk_walk counter\n%s", body)
+	}
+	if !strings.Contains(body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="bulk_walk",result="success"}`) {
+		t.Fatalf("metrics output missing static bulk_walk histogram\n%s", body)
+	}
+	if strings.Contains(body, `collector="static",operation="sysuptime_probe"`) {
+		t.Fatalf("metrics output unexpectedly recorded static sysuptime_probe:\n%s", body)
 	}
 }
