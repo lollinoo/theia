@@ -19,6 +19,10 @@ import {
   mergeSnapshotDelta,
   parseWSMessage,
 } from '../types/metrics';
+import {
+  getCanvasRuntimeBootstrap,
+  subscribeCanvasRuntimeBootstrap,
+} from './canvasRuntimeBootstrap';
 
 interface UseWebSocketResult {
   snapshot: SnapshotPayload | null;
@@ -27,6 +31,10 @@ interface UseWebSocketResult {
   reconnecting: boolean;
   prometheusStatus: PrometheusStatusPayload | null;
   pollingHealth: PollingHealthPayload | null;
+}
+
+interface UseWebSocketOptions {
+  requireRuntimeBootstrap?: boolean;
 }
 
 type DetailControlType = 'subscribe_detail' | 'unsubscribe_detail';
@@ -53,19 +61,30 @@ function buildWebSocketURL(url: string): string {
 export function useWebSocket(
   url: string,
   detailDeviceId: string | null = null,
+  options: UseWebSocketOptions = {},
 ): UseWebSocketResult {
-  const [snapshot, setSnapshot] = useState<SnapshotPayload | null>(null);
+  const requireRuntimeBootstrap = options.requireRuntimeBootstrap === true;
+  const initialRuntimeBootstrap = requireRuntimeBootstrap ? getCanvasRuntimeBootstrap() : null;
+  const [snapshot, setSnapshot] = useState<SnapshotPayload | null>(
+    initialRuntimeBootstrap?.snapshot ?? null,
+  );
   const [alerts, setAlerts] = useState<AlertDTO[]>([]);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [prometheusStatus, setPrometheusStatus] = useState<PrometheusStatusPayload | null>(null);
   const [pollingHealth, setPollingHealth] = useState<PollingHealthPayload | null>(null);
+  const [runtimeBootstrapReady, setRuntimeBootstrapReady] = useState(
+    !requireRuntimeBootstrap || initialRuntimeBootstrap !== null,
+  );
 
   const socketRef = useRef<WebSocket | null>(null);
   const detailDeviceIdRef = useRef<string | null>(detailDeviceId);
   const lastSubscribedDeviceIdRef = useRef<string | null>(null);
-  const snapshotVersionRef = useRef<number | null>(null);
-  const runtimeIdentityRef = useRef<string | null>(null);
+  const hasRuntimeSnapshotRef = useRef(initialRuntimeBootstrap !== null);
+  const snapshotVersionRef = useRef<number | null>(initialRuntimeBootstrap?.runtimeVersion ?? null);
+  const runtimeIdentityRef = useRef<string | null>(
+    initialRuntimeBootstrap?.runtimeIdentity ?? null,
+  );
   const alertVersionRef = useRef<number | null>(null);
   const awaitingResyncRef = useRef(false);
 
@@ -94,6 +113,47 @@ export function useWebSocket(
   }
 
   useEffect(() => {
+    if (!requireRuntimeBootstrap) {
+      return;
+    }
+
+    return subscribeCanvasRuntimeBootstrap((bootstrap) => {
+      hasRuntimeSnapshotRef.current = true;
+      snapshotVersionRef.current = bootstrap.runtimeVersion ?? null;
+      runtimeIdentityRef.current = bootstrap.runtimeIdentity ?? null;
+      awaitingResyncRef.current = false;
+      setSnapshot(bootstrap.snapshot);
+      setRuntimeBootstrapReady(true);
+      updateCanvasDiagnosticsState({
+        websocket: {
+          lastAppliedSnapshotVersion:
+            bootstrap.runtimeVersion === undefined ? undefined : String(bootstrap.runtimeVersion),
+          ...(bootstrap.runtimeIdentity !== undefined
+            ? { lastAppliedRuntimeIdentity: bootstrap.runtimeIdentity }
+            : {}),
+          lastRejectedDeltaReason: undefined,
+        },
+      });
+      recordCanvasDiagnosticEvent({
+        level: 'info',
+        source: 'runtime',
+        event: 'runtime.snapshot.applied',
+        message: 'Runtime snapshot applied from HTTP canvas bootstrap',
+        metadata: {
+          version: bootstrap.runtimeVersion,
+          deviceCount: Object.keys(bootstrap.snapshot.devices).length,
+          linkCount: Object.keys(bootstrap.snapshot.links).length,
+          runtimeIdentity: bootstrap.runtimeIdentity,
+        },
+      });
+    });
+  }, [requireRuntimeBootstrap]);
+
+  useEffect(() => {
+    if (!runtimeBootstrapReady) {
+      return;
+    }
+
     disposed.current = false;
     let reconnectTimer: number | null = null;
 
@@ -147,14 +207,19 @@ export function useWebSocket(
 
       function sendHello(): void {
         const diagnostics = getCanvasDiagnosticsSnapshot();
+        const hasRuntimeBase = hasRuntimeSnapshotRef.current;
         ws.send(
           JSON.stringify({
             type: 'hello',
             payload: {
               canvas_schema_version: canvasSchemaVersion,
               topology_version: diagnostics.topology.topologyVersion,
-              runtime_version: snapshotVersionRef.current ?? undefined,
-              runtime_identity: runtimeIdentityRef.current ?? undefined,
+              runtime_version: hasRuntimeBase
+                ? (snapshotVersionRef.current ?? undefined)
+                : undefined,
+              runtime_identity: hasRuntimeBase
+                ? (runtimeIdentityRef.current ?? undefined)
+                : undefined,
               alert_version: alertVersionRef.current ?? undefined,
               subscriptions: {
                 runtime: true,
@@ -167,7 +232,10 @@ export function useWebSocket(
         );
       }
 
-      function requestClientResync(): void {
+      function requestClientResync(
+        payloadReason: ResyncRequiredPayload['reason'] = 'client_resync_scheduled',
+        diagnosticReason = 'base_version_mismatch',
+      ): void {
         if (awaitingResyncRef.current) {
           return;
         }
@@ -176,22 +244,22 @@ export function useWebSocket(
         updateCanvasDiagnosticsState({
           websocket: {
             resyncRequiredCount: resyncRequiredCountRef.current,
-            lastRejectedDeltaReason: 'base_version_mismatch',
+            lastRejectedDeltaReason: diagnosticReason,
           },
         });
         recordCanvasDiagnosticEvent({
           level: 'warn',
           source: 'runtime',
           event: 'runtime.delta.rejected',
-          message: 'Runtime delta rejected because base version did not match',
+          message: 'Runtime delta rejected because the client runtime base is not usable',
           metadata: {
-            reason: 'base_version_mismatch',
+            reason: diagnosticReason,
           },
         });
         resetAlertState();
         dispatchResyncRequired({
           scope: 'overview',
-          reason: 'client_resync_scheduled',
+          reason: payloadReason,
         });
         ws.close();
       }
@@ -244,6 +312,10 @@ export function useWebSocket(
 
           if (message.type === 'ready') {
             const payload = (message as ReadyWSMessage).payload;
+            if (!hasRuntimeSnapshotRef.current) {
+              requestClientResync('client_missing_runtime_snapshot', 'missing_base_snapshot');
+              return;
+            }
             if (payload.runtime_version !== undefined) {
               snapshotVersionRef.current = payload.runtime_version;
             }
@@ -256,6 +328,9 @@ export function useWebSocket(
             awaitingResyncRef.current = false;
             updateCanvasDiagnosticsState({
               websocket: {
+                ...(payload.runtime_identity !== undefined
+                  ? { lastAppliedRuntimeIdentity: payload.runtime_identity }
+                  : {}),
                 lastRejectedDeltaReason: undefined,
               },
             });
@@ -272,6 +347,7 @@ export function useWebSocket(
             });
           } else if (message.type === 'snapshot') {
             const payload = (message as SnapshotWSMessage).payload;
+            hasRuntimeSnapshotRef.current = true;
             snapshotVersionRef.current = payload.version;
             runtimeIdentityRef.current = payload.runtime_identity ?? null;
             awaitingResyncRef.current = false;
@@ -279,6 +355,9 @@ export function useWebSocket(
               websocket: {
                 lastAppliedSnapshotVersion:
                   payload.version === null ? undefined : String(payload.version),
+                ...(payload.runtime_identity !== undefined
+                  ? { lastAppliedRuntimeIdentity: payload.runtime_identity }
+                  : {}),
                 lastRejectedDeltaReason: undefined,
               },
             });
@@ -335,6 +414,9 @@ export function useWebSocket(
                 updateCanvasDiagnosticsState({
                   websocket: {
                     lastAppliedDeltaVersion: String(payload.version),
+                    ...(payload.runtime_identity !== undefined
+                      ? { lastAppliedRuntimeIdentity: payload.runtime_identity }
+                      : {}),
                     lastRejectedDeltaReason: undefined,
                   },
                 });
@@ -469,6 +551,7 @@ export function useWebSocket(
       clearReconnectTimer();
       setConnected(false);
       setReconnecting(false);
+      hasRuntimeSnapshotRef.current = false;
       snapshotVersionRef.current = null;
       runtimeIdentityRef.current = null;
       updateCanvasDiagnosticsState({
@@ -489,7 +572,7 @@ export function useWebSocket(
         socketRef.current = null;
       }
     };
-  }, [url]);
+  }, [runtimeBootstrapReady, url]);
 
   useEffect(() => {
     detailDeviceIdRef.current = detailDeviceId;

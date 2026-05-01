@@ -4,10 +4,12 @@ import {
   createDevice,
   deleteDevice,
   fetchBackupJobs,
+  fetchCanvasBootstrap,
   fetchCanvasTopology,
   fetchDevices,
   fetchLinks,
   fetchSettings,
+  resetCanvasBootstrapRequestCache,
   restoreInstanceBackup,
   runTopologyDiscovery,
   updateDevice,
@@ -317,6 +319,181 @@ describe('fetchCanvasTopology', () => {
       status: 'not-modified',
       etag: '"canvas-topology-1"',
     });
+  });
+});
+
+describe('fetchCanvasBootstrap', () => {
+  beforeEach(() => {
+    resetCanvasBootstrapRequestCache();
+  });
+
+  it('fetches the full canvas bootstrap including runtime state', async () => {
+    const payload = {
+      schema_version: 1,
+      topology_version: 'topo-abc123',
+      runtime_version: 42,
+      runtime_identity: 'rt-sha256:abc',
+      runtime_snapshot: {
+        devices: {
+          'uuid-1': {
+            device_id: 'uuid-1',
+            operational_status: 'down',
+            primary_health: 'unreachable',
+            runtime_flags: [],
+            field_states: {
+              cpu: 'missing',
+              memory: 'missing',
+              uptime: 'error',
+            },
+            network_reachable: 'false',
+            snmp_reachable: 'false',
+            reachability: 'hard_down',
+            health: 'unknown',
+            freshness: 'fresh',
+            primary_reason: 'device_unreachable',
+            metrics_status: 'unavailable',
+            metrics_reason: 'device_unreachable',
+            alert_status: 'normal',
+            firing_alert_count: 0,
+            last_collected_at: null,
+            last_polled_at: null,
+            expected_poll_interval_seconds: null,
+            cpu_percent: null,
+            mem_percent: null,
+            temp_celsius: null,
+            uptime_secs: null,
+          },
+        },
+        links: {},
+      },
+      generated_at: '2026-04-30T12:00:00Z',
+      devices: [deviceResource('uuid-1', 'router-01', '10.0.0.1')],
+      links: [],
+      positions: {},
+      areas: [],
+      capabilities: {
+        supports_topology_delta: false,
+        supports_position_revision: false,
+        supports_area_filtering: true,
+      },
+      settings: { layout: { version: 1 } },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(payload));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchCanvasBootstrap();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/canvas', {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+    expect(result.topology.runtime_version).toBe(42);
+    expect(result.topology.runtime_identity).toBe('rt-sha256:abc');
+    expect(result.topology.runtime_snapshot?.devices['uuid-1'].operational_status).toBe('down');
+  });
+
+  it('deduplicates concurrent full canvas bootstrap requests', async () => {
+    const payload = {
+      schema_version: 1,
+      topology_version: 'topo-abc123',
+      runtime_version: 42,
+      runtime_identity: 'rt-sha256:abc',
+      runtime_snapshot: {
+        devices: {},
+        links: {},
+      },
+      generated_at: '2026-04-30T12:00:00Z',
+      devices: [],
+      links: [],
+      positions: {},
+      areas: [],
+      capabilities: {
+        supports_topology_delta: false,
+        supports_position_revision: false,
+        supports_area_filtering: true,
+      },
+      settings: { layout: { version: 1 } },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(payload));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const [first, second] = await Promise.all([fetchCanvasBootstrap(), fetchCanvasBootstrap()]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(first.topology.runtime_version).toBe(42);
+    expect(second.topology.runtime_version).toBe(42);
+  });
+
+  it('reuses a fresh completed full canvas bootstrap request', async () => {
+    const payload = {
+      schema_version: 1,
+      topology_version: 'topo-abc123',
+      runtime_version: 42,
+      runtime_identity: 'rt-sha256:abc',
+      runtime_snapshot: {
+        devices: {},
+        links: {},
+      },
+      generated_at: '2026-04-30T12:00:00Z',
+      devices: [],
+      links: [],
+      positions: {},
+      areas: [],
+      capabilities: {
+        supports_topology_delta: false,
+        supports_position_revision: false,
+        supports_area_filtering: true,
+      },
+      settings: { layout: { version: 1 } },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(payload));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = await fetchCanvasBootstrap();
+    const second = await fetchCanvasBootstrap();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(first.topology.runtime_identity).toBe('rt-sha256:abc');
+    expect(second.topology.runtime_identity).toBe('rt-sha256:abc');
+  });
+
+  it('bypasses a fresh completed full canvas bootstrap request when forced', async () => {
+    const firstPayload = {
+      schema_version: 1,
+      topology_version: 'topo-abc123',
+      runtime_version: 42,
+      runtime_identity: 'rt-sha256:abc',
+      runtime_snapshot: { devices: {}, links: {} },
+      generated_at: '2026-04-30T12:00:00Z',
+      devices: [],
+      links: [],
+      positions: {},
+      areas: [],
+      capabilities: {
+        supports_topology_delta: false,
+        supports_position_revision: false,
+        supports_area_filtering: true,
+      },
+      settings: { layout: { version: 1 } },
+    };
+    const secondPayload = {
+      ...firstPayload,
+      runtime_version: 43,
+      runtime_identity: 'rt-sha256:def',
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse(firstPayload))
+      .mockResolvedValueOnce(mockResponse(secondPayload));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = await fetchCanvasBootstrap();
+    const second = await fetchCanvasBootstrap({ force: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(first.topology.runtime_version).toBe(42);
+    expect(second.topology.runtime_version).toBe(43);
   });
 });
 

@@ -81,6 +81,83 @@ export type CanvasTopologyFetchResult =
       etag?: string;
     };
 
+const canvasBootstrapReuseWindowMs = 2000;
+
+let canvasBootstrapRequest: Promise<{ topology: CanvasTopologyResponse }> | null = null;
+let recentCanvasBootstrap: {
+  value: { topology: CanvasTopologyResponse };
+  expiresAt: number;
+} | null = null;
+
+type FetchCanvasBootstrapOptions = {
+  force?: boolean;
+};
+
+export function resetCanvasBootstrapRequestCache(): void {
+  canvasBootstrapRequest = null;
+  recentCanvasBootstrap = null;
+}
+
+export async function fetchCanvasBootstrap(
+  options: FetchCanvasBootstrapOptions = {},
+): Promise<{ topology: CanvasTopologyResponse }> {
+  if (
+    options.force !== true &&
+    recentCanvasBootstrap !== null &&
+    Date.now() < recentCanvasBootstrap.expiresAt
+  ) {
+    return recentCanvasBootstrap.value;
+  }
+
+  if (options.force !== true && canvasBootstrapRequest !== null) {
+    return canvasBootstrapRequest;
+  }
+
+  const request = fetchCanvasBootstrapUncached()
+    .then((result) => {
+      recentCanvasBootstrap = {
+        value: result,
+        expiresAt: Date.now() + canvasBootstrapReuseWindowMs,
+      };
+      return result;
+    })
+    .finally(() => {
+      if (canvasBootstrapRequest === request) {
+        canvasBootstrapRequest = null;
+      }
+    });
+  canvasBootstrapRequest = request;
+  return canvasBootstrapRequest;
+}
+
+async function fetchCanvasBootstrapUncached(): Promise<{ topology: CanvasTopologyResponse }> {
+  const response = await fetch('/api/v1/canvas', {
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  const payload = (await response.json().catch(() => null)) as ErrorPayload | unknown;
+
+  if (!response.ok) {
+    const errorMessage =
+      typeof payload === 'object' &&
+      payload !== null &&
+      'error' in payload &&
+      typeof payload.error === 'string'
+        ? payload.error
+        : response.statusText;
+    throw new CanvasTopologyFetchError(
+      response.status,
+      `/api/v1/canvas failed: ${response.status} ${errorMessage}`,
+    );
+  }
+
+  return {
+    topology: parseCanvasTopologyResponse(payload),
+  };
+}
+
 export async function fetchCanvasTopology(
   ifNoneMatch?: string,
 ): Promise<CanvasTopologyFetchResult> {

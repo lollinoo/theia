@@ -11,6 +11,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
+	"github.com/lollinoo/theia/internal/ws"
 )
 
 func newTestCanvasTopologyHandler(t *testing.T) (*CanvasTopologyHandler, *mockDeviceRepo, *mockLinkRepo, *mockPositionRepo, *mockAreaRepo) {
@@ -181,5 +182,61 @@ func TestCanvasTopologyHandlerHandleGet_ReturnsNotModifiedForMatchingETag(t *tes
 	}
 	if secondRec.Body.Len() != 0 {
 		t.Fatalf("expected empty 304 body, got %q", secondRec.Body.String())
+	}
+}
+
+func TestCanvasTopologyHandlerHandleGetCanvas_ReturnsRuntimeBootstrap(t *testing.T) {
+	handler, deviceRepo, _, _, _ := newTestCanvasTopologyHandler(t)
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID:         deviceID,
+		Hostname:   "router-01",
+		IP:         "10.0.0.1",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		SysName:    "router-01",
+		Vendor:     "default",
+		Managed:    true,
+		Tags:       map[string]string{},
+	}); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+
+	runtimeSnapshot := ws.EmptySnapshot()
+	runtimeSnapshot.Devices[deviceID.String()] = ws.DeviceRuntimeDTO{
+		DeviceID:          deviceID.String(),
+		OperationalStatus: "down",
+		PrimaryHealth:     "unreachable",
+		MetricsStatus:     "unavailable",
+		MetricsReason:     "device_unreachable",
+	}
+	handler.runtimeSnapshotFunc = func() (*ws.SnapshotPayload, uint64) {
+		return runtimeSnapshot, 42
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/canvas", nil)
+	rec := httptest.NewRecorder()
+
+	handler.HandleGetCanvas(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp canvasTopologyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.RuntimeVersion == nil || *resp.RuntimeVersion != 42 {
+		t.Fatalf("runtime_version = %#v, want 42", resp.RuntimeVersion)
+	}
+	if resp.RuntimeIdentity != ws.RuntimeIdentityForSnapshot(runtimeSnapshot) {
+		t.Fatalf("runtime_identity = %q, want snapshot identity", resp.RuntimeIdentity)
+	}
+	if resp.RuntimeSnapshot == nil {
+		t.Fatal("expected runtime_snapshot")
+	}
+	if got := resp.RuntimeSnapshot.Devices[deviceID.String()].OperationalStatus; got != "down" {
+		t.Fatalf("runtime snapshot status = %q, want down", got)
 	}
 }

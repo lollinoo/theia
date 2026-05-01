@@ -33,6 +33,7 @@ describe('CanvasDiagnosticsPanel', () => {
         topologyChangedCount: 3,
         lastAppliedSnapshotVersion: '42',
         lastAppliedDeltaVersion: '43',
+        lastAppliedRuntimeIdentity: 'rt-sha256:abc',
       },
       graph: {
         canonicalNodeCount: 10,
@@ -80,6 +81,7 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(deltaVersionRow).not.toBeNull();
     expect(within(snapshotVersionRow as HTMLElement).getByText('42')).toBeInTheDocument();
     expect(within(deltaVersionRow as HTMLElement).getByText('43')).toBeInTheDocument();
+    expect(screen.getByText('rt-sha256:abc')).toBeInTheDocument();
     expect(screen.getByText('10')).toBeInTheDocument();
     expect(screen.getByText('area-1')).toBeInTheDocument();
     expect(screen.getAllByText('success').length).toBeGreaterThan(0);

@@ -29,6 +29,7 @@ func NewRouter(
 	poller statusProvider,
 	instanceBackupService *service.InstanceBackupService,
 	bridgeBinariesDir string,
+	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64),
 	wsHandler *ws.Handler,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -42,6 +43,7 @@ func NewRouter(
 		positionRepo,
 		areaRepo,
 		vendorRegistry,
+		runtimeSnapshotFunc,
 	)
 	settingsHandler := NewSettingsHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
@@ -62,6 +64,14 @@ func NewRouter(
 			return
 		}
 		canvasTopologyHandler.HandleGet(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/canvas", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		canvasTopologyHandler.HandleGetCanvas(w, r)
 	})
 
 	// Device routes

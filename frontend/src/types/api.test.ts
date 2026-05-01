@@ -104,7 +104,41 @@ describe('parseCanvasTopologyResponse', () => {
     const payload = {
       schema_version: 1,
       topology_version: 'topo-abc123',
-      runtime_version: 'rt-456',
+      runtime_version: 456,
+      runtime_identity: 'rt-sha256:abc',
+      runtime_snapshot: {
+        devices: {
+          'router-1': {
+            device_id: 'router-1',
+            operational_status: 'down',
+            primary_health: 'unreachable',
+            runtime_flags: [],
+            field_states: {
+              cpu: 'missing',
+              memory: 'missing',
+              uptime: 'error',
+            },
+            network_reachable: 'false',
+            snmp_reachable: 'false',
+            reachability: 'hard_down',
+            health: 'unknown',
+            freshness: 'fresh',
+            primary_reason: 'device_unreachable',
+            metrics_status: 'unavailable',
+            metrics_reason: 'device_unreachable',
+            alert_status: 'normal',
+            firing_alert_count: 0,
+            last_collected_at: null,
+            last_polled_at: null,
+            expected_poll_interval_seconds: null,
+            cpu_percent: null,
+            mem_percent: null,
+            temp_celsius: null,
+            uptime_secs: null,
+          },
+        },
+        links: {},
+      },
       generated_at: '2026-04-30T12:00:00Z',
       devices: [deviceResource('router-1', 'router')],
       links: [
@@ -156,6 +190,9 @@ describe('parseCanvasTopologyResponse', () => {
 
     expect(topology.schema_version).toBe(1);
     expect(topology.topology_version).toBe('topo-abc123');
+    expect(topology.runtime_version).toBe(456);
+    expect(topology.runtime_identity).toBe('rt-sha256:abc');
+    expect(topology.runtime_snapshot?.devices['router-1'].operational_status).toBe('down');
     expect(topology.devices[0].hostname).toBe('router-1.example.test');
     expect(topology.links[0]).toMatchObject({
       id: 'link-1',

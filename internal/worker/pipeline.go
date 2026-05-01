@@ -234,6 +234,30 @@ func (p *PipelineOrchestrator) GetOverviewSnapshot() (*ws.SnapshotPayload, uint6
 	return p.runtime.getOverviewSnapshot()
 }
 
+func (p *PipelineOrchestrator) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
+	p.runtime.mu.RLock()
+	hasRuntimeBase := p.runtime.prevHashes != nil
+	p.runtime.mu.RUnlock()
+	if hasRuntimeBase {
+		return p.runtime.getOverviewSnapshot()
+	}
+
+	snapshot, err := p.buildFullOverviewSnapshot()
+	if err != nil {
+		return p.runtime.getOverviewSnapshot()
+	}
+	hashes := computeSnapshotHashes(snapshot)
+
+	p.runtime.mu.Lock()
+	p.runtime.lastSnapshot = snapshot
+	p.runtime.prevHashes = hashes
+	p.runtime.overviewVersion++
+	version := p.runtime.overviewVersion
+	p.runtime.mu.Unlock()
+
+	return ws.CloneSnapshot(snapshot), version
+}
+
 func (p *PipelineOrchestrator) IsPromAvailable() bool {
 	return p.runtime.isPromAvailable()
 }

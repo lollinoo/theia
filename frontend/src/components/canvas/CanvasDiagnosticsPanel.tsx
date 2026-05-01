@@ -165,6 +165,10 @@ export function CanvasDiagnosticsPanel({
             value={snapshot.websocket.lastAppliedDeltaVersion}
           />
           <DiagnosticsRow
+            label="runtime identity"
+            value={snapshot.websocket.lastAppliedRuntimeIdentity}
+          />
+          <DiagnosticsRow
             label="rejected delta"
             value={snapshot.websocket.lastRejectedDeltaReason}
           />

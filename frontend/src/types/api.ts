@@ -1,3 +1,5 @@
+import { type SnapshotPayload, parseSnapshotPayload } from './metrics';
+
 export type DeviceType = 'router' | 'switch' | 'ap' | 'firewall' | 'virtual' | 'unknown';
 export type DevicePollClass = 'core' | 'standard' | 'low';
 export type TopologyDiscoveryMode = 'inherit' | 'off' | 'lldp' | 'lldp_cdp' | 'bootstrap_once';
@@ -99,7 +101,9 @@ export interface CanvasTopologyCapabilities {
 export interface CanvasTopologyResponse {
   schema_version: 1;
   topology_version: string;
-  runtime_version?: string;
+  runtime_version?: number;
+  runtime_identity?: string;
+  runtime_snapshot?: SnapshotPayload;
   generated_at: string;
   devices: Device[];
   links: Link[];
@@ -380,7 +384,15 @@ export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyRes
     schema_version: 1,
     topology_version: readString(payload, 'topology_version'),
     runtime_version:
-      typeof payload.runtime_version === 'string' ? payload.runtime_version : undefined,
+      typeof payload.runtime_version === 'number' && Number.isFinite(payload.runtime_version)
+        ? payload.runtime_version
+        : undefined,
+    runtime_identity:
+      typeof payload.runtime_identity === 'string' ? payload.runtime_identity : undefined,
+    runtime_snapshot:
+      payload.runtime_snapshot === undefined
+        ? undefined
+        : parseSnapshotPayload(payload.runtime_snapshot),
     generated_at: readString(payload, 'generated_at'),
     devices: parseDevicesResponse({
       data: Array.isArray(payload.devices) ? payload.devices : [],

@@ -12,16 +12,18 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/vendor"
+	"github.com/lollinoo/theia/internal/ws"
 )
 
 // CanvasTopologyHandler serves the canvas read model used for initial loads and
 // structural refreshes. Runtime metrics remain owned by the WebSocket stream.
 type CanvasTopologyHandler struct {
-	deviceService  *service.DeviceService
-	linkRepo       domain.LinkRepository
-	positionRepo   domain.PositionRepository
-	areaRepo       domain.AreaRepository
-	vendorRegistry *vendor.Registry
+	deviceService       *service.DeviceService
+	linkRepo            domain.LinkRepository
+	positionRepo        domain.PositionRepository
+	areaRepo            domain.AreaRepository
+	vendorRegistry      *vendor.Registry
+	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64)
 }
 
 func NewCanvasTopologyHandler(
@@ -30,20 +32,28 @@ func NewCanvasTopologyHandler(
 	positionRepo domain.PositionRepository,
 	areaRepo domain.AreaRepository,
 	vendorRegistry *vendor.Registry,
+	runtimeSnapshotFunc ...func() (*ws.SnapshotPayload, uint64),
 ) *CanvasTopologyHandler {
+	var snapshotFunc func() (*ws.SnapshotPayload, uint64)
+	if len(runtimeSnapshotFunc) > 0 {
+		snapshotFunc = runtimeSnapshotFunc[0]
+	}
 	return &CanvasTopologyHandler{
-		deviceService:  deviceService,
-		linkRepo:       linkRepo,
-		positionRepo:   positionRepo,
-		areaRepo:       areaRepo,
-		vendorRegistry: vendorRegistry,
+		deviceService:       deviceService,
+		linkRepo:            linkRepo,
+		positionRepo:        positionRepo,
+		areaRepo:            areaRepo,
+		vendorRegistry:      vendorRegistry,
+		runtimeSnapshotFunc: snapshotFunc,
 	}
 }
 
 type canvasTopologyResponse struct {
 	SchemaVersion   int                          `json:"schema_version"`
 	TopologyVersion string                       `json:"topology_version"`
-	RuntimeVersion  string                       `json:"runtime_version,omitempty"`
+	RuntimeVersion  *uint64                      `json:"runtime_version,omitempty"`
+	RuntimeIdentity string                       `json:"runtime_identity,omitempty"`
+	RuntimeSnapshot *ws.SnapshotPayload          `json:"runtime_snapshot,omitempty"`
 	GeneratedAt     string                       `json:"generated_at"`
 	Devices         []jsonAPIResource            `json:"devices"`
 	Links           []enrichedLinkResponse       `json:"links"`
@@ -115,6 +125,43 @@ func (h *CanvasTopologyHandler) HandleGet(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	json.NewEncoder(w).Encode(response)
+}
+
+// HandleGetCanvas handles GET /api/v1/canvas and returns the complete canvas
+// bootstrap: structural read model plus the current runtime base used by the
+// WebSocket delta stream.
+func (h *CanvasTopologyHandler) HandleGetCanvas(w http.ResponseWriter, r *http.Request) {
+	devices, err := h.deviceService.GetAllDevices(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
+		return
+	}
+	links, err := h.linkRepo.GetAll()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list links", err)
+		return
+	}
+	positions, err := h.positionRepo.GetAll()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list positions", err)
+		return
+	}
+	areas, err := h.areaRepo.GetAllWithDeviceCount()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list areas", err)
+		return
+	}
+
+	response := h.buildResponse(devices, links, positions, areas)
+	if h.runtimeSnapshotFunc != nil {
+		runtimeSnapshot, runtimeVersion := h.runtimeSnapshotFunc()
+		response.RuntimeVersion = &runtimeVersion
+		response.RuntimeSnapshot = ws.CloneSnapshot(runtimeSnapshot)
+		response.RuntimeIdentity = ws.RuntimeIdentityForSnapshot(runtimeSnapshot)
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(response)
 }
 

@@ -148,7 +148,11 @@ export interface PrometheusStatusPayload {
 
 export interface ResyncRequiredPayload {
   scope: 'overview';
-  reason: 'client_resync_scheduled' | 'state_changes_dropped' | 'hub_buffer_full';
+  reason:
+    | 'client_resync_scheduled'
+    | 'client_missing_runtime_snapshot'
+    | 'state_changes_dropped'
+    | 'hub_buffer_full';
 }
 
 export interface TopologyChangedPayload {
@@ -659,6 +663,7 @@ export function parseWSMessage(
     }
     if (
       reason !== 'client_resync_scheduled' &&
+      reason !== 'client_missing_runtime_snapshot' &&
       reason !== 'state_changes_dropped' &&
       reason !== 'hub_buffer_full'
     ) {

@@ -259,3 +259,185 @@ func TestHandlerServeHTTP_HelloWithCurrentRuntimeIdentitySkipsBootstrapSnapshot(
 	}
 	conn.SetReadDeadline(time.Time{})
 }
+
+func TestHandlerServeHTTP_DelayedHelloWithCurrentRuntimeIdentitySkipsBootstrapSnapshot(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			return snapshot, 1
+		},
+		func() AlertMessagePayload {
+			return AlertMessagePayload{Version: 7, Alerts: []AlertDTO{}}
+		},
+		func() PrometheusStatusPayload {
+			return PrometheusStatusPayload{}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial websocket test server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	time.Sleep(150 * time.Millisecond)
+	if err := conn.WriteJSON(map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"canvas_schema_version": 1,
+			"runtime_version":       1,
+			"runtime_identity":      RuntimeIdentityForSnapshot(snapshot),
+		},
+	}); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read bootstrap websocket message: %v", err)
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("failed to decode bootstrap websocket message: %v", err)
+	}
+	if message.Type != MessageTypeReady {
+		t.Fatalf("first bootstrap message = %q, want ready", message.Type)
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerServeHTTP_DoesNotReceiveBroadcastBeforeBootstrapReady(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			return snapshot, 1
+		},
+		func() AlertMessagePayload {
+			return AlertMessagePayload{Version: 7, Alerts: []AlertDTO{}}
+		},
+		func() PrometheusStatusPayload {
+			return PrometheusStatusPayload{}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial websocket test server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	hub.BroadcastOverviewDelta(EmptySnapshot(), 1, 2, snapshot)
+	time.Sleep(100 * time.Millisecond)
+	if err := conn.WriteJSON(map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"canvas_schema_version": 1,
+			"runtime_version":       1,
+			"runtime_identity":      RuntimeIdentityForSnapshot(snapshot),
+		},
+	}); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read bootstrap websocket message: %v", err)
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("failed to decode bootstrap websocket message: %v", err)
+	}
+	if message.Type != MessageTypeReady {
+		t.Fatalf("first bootstrap message = %q, want ready", message.Type)
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerServeHTTP_StaleHelloRequestsHTTPResyncInsteadOfSnapshot(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			return snapshot, 2
+		},
+		func() AlertMessagePayload {
+			return AlertMessagePayload{Version: 7, Alerts: []AlertDTO{}}
+		},
+		func() PrometheusStatusPayload {
+			return PrometheusStatusPayload{}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial websocket test server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"canvas_schema_version": 1,
+			"runtime_version":       1,
+			"runtime_identity":      "rt-sha256:stale",
+		},
+	}); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read bootstrap websocket message: %v", err)
+	}
+	var message struct {
+		Type    string                `json:"type"`
+		Payload ResyncRequiredPayload `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("failed to decode bootstrap websocket message: %v", err)
+	}
+	if message.Type != MessageTypeResyncRequired {
+		t.Fatalf("first bootstrap message = %q, want resync_required", message.Type)
+	}
+	if message.Payload.Scope != ResyncScopeOverview {
+		t.Fatalf("resync scope = %q, want %q", message.Payload.Scope, ResyncScopeOverview)
+	}
+	if message.Payload.Reason != ResyncReasonClientMissingRuntimeSnapshot {
+		t.Fatalf("resync reason = %q, want %q", message.Payload.Reason, ResyncReasonClientMissingRuntimeSnapshot)
+	}
+	conn.SetReadDeadline(time.Time{})
+}

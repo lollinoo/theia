@@ -23,6 +23,7 @@ function App() {
   const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket(
     '/api/v1/ws',
     detailDeviceId,
+    { requireRuntimeBootstrap: true },
   );
 
   // Fetch areas on mount

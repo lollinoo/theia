@@ -4,6 +4,10 @@ import {
   exportCanvasDiagnostics,
   resetCanvasDiagnostics,
 } from '../components/canvas/canvasDiagnostics';
+import {
+  publishCanvasRuntimeBootstrap,
+  resetCanvasRuntimeBootstrap,
+} from './canvasRuntimeBootstrap';
 import { useWebSocket } from './useWebSocket';
 
 function makeDeviceRuntime(overrides: Record<string, unknown> = {}) {
@@ -87,6 +91,7 @@ beforeEach(() => {
   mockInstances = [];
   vi.useFakeTimers();
   resetCanvasDiagnostics();
+  resetCanvasRuntimeBootstrap();
 
   // Replace the global WebSocket with our MockWebSocket class.
   // When the hook calls `new WebSocket(url)`, it will construct a MockWebSocket.
@@ -103,9 +108,51 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+  resetCanvasRuntimeBootstrap();
 });
 
 describe('useWebSocket', () => {
+  it('waits for HTTP runtime bootstrap before opening the socket when required', () => {
+    renderHook(() =>
+      useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
+    );
+
+    expect(mockInstances).toHaveLength(0);
+
+    act(() => {
+      publishCanvasRuntimeBootstrap({
+        snapshot: { devices: {}, links: {} },
+        runtimeVersion: 42,
+        runtimeIdentity: 'rt-sha256:abc',
+      });
+    });
+
+    expect(mockInstances).toHaveLength(1);
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'hello',
+        payload: {
+          canvas_schema_version: 1,
+          topology_version: undefined,
+          runtime_version: 42,
+          runtime_identity: 'rt-sha256:abc',
+          alert_version: undefined,
+          subscriptions: {
+            runtime: true,
+            topology: true,
+            alerts: true,
+            details_device_id: null,
+          },
+        },
+      }),
+    );
+  });
+
   it('sets connected=true after open', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
@@ -173,6 +220,87 @@ describe('useWebSocket', () => {
     );
   });
 
+  it('does not reuse diagnostics runtime identity after the hook remounts without a base snapshot', () => {
+    const { unmount } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 42,
+          runtime_identity: 'rt-sha256:abc',
+          snapshot: {
+            devices: {},
+            links: {},
+          },
+        },
+      });
+    });
+
+    unmount();
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    const secondSocket = mockInstances[1];
+    expect(secondSocket).toBeDefined();
+    if (!secondSocket) {
+      throw new Error('expected remounted socket instance');
+    }
+
+    act(() => {
+      secondSocket.simulateOpen();
+    });
+
+    const hello = JSON.parse(secondSocket.send.mock.calls[0]?.[0] as string) as {
+      type: string;
+      payload: Record<string, unknown>;
+    };
+    expect(hello.type).toBe('hello');
+    expect(hello.payload).not.toHaveProperty('runtime_identity');
+    expect(hello.payload).not.toHaveProperty('runtime_version');
+  });
+
+  it('does not reuse stored runtime identity after a full page refresh clears the base snapshot', () => {
+    const { unmount } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 42,
+          runtime_identity: 'rt-sha256:abc',
+          snapshot: {
+            devices: {},
+            links: {},
+          },
+        },
+      });
+    });
+
+    unmount();
+    resetCanvasDiagnostics();
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    const secondSocket = mockInstances[1];
+    expect(secondSocket).toBeDefined();
+    if (!secondSocket) {
+      throw new Error('expected refreshed socket instance');
+    }
+
+    act(() => {
+      secondSocket.simulateOpen();
+    });
+
+    const hello = JSON.parse(secondSocket.send.mock.calls[0]?.[0] as string) as {
+      type: string;
+      payload: Record<string, unknown>;
+    };
+    expect(hello.type).toBe('hello');
+    expect(hello.payload).not.toHaveProperty('runtime_identity');
+    expect(hello.payload).not.toHaveProperty('runtime_version');
+  });
+
   it('handles ready handshake without replacing the existing snapshot', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
@@ -202,6 +330,33 @@ describe('useWebSocket', () => {
     });
 
     expect(result.current.snapshot?.devices['dev-1'].cpu_percent).toBe(50);
+  });
+
+  it('requests resync when ready arrives before any base snapshot exists', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'ready',
+        payload: {
+          runtime_version: 42,
+          runtime_identity: 'rt-sha256:abc',
+        },
+      });
+    });
+
+    expect(mockInstance.close).toHaveBeenCalled();
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'backend-resync-required',
+        detail: {
+          scope: 'overview',
+          reason: 'client_missing_runtime_snapshot',
+        },
+      }),
+    );
   });
 
   it('records websocket snapshot, delta and rejected delta diagnostics', () => {

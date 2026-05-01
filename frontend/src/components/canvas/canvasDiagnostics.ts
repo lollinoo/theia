@@ -33,6 +33,7 @@ export interface CanvasDiagnosticsSnapshot {
     topologyChangedCount: number;
     lastAppliedSnapshotVersion?: string;
     lastAppliedDeltaVersion?: string;
+    lastAppliedRuntimeIdentity?: string;
     lastRejectedDeltaReason?: string;
   };
   graph: {

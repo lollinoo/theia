@@ -48,10 +48,11 @@ const (
 const (
 	CanvasTopologyEndpoint = "/api/v1/topology/canvas"
 
-	ResyncScopeOverview          = "overview"
-	ResyncReasonClientResync     = "client_resync_scheduled"
-	ResyncReasonStateChangesDrop = "state_changes_dropped"
-	ResyncReasonHubBufferFull    = "hub_buffer_full"
+	ResyncScopeOverview                      = "overview"
+	ResyncReasonClientResync                 = "client_resync_scheduled"
+	ResyncReasonClientMissingRuntimeSnapshot = "client_missing_runtime_snapshot"
+	ResyncReasonStateChangesDrop             = "state_changes_dropped"
+	ResyncReasonHubBufferFull                = "hub_buffer_full"
 )
 
 // PrometheusStatusPayload is sent when Prometheus availability changes.

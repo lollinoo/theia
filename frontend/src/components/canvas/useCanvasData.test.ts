@@ -5,11 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createLink,
+  fetchCanvasBootstrap,
   fetchCanvasTopology,
   fetchDevices,
   fetchLinks,
   fetchSettings,
 } from '../../api/client';
+import {
+  getCanvasRuntimeBootstrap,
+  resetCanvasRuntimeBootstrap,
+} from '../../hooks/canvasRuntimeBootstrap';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
 import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
@@ -22,6 +27,7 @@ import { buildTopologyEdges } from './edgeBuilder';
 import { useCanvasData } from './useCanvasData';
 
 vi.mock('../../api/client', () => ({
+  fetchCanvasBootstrap: vi.fn(),
   fetchCanvasTopology: vi.fn(),
   fetchDevices: vi.fn(),
   fetchLinks: vi.fn(),
@@ -170,6 +176,7 @@ describe('useCanvasData', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-13T12:00:00Z'));
     positionMocks.fetchPositions.mockResolvedValue(new Map());
+    vi.mocked(fetchCanvasBootstrap).mockRejectedValue({ status: 404 });
     vi.mocked(fetchCanvasTopology).mockRejectedValue({ status: 404 });
     vi.mocked(fetchDevices).mockResolvedValue([mockDevice()]);
     vi.mocked(fetchLinks).mockResolvedValue([]);
@@ -182,6 +189,7 @@ describe('useCanvasData', () => {
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     window.__THEIA_CANVAS_METRICS__ = [];
     resetCanvasDiagnostics();
+    resetCanvasRuntimeBootstrap();
     window.localStorage.clear();
   });
 
@@ -228,7 +236,7 @@ describe('useCanvasData', () => {
       topology: {
         schema_version: 1,
         topology_version: 'topo-1',
-        runtime_version: 'rt-1',
+        runtime_version: 1,
         generated_at: '2026-04-13T12:00:00Z',
         devices: [mockDevice()],
         links: [],
@@ -253,7 +261,7 @@ describe('useCanvasData', () => {
     expect(result.current.loading).toBe(false);
     expect(exportCanvasDiagnostics().diagnostics.topology).toMatchObject({
       topologyVersion: 'topo-1',
-      runtimeVersion: 'rt-1',
+      runtimeVersion: '1',
       schemaVersion: 1,
       lastTopologyLoadReason: 'initial_load',
       lastTopologyLoadStatus: 'success',
@@ -753,6 +761,53 @@ describe('useCanvasData', () => {
     expect(fetchLinks).not.toHaveBeenCalled();
     expect(positionMocks.fetchPositions).not.toHaveBeenCalled();
     expect(result.current.nodes[0].position).toEqual({ x: 222, y: 333 });
+  });
+
+  it('uses the full canvas bootstrap on initial load and publishes runtime base for websocket', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValue({
+      topology: {
+        schema_version: 1,
+        topology_version: 'topo-abc123',
+        runtime_version: 42,
+        runtime_identity: 'rt-sha256:abc',
+        runtime_snapshot: mockSnapshot({
+          devices: {
+            'dev-1': {
+              ...mockSnapshot().devices['dev-1'],
+              operational_status: 'down',
+              primary_health: 'unreachable',
+            },
+          },
+        }),
+        generated_at: '2026-04-30T12:00:00Z',
+        devices: [mockDevice()],
+        links: [],
+        positions: {},
+        areas: [],
+        capabilities: {
+          supports_topology_delta: false,
+          supports_position_revision: false,
+          supports_area_filtering: true,
+        },
+        settings: { layout: { version: 1 } },
+      },
+    });
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenCalledTimes(1);
+    expect(fetchCanvasTopology).not.toHaveBeenCalled();
+    expect(result.current.nodes[0].data.device.status).toBe('down');
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeVersion: 42,
+      runtimeIdentity: 'rt-sha256:abc',
+    });
+    expect(getCanvasRuntimeBootstrap()?.snapshot.devices['dev-1'].operational_status).toBe('down');
   });
 
   it('skips structural recomposition when the canvas read model is not modified', async () => {

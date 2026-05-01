@@ -45,6 +45,8 @@ type Client struct {
 	conn           *websocket.Conn
 	mu             sync.Mutex
 	closed         bool
+	disconnected   chan struct{}
+	disconnectOnce sync.Once
 	send           chan []byte
 	overviewSend   chan []byte
 	hello          chan clientControlMessage
@@ -99,6 +101,18 @@ func (h *Hub) SendTo(client *Client, msg Message) {
 	}
 	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
 	h.enqueue(client, payload)
+}
+
+// WriteTo serializes and writes a message directly to a client. It must only be
+// used before the client's write pump starts.
+func (h *Hub) WriteTo(client *Client, msg Message) bool {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal direct client message: %v", err)
+		return false
+	}
+	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
+	return client.writePayload(payload, true)
 }
 
 // BroadcastOverviewSnapshot broadcasts a versioned full overview snapshot.
@@ -320,6 +334,7 @@ func (h *Hub) removeClient(client *Client) {
 
 func (c *Client) readPump() {
 	defer func() {
+		c.markDisconnected()
 		c.hub.unregister <- c
 	}()
 
@@ -357,6 +372,15 @@ func (c *Client) readPump() {
 			c.hub.ClearDetailSubscription(c)
 		}
 	}
+}
+
+func (c *Client) markDisconnected() {
+	if c.disconnected == nil {
+		return
+	}
+	c.disconnectOnce.Do(func() {
+		close(c.disconnected)
+	})
 }
 
 func (c *Client) acceptHello(cmd clientControlMessage) {
