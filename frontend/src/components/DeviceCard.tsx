@@ -1,5 +1,5 @@
-import { Handle, type Node, type NodeProps, Position, useStore } from '@xyflow/react';
-import { type CSSProperties, memo } from 'react';
+import { Handle, type Node, type NodeProps, Position } from '@xyflow/react';
+import { type CSSProperties, memo, useLayoutEffect } from 'react';
 import type { Device, Link } from '../types/api';
 import {
   type AlertStatus,
@@ -12,6 +12,10 @@ import {
 import { formatPollingEvery } from '../utils/freshness';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
 import { StatusDot } from './StatusDot';
+import {
+  isCanvasRenderMetricsEnabled,
+  recordCanvasComponentRenderMetric,
+} from './canvas/canvasInstrumentation';
 import { resolveDeviceCardRenderModel } from './deviceCardVariant';
 import {
   type DeviceMonitoringState,
@@ -180,6 +184,7 @@ const compactPercentFormatter = new Intl.NumberFormat('en-US', { maximumFraction
 const DEVICE_NODE_SCALE_START_ZOOM = 0.9;
 const DEVICE_NODE_MIN_SCALE_ZOOM = 0.6;
 const DEVICE_NODE_MAX_READABILITY_SCALE = 1.12;
+const DEVICE_NODE_READABILITY_SCALE_CSS_VAR = 'var(--theia-device-node-readability-scale, 1)';
 
 export function resolveDeviceNodeReadabilityScale(zoom: number): number {
   const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
@@ -195,30 +200,29 @@ export function resolveDeviceNodeReadabilityScale(zoom: number): number {
   return Number(scale.toFixed(2));
 }
 
-function scaledPx(basePx: number, scale: number): string {
-  return `${Number((basePx * scale).toFixed(2))}px`;
+function readableFontStyle(basePx: number): CSSProperties {
+  return {
+    fontSize: `calc(${basePx}px * ${DEVICE_NODE_READABILITY_SCALE_CSS_VAR})`,
+  };
 }
 
-function readableFontStyle(scale: number, basePx: number): CSSProperties | undefined {
-  return scale > 1 ? { fontSize: scaledPx(basePx, scale) } : undefined;
-}
-
-function readableHeightStyle(scale: number, basePx: number): CSSProperties | undefined {
-  return scale > 1 ? { height: scaledPx(basePx, scale) } : undefined;
+function readableHeightStyle(basePx: number): CSSProperties {
+  return {
+    height: `calc(${basePx}px * ${DEVICE_NODE_READABILITY_SCALE_CSS_VAR})`,
+  };
 }
 
 function mergeReadableFontStyle(
   baseStyle: CSSProperties | undefined,
-  scale: number,
   basePx: number,
 ): CSSProperties | undefined {
-  const fontStyle = readableFontStyle(scale, basePx);
+  const fontStyle = readableFontStyle(basePx);
 
   if (!baseStyle) {
     return fontStyle;
   }
 
-  return fontStyle ? { ...baseStyle, ...fontStyle } : baseStyle;
+  return { ...baseStyle, ...fontStyle };
 }
 
 function formatRuntimePercent(value: number | null | undefined): string {
@@ -269,8 +273,8 @@ function PollingDisabledNotice({ className = '' }: { className?: string }) {
 }
 
 function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
-  const zoom = useStore((state) => state.transform[2]);
-  const readabilityScale = resolveDeviceNodeReadabilityScale(zoom);
+  const renderStartedAt =
+    isCanvasRenderMetricsEnabled() && typeof performance !== 'undefined' ? performance.now() : null;
   const monitoringState = data.monitoringState ?? resolveDeviceMonitoringState(data.device);
   const isPollingDisabled =
     monitoringState === 'monitorable' && data.device.polling_enabled === false;
@@ -321,6 +325,26 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     highlighted: data.highlighted === true,
   });
   const runtimeBadges = metrics?.runtime_flags.map(runtimeBadgeLabel) ?? [];
+  const renderKind = data.kind === 'ghost-device' || data.isGhost ? 'ghost-device' : 'device';
+  const renderVariant = renderKind === 'device' ? renderModel.variant : undefined;
+
+  useLayoutEffect(() => {
+    if (renderStartedAt === null) {
+      return;
+    }
+
+    recordCanvasComponentRenderMetric(
+      'DeviceCard',
+      Math.max(0, performance.now() - renderStartedAt),
+      {
+        deviceId: data.device.id,
+        kind: renderKind,
+        hasMetrics: metrics !== null,
+        selected,
+        ...(renderVariant ? { variant: renderVariant } : {}),
+      },
+    );
+  });
 
   if (data.kind === 'ghost-device' || data.isGhost) {
     return (
@@ -434,7 +458,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div
                   data-testid="physical-node-hostname"
                   className="min-w-0 text-[15px] font-semibold leading-snug text-on-bg"
-                  style={readableFontStyle(readabilityScale, 15)}
+                  style={readableFontStyle(15)}
                 >
                   <span className="line-clamp-2 break-words">{label}</span>
                 </div>
@@ -443,7 +467,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               <div
                 data-testid="physical-node-status-badge"
                 className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyles.badgeClass}`}
-                style={mergeReadableFontStyle(statusStyles.badgeStyle, readabilityScale, 11)}
+                style={mergeReadableFontStyle(statusStyles.badgeStyle, 11)}
               >
                 <StatusDot status={headerState.dotStatus} />
                 <span>{headerState.label}</span>
@@ -455,7 +479,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <span
                   data-testid="physical-node-address"
                   className="min-w-0 truncate rounded-full border border-outline bg-surface-container px-2.5 py-1 font-mono text-[11px] font-medium text-on-bg"
-                  style={readableFontStyle(readabilityScale, 11)}
+                  style={readableFontStyle(11)}
                 >
                   {addressLabel} {data.device.ip}
                 </span>
@@ -463,7 +487,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <span
                   data-testid="physical-node-address"
                   className="rounded-full border border-outline bg-surface-container px-2.5 py-1 text-[11px] font-semibold text-on-bg-secondary"
-                  style={readableFontStyle(readabilityScale, 11)}
+                  style={readableFontStyle(11)}
                 >
                   No IP
                 </span>
@@ -474,7 +498,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                   <div
                     data-testid="physical-node-freshness"
                     className={`truncate text-[11px] font-semibold ${readoutToneClass(freshness!.tone)}`}
-                    style={readableFontStyle(readabilityScale, 11)}
+                    style={readableFontStyle(11)}
                   >
                     {freshness!.text}
                   </div>
@@ -486,18 +510,18 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               <div
                 className="mt-2 grid h-[40px] grid-cols-3 overflow-hidden rounded-xl border border-outline-subtle bg-surface-container/55"
                 data-testid="physical-runtime-readouts"
-                style={readableHeightStyle(readabilityScale, 40)}
+                style={readableHeightStyle(40)}
               >
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
                   <span
                     className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
-                    style={readableFontStyle(readabilityScale, 9)}
+                    style={readableFontStyle(9)}
                   >
                     CPU
                   </span>
                   <span
                     className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.cpuPercent)}`}
-                    style={readableFontStyle(readabilityScale, 12)}
+                    style={readableFontStyle(12)}
                   >
                     {formatRuntimePercent(operationalReadouts.cpuPercent)}
                   </span>
@@ -505,13 +529,13 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
                   <span
                     className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
-                    style={readableFontStyle(readabilityScale, 9)}
+                    style={readableFontStyle(9)}
                   >
                     MEM
                   </span>
                   <span
                     className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.memPercent)}`}
-                    style={readableFontStyle(readabilityScale, 12)}
+                    style={readableFontStyle(12)}
                   >
                     {formatRuntimePercent(operationalReadouts.memPercent)}
                   </span>
@@ -519,13 +543,13 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="flex min-w-0 flex-col justify-center px-2.5">
                   <span
                     className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
-                    style={readableFontStyle(readabilityScale, 9)}
+                    style={readableFontStyle(9)}
                   >
                     Uptime
                   </span>
                   <span
                     className="mt-1 truncate font-mono text-[12px] font-semibold leading-none text-on-bg"
-                    style={readableFontStyle(readabilityScale, 12)}
+                    style={readableFontStyle(12)}
                   >
                     {formatRuntimeUptime(operationalReadouts.uptimeSecs)}
                   </span>
@@ -542,7 +566,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="mb-1.5 flex w-full justify-end">
                   <div
                     className={`inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
-                    style={mergeReadableFontStyle(statusStyles.badgeStyle, readabilityScale, 10)}
+                    style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
                   >
                     <StatusDot status={headerState.dotStatus} />
                     <span className="truncate">{headerState.label}</span>
@@ -556,13 +580,13 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
               <div
                 className="mt-2.5 max-w-full truncate text-[10px] uppercase tracking-[0.14em] text-on-bg-secondary"
-                style={readableFontStyle(readabilityScale, 10)}
+                style={readableFontStyle(10)}
               >
                 {deviceTypeLabel(data.device, isVirtual, data.subtype)}
               </div>
               <div
                 className="mt-1.5 w-full max-w-full text-[17px] font-semibold leading-tight tracking-tight text-on-bg"
-                style={readableFontStyle(readabilityScale, 17)}
+                style={readableFontStyle(17)}
               >
                 <span className="block w-full truncate">{label}</span>
               </div>
@@ -571,7 +595,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 {renderModel.showVirtualAddressChip ? (
                   <span
                     className="inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-3 py-1 font-mono text-[11px] text-on-bg"
-                    style={readableFontStyle(readabilityScale, 11)}
+                    style={readableFontStyle(11)}
                   >
                     {addressLabel} {data.device.ip}
                   </span>
@@ -582,13 +606,13 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="mt-3 flex w-full items-center justify-between gap-2 text-[10px]">
                   <div
                     className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}
-                    style={readableFontStyle(readabilityScale, 10)}
+                    style={readableFontStyle(10)}
                   >
                     {freshness!.text}
                   </div>
                   <div
                     className="min-w-0 truncate text-on-bg-secondary"
-                    style={readableFontStyle(readabilityScale, 10)}
+                    style={readableFontStyle(10)}
                   >
                     {pollingEvery}
                   </div>
@@ -642,7 +666,6 @@ export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
     selfLinks: data.selfLinks,
     cpuPercent: metrics?.cpu_percent,
     memPercent: metrics?.mem_percent,
-    tempCelsius: metrics?.temp_celsius,
     uptimeSecs: metrics?.uptime_secs,
     health: metrics?.health,
     primaryHealth: metrics?.primary_health,
@@ -651,7 +674,6 @@ export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
     snmpReachable: metrics?.snmp_reachable,
     runtimeFlags: metrics?.runtime_flags,
     freshness: metrics?.freshness,
-    lastPolledAt: metrics?.last_polled_at,
     expectedPollIntervalSeconds: metrics?.expected_poll_interval_seconds,
     editMode: data.editMode,
     positionAbsoluteX: props.positionAbsoluteX,
@@ -697,7 +719,6 @@ function sameDeviceRenderSignature(
     sameSelfLinks(previous.selfLinks, next.selfLinks) &&
     previous.cpuPercent === next.cpuPercent &&
     previous.memPercent === next.memPercent &&
-    previous.tempCelsius === next.tempCelsius &&
     previous.uptimeSecs === next.uptimeSecs &&
     previous.health === next.health &&
     previous.primaryHealth === next.primaryHealth &&
@@ -706,7 +727,6 @@ function sameDeviceRenderSignature(
     previous.snmpReachable === next.snmpReachable &&
     sameRuntimeFlags(previous.runtimeFlags, next.runtimeFlags) &&
     previous.freshness === next.freshness &&
-    previous.lastPolledAt === next.lastPolledAt &&
     previous.expectedPollIntervalSeconds === next.expectedPollIntervalSeconds &&
     previous.editMode === next.editMode &&
     previous.positionAbsoluteX === next.positionAbsoluteX &&

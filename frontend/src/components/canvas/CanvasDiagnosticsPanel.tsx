@@ -110,6 +110,7 @@ export function CanvasDiagnosticsPanel({
   const metrics = Object.entries(snapshot.performance.metrics).sort(([left], [right]) =>
     left.localeCompare(right),
   );
+  const deviceCardRenderMetric = snapshot.performance.metrics['runtime:deviceCardRender'];
   const recentEvents = events.slice(-8).reverse();
 
   return (
@@ -207,6 +208,13 @@ export function CanvasDiagnosticsPanel({
           <DiagnosticsRow label="Prometheus error" value={snapshot.runtime.prometheusError} />
         </DiagnosticsSection>
 
+        <DiagnosticsSection title="Component Renders">
+          <DiagnosticsRow label="DeviceCard renders" value={deviceCardRenderMetric?.count} />
+          <DiagnosticsRow label="DeviceCard avg ms" value={deviceCardRenderMetric?.avgMs} />
+          <DiagnosticsRow label="DeviceCard p95 ms" value={deviceCardRenderMetric?.p95Ms} />
+          <DiagnosticsRow label="DeviceCard max ms" value={deviceCardRenderMetric?.maxMs} />
+        </DiagnosticsSection>
+
         <section className="pt-1">
           <h3 className="mb-2 text-xs font-semibold uppercase text-on-bg-secondary">Performance</h3>
           <div className="space-y-1 text-xs">
@@ -234,10 +242,7 @@ export function CanvasDiagnosticsPanel({
               <p className="text-on-bg-secondary">No events recorded</p>
             ) : (
               recentEvents.map((event) => (
-                <div
-                  key={`${event.timestamp}:${event.event}`}
-                  className="rounded-md bg-surface/70 px-2 py-1.5"
-                >
+                <div key={event.id} className="rounded-md bg-surface/70 px-2 py-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium text-on-bg">{event.event}</span>
                     <span className="text-on-bg-secondary">{event.level}</span>

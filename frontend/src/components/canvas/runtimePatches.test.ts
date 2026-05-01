@@ -202,6 +202,38 @@ describe('runtime canvas patching', () => {
     expect([...plan.edgeIds]).toEqual(['link-2']);
   });
 
+  it('does not target cloned runtime records when their values are unchanged', () => {
+    const links = [mockLink('link-1', 'dev-1', 'dev-2')];
+    const previous = snapshot(
+      {
+        'dev-1': mockDeviceRuntime('dev-1'),
+        'dev-2': mockDeviceRuntime('dev-2'),
+      },
+      {
+        'link-1': mockLinkRuntime('link-1', 'dev-1', 'dev-2'),
+      },
+    );
+    const next = snapshot(
+      {
+        'dev-1': { ...previous.devices['dev-1'], runtime_flags: [] },
+        'dev-2': { ...previous.devices['dev-2'] },
+      },
+      {
+        'link-1': { ...previous.links['link-1'] },
+      },
+    );
+
+    const plan = buildRuntimePatchPlan({
+      previousSnapshot: previous,
+      nextSnapshot: next,
+      links,
+    });
+
+    expect([...plan.deviceIds]).toEqual([]);
+    expect([...plan.directLinkIds]).toEqual([]);
+    expect([...plan.edgeIds]).toEqual([]);
+  });
+
   it('patches only impacted node data and runtime-aware device records', () => {
     const devices = [mockDevice('dev-1'), mockDevice('dev-2')];
     const nodes = devices.map(nodeFor);
@@ -236,6 +268,83 @@ describe('runtime canvas patching', () => {
     expect(patchedDevices[0]).not.toBe(devices[0]);
     expect(patchedDevices[0].status).toBe('down');
     expect(patchedDevices[1]).toBe(devices[1]);
+  });
+
+  it('keeps node references stable when an included runtime patch does not alter render data', () => {
+    const devices = [mockDevice('dev-1')];
+    const runtimeState = buildRuntimeState({
+      devices,
+      links: [],
+      snapshot: snapshot({
+        'dev-1': mockDeviceRuntime('dev-1'),
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+    const runtimeDevice = runtimeState.devicesById.get('dev-1')!;
+    const node = nodeFor(runtimeDevice.device);
+    node.data.metrics = runtimeDevice.metrics;
+    node.data.alertStatus = runtimeDevice.alertStatus;
+    node.data.monitoringState = runtimeDevice.monitoringState;
+    node.data.isVirtual = false;
+    node.data.subtype = undefined;
+    const nodes = [node];
+    const plan = {
+      deviceIds: new Set(['dev-1']),
+      directLinkIds: new Set<string>(),
+      edgeIds: new Set<string>(),
+    };
+
+    const patchedNodes = patchRuntimeNodes({ nodes, runtimeState, plan });
+
+    expect(patchedNodes).toBe(nodes);
+    expect(patchedNodes[0]).toBe(node);
+  });
+
+  it('keeps node references stable when only non-rendered runtime fields change', () => {
+    const devices = [mockDevice('dev-1')];
+    const baseRuntime = mockDeviceRuntime('dev-1', {
+      temp_celsius: 45,
+      last_polled_at: '2026-04-30T10:00:00Z',
+    });
+    const currentRuntimeState = buildRuntimeState({
+      devices,
+      links: [],
+      snapshot: snapshot({ 'dev-1': baseRuntime }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+    const currentRuntimeDevice = currentRuntimeState.devicesById.get('dev-1')!;
+    const node = nodeFor(currentRuntimeDevice.device);
+    node.data.metrics = currentRuntimeDevice.metrics;
+    node.data.alertStatus = currentRuntimeDevice.alertStatus;
+    node.data.monitoringState = currentRuntimeDevice.monitoringState;
+    node.data.isVirtual = false;
+
+    const nextRuntimeState = buildRuntimeState({
+      devices,
+      links: [],
+      snapshot: snapshot({
+        'dev-1': {
+          ...baseRuntime,
+          temp_celsius: 51,
+          last_polled_at: '2026-04-30T10:01:00Z',
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+    const plan = {
+      deviceIds: new Set(['dev-1']),
+      directLinkIds: new Set<string>(),
+      edgeIds: new Set<string>(),
+    };
+
+    const nodes = [node];
+    const patchedNodes = patchRuntimeNodes({ nodes, runtimeState: nextRuntimeState, plan });
+
+    expect(patchedNodes).toBe(nodes);
+    expect(patchedNodes[0]).toBe(node);
   });
 
   it('patches only impacted edge data with link and endpoint runtime', () => {

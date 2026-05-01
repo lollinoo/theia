@@ -1,9 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import type { CSSProperties, ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
-
-let mockZoom = 1.3;
 
 vi.mock('@xyflow/react', async () => {
   const ReactModule = await import('react');
@@ -18,13 +16,7 @@ vi.mock('@xyflow/react', async () => {
     }) => <div data-testid={id} style={style} />,
     EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
     getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
-    useStore: (selector: (state: { transform: [number, number, number] }) => unknown) =>
-      selector({ transform: [0, 0, mockZoom] }),
   };
-});
-
-afterEach(() => {
-  mockZoom = 1.3;
 });
 
 function renderEdge(
@@ -125,12 +117,12 @@ describe('LinkEdge render', () => {
     expect(screen.getByTestId('edge-thick')).toHaveStyle({ strokeWidth: '6.75' });
   });
 
-  it('renders larger zoom-resilient telemetry badge pills at low zoom', () => {
-    mockZoom = 0.6;
-
+  it('uses the canvas readability scale variable for zoom-resilient telemetry badge pills', () => {
     renderEdge({ id: 'edge-readable' }, { throughputLabel: 'TX: 500M / RX: 300M' });
 
-    expect(screen.getByTestId('edge-readable-badge-stack').style.transform).toContain('scale(1.2)');
+    expect(screen.getByTestId('edge-readable-badge-stack').style.transform).toContain(
+      'scale(var(--theia-link-badge-readability-scale, 1))',
+    );
 
     for (const badgeKey of ['rate', 'throughput']) {
       expect(screen.getByTestId(`edge-readable-badge-${badgeKey}`)).toHaveClass(

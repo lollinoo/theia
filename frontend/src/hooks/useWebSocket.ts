@@ -37,6 +37,7 @@ interface UseWebSocketResult {
 
 interface UseWebSocketOptions {
   requireRuntimeBootstrap?: boolean;
+  runtimeUpdatesPaused?: boolean;
 }
 
 type DetailControlType = 'subscribe_detail' | 'unsubscribe_detail';
@@ -66,6 +67,7 @@ export function useWebSocket(
   options: UseWebSocketOptions = {},
 ): UseWebSocketResult {
   const requireRuntimeBootstrap = options.requireRuntimeBootstrap === true;
+  const runtimeUpdatesPaused = options.runtimeUpdatesPaused === true;
   const initialRuntimeBootstrap = requireRuntimeBootstrap ? getCanvasRuntimeBootstrap() : null;
   const [snapshot, setSnapshot] = useState<SnapshotPayload | null>(
     initialRuntimeBootstrap?.snapshot ?? null,
@@ -83,6 +85,13 @@ export function useWebSocket(
   const detailDeviceIdRef = useRef<string | null>(detailDeviceId);
   const lastSubscribedDeviceIdRef = useRef<string | null>(null);
   const hasRuntimeSnapshotRef = useRef(initialRuntimeBootstrap !== null);
+  const runtimeUpdatesPausedRef = useRef(runtimeUpdatesPaused);
+  const snapshotStateRef = useRef<SnapshotPayload | null>(
+    initialRuntimeBootstrap?.snapshot ?? null,
+  );
+  const pendingSnapshotFlushRef = useRef(false);
+  const pollingHealthStateRef = useRef<PollingHealthPayload | null>(null);
+  const pendingPollingHealthFlushRef = useRef(false);
   const snapshotVersionRef = useRef<number | null>(initialRuntimeBootstrap?.runtimeVersion ?? null);
   const runtimeIdentityRef = useRef<string | null>(
     initialRuntimeBootstrap?.runtimeIdentity ?? null,
@@ -95,6 +104,28 @@ export function useWebSocket(
   const resyncRequiredCountRef = useRef(0);
   const topologyChangedCountRef = useRef(0);
   const disposed = useRef(false);
+
+  function publishRuntimeSnapshot(nextSnapshot: SnapshotPayload | null): void {
+    snapshotStateRef.current = nextSnapshot;
+    if (runtimeUpdatesPausedRef.current) {
+      pendingSnapshotFlushRef.current = true;
+      return;
+    }
+
+    pendingSnapshotFlushRef.current = false;
+    setSnapshot(nextSnapshot);
+  }
+
+  function publishPollingHealth(nextPollingHealth: PollingHealthPayload | null): void {
+    pollingHealthStateRef.current = nextPollingHealth;
+    if (runtimeUpdatesPausedRef.current) {
+      pendingPollingHealthFlushRef.current = true;
+      return;
+    }
+
+    pendingPollingHealthFlushRef.current = false;
+    setPollingHealth(nextPollingHealth);
+  }
 
   function resetAlertState() {
     alertVersionRef.current = null;
@@ -124,7 +155,7 @@ export function useWebSocket(
       snapshotVersionRef.current = bootstrap.runtimeVersion ?? null;
       runtimeIdentityRef.current = bootstrap.runtimeIdentity ?? null;
       awaitingResyncRef.current = false;
-      setSnapshot(bootstrap.snapshot);
+      publishRuntimeSnapshot(bootstrap.snapshot);
       setRuntimeBootstrapReady(true);
       updateCanvasDiagnosticsState({
         websocket: {
@@ -150,6 +181,32 @@ export function useWebSocket(
       });
     });
   }, [requireRuntimeBootstrap]);
+
+  useEffect(() => {
+    runtimeUpdatesPausedRef.current = runtimeUpdatesPaused;
+    if (runtimeUpdatesPaused) {
+      return;
+    }
+
+    if (pendingSnapshotFlushRef.current) {
+      pendingSnapshotFlushRef.current = false;
+      setSnapshot(snapshotStateRef.current);
+      recordCanvasDiagnosticEvent({
+        level: 'debug',
+        source: 'runtime',
+        event: 'runtime.snapshot.flushed',
+        message: 'Deferred runtime snapshot state flushed after canvas interaction',
+        metadata: {
+          version: snapshotVersionRef.current,
+        },
+      });
+    }
+
+    if (pendingPollingHealthFlushRef.current) {
+      pendingPollingHealthFlushRef.current = false;
+      setPollingHealth(pollingHealthStateRef.current);
+    }
+  }, [runtimeUpdatesPaused]);
 
   useEffect(() => {
     if (!runtimeBootstrapReady) {
@@ -266,6 +323,27 @@ export function useWebSocket(
         ws.close();
       }
 
+      function ignoreStaleRuntimeDelta(
+        messageType: 'snapshot_delta' | 'runtime_delta',
+        baseVersion: number,
+        version: number,
+        currentVersion: number,
+      ): void {
+        recordCanvasDiagnosticEvent({
+          level: 'debug',
+          source: 'runtime',
+          event: 'runtime.delta.ignored',
+          message: 'Runtime delta ignored because it is older than the current client base',
+          metadata: {
+            type: messageType,
+            reason: 'stale_delta',
+            baseVersion,
+            version,
+            currentVersion,
+          },
+        });
+      }
+
       ws.onopen = () => {
         if (disposed.current) {
           ws.close();
@@ -375,76 +453,99 @@ export function useWebSocket(
                 runtimeIdentity: payload.runtime_identity,
               },
             });
-            setSnapshot(payload.snapshot);
+            publishRuntimeSnapshot(payload.snapshot);
           } else if (message.type === 'snapshot_delta' || message.type === 'runtime_delta') {
             const payload =
               message.type === 'runtime_delta'
                 ? (message as RuntimeDeltaWSMessage).payload
                 : (message as SnapshotDeltaWSMessage).payload;
-            setSnapshot((prev) => {
-              if (prev === null) {
-                // No base snapshot yet — ignore delta until a full snapshot arrives.
-                updateCanvasDiagnosticsState({
-                  websocket: {
-                    lastRejectedDeltaReason: 'missing_base_snapshot',
-                  },
-                });
-                recordCanvasDiagnosticEvent({
-                  level: 'warn',
-                  source: 'runtime',
-                  event: 'runtime.delta.rejected',
-                  message: 'Runtime delta rejected because no base snapshot is available',
-                  metadata: {
-                    reason: 'missing_base_snapshot',
-                  },
-                });
-                return null;
-              }
-              if (awaitingResyncRef.current) {
-                return prev;
+            if (awaitingResyncRef.current) {
+              return;
+            }
+
+            const hasVersionEnvelope =
+              payload.version !== undefined || payload.base_version !== undefined;
+            if (hasVersionEnvelope) {
+              if (payload.version === undefined || payload.base_version === undefined) {
+                requestClientResync('client_resync_scheduled', 'invalid_delta_version');
+                return;
               }
 
-              if (payload.version !== undefined || payload.base_version !== undefined) {
-                if (
-                  snapshotVersionRef.current !== payload.base_version ||
-                  payload.version === undefined
-                ) {
-                  requestClientResync();
-                  return prev;
-                }
-                snapshotVersionRef.current = payload.version;
-                if (payload.runtime_identity !== undefined) {
-                  runtimeIdentityRef.current = payload.runtime_identity;
-                }
-                updateCanvasDiagnosticsState({
-                  websocket: {
-                    lastAppliedDeltaVersion: String(payload.version),
-                    ...(payload.runtime_identity !== undefined
-                      ? { lastAppliedRuntimeIdentity: payload.runtime_identity }
-                      : {}),
-                    lastRejectedDeltaReason: undefined,
-                  },
-                });
+              const currentVersion = snapshotVersionRef.current;
+              if (currentVersion === null || !hasRuntimeSnapshotRef.current) {
+                requestClientResync('client_missing_runtime_snapshot', 'missing_base_snapshot');
+                return;
               }
 
-              recordCanvasDiagnosticEvent({
-                level: 'debug',
-                source: 'runtime',
-                event: 'runtime.delta.applied',
-                message: 'Runtime delta applied',
-                metadata: {
-                  type: message.type,
-                  baseVersion: payload.base_version,
-                  version: payload.version,
-                  deviceCount: Object.keys(payload.delta.devices).length,
-                  linkCount: Object.keys(payload.delta.links).length,
-                  runtimeIdentity: payload.runtime_identity,
+              if (payload.base_version < currentVersion) {
+                ignoreStaleRuntimeDelta(
+                  message.type,
+                  payload.base_version,
+                  payload.version,
+                  currentVersion,
+                );
+                return;
+              }
+
+              if (payload.base_version > currentVersion) {
+                requestClientResync();
+                return;
+              }
+
+              snapshotVersionRef.current = payload.version;
+              if (payload.runtime_identity !== undefined) {
+                runtimeIdentityRef.current = payload.runtime_identity;
+              }
+              updateCanvasDiagnosticsState({
+                websocket: {
+                  lastAppliedDeltaVersion: String(payload.version),
+                  ...(payload.runtime_identity !== undefined
+                    ? { lastAppliedRuntimeIdentity: payload.runtime_identity }
+                    : {}),
+                  lastRejectedDeltaReason: undefined,
                 },
               });
-              return message.type === 'runtime_delta'
-                ? mergeRuntimeDeltaPatch(prev, (payload as RuntimeDeltaWSMessage['payload']).delta)
-                : mergeSnapshotDelta(prev, (payload as SnapshotDeltaWSMessage['payload']).delta);
+            } else if (!hasRuntimeSnapshotRef.current) {
+              recordCanvasDiagnosticEvent({
+                level: 'warn',
+                source: 'runtime',
+                event: 'runtime.delta.rejected',
+                message: 'Runtime delta rejected because no base snapshot is available',
+                metadata: {
+                  reason: 'missing_base_snapshot',
+                },
+              });
+              return;
+            }
+            recordCanvasDiagnosticEvent({
+              level: 'debug',
+              source: 'runtime',
+              event: 'runtime.delta.applied',
+              message: 'Runtime delta applied',
+              metadata: {
+                type: message.type,
+                baseVersion: payload.base_version,
+                version: payload.version,
+                deviceCount: Object.keys(payload.delta.devices).length,
+                linkCount: Object.keys(payload.delta.links).length,
+                runtimeIdentity: payload.runtime_identity,
+              },
             });
+            const currentSnapshot = snapshotStateRef.current;
+            if (currentSnapshot === null) {
+              return;
+            }
+            const nextSnapshot =
+              message.type === 'runtime_delta'
+                ? mergeRuntimeDeltaPatch(
+                    currentSnapshot,
+                    (payload as RuntimeDeltaWSMessage['payload']).delta,
+                  )
+                : mergeSnapshotDelta(
+                    currentSnapshot,
+                    (payload as SnapshotDeltaWSMessage['payload']).delta,
+                  );
+            publishRuntimeSnapshot(nextSnapshot);
           } else if (message.type === 'prometheus_status') {
             const payload = message.payload as PrometheusStatusPayload;
             setPrometheusStatus(payload);
@@ -460,7 +561,7 @@ export function useWebSocket(
               },
             });
           } else if (message.type === 'polling_health_changed') {
-            setPollingHealth(message.payload as PollingHealthPayload);
+            publishPollingHealth(message.payload as PollingHealthPayload);
           } else if (message.type === 'alert') {
             const payload = (message as AlertWSMessage).payload;
             if (
@@ -559,6 +660,10 @@ export function useWebSocket(
       setConnected(false);
       setReconnecting(false);
       hasRuntimeSnapshotRef.current = false;
+      snapshotStateRef.current = null;
+      pendingSnapshotFlushRef.current = false;
+      pollingHealthStateRef.current = null;
+      pendingPollingHealthFlushRef.current = false;
       snapshotVersionRef.current = null;
       runtimeIdentityRef.current = null;
       updateCanvasDiagnosticsState({

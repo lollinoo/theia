@@ -421,6 +421,44 @@ describe('mergeSnapshotDelta', () => {
 });
 
 describe('mergeRuntimeDeltaPatch', () => {
+  it('preserves snapshot and record references for no-op runtime patches', () => {
+    const existing = makeSnapshot({
+      devices: {
+        'dev-1': makeDeviceRuntime({
+          cpu_percent: 50,
+          mem_percent: 25,
+        }),
+      },
+      links: {
+        'link-1': makeLinkRuntime({
+          tx_bps: 100,
+          rx_bps: 200,
+        }),
+      },
+    });
+
+    const result = mergeRuntimeDeltaPatch(existing, {
+      devices: {
+        'dev-1': {
+          device_id: 'dev-1',
+          cpu_percent: 50,
+          runtime_flags: [],
+          field_states: { ...existing.devices['dev-1'].field_states },
+        },
+      },
+      links: {
+        'link-1': {
+          link_id: 'link-1',
+          rx_bps: 200,
+        },
+      },
+    });
+
+    expect(result).toBe(existing);
+    expect(result.devices['dev-1']).toBe(existing.devices['dev-1']);
+    expect(result.links['link-1']).toBe(existing.links['link-1']);
+  });
+
   it('merges partial device and link patches without dropping existing runtime fields', () => {
     const existing = makeSnapshot({
       devices: {

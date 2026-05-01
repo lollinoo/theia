@@ -3,13 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearCanvasMetrics,
   exportCanvasMetrics,
+  finishCanvasRenderMetric,
   measureCanvasMetric,
   recordCanvasMetric,
+  setCanvasRenderMetricsEnabled,
+  startCanvasRenderMetric,
 } from './canvasInstrumentation';
 
 describe('canvasInstrumentation', () => {
   beforeEach(() => {
     clearCanvasMetrics();
+    setCanvasRenderMetricsEnabled(false);
   });
 
   it('records raw samples in the browser buffer', () => {
@@ -109,5 +113,37 @@ describe('canvasInstrumentation', () => {
     expect(exported.samples).toEqual([]);
     expect(exported.aggregates).toEqual({});
     expect(() => JSON.stringify(exported)).not.toThrow();
+  });
+
+  it('records device card render samples only when render metrics are enabled', () => {
+    expect(startCanvasRenderMetric('DeviceCard')).toBeNull();
+    expect(exportCanvasMetrics().samples).toEqual([]);
+
+    setCanvasRenderMetricsEnabled(true);
+    vi.spyOn(performance, 'now').mockReturnValueOnce(21).mockReturnValueOnce(25.5);
+
+    const measurement = startCanvasRenderMetric('DeviceCard');
+    finishCanvasRenderMetric(measurement, { deviceId: 'dev-1', kind: 'device' });
+
+    expect(exportCanvasMetrics().samples).toEqual([]);
+    expect(exportCanvasMetrics().aggregates['runtime:deviceCardRender']).toEqual({
+      count: 1,
+      minMs: 4.5,
+      maxMs: 4.5,
+      avgMs: 4.5,
+      p95Ms: 4.5,
+    });
+  });
+
+  it('clears aggregate render metrics together with raw samples', () => {
+    setCanvasRenderMetricsEnabled(true);
+    vi.spyOn(performance, 'now').mockReturnValueOnce(1).mockReturnValueOnce(3);
+
+    finishCanvasRenderMetric(startCanvasRenderMetric('DeviceCard'), { deviceId: 'dev-1' });
+    expect(exportCanvasMetrics().aggregates['runtime:deviceCardRender']?.count).toBe(1);
+
+    clearCanvasMetrics();
+
+    expect(exportCanvasMetrics().aggregates['runtime:deviceCardRender']).toBeUndefined();
   });
 });

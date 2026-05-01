@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   clearCanvasDiagnosticEvents,
@@ -6,14 +6,25 @@ import {
   getCanvasDiagnosticsSnapshot,
   recordCanvasDiagnosticEvent,
   resetCanvasDiagnostics,
+  subscribeCanvasDiagnostics,
   updateCanvasDiagnosticsState,
 } from './canvasDiagnostics';
-import { clearCanvasMetrics, recordCanvasMetric } from './canvasInstrumentation';
+import {
+  clearCanvasMetrics,
+  finishCanvasRenderMetric,
+  recordCanvasMetric,
+  setCanvasRenderMetricsEnabled,
+  startCanvasRenderMetric,
+} from './canvasInstrumentation';
 
 describe('canvasDiagnostics', () => {
   beforeEach(() => {
     clearCanvasMetrics();
     resetCanvasDiagnostics();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('returns a safe initial snapshot', () => {
@@ -82,6 +93,54 @@ describe('canvasDiagnostics', () => {
     expect(exported.events[0]).toMatchObject({ message: 'load 5' });
   });
 
+  it('notifies subscribers asynchronously and coalesces rapid diagnostics updates', () => {
+    vi.useFakeTimers();
+    const listener = vi.fn();
+    const unsubscribe = subscribeCanvasDiagnostics(listener);
+
+    updateCanvasDiagnosticsState({
+      websocket: {
+        connected: true,
+      },
+    });
+    recordCanvasDiagnosticEvent({
+      level: 'debug',
+      source: 'runtime',
+      event: 'runtime.delta.applied',
+      message: 'Runtime delta applied',
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+
+    vi.runOnlyPendingTimers();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('assigns unique ids to diagnostic events recorded in the same millisecond', () => {
+    const timestamp = '2026-05-01T22:20:59.399Z';
+
+    recordCanvasDiagnosticEvent({
+      timestamp,
+      level: 'debug',
+      source: 'runtime',
+      event: 'runtime.delta.applied',
+      message: 'first delta',
+    });
+    recordCanvasDiagnosticEvent({
+      timestamp,
+      level: 'debug',
+      source: 'runtime',
+      event: 'runtime.delta.applied',
+      message: 'second delta',
+    });
+
+    const ids = exportCanvasDiagnostics().events.map((event) => event.id);
+
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('clears events independently of diagnostics state', () => {
     updateCanvasDiagnosticsState({
       graph: {
@@ -128,5 +187,17 @@ describe('canvasDiagnostics', () => {
       'runtime:composeCanvasTopology': expect.objectContaining({ count: 1 }),
     });
     expect(() => JSON.stringify(exported)).not.toThrow();
+  });
+
+  it('includes aggregate component render metrics in diagnostics exports', () => {
+    setCanvasRenderMetricsEnabled(true);
+    finishCanvasRenderMetric(startCanvasRenderMetric('DeviceCard'), { deviceId: 'dev-1' });
+
+    expect(exportCanvasDiagnostics().metrics).toMatchObject({
+      'runtime:deviceCardRender': expect.objectContaining({ count: 1 }),
+    });
+    expect(getCanvasDiagnosticsSnapshot().performance.metrics).toMatchObject({
+      'runtime:deviceCardRender': expect.objectContaining({ count: 1 }),
+    });
   });
 });

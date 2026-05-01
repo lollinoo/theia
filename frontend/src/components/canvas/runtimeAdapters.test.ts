@@ -212,6 +212,27 @@ describe('buildRuntimeState', () => {
     });
   });
 
+  it('preserves the device object reference when normalized runtime status is unchanged', () => {
+    const device = mockDevice({ status: 'up' });
+
+    const runtime = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: mockSnapshot({
+        devices: {
+          'dev-1': {
+            ...mockSnapshot().devices['dev-1'],
+            operational_status: 'up',
+          },
+        },
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    expect(runtime.devicesById.get('dev-1')?.device).toBe(device);
+  });
+
   it('exposes primary health and runtime flags on device models', () => {
     const runtime = buildRuntimeState({
       devices: [mockDevice()],

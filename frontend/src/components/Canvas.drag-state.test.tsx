@@ -68,6 +68,7 @@ vi.mock('@xyflow/react', () => ({
     onlyRenderVisibleElements,
     onMoveStart,
     onMoveEnd,
+    onMove,
     onConnectStart,
     onConnectEnd,
     onNodeDragStop,
@@ -77,6 +78,7 @@ vi.mock('@xyflow/react', () => ({
     onlyRenderVisibleElements?: boolean;
     onMoveStart?: () => void;
     onMoveEnd?: () => void;
+    onMove?: (event: unknown, viewport: { zoom: number }) => void;
     onConnectStart?: () => void;
     onConnectEnd?: () => void;
     onNodeDragStop?: (event: unknown, node: DeviceNode) => void;
@@ -93,6 +95,9 @@ vi.mock('@xyflow/react', () => ({
         </button>
         <button type="button" onClick={() => onMoveEnd?.()}>
           End pan
+        </button>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 0.6 })}>
+          Move low zoom
         </button>
         <button type="button" onClick={() => onConnectStart?.()}>
           Start connect
@@ -131,7 +136,10 @@ vi.mock('@xyflow/react', () => ({
   }),
 }));
 
-vi.mock('./DeviceCard', () => ({ default: () => null }));
+vi.mock('./DeviceCard', () => ({
+  default: () => null,
+  resolveDeviceNodeReadabilityScale: (zoom: number) => (zoom <= 0.6 ? 1.12 : 1),
+}));
 vi.mock('./LinkEdge', () => ({ default: () => null }));
 vi.mock('./SearchOverlay', () => ({ default: () => null }));
 vi.mock('./ZoomControls', () => ({ default: () => null }));
@@ -294,5 +302,74 @@ describe('Canvas drag state ownership', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('updates canvas readability scales from viewport changes without React state churn', () => {
+    render(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[
+          { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+          { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+        ]}
+      />,
+    );
+
+    const root = screen.getByTestId('topology-canvas-root');
+
+    expect(root.style.getPropertyValue('--theia-device-node-readability-scale')).toBe('1');
+    expect(root.style.getPropertyValue('--theia-link-badge-readability-scale')).toBe('1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move low zoom' }));
+
+    expect(root.style.getPropertyValue('--theia-device-node-readability-scale')).toBe('1.12');
+    expect(root.style.getPropertyValue('--theia-link-badge-readability-scale')).toBe('1.2');
+  });
+
+  it('preserves unchanged area-colored display node references when one canonical node changes', () => {
+    const { rerender } = render(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[
+          { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+          { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+          { id: 'area-3', name: 'Area 3', color: '#22cc88' },
+        ]}
+      />,
+    );
+
+    const [, firstStableNode, secondStableNode] = testState.displayedNodes;
+
+    testState.canonicalNodes = [
+      {
+        ...testState.canonicalNodes[0],
+        position: { x: 125, y: 125 },
+      },
+      testState.canonicalNodes[1],
+      testState.canonicalNodes[2],
+    ];
+
+    rerender(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[
+          { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+          { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+          { id: 'area-3', name: 'Area 3', color: '#22cc88' },
+        ]}
+      />,
+    );
+
+    expect(testState.displayedNodes[1]).toBe(firstStableNode);
+    expect(testState.displayedNodes[2]).toBe(secondStableNode);
   });
 });

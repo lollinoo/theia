@@ -12,6 +12,8 @@ import type { Area, Device, Link } from './types/api';
 
 export type ActiveView = 'hub' | 'canvas' | 'dashboard';
 
+const runtimeUpdatePauseIdleDelayMs = 1500;
+
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>('canvas');
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
@@ -20,11 +22,31 @@ function App() {
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
+  const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
+
+  useEffect(() => {
+    if (canvasInteractionActive) {
+      setRuntimeUpdatesPaused(true);
+      return;
+    }
+
+    if (!runtimeUpdatesPaused) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setRuntimeUpdatesPaused(false);
+    }, runtimeUpdatePauseIdleDelayMs);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [canvasInteractionActive, runtimeUpdatesPaused]);
 
   const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket(
     '/api/v1/ws',
     detailDeviceId,
-    { requireRuntimeBootstrap: true },
+    { requireRuntimeBootstrap: true, runtimeUpdatesPaused },
   );
 
   // Fetch areas on mount

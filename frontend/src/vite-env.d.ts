@@ -16,6 +16,8 @@ declare global {
     __THEIA_CANVAS_METRICS__?: CanvasMetricSample[];
     __THEIA_CANVAS_METRICS_EXPORT__?: () => CanvasMetricsExport;
     __THEIA_CANVAS_METRICS_CLEAR__?: () => void;
+    __THEIA_CANVAS_RENDER_METRICS_ENABLE__?: () => void;
+    __THEIA_CANVAS_RENDER_METRICS_DISABLE__?: () => void;
     __THEIA_CANVAS_DIAGNOSTICS__?: () => CanvasDiagnosticsSnapshot;
     __THEIA_CANVAS_DIAGNOSTICS_EXPORT__?: () => CanvasDiagnosticsExport;
     __THEIA_CANVAS_DIAGNOSTICS_CLEAR_EVENTS__?: () => void;

@@ -6,6 +6,11 @@ import type { Device, Link } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 import DeviceCard, { getDeviceRenderSignature } from './DeviceCard';
 import type { DeviceNode, DeviceNodeData } from './DeviceCard';
+import {
+  clearCanvasMetrics,
+  exportCanvasMetrics,
+  setCanvasRenderMetricsEnabled,
+} from './canvas/canvasInstrumentation';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -126,6 +131,41 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('Late')).toBeNull();
     expect(screen.queryByText('Partial')).toBeNull();
     expect(screen.queryByText(/Polling every/)).toBeNull();
+  });
+
+  it('records a render metric sample when canvas render metrics are enabled', () => {
+    clearCanvasMetrics();
+    setCanvasRenderMetricsEnabled(true);
+
+    renderDeviceCard({ metrics: mockMetrics() });
+
+    expect(exportCanvasMetrics().aggregates['runtime:deviceCardRender']).toEqual(
+      expect.objectContaining({ count: 1 }),
+    );
+
+    setCanvasRenderMetricsEnabled(false);
+    clearCanvasMetrics();
+  });
+
+  it('keeps render signature stable for runtime fields that are not displayed on the card', () => {
+    const previous = makeNodeProps({
+      device: mockDevice(),
+      pinned: false,
+      metrics: mockMetrics({
+        temp_celsius: 45,
+        last_polled_at: '2026-04-13T11:59:30Z',
+      }),
+    });
+    const next = makeNodeProps({
+      device: mockDevice(),
+      pinned: false,
+      metrics: mockMetrics({
+        temp_celsius: 51,
+        last_polled_at: '2026-04-13T12:00:30Z',
+      }),
+    });
+
+    expect(getDeviceRenderSignature(next)).toEqual(getDeviceRenderSignature(previous));
   });
 
   it('includes area membership content in the render signature even when cardinality is unchanged', () => {

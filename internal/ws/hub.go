@@ -19,7 +19,7 @@ const (
 	pingPeriod         = 54 * time.Second
 	maxMessageSize     = 4096
 	sendBufferSize     = 16
-	overviewBufferSize = 2
+	overviewBufferSize = 32
 	clientHelloBuffer  = 1
 
 	wsBackpressureScopeBroadcast    = "broadcast"

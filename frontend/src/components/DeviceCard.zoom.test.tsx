@@ -4,8 +4,6 @@ import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNodeData } from './DeviceCard';
 
-let mockZoom = 1;
-
 vi.mock('@xyflow/react', () => ({
   Handle: ({ id }: { id?: string }) => <span data-testid={`handle-${id ?? 'default'}`} />,
   Position: {
@@ -14,8 +12,9 @@ vi.mock('@xyflow/react', () => ({
     Bottom: 'bottom',
     Left: 'left',
   },
-  useStore: (selector: (state: { transform: [number, number, number] }) => unknown) =>
-    selector({ transform: [0, 0, mockZoom] }),
+  useStore: () => {
+    throw new Error('DeviceCard must not subscribe to the React Flow viewport store');
+  },
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -98,10 +97,6 @@ function renderDeviceCard(data: Partial<DeviceNodeData> = {}) {
 }
 
 describe('DeviceCard zoom readability', () => {
-  afterEach(() => {
-    mockZoom = 1;
-  });
-
   it('raises node content scale at low zoom without enlarging at normal zoom', () => {
     expect(resolveDeviceNodeReadabilityScale(1.3)).toBe(1);
     expect(resolveDeviceNodeReadabilityScale(1)).toBe(1);
@@ -109,23 +104,21 @@ describe('DeviceCard zoom readability', () => {
     expect(resolveDeviceNodeReadabilityScale(0.6)).toBe(1.12);
   });
 
-  it('applies readable low-zoom sizing to physical node content without scaling the frame', () => {
-    mockZoom = 0.6;
-
+  it('uses the canvas readability CSS variable without subscribing every card to zoom changes', () => {
     renderDeviceCard({ metrics: mockMetrics() });
 
     expect(screen.getByTestId('device-node-card').style.transform).toBe('');
-    expect(screen.getByTestId('physical-node-hostname')).toHaveStyle({
-      fontSize: '16.8px',
-    });
-    expect(screen.getByTestId('physical-node-status-badge')).toHaveStyle({
-      fontSize: '12.32px',
-    });
-    expect(screen.getByTestId('physical-node-address')).toHaveStyle({
-      fontSize: '12.32px',
-    });
-    expect(screen.getByTestId('physical-runtime-readouts')).toHaveStyle({
-      height: '44.8px',
-    });
+    expect(screen.getByTestId('physical-node-hostname').style.fontSize).toBe(
+      'calc(15px * var(--theia-device-node-readability-scale, 1))',
+    );
+    expect(screen.getByTestId('physical-node-status-badge').style.fontSize).toBe(
+      'calc(11px * var(--theia-device-node-readability-scale, 1))',
+    );
+    expect(screen.getByTestId('physical-node-address').style.fontSize).toBe(
+      'calc(11px * var(--theia-device-node-readability-scale, 1))',
+    );
+    expect(screen.getByTestId('physical-runtime-readouts').style.height).toBe(
+      'calc(40px * var(--theia-device-node-readability-scale, 1))',
+    );
   });
 });

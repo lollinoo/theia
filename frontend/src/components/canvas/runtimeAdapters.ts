@@ -156,7 +156,8 @@ export function buildRuntimeState({
     const runtimeMetrics = snapshot?.devices[device.id];
     const monitoringState = runtimeMonitoringState(device, runtimeMetrics);
     const nextStatus = effectiveStatusForRuntimeDevice(runtimeMetrics);
-    const runtimeDevice = nextStatus ? { ...device, status: nextStatus } : device;
+    const runtimeDevice =
+      nextStatus && device.status !== nextStatus ? { ...device, status: nextStatus } : device;
 
     devicesById.set(device.id, {
       device: runtimeDevice,
