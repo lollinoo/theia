@@ -17,7 +17,7 @@ func TestHubBroadcastMarksClientForResyncWhenMailboxIsFull(t *testing.T) {
 	fallback := EmptySnapshot()
 	fallback.DeviceStatuses["dev-1"] = "up"
 
-	hub.BroadcastOverviewDelta(EmptySnapshot(), 5, 6, fallback)
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 5, 6, fallback)
 
 	if got := len(client.overviewSend); got != 2 {
 		t.Fatalf("overview mailbox length = %d, want 2", got)

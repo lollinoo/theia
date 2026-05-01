@@ -133,8 +133,8 @@ func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint6
 // BroadcastOverviewDelta broadcasts a versioned sparse overview delta.
 // If a client cannot keep up, it receives resync_required plus the supplied
 // fallback full snapshot instead of blocking the producer.
-func (h *Hub) BroadcastOverviewDelta(delta *SnapshotPayload, baseVersion, version uint64, fallbackSnapshot *SnapshotPayload) {
-	deltaMessage := NewRuntimeDeltaMessage(delta, baseVersion, version, fallbackSnapshot)
+func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, version uint64, fallbackSnapshot *SnapshotPayload) {
+	deltaMessage := NewRuntimeDeltaMessage(delta, baseVersion, version)
 	deltaPayload, err := json.Marshal(deltaMessage)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal overview delta: %v", err)

@@ -754,6 +754,83 @@ func TestBuildDeltaSuppressesUnchangedSections(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeDeltaPatchIncludesOnlyChangedRuntimeFields(t *testing.T) {
+	deviceID := uuid.New().String()
+	targetID := uuid.New().String()
+	linkID := uuid.New().String()
+	oldCPU := 10.0
+	newCPU := 25.0
+	tx := 100.0
+
+	previous := &ws.SnapshotPayload{
+		Devices: map[string]ws.DeviceRuntimeDTO{
+			deviceID: {
+				DeviceID:          deviceID,
+				OperationalStatus: "up",
+				PrimaryHealth:     "up_fresh",
+				RuntimeFlags:      []string{},
+				FieldStates: map[string]string{
+					"uptime": "ok",
+					"cpu":    "ok",
+					"memory": "ok",
+				},
+				NetworkReachable: "true",
+				SNMPReachable:    "true",
+				Reachability:     "up",
+				Health:           "healthy",
+				Freshness:        "fresh",
+				PrimaryReason:    "ok",
+				MetricsStatus:    "available",
+				MetricsReason:    "ok",
+				AlertStatus:      "normal",
+				FiringAlertCount: 0,
+				CPUPercent:       &oldCPU,
+				LastCollectedAt:  stringPtr("2026-05-01T10:00:00Z"),
+			},
+		},
+		Links: map[string]ws.LinkRuntimeDTO{
+			linkID: {
+				LinkID:          linkID,
+				SourceDeviceID:  deviceID,
+				TargetDeviceID:  targetID,
+				SourceIfName:    "ether1",
+				TargetIfName:    "ether2",
+				MetricsStatus:   "available",
+				MetricsReason:   "ok",
+				TxBps:           &tx,
+				LastCollectedAt: stringPtr("2026-05-01T10:00:00Z"),
+			},
+		},
+	}
+	delta := ws.EmptySnapshot()
+	delta.Devices[deviceID] = previous.Devices[deviceID]
+	changedDevice := delta.Devices[deviceID]
+	changedDevice.CPUPercent = &newCPU
+	delta.Devices[deviceID] = changedDevice
+	delta.Links[linkID] = previous.Links[linkID]
+
+	patch := buildRuntimeDeltaPatch(delta, previous)
+	if patch == nil {
+		t.Fatal("expected runtime delta patch")
+	}
+	if len(patch.Devices) != 1 {
+		t.Fatalf("patch devices = %d, want 1", len(patch.Devices))
+	}
+	devicePatch := patch.Devices[deviceID]
+	if got := devicePatch["device_id"]; got != deviceID {
+		t.Fatalf("device_id = %#v, want %s", got, deviceID)
+	}
+	if got := devicePatch["cpu_percent"]; got != newCPU {
+		t.Fatalf("cpu_percent = %#v, want %v", got, newCPU)
+	}
+	if _, ok := devicePatch["operational_status"]; ok {
+		t.Fatalf("unexpected unchanged operational_status in device patch: %#v", devicePatch)
+	}
+	if len(patch.Links) != 0 {
+		t.Fatalf("expected unchanged incident link to be omitted, got %#v", patch.Links)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

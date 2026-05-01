@@ -673,6 +673,62 @@ describe('useWebSocket', () => {
     expect(result.current.snapshot!.devices['dev-1'].runtime_flags).toEqual(['partial_telemetry']);
   });
 
+  it('handles runtime_delta partial patches without dropping existing runtime fields', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 1,
+          snapshot: {
+            devices: {
+              'dev-1': makeDeviceRuntime({
+                cpu_percent: 50,
+                mem_percent: 25,
+                primary_health: 'up_fresh',
+              }),
+            },
+            links: {
+              'link-1': makeLinkRuntime({
+                rx_bps: 200,
+                tx_bps: 100,
+              }),
+            },
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 1,
+          version: 2,
+          delta: {
+            devices: {
+              'dev-1': {
+                device_id: 'dev-1',
+                cpu_percent: null,
+              },
+            },
+            links: {
+              'link-1': {
+                link_id: 'link-1',
+                rx_bps: 250,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBeNull();
+    expect(result.current.snapshot!.devices['dev-1'].mem_percent).toBe(25);
+    expect(result.current.snapshot!.devices['dev-1'].primary_health).toBe('up_fresh');
+    expect(result.current.snapshot!.links['link-1'].rx_bps).toBe(250);
+    expect(result.current.snapshot!.links['link-1'].tx_bps).toBe(100);
+  });
+
   it('exposes polling health changes', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 

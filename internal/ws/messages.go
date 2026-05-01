@@ -83,10 +83,14 @@ type SnapshotDeltaMessagePayload struct {
 }
 
 type RuntimeDeltaMessagePayload struct {
-	BaseVersion     uint64           `json:"base_version"`
-	Version         uint64           `json:"version"`
-	RuntimeIdentity string           `json:"runtime_identity,omitempty"`
-	Delta           *SnapshotPayload `json:"delta"`
+	BaseVersion uint64               `json:"base_version"`
+	Version     uint64               `json:"version"`
+	Delta       *RuntimeDeltaPayload `json:"delta"`
+}
+
+type RuntimeDeltaPayload struct {
+	Devices map[string]map[string]any `json:"devices"`
+	Links   map[string]map[string]any `json:"links"`
 }
 
 type TopologyChangedPayload struct {
@@ -137,18 +141,13 @@ func NewSnapshotDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64
 	}
 }
 
-func NewRuntimeDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64, currentSnapshot ...*SnapshotPayload) Message {
-	runtimeIdentity := ""
-	if len(currentSnapshot) > 0 {
-		runtimeIdentity = RuntimeIdentityForSnapshot(currentSnapshot[0])
-	}
+func NewRuntimeDeltaMessage(delta *RuntimeDeltaPayload, baseVersion, version uint64) Message {
 	return Message{
 		Type: MessageTypeRuntimeDelta,
 		Payload: RuntimeDeltaMessagePayload{
-			BaseVersion:     baseVersion,
-			Version:         version,
-			RuntimeIdentity: runtimeIdentity,
-			Delta:           CloneSnapshot(delta),
+			BaseVersion: baseVersion,
+			Version:     version,
+			Delta:       CloneRuntimeDeltaPayload(delta),
 		},
 	}
 }
@@ -299,6 +298,50 @@ func EmptySnapshot() *SnapshotPayload {
 		LinkMetrics:    map[string][]LinkRuntimeDTO{},
 		DeviceStatuses: map[string]string{},
 	}
+}
+
+func EmptyRuntimeDeltaPayload() *RuntimeDeltaPayload {
+	return &RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{},
+		Links:   map[string]map[string]any{},
+	}
+}
+
+func CloneRuntimeDeltaPayload(delta *RuntimeDeltaPayload) *RuntimeDeltaPayload {
+	if delta == nil {
+		return EmptyRuntimeDeltaPayload()
+	}
+
+	cloned := &RuntimeDeltaPayload{
+		Devices: make(map[string]map[string]any, len(delta.Devices)),
+		Links:   make(map[string]map[string]any, len(delta.Links)),
+	}
+	for id, patch := range delta.Devices {
+		cloned.Devices[id] = cloneRuntimePatchMap(patch)
+	}
+	for id, patch := range delta.Links {
+		cloned.Links[id] = cloneRuntimePatchMap(patch)
+	}
+	return cloned
+}
+
+func cloneRuntimePatchMap(patch map[string]any) map[string]any {
+	cloned := make(map[string]any, len(patch))
+	for key, value := range patch {
+		switch typed := value.(type) {
+		case []string:
+			cloned[key] = append([]string(nil), typed...)
+		case map[string]string:
+			nested := make(map[string]string, len(typed))
+			for nestedKey, nestedValue := range typed {
+				nested[nestedKey] = nestedValue
+			}
+			cloned[key] = nested
+		default:
+			cloned[key] = value
+		}
+	}
+	return cloned
 }
 
 // CloneSnapshot makes a deep copy so callers can safely share snapshots.
