@@ -42,6 +42,13 @@ describe('Watermark', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('renders nothing while canvas interaction chrome is hidden', () => {
+    const { container } = render(
+      <Watermark activeView="canvas" selectedAreaId={null} areas={[mockArea()]} hidden />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
   it('has pointer-events-none and aria-hidden attributes', () => {
     const { container } = render(
       <Watermark activeView="canvas" selectedAreaId={null} areas={[]} />,

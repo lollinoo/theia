@@ -58,6 +58,7 @@ const minimapStyle = {
 };
 const minimapMaskColor = 'var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))';
 const canvasDiagnosticsStorageKey = 'theia.canvas.diagnostics';
+const canvasInteractionIdleDelayMs = 140;
 
 function topologyMinimapNodeColor(node: DeviceNode): string {
   const data = node.data;
@@ -94,6 +95,49 @@ function isCanvasDiagnosticsShortcut(event: KeyboardEvent): boolean {
   return event.altKey && (event.ctrlKey || event.metaKey) && isPhysicalD;
 }
 
+function selectedNodeIdsFromSignature(signature: string): Set<string> {
+  return new Set(signature === '' ? [] : signature.split('\u0000'));
+}
+
+function applyEdgeEmphasis(edges: LinkEdgeType[], selectedIds: Set<string>): LinkEdgeType[] {
+  if (selectedIds.size === 0) {
+    let changed = false;
+    const nextEdges = edges.map((edge) => {
+      if (!edge.data?.emphasis) return edge;
+      changed = true;
+      return { ...edge, data: { ...edge.data, emphasis: 'default' as const } };
+    });
+    return changed ? nextEdges : edges;
+  }
+
+  let changed = false;
+  const nextEdges = edges.map((edge) => {
+    if (!edge.data) return edge;
+    const emphasis =
+      selectedIds.has(edge.source) || selectedIds.has(edge.target)
+        ? ('connected' as const)
+        : ('muted' as const);
+    if (edge.data.emphasis === emphasis) return edge;
+    changed = true;
+    return { ...edge, data: { ...edge.data, emphasis } };
+  });
+  return changed ? nextEdges : edges;
+}
+
+function setEdgeInteractionMode(
+  edges: LinkEdgeType[],
+  interactionMode: 'idle' | 'interactive',
+): LinkEdgeType[] {
+  let changed = false;
+  const nextEdges = edges.map((edge) => {
+    if (!edge.data) return edge;
+    if ((edge.data.interactionMode ?? 'idle') === interactionMode) return edge;
+    changed = true;
+    return { ...edge, data: { ...edge.data, interactionMode } };
+  });
+  return changed ? nextEdges : edges;
+}
+
 interface CanvasProps {
   snapshot: SnapshotPayload | null;
   alerts?: AlertDTO[];
@@ -106,6 +150,7 @@ interface CanvasProps {
   onAreaSelect?: (areaId: string | null) => void;
   onAreasChange?: () => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
+  onInteractionActiveChange?: (active: boolean) => void;
 }
 
 export default function Canvas({
@@ -120,12 +165,15 @@ export default function Canvas({
   onAreaSelect,
   onAreasChange,
   onDetailDeviceChange,
+  onInteractionActiveChange,
 }: CanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
+  const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const highlightTimerRef = useRef<number | null>(null);
+  const interactionIdleTimerRef = useRef<number | null>(null);
   const lastProjectionDiagnosticsSignatureRef = useRef<string>('');
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
   const { resolvedTheme } = useTheme();
@@ -161,6 +209,30 @@ export default function Canvas({
   }, [panelContent, onDetailDeviceChange]);
 
   useEffect(() => () => onDetailDeviceChange?.(null), [onDetailDeviceChange]);
+
+  useEffect(() => {
+    onInteractionActiveChange?.(canvasInteractionActive);
+  }, [canvasInteractionActive, onInteractionActiveChange]);
+
+  useEffect(() => () => onInteractionActiveChange?.(false), [onInteractionActiveChange]);
+
+  const beginCanvasInteraction = useCallback(() => {
+    if (interactionIdleTimerRef.current !== null) {
+      window.clearTimeout(interactionIdleTimerRef.current);
+      interactionIdleTimerRef.current = null;
+    }
+    setCanvasInteractionActive(true);
+  }, []);
+
+  const endCanvasInteraction = useCallback(() => {
+    if (interactionIdleTimerRef.current !== null) {
+      window.clearTimeout(interactionIdleTimerRef.current);
+    }
+    interactionIdleTimerRef.current = window.setTimeout(() => {
+      interactionIdleTimerRef.current = null;
+      setCanvasInteractionActive(false);
+    }, canvasInteractionIdleDelayMs);
+  }, []);
 
   const handleSelectionChange = useCallback(
     ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => {
@@ -296,8 +368,8 @@ export default function Canvas({
   const edgesWithAreaColor = useMemo(() => {
     if (areaColorMap.size === 0) return edges;
     const deviceAreaMap = new Map<string, string[]>();
-    for (const n of nodesWithAreaColor) {
-      deviceAreaMap.set(n.id, n.data.device.area_ids ?? []);
+    for (const device of devices) {
+      deviceAreaMap.set(device.id, device.area_ids ?? []);
     }
     return edges.map((e) => {
       const srcAreas = new Set(deviceAreaMap.get(e.source) ?? []);
@@ -307,29 +379,22 @@ export default function Canvas({
       if (color === e.data?.areaColor) return e;
       return { ...e, data: { ...e.data!, areaColor: color } };
     });
-  }, [edges, areaColorMap, nodesWithAreaColor]);
+  }, [edges, areaColorMap, devices]);
+
+  const selectedRealNodeIdSignature = useMemo(
+    () =>
+      nodes
+        .filter((node) => node.selected && !isGhostDeviceNode(node))
+        .map((node) => node.id)
+        .sort()
+        .join('\u0000'),
+    [nodes],
+  );
 
   // Build display nodes/edges by filtering the full node/edge set and adding ghost nodes
-  const { displayNodes, displayEdges } = useMemo(() => {
+  const displayNodes = useMemo(() => {
     if (!selectedAreaId) {
-      const selectedIds = new Set(
-        nodesWithAreaColor
-          .filter((node) => node.selected && !isGhostDeviceNode(node))
-          .map((node) => node.id),
-      );
-      const emphasizedEdges = edgesWithAreaColor.map((edge) => {
-        if (selectedIds.size === 0) {
-          if (!edge.data?.emphasis) return edge;
-          return { ...edge, data: { ...edge.data!, emphasis: 'default' } };
-        }
-
-        const emphasis =
-          selectedIds.has(edge.source) || selectedIds.has(edge.target) ? 'connected' : 'muted';
-        if (edge.data?.emphasis === emphasis) return edge;
-        return { ...edge, data: { ...edge.data!, emphasis } };
-      });
-
-      return { displayNodes: nodesWithAreaColor, displayEdges: emphasizedEdges };
+      return nodesWithAreaColor;
     }
 
     const filteredDeviceIds = new Set(filteredDevices.map((d) => d.id));
@@ -379,39 +444,32 @@ export default function Canvas({
       };
     });
 
-    const allDisplayNodes = [...areaNodes, ...ghostNodes];
-
-    // Filter edges to only include filtered links
-    const filteredLinkIds = new Set(filteredLinks.map((l) => l.id));
-    const areaEdges = edgesWithAreaColor.filter((e) => filteredLinkIds.has(e.id));
-    const selectedIds = new Set(
-      allDisplayNodes
-        .filter((node) => node.selected && !isGhostDeviceNode(node))
-        .map((node) => node.id),
-    );
-    const emphasizedEdges = areaEdges.map((edge) => {
-      if (selectedIds.size === 0) {
-        if (!edge.data?.emphasis) return edge;
-        return { ...edge, data: { ...edge.data!, emphasis: 'default' } };
-      }
-
-      const emphasis =
-        selectedIds.has(edge.source) || selectedIds.has(edge.target) ? 'connected' : 'muted';
-      if (edge.data?.emphasis === emphasis) return edge;
-      return { ...edge, data: { ...edge.data!, emphasis } };
-    });
-
-    return { displayNodes: allDisplayNodes, displayEdges: emphasizedEdges };
+    return [...areaNodes, ...ghostNodes];
   }, [
     selectedAreaId,
     nodesWithAreaColor,
-    edgesWithAreaColor,
     filteredDevices,
     filteredLinks,
     ghostDevices,
     devices,
     onAreaSelect,
   ]);
+
+  const displayEdges = useMemo(() => {
+    const selectedIds = selectedNodeIdsFromSignature(selectedRealNodeIdSignature);
+    if (!selectedAreaId) {
+      return applyEdgeEmphasis(edgesWithAreaColor, selectedIds);
+    }
+    // Filter edges to only include filtered links
+    const filteredLinkIds = new Set(filteredLinks.map((l) => l.id));
+    const areaEdges = edgesWithAreaColor.filter((e) => filteredLinkIds.has(e.id));
+    return applyEdgeEmphasis(areaEdges, selectedIds);
+  }, [selectedAreaId, edgesWithAreaColor, filteredLinks, selectedRealNodeIdSignature]);
+
+  const renderEdges = useMemo(
+    () => setEdgeInteractionMode(displayEdges, canvasInteractionActive ? 'interactive' : 'idle'),
+    [displayEdges, canvasInteractionActive],
+  );
 
   useEffect(() => {
     const selectedEdgeCount = displayEdges.filter((edge) => edge.selected).length;
@@ -495,6 +553,9 @@ export default function Canvas({
   useEffect(
     () => () => {
       if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+      if (interactionIdleTimerRef.current !== null) {
+        window.clearTimeout(interactionIdleTimerRef.current);
+      }
     },
     [],
   );
@@ -613,7 +674,9 @@ export default function Canvas({
   }
 
   return (
-    <div className="topology-backdrop relative h-full w-full bg-bg">
+    <div
+      className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
+    >
       {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
       <Toolbar
         onSearch={() => setShowSearch((s) => !s)}
@@ -801,12 +864,16 @@ export default function Canvas({
       <ReactFlow
         data-testid="topology-canvas"
         nodes={displayNodes}
-        edges={displayEdges}
+        edges={renderEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={handleConnect}
+        onConnectStart={beginCanvasInteraction}
+        onConnectEnd={endCanvasInteraction}
+        onMoveStart={beginCanvasInteraction}
+        onMoveEnd={endCanvasInteraction}
         onSelectionChange={handleSelectionChange}
         onPaneClick={() => {
           setEdgeMenu(null);
@@ -837,7 +904,9 @@ export default function Canvas({
             data: { link: lk },
           });
         }}
+        onNodeDragStart={beginCanvasInteraction}
         onNodeDragStop={(_ev, node) => {
+          endCanvasInteraction();
           if (isGhostDeviceNode(node)) return;
           updateNodePosition(node.id, node.position);
         }}
@@ -849,6 +918,7 @@ export default function Canvas({
         maxZoom={2}
         fitView
         fitViewOptions={{ padding: topologyFitViewPadding }}
+        onlyRenderVisibleElements
         nodesDraggable={editMode}
         panOnDrag
         zoomOnScroll
@@ -858,7 +928,7 @@ export default function Canvas({
         className="bg-transparent"
       >
         <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
-        <TopologyMiniMap />
+        {!canvasInteractionActive && <TopologyMiniMap />}
       </ReactFlow>
     </div>
   );

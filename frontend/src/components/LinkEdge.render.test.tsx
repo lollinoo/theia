@@ -142,4 +142,15 @@ describe('LinkEdge render', () => {
       );
     }
   });
+
+  it('suppresses telemetry badges while the canvas is being interacted with', () => {
+    renderEdge(
+      { id: 'edge-interactive' },
+      { interactionMode: 'interactive', throughputLabel: 'TX: 500M / RX: 300M' },
+    );
+
+    expect(screen.queryByTestId('edge-interactive-badge-stack')).not.toBeInTheDocument();
+    expect(screen.queryByText('1 Gbps')).not.toBeInTheDocument();
+    expect(screen.getByTestId('edge-interactive')).toHaveStyle({ transition: 'none' });
+  });
 });

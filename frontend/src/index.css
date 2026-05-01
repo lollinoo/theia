@@ -247,6 +247,16 @@
   --xy-selection-border-default: 1px solid var(--nt-selection-stroke);
 }
 
+.topology-interacting .react-flow__node,
+.topology-interacting .react-flow__edge,
+.topology-interacting .react-flow__edge path {
+  transition: none !important;
+}
+
+.topology-interacting .react-flow__edgelabel-renderer {
+  display: none;
+}
+
 @layer base {
   html,
   body,
