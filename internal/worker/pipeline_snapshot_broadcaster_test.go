@@ -1,13 +1,33 @@
 package worker
 
 import (
+	"bytes"
+	"log"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/ws"
 )
+
+func capturePipelineDebugLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	logging.Configure("debug")
+	t.Cleanup(func() {
+		logging.Configure("info")
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+	return &buf
+}
 
 func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthOnlyWhenChanged(t *testing.T) {
 	sched := newPipelineTestScheduler()
@@ -53,6 +73,44 @@ func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthOnlyWhenChanged(t *te
 	third := <-pipeline.hub.BroadcastCh()
 	if !strings.Contains(string(third), `"configured_workers":65`) {
 		t.Fatalf("expected updated polling health payload, got %s", string(third))
+	}
+}
+
+func TestPipelineSnapshotBroadcasterDebugLogsPollingHealthChange(t *testing.T) {
+	logs := capturePipelineDebugLogs(t)
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	broadcaster := &pipelineSnapshotBroadcaster{pipeline: pipeline}
+
+	sched.health = polling.HealthSnapshot{
+		EssentialOverloaded:      true,
+		DegradedRisk:             true,
+		EssentialQueueLagSeconds: 12.5,
+		DeadlineMissTotal:        3,
+		ConfiguredWorkers:        64,
+		ActiveWorkers:            61,
+		Queues: map[string]polling.QueueSnapshot{
+			"performance": {
+				ReadyDepth:        7,
+				LagSeconds:        125.1,
+				ActiveWorkers:     32,
+				ConfiguredWorkers: 32,
+			},
+		},
+	}
+
+	broadcaster.broadcastPollingHealthIfChanged()
+	<-pipeline.hub.BroadcastCh()
+
+	output := logs.String()
+	if !strings.Contains(output, "DEBUG polling health changed") {
+		t.Fatalf("debug output missing polling health change: %q", output)
+	}
+	if !strings.Contains(output, "deadline_miss_total=3") {
+		t.Fatalf("debug output missing deadline miss total: %q", output)
+	}
+	if !strings.Contains(output, "performance ready=7 lag=125.1s active=32/32") {
+		t.Fatalf("debug output missing queue summary: %q", output)
 	}
 }
 

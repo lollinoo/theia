@@ -2,12 +2,16 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/ws"
@@ -285,6 +289,18 @@ func (b *pipelineSnapshotBroadcaster) broadcastPollingHealthIfChanged() {
 	p.runtime.mu.Unlock()
 
 	if changed {
+		logging.Debugf(
+			"polling health changed status=%s essential_overloaded=%t degraded_risk=%t essential_lag=%.1fs deadline_miss_total=%d active_workers=%d/%d queues=%s warnings=%d",
+			health.Status(),
+			health.EssentialOverloaded,
+			health.DegradedRisk,
+			health.EssentialQueueLagSeconds,
+			health.DeadlineMissTotal,
+			health.ActiveWorkers,
+			health.ConfiguredWorkers,
+			pollingHealthQueueSummary(health.Queues),
+			len(health.Warnings),
+		)
 		p.hub.Broadcast(ws.NewPollingHealthChangedMessage(health))
 	}
 }
@@ -342,6 +358,32 @@ func pollingHealthLagBucket(lagSeconds float64) int64 {
 		return 0
 	}
 	return int64(lagSeconds / pollingHealthLagBucketSeconds)
+}
+
+func pollingHealthQueueSummary(queues map[string]polling.QueueSnapshot) string {
+	if len(queues) == 0 {
+		return "-"
+	}
+
+	keys := make([]string, 0, len(queues))
+	for key := range queues {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		queue := queues[key]
+		parts = append(parts, fmt.Sprintf(
+			"%s ready=%d lag=%.1fs active=%d/%d",
+			key,
+			queue.ReadyDepth,
+			queue.LagSeconds,
+			queue.ActiveWorkers,
+			queue.ConfiguredWorkers,
+		))
+	}
+	return strings.Join(parts, " ")
 }
 
 func clonePollingHealth(health polling.HealthSnapshot) polling.HealthSnapshot {

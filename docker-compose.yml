@@ -46,6 +46,7 @@ services:
       - THEIA_DATA_DIR=/app/data
       - THEIA_LISTEN_ADDR=:8080
       - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-devkey1234567890}
+      - THEIA_LOG_LEVEL=debug
       - CGO_ENABLED=1
       - THEIA_VERSION=${THEIA_VERSION:-dev}
       - GIT_COMMIT=${GIT_COMMIT:-dev}
