@@ -36,6 +36,14 @@ func TestHealthHandlerHealth(t *testing.T) {
 			EssentialQueueLagSeconds: 1.5,
 			ActiveWorkers:            4,
 			ConfiguredWorkers:        4,
+			Queues: map[string]polling.QueueSnapshot{
+				"performance": {
+					ReadyDepth:        2,
+					LagSeconds:        233,
+					ActiveWorkers:     32,
+					ConfiguredWorkers: 32,
+				},
+			},
 		},
 	}
 	h := NewHealthHandler(db, poller)
@@ -79,6 +87,9 @@ func TestHealthHandlerHealth(t *testing.T) {
 	}
 	if resp.Polling.ConfiguredWorkers != 4 {
 		t.Fatalf("expected configured workers 4, got %d", resp.Polling.ConfiguredWorkers)
+	}
+	if resp.Polling.Queues["performance"].LagSeconds != 233 {
+		t.Fatalf("expected performance queue lag in health response, got %#v", resp.Polling.Queues)
 	}
 }
 

@@ -327,9 +327,25 @@ func TestNewPollingHealthChangedMessage(t *testing.T) {
 		EssentialOverloaded: true,
 		ConfiguredWorkers:   64,
 		ActiveWorkers:       64,
+		Queues: map[string]polling.QueueSnapshot{
+			"performance": {
+				ReadyDepth:        9,
+				LagSeconds:        125.5,
+				ActiveWorkers:     32,
+				ConfiguredWorkers: 32,
+			},
+		},
 	})
 	if msg.Type != MessageTypePollingHealthChanged {
 		t.Fatalf("Type = %q, want polling_health_changed", msg.Type)
+	}
+
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"queues":{"performance":{"ready_depth":9,"lag_seconds":125.5,"active_workers":32,"configured_workers":32}}`) {
+		t.Fatalf("message = %s, want performance queue details", raw)
 	}
 }
 

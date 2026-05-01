@@ -296,12 +296,31 @@ func pollingHealthEqual(a, b polling.HealthSnapshot) bool {
 		pollingHealthLagBucket(a.EssentialQueueLagSeconds) != pollingHealthLagBucket(b.EssentialQueueLagSeconds) ||
 		a.DeadlineMissTotal != b.DeadlineMissTotal ||
 		a.ConfiguredWorkers != b.ConfiguredWorkers ||
+		!pollingHealthQueuesEqual(a.Queues, b.Queues) ||
 		len(a.Warnings) != len(b.Warnings) {
 		return false
 	}
 
 	for i := range a.Warnings {
 		if a.Warnings[i] != b.Warnings[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func pollingHealthQueuesEqual(a, b map[string]polling.QueueSnapshot) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, aQueue := range a {
+		bQueue, ok := b[key]
+		if !ok {
+			return false
+		}
+		if aQueue.ReadyDepth != bQueue.ReadyDepth ||
+			pollingHealthLagBucket(aQueue.LagSeconds) != pollingHealthLagBucket(bQueue.LagSeconds) ||
+			aQueue.ConfiguredWorkers != bQueue.ConfiguredWorkers {
 			return false
 		}
 	}
@@ -327,6 +346,13 @@ func pollingHealthLagBucket(lagSeconds float64) int64 {
 
 func clonePollingHealth(health polling.HealthSnapshot) polling.HealthSnapshot {
 	health.Warnings = append([]polling.CapacityWarning(nil), health.Warnings...)
+	if health.Queues != nil {
+		queues := health.Queues
+		health.Queues = make(map[string]polling.QueueSnapshot, len(queues))
+		for key, queue := range queues {
+			health.Queues[key] = queue
+		}
+	}
 	return health
 }
 
