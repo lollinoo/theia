@@ -63,6 +63,17 @@ type prometheusRuntimeRequestKey struct {
 	Result    string
 }
 
+type snmpCollectorOperationKey struct {
+	Collector string
+	Operation string
+	Result    string
+}
+
+type snmpCollectorEarlyExitKey struct {
+	Collector string
+	Reason    string
+}
+
 type histogram struct {
 	buckets []float64
 	counts  []uint64
@@ -98,6 +109,9 @@ type Registry struct {
 	refreshTopologyReloadTotal map[string]uint64
 	prometheusRuntimeRequests  map[prometheusRuntimeRequestKey]uint64
 	prometheusRuntimeDuration  map[prometheusRuntimeRequestKey]*histogram
+	snmpCollectorOperations    map[snmpCollectorOperationKey]uint64
+	snmpCollectorDuration      map[snmpCollectorOperationKey]*histogram
+	snmpCollectorEarlyExit     map[snmpCollectorEarlyExitKey]uint64
 	wsMessagesTotal            map[wsMetricKey]uint64
 	wsBackpressureTotal        map[wsBackpressureKey]uint64
 	wsPayloadBytes             map[wsMetricKey]*histogram
@@ -145,6 +159,9 @@ func NewRegistry() *Registry {
 		refreshTopologyReloadTotal: make(map[string]uint64),
 		prometheusRuntimeRequests:  make(map[prometheusRuntimeRequestKey]uint64),
 		prometheusRuntimeDuration:  make(map[prometheusRuntimeRequestKey]*histogram),
+		snmpCollectorOperations:    make(map[snmpCollectorOperationKey]uint64),
+		snmpCollectorDuration:      make(map[snmpCollectorOperationKey]*histogram),
+		snmpCollectorEarlyExit:     make(map[snmpCollectorEarlyExitKey]uint64),
 		wsMessagesTotal:            make(map[wsMetricKey]uint64),
 		wsBackpressureTotal:        make(map[wsBackpressureKey]uint64),
 		wsPayloadBytes:             make(map[wsMetricKey]*histogram),
@@ -269,6 +286,21 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_prometheus_runtime_request_seconds",
 		"Prometheus runtime request latency by operation and result.",
 		sortedPrometheusRuntimeHistogramRows(r.prometheusRuntimeDuration),
+	)
+	writeCounterVec(&b,
+		"theia_snmp_collector_operations_total",
+		"SNMP collector operation totals by collector, operation, and result.",
+		sortedSNMPCollectorOperationCounterRows(r.snmpCollectorOperations),
+	)
+	writeHistogramVec(&b,
+		"theia_snmp_collector_operation_seconds",
+		"SNMP collector operation latency by collector, operation, and result.",
+		sortedSNMPCollectorOperationHistogramRows(r.snmpCollectorDuration),
+	)
+	writeCounterVec(&b,
+		"theia_snmp_collector_early_exit_total",
+		"SNMP collector early exits by collector and reason.",
+		sortedSNMPCollectorEarlyExitRows(r.snmpCollectorEarlyExit),
 	)
 	writeCounterVec(&b,
 		"theia_ws_messages_total",
@@ -475,6 +507,45 @@ func (r *Registry) ObservePrometheusRuntimeRequest(operation, result string, dur
 	}
 	h.observe(duration.Seconds())
 }
+
+func (r *Registry) ObserveSNMPCollectorOperation(collector, operation, result string, duration time.Duration) {
+	if collector == "" || operation == "" || result == "" {
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := snmpCollectorOperationKey{
+		Collector: collector,
+		Operation: operation,
+		Result:    result,
+	}
+	r.snmpCollectorOperations[key]++
+	h, ok := r.snmpCollectorDuration[key]
+	if !ok {
+		h = newHistogram(durationBucketsSeconds)
+		r.snmpCollectorDuration[key] = h
+	}
+	h.observe(duration.Seconds())
+}
+
+func (r *Registry) IncSNMPCollectorEarlyExit(collector, reason string) {
+	if collector == "" || reason == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snmpCollectorEarlyExit[snmpCollectorEarlyExitKey{
+		Collector: collector,
+		Reason:    reason,
+	}]++
+}
+
 func (r *Registry) ObserveWSMessage(scope, messageType string, payloadBytes int) {
 	key := wsMetricKey{Scope: scope, Type: messageType}
 
@@ -821,6 +892,86 @@ func sortedPrometheusRuntimeHistogramRows(values map[prometheusRuntimeRequestKey
 	}
 	return rows
 }
+
+func sortedSNMPCollectorOperationCounterRows(values map[snmpCollectorOperationKey]uint64) []counterRow {
+	keys := make([]snmpCollectorOperationKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortSNMPCollectorOperationKeys(keys)
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"collector": key.Collector,
+				"operation": key.Operation,
+				"result":    key.Result,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedSNMPCollectorOperationHistogramRows(values map[snmpCollectorOperationKey]*histogram) []histogramRow {
+	keys := make([]snmpCollectorOperationKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortSNMPCollectorOperationKeys(keys)
+
+	rows := make([]histogramRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, histogramRow{
+			labels: map[string]string{
+				"collector": key.Collector,
+				"operation": key.Operation,
+				"result":    key.Result,
+			},
+			value: values[key].snapshot(),
+		})
+	}
+	return rows
+}
+
+func sortSNMPCollectorOperationKeys(keys []snmpCollectorOperationKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Collector != keys[j].Collector {
+			return keys[i].Collector < keys[j].Collector
+		}
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		return keys[i].Result < keys[j].Result
+	})
+}
+
+func sortedSNMPCollectorEarlyExitRows(values map[snmpCollectorEarlyExitKey]uint64) []counterRow {
+	keys := make([]snmpCollectorEarlyExitKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Collector != keys[j].Collector {
+			return keys[i].Collector < keys[j].Collector
+		}
+		return keys[i].Reason < keys[j].Reason
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"collector": key.Collector,
+				"reason":    key.Reason,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
 func sortedWSRows(values map[wsMetricKey]uint64) []counterRow {
 	keys := make([]wsMetricKey, 0, len(values))
 	for key := range values {
