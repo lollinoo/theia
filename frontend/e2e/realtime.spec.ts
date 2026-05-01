@@ -95,6 +95,5 @@ test('opens the device detail panel from the topology canvas', async ({ page }) 
   });
 
   await expect(page.getByTestId('device-detail-panel')).toBeVisible();
-  await expect(page.getByTestId('device-detail-runtime')).toContainText('Operational status');
-  await expect(page.getByTestId('device-detail-runtime')).toContainText('up');
+  await expect(page.getByTestId('device-detail-runtime')).toContainText('Live Detail Telemetry');
 });

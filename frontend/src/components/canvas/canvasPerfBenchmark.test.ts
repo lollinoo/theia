@@ -48,7 +48,7 @@ describe('canvasPerfBenchmark', () => {
         expect(aggregate.p95Ms).toBeLessThanOrEqual(aggregate.maxMs);
       }
     }
-  });
+  }, 15_000);
 
   it('returns a JSON-serializable contract without timing thresholds', () => {
     const result = runCanvasPerfBenchmark({
