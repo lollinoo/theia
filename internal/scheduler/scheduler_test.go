@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
 )
 
@@ -1130,6 +1132,160 @@ func TestSchedulerDispatchReady_RespectsPollingIsolationBudgets(t *testing.T) {
 
 	if scheduler.inFlight != 1 {
 		t.Fatalf("inFlight = %d, want 1 due to site/subnet/profile/device isolation budgets", scheduler.inFlight)
+	}
+}
+
+func TestSchedulerDispatchReady_RecordsEssentialProfileBackpressureReason(t *testing.T) {
+	observability.ResetDefaultForTest()
+
+	sharedCreds := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+	}
+	deviceA := domain.Device{
+		ID:              uuid.MustParse("53100000-0000-0000-0000-000000000001"),
+		Hostname:        "edge-profile-budget-a",
+		IP:              "10.10.30.10",
+		Managed:         true,
+		PollClass:       domain.PollClassCore,
+		SNMPCredentials: sharedCreds,
+	}
+	deviceB := domain.Device{
+		ID:              uuid.MustParse("53100000-0000-0000-0000-000000000002"),
+		Hostname:        "edge-profile-budget-b",
+		IP:              "10.10.30.11",
+		Managed:         true,
+		PollClass:       domain.PollClassCore,
+		SNMPCredentials: sharedCreds,
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{devices: []domain.Device{deviceA, deviceB}}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingSNMPWorkerPoolPerformance:    "8",
+			domain.SettingPollingMaxWorkersPerDevice:   "16",
+			domain.SettingPollingMaxWorkersPerSubnet:   "16",
+			domain.SettingPollingMaxWorkersPerSite:     "16",
+			domain.SettingPollingMaxInflightPerProfile: "1",
+		},
+	})
+	now := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("refreshDevices: %v", err)
+	}
+
+	inFlightEssential := mustSchedulerItem(t, scheduler, NewEssentialTaskKey(deviceA.ID))
+	if inFlightEssential.index >= 0 {
+		heap.Remove(&scheduler.heap, inFlightEssential.index)
+	}
+	inFlightEssential.inFlight = true
+	scheduler.inFlight++
+	scheduler.incrementInFlight(inFlightEssential.task)
+
+	essential := mustSchedulerItem(t, scheduler, NewEssentialTaskKey(deviceB.ID))
+	essential.dueAt = now.Add(-time.Minute)
+	heap.Fix(&scheduler.heap, essential.index)
+
+	scheduler.moveDueTasksToReady(now)
+	scheduler.dispatchReady(context.Background(), now)
+
+	metrics := string(observability.Default().MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_scheduler_backpressure_total{reason="essential_limit",volatility_class="performance"} 1`) {
+		t.Fatalf("expected aggregate essential_limit backpressure metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_scheduler_backpressure_total{reason="essential_profile_limit",volatility_class="performance"} 1`) {
+		t.Fatalf("expected detailed essential_profile_limit backpressure metric, got:\n%s", metrics)
+	}
+}
+
+func TestSchedulerDispatchReady_EssentialBypassesBackgroundDeviceSaturation(t *testing.T) {
+	device := domain.Device{
+		ID:        uuid.MustParse("53100000-0000-0000-0000-000000000003"),
+		Hostname:  "edge-essential-reserve",
+		IP:        "10.10.30.11",
+		Managed:   true,
+		PollClass: domain.PollClassCore,
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{devices: []domain.Device{device}}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingSNMPWorkerPoolPerformance:    "8",
+			domain.SettingPollingMaxWorkersPerDevice:   "1",
+			domain.SettingPollingMaxWorkersPerSubnet:   "16",
+			domain.SettingPollingMaxWorkersPerSite:     "16",
+			domain.SettingPollingMaxInflightPerProfile: "16",
+		},
+	})
+	now := time.Date(2026, 5, 1, 10, 5, 0, 0, time.UTC)
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("refreshDevices: %v", err)
+	}
+
+	background := mustSchedulerItem(t, scheduler, NewTaskKey(device.ID, domain.VolatilityClassPerformance))
+	if background.index >= 0 {
+		heap.Remove(&scheduler.heap, background.index)
+	}
+	background.inFlight = true
+	scheduler.inFlight++
+	scheduler.incrementInFlight(background.task)
+
+	essential := mustSchedulerItem(t, scheduler, NewEssentialTaskKey(device.ID))
+	essential.dueAt = now.Add(-time.Minute)
+	heap.Fix(&scheduler.heap, essential.index)
+
+	scheduler.moveDueTasksToReady(now)
+	scheduler.dispatchReady(context.Background(), now)
+
+	if !essential.inFlight {
+		t.Fatal("essential task should dispatch even when background work has saturated the device budget")
+	}
+	if scheduler.inFlight != 2 {
+		t.Fatalf("inFlight = %d, want background plus essential", scheduler.inFlight)
+	}
+}
+
+func TestSchedulerDispatchReady_BackgroundRespectsEssentialDeviceSaturation(t *testing.T) {
+	device := domain.Device{
+		ID:        uuid.MustParse("53100000-0000-0000-0000-000000000004"),
+		Hostname:  "edge-background-limited",
+		IP:        "10.10.30.12",
+		Managed:   true,
+		PollClass: domain.PollClassCore,
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{devices: []domain.Device{device}}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingSNMPWorkerPoolPerformance:    "8",
+			domain.SettingPollingMaxWorkersPerDevice:   "1",
+			domain.SettingPollingMaxWorkersPerSubnet:   "16",
+			domain.SettingPollingMaxWorkersPerSite:     "16",
+			domain.SettingPollingMaxInflightPerProfile: "16",
+		},
+	})
+	now := time.Date(2026, 5, 1, 10, 10, 0, 0, time.UTC)
+	if err := scheduler.refreshDevices(now); err != nil {
+		t.Fatalf("refreshDevices: %v", err)
+	}
+
+	essential := mustSchedulerItem(t, scheduler, NewEssentialTaskKey(device.ID))
+	if essential.index >= 0 {
+		heap.Remove(&scheduler.heap, essential.index)
+	}
+	essential.inFlight = true
+	scheduler.inFlight++
+	scheduler.incrementInFlight(essential.task)
+
+	background := mustSchedulerItem(t, scheduler, NewTaskKey(device.ID, domain.VolatilityClassPerformance))
+	background.dueAt = now.Add(-time.Minute)
+	heap.Fix(&scheduler.heap, background.index)
+
+	scheduler.moveDueTasksToReady(now)
+	scheduler.dispatchReady(context.Background(), now)
+
+	if background.inFlight {
+		t.Fatal("background task should remain queued while essential work occupies the device budget")
+	}
+	if scheduler.inFlight != 1 {
+		t.Fatalf("inFlight = %d, want only the essential task", scheduler.inFlight)
 	}
 }
 

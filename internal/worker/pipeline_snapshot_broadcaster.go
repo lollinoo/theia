@@ -277,7 +277,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastPollingHealthIfChanged() {
 func pollingHealthEqual(a, b polling.HealthSnapshot) bool {
 	if a.EssentialOverloaded != b.EssentialOverloaded ||
 		a.DegradedRisk != b.DegradedRisk ||
-		a.EssentialQueueLagSeconds != b.EssentialQueueLagSeconds ||
+		pollingHealthLagBucket(a.EssentialQueueLagSeconds) != pollingHealthLagBucket(b.EssentialQueueLagSeconds) ||
 		a.DeadlineMissTotal != b.DeadlineMissTotal ||
 		a.ActiveWorkers != b.ActiveWorkers ||
 		a.ConfiguredWorkers != b.ConfiguredWorkers ||
@@ -291,6 +291,15 @@ func pollingHealthEqual(a, b polling.HealthSnapshot) bool {
 		}
 	}
 	return true
+}
+
+const pollingHealthLagBucketSeconds = 5
+
+func pollingHealthLagBucket(lagSeconds float64) int64 {
+	if lagSeconds <= 0 {
+		return 0
+	}
+	return int64(lagSeconds / pollingHealthLagBucketSeconds)
 }
 
 func clonePollingHealth(health polling.HealthSnapshot) polling.HealthSnapshot {

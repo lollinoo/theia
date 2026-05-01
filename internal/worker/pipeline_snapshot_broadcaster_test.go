@@ -42,3 +42,37 @@ func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthOnlyWhenChanged(t *te
 		t.Fatalf("expected updated polling health payload, got %s", string(third))
 	}
 }
+
+func TestPipelineSnapshotBroadcasterIgnoresSubBucketPollingHealthLagDrift(t *testing.T) {
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	broadcaster := &pipelineSnapshotBroadcaster{pipeline: pipeline}
+
+	sched.health = polling.HealthSnapshot{
+		EssentialQueueLagSeconds: 120.1,
+		ConfiguredWorkers:        64,
+	}
+	broadcaster.broadcastPollingHealthIfChanged()
+	<-pipeline.hub.BroadcastCh()
+
+	sched.health = polling.HealthSnapshot{
+		EssentialQueueLagSeconds: 124.9,
+		ConfiguredWorkers:        64,
+	}
+	broadcaster.broadcastPollingHealthIfChanged()
+	select {
+	case payload := <-pipeline.hub.BroadcastCh():
+		t.Fatalf("unexpected polling health broadcast for sub-bucket lag drift: %s", string(payload))
+	default:
+	}
+
+	sched.health = polling.HealthSnapshot{
+		EssentialQueueLagSeconds: 125.1,
+		ConfiguredWorkers:        64,
+	}
+	broadcaster.broadcastPollingHealthIfChanged()
+	payload := <-pipeline.hub.BroadcastCh()
+	if !strings.Contains(string(payload), `"essential_queue_lag_seconds":125.1`) {
+		t.Fatalf("expected bucket-crossing polling health payload, got %s", string(payload))
+	}
+}

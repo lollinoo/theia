@@ -43,19 +43,23 @@ type Scheduler struct {
 	heap            taskHeap
 	ready           [3][]*heapItem
 
-	running           atomic.Bool
-	lifecycleMu       sync.Mutex
-	mu                sync.RWMutex
-	cancel            context.CancelFunc
-	done              chan struct{}
-	inFlight          int
-	inFlightByClass   map[domain.VolatilityClass]int
-	inFlightByKind    map[polling.TaskKind]int
-	inFlightByDevice  map[string]int
-	inFlightBySite    map[string]int
-	inFlightBySubnet  map[string]int
-	inFlightByProfile map[string]int
-	runID             uint64
+	running            atomic.Bool
+	lifecycleMu        sync.Mutex
+	mu                 sync.RWMutex
+	cancel             context.CancelFunc
+	done               chan struct{}
+	inFlight           int
+	inFlightByClass    map[domain.VolatilityClass]int
+	inFlightByKind     map[polling.TaskKind]int
+	inFlightByDevice   map[string]int
+	inFlightBySite     map[string]int
+	inFlightBySubnet   map[string]int
+	inFlightByProfile  map[string]int
+	essentialByDevice  map[string]int
+	essentialBySite    map[string]int
+	essentialBySubnet  map[string]int
+	essentialByProfile map[string]int
+	runID              uint64
 
 	deadlineMissTotal uint64
 	lastWarnings      []polling.CapacityWarning
@@ -69,22 +73,26 @@ type reduePerformanceTaskRequest struct {
 
 func NewScheduler(source DeviceSource, settingsRepo domain.SettingsRepository) *Scheduler {
 	scheduler := &Scheduler{
-		source:            source,
-		settingsRepo:      settingsRepo,
-		refreshInterval:   defaultInventoryRefreshInterval,
-		tasks:             make(chan PollTask, defaultTaskBuffer),
-		completions:       make(chan Completion, defaultTaskBuffer),
-		redueRequests:     make(chan reduePerformanceTaskRequest, defaultTaskBuffer),
-		now:               time.Now,
-		rnd:               rand.New(rand.NewSource(1)),
-		items:             make(map[TaskKey]*heapItem),
-		done:              make(chan struct{}),
-		inFlightByClass:   make(map[domain.VolatilityClass]int),
-		inFlightByKind:    make(map[polling.TaskKind]int),
-		inFlightByDevice:  make(map[string]int),
-		inFlightBySite:    make(map[string]int),
-		inFlightBySubnet:  make(map[string]int),
-		inFlightByProfile: make(map[string]int),
+		source:             source,
+		settingsRepo:       settingsRepo,
+		refreshInterval:    defaultInventoryRefreshInterval,
+		tasks:              make(chan PollTask, defaultTaskBuffer),
+		completions:        make(chan Completion, defaultTaskBuffer),
+		redueRequests:      make(chan reduePerformanceTaskRequest, defaultTaskBuffer),
+		now:                time.Now,
+		rnd:                rand.New(rand.NewSource(1)),
+		items:              make(map[TaskKey]*heapItem),
+		done:               make(chan struct{}),
+		inFlightByClass:    make(map[domain.VolatilityClass]int),
+		inFlightByKind:     make(map[polling.TaskKind]int),
+		inFlightByDevice:   make(map[string]int),
+		inFlightBySite:     make(map[string]int),
+		inFlightBySubnet:   make(map[string]int),
+		inFlightByProfile:  make(map[string]int),
+		essentialByDevice:  make(map[string]int),
+		essentialBySite:    make(map[string]int),
+		essentialBySubnet:  make(map[string]int),
+		essentialByProfile: make(map[string]int),
 	}
 	heap.Init(&scheduler.heap)
 	return scheduler
@@ -555,8 +563,10 @@ func (s *Scheduler) popReady() *heapItem {
 func (s *Scheduler) popReadyEligible() *heapItem {
 	budgets := s.classBudgets()
 	policy, _ := polling.PolicyFromSettings(s.settingsRepo, 0, 0, 0)
-	blockedClasses := make(map[domain.VolatilityClass]struct{})
-	blockedKinds := make(map[polling.TaskKind]struct{})
+	blockedMetrics := make(map[struct {
+		volatility domain.VolatilityClass
+		reason     string
+	}]struct{})
 
 	for priority := range s.ready {
 		if len(s.ready[priority]) == 0 {
@@ -565,11 +575,9 @@ func (s *Scheduler) popReadyEligible() *heapItem {
 
 		for index, item := range s.ready[priority] {
 			item.task = normalizeTask(item.task)
-			if !s.canDispatch(item.task, budgets, policy) {
-				if item.task.Kind == polling.TaskKindEssential {
-					blockedKinds[item.task.Kind] = struct{}{}
-				} else {
-					blockedClasses[item.task.VolatilityClass] = struct{}{}
+			if reason := s.dispatchBlockReason(item.task, budgets, policy); reason != "" {
+				for _, metric := range blockedDispatchMetrics(item.task, reason) {
+					blockedMetrics[metric] = struct{}{}
 				}
 				continue
 			}
@@ -583,13 +591,8 @@ func (s *Scheduler) popReadyEligible() *heapItem {
 		}
 	}
 
-	for volatility := range blockedClasses {
-		observability.Default().IncSchedulerBackpressure(volatility, "class_limit")
-	}
-	for kind := range blockedKinds {
-		if kind == polling.TaskKindEssential {
-			observability.Default().IncSchedulerBackpressure(domain.VolatilityClassPerformance, "essential_limit")
-		}
+	for metric := range blockedMetrics {
+		observability.Default().IncSchedulerBackpressure(metric.volatility, metric.reason)
 	}
 	return nil
 }
@@ -815,12 +818,21 @@ func (s *Scheduler) maxEssentialInFlight() int {
 }
 
 func (s *Scheduler) canDispatch(task PollTask, budgets map[domain.VolatilityClass]int, policy polling.Policy) bool {
+	return s.dispatchBlockReason(task, budgets, policy) == ""
+}
+
+func (s *Scheduler) dispatchBlockReason(task PollTask, budgets map[domain.VolatilityClass]int, policy polling.Policy) string {
+	task = normalizeTask(task)
 	if task.Kind == polling.TaskKindEssential {
-		return s.inFlightByKind[polling.TaskKindEssential] < s.maxEssentialInFlight() &&
-			s.withinIsolationBudgets(task, policy)
+		if s.inFlightByKind[polling.TaskKindEssential] >= s.maxEssentialInFlight() {
+			return "essential_limit"
+		}
+		return s.isolationBlockReason(task, policy)
 	}
-	return s.inFlightByClass[task.VolatilityClass] < budgets[task.VolatilityClass] &&
-		s.withinIsolationBudgets(task, policy)
+	if s.inFlightByClass[task.VolatilityClass] >= budgets[task.VolatilityClass] {
+		return "class_limit"
+	}
+	return s.isolationBlockReason(task, policy)
 }
 
 func (s *Scheduler) incrementInFlight(task PollTask) {
@@ -844,24 +856,68 @@ func (s *Scheduler) decrementInFlight(task PollTask) {
 }
 
 func (s *Scheduler) withinIsolationBudgets(task PollTask, policy polling.Policy) bool {
+	return s.isolationBlockReason(task, policy) == ""
+}
+
+func (s *Scheduler) isolationBlockReason(task PollTask, policy polling.Policy) string {
+	deviceCounts := s.inFlightByDevice
+	siteCounts := s.inFlightBySite
+	subnetCounts := s.inFlightBySubnet
+	profileCounts := s.inFlightByProfile
+	if normalizeTask(task).Kind == polling.TaskKindEssential {
+		deviceCounts = s.essentialByDevice
+		siteCounts = s.essentialBySite
+		subnetCounts = s.essentialBySubnet
+		profileCounts = s.essentialByProfile
+	}
+
 	deviceKey := task.Device.ID.String()
-	if deviceKey != "" && policy.MaxWorkersPerDevice > 0 && s.inFlightByDevice[deviceKey] >= policy.MaxWorkersPerDevice {
-		return false
+	if deviceKey != "" && policy.MaxWorkersPerDevice > 0 && deviceCounts[deviceKey] >= policy.MaxWorkersPerDevice {
+		return "device_limit"
 	}
 	if policy.MaxWorkersPerSite > 0 {
 		for _, siteKey := range taskSiteKeys(task) {
-			if s.inFlightBySite[siteKey] >= policy.MaxWorkersPerSite {
-				return false
+			if siteCounts[siteKey] >= policy.MaxWorkersPerSite {
+				return "site_limit"
 			}
 		}
 	}
-	if subnetKey := taskSubnetKey(task); subnetKey != "" && policy.MaxWorkersPerSubnet > 0 && s.inFlightBySubnet[subnetKey] >= policy.MaxWorkersPerSubnet {
-		return false
+	if subnetKey := taskSubnetKey(task); subnetKey != "" && policy.MaxWorkersPerSubnet > 0 && subnetCounts[subnetKey] >= policy.MaxWorkersPerSubnet {
+		return "subnet_limit"
 	}
-	if profileKey := taskProfileKey(task); profileKey != "" && policy.MaxInflightPerProfile > 0 && s.inFlightByProfile[profileKey] >= policy.MaxInflightPerProfile {
-		return false
+	if profileKey := taskProfileKey(task); profileKey != "" && policy.MaxInflightPerProfile > 0 && profileCounts[profileKey] >= policy.MaxInflightPerProfile {
+		return "profile_limit"
 	}
-	return true
+	return ""
+}
+
+func blockedDispatchMetrics(task PollTask, reason string) []struct {
+	volatility domain.VolatilityClass
+	reason     string
+} {
+	task = normalizeTask(task)
+	if task.Kind != polling.TaskKindEssential {
+		return []struct {
+			volatility domain.VolatilityClass
+			reason     string
+		}{
+			{volatility: taskVolatilityForMetrics(task), reason: reason},
+		}
+	}
+
+	metrics := []struct {
+		volatility domain.VolatilityClass
+		reason     string
+	}{
+		{volatility: domain.VolatilityClassPerformance, reason: "essential_limit"},
+	}
+	if reason != "essential_limit" {
+		metrics = append(metrics, struct {
+			volatility domain.VolatilityClass
+			reason     string
+		}{volatility: domain.VolatilityClassPerformance, reason: "essential_" + reason})
+	}
+	return metrics
 }
 
 func (s *Scheduler) incrementIsolationCounts(task PollTask) {
@@ -871,6 +927,16 @@ func (s *Scheduler) incrementIsolationCounts(task PollTask) {
 	}
 	incrementCount(s.inFlightBySubnet, taskSubnetKey(task))
 	incrementCount(s.inFlightByProfile, taskProfileKey(task))
+
+	if normalizeTask(task).Kind != polling.TaskKindEssential {
+		return
+	}
+	incrementCount(s.essentialByDevice, task.Device.ID.String())
+	for _, siteKey := range taskSiteKeys(task) {
+		incrementCount(s.essentialBySite, siteKey)
+	}
+	incrementCount(s.essentialBySubnet, taskSubnetKey(task))
+	incrementCount(s.essentialByProfile, taskProfileKey(task))
 }
 
 func (s *Scheduler) decrementIsolationCounts(task PollTask) {
@@ -880,6 +946,16 @@ func (s *Scheduler) decrementIsolationCounts(task PollTask) {
 	}
 	decrementCount(s.inFlightBySubnet, taskSubnetKey(task))
 	decrementCount(s.inFlightByProfile, taskProfileKey(task))
+
+	if normalizeTask(task).Kind != polling.TaskKindEssential {
+		return
+	}
+	decrementCount(s.essentialByDevice, task.Device.ID.String())
+	for _, siteKey := range taskSiteKeys(task) {
+		decrementCount(s.essentialBySite, siteKey)
+	}
+	decrementCount(s.essentialBySubnet, taskSubnetKey(task))
+	decrementCount(s.essentialByProfile, taskProfileKey(task))
 }
 
 func incrementCount(counts map[string]int, key string) {
@@ -1146,6 +1222,10 @@ func (s *Scheduler) resetRuntimeState() {
 	s.inFlightBySite = make(map[string]int)
 	s.inFlightBySubnet = make(map[string]int)
 	s.inFlightByProfile = make(map[string]int)
+	s.essentialByDevice = make(map[string]int)
+	s.essentialBySite = make(map[string]int)
+	s.essentialBySubnet = make(map[string]int)
+	s.essentialByProfile = make(map[string]int)
 	s.deadlineMissTotal = 0
 	s.lastWarnings = nil
 	s.degradedRisk = false
