@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosnmp/gosnmp"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/vendor"
 )
@@ -95,20 +97,33 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		result.Err = err
 		return result
 	}
-	if _, err := client.Get([]string{snmp.OidSysUpTime}); err != nil {
+	probeStartedAt := time.Now()
+	_, err = client.Get([]string{snmp.OidSysUpTime})
+	observability.Default().ObserveSNMPCollectorOperation(
+		"performance",
+		"sysuptime_probe",
+		classifySNMPCollectorResult(err),
+		time.Since(probeStartedAt),
+	)
+	if err != nil {
+		observability.Default().IncSNMPCollectorEarlyExit("performance", "sysuptime_probe_failed")
 		result.Err = fmt.Errorf("performance uptime probe: %w", err)
 		return result
 	}
 
+	instrumentedClient := instrumentedSNMPBulkWalkClient{
+		delegate:  client,
+		collector: "performance",
+	}
 	perfOIDs := c.registry.ResolvePerformanceOIDs(vendorName)
-	cpuPercent, memPercent, uptimeSecs, tempCelsius := snmp.PollDeviceMetrics(client, perfOIDs)
+	cpuPercent, memPercent, uptimeSecs, tempCelsius := snmp.PollDeviceMetrics(instrumentedClient, perfOIDs)
 	result.Metrics.CPUPercent = cloneFloat64Ptr(cpuPercent)
 	result.Metrics.MemPercent = cloneFloat64Ptr(memPercent)
 	result.Metrics.UptimeSecs = cloneFloat64Ptr(uptimeSecs)
 	result.Metrics.TempCelsius = cloneFloat64Ptr(tempCelsius)
 
 	speedByName, speedByDescr := indexInterfaceSpeeds(device.Interfaces)
-	counters := snmp.PollInterfaceCounters(client)
+	counters := snmp.PollInterfaceCounters(instrumentedClient)
 	result.Counters = make([]InterfaceCounterSnapshot, 0, len(counters))
 	for _, counter := range counters {
 		result.Counters = append(result.Counters, InterfaceCounterSnapshot{
@@ -126,6 +141,38 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	}
 
 	return result
+}
+
+type instrumentedSNMPBulkWalkClient struct {
+	delegate  snmp.ClientInterface
+	collector string
+}
+
+func (c instrumentedSNMPBulkWalkClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
+	return c.delegate.Get(oids)
+}
+
+func (c instrumentedSNMPBulkWalkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	startedAt := time.Now()
+	pdus, err := c.delegate.BulkWalk(rootOID)
+	observability.Default().ObserveSNMPCollectorOperation(
+		c.collector,
+		"bulk_walk",
+		classifySNMPCollectorResult(err),
+		time.Since(startedAt),
+	)
+	return pdus, err
+}
+
+func classifySNMPCollectorResult(err error) string {
+	if err == nil {
+		return "success"
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") {
+		return "timeout"
+	}
+	return "error"
 }
 
 func performanceResultHasNoSNMPData(result PerformanceResult) bool {
