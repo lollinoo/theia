@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 )
 
@@ -71,7 +72,9 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
+			clientCount := len(h.clients)
 			h.mu.Unlock()
+			logging.Debugf("websocket client registered clients=%d", clientCount)
 		case client := <-h.unregister:
 			h.removeClient(client)
 		}
@@ -87,7 +90,9 @@ func (h *Hub) Broadcast(msg Message) {
 	}
 	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
 	h.recordBroadcast(payload)
-	for _, client := range h.copyClients() {
+	clients := h.copyClients()
+	logging.Debugf("websocket message queued scope=broadcast type=%s bytes=%d clients=%d", msg.Type, len(payload), len(clients))
+	for _, client := range clients {
 		h.enqueue(client, payload)
 	}
 }
@@ -100,6 +105,7 @@ func (h *Hub) SendTo(client *Client, msg Message) {
 		return
 	}
 	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
+	logging.Debugf("websocket message queued scope=unicast type=%s bytes=%d", msg.Type, len(payload))
 	h.enqueue(client, payload)
 }
 
@@ -112,6 +118,7 @@ func (h *Hub) WriteTo(client *Client, msg Message) bool {
 		return false
 	}
 	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
+	logging.Debugf("websocket message write-direct type=%s bytes=%d", msg.Type, len(payload))
 	return client.writePayload(payload, true)
 }
 
@@ -125,7 +132,9 @@ func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint6
 	}
 	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
 	h.recordBroadcast(payload)
-	for _, client := range h.copyClients() {
+	clients := h.copyClients()
+	logging.Debugf("websocket message queued scope=overview_broadcast type=%s version=%d bytes=%d clients=%d", msg.Type, version, len(payload), len(clients))
+	for _, client := range clients {
 		h.enqueueOverviewSnapshot(client, payload)
 	}
 }
@@ -159,7 +168,17 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 	}
 	observability.Default().ObserveWSMessage("broadcast", deltaMessage.Type, len(deltaPayload))
 	h.recordBroadcast(deltaPayload)
-	for _, client := range h.copyClients() {
+	clients := h.copyClients()
+	logging.Debugf(
+		"websocket message queued scope=overview_broadcast type=%s base_version=%d version=%d bytes=%d fallback_bytes=%d clients=%d",
+		deltaMessage.Type,
+		baseVersion,
+		version,
+		len(deltaPayload),
+		len(fallbackPayload),
+		len(clients),
+	)
+	for _, client := range clients {
 		h.enqueueOverviewDelta(client, deltaPayload, resyncPayload, fallbackPayload)
 	}
 }
@@ -173,6 +192,7 @@ func (h *Hub) SendOverviewSnapshot(client *Client, snapshot *SnapshotPayload, ve
 		return
 	}
 	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
+	logging.Debugf("websocket message queued scope=overview_unicast type=%s version=%d bytes=%d", msg.Type, version, len(payload))
 	h.enqueueOverviewSnapshot(client, payload)
 }
 
@@ -200,7 +220,16 @@ func (h *Hub) BroadcastOverviewResync(reason string, snapshot *SnapshotPayload, 
 	observability.Default().ObserveWSMessage("broadcast", snapshotMessage.Type, len(snapshotPayload))
 	h.recordBroadcast(resyncPayload)
 	h.recordBroadcast(snapshotPayload)
-	for _, client := range h.copyClients() {
+	clients := h.copyClients()
+	logging.Debugf(
+		"websocket message queued scope=overview_broadcast type=%s reason=%s snapshot_version=%d snapshot_bytes=%d clients=%d",
+		MessageTypeResyncRequired,
+		reason,
+		version,
+		len(snapshotPayload),
+		len(clients),
+	)
+	for _, client := range clients {
 		h.enqueueOverviewResync(client, resyncPayload, snapshotPayload)
 	}
 }
@@ -210,6 +239,7 @@ func (h *Hub) SetDetailSubscription(client *Client, deviceID uuid.UUID) {
 	defer h.mu.Unlock()
 
 	client.detailDeviceID = deviceID
+	logging.Debugf("websocket detail subscription set active=%t", deviceID != uuid.Nil)
 }
 
 func (h *Hub) ClearDetailSubscription(client *Client) {
@@ -217,6 +247,7 @@ func (h *Hub) ClearDetailSubscription(client *Client) {
 	defer h.mu.Unlock()
 
 	client.detailDeviceID = uuid.Nil
+	logging.Debugf("websocket detail subscription cleared")
 }
 
 func (h *Hub) DetailSubscribers(deviceID uuid.UUID) []*Client {
@@ -314,6 +345,7 @@ func (h *Hub) enqueueOverviewResync(client *Client, resyncPayload, snapshotPaylo
 }
 
 func (h *Hub) removeClient(client *Client) {
+	clientCount := 0
 	h.mu.Lock()
 	_, ok := h.clients[client]
 	if ok {
@@ -321,6 +353,7 @@ func (h *Hub) removeClient(client *Client) {
 		client.detailDeviceID = uuid.Nil
 		client.closed = true
 		delete(h.clients, client)
+		clientCount = len(h.clients)
 		close(client.send)
 		close(client.overviewSend)
 		client.mu.Unlock()
@@ -329,6 +362,9 @@ func (h *Hub) removeClient(client *Client) {
 
 	if ok && client.conn != nil {
 		_ = client.conn.Close()
+	}
+	if ok {
+		logging.Debugf("websocket client unregistered clients=%d", clientCount)
 	}
 }
 
@@ -362,6 +398,7 @@ func (c *Client) readPump() {
 			log.Printf("WebSocket control message ignored: %v", err)
 			continue
 		}
+		logging.Debugf("websocket control received type=%s", cmd.Type)
 
 		switch cmd.Type {
 		case MessageTypeHello:

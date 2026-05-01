@@ -1,11 +1,13 @@
 package ws
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/lollinoo/theia/internal/logging"
 )
 
 const bootstrapHelloWait = 500 * time.Millisecond
@@ -83,8 +85,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var bootstrapMessage Message
+	bootstrapDecision := MessageTypeSnapshot
+	versionMatch := hasHello && hello.RuntimeVersion != nil && *hello.RuntimeVersion == version
+	identityMatch := hasHello && hello.RuntimeIdentity != "" && hello.RuntimeIdentity == runtimeIdentity
 	if hasHello && clientRuntimeCurrent(hello, version, runtimeIdentity) {
 		bootstrapMessage = NewReadyMessage(version, alerts.Version, runtimeIdentity)
+		bootstrapDecision = MessageTypeReady
 	} else if hasHello {
 		bootstrapMessage = Message{
 			Type: MessageTypeResyncRequired,
@@ -93,9 +99,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Reason: ResyncReasonClientMissingRuntimeSnapshot,
 			},
 		}
+		bootstrapDecision = MessageTypeResyncRequired
 	} else {
 		bootstrapMessage = NewSnapshotMessage(snapshot, version)
 	}
+	logging.Debugf(
+		"websocket bootstrap decision=%s has_hello=%t version_match=%t identity_match=%t hello_runtime_version=%s server_runtime_version=%d snapshot_devices=%d snapshot_links=%d alert_version=%d",
+		bootstrapDecision,
+		hasHello,
+		versionMatch,
+		identityMatch,
+		debugRuntimeVersion(hello.RuntimeVersion),
+		version,
+		len(snapshot.Devices),
+		len(snapshot.Links),
+		alerts.Version,
+	)
 
 	if !h.hub.WriteTo(client, bootstrapMessage) {
 		return
@@ -132,6 +151,13 @@ func clientRuntimeCurrent(hello clientControlMessage, runtimeVersion uint64, run
 		return true
 	}
 	return hello.RuntimeIdentity != "" && hello.RuntimeIdentity == runtimeIdentity
+}
+
+func debugRuntimeVersion(version *uint64) string {
+	if version == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%d", *version)
 }
 
 func waitForClientHello(client *Client) (clientControlMessage, bool, bool) {
