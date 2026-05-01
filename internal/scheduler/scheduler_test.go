@@ -1361,6 +1361,78 @@ func TestSchedulerDispatchReady_AllowsLowerPriorityWhenHigherPriorityAtClassLimi
 	}
 }
 
+func TestSchedulerPollingHealth_ReportsQueueDepthLagAndWorkersByClass(t *testing.T) {
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance: "32",
+			domain.SettingSNMPWorkerPoolOperational: "16",
+			domain.SettingSNMPWorkerPoolStatic:      "6",
+		}},
+	)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	scheduler.now = func() time.Time { return now }
+
+	perfOne := &heapItem{
+		task:  PollTask{Key: NewTaskKey(uuid.MustParse("52100000-0000-0000-0000-000000000001"), domain.VolatilityClassPerformance), VolatilityClass: domain.VolatilityClassPerformance},
+		dueAt: now.Add(-233 * time.Second),
+		index: -1,
+	}
+	perfTwo := &heapItem{
+		task:  PollTask{Key: NewTaskKey(uuid.MustParse("52100000-0000-0000-0000-000000000002"), domain.VolatilityClassPerformance), VolatilityClass: domain.VolatilityClassPerformance},
+		dueAt: now.Add(-30 * time.Second),
+		index: -1,
+	}
+	operational := &heapItem{
+		task:  PollTask{Key: NewTaskKey(uuid.MustParse("52100000-0000-0000-0000-000000000003"), domain.VolatilityClassOperational), VolatilityClass: domain.VolatilityClassOperational},
+		dueAt: now.Add(-5 * time.Second),
+		index: -1,
+	}
+	static := &heapItem{
+		task:  PollTask{Key: NewTaskKey(uuid.MustParse("52100000-0000-0000-0000-000000000004"), domain.VolatilityClassStatic), VolatilityClass: domain.VolatilityClassStatic},
+		dueAt: now.Add(10 * time.Second),
+		index: -1,
+	}
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)] = []*heapItem{perfOne, perfTwo}
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassOperational)] = []*heapItem{operational}
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassStatic)] = []*heapItem{static}
+	scheduler.inFlightByClass[domain.VolatilityClassPerformance] = 32
+	scheduler.inFlightByClass[domain.VolatilityClassOperational] = 3
+	scheduler.inFlightByClass[domain.VolatilityClassStatic] = 1
+
+	health := scheduler.PollingHealth()
+
+	performanceQueue := health.Queues["performance"]
+	if performanceQueue.ReadyDepth != 2 {
+		t.Fatalf("performance ready depth = %d, want 2", performanceQueue.ReadyDepth)
+	}
+	if performanceQueue.LagSeconds != 233 {
+		t.Fatalf("performance lag seconds = %v, want 233", performanceQueue.LagSeconds)
+	}
+	if performanceQueue.ActiveWorkers != 32 {
+		t.Fatalf("performance active workers = %d, want 32", performanceQueue.ActiveWorkers)
+	}
+	if performanceQueue.ConfiguredWorkers != 32 {
+		t.Fatalf("performance configured workers = %d, want 32", performanceQueue.ConfiguredWorkers)
+	}
+
+	operationalQueue := health.Queues["operational"]
+	if operationalQueue.ReadyDepth != 1 || operationalQueue.LagSeconds != 5 {
+		t.Fatalf("operational queue = %#v, want depth=1 lag=5", operationalQueue)
+	}
+	if operationalQueue.ActiveWorkers != 3 || operationalQueue.ConfiguredWorkers != 16 {
+		t.Fatalf("operational workers = %#v, want active=3 configured=16", operationalQueue)
+	}
+
+	staticQueue := health.Queues["static"]
+	if staticQueue.ReadyDepth != 1 || staticQueue.LagSeconds != 0 {
+		t.Fatalf("static queue = %#v, want depth=1 lag=0 for future due item", staticQueue)
+	}
+	if staticQueue.ActiveWorkers != 1 || staticQueue.ConfiguredWorkers != 6 {
+		t.Fatalf("static workers = %#v, want active=1 configured=6", staticQueue)
+	}
+}
+
 func TestSchedulerMaxInFlight_DefaultAndConfigured(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -119,6 +119,7 @@ func (s *Scheduler) pollingHealthLocked(now time.Time) polling.HealthSnapshot {
 	lag := s.queueLagForKind(polling.TaskKindEssential, now)
 	active := s.inFlightByKind[polling.TaskKindEssential]
 	configured := s.maxEssentialInFlight()
+	budgets := s.classBudgets()
 
 	return polling.HealthSnapshot{
 		EssentialOverloaded:      lag > 0 && active >= configured,
@@ -127,8 +128,16 @@ func (s *Scheduler) pollingHealthLocked(now time.Time) polling.HealthSnapshot {
 		DeadlineMissTotal:        s.deadlineMissTotal,
 		ActiveWorkers:            active,
 		ConfiguredWorkers:        configured,
+		Queues:                   s.queueSnapshotsLocked(now, budgets),
 		Warnings:                 append([]polling.CapacityWarning(nil), s.lastWarnings...),
 	}
+}
+
+func (s *Scheduler) pollingEssentialOverloadedLocked(now time.Time) bool {
+	lag := s.queueLagForKind(polling.TaskKindEssential, now)
+	active := s.inFlightByKind[polling.TaskKindEssential]
+	configured := s.maxEssentialInFlight()
+	return lag > 0 && active >= configured
 }
 
 func (s *Scheduler) Start(ctx context.Context) error {
@@ -477,7 +486,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 				s.deadlineMissTotal++
 				observability.Default().IncPollingDeadlineMiss()
 			}
-			observability.Default().SetPollingEssentialOverloaded(s.pollingHealthLocked(now).EssentialOverloaded)
+			observability.Default().SetPollingEssentialOverloaded(s.pollingEssentialOverloadedLocked(now))
 			observability.Default().IncSchedulerTaskDispatch(taskVolatilityForMetrics(task))
 		case <-ctx.Done():
 			s.pushReadyFront(item)
@@ -1274,7 +1283,7 @@ func (s *Scheduler) recordMetrics() {
 
 func (s *Scheduler) recordMetricsLocked(now time.Time) {
 	observability.Default().SetSchedulerInFlight(s.inFlight)
-	observability.Default().SetPollingEssentialOverloaded(s.pollingHealthLocked(now).EssentialOverloaded)
+	observability.Default().SetPollingEssentialOverloaded(s.pollingEssentialOverloadedLocked(now))
 	for _, volatility := range scheduledVolatilityClasses() {
 		priority := VolatilityPriority(volatility)
 		depth := 0
@@ -1284,6 +1293,24 @@ func (s *Scheduler) recordMetricsLocked(now time.Time) {
 		observability.Default().SetSchedulerReadyDepth(volatility, depth)
 		observability.Default().SetSchedulerQueueLag(volatility, s.queueLag(volatility, now))
 	}
+}
+
+func (s *Scheduler) queueSnapshotsLocked(now time.Time, budgets map[domain.VolatilityClass]int) map[string]polling.QueueSnapshot {
+	queues := make(map[string]polling.QueueSnapshot, len(scheduledVolatilityClasses()))
+	for _, volatility := range scheduledVolatilityClasses() {
+		priority := VolatilityPriority(volatility)
+		readyDepth := 0
+		if priority >= 0 && priority < len(s.ready) {
+			readyDepth = len(s.ready[priority])
+		}
+		queues[string(volatility)] = polling.QueueSnapshot{
+			ReadyDepth:        readyDepth,
+			LagSeconds:        s.queueLag(volatility, now).Seconds(),
+			ActiveWorkers:     s.inFlightByClass[volatility],
+			ConfiguredWorkers: budgets[volatility],
+		}
+	}
+	return queues
 }
 
 func (s *Scheduler) classBudgets() map[domain.VolatilityClass]int {
