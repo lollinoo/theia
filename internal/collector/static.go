@@ -85,7 +85,11 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 		return result
 	}
 
-	discovery, err := snmp.DiscoverDeviceWithPolicy(client, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
+	instrumentedClient := instrumentedSNMPBulkWalkClient{
+		delegate:  client,
+		collector: "static",
+	}
+	discovery, err := snmp.DiscoverDeviceWithPolicy(instrumentedClient, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
 	if err != nil {
 		result.Err = fmt.Errorf("discover device: %w", err)
 		return result
