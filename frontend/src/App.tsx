@@ -19,6 +19,7 @@ function App() {
   const [canvasDevices, setCanvasDevices] = useState<Device[]>([]);
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
+  const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
 
   const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket(
     '/api/v1/ws',
@@ -77,7 +78,12 @@ function App() {
           onViewChange={handleViewChange}
           onAreaSelect={handleAreaSelect}
         />
-        <Watermark activeView={activeView} selectedAreaId={selectedAreaId} areas={areas} />
+        <Watermark
+          activeView={activeView}
+          selectedAreaId={selectedAreaId}
+          areas={areas}
+          hidden={canvasInteractionActive}
+        />
         {/* All views stay mounted; inactive ones hidden via CSS */}
         <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
           <AreaHub
@@ -104,6 +110,7 @@ function App() {
               onAreaSelect={handleAreaSelect}
               onAreasChange={handleAreasChange}
               onDetailDeviceChange={setDetailDeviceId}
+              onInteractionActiveChange={setCanvasInteractionActive}
             />
           </ReactFlowProvider>
         </div>

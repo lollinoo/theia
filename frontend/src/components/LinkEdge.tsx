@@ -27,6 +27,8 @@ function LinkEdgeInner({
 }: EdgeProps<LinkEdgeType>) {
   const [hovered, setHovered] = useState(false);
   const zoom = useStore((state) => state.transform[2]);
+  const interactionMode = data?.interactionMode ?? 'idle';
+  const isInteractive = interactionMode === 'interactive';
   const isActive = selected || hovered;
   const isConnected = data?.emphasis === 'connected';
   const isMuted = data?.emphasis === 'muted';
@@ -74,19 +76,32 @@ function LinkEdgeInner({
   const labelYOffset = labelY + labelOffsetY;
   const badgePresentation = useMemo(
     () =>
-      resolveLinkBadgePresentation({
-        data,
-        zoom,
-        path: edgePath,
-        fallbackX: labelX,
-        fallbackY: labelYOffset,
-        edgeTone: tone,
-        parallelIndex: data?.parallelIndex,
-        isActive,
-        isConnected,
-        isMuted,
-      }),
-    [data, edgePath, isActive, isConnected, isMuted, labelX, labelYOffset, tone, zoom],
+      isInteractive
+        ? null
+        : resolveLinkBadgePresentation({
+            data,
+            zoom,
+            path: edgePath,
+            fallbackX: labelX,
+            fallbackY: labelYOffset,
+            edgeTone: tone,
+            parallelIndex: data?.parallelIndex,
+            isActive,
+            isConnected,
+            isMuted,
+          }),
+    [
+      data,
+      edgePath,
+      isActive,
+      isConnected,
+      isInteractive,
+      isMuted,
+      labelX,
+      labelYOffset,
+      tone,
+      zoom,
+    ],
   );
 
   return (
@@ -118,7 +133,9 @@ function LinkEdgeInner({
             stroke: haloColor,
             strokeOpacity: isConnected ? 0.22 : 0.18,
             strokeWidth: strokeWidth + 4,
-            transition: 'stroke-width 120ms ease, stroke-opacity 120ms ease',
+            transition: isInteractive
+              ? 'none'
+              : 'stroke-width 120ms ease, stroke-opacity 120ms ease',
           }}
         />
       )}
@@ -131,11 +148,13 @@ function LinkEdgeInner({
           strokeOpacity,
           strokeWidth,
           strokeDasharray: isMuted ? '10 12' : undefined,
-          transition: 'stroke-width 120ms ease, stroke-opacity 120ms ease, stroke 120ms ease',
+          transition: isInteractive
+            ? 'none'
+            : 'stroke-width 120ms ease, stroke-opacity 120ms ease, stroke 120ms ease',
         }}
       />
 
-      {badgePresentation.items.length > 0 ? (
+      {badgePresentation !== null && badgePresentation.items.length > 0 ? (
         <EdgeLabelRenderer>
           <div
             data-testid={`${id}-badge-stack`}
@@ -203,6 +222,7 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.data?.targetDeviceNetworkReachable === next.data?.targetDeviceNetworkReachable &&
     prev.data?.sourceDeviceSnmpReachable === next.data?.sourceDeviceSnmpReachable &&
     prev.data?.targetDeviceSnmpReachable === next.data?.targetDeviceSnmpReachable &&
+    prev.data?.interactionMode === next.data?.interactionMode &&
     prev.data?.areaColor === next.data?.areaColor &&
     prev.data?.emphasis === next.data?.emphasis &&
     prev.source === next.source &&

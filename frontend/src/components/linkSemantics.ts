@@ -32,6 +32,7 @@ interface DeviceEndpointRuntimeState {
 
 export interface LinkEdgeData {
   link?: Link;
+  interactionMode?: 'idle' | 'interactive';
   bandwidthLabel?: string;
   speedLabel?: string;
   negotiationTitle?: string;

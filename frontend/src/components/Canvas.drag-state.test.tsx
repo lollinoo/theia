@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -54,26 +54,52 @@ const testState = vi.hoisted(() => ({
   onNodesChange: vi.fn(),
   savePositions: vi.fn(),
   updateNodePosition: vi.fn(),
+  reactFlowProps: {} as Record<string, unknown>,
 }));
 
 vi.mock('@xyflow/react', () => ({
   ConnectionMode: { Loose: 'loose' },
   SelectionMode: { Partial: 'partial' },
   Background: () => null,
-  MiniMap: () => null,
+  MiniMap: () => <div data-testid="topology-minimap" />,
   ReactFlow: ({
     children,
     nodes,
+    onlyRenderVisibleElements,
+    onMoveStart,
+    onMoveEnd,
+    onConnectStart,
+    onConnectEnd,
     onNodeDragStop,
   }: {
     children: React.ReactNode;
     nodes: DeviceNode[];
+    onlyRenderVisibleElements?: boolean;
+    onMoveStart?: () => void;
+    onMoveEnd?: () => void;
+    onConnectStart?: () => void;
+    onConnectEnd?: () => void;
     onNodeDragStop?: (event: unknown, node: DeviceNode) => void;
   }) => {
     testState.displayedNodes = nodes;
+    testState.reactFlowProps = {
+      onlyRenderVisibleElements,
+    };
     const draggedNode = nodes.find((node) => node.id === 'dev-a');
     return (
       <div>
+        <button type="button" onClick={() => onMoveStart?.()}>
+          Start pan
+        </button>
+        <button type="button" onClick={() => onMoveEnd?.()}>
+          End pan
+        </button>
+        <button type="button" onClick={() => onConnectStart?.()}>
+          Start connect
+        </button>
+        <button type="button" onClick={() => onConnectEnd?.()}>
+          End connect
+        </button>
         <button
           type="button"
           onClick={() => {
@@ -199,6 +225,7 @@ describe('Canvas drag state ownership', () => {
     testState.onNodesChange.mockReset();
     testState.savePositions.mockReset();
     testState.updateNodePosition.mockReset();
+    testState.reactFlowProps = {};
   });
 
   it('patches the dragged real node without replacing canonical nodes with the area projection', () => {
@@ -226,5 +253,46 @@ describe('Canvas drag state ownership', () => {
     expect(testState.setNodes).not.toHaveBeenCalled();
     expect(testState.savePositions).not.toHaveBeenCalled();
     expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', { x: 444, y: 555 });
+  });
+
+  it('enables visible-element rendering and hides the minimap during canvas gestures', () => {
+    vi.useFakeTimers();
+    try {
+      const onInteractionActiveChange = vi.fn();
+
+      render(
+        <Canvas
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[
+            { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+            { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+          ]}
+          onInteractionActiveChange={onInteractionActiveChange}
+        />,
+      );
+
+      expect(testState.reactFlowProps.onlyRenderVisibleElements).toBe(true);
+      expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
+      onInteractionActiveChange.mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Start pan' }));
+      expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
+      expect(onInteractionActiveChange).toHaveBeenLastCalledWith(true);
+
+      fireEvent.click(screen.getByRole('button', { name: 'End pan' }));
+      expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(180);
+      });
+
+      expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
+      expect(onInteractionActiveChange).toHaveBeenLastCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

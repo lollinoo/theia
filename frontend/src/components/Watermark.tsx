@@ -5,11 +5,12 @@ interface WatermarkProps {
   activeView: ActiveView;
   selectedAreaId: string | null;
   areas: Area[];
+  hidden?: boolean;
 }
 
 /** Fixed-position atmospheric watermark with contextual text. Only visible on canvas view. */
-export function Watermark({ activeView, selectedAreaId, areas }: WatermarkProps) {
-  if (activeView !== 'canvas') return null;
+export function Watermark({ activeView, selectedAreaId, areas, hidden = false }: WatermarkProps) {
+  if (hidden || activeView !== 'canvas') return null;
 
   const text = selectedAreaId
     ? (areas.find((a) => a.id === selectedAreaId)?.name ?? 'AREA').toUpperCase()
