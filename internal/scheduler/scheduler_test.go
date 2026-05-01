@@ -1553,12 +1553,13 @@ func TestSchedulerComplete_RequeuesImmediatePendingRerun(t *testing.T) {
 			Key:             NewTaskKey(uuid.MustParse("60000000-0000-0000-0000-000000000002"), domain.VolatilityClassOperational),
 			VolatilityClass: domain.VolatilityClassOperational,
 		},
-		dueAt:        finishedAt.Add(-30 * time.Second),
-		dispatchedAt: finishedAt.Add(-35 * time.Second),
-		interval:     60 * time.Second,
-		inFlight:     true,
-		pending:      true,
-		index:        -1,
+		dueAt:          finishedAt.Add(-30 * time.Second),
+		dispatchedAt:   finishedAt.Add(-35 * time.Second),
+		interval:       60 * time.Second,
+		inFlight:       true,
+		pending:        true,
+		immediateRerun: true,
+		index:          -1,
 	}
 
 	scheduler.items[item.task.Key] = item
@@ -1666,8 +1667,9 @@ func TestSchedulerComplete_DropsDisabledItem(t *testing.T) {
 	}
 }
 
-func TestSchedulerComplete_CoalescesElapsedIntervalsToSingleImmediateRerun(t *testing.T) {
+func TestSchedulerComplete_CoalescesSkippedBackgroundWindowsToNextInterval(t *testing.T) {
 	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	scheduler.rnd = rand.New(rand.NewSource(7))
 	dueAt := time.Unix(1_700_000_000, 0).UTC()
 	finishedAt := dueAt.Add(90 * time.Second)
 	item := &heapItem{
@@ -1677,11 +1679,13 @@ func TestSchedulerComplete_CoalescesElapsedIntervalsToSingleImmediateRerun(t *te
 			ExpectedInterval: 30 * time.Second,
 			DueAt:            dueAt,
 		},
-		dueAt:        dueAt,
-		dispatchedAt: dueAt.Add(30 * time.Second),
-		interval:     30 * time.Second,
-		inFlight:     true,
-		index:        -1,
+		dueAt:          dueAt,
+		dispatchedAt:   dueAt.Add(30 * time.Second),
+		interval:       30 * time.Second,
+		inFlight:       true,
+		pending:        true,
+		skippedWindows: 2,
+		index:          -1,
 	}
 
 	scheduler.items[item.task.Key] = item
@@ -1689,23 +1693,30 @@ func TestSchedulerComplete_CoalescesElapsedIntervalsToSingleImmediateRerun(t *te
 
 	scheduler.handleCompletion(Completion{Key: item.task.Key, FinishedAt: finishedAt})
 
-	if !item.queued {
-		t.Fatalf("queued = false, want true for an overlapped run")
+	if item.queued {
+		t.Fatalf("queued = true, want false for coalesced background windows")
 	}
 	if item.inFlight {
 		t.Fatalf("inFlight flag = true, want false after completion")
 	}
+	if item.pending {
+		t.Fatalf("pending = true, want false after coalescing background windows")
+	}
 	if scheduler.inFlight != 0 {
 		t.Fatalf("inFlight = %d, want 0", scheduler.inFlight)
 	}
-	if got := scheduler.heap.Len(); got != 0 {
-		t.Fatalf("heap.Len() = %d, want 0 immediate-rerun heap entries", got)
+	if got := scheduler.heap.Len(); got != 1 {
+		t.Fatalf("heap.Len() = %d, want 1 next-interval heap entry", got)
 	}
-	if got := len(scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)]); got != 1 {
-		t.Fatalf("ready queue length = %d, want 1", got)
+	if got := len(scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)]); got != 0 {
+		t.Fatalf("ready queue length = %d, want 0", got)
 	}
-	if !item.dueAt.Equal(finishedAt) {
-		t.Fatalf("dueAt = %v, want %v", item.dueAt, finishedAt)
+	want := jitteredNext(finishedAt, item.interval, rand.New(rand.NewSource(7)))
+	if !item.dueAt.Equal(want) {
+		t.Fatalf("dueAt = %v, want next interval %v", item.dueAt, want)
+	}
+	if item.skippedWindows != 0 {
+		t.Fatalf("skippedWindows = %d, want 0 after coalescing", item.skippedWindows)
 	}
 }
 

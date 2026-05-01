@@ -627,6 +627,7 @@ func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskReque
 		switch {
 		case item.inFlight:
 			item.pending = true
+			item.immediateRerun = true
 		case item.queued:
 			s.removeReadyItem(item)
 			s.pushReadyFront(item)
@@ -667,6 +668,7 @@ func (s *Scheduler) scheduleBootstrapItem(device domain.Device, dueAt time.Time)
 		switch {
 		case item.inFlight:
 			item.pending = true
+			item.immediateRerun = true
 		case item.queued:
 			s.removeReadyItem(item)
 			s.pushReadyFront(item)
@@ -776,8 +778,13 @@ func (s *Scheduler) handleCompletion(c Completion) {
 		delete(s.items, c.Key)
 		return
 	}
-	if item.pending || (item.interval > 0 && finishedAt.After(item.dueAt.Add(item.interval))) {
-		item.pending = false
+	pending := item.pending
+	immediateRerun := item.immediateRerun
+	overdue := item.interval > 0 && finishedAt.After(item.dueAt.Add(item.interval))
+	item.pending = false
+	item.immediateRerun = false
+
+	if immediateRerun || (item.task.Kind == polling.TaskKindEssential && (pending || overdue)) {
 		item.dueAt = finishedAt
 		item.task.DueAt = finishedAt
 		item.task.DeadlineAt = finishedAt.Add(item.interval)

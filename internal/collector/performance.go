@@ -95,6 +95,10 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		result.Err = err
 		return result
 	}
+	if _, err := client.Get([]string{snmp.OidSysUpTime}); err != nil {
+		result.Err = fmt.Errorf("performance uptime probe: %w", err)
+		return result
+	}
 
 	perfOIDs := c.registry.ResolvePerformanceOIDs(vendorName)
 	cpuPercent, memPercent, uptimeSecs, tempCelsius := snmp.PollDeviceMetrics(client, perfOIDs)

@@ -19,6 +19,7 @@ type scriptedPerformanceClient struct {
 	bulkWalkResponses map[string][]gosnmp.SnmpPDU
 	getErr            error
 	bulkWalkErr       error
+	bulkWalkCalls     []string
 	connectErr        error
 	connectCalls      int
 	closeCalls        int
@@ -36,6 +37,7 @@ func (c *scriptedPerformanceClient) Get(oids []string) ([]gosnmp.SnmpPDU, error)
 }
 
 func (c *scriptedPerformanceClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	c.bulkWalkCalls = append(c.bulkWalkCalls, rootOID)
 	if c.bulkWalkErr != nil {
 		return nil, c.bulkWalkErr
 	}
@@ -238,6 +240,9 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 				}
 				if len(result.Counters) != 0 {
 					t.Fatalf("counter count = %d, want 0", len(result.Counters))
+				}
+				if len(client.bulkWalkCalls) != 0 {
+					t.Fatalf("BulkWalk calls = %v, want none after uptime probe failure", client.bulkWalkCalls)
 				}
 				if client.closeCalls != 1 {
 					t.Fatalf("close calls = %d, want 1", client.closeCalls)

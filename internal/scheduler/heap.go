@@ -11,6 +11,7 @@ type heapItem struct {
 	queued         bool
 	inFlight       bool
 	pending        bool
+	immediateRerun bool
 	disabled       bool
 	skippedWindows int
 	index          int
