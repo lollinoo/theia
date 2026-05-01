@@ -10,10 +10,13 @@ import (
 
 	"github.com/gosnmp/gosnmp"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/vendor"
 )
+
+const snmpCollectorDebugSlowThreshold = 2 * time.Second
 
 // PerformanceCollector polls SNMP performance metrics and raw interface
 // counters for a single device without retaining collector-side state.
@@ -158,12 +161,15 @@ func (c instrumentedSNMPBulkWalkClient) Get(oids []string) ([]gosnmp.SnmpPDU, er
 
 	startedAt := time.Now()
 	pdus, err := c.delegate.Get(oids)
+	duration := time.Since(startedAt)
+	result := classifySNMPCollectorResult(err)
 	observability.Default().ObserveSNMPCollectorOperation(
 		c.collector,
 		operation,
-		classifySNMPCollectorResult(err),
-		time.Since(startedAt),
+		result,
+		duration,
 	)
+	logSNMPCollectorDebug(c.collector, operation, result, duration, len(pdus), err)
 	if err != nil {
 		if reason := c.earlyExitReasons[operation]; reason != "" {
 			observability.Default().IncSNMPCollectorEarlyExit(c.collector, reason)
@@ -175,12 +181,15 @@ func (c instrumentedSNMPBulkWalkClient) Get(oids []string) ([]gosnmp.SnmpPDU, er
 func (c instrumentedSNMPBulkWalkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
 	startedAt := time.Now()
 	pdus, err := c.delegate.BulkWalk(rootOID)
+	duration := time.Since(startedAt)
+	result := classifySNMPCollectorResult(err)
 	observability.Default().ObserveSNMPCollectorOperation(
 		c.collector,
 		"bulk_walk",
-		classifySNMPCollectorResult(err),
-		time.Since(startedAt),
+		result,
+		duration,
 	)
+	logSNMPCollectorDebug(c.collector, "bulk_walk", result, duration, len(pdus), err)
 	return pdus, err
 }
 
@@ -200,6 +209,23 @@ func classifySNMPCollectorResult(err error) string {
 		return "timeout"
 	}
 	return "error"
+}
+
+func logSNMPCollectorDebug(collector string, operation string, result string, duration time.Duration, pduCount int, err error) {
+	slow := duration >= snmpCollectorDebugSlowThreshold
+	if err == nil && !slow {
+		return
+	}
+	logging.Debugf(
+		"snmp collector operation collector=%s operation=%s result=%s duration_ms=%d pdu_count=%d error_set=%t slow=%t",
+		collector,
+		operation,
+		result,
+		duration.Milliseconds(),
+		pduCount,
+		err != nil,
+		slow,
+	)
 }
 
 func performanceResultHasNoSNMPData(result PerformanceResult) bool {

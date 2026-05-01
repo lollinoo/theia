@@ -75,6 +75,30 @@ func TestSettingsHandlerUpdate_HappyPath(t *testing.T) {
 	}
 }
 
+func TestSettingsHandlerUpdate_DebugLogsSanitizedChange(t *testing.T) {
+	logs := captureAPIDebugLogs(t)
+	repo := newMockSettingsRepo()
+	repo.settings[domain.SettingPrometheusURL] = "http://old-prometheus.example/api"
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"http://new-prometheus.example/api"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingPrometheusURL, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	output := logs.String()
+	if !strings.Contains(output, "DEBUG settings changed key=prometheus_url previous=<set> new=<set> affects=prometheus") {
+		t.Fatalf("debug output missing sanitized settings change: %q", output)
+	}
+	if strings.Contains(output, "old-prometheus.example") || strings.Contains(output, "new-prometheus.example") {
+		t.Fatalf("debug output leaked URL value: %q", output)
+	}
+}
+
 func TestSettingsHandlerUpdate_EmptyKey(t *testing.T) {
 	repo := newMockSettingsRepo()
 	h := NewSettingsHandler(repo)

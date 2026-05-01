@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 )
 
 // SettingsHandler provides HTTP handlers for runtime settings.
@@ -211,12 +212,85 @@ func (h *SettingsHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	previous, previousErr := h.repo.Get(key)
 	if err := h.repo.Set(key, req.Value); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update setting", err)
 		return
 	}
+	logging.Debugf(
+		"settings changed key=%s previous=%s new=%s affects=%s",
+		key,
+		debugSettingValue(key, previous, previousErr),
+		debugSettingValue(key, req.Value, nil),
+		debugSettingAffects(key),
+	)
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"data": map[string]string{key: req.Value},
 	})
+}
+
+func debugSettingValue(key string, value string, err error) string {
+	if err != nil {
+		return "<unavailable>"
+	}
+	value = strings.TrimSpace(value)
+	if debugSettingSensitive(key) {
+		if value == "" {
+			return "<empty>"
+		}
+		return "<set>"
+	}
+	if value == "" {
+		return "<empty>"
+	}
+	return value
+}
+
+func debugSettingSensitive(key string) bool {
+	switch key {
+	case domain.SettingPrometheusURL, domain.SettingGrafanaURL, domain.SettingBridgeSecret:
+		return true
+	default:
+		return false
+	}
+}
+
+func debugSettingAffects(key string) string {
+	switch key {
+	case domain.SettingPrometheusURL:
+		return "prometheus"
+	case domain.SettingGrafanaURL:
+		return "grafana"
+	case domain.SettingTopologyDiscoveryDefaultMode:
+		return "topology"
+	case domain.SettingInstanceBackupIntervalHours,
+		domain.SettingInstanceBackupRetentionCount,
+		domain.SettingDeviceBackupIntervalHours,
+		domain.SettingDeviceBackupRetentionCount:
+		return "backup"
+	case domain.SettingBridgeSecret, domain.SettingBridgePort:
+		return "bridge"
+	case domain.SettingPollingInterval,
+		domain.SettingSNMPWorkerPoolSize,
+		domain.SettingSNMPWorkerPoolPerformance,
+		domain.SettingSNMPWorkerPoolOperational,
+		domain.SettingSNMPWorkerPoolStatic,
+		domain.SettingSNMPTimeout,
+		domain.SettingSNMPRetries,
+		domain.SettingPollingEssentialWorkers,
+		domain.SettingPollingMaxWorkersPerSite,
+		domain.SettingPollingMaxWorkersPerSubnet,
+		domain.SettingPollingMaxWorkersPerDevice,
+		domain.SettingPollingMaxInflightPerProfile,
+		domain.SettingPollingEssentialTimeoutMillis,
+		domain.SettingPollingEssentialRetries,
+		domain.SettingPollingWebSocketCoalesceMS,
+		domain.SettingPollingPersistenceBatchMS,
+		domain.SettingPollingCapacitySafetyMargin,
+		domain.SettingPollingForceOverCapacity:
+		return "polling"
+	default:
+		return "runtime"
+	}
 }

@@ -114,6 +114,29 @@ func TestPipelineSnapshotBroadcasterDebugLogsPollingHealthChange(t *testing.T) {
 	}
 }
 
+func TestPipelinePrometheusMonitor_DebugLogsStatusTransition(t *testing.T) {
+	logs := capturePipelineDebugLogs(t)
+	pipeline := NewPipelineOrchestrator(newPipelineTestScheduler(), nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	monitor := &pipelinePrometheusMonitor{pipeline: pipeline}
+
+	monitor.publishStatus(ws.PrometheusStatusPayload{
+		Enabled:   true,
+		Available: false,
+		Error:     "dial tcp: connection refused",
+	})
+
+	output := logs.String()
+	if !strings.Contains(output, "DEBUG prometheus status changed enabled=true available=false") {
+		t.Fatalf("debug output missing Prometheus transition: %q", output)
+	}
+	if !strings.Contains(output, "error_set=true") {
+		t.Fatalf("debug output missing sanitized error state: %q", output)
+	}
+	if strings.Contains(output, "connection refused") {
+		t.Fatalf("debug output should not include raw Prometheus error: %q", output)
+	}
+}
+
 func TestPipelineSnapshotBroadcasterThrottlesActiveWorkerOnlyPollingHealth(t *testing.T) {
 	sched := newPipelineTestScheduler()
 	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)

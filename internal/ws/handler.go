@@ -66,7 +66,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.hub.register <- client
 	go client.readPump()
 
-	hello, hasHello, connected := waitForClientHello(client)
+	hello, hasHello, connected, helloTimedOut := waitForClientHello(client)
 	if !connected {
 		return
 	}
@@ -104,8 +104,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bootstrapMessage = NewSnapshotMessage(snapshot, version)
 	}
 	logging.Debugf(
-		"websocket bootstrap decision=%s has_hello=%t version_match=%t identity_match=%t hello_runtime_version=%s server_runtime_version=%d snapshot_devices=%d snapshot_links=%d alert_version=%d",
+		"websocket bootstrap decision=%s hello_timeout=%t hello_wait_ms=%d has_hello=%t version_match=%t identity_match=%t hello_runtime_version=%s server_runtime_version=%d snapshot_devices=%d snapshot_links=%d alert_version=%d",
 		bootstrapDecision,
+		helloTimedOut,
+		bootstrapHelloWait.Milliseconds(),
 		hasHello,
 		versionMatch,
 		identityMatch,
@@ -160,9 +162,9 @@ func debugRuntimeVersion(version *uint64) string {
 	return fmt.Sprintf("%d", *version)
 }
 
-func waitForClientHello(client *Client) (clientControlMessage, bool, bool) {
+func waitForClientHello(client *Client) (clientControlMessage, bool, bool, bool) {
 	if client.hello == nil {
-		return clientControlMessage{}, false, true
+		return clientControlMessage{}, false, true, false
 	}
 
 	timer := time.NewTimer(bootstrapHelloWait)
@@ -170,10 +172,10 @@ func waitForClientHello(client *Client) (clientControlMessage, bool, bool) {
 
 	select {
 	case hello := <-client.hello:
-		return hello, true, true
+		return hello, true, true, false
 	case <-client.disconnected:
-		return clientControlMessage{}, false, false
+		return clientControlMessage{}, false, false, false
 	case <-timer.C:
-		return clientControlMessage{}, false, true
+		return clientControlMessage{}, false, true, true
 	}
 }

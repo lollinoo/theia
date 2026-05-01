@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/pollingbudget"
@@ -447,14 +449,32 @@ func (s *Scheduler) removeDeviceTasksLocked(deviceID uuid.UUID) {
 }
 
 func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
+	dispatched := 0
+	stopReason := ""
+	defer func() {
+		if dispatched == 0 && (stopReason == "" || stopReason == "no_eligible_task") {
+			return
+		}
+		logging.Debugf(
+			"scheduler dispatch cycle dispatched=%d stop_reason=%s inflight=%d global_limit=%d queues=%s",
+			dispatched,
+			stopReason,
+			s.inFlight,
+			s.maxDispatchInFlight(),
+			s.queueDebugSummaryLocked(now),
+		)
+	}()
+
 	for {
 		if s.inFlight >= s.maxDispatchInFlight() {
+			stopReason = "global_limit"
 			s.recordBackpressure("global_limit")
 			return
 		}
 
 		item := s.popReadyEligible()
 		if item == nil {
+			stopReason = "no_eligible_task"
 			return
 		}
 		if item.disabled {
@@ -482,6 +502,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 			item.task = task
 			s.inFlight++
 			s.incrementInFlight(task)
+			dispatched++
 			if task.Kind == polling.TaskKindEssential && task.DeadlineMissed {
 				s.deadlineMissTotal++
 				observability.Default().IncPollingDeadlineMiss()
@@ -489,6 +510,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 			observability.Default().SetPollingEssentialOverloaded(s.pollingEssentialOverloadedLocked(now))
 			observability.Default().IncSchedulerTaskDispatch(taskVolatilityForMetrics(task))
 		case <-ctx.Done():
+			stopReason = "context_done"
 			s.pushReadyFront(item)
 			return
 		}
@@ -1311,6 +1333,27 @@ func (s *Scheduler) queueSnapshotsLocked(now time.Time, budgets map[domain.Volat
 		}
 	}
 	return queues
+}
+
+func (s *Scheduler) queueDebugSummaryLocked(now time.Time) string {
+	budgets := s.classBudgets()
+	parts := make([]string, 0, len(scheduledVolatilityClasses()))
+	for _, volatility := range scheduledVolatilityClasses() {
+		priority := VolatilityPriority(volatility)
+		readyDepth := 0
+		if priority >= 0 && priority < len(s.ready) {
+			readyDepth = len(s.ready[priority])
+		}
+		parts = append(parts, fmt.Sprintf(
+			"%s ready=%d lag=%.1fs active=%d/%d",
+			volatility,
+			readyDepth,
+			s.queueLag(volatility, now).Seconds(),
+			s.inFlightByClass[volatility],
+			budgets[volatility],
+		))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (s *Scheduler) classBudgets() map[domain.VolatilityClass]int {

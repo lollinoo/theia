@@ -161,6 +161,32 @@ func TestHubOverviewDeltaUsesRuntimeDeltaEnvelope(t *testing.T) {
 	}
 }
 
+func TestHubOverviewDelta_DebugLogsPatchCounts(t *testing.T) {
+	logs := captureDebugLogs(t)
+	hub := NewHub()
+	client := registerTestClient(hub)
+	delta := &RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{
+			"dev-1": {"primary_health": "up_fresh"},
+			"dev-2": {"primary_health": "unreachable"},
+		},
+		Links: map[string]map[string]any{
+			"link-1": {"utilization": 0.42},
+		},
+	}
+
+	hub.BroadcastOverviewDelta(delta, 7, 8, EmptySnapshot())
+	<-client.overviewSend
+
+	output := logs.String()
+	if !strings.Contains(output, "type=runtime_delta base_version=7 version=8") {
+		t.Fatalf("debug output missing runtime delta version summary: %q", output)
+	}
+	if !strings.Contains(output, "device_patches=2 link_patches=1") {
+		t.Fatalf("debug output missing runtime delta patch counts: %q", output)
+	}
+}
+
 func TestHubEnqueue_RecordsClientBufferBackpressure(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {

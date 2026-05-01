@@ -1,8 +1,10 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -11,10 +13,28 @@ import (
 	"github.com/gosnmp/gosnmp"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/vendor"
 )
+
+func captureCollectorDebugLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	logging.Configure("debug")
+	t.Cleanup(func() {
+		logging.Configure("info")
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+	return &buf
+}
 
 type scriptedPerformanceClient struct {
 	getResponses      map[string][]gosnmp.SnmpPDU
@@ -308,6 +328,27 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 
 			tt.assert(t, result, client, calls)
 		})
+	}
+}
+
+func TestInstrumentedSNMPBulkWalkClient_DebugLogsFailedOperation(t *testing.T) {
+	logs := captureCollectorDebugLogs(t)
+	client := instrumentedSNMPBulkWalkClient{
+		delegate:  &scriptedPerformanceClient{bulkWalkErr: errors.New("timeout waiting for response")},
+		collector: "performance",
+	}
+
+	_, err := client.BulkWalk(".1.3.6.1.2.1.2")
+
+	if err == nil {
+		t.Fatal("expected bulk walk error")
+	}
+	output := logs.String()
+	if !strings.Contains(output, "DEBUG snmp collector operation collector=performance operation=bulk_walk result=timeout") {
+		t.Fatalf("debug output missing failed SNMP operation: %q", output)
+	}
+	if strings.Contains(output, ".1.3.6.1.2.1.2") {
+		t.Fatalf("debug output should not include raw OID: %q", output)
 	}
 }
 
