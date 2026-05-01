@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,5 +239,52 @@ func TestCanvasTopologyHandlerHandleGetCanvas_ReturnsRuntimeBootstrap(t *testing
 	}
 	if got := resp.RuntimeSnapshot.Devices[deviceID.String()].OperationalStatus; got != "down" {
 		t.Fatalf("runtime snapshot status = %q, want down", got)
+	}
+}
+
+func TestCanvasTopologyHandlerHandleGetCanvas_DebugLogsCardinality(t *testing.T) {
+	logs := captureAPIDebugLogs(t)
+	handler, deviceRepo, _, positionRepo, _ := newTestCanvasTopologyHandler(t)
+	deviceID := uuid.New()
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	if err := deviceRepo.Create(&domain.Device{
+		ID:         deviceID,
+		Hostname:   "router-01",
+		IP:         "10.0.0.1",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		SysName:    "router-01",
+		Vendor:     "default",
+		Managed:    true,
+		Tags:       map[string]string{},
+	}); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	positionRepo.positions = []domain.DevicePosition{
+		{DeviceID: deviceID, X: 110, Y: 220, UpdatedAt: now},
+	}
+
+	runtimeSnapshot := ws.EmptySnapshot()
+	runtimeSnapshot.Devices[deviceID.String()] = ws.DeviceRuntimeDTO{DeviceID: deviceID.String()}
+	handler.runtimeSnapshotFunc = func() (*ws.SnapshotPayload, uint64) {
+		return runtimeSnapshot, 42
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/canvas", nil)
+	rec := httptest.NewRecorder()
+
+	handler.HandleGetCanvas(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	output := logs.String()
+	if !strings.Contains(output, "DEBUG canvas response endpoint=/api/v1/canvas status=200") {
+		t.Fatalf("debug output missing canvas endpoint summary: %q", output)
+	}
+	for _, want := range []string{"devices=1", "links=0", "positions=1", "areas=0", "runtime_version=42", "runtime_devices=1", "runtime_links=0"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("debug output missing %s: %q", want, output)
+		}
 	}
 }

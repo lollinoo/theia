@@ -1,9 +1,11 @@
 package scheduler
 
 import (
+	"bytes"
 	"container/heap"
 	"context"
 	"errors"
+	"log"
 	"math/rand"
 	"strings"
 	"sync"
@@ -13,9 +15,27 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
 )
+
+func captureSchedulerDebugLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	logging.Configure("debug")
+	t.Cleanup(func() {
+		logging.Configure("info")
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+	return &buf
+}
 
 func TestRefreshDevices_SeedsManagedDeviceAcrossAllThreeVolatilityClasses(t *testing.T) {
 	device := domain.Device{
@@ -1327,6 +1347,39 @@ func TestSchedulerDispatchReady_RespectsPerClassBudgets(t *testing.T) {
 	}
 	if got := len(scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)]); got != 1 {
 		t.Fatalf("performance ready queue len = %d, want 1", got)
+	}
+}
+
+func TestSchedulerDispatchReady_DebugLogsCycleSummary(t *testing.T) {
+	logs := captureSchedulerDebugLogs(t)
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance: "1",
+			domain.SettingSNMPWorkerPoolOperational: "1",
+			domain.SettingSNMPWorkerPoolStatic:      "1",
+		}},
+	)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	deviceA := uuid.MustParse("51000000-0000-0000-0000-000000000011")
+	deviceB := uuid.MustParse("51000000-0000-0000-0000-000000000012")
+
+	perfOne := &heapItem{task: PollTask{Key: NewTaskKey(deviceA, domain.VolatilityClassPerformance), Device: domain.Device{ID: deviceA}, VolatilityClass: domain.VolatilityClassPerformance}, index: -1}
+	perfTwo := &heapItem{task: PollTask{Key: NewTaskKey(deviceB, domain.VolatilityClassPerformance), Device: domain.Device{ID: deviceB}, VolatilityClass: domain.VolatilityClassPerformance}, index: -1}
+	scheduler.tasks = make(chan PollTask, 2)
+	scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)] = []*heapItem{perfOne, perfTwo}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	output := logs.String()
+	if !strings.Contains(output, "DEBUG scheduler dispatch cycle dispatched=1 stop_reason=no_eligible_task") {
+		t.Fatalf("debug output missing scheduler summary: %q", output)
+	}
+	if !strings.Contains(output, "queues=performance ready=1") {
+		t.Fatalf("debug output missing queue summary: %q", output)
+	}
+	if !strings.Contains(output, "inflight=1") {
+		t.Fatalf("debug output missing inflight count: %q", output)
 	}
 }
 

@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/vendor"
 	"github.com/lollinoo/theia/internal/ws"
@@ -96,6 +98,7 @@ type canvasTopologyVersionInput struct {
 
 // HandleGet handles GET /api/v1/topology/canvas.
 func (h *CanvasTopologyHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
 	devices, err := h.deviceService.GetAllDevices(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
@@ -122,9 +125,11 @@ func (h *CanvasTopologyHandler) HandleGet(w http.ResponseWriter, r *http.Request
 	w.Header().Set("ETag", etag)
 	if requestETagMatches(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
+		logCanvasTopologyResponse("/api/v1/topology/canvas", http.StatusNotModified, response, startedAt)
 		return
 	}
 
+	logCanvasTopologyResponse("/api/v1/topology/canvas", http.StatusOK, response, startedAt)
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -132,6 +137,7 @@ func (h *CanvasTopologyHandler) HandleGet(w http.ResponseWriter, r *http.Request
 // bootstrap: structural read model plus the current runtime base used by the
 // WebSocket delta stream.
 func (h *CanvasTopologyHandler) HandleGetCanvas(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
 	devices, err := h.deviceService.GetAllDevices(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
@@ -162,7 +168,36 @@ func (h *CanvasTopologyHandler) HandleGetCanvas(w http.ResponseWriter, r *http.R
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
+	logCanvasTopologyResponse("/api/v1/canvas", http.StatusOK, response, startedAt)
 	json.NewEncoder(w).Encode(response)
+}
+
+func logCanvasTopologyResponse(endpoint string, status int, response canvasTopologyResponse, startedAt time.Time) {
+	runtimeVersion := "-"
+	if response.RuntimeVersion != nil {
+		runtimeVersion = strconv.FormatUint(*response.RuntimeVersion, 10)
+	}
+	runtimeDevices := 0
+	runtimeLinks := 0
+	if response.RuntimeSnapshot != nil {
+		runtimeDevices = len(response.RuntimeSnapshot.Devices)
+		runtimeLinks = len(response.RuntimeSnapshot.Links)
+	}
+	logging.Debugf(
+		"canvas response endpoint=%s status=%d schema_version=%d topology_version=%s runtime_version=%s devices=%d links=%d positions=%d areas=%d runtime_devices=%d runtime_links=%d duration_ms=%d",
+		endpoint,
+		status,
+		response.SchemaVersion,
+		response.TopologyVersion,
+		runtimeVersion,
+		len(response.Devices),
+		len(response.Links),
+		len(response.Positions),
+		len(response.Areas),
+		runtimeDevices,
+		runtimeLinks,
+		time.Since(startedAt).Milliseconds(),
+	)
 }
 
 func (h *CanvasTopologyHandler) buildResponse(

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/ws"
 )
 
@@ -100,8 +101,21 @@ func (m *pipelinePrometheusMonitor) setAlerts(next map[uuid.UUID][]domain.AlertS
 
 func (m *pipelinePrometheusMonitor) publishStatus(status ws.PrometheusStatusPayload) {
 	p := m.pipeline
+	previous := p.runtime.getPrometheusStatus()
 	changed := p.runtime.setPrometheusStatus(status)
-	if !changed || p.hub == nil {
+	if !changed {
+		return
+	}
+
+	logging.Debugf(
+		"prometheus status changed enabled=%t available=%t previous_enabled=%t previous_available=%t error_set=%t",
+		status.Enabled,
+		status.Available,
+		previous.Enabled,
+		previous.Available,
+		strings.TrimSpace(status.Error) != "",
+	)
+	if p.hub == nil {
 		return
 	}
 

@@ -223,6 +223,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	linkChangeNotify := linkRepo.SubscribeLinkChanges(256)
 	positionRepo := sqlite.NewPositionRepo(db)
 	settingsRepo := sqlite.NewSettingsRepo(db)
+	logging.Debugf("runtime effective config %s", runtimeDebugSettingsSummary(cfg, settingsRepo))
 	snmpProfileRepo := sqlite.NewSNMPProfileRepo(db, encryptionKey)
 	credentialProfileRepo := sqlite.NewCredentialProfileRepo(db)
 	areaRepo := sqlite.NewAreaRepo(db)
@@ -357,6 +358,61 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	log.Println("Server stopped")
 	return nil
+}
+
+func runtimeDebugSettingsSummary(cfg *runtimeConfig, settingsRepo domain.SettingsRepository) string {
+	cfgLogLevel := ""
+	cfgDBDriver := ""
+	cfgListen := ""
+	if cfg != nil {
+		cfgLogLevel = cfg.LogLevel
+		cfgDBDriver = cfg.DBDriver
+		cfgListen = cfg.ListenAddr
+	}
+	prometheusSetting := runtimeDebugSetting(settingsRepo, domain.SettingPrometheusURL)
+
+	parts := []string{
+		"log_level=" + debugSettingValue(cfgLogLevel),
+		"db_driver=" + debugSettingValue(cfgDBDriver),
+		"listen=" + debugSettingValue(cfgListen),
+		"polling_interval_seconds=" + runtimeDebugSetting(settingsRepo, domain.SettingPollingInterval),
+		"pool_performance=" + runtimeDebugSetting(settingsRepo, domain.SettingSNMPWorkerPoolPerformance),
+		"pool_operational=" + runtimeDebugSetting(settingsRepo, domain.SettingSNMPWorkerPoolOperational),
+		"pool_static=" + runtimeDebugSetting(settingsRepo, domain.SettingSNMPWorkerPoolStatic),
+		"polling_max_workers_per_device=" + runtimeDebugSetting(settingsRepo, domain.SettingPollingMaxWorkersPerDevice),
+		"snmp_timeout_seconds=" + runtimeDebugSetting(settingsRepo, domain.SettingSNMPTimeout),
+		"snmp_retries=" + runtimeDebugSetting(settingsRepo, domain.SettingSNMPRetries),
+		"websocket_coalesce_ms=" + runtimeDebugSetting(settingsRepo, domain.SettingPollingWebSocketCoalesceMS),
+		"persistence_batch_ms=" + runtimeDebugSetting(settingsRepo, domain.SettingPollingPersistenceBatchMS),
+		"topology_discovery_default_mode=" + runtimeDebugSetting(settingsRepo, domain.SettingTopologyDiscoveryDefaultMode),
+		fmt.Sprintf("prometheus_configured=%t", strings.TrimSpace(prometheusSetting) != "" && prometheusSetting != "-"),
+	}
+	return strings.Join(parts, " ")
+}
+
+func runtimeDebugSetting(settingsRepo domain.SettingsRepository, key string) string {
+	if settingsRepo == nil {
+		return "-"
+	}
+	value, err := settingsRepo.Get(key)
+	if err != nil {
+		return "-"
+	}
+	if key == domain.SettingPrometheusURL || key == domain.SettingGrafanaURL || key == domain.SettingBridgeSecret {
+		if strings.TrimSpace(value) == "" {
+			return ""
+		}
+		return "<set>"
+	}
+	return debugSettingValue(value)
+}
+
+func debugSettingValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func (b *runtimeBootstrap) handleShutdown(cancel context.CancelFunc, server runtimeServer, children runtimeChildren) {

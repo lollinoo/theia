@@ -286,6 +286,58 @@ func TestHandlerServeHTTP_DebugLogsBootstrapDecision(t *testing.T) {
 	}
 }
 
+func TestHandlerServeHTTP_DebugLogsHelloTimeout(t *testing.T) {
+	logs := captureDebugLogs(t)
+	hub := NewHub()
+	go hub.Run()
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			return EmptySnapshot(), 42
+		},
+		func() AlertMessagePayload {
+			return AlertMessagePayload{Version: 7, Alerts: []AlertDTO{}}
+		},
+		func() PrometheusStatusPayload {
+			return PrometheusStatusPayload{}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial websocket test server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read bootstrap websocket message: %v", err)
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("failed to decode bootstrap websocket message: %v", err)
+	}
+	if message.Type != MessageTypeSnapshot {
+		t.Fatalf("bootstrap message type = %q, want %q", message.Type, MessageTypeSnapshot)
+	}
+
+	output := logs.String()
+	if !strings.Contains(output, "hello_timeout=true") {
+		t.Fatalf("debug output missing hello timeout: %q", output)
+	}
+	if !strings.Contains(output, "hello_wait_ms=500") {
+		t.Fatalf("debug output missing hello wait: %q", output)
+	}
+}
+
 func TestHandlerServeHTTP_HelloWithCurrentRuntimeIdentitySkipsBootstrapSnapshot(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()

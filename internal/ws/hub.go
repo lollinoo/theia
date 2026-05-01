@@ -169,11 +169,14 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 	observability.Default().ObserveWSMessage("broadcast", deltaMessage.Type, len(deltaPayload))
 	h.recordBroadcast(deltaPayload)
 	clients := h.copyClients()
+	devicePatchCount, linkPatchCount := runtimeDeltaPatchCounts(delta)
 	logging.Debugf(
-		"websocket message queued scope=overview_broadcast type=%s base_version=%d version=%d bytes=%d fallback_bytes=%d clients=%d",
+		"websocket message queued scope=overview_broadcast type=%s base_version=%d version=%d device_patches=%d link_patches=%d bytes=%d fallback_bytes=%d clients=%d",
 		deltaMessage.Type,
 		baseVersion,
 		version,
+		devicePatchCount,
+		linkPatchCount,
 		len(deltaPayload),
 		len(fallbackPayload),
 		len(clients),
@@ -181,6 +184,13 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 	for _, client := range clients {
 		h.enqueueOverviewDelta(client, deltaPayload, resyncPayload, fallbackPayload)
 	}
+}
+
+func runtimeDeltaPatchCounts(delta *RuntimeDeltaPayload) (int, int) {
+	if delta == nil {
+		return 0, 0
+	}
+	return len(delta.Devices), len(delta.Links)
 }
 
 // SendOverviewSnapshot sends a versioned full snapshot to one client.

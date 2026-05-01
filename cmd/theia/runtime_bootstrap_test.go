@@ -1,8 +1,8 @@
 package main
 
 import (
-	"database/sql"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
 )
 
@@ -34,6 +35,77 @@ func (s stubRuntimeServer) ListenAndServe() error {
 
 func (stubRuntimeServer) Shutdown(context.Context) error {
 	return nil
+}
+
+type runtimeDebugSettingsRepo struct {
+	values map[string]string
+}
+
+func (r runtimeDebugSettingsRepo) Get(key string) (string, error) {
+	value, ok := r.values[key]
+	if !ok {
+		return "", errors.New("missing setting")
+	}
+	return value, nil
+}
+
+func (r runtimeDebugSettingsRepo) Set(key, value string) error {
+	if r.values == nil {
+		r.values = map[string]string{}
+	}
+	r.values[key] = value
+	return nil
+}
+
+func (r runtimeDebugSettingsRepo) GetAll() (map[string]string, error) {
+	out := make(map[string]string, len(r.values))
+	for key, value := range r.values {
+		out[key] = value
+	}
+	return out, nil
+}
+
+func TestRuntimeDebugSettingsSummaryIncludesEffectivePollingConfig(t *testing.T) {
+	cfg := &runtimeConfig{
+		DBDriver:   "postgres",
+		ListenAddr: ":8080",
+		LogLevel:   "debug",
+	}
+	repo := runtimeDebugSettingsRepo{values: map[string]string{
+		domain.SettingPollingInterval:            "30",
+		domain.SettingSNMPWorkerPoolPerformance:  "32",
+		domain.SettingSNMPWorkerPoolOperational:  "16",
+		domain.SettingSNMPWorkerPoolStatic:       "6",
+		domain.SettingPollingMaxWorkersPerDevice: "2",
+		domain.SettingSNMPTimeout:                "8",
+		domain.SettingSNMPRetries:                "1",
+		domain.SettingPollingWebSocketCoalesceMS: "250",
+		domain.SettingPrometheusURL:              "http://prometheus.internal:9090",
+	}}
+
+	summary := runtimeDebugSettingsSummary(cfg, repo)
+
+	for _, want := range []string{
+		"log_level=debug",
+		"db_driver=postgres",
+		"listen=:8080",
+		"polling_interval_seconds=30",
+		"pool_performance=32",
+		"pool_operational=16",
+		"pool_static=6",
+		"polling_max_workers_per_device=2",
+		"snmp_timeout_seconds=8",
+		"snmp_retries=1",
+		"websocket_coalesce_ms=250",
+		"prometheus_configured=true",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %s: %q", want, summary)
+		}
+	}
+	if strings.Contains(summary, "prometheus.internal") {
+		t.Fatalf("summary leaked Prometheus URL: %q", summary)
+	}
 }
 
 func TestRuntimeBootstrapRunWrapsLoadConfigError(t *testing.T) {
