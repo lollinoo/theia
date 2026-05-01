@@ -3,6 +3,7 @@ package worker
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/ws"
@@ -37,9 +38,60 @@ func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthOnlyWhenChanged(t *te
 		ActiveWorkers:       63,
 	}
 	broadcaster.broadcastPollingHealthIfChanged()
+	select {
+	case payload := <-pipeline.hub.BroadcastCh():
+		t.Fatalf("unexpected polling health broadcast for active worker drift: %s", string(payload))
+	default:
+	}
+
+	sched.health = polling.HealthSnapshot{
+		EssentialOverloaded: true,
+		ConfiguredWorkers:   65,
+		ActiveWorkers:       63,
+	}
+	broadcaster.broadcastPollingHealthIfChanged()
 	third := <-pipeline.hub.BroadcastCh()
-	if !strings.Contains(string(third), `"active_workers":63`) {
+	if !strings.Contains(string(third), `"configured_workers":65`) {
 		t.Fatalf("expected updated polling health payload, got %s", string(third))
+	}
+}
+
+func TestPipelineSnapshotBroadcasterThrottlesActiveWorkerOnlyPollingHealth(t *testing.T) {
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	broadcaster := &pipelineSnapshotBroadcaster{pipeline: pipeline}
+
+	now := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	pipeline.runtime.now = func() time.Time { return now }
+
+	sched.health = polling.HealthSnapshot{
+		ConfiguredWorkers: 64,
+		ActiveWorkers:     10,
+	}
+	broadcaster.broadcastPollingHealthIfChanged()
+	<-pipeline.hub.BroadcastCh()
+
+	sched.health = polling.HealthSnapshot{
+		ConfiguredWorkers: 64,
+		ActiveWorkers:     11,
+	}
+	now = now.Add(time.Minute - time.Second)
+	broadcaster.broadcastPollingHealthIfChanged()
+	select {
+	case payload := <-pipeline.hub.BroadcastCh():
+		t.Fatalf("unexpected polling health heartbeat before interval: %s", string(payload))
+	default:
+	}
+
+	now = now.Add(time.Second)
+	broadcaster.broadcastPollingHealthIfChanged()
+	select {
+	case payload := <-pipeline.hub.BroadcastCh():
+		if !strings.Contains(string(payload), `"active_workers":11`) {
+			t.Fatalf("expected throttled active worker polling health payload, got %s", string(payload))
+		}
+	default:
+		t.Fatalf("expected throttled active worker polling health payload")
 	}
 }
 

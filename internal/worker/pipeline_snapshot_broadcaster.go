@@ -262,10 +262,15 @@ func (b *pipelineSnapshotBroadcaster) broadcastPollingHealthIfChanged() {
 	}
 
 	health := p.PollingHealth()
+	now := p.clockNow()
 	p.runtime.mu.Lock()
 	changed := !pollingHealthEqual(health, p.runtime.lastPollingHealth)
+	if !changed && health.ActiveWorkers != p.runtime.lastPollingHealth.ActiveWorkers {
+		changed = pollingHealthActiveWorkerHeartbeatDue(p.runtime.lastPollingHealthAt, now)
+	}
 	if changed {
 		p.runtime.lastPollingHealth = clonePollingHealth(health)
+		p.runtime.lastPollingHealthAt = now
 	}
 	p.runtime.mu.Unlock()
 
@@ -274,12 +279,12 @@ func (b *pipelineSnapshotBroadcaster) broadcastPollingHealthIfChanged() {
 	}
 }
 
+// pollingHealthEqual compares fields that should trigger immediate health broadcasts.
 func pollingHealthEqual(a, b polling.HealthSnapshot) bool {
 	if a.EssentialOverloaded != b.EssentialOverloaded ||
 		a.DegradedRisk != b.DegradedRisk ||
 		pollingHealthLagBucket(a.EssentialQueueLagSeconds) != pollingHealthLagBucket(b.EssentialQueueLagSeconds) ||
 		a.DeadlineMissTotal != b.DeadlineMissTotal ||
-		a.ActiveWorkers != b.ActiveWorkers ||
 		a.ConfiguredWorkers != b.ConfiguredWorkers ||
 		len(a.Warnings) != len(b.Warnings) {
 		return false
@@ -294,6 +299,14 @@ func pollingHealthEqual(a, b polling.HealthSnapshot) bool {
 }
 
 const pollingHealthLagBucketSeconds = 5
+const pollingHealthActiveWorkerHeartbeatInterval = time.Minute
+
+func pollingHealthActiveWorkerHeartbeatDue(lastBroadcastAt time.Time, now time.Time) bool {
+	if lastBroadcastAt.IsZero() {
+		return true
+	}
+	return !now.Before(lastBroadcastAt.Add(pollingHealthActiveWorkerHeartbeatInterval))
+}
 
 func pollingHealthLagBucket(lagSeconds float64) int64 {
 	if lagSeconds <= 0 {
