@@ -46,6 +46,7 @@ import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
+import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { minimapColorForDevice } from './deviceVisualState';
 import { resolveLinkBadgeScale } from './linkSemantics';
@@ -187,6 +188,7 @@ export default function Canvas({
   );
   const lastProjectionDiagnosticsSignatureRef = useRef<string>('');
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
+  useCanvasFrameMetrics();
   const { resolvedTheme } = useTheme();
   const {
     bridgeChecked,
