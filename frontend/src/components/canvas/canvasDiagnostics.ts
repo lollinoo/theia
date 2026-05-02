@@ -9,6 +9,7 @@ export type CanvasDiagnosticSource =
   | 'websocket'
   | 'layout'
   | 'positions'
+  | 'performance'
   | 'projection'
   | 'reactflow';
 

@@ -9,7 +9,12 @@ export type CanvasMetricName =
   | 'runtimePatch'
   | 'incrementalLayout'
   | 'computeForceLayout'
-  | 'deviceCardRender';
+  | 'deviceCardRender'
+  | 'frameTime'
+  | 'frameOverBudget16'
+  | 'frameOverBudget33'
+  | 'frameOverBudget50'
+  | 'longTask';
 
 export type CanvasPerfScenarioName = 'runtime' | 'small' | 'medium' | 'large' | 'stress';
 
@@ -64,7 +69,7 @@ const maxCanvasRenderMetricDurations = 1000;
 let nodeCanvasMetrics: CanvasMetricSample[] = [];
 let canvasRenderMetricsEnabled = false;
 let canvasRenderMetricSequence = 0;
-const canvasRenderMetricAggregates = new Map<
+const canvasRuntimeMetricAggregates = new Map<
   string,
   { count: number; minMs: number; maxMs: number; totalMs: number; durations: number[] }
 >();
@@ -168,14 +173,14 @@ export function exportCanvasMetrics(): CanvasMetricsExport {
     samples,
     aggregates: {
       ...aggregateCanvasMetricSamples(samples),
-      ...aggregateCanvasRenderMetricSamples(),
+      ...aggregateCanvasRuntimeMetricSamples(),
     },
   };
 }
 
 export function clearCanvasMetrics(): void {
   setMetricSamples([]);
-  canvasRenderMetricAggregates.clear();
+  canvasRuntimeMetricAggregates.clear();
 }
 
 export function setCanvasRenderMetricsEnabled(enabled: boolean): void {
@@ -299,7 +304,7 @@ export function recordCanvasComponentRenderMetric(
     return;
   }
 
-  recordCanvasRenderMetric({
+  recordCanvasAggregateMetric({
     name: 'deviceCardRender',
     scenario: 'runtime',
     durationMs,
@@ -311,9 +316,9 @@ export function recordCanvasComponentRenderMetric(
   });
 }
 
-function recordCanvasRenderMetric(sample: CanvasMetricSample): void {
+function recordCanvasAggregateMetric(sample: CanvasMetricSample): void {
   const key = `${sample.scenario}:${normalizeMetricName(sample.name)}`;
-  const aggregate = canvasRenderMetricAggregates.get(key) ?? {
+  const aggregate = canvasRuntimeMetricAggregates.get(key) ?? {
     count: 0,
     minMs: sample.durationMs,
     maxMs: sample.durationMs,
@@ -331,13 +336,13 @@ function recordCanvasRenderMetric(sample: CanvasMetricSample): void {
     aggregate.durations.splice(0, aggregate.durations.length - maxCanvasRenderMetricDurations);
   }
 
-  canvasRenderMetricAggregates.set(key, aggregate);
+  canvasRuntimeMetricAggregates.set(key, aggregate);
 }
 
-function aggregateCanvasRenderMetricSamples(): Record<string, CanvasMetricAggregate> {
+function aggregateCanvasRuntimeMetricSamples(): Record<string, CanvasMetricAggregate> {
   const aggregates: Record<string, CanvasMetricAggregate> = {};
 
-  for (const [key, aggregate] of canvasRenderMetricAggregates.entries()) {
+  for (const [key, aggregate] of canvasRuntimeMetricAggregates.entries()) {
     const sorted = [...aggregate.durations].sort((a, b) => a - b);
     const p95Index = Math.max(0, Math.ceil(0.95 * sorted.length) - 1);
     aggregates[key] = {
@@ -350,6 +355,65 @@ function aggregateCanvasRenderMetricSamples(): Record<string, CanvasMetricAggreg
   }
 
   return aggregates;
+}
+
+export function recordCanvasFrameTime(
+  durationMs: number,
+  metadata: Record<string, unknown> = {},
+): void {
+  const roundedDurationMs = Math.max(0, roundMetric(durationMs));
+  const timestamp = Date.now();
+
+  recordCanvasAggregateMetric({
+    name: 'frameTime',
+    scenario: 'runtime',
+    durationMs: roundedDurationMs,
+    timestamp,
+    metadata,
+  });
+
+  if (roundedDurationMs > 16.667) {
+    recordCanvasAggregateMetric({
+      name: 'frameOverBudget16',
+      scenario: 'runtime',
+      durationMs: roundedDurationMs,
+      timestamp,
+      metadata: { ...metadata, thresholdMs: 16.667 },
+    });
+  }
+
+  if (roundedDurationMs > 33.333) {
+    recordCanvasAggregateMetric({
+      name: 'frameOverBudget33',
+      scenario: 'runtime',
+      durationMs: roundedDurationMs,
+      timestamp,
+      metadata: { ...metadata, thresholdMs: 33.333 },
+    });
+  }
+
+  if (roundedDurationMs > 50) {
+    recordCanvasAggregateMetric({
+      name: 'frameOverBudget50',
+      scenario: 'runtime',
+      durationMs: roundedDurationMs,
+      timestamp,
+      metadata: { ...metadata, thresholdMs: 50 },
+    });
+  }
+}
+
+export function recordCanvasLongTask(
+  durationMs: number,
+  metadata: Record<string, unknown> = {},
+): void {
+  recordCanvasAggregateMetric({
+    name: 'longTask',
+    scenario: 'runtime',
+    durationMs: Math.max(0, roundMetric(durationMs)),
+    timestamp: Date.now(),
+    metadata,
+  });
 }
 
 export function measureCanvasWork<T>(

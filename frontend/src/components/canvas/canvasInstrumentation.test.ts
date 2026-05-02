@@ -5,6 +5,8 @@ import {
   exportCanvasMetrics,
   finishCanvasRenderMetric,
   measureCanvasMetric,
+  recordCanvasFrameTime,
+  recordCanvasLongTask,
   recordCanvasMetric,
   setCanvasRenderMetricsEnabled,
   startCanvasRenderMetric,
@@ -145,5 +147,59 @@ describe('canvasInstrumentation', () => {
     clearCanvasMetrics();
 
     expect(exportCanvasMetrics().aggregates['runtime:deviceCardRender']).toBeUndefined();
+  });
+
+  it('records frame timing and frame budget aggregates without raw sample growth', () => {
+    recordCanvasFrameTime(12);
+    recordCanvasFrameTime(20);
+    recordCanvasFrameTime(40);
+    recordCanvasFrameTime(55);
+
+    const exported = exportCanvasMetrics();
+
+    expect(exported.samples).toEqual([]);
+    expect(exported.aggregates['runtime:frameTime']).toEqual({
+      count: 4,
+      minMs: 12,
+      maxMs: 55,
+      avgMs: 31.75,
+      p95Ms: 55,
+    });
+    expect(exported.aggregates['runtime:frameOverBudget16']).toEqual({
+      count: 3,
+      minMs: 20,
+      maxMs: 55,
+      avgMs: 38.333,
+      p95Ms: 55,
+    });
+    expect(exported.aggregates['runtime:frameOverBudget33']).toEqual({
+      count: 2,
+      minMs: 40,
+      maxMs: 55,
+      avgMs: 47.5,
+      p95Ms: 55,
+    });
+    expect(exported.aggregates['runtime:frameOverBudget50']).toEqual({
+      count: 1,
+      minMs: 55,
+      maxMs: 55,
+      avgMs: 55,
+      p95Ms: 55,
+    });
+  });
+
+  it('records browser long task aggregates without adding raw samples', () => {
+    recordCanvasLongTask(82.4, { attributionCount: 1 });
+
+    const exported = exportCanvasMetrics();
+
+    expect(exported.samples).toEqual([]);
+    expect(exported.aggregates['runtime:longTask']).toEqual({
+      count: 1,
+      minMs: 82.4,
+      maxMs: 82.4,
+      avgMs: 82.4,
+      p95Ms: 82.4,
+    });
   });
 });

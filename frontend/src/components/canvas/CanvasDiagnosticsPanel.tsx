@@ -81,7 +81,12 @@ function useDiagnosticsPanelState(open: boolean): {
       });
     };
     refresh();
-    return subscribeCanvasDiagnostics(refresh);
+    const unsubscribe = subscribeCanvasDiagnostics(refresh);
+    const intervalId = window.setInterval(refresh, 1000);
+    return () => {
+      unsubscribe();
+      window.clearInterval(intervalId);
+    };
   }, [open]);
 
   return state;
@@ -111,6 +116,11 @@ export function CanvasDiagnosticsPanel({
     left.localeCompare(right),
   );
   const deviceCardRenderMetric = snapshot.performance.metrics['runtime:deviceCardRender'];
+  const frameTimeMetric = snapshot.performance.metrics['runtime:frameTime'];
+  const frameOverBudget16Metric = snapshot.performance.metrics['runtime:frameOverBudget16'];
+  const frameOverBudget33Metric = snapshot.performance.metrics['runtime:frameOverBudget33'];
+  const frameOverBudget50Metric = snapshot.performance.metrics['runtime:frameOverBudget50'];
+  const longTaskMetric = snapshot.performance.metrics['runtime:longTask'];
   const recentEvents = events.slice(-8).reverse();
 
   return (
@@ -213,6 +223,18 @@ export function CanvasDiagnosticsPanel({
           <DiagnosticsRow label="DeviceCard avg ms" value={deviceCardRenderMetric?.avgMs} />
           <DiagnosticsRow label="DeviceCard p95 ms" value={deviceCardRenderMetric?.p95Ms} />
           <DiagnosticsRow label="DeviceCard max ms" value={deviceCardRenderMetric?.maxMs} />
+        </DiagnosticsSection>
+
+        <DiagnosticsSection title="Browser Responsiveness">
+          <DiagnosticsRow label="Frame samples" value={frameTimeMetric?.count} />
+          <DiagnosticsRow label="Frame avg ms" value={frameTimeMetric?.avgMs} />
+          <DiagnosticsRow label="Frame p95 ms" value={frameTimeMetric?.p95Ms} />
+          <DiagnosticsRow label="Frame max ms" value={frameTimeMetric?.maxMs} />
+          <DiagnosticsRow label="Frames >16.7ms" value={frameOverBudget16Metric?.count} />
+          <DiagnosticsRow label="Frames >33.3ms" value={frameOverBudget33Metric?.count} />
+          <DiagnosticsRow label="Frames >50ms" value={frameOverBudget50Metric?.count} />
+          <DiagnosticsRow label="Long tasks" value={longTaskMetric?.count} />
+          <DiagnosticsRow label="Long task max ms" value={longTaskMetric?.maxMs} />
         </DiagnosticsSection>
 
         <section className="pt-1">

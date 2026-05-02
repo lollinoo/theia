@@ -10,6 +10,8 @@ import {
 import {
   clearCanvasMetrics,
   finishCanvasRenderMetric,
+  recordCanvasFrameTime,
+  recordCanvasLongTask,
   recordCanvasMetric,
   setCanvasRenderMetricsEnabled,
   startCanvasRenderMetric,
@@ -61,6 +63,9 @@ describe('CanvasDiagnosticsPanel', () => {
       durationMs: 3,
       timestamp: 1,
     });
+    recordCanvasFrameTime(18);
+    recordCanvasFrameTime(42);
+    recordCanvasLongTask(88);
     setCanvasRenderMetricsEnabled(true);
     finishCanvasRenderMetric(startCanvasRenderMetric('DeviceCard'), { deviceId: 'dev-1' });
     recordCanvasDiagnosticEvent({
@@ -95,6 +100,9 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(screen.getAllByText('success').length).toBeGreaterThan(0);
     expect(screen.getByText('runtime:areaProjection')).toBeInTheDocument();
     expect(screen.getByText('DeviceCard renders')).toBeInTheDocument();
+    expect(screen.getByText('Browser Responsiveness')).toBeInTheDocument();
+    expect(screen.getByText('Frame p95 ms')).toBeInTheDocument();
+    expect(screen.getByText('Long tasks')).toBeInTheDocument();
     expect(screen.getByText('projection.area.changed')).toBeInTheDocument();
   });
 
