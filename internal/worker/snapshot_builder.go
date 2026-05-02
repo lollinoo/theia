@@ -375,6 +375,7 @@ func buildRuntimeDeltaPatch(delta *ws.SnapshotPayload, previous *ws.SnapshotPayl
 			previousDevice = previous.Devices[id]
 		}
 		if devicePatch := buildDeviceRuntimePatch(current, previousDevice); devicePatch != nil {
+			devicePatch["device_id"] = id
 			patch.Devices[id] = devicePatch
 		}
 	}
@@ -384,6 +385,7 @@ func buildRuntimeDeltaPatch(delta *ws.SnapshotPayload, previous *ws.SnapshotPayl
 			previousLink = previous.Links[id]
 		}
 		if linkPatch := buildLinkRuntimePatch(current, previousLink); linkPatch != nil {
+			linkPatch["link_id"] = id
 			patch.Links[id] = linkPatch
 		}
 	}
@@ -398,7 +400,7 @@ func buildDeviceRuntimePatch(current, previous ws.DeviceRuntimeDTO) map[string]a
 	patch := map[string]any{"device_id": current.DeviceID}
 	changed := false
 	addString := func(key, currentValue, previousValue string) {
-		if currentValue != previousValue {
+		if currentValue != "" && currentValue != previousValue {
 			patch[key] = currentValue
 			changed = true
 		}
@@ -424,11 +426,11 @@ func buildDeviceRuntimePatch(current, previous ws.DeviceRuntimeDTO) map[string]a
 
 	addString("operational_status", current.OperationalStatus, previous.OperationalStatus)
 	addString("primary_health", current.PrimaryHealth, previous.PrimaryHealth)
-	if !stringSliceRuntimeEqual(current.RuntimeFlags, previous.RuntimeFlags) {
+	if current.RuntimeFlags != nil && !stringSliceRuntimeEqual(current.RuntimeFlags, previous.RuntimeFlags) {
 		patch["runtime_flags"] = append([]string(nil), current.RuntimeFlags...)
 		changed = true
 	}
-	if !stringMapRuntimeEqual(current.FieldStates, previous.FieldStates) {
+	if validRuntimeFieldStates(current.FieldStates) && !stringMapRuntimeEqual(current.FieldStates, previous.FieldStates) {
 		fields := make(map[string]string, len(current.FieldStates))
 		for key, value := range current.FieldStates {
 			fields[key] = value
@@ -464,7 +466,7 @@ func buildLinkRuntimePatch(current, previous ws.LinkRuntimeDTO) map[string]any {
 	patch := map[string]any{"link_id": current.LinkID}
 	changed := false
 	addString := func(key, currentValue, previousValue string) {
-		if currentValue != previousValue {
+		if currentValue != "" && currentValue != previousValue {
 			patch[key] = currentValue
 			changed = true
 		}
@@ -493,6 +495,18 @@ func buildLinkRuntimePatch(current, previous ws.LinkRuntimeDTO) map[string]any {
 		return nil
 	}
 	return patch
+}
+
+func validRuntimeFieldStates(fields map[string]string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	for _, key := range []string{"uptime", "cpu", "memory"} {
+		if fields[key] == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func stringPtrRuntimeEqual(a, b *string) bool {

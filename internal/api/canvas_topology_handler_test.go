@@ -186,6 +186,102 @@ func TestCanvasTopologyHandlerHandleGet_ReturnsNotModifiedForMatchingETag(t *tes
 	}
 }
 
+func TestCanvasTopologyHandlerTopologyVersionIgnoresVolatileRuntimeFields(t *testing.T) {
+	handler, deviceRepo, linkRepo, positionRepo, areaRepo := newTestCanvasTopologyHandler(t)
+
+	sourceID := uuid.New()
+	targetID := uuid.New()
+	linkID := uuid.New()
+	areaID := seedAreaHelper(t, areaRepo, "Backbone", "#2979FF")
+	initialDiscoveryAt := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	initialPositionAt := time.Date(2026, 5, 1, 10, 5, 0, 0, time.UTC)
+
+	source := &domain.Device{
+		ID:         sourceID,
+		Hostname:   "router-01",
+		IP:         "10.0.0.1",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		SysName:    "router-01",
+		Vendor:     "default",
+		Managed:    true,
+		Tags:       map[string]string{},
+		AreaIDs:    []uuid.UUID{areaID},
+		Interfaces: []domain.Interface{
+			{IfName: "ether1", Speed: 1000000000, OperStatus: "up"},
+		},
+		TopologyBootstrapState:      domain.TopologyBootstrapStatePending,
+		LastTopologyDiscoveryAt:     &initialDiscoveryAt,
+		LastTopologyDiscoveryResult: "scheduled",
+	}
+	if err := deviceRepo.Create(source); err != nil {
+		t.Fatalf("seed source device: %v", err)
+	}
+	target := &domain.Device{
+		ID:         targetID,
+		Hostname:   "router-02",
+		IP:         "10.0.0.2",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		SysName:    "router-02",
+		Vendor:     "default",
+		Managed:    true,
+		Tags:       map[string]string{},
+		Interfaces: []domain.Interface{
+			{IfName: "ether2", Speed: 100000000, OperStatus: "down"},
+		},
+	}
+	if err := deviceRepo.Create(target); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+	if err := linkRepo.Create(&domain.Link{
+		ID:                linkID,
+		SourceDeviceID:    sourceID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    targetID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+	positionRepo.positions = []domain.DevicePosition{
+		{DeviceID: sourceID, X: 110, Y: 220, Pinned: true, UpdatedAt: initialPositionAt},
+	}
+
+	first := handler.buildResponse(
+		mustGetAllDevices(t, deviceRepo),
+		mustGetAllLinks(t, linkRepo),
+		positionRepo.positions,
+		mustGetAllAreas(t, areaRepo),
+	)
+
+	updatedDiscoveryAt := initialDiscoveryAt.Add(5 * time.Minute)
+	updatedSource, err := deviceRepo.GetByID(sourceID)
+	if err != nil {
+		t.Fatalf("load source device: %v", err)
+	}
+	updatedSource.Status = domain.DeviceStatusDown
+	updatedSource.TopologyBootstrapState = domain.TopologyBootstrapStateCompleted
+	updatedSource.LastTopologyDiscoveryAt = &updatedDiscoveryAt
+	updatedSource.LastTopologyDiscoveryResult = "no new neighbors"
+	updatedSource.Interfaces[0].OperStatus = "down"
+	if err := deviceRepo.Update(updatedSource); err != nil {
+		t.Fatalf("update source device: %v", err)
+	}
+	positionRepo.positions[0].UpdatedAt = initialPositionAt.Add(10 * time.Minute)
+
+	second := handler.buildResponse(
+		mustGetAllDevices(t, deviceRepo),
+		mustGetAllLinks(t, linkRepo),
+		positionRepo.positions,
+		mustGetAllAreas(t, areaRepo),
+	)
+
+	if first.TopologyVersion != second.TopologyVersion {
+		t.Fatalf("topology version changed for volatile runtime fields: first=%s second=%s", first.TopologyVersion, second.TopologyVersion)
+	}
+}
+
 func TestCanvasTopologyHandlerHandleGetCanvas_ReturnsRuntimeBootstrap(t *testing.T) {
 	handler, deviceRepo, _, _, _ := newTestCanvasTopologyHandler(t)
 	deviceID := uuid.New()
@@ -287,4 +383,31 @@ func TestCanvasTopologyHandlerHandleGetCanvas_DebugLogsCardinality(t *testing.T)
 			t.Fatalf("debug output missing %s: %q", want, output)
 		}
 	}
+}
+
+func mustGetAllDevices(t *testing.T, repo *mockDeviceRepo) []domain.Device {
+	t.Helper()
+	devices, err := repo.GetAll()
+	if err != nil {
+		t.Fatalf("get all devices: %v", err)
+	}
+	return devices
+}
+
+func mustGetAllLinks(t *testing.T, repo *mockLinkRepo) []domain.Link {
+	t.Helper()
+	links, err := repo.GetAll()
+	if err != nil {
+		t.Fatalf("get all links: %v", err)
+	}
+	return links
+}
+
+func mustGetAllAreas(t *testing.T, repo *mockAreaRepo) []domain.AreaWithCount {
+	t.Helper()
+	areas, err := repo.GetAllWithDeviceCount()
+	if err != nil {
+		t.Fatalf("get all areas: %v", err)
+	}
+	return areas
 }

@@ -831,6 +831,117 @@ func TestBuildRuntimeDeltaPatchIncludesOnlyChangedRuntimeFields(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeDeltaPatchUsesMapKeysAsPatchIdentifiers(t *testing.T) {
+	deviceID := uuid.New().String()
+	linkID := uuid.New().String()
+	oldCPU := 10.0
+	newCPU := 25.0
+	oldTx := 100.0
+	newTx := 200.0
+
+	previous := &ws.SnapshotPayload{
+		Devices: map[string]ws.DeviceRuntimeDTO{
+			deviceID: {
+				DeviceID:    deviceID,
+				CPUPercent:  &oldCPU,
+				FieldStates: map[string]string{"cpu": "ok", "memory": "ok", "uptime": "ok"},
+			},
+		},
+		Links: map[string]ws.LinkRuntimeDTO{
+			linkID: {
+				LinkID: linkID,
+				TxBps:  &oldTx,
+			},
+		},
+	}
+	delta := ws.EmptySnapshot()
+	delta.Devices[deviceID] = ws.DeviceRuntimeDTO{
+		CPUPercent:  &newCPU,
+		FieldStates: map[string]string{"cpu": "ok", "memory": "ok", "uptime": "ok"},
+	}
+	delta.Links[linkID] = ws.LinkRuntimeDTO{
+		TxBps: &newTx,
+	}
+
+	patch := buildRuntimeDeltaPatch(delta, previous)
+	if patch == nil {
+		t.Fatal("expected runtime delta patch")
+	}
+	if got := patch.Devices[deviceID]["device_id"]; got != deviceID {
+		t.Fatalf("device_id = %#v, want map key %s", got, deviceID)
+	}
+	if got := patch.Links[linkID]["link_id"]; got != linkID {
+		t.Fatalf("link_id = %#v, want map key %s", got, linkID)
+	}
+}
+
+func TestBuildRuntimeDeltaPatchDoesNotEmitInvalidZeroSemanticFields(t *testing.T) {
+	deviceID := uuid.New().String()
+	linkID := uuid.New().String()
+	oldCPU := 10.0
+	newCPU := 25.0
+	oldTx := 100.0
+	newTx := 200.0
+
+	previous := &ws.SnapshotPayload{
+		Devices: map[string]ws.DeviceRuntimeDTO{
+			deviceID: {
+				DeviceID:          deviceID,
+				OperationalStatus: "up",
+				PrimaryHealth:     "up_fresh",
+				FieldStates:       map[string]string{"cpu": "ok", "memory": "ok", "uptime": "ok"},
+				Reachability:      "up",
+				Health:            "healthy",
+				Freshness:         "fresh",
+				PrimaryReason:     "ok",
+				MetricsStatus:     "available",
+				MetricsReason:     "ok",
+				AlertStatus:       "normal",
+				CPUPercent:        &oldCPU,
+			},
+		},
+		Links: map[string]ws.LinkRuntimeDTO{
+			linkID: {
+				LinkID:        linkID,
+				MetricsStatus: "available",
+				MetricsReason: "ok",
+				TxBps:         &oldTx,
+			},
+		},
+	}
+	delta := ws.EmptySnapshot()
+	delta.Devices[deviceID] = ws.DeviceRuntimeDTO{CPUPercent: &newCPU}
+	delta.Links[linkID] = ws.LinkRuntimeDTO{TxBps: &newTx}
+
+	patch := buildRuntimeDeltaPatch(delta, previous)
+	if patch == nil {
+		t.Fatal("expected runtime delta patch")
+	}
+	devicePatch := patch.Devices[deviceID]
+	for _, key := range []string{
+		"operational_status",
+		"primary_health",
+		"field_states",
+		"reachability",
+		"health",
+		"freshness",
+		"primary_reason",
+		"metrics_status",
+		"metrics_reason",
+		"alert_status",
+	} {
+		if _, ok := devicePatch[key]; ok {
+			t.Fatalf("unexpected invalid zero-value device field %q in patch: %#v", key, devicePatch)
+		}
+	}
+	linkPatch := patch.Links[linkID]
+	for _, key := range []string{"metrics_status", "metrics_reason"} {
+		if _, ok := linkPatch[key]; ok {
+			t.Fatalf("unexpected invalid zero-value link field %q in patch: %#v", key, linkPatch)
+		}
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

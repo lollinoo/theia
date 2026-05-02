@@ -88,12 +88,44 @@ type canvasTopologyLayoutSettings struct {
 }
 
 type canvasTopologyVersionInput struct {
-	Devices      []jsonAPIResource            `json:"devices"`
-	Links        []enrichedLinkResponse       `json:"links"`
-	Positions    map[string]canvasPosition    `json:"positions"`
-	Areas        []areaResponse               `json:"areas"`
-	Capabilities canvasTopologyCapabilities   `json:"capabilities"`
-	Settings     canvasTopologyCanvasSettings `json:"settings"`
+	Devices      []canvasTopologyVersionDevice            `json:"devices"`
+	Links        []canvasTopologyVersionLink              `json:"links"`
+	Positions    map[string]canvasTopologyVersionPosition `json:"positions"`
+	Areas        []canvasTopologyVersionArea              `json:"areas"`
+	Capabilities canvasTopologyCapabilities               `json:"capabilities"`
+	Settings     canvasTopologyCanvasSettings             `json:"settings"`
+}
+
+type canvasTopologyVersionDevice struct {
+	Type       string                 `json:"type"`
+	ID         string                 `json:"id"`
+	Attributes map[string]interface{} `json:"attributes"`
+}
+
+type canvasTopologyVersionLink struct {
+	ID                string `json:"id"`
+	SourceDeviceID    string `json:"source_device_id"`
+	SourceIfName      string `json:"source_if_name"`
+	TargetDeviceID    string `json:"target_device_id"`
+	TargetIfName      string `json:"target_if_name"`
+	DiscoveryProtocol string `json:"discovery_protocol"`
+	SourceIfSpeed     int64  `json:"source_if_speed"`
+	TargetIfSpeed     int64  `json:"target_if_speed"`
+}
+
+type canvasTopologyVersionPosition struct {
+	DeviceID string  `json:"device_id"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+	Pinned   bool    `json:"pinned"`
+}
+
+type canvasTopologyVersionArea struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Color       string `json:"color"`
+	DeviceCount int    `json:"device_count"`
 }
 
 // HandleGet handles GET /api/v1/topology/canvas.
@@ -256,14 +288,7 @@ func (h *CanvasTopologyHandler) buildResponse(
 	}
 	enrichedLinks := buildEnrichedLinkResponses(links, devices)
 
-	versionInput := canvasTopologyVersionInput{
-		Devices:      deviceResources,
-		Links:        enrichedLinks,
-		Positions:    positionMap,
-		Areas:        areaResponses,
-		Capabilities: capabilities,
-		Settings:     settings,
-	}
+	versionInput := buildCanvasTopologyVersionInput(deviceResources, enrichedLinks, positionMap, areaResponses, capabilities, settings)
 
 	return canvasTopologyResponse{
 		SchemaVersion:   1,
@@ -285,6 +310,113 @@ func buildCanvasTopologyVersion(input canvasTopologyVersionInput) string {
 	}
 	sum := sha256.Sum256(data)
 	return "topo-" + hex.EncodeToString(sum[:])[:16]
+}
+
+func buildCanvasTopologyVersionInput(
+	devices []jsonAPIResource,
+	links []enrichedLinkResponse,
+	positions map[string]canvasPosition,
+	areas []areaResponse,
+	capabilities canvasTopologyCapabilities,
+	settings canvasTopologyCanvasSettings,
+) canvasTopologyVersionInput {
+	versionDevices := make([]canvasTopologyVersionDevice, 0, len(devices))
+	for _, device := range devices {
+		versionDevices = append(versionDevices, canvasTopologyVersionDevice{
+			Type:       device.Type,
+			ID:         device.ID,
+			Attributes: stableCanvasTopologyDeviceAttributes(device.Attributes),
+		})
+	}
+
+	versionLinks := make([]canvasTopologyVersionLink, 0, len(links))
+	for _, link := range links {
+		versionLinks = append(versionLinks, canvasTopologyVersionLink{
+			ID:                link.ID,
+			SourceDeviceID:    link.SourceDeviceID,
+			SourceIfName:      link.SourceIfName,
+			TargetDeviceID:    link.TargetDeviceID,
+			TargetIfName:      link.TargetIfName,
+			DiscoveryProtocol: link.DiscoveryProtocol,
+			SourceIfSpeed:     link.SourceIfSpeed,
+			TargetIfSpeed:     link.TargetIfSpeed,
+		})
+	}
+
+	versionPositions := make(map[string]canvasTopologyVersionPosition, len(positions))
+	for key, position := range positions {
+		versionPositions[key] = canvasTopologyVersionPosition{
+			DeviceID: position.DeviceID,
+			X:        position.X,
+			Y:        position.Y,
+			Pinned:   position.Pinned,
+		}
+	}
+
+	versionAreas := make([]canvasTopologyVersionArea, 0, len(areas))
+	for _, area := range areas {
+		versionAreas = append(versionAreas, canvasTopologyVersionArea{
+			ID:          area.ID,
+			Name:        area.Name,
+			Description: area.Description,
+			Color:       area.Color,
+			DeviceCount: area.DeviceCount,
+		})
+	}
+
+	return canvasTopologyVersionInput{
+		Devices:      versionDevices,
+		Links:        versionLinks,
+		Positions:    versionPositions,
+		Areas:        versionAreas,
+		Capabilities: capabilities,
+		Settings:     settings,
+	}
+}
+
+func stableCanvasTopologyDeviceAttributes(attributes map[string]interface{}) map[string]interface{} {
+	stableKeys := []string{
+		"hostname",
+		"ip",
+		"notes",
+		"device_type",
+		"poll_class",
+		"polling_enabled",
+		"poll_interval_override",
+		"sys_name",
+		"sys_descr",
+		"sys_object_id",
+		"hardware_model",
+		"os_version",
+		"vendor",
+		"managed",
+		"tags",
+		"metrics_source",
+		"prometheus_label_name",
+		"prometheus_label_value",
+		"topology_discovery_mode",
+		"effective_topology_discovery_mode",
+		"area_ids",
+		"backup_supported",
+	}
+
+	stable := make(map[string]interface{}, len(stableKeys))
+	for _, key := range stableKeys {
+		value, ok := attributes[key]
+		if !ok {
+			continue
+		}
+		if key == "area_ids" {
+			if areaIDs, ok := value.([]string); ok {
+				cloned := append([]string(nil), areaIDs...)
+				sort.Strings(cloned)
+				stable[key] = cloned
+				continue
+			}
+		}
+		stable[key] = value
+	}
+	return stable
 }
 
 func requestETagMatches(headerValue string, etag string) bool {
