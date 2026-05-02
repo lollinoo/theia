@@ -100,12 +100,7 @@ function App() {
           onViewChange={handleViewChange}
           onAreaSelect={handleAreaSelect}
         />
-        <Watermark
-          activeView={activeView}
-          selectedAreaId={selectedAreaId}
-          areas={areas}
-          hidden={canvasInteractionActive}
-        />
+        <Watermark activeView={activeView} selectedAreaId={selectedAreaId} areas={areas} />
         {/* All views stay mounted; inactive ones hidden via CSS */}
         <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
           <AreaHub

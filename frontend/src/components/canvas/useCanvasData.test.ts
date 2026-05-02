@@ -217,12 +217,13 @@ describe('useCanvasData', () => {
 
     expect(result.current.loading).toBe(false);
     expect(result.current.nodes).toHaveLength(1);
-    expect(result.current.nodes[0].data.device.status).toBe('down');
+    expect(result.current.nodes[0].data.device.status).toBe('up');
+    expect(result.current.nodes[0].data.runtime.status).toBe('down');
     expect(result.current.runtimeSummary).toEqual({
       alertCount: 0,
       prometheusDiagnosticsVisible: false,
     });
-    expect(result.current.nodes[0].data.metrics).toMatchObject({
+    expect(result.current.nodes[0].data.runtime.metrics).toMatchObject({
       health: 'warning',
       last_polled_at: '2026-04-13T11:59:45Z',
       expected_poll_interval_seconds: 60,
@@ -292,7 +293,7 @@ describe('useCanvasData', () => {
     );
   });
 
-  it('emits runtime-aware devices on initial load when snapshot overrides persisted status', async () => {
+  it('keeps emitted devices static when runtime snapshot overrides persisted status', async () => {
     const onDevicesChange = vi.fn();
 
     const { result } = renderUseCanvasData(
@@ -314,9 +315,10 @@ describe('useCanvasData', () => {
     });
 
     expect(result.current.loading).toBe(false);
-    expect(result.current.devices[0]?.status).toBe('down');
+    expect(result.current.devices[0]?.status).toBe('up');
+    expect(result.current.nodes[0].data.runtime.status).toBe('down');
     expect(onDevicesChange).toHaveBeenLastCalledWith([
-      expect.objectContaining({ id: 'dev-1', status: 'down' }),
+      expect.objectContaining({ id: 'dev-1', status: 'up' }),
     ]);
   });
 
@@ -348,8 +350,8 @@ describe('useCanvasData', () => {
 
     expect(result.current.loading).toBe(false);
     expect(result.current.nodes).toHaveLength(1);
-    expect(result.current.nodes[0].data.monitoringState).toBe('unmonitored');
-    expect(result.current.nodes[0].data.metrics).toBeNull();
+    expect(result.current.nodes[0].data.runtime.monitoringState).toBe('unmonitored');
+    expect(result.current.nodes[0].data.runtime.metrics).toBeNull();
   });
 
   it('does not blank runtime telemetry client-side after a local stale timer expires', async () => {
@@ -365,7 +367,7 @@ describe('useCanvasData', () => {
     });
 
     expect(result.current.nodes).toHaveLength(1);
-    expect(result.current.nodes[0].data.metrics).toMatchObject({
+    expect(result.current.nodes[0].data.runtime.metrics).toMatchObject({
       cpu_percent: 42,
       mem_percent: 68,
       temp_celsius: null,
@@ -389,6 +391,7 @@ describe('useCanvasData', () => {
     expect(result.current.loading).toBe(false);
     expect(result.current.nodes).toHaveLength(1);
     expect(result.current.nodes[0].data.device.status).toBe('up');
+    expect(result.current.nodes[0].data.runtime.status).toBe('up');
   });
 
   it('prefers normalized runtime firing alert counts over the raw alert feed', async () => {
@@ -802,7 +805,8 @@ describe('useCanvasData', () => {
 
     expect(fetchCanvasBootstrap).toHaveBeenCalledTimes(1);
     expect(fetchCanvasTopology).not.toHaveBeenCalled();
-    expect(result.current.nodes[0].data.device.status).toBe('down');
+    expect(result.current.nodes[0].data.device.status).toBe('up');
+    expect(result.current.nodes[0].data.runtime.status).toBe('down');
     expect(getCanvasRuntimeBootstrap()).toMatchObject({
       runtimeVersion: 42,
       runtimeIdentity: 'rt-sha256:abc',

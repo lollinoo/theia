@@ -305,15 +305,20 @@ describe('CanvasPanels', () => {
       position: { x: 0, y: 0 },
       data: {
         device,
+        runtime: {
+          status: device.status,
+          metrics: mockMetrics(),
+          alertStatus: 'normal',
+          monitoringState: 'monitorable',
+        },
         pinned: false,
-        metrics: mockMetrics(),
       },
     };
 
     const [updatedNode] = updateNodes([previousNode]);
 
     expect(updatedNode.data.device.ip).toBe('10.0.0.2');
-    expect(updatedNode.data.metrics).toBeNull();
+    expect(updatedNode.data.runtime.metrics).toBeNull();
   });
 
   it('renders link details in read-only mode when edit mode is disabled', () => {

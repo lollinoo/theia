@@ -20,7 +20,6 @@ import { resolveDeviceCardRenderModel } from './deviceCardVariant';
 import {
   type DeviceMonitoringState,
   resolveDeviceAddressState,
-  resolveDeviceMonitoringState,
   resolveDeviceNodeStatusStyles,
   resolveDeviceOperationalReadouts,
   resolveDeviceOperationalStatusState,
@@ -32,17 +31,15 @@ import { VendorIcon } from './icons/VendorIcon';
 export interface DeviceNodeData {
   kind?: 'device' | 'ghost-device';
   device: Device;
+  runtime: DeviceNodeRuntimeData;
   pinned: boolean;
   highlighted?: boolean;
   editMode?: boolean;
-  metrics?: DeviceMetricsDTO | null;
-  alertStatus?: AlertStatus;
   areaColors?: string[];
   onContextMenu?: (event: React.MouseEvent, deviceId: string) => void;
   isGhost?: boolean;
   onGhostClick?: (deviceId: string) => void;
   isVirtual?: boolean;
-  monitoringState?: DeviceMonitoringState;
   subtype?: string;
   selfLinks?: Link[];
   onSelfLinkClick?: (link: Link) => void;
@@ -50,6 +47,13 @@ export interface DeviceNodeData {
 }
 
 export type DeviceNode = Node<DeviceNodeData>;
+
+export interface DeviceNodeRuntimeData {
+  status: Device['status'];
+  metrics: DeviceMetricsDTO | null;
+  alertStatus: AlertStatus;
+  monitoringState: DeviceMonitoringState;
+}
 
 type ReadoutTone = 'default' | 'ok' | 'warning' | 'critical' | 'muted';
 
@@ -275,15 +279,20 @@ function PollingDisabledNotice({ className = '' }: { className?: string }) {
 function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const renderStartedAt =
     isCanvasRenderMetricsEnabled() && typeof performance !== 'undefined' ? performance.now() : null;
-  const monitoringState = data.monitoringState ?? resolveDeviceMonitoringState(data.device);
+  const runtime = data.runtime;
+  const runtimeDevice =
+    data.device.status === runtime.status
+      ? data.device
+      : { ...data.device, status: runtime.status };
+  const monitoringState = runtime.monitoringState;
   const isPollingDisabled =
     monitoringState === 'monitorable' && data.device.polling_enabled === false;
   const isVirtual = data.isVirtual === true;
-  const metrics = sanitizeDeviceMetricsForDisplay(data.device, data.metrics, monitoringState);
+  const metrics = sanitizeDeviceMetricsForDisplay(runtimeDevice, runtime.metrics, monitoringState);
   const headerState =
     metrics || isVirtual
-      ? resolveDeviceVisualState(data.device, metrics, monitoringState)
-      : resolveDeviceOperationalStatusState(data.device, monitoringState);
+      ? resolveDeviceVisualState(runtimeDevice, metrics, monitoringState)
+      : resolveDeviceOperationalStatusState(runtimeDevice, monitoringState);
   const telemetryFallback =
     monitoringState === 'monitorable' && !isVirtual && !metrics
       ? { tone: 'muted' as const, text: 'Unmonitored' }
@@ -314,7 +323,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   });
   const operationalReadouts =
     renderModel.variant === 'physical' && metrics
-      ? resolveDeviceOperationalReadouts(data.device, metrics, monitoringState)
+      ? resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState)
       : null;
   const isVirtualUnmonitored = renderModel.variant === 'virtual-unmonitored';
   const selfLinks = data.selfLinks ?? [];
@@ -643,11 +652,13 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
 export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
   const data = props.data;
-  const metrics = data.metrics;
+  const runtime = data.runtime;
+  const metrics = runtime.metrics;
 
   return {
     deviceId: data.device.id,
-    status: data.device.status,
+    staticStatus: data.device.status,
+    runtimeStatus: runtime.status,
     vendor: data.device.vendor,
     sysName: data.device.sys_name,
     hardwareModel: data.device.hardware_model,
@@ -656,12 +667,12 @@ export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
     pollingEnabled: data.device.polling_enabled,
     areaIds: data.device.area_ids ?? [],
     highlighted: data.highlighted,
-    alertStatus: data.alertStatus,
+    alertStatus: runtime.alertStatus,
     areaColors: data.areaColors ?? [],
     kind: data.kind,
     isGhost: data.isGhost,
     isVirtual: data.isVirtual,
-    monitoringState: data.monitoringState,
+    monitoringState: runtime.monitoringState,
     subtype: data.subtype,
     selfLinks: data.selfLinks,
     cpuPercent: metrics?.cpu_percent,
@@ -700,7 +711,8 @@ function sameDeviceRenderSignature(
 ): boolean {
   return (
     previous.deviceId === next.deviceId &&
-    previous.status === next.status &&
+    previous.staticStatus === next.staticStatus &&
+    previous.runtimeStatus === next.runtimeStatus &&
     previous.vendor === next.vendor &&
     previous.sysName === next.sysName &&
     previous.hardwareModel === next.hardwareModel &&

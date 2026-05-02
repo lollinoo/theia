@@ -158,7 +158,7 @@ function buildSubject(options: {
 }
 
 describe('composeCanvasTopology', () => {
-  it('hydrates node device status from runtime models', () => {
+  it('hydrates node runtime status from runtime models without mutating static device status', () => {
     const { nodes } = buildSubject({
       snapshot: mockSnapshot({
         devices: {
@@ -171,7 +171,9 @@ describe('composeCanvasTopology', () => {
       }),
     });
 
-    expect(nodes.find((node) => node.id === 'dev-1')?.data.device.status).toBe('down');
+    const node = nodes.find((candidate) => candidate.id === 'dev-1');
+    expect(node?.data.device.status).toBe('up');
+    expect(node?.data.runtime.status).toBe('down');
   });
 
   it('hydrates edge endpoint status from runtime models', () => {

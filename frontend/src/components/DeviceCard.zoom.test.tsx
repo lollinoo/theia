@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNodeData } from './DeviceCard';
+import { resolveDeviceMonitoringState } from './deviceVisualState';
 
 vi.mock('@xyflow/react', () => ({
   Handle: ({ id }: { id?: string }) => <span data-testid={`handle-${id ?? 'default'}`} />,
@@ -69,11 +70,21 @@ function mockMetrics(overrides: Partial<DeviceMetricsDTO> = {}): DeviceMetricsDT
   };
 }
 
-function renderDeviceCard(data: Partial<DeviceNodeData> = {}) {
+function renderDeviceCard(
+  data: Partial<DeviceNodeData> & { metrics?: DeviceMetricsDTO | null } = {},
+) {
+  const device = data.device ?? mockDevice();
+  const { metrics, runtime, ...staticData } = data;
   const nodeData: DeviceNodeData = {
-    device: mockDevice(),
+    device,
+    runtime: runtime ?? {
+      status: device.status,
+      metrics: metrics ?? null,
+      alertStatus: 'normal',
+      monitoringState: resolveDeviceMonitoringState(device),
+    },
     pinned: false,
-    ...data,
+    ...staticData,
   };
 
   return render(

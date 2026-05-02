@@ -200,9 +200,18 @@ export function CanvasPanels({
                                 updated.device_type === 'virtual'
                                   ? (updated.tags?.virtual_subtype ?? 'generic')
                                   : undefined,
-                              metrics: ipChanged
-                                ? null
-                                : sanitizeDeviceMetricsForDisplay(updated, n.data.metrics),
+                              runtime: {
+                                ...n.data.runtime,
+                                status: ipChanged ? updated.status : n.data.runtime.status,
+                                monitoringState: resolveDeviceMonitoringState(updated),
+                                metrics: ipChanged
+                                  ? null
+                                  : sanitizeDeviceMetricsForDisplay(
+                                      updated,
+                                      n.data.runtime.metrics,
+                                      resolveDeviceMonitoringState(updated),
+                                    ),
+                              },
                             },
                           }
                         : n,

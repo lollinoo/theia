@@ -95,9 +95,10 @@ describe('buildTopologyNodes', () => {
       [mockAlert()],
     );
 
-    expect(nodes[0].data.device.status).toBe('down');
-    expect(nodes[0].data.alertStatus).toBe('degraded');
-    expect(nodes[0].data.metrics).toMatchObject({
+    expect(nodes[0].data.device.status).toBe('up');
+    expect(nodes[0].data.runtime.status).toBe('down');
+    expect(nodes[0].data.runtime.alertStatus).toBe('degraded');
+    expect(nodes[0].data.runtime.metrics).toMatchObject({
       health: 'warning',
       last_polled_at: '2026-04-13T11:59:45Z',
       expected_poll_interval_seconds: 60,
@@ -132,7 +133,7 @@ describe('buildTopologyNodes', () => {
     );
 
     expect(nodes[0].data.isVirtual).toBe(true);
-    expect(nodes[0].data.metrics).toMatchObject({
+    expect(nodes[0].data.runtime.metrics).toMatchObject({
       health: 'warning',
       last_polled_at: '2026-04-13T11:59:45Z',
       expected_poll_interval_seconds: 60,
@@ -158,12 +159,12 @@ describe('buildTopologyNodes', () => {
       [],
     );
 
-    expect(nodes[0].data.monitoringState).toBe('unmonitored');
-    expect(nodes[0].data.metrics).toBeNull();
+    expect(nodes[0].data.runtime.monitoringState).toBe('unmonitored');
+    expect(nodes[0].data.runtime.metrics).toBeNull();
     expect(nodes[0].data.device.status).toBe('down');
   });
 
-  it('hydrates status from normalized snapshot device runtime', () => {
+  it('hydrates status into node runtime from normalized snapshot device runtime', () => {
     const nodes = buildTopologyNodes(
       [mockDevice({ status: 'up' })],
       new Map(),
@@ -175,11 +176,34 @@ describe('buildTopologyNodes', () => {
       [],
     );
 
-    expect(nodes[0].data.device.status).toBe('down');
-    expect(nodes[0].data.metrics).toMatchObject({
+    expect(nodes[0].data.device.status).toBe('up');
+    expect(nodes[0].data.runtime.status).toBe('down');
+    expect(nodes[0].data.runtime.metrics).toMatchObject({
       health: 'warning',
       last_polled_at: '2026-04-13T11:59:45Z',
       expected_poll_interval_seconds: 60,
+    });
+  });
+
+  it('keeps static device status separate from runtime status when hydrating nodes', () => {
+    const nodes = buildTopologyNodes(
+      [mockDevice({ status: 'up' })],
+      new Map(),
+      new Map(),
+      { x: 120, y: 180 },
+      false,
+      vi.fn(),
+      mockSnapshot(),
+      [],
+    );
+
+    expect(nodes[0].data.device.status).toBe('up');
+    expect(nodes[0].data.runtime).toMatchObject({
+      status: 'down',
+      metrics: expect.objectContaining({
+        health: 'warning',
+        expected_poll_interval_seconds: 60,
+      }),
     });
   });
 
@@ -204,7 +228,7 @@ describe('buildTopologyNodes', () => {
       [mockAlert()],
     );
 
-    expect(nodes[0].data.alertStatus).toBe('normal');
+    expect(nodes[0].data.runtime.alertStatus).toBe('normal');
   });
 
   it('preserves normalized unmonitored device state when building nodes', () => {
@@ -237,8 +261,8 @@ describe('buildTopologyNodes', () => {
       [],
     );
 
-    expect(nodes[0].data.monitoringState).toBe('unmonitored');
-    expect(nodes[0].data.metrics).toBeNull();
+    expect(nodes[0].data.runtime.monitoringState).toBe('unmonitored');
+    expect(nodes[0].data.runtime.metrics).toBeNull();
   });
 
   it('attaches visible self-links to matching device nodes', () => {

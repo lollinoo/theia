@@ -3,7 +3,7 @@ import { ReactFlowProvider } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../types/api';
-import type { DeviceMetricsDTO } from '../types/metrics';
+import type { AlertStatus, DeviceMetricsDTO } from '../types/metrics';
 import DeviceCard, { getDeviceRenderSignature } from './DeviceCard';
 import type { DeviceNode, DeviceNodeData } from './DeviceCard';
 import {
@@ -11,6 +11,7 @@ import {
   exportCanvasMetrics,
   setCanvasRenderMetricsEnabled,
 } from './canvas/canvasInstrumentation';
+import { type DeviceMonitoringState, resolveDeviceMonitoringState } from './deviceVisualState';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -80,10 +81,24 @@ function mockLink(overrides: Partial<Link> = {}): Link {
   };
 }
 
-function makeNodeProps(data: DeviceNodeData): NodeProps<DeviceNode> {
+function makeNodeProps(data: DeviceCardTestData): NodeProps<DeviceNode> {
+  const device = data.device ?? mockDevice();
+  const { alertStatus, metrics, monitoringState, runtime, ...staticData } = data;
+  const nodeData: DeviceNodeData = {
+    device,
+    runtime: runtime ?? {
+      status: device.status,
+      metrics: metrics ?? null,
+      alertStatus: alertStatus ?? 'normal',
+      monitoringState: monitoringState ?? resolveDeviceMonitoringState(device),
+    },
+    pinned: false,
+    ...staticData,
+  };
+
   return {
     id: 'node-1',
-    data,
+    data: nodeData,
     type: 'device',
     selected: false,
     isConnectable: true,
@@ -97,11 +112,25 @@ function makeNodeProps(data: DeviceNodeData): NodeProps<DeviceNode> {
   };
 }
 
-function renderDeviceCard(data: Partial<DeviceNodeData> = {}) {
+type DeviceCardTestData = Partial<DeviceNodeData> & {
+  metrics?: DeviceMetricsDTO | null;
+  alertStatus?: AlertStatus;
+  monitoringState?: DeviceMonitoringState;
+};
+
+function renderDeviceCard(data: DeviceCardTestData = {}) {
+  const device = data.device ?? mockDevice();
+  const { alertStatus, metrics, monitoringState, runtime, ...staticData } = data;
   const nodeData: DeviceNodeData = {
-    device: mockDevice(),
+    device,
+    runtime: runtime ?? {
+      status: device.status,
+      metrics: metrics ?? null,
+      alertStatus: alertStatus ?? 'normal',
+      monitoringState: monitoringState ?? resolveDeviceMonitoringState(device),
+    },
     pinned: false,
-    ...data,
+    ...staticData,
   };
   const props = makeNodeProps(nodeData);
 
@@ -365,6 +394,27 @@ describe('DeviceCard', () => {
 
     expect(screen.getByText('Probing')).toBeInTheDocument();
     expect(screen.queryByText('Warning')).toBeNull();
+  });
+
+  it('uses runtime status for visual state without mutating static device identity', () => {
+    const staticDevice = mockDevice({ status: 'up' });
+
+    renderDeviceCard({
+      device: staticDevice,
+      runtime: {
+        status: 'down',
+        metrics: mockMetrics({
+          operational_status: 'down',
+          health: 'critical',
+          primary_health: 'unreachable',
+        }),
+        alertStatus: 'normal',
+        monitoringState: 'monitorable',
+      },
+    });
+
+    expect(staticDevice.status).toBe('up');
+    expect(screen.getByText('Down')).toBeInTheDocument();
   });
 
   it('distinguishes critical health from down status in the device badge styling', () => {
