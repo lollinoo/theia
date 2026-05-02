@@ -1,7 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import type { CSSProperties, ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
+import { LinkLabelLayer } from './LinkLabelLayer';
+import { clearLinkLabelRegistry } from './linkLabelRegistry';
 
 vi.mock('@xyflow/react', () => ({
   BaseEdge: ({ id, style }: { id: string; style?: CSSProperties }) => (
@@ -15,31 +17,38 @@ vi.mock('@xyflow/react', () => ({
 }));
 
 describe('LinkEdge zoom performance', () => {
+  afterEach(() => {
+    clearLinkLabelRegistry();
+  });
+
   it('uses canvas CSS variables for badge readability without subscribing each edge to zoom', () => {
     render(
-      <LinkEdge
-        {...({
-          id: 'edge-readable',
-          source: 'dev-1',
-          target: 'dev-2',
-          sourceX: 0,
-          sourceY: 0,
-          targetX: 100,
-          targetY: 100,
-          sourcePosition: 'right',
-          targetPosition: 'left',
-          selected: false,
-          data: {
-            bandwidthLabel: '1 Gbps',
-            throughputLabel: 'TX: 500M / RX: 300M',
-            negotiationState: 'matched',
-            sourceDeviceStatus: 'up',
-            targetDeviceStatus: 'up',
-            sourceIfStatus: 'up',
-            targetIfStatus: 'up',
-          },
-        } as never)}
-      />,
+      <>
+        <LinkEdge
+          {...({
+            id: 'edge-readable',
+            source: 'dev-1',
+            target: 'dev-2',
+            sourceX: 0,
+            sourceY: 0,
+            targetX: 100,
+            targetY: 100,
+            sourcePosition: 'right',
+            targetPosition: 'left',
+            selected: false,
+            data: {
+              bandwidthLabel: '1 Gbps',
+              throughputLabel: 'TX: 500M / RX: 300M',
+              negotiationState: 'matched',
+              sourceDeviceStatus: 'up',
+              targetDeviceStatus: 'up',
+              sourceIfStatus: 'up',
+              targetIfStatus: 'up',
+            },
+          } as never)}
+        />
+        <LinkLabelLayer />
+      </>,
     );
 
     expect(screen.getByTestId('edge-readable-badge-stack').style.transform).toContain(

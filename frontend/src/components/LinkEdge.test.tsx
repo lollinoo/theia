@@ -13,6 +13,7 @@ import {
 } from './linkSemantics';
 
 const LINK_EDGE_PATH = join(__dirname, 'LinkEdge.tsx');
+const LINK_LABEL_LAYER_PATH = join(__dirname, 'LinkLabelLayer.tsx');
 const LINK_SEMANTICS_PATH = join(__dirname, 'linkSemantics.ts');
 
 describe('LinkEdge', () => {
@@ -95,21 +96,31 @@ describe('LinkEdge', () => {
   });
 
   it('uses the new high-contrast label surface token', () => {
-    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    const content = readFileSync(LINK_LABEL_LAYER_PATH, 'utf-8');
     expect(content).toContain('bg-surface-container-high');
     expect(content).not.toContain('bg-bg/95');
   });
 
   it('keeps telemetry label pills on a solid tokenized surface without repeated shadows', () => {
-    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    const content = readFileSync(LINK_LABEL_LAYER_PATH, 'utf-8');
     expect(content).toContain('bg-surface-container-high');
     expect(content).toContain('topology-link-badge');
     expect(content).not.toContain('shadow-pill');
-    expect(content).toContain('data-testid={`${id}-badge-${badge.key}`}');
+    expect(content).toContain('data-testid={`${edgeId}-badge-${badge.key}`}');
+  });
+
+  it('delegates telemetry label DOM to the centralized link label layer', () => {
+    const edgeContent = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    const labelLayerContent = readFileSync(LINK_LABEL_LAYER_PATH, 'utf-8');
+
+    expect(edgeContent).not.toContain('EdgeLabelRenderer');
+    expect(edgeContent).toContain('registerLinkLabel');
+    expect(labelLayerContent).toContain('EdgeLabelRenderer');
+    expect(labelLayerContent).toContain('data-testid={`${label.edgeId}-badge-stack`}');
   });
 
   it('animates label pills with opacity and transform transitions', () => {
-    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    const content = readFileSync(LINK_LABEL_LAYER_PATH, 'utf-8');
     expect(content).toContain('transition-[opacity,transform]');
     expect(content).toContain('transition-[border-color,color]');
   });
@@ -163,11 +174,12 @@ describe('LinkEdge', () => {
   });
 
   it('renders a stacked negotiated-rate and throughput group without a standalone AUTO pill', () => {
-    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
-    expect(content).toContain('data?.bandwidthLabel');
-    expect(content).toContain('data?.throughputLabel');
-    expect(content).not.toContain('data?.autonegLabel');
-    expect(content).toContain('badgePresentation.items.map((badge) =>');
-    expect(content).toContain('badge.warningIndicator');
+    const edgeContent = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    const labelLayerContent = readFileSync(LINK_LABEL_LAYER_PATH, 'utf-8');
+    expect(edgeContent).toContain('data?.bandwidthLabel');
+    expect(edgeContent).toContain('data?.throughputLabel');
+    expect(edgeContent).not.toContain('data?.autonegLabel');
+    expect(labelLayerContent).toContain('presentation.items.map((badge) =>');
+    expect(labelLayerContent).toContain('badge.warningIndicator');
   });
 });
