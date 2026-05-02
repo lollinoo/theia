@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,6 +221,57 @@ func TestHandlerServeHTTP_HelloWithCurrentRuntimeVersionSkipsBootstrapSnapshot(t
 
 	if got, want := types, []string{MessageTypeReady, MessageTypeAlert, MessageTypePrometheusStatus}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("bootstrap message order = %v, want %v", got, want)
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerServeHTTP_QueryHelloSkipsBootstrapSnapshotWhenClientHelloMessageIsDelayed(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+	runtimeIdentity := RuntimeIdentityForSnapshot(snapshot)
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			return snapshot, 42
+		},
+		func() AlertMessagePayload {
+			return AlertMessagePayload{Version: 7, Alerts: []AlertDTO{}}
+		},
+		func() PrometheusStatusPayload {
+			return PrometheusStatusPayload{}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("canvas_schema_version", "1")
+	params.Set("runtime_version", "42")
+	params.Set("runtime_identity", runtimeIdentity)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?" + params.Encode()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial websocket test server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read bootstrap websocket message: %v", err)
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("failed to decode bootstrap websocket message: %v", err)
+	}
+	if message.Type != MessageTypeReady {
+		t.Fatalf("bootstrap message type = %q, want %q", message.Type, MessageTypeReady)
 	}
 	conn.SetReadDeadline(time.Time{})
 }
@@ -491,6 +544,88 @@ func TestHandlerServeHTTP_DoesNotReceiveBroadcastBeforeBootstrapReady(t *testing
 			"canvas_schema_version": 1,
 			"runtime_version":       1,
 			"runtime_identity":      RuntimeIdentityForSnapshot(snapshot),
+		},
+	}); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read bootstrap websocket message: %v", err)
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("failed to decode bootstrap websocket message: %v", err)
+	}
+	if message.Type != MessageTypeReady {
+		t.Fatalf("first bootstrap message = %q, want ready", message.Type)
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerServeHTTP_HelloCurrentAtConnectSkipsSnapshotWhenDeltaQueuedDuringHelloWait(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	initialSnapshot := EmptySnapshot()
+	initialSnapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+	updatedSnapshot := CloneSnapshot(initialSnapshot)
+	updatedSnapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "down"}
+	initialIdentity := RuntimeIdentityForSnapshot(initialSnapshot)
+
+	var snapshotMu sync.Mutex
+	currentSnapshot := initialSnapshot
+	currentVersion := uint64(1)
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			snapshotMu.Lock()
+			defer snapshotMu.Unlock()
+			return currentSnapshot, currentVersion
+		},
+		func() AlertMessagePayload {
+			return AlertMessagePayload{Version: 7, Alerts: []AlertDTO{}}
+		},
+		func() PrometheusStatusPayload {
+			return PrometheusStatusPayload{}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial websocket test server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	snapshotMu.Lock()
+	currentSnapshot = updatedSnapshot
+	currentVersion = 2
+	snapshotMu.Unlock()
+	hub.BroadcastOverviewDelta(&RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{
+			"dev-1": {
+				"primary_health": "down",
+			},
+		},
+		Links: map[string]map[string]any{},
+	}, 1, 2, updatedSnapshot)
+	time.Sleep(50 * time.Millisecond)
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"canvas_schema_version": 1,
+			"runtime_version":       1,
+			"runtime_identity":      initialIdentity,
 		},
 	}); err != nil {
 		t.Fatalf("write hello: %v", err)
