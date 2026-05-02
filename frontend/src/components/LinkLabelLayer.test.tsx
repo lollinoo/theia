@@ -1,0 +1,139 @@
+import { act, render, screen } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LinkLabelLayer } from './LinkLabelLayer';
+import {
+  clearLinkLabelRegistry,
+  registerLinkLabel,
+  unregisterLinkLabel,
+} from './linkLabelRegistry';
+
+vi.mock('@xyflow/react', () => ({
+  EdgeLabelRenderer: ({ children }: { children: ReactNode }) => (
+    <div data-testid="central-edge-label-renderer">{children}</div>
+  ),
+}));
+
+describe('LinkLabelLayer', () => {
+  afterEach(() => {
+    clearLinkLabelRegistry();
+  });
+
+  it('renders registered link telemetry badges through one centralized label renderer', () => {
+    render(<LinkLabelLayer />);
+
+    act(() => {
+      registerLinkLabel({
+        edgeId: 'edge-1',
+        interactive: false,
+        presentation: {
+          anchor: { x: 48, y: 24 },
+          opacity: 0.9,
+          scale: 1,
+          visibility: {
+            zoomBand: 'medium',
+            showRate: true,
+            showThroughput: true,
+          },
+          items: [
+            {
+              key: 'rate',
+              text: '1 Gbps',
+              title: 'Matched speed',
+              className: 'border-status-up/35 text-status-up',
+            },
+            {
+              key: 'throughput',
+              text: 'TX: 500M / RX: 300M',
+              className: 'border-status-up/35 text-status-up',
+            },
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByTestId('central-edge-label-renderer')).toBeInTheDocument();
+    expect(screen.getByTestId('edge-1-badge-stack')).toHaveClass('topology-render-contained');
+    expect(screen.getByTestId('edge-1-badge-stack').style.transform).toContain(
+      'translate(48px, 24px)',
+    );
+    expect(screen.getByText('1 Gbps')).toBeInTheDocument();
+    expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
+  });
+
+  it('keeps badges visible during interactions while disabling per-label transitions', () => {
+    render(<LinkLabelLayer />);
+
+    act(() => {
+      registerLinkLabel({
+        edgeId: 'edge-interactive',
+        interactive: true,
+        presentation: {
+          anchor: { x: 12, y: 18 },
+          opacity: 1,
+          scale: 1,
+          visibility: {
+            zoomBand: 'low',
+            showRate: true,
+            showThroughput: false,
+          },
+          items: [
+            {
+              key: 'rate',
+              text: '100 Mbps',
+              className: 'border-warning/35 text-warning',
+              warningIndicator: {
+                text: '!',
+                title: 'Speed mismatch',
+                className: 'border-warning/45 bg-warning/12 text-warning',
+              },
+            },
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByTestId('edge-interactive-badge-stack')).toHaveClass('transition-none');
+    expect(screen.getByTestId('edge-interactive-badge-rate')).toHaveClass(
+      'topology-link-badge',
+      'transition-none',
+    );
+    expect(screen.getByTestId('edge-interactive-badge-rate-warning')).toHaveTextContent('!');
+  });
+
+  it('removes labels when their edge unregisters', () => {
+    render(<LinkLabelLayer />);
+
+    act(() => {
+      registerLinkLabel({
+        edgeId: 'edge-removed',
+        interactive: false,
+        presentation: {
+          anchor: { x: 0, y: 0 },
+          opacity: 1,
+          scale: 1,
+          visibility: {
+            zoomBand: 'medium',
+            showRate: true,
+            showThroughput: false,
+          },
+          items: [
+            {
+              key: 'rate',
+              text: '1 Gbps',
+              className: 'border-outline text-on-bg-secondary',
+            },
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByTestId('edge-removed-badge-stack')).toBeInTheDocument();
+
+    act(() => {
+      unregisterLinkLabel('edge-removed');
+    });
+
+    expect(screen.queryByTestId('edge-removed-badge-stack')).not.toBeInTheDocument();
+  });
+});

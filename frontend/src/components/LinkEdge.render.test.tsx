@@ -1,7 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import type { CSSProperties, ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
+import { LinkLabelLayer } from './LinkLabelLayer';
+import { clearLinkLabelRegistry } from './linkLabelRegistry';
 
 vi.mock('@xyflow/react', async () => {
   const ReactModule = await import('react');
@@ -51,11 +53,16 @@ function renderEdge(
           ...overrides,
         } as never)}
       />
+      <LinkLabelLayer />
     </div>,
   );
 }
 
 describe('LinkEdge render', () => {
+  afterEach(() => {
+    clearLinkLabelRegistry();
+  });
+
   it('shows stacked rate and throughput badges without a standalone AUTO pill', () => {
     renderEdge({}, { throughputLabel: 'TX: 500M / RX: 300M' });
 

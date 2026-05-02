@@ -24,6 +24,7 @@ import {
 import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
+import { LinkLabelLayer } from './LinkLabelLayer';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
@@ -1001,6 +1002,7 @@ export default function Canvas({
         className="bg-transparent"
       >
         <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
+        <LinkLabelLayer />
         {!canvasInteractionActive && <TopologyMiniMap />}
       </ReactFlow>
     </div>

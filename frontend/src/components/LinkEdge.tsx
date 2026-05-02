@@ -1,16 +1,10 @@
-import {
-  BaseEdge,
-  type Edge,
-  EdgeLabelRenderer,
-  type EdgeProps,
-  getBezierPath,
-} from '@xyflow/react';
-import { memo, useMemo, useState } from 'react';
+import { BaseEdge, type Edge, type EdgeProps, getBezierPath } from '@xyflow/react';
+import { memo, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { buildSelfLoopPathModel } from './linkEdgeGeometry';
+import { registerLinkLabel, unregisterLinkLabel } from './linkLabelRegistry';
 import { type LinkEdgeData, resolveEdgeTone, resolveLinkBadgePresentation } from './linkSemantics';
 
 export type LinkEdgeType = Edge<LinkEdgeData>;
-const linkBadgeReadabilityScaleCssVar = 'var(--theia-link-badge-readability-scale, 1)';
 
 function LinkEdgeInner({
   id,
@@ -90,6 +84,26 @@ function LinkEdgeInner({
     [data, edgePath, isActive, isConnected, isMuted, labelX, labelYOffset, tone],
   );
 
+  useLayoutEffect(() => {
+    if (badgePresentation === null || badgePresentation.items.length === 0) {
+      unregisterLinkLabel(id);
+      return;
+    }
+
+    registerLinkLabel({
+      edgeId: id,
+      interactive: isInteractive,
+      presentation: badgePresentation,
+    });
+  }, [badgePresentation, id, isInteractive]);
+
+  useEffect(
+    () => () => {
+      unregisterLinkLabel(id);
+    },
+    [id],
+  );
+
   return (
     <>
       <path
@@ -139,45 +153,6 @@ function LinkEdgeInner({
             : 'stroke-width 120ms ease, stroke-opacity 120ms ease, stroke 120ms ease',
         }}
       />
-
-      {badgePresentation !== null && badgePresentation.items.length > 0 ? (
-        <EdgeLabelRenderer>
-          <div
-            data-testid={`${id}-badge-stack`}
-            className={`topology-render-contained pointer-events-none absolute top-0 left-0 z-10 flex flex-col items-center gap-1.5 ${
-              isInteractive ? 'transition-none' : 'transition-[opacity,transform] duration-150'
-            }`}
-            style={{
-              position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${badgePresentation.anchor.x}px, ${badgePresentation.anchor.y}px) scale(${linkBadgeReadabilityScaleCssVar})`,
-              opacity: badgePresentation.opacity,
-            }}
-          >
-            {badgePresentation.items.map((badge) => (
-              <span
-                key={`${id}-${badge.key}`}
-                data-testid={`${id}-badge-${badge.key}`}
-                title={badge.title}
-                className={`topology-link-badge topology-render-contained inline-flex min-h-7 items-center gap-2 whitespace-nowrap rounded-full border bg-surface-container-high px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none tracking-[0.06em] ${
-                  isInteractive ? 'transition-none' : 'transition-[border-color,color] duration-150'
-                } ${badge.className}`}
-                style={badge.style}
-              >
-                <span>{badge.text}</span>
-                {badge.warningIndicator ? (
-                  <span
-                    data-testid={`${id}-badge-${badge.key}-warning`}
-                    title={badge.warningIndicator.title}
-                    className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full border text-[10px] font-bold leading-none ${badge.warningIndicator.className}`}
-                  >
-                    {badge.warningIndicator.text}
-                  </span>
-                ) : null}
-              </span>
-            ))}
-          </div>
-        </EdgeLabelRenderer>
-      ) : null}
     </>
   );
 }
