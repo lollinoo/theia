@@ -44,7 +44,6 @@ import { buildRuntimeState } from './runtimeAdapters';
 import {
   buildRuntimePatchPlan,
   hasRuntimePatchWork,
-  patchRuntimeDevices,
   patchRuntimeEdges,
   patchRuntimeNodes,
 } from './runtimePatches';
@@ -568,10 +567,6 @@ export function useCanvasData({
             alerts: alertsRef.current,
             prometheusStatus,
           });
-          const runtimeDevices = fetchedDevices.map(
-            (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
-          );
-
           // Migrate localStorage manual edges to backend on first load (best-effort)
           const storedManualRaw = window.localStorage.getItem(manualEdgeStorageKey);
           if (storedManualRaw) {
@@ -612,7 +607,7 @@ export function useCanvasData({
           }
 
           if (!structureChanged) {
-            setDevices(runtimeDevices);
+            setDevices(fetchedDevices);
             setTopologyLinks(fetchedLinks);
             const { nodes: nextNodes, edges: nextEdges } = composeCanvasTopology({
               devices: fetchedDevices,
@@ -753,7 +748,7 @@ export function useCanvasData({
           // low-priority, allowing WebSocket snapshot effects (which depend on
           // devices.length) to interrupt and race with the transition's setNodes,
           // sometimes causing all canvas nodes to vanish after a device delete.
-          setDevices(runtimeDevices);
+          setDevices(fetchedDevices);
           setTopologyLinks(fetchedLinks);
           setNodes((currentNodes) => {
             return mergeNodePresentationState(composedNodes, currentNodes);
@@ -1090,13 +1085,6 @@ export function useCanvasData({
           plan: patchPlan,
         }),
       );
-      setDevices((currentDevices) =>
-        patchRuntimeDevices({
-          devices: currentDevices,
-          runtimeState,
-          plan: patchPlan,
-        }),
-      );
     });
   }, [openEdgeMenu, prometheusStatus, setEdges, setNodes, snapshot]);
 
@@ -1105,7 +1093,7 @@ export function useCanvasData({
       let changed = false;
       const nextNodes = currentNodes.map((node) => {
         const alertStatus = runtimeAlertStatusForDevice(node.id, snapshot, alerts);
-        if (node.data.alertStatus === alertStatus) {
+        if (node.data.runtime.alertStatus === alertStatus) {
           return node;
         }
         changed = true;
@@ -1113,7 +1101,10 @@ export function useCanvasData({
           ...node,
           data: {
             ...node.data,
-            alertStatus,
+            runtime: {
+              ...node.data.runtime,
+              alertStatus,
+            },
           },
         };
       });

@@ -122,12 +122,15 @@ function nodeFor(device: Device): DeviceNode {
     data: {
       kind: 'device',
       device,
+      runtime: {
+        status: device.status,
+        metrics: null,
+        alertStatus: 'normal',
+        monitoringState: 'monitorable',
+      },
       pinned: false,
       highlighted: false,
-      metrics: null,
-      alertStatus: 'normal',
       isVirtual: false,
-      monitoringState: 'monitorable',
     },
   };
 }
@@ -263,11 +266,46 @@ describe('runtime canvas patching', () => {
     expect(patchedNodes).not.toBe(nodes);
     expect(patchedNodes[0]).not.toBe(nodes[0]);
     expect(patchedNodes[1]).toBe(nodes[1]);
-    expect(patchedNodes[0].data.device.status).toBe('down');
-    expect(patchedNodes[0].data.metrics?.cpu_percent).toBe(91);
+    expect(patchedNodes[0].data.device.status).toBe('up');
+    expect(patchedNodes[0].data.runtime.status).toBe('down');
+    expect(patchedNodes[0].data.runtime.metrics?.cpu_percent).toBe(91);
     expect(patchedDevices[0]).not.toBe(devices[0]);
     expect(patchedDevices[0].status).toBe('down');
     expect(patchedDevices[1]).toBe(devices[1]);
+  });
+
+  it('patches runtime node data without replacing static device identity', () => {
+    const devices = [mockDevice('dev-1', { status: 'up' })];
+    const nodes = devices.map(nodeFor);
+    const runtimeState = buildRuntimeState({
+      devices,
+      links: [],
+      snapshot: snapshot({
+        'dev-1': mockDeviceRuntime('dev-1', {
+          operational_status: 'down',
+          health: 'critical',
+          primary_health: 'unreachable',
+          cpu_percent: 91,
+        }),
+      }),
+      alerts: [],
+      prometheusStatus: null,
+    });
+    const plan = {
+      deviceIds: new Set(['dev-1']),
+      directLinkIds: new Set<string>(),
+      edgeIds: new Set<string>(),
+    };
+
+    const patchedNodes = patchRuntimeNodes({ nodes, runtimeState, plan });
+
+    expect(patchedNodes).not.toBe(nodes);
+    expect(patchedNodes[0].data.device).toBe(devices[0]);
+    expect(patchedNodes[0].data.device.status).toBe('up');
+    expect(patchedNodes[0].data.runtime).toMatchObject({
+      status: 'down',
+      metrics: expect.objectContaining({ cpu_percent: 91 }),
+    });
   });
 
   it('keeps node references stable when an included runtime patch does not alter render data', () => {
@@ -283,9 +321,12 @@ describe('runtime canvas patching', () => {
     });
     const runtimeDevice = runtimeState.devicesById.get('dev-1')!;
     const node = nodeFor(runtimeDevice.device);
-    node.data.metrics = runtimeDevice.metrics;
-    node.data.alertStatus = runtimeDevice.alertStatus;
-    node.data.monitoringState = runtimeDevice.monitoringState;
+    node.data.runtime = {
+      status: runtimeDevice.device.status,
+      metrics: runtimeDevice.metrics,
+      alertStatus: runtimeDevice.alertStatus,
+      monitoringState: runtimeDevice.monitoringState,
+    };
     node.data.isVirtual = false;
     node.data.subtype = undefined;
     const nodes = [node];
@@ -316,9 +357,12 @@ describe('runtime canvas patching', () => {
     });
     const currentRuntimeDevice = currentRuntimeState.devicesById.get('dev-1')!;
     const node = nodeFor(currentRuntimeDevice.device);
-    node.data.metrics = currentRuntimeDevice.metrics;
-    node.data.alertStatus = currentRuntimeDevice.alertStatus;
-    node.data.monitoringState = currentRuntimeDevice.monitoringState;
+    node.data.runtime = {
+      status: currentRuntimeDevice.device.status,
+      metrics: currentRuntimeDevice.metrics,
+      alertStatus: currentRuntimeDevice.alertStatus,
+      monitoringState: currentRuntimeDevice.monitoringState,
+    };
     node.data.isVirtual = false;
 
     const nextRuntimeState = buildRuntimeState({

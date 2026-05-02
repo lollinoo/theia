@@ -263,7 +263,7 @@ describe('Canvas drag state ownership', () => {
     expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', { x: 444, y: 555 });
   });
 
-  it('enables visible-element rendering and hides the minimap during canvas gestures', () => {
+  it('keeps visible-element rendering enabled and the minimap visible during canvas gestures', () => {
     vi.useFakeTimers();
     try {
       const onInteractionActiveChange = vi.fn();
@@ -287,11 +287,11 @@ describe('Canvas drag state ownership', () => {
       onInteractionActiveChange.mockClear();
 
       fireEvent.click(screen.getByRole('button', { name: 'Start pan' }));
-      expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
+      expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
       expect(onInteractionActiveChange).toHaveBeenLastCalledWith(true);
 
       fireEvent.click(screen.getByRole('button', { name: 'End pan' }));
-      expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
+      expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
 
       act(() => {
         vi.advanceTimersByTime(180);

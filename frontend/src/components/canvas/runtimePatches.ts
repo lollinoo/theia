@@ -2,7 +2,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, DeviceMetricsDTO, SnapshotPayload } from '../../types/metrics';
-import type { DeviceNode } from '../DeviceCard';
+import type { DeviceNode, DeviceNodeRuntimeData } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import type { LinkEdgeData } from '../linkSemantics';
 import { alertStatusForLink, buildEdgeData } from './edgeBuilder';
@@ -120,17 +120,25 @@ function runtimeNodeDataChanged(
   node: DeviceNode,
   runtimeDevice: RuntimeState['devicesById'] extends Map<string, infer Model> ? Model : never,
 ): boolean {
-  const isVirtual = runtimeDevice.device.device_type === 'virtual';
-  const subtype = isVirtual ? (runtimeDevice.device.tags?.virtual_subtype ?? 'generic') : undefined;
+  const runtimeStatus = runtimeDevice.device.status;
 
   return (
-    !runtimeValueEqual(node.data.device, runtimeDevice.device) ||
-    !runtimeMetricRenderEqual(node.data.metrics, runtimeDevice.metrics) ||
-    node.data.alertStatus !== runtimeDevice.alertStatus ||
-    node.data.monitoringState !== runtimeDevice.monitoringState ||
-    node.data.isVirtual !== isVirtual ||
-    node.data.subtype !== subtype
+    node.data.runtime.status !== runtimeStatus ||
+    !runtimeMetricRenderEqual(node.data.runtime.metrics, runtimeDevice.metrics) ||
+    node.data.runtime.alertStatus !== runtimeDevice.alertStatus ||
+    node.data.runtime.monitoringState !== runtimeDevice.monitoringState
   );
+}
+
+function buildNodeRuntimeData(
+  runtimeDevice: RuntimeState['devicesById'] extends Map<string, infer Model> ? Model : never,
+): DeviceNodeRuntimeData {
+  return {
+    status: runtimeDevice.device.status,
+    metrics: runtimeDevice.metrics,
+    alertStatus: runtimeDevice.alertStatus,
+    monitoringState: runtimeDevice.monitoringState,
+  };
 }
 
 function runtimeMetricRenderEqual(
@@ -219,15 +227,7 @@ export function patchRuntimeNodes({
       ...node,
       data: {
         ...node.data,
-        device: runtimeDevice.device,
-        metrics: runtimeDevice.metrics,
-        alertStatus: runtimeDevice.alertStatus,
-        monitoringState: runtimeDevice.monitoringState,
-        isVirtual: runtimeDevice.device.device_type === 'virtual',
-        subtype:
-          runtimeDevice.device.device_type === 'virtual'
-            ? (runtimeDevice.device.tags?.virtual_subtype ?? 'generic')
-            : undefined,
+        runtime: buildNodeRuntimeData(runtimeDevice),
       },
     };
   });

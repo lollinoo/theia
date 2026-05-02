@@ -1,6 +1,6 @@
 import type { Device, Link } from '../../types/api';
 import { type AlertDTO, type SnapshotPayload, alertStatusForDevice } from '../../types/metrics';
-import type { DeviceNode } from '../DeviceCard';
+import type { DeviceNode, DeviceNodeRuntimeData } from '../DeviceCard';
 import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
@@ -86,25 +86,24 @@ export function buildTopologyNodes(
     const resolvedPosition = position ?? { x: 0, y: 0 };
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
-    // Merge runtime status into fetched topology data when available.
-    let deviceData = device;
     const runtimeDevice = pendingSnapshot?.devices[device.id];
     const monitoringState = snapshotMonitoringState(device, runtimeDevice);
-    if (pendingSnapshot) {
-      const snapStatus = normalizeSnapshotStatus(runtimeDevice?.operational_status);
-      if (snapStatus) {
-        deviceData = {
-          ...device,
-          ...(snapStatus ? { status: snapStatus as Device['status'] } : {}),
-        };
-      }
-    }
+    const runtimeStatus =
+      normalizeSnapshotStatus(runtimeDevice?.operational_status) ?? device.status;
+    const runtimeDeviceForDisplay =
+      device.status === runtimeStatus ? device : { ...device, status: runtimeStatus };
 
     const nodeMetrics = sanitizeDeviceMetricsForDisplay(
-      deviceData,
+      runtimeDeviceForDisplay,
       runtimeDevice ?? null,
       monitoringState,
     );
+    const runtime: DeviceNodeRuntimeData = {
+      status: runtimeStatus,
+      metrics: nodeMetrics,
+      alertStatus: runtimeDevice?.alert_status ?? alertStatusForDevice(device.id, alerts),
+      monitoringState,
+    };
 
     // Virtual devices have no SNMP metrics; detect and propagate flags
     const isVirtual = device.device_type === 'virtual';
@@ -117,16 +116,14 @@ export function buildTopologyNodes(
       },
       data: {
         kind: 'device',
-        device: deviceData,
+        device,
+        runtime,
         pinned: current?.pinned ?? saved?.pinned ?? false,
         highlighted: false,
         editMode,
         onContextMenu: openDeviceMenu,
-        metrics: nodeMetrics,
-        alertStatus: runtimeDevice?.alert_status ?? alertStatusForDevice(device.id, alerts),
         isVirtual,
-        monitoringState,
-        subtype: isVirtual ? (deviceData.tags?.virtual_subtype ?? 'generic') : undefined,
+        subtype: isVirtual ? (device.tags?.virtual_subtype ?? 'generic') : undefined,
         selfLinks,
         onSelfLinkClick,
       },

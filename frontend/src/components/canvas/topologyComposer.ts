@@ -74,11 +74,8 @@ export function composeCanvasTopology({
   placementDeviceIds,
   alerts,
 }: ComposeCanvasTopologyInput): ComposeCanvasTopologyResult {
-  const runtimeDevices = devices.map(
-    (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
-  );
   const nodes = buildTopologyNodes(
-    runtimeDevices,
+    devices,
     savedPositions,
     computedPositions,
     defaultPosition,
@@ -100,19 +97,19 @@ export function composeCanvasTopology({
       ...node,
       data: {
         ...node.data,
-        device: runtimeDevice.device,
-        metrics: runtimeDevice.metrics,
-        alertStatus: runtimeDevice.alertStatus,
-        monitoringState: runtimeDevice.monitoringState,
-        isVirtual: runtimeDevice.device.device_type === 'virtual',
-        subtype:
-          runtimeDevice.device.device_type === 'virtual'
-            ? (runtimeDevice.device.tags?.virtual_subtype ?? 'generic')
-            : undefined,
+        runtime: {
+          status: runtimeDevice.device.status,
+          metrics: runtimeDevice.metrics,
+          alertStatus: runtimeDevice.alertStatus,
+          monitoringState: runtimeDevice.monitoringState,
+        },
       },
     };
   });
 
+  const runtimeDevices = devices.map(
+    (device) => runtimeState.devicesById.get(device.id)?.device ?? device,
+  );
   const runtimeDevicesById = new Map(runtimeDevices.map((device) => [device.id, device]));
   const edges = buildTopologyEdges(
     links,

@@ -7,6 +7,7 @@ import type { SnapshotPayload } from './types/metrics';
 
 const fetchAreasMock = vi.fn<() => Promise<Area[]>>();
 const useWebSocketMock = vi.fn();
+const watermarkPropsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('./api/client', () => ({
   fetchAreas: () => fetchAreasMock(),
@@ -25,7 +26,10 @@ vi.mock('@xyflow/react', () => ({
 }));
 
 vi.mock('./components/Watermark', () => ({
-  Watermark: () => <div data-testid="watermark" />,
+  Watermark: (props: { hidden?: boolean }) => {
+    watermarkPropsMock(props);
+    return <div data-testid="watermark" data-hidden={String(props.hidden ?? false)} />;
+  },
 }));
 
 vi.mock('./components/NavigationPill', () => ({
@@ -143,6 +147,7 @@ describe('App', () => {
   beforeEach(() => {
     fetchAreasMock.mockReset();
     useWebSocketMock.mockReset();
+    watermarkPropsMock.mockClear();
     fetchAreasMock.mockResolvedValue([mockArea()]);
     useWebSocketMock.mockReturnValue({
       snapshot: {
@@ -221,5 +226,18 @@ describe('App', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps the canvas watermark visible while canvas interaction pauses runtime updates', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+
+    act(() => {
+      screen.getByRole('button', { name: 'Start interaction' }).click();
+    });
+
+    expect(screen.getByTestId('watermark')).toHaveAttribute('data-hidden', 'false');
+    expect(watermarkPropsMock.mock.lastCall?.[0]).not.toHaveProperty('hidden');
   });
 });

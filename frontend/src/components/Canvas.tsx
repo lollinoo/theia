@@ -48,7 +48,7 @@ import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
-import { minimapColorForDevice } from './deviceVisualState';
+import { minimapColorForDevice, resolveDeviceMonitoringState } from './deviceVisualState';
 import { resolveLinkBadgeScale } from './linkSemantics';
 
 const nodeTypes = { device: DeviceCard };
@@ -68,9 +68,13 @@ const linkBadgeReadabilityScaleProperty = '--theia-link-badge-readability-scale'
 
 function topologyMinimapNodeColor(node: DeviceNode): string {
   const data = node.data;
+  const device =
+    data.device.status === data.runtime.status
+      ? data.device
+      : { ...data.device, status: data.runtime.status };
   return minimapColorForDevice({
-    device: data.device,
-    metrics: data.metrics,
+    device,
+    metrics: data.runtime.metrics,
     isGhost: isGhostDeviceNode(node),
   });
 }
@@ -496,6 +500,7 @@ export default function Canvas({
         (connectedRealNode
           ? { x: connectedRealNode.position.x + 200, y: connectedRealNode.position.y }
           : { x: 0, y: 0 });
+      const runtimeDevice = runtimeState.devicesById.get(device.id);
 
       return {
         id: device.id,
@@ -505,6 +510,12 @@ export default function Canvas({
         data: {
           kind: 'ghost-device',
           device,
+          runtime: existingNode?.data.runtime ?? {
+            status: runtimeDevice?.device.status ?? device.status,
+            metrics: runtimeDevice?.metrics ?? null,
+            alertStatus: runtimeDevice?.alertStatus ?? 'normal',
+            monitoringState: runtimeDevice?.monitoringState ?? resolveDeviceMonitoringState(device),
+          },
           pinned: false,
           isGhost: true,
           onGhostClick: (deviceId: string) => {
@@ -525,6 +536,7 @@ export default function Canvas({
     filteredLinks,
     ghostDevices,
     devices,
+    runtimeState,
     onAreaSelect,
   ]);
 
@@ -1005,7 +1017,7 @@ export default function Canvas({
       >
         <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
         <LinkLabelLayer />
-        {!canvasInteractionActive && <TopologyMiniMap />}
+        <TopologyMiniMap />
       </ReactFlow>
     </div>
   );
