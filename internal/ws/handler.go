@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -63,19 +64,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		disconnected: make(chan struct{}),
 	}
 
-	h.hub.register <- client
+	h.hub.addClient(client)
 	go client.readPump()
-
-	hello, hasHello, connected, helloTimedOut := waitForClientHello(client)
-	if !connected {
-		return
-	}
 
 	snapshot := EmptySnapshot()
 	version := uint64(0)
 	if h.snapshotFunc != nil {
 		snapshot, version = h.snapshotFunc()
 		snapshot = CloneSnapshot(snapshot)
+	}
+
+	hello, hasHello := clientHelloFromRequest(r)
+	connected := true
+	helloTimedOut := false
+	if !hasHello {
+		hello, hasHello, connected, helloTimedOut = waitForClientHello(client)
+		if !connected {
+			return
+		}
 	}
 	runtimeIdentity := RuntimeIdentityForSnapshot(snapshot)
 
@@ -160,6 +166,43 @@ func debugRuntimeVersion(version *uint64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%d", *version)
+}
+
+func clientHelloFromRequest(r *http.Request) (clientControlMessage, bool) {
+	query := r.URL.Query()
+	if query.Get("canvas_schema_version") == "" &&
+		query.Get("topology_version") == "" &&
+		query.Get("runtime_version") == "" &&
+		query.Get("runtime_identity") == "" &&
+		query.Get("alert_version") == "" {
+		return clientControlMessage{}, false
+	}
+
+	hello := clientControlMessage{
+		Type:            MessageTypeHello,
+		TopologyVersion: query.Get("topology_version"),
+		RuntimeIdentity: query.Get("runtime_identity"),
+	}
+
+	if schemaVersion := query.Get("canvas_schema_version"); schemaVersion != "" {
+		if parsed, err := strconv.Atoi(schemaVersion); err == nil {
+			hello.CanvasSchemaVersion = parsed
+		}
+	}
+
+	if runtimeVersion := query.Get("runtime_version"); runtimeVersion != "" {
+		if parsed, err := strconv.ParseUint(runtimeVersion, 10, 64); err == nil {
+			hello.RuntimeVersion = &parsed
+		}
+	}
+
+	if alertVersion := query.Get("alert_version"); alertVersion != "" {
+		if parsed, err := strconv.ParseUint(alertVersion, 10, 64); err == nil {
+			hello.AlertVersion = &parsed
+		}
+	}
+
+	return hello, true
 }
 
 func waitForClientHello(client *Client) (clientControlMessage, bool, bool, bool) {

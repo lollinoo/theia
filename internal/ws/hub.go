@@ -70,15 +70,19 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case client := <-h.register:
-			h.mu.Lock()
-			h.clients[client] = true
-			clientCount := len(h.clients)
-			h.mu.Unlock()
-			logging.Debugf("websocket client registered clients=%d", clientCount)
+			h.addClient(client)
 		case client := <-h.unregister:
 			h.removeClient(client)
 		}
 	}
+}
+
+func (h *Hub) addClient(client *Client) {
+	h.mu.Lock()
+	h.clients[client] = true
+	clientCount := len(h.clients)
+	h.mu.Unlock()
+	logging.Debugf("websocket client registered clients=%d", clientCount)
 }
 
 // Broadcast serializes a message and sends it to all connected clients.
