@@ -43,6 +43,20 @@ interface UseWebSocketOptions {
 type DetailControlType = 'subscribe_detail' | 'unsubscribe_detail';
 const canvasSchemaVersion = 1;
 
+interface CanvasHelloPayload {
+  canvas_schema_version: number;
+  topology_version?: string;
+  runtime_version?: number;
+  runtime_identity?: string;
+  alert_version?: number;
+  subscriptions: {
+    runtime: boolean;
+    topology: boolean;
+    alerts: boolean;
+    details_device_id: string | null;
+  };
+}
+
 function buildWebSocketURL(url: string): string {
   if (/^wss?:\/\//i.test(url)) {
     return url;
@@ -59,6 +73,24 @@ function buildWebSocketURL(url: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const normalizedPath = url.startsWith('/') ? url : `/${url}`;
   return `${protocol}//${window.location.host}${normalizedPath}`;
+}
+
+function appendHelloQueryParams(url: string, payload: CanvasHelloPayload): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set('canvas_schema_version', String(payload.canvas_schema_version));
+  if (payload.topology_version !== undefined) {
+    parsed.searchParams.set('topology_version', payload.topology_version);
+  }
+  if (payload.runtime_version !== undefined) {
+    parsed.searchParams.set('runtime_version', String(payload.runtime_version));
+  }
+  if (payload.runtime_identity !== undefined) {
+    parsed.searchParams.set('runtime_identity', payload.runtime_identity);
+  }
+  if (payload.alert_version !== undefined) {
+    parsed.searchParams.set('alert_version', String(payload.alert_version));
+  }
+  return parsed.toString();
 }
 
 export function useWebSocket(
@@ -252,8 +284,27 @@ export function useWebSocket(
         socketRef.current = null;
       }
 
+      function buildHelloPayload(): CanvasHelloPayload {
+        const diagnostics = getCanvasDiagnosticsSnapshot();
+        const hasRuntimeBase = hasRuntimeSnapshotRef.current;
+        return {
+          canvas_schema_version: canvasSchemaVersion,
+          topology_version: diagnostics.topology.topologyVersion,
+          runtime_version: hasRuntimeBase ? (snapshotVersionRef.current ?? undefined) : undefined,
+          runtime_identity: hasRuntimeBase ? (runtimeIdentityRef.current ?? undefined) : undefined,
+          alert_version: alertVersionRef.current ?? undefined,
+          subscriptions: {
+            runtime: true,
+            topology: true,
+            alerts: true,
+            details_device_id: detailDeviceIdRef.current,
+          },
+        };
+      }
+
       resetAlertState();
-      const ws = new WebSocket(buildWebSocketURL(url));
+      const initialHelloPayload = buildHelloPayload();
+      const ws = new WebSocket(appendHelloQueryParams(buildWebSocketURL(url), initialHelloPayload));
       socketRef.current = ws;
 
       function dispatchResyncRequired(payload: ResyncRequiredPayload): void {
@@ -265,28 +316,10 @@ export function useWebSocket(
       }
 
       function sendHello(): void {
-        const diagnostics = getCanvasDiagnosticsSnapshot();
-        const hasRuntimeBase = hasRuntimeSnapshotRef.current;
         ws.send(
           JSON.stringify({
             type: 'hello',
-            payload: {
-              canvas_schema_version: canvasSchemaVersion,
-              topology_version: diagnostics.topology.topologyVersion,
-              runtime_version: hasRuntimeBase
-                ? (snapshotVersionRef.current ?? undefined)
-                : undefined,
-              runtime_identity: hasRuntimeBase
-                ? (runtimeIdentityRef.current ?? undefined)
-                : undefined,
-              alert_version: alertVersionRef.current ?? undefined,
-              subscriptions: {
-                runtime: true,
-                topology: true,
-                alerts: true,
-                details_device_id: detailDeviceIdRef.current,
-              },
-            },
+            payload: buildHelloPayload(),
           }),
         );
       }

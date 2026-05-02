@@ -87,9 +87,11 @@ class MockWebSocket {
 
 let mockInstance: MockWebSocket;
 let mockInstances: MockWebSocket[] = [];
+let mockUrls: string[] = [];
 
 beforeEach(() => {
   mockInstances = [];
+  mockUrls = [];
   vi.useFakeTimers();
   resetCanvasDiagnostics();
   resetCanvasRuntimeBootstrap();
@@ -97,8 +99,9 @@ beforeEach(() => {
   // Replace the global WebSocket with our MockWebSocket class.
   // When the hook calls `new WebSocket(url)`, it will construct a MockWebSocket.
   const OriginalMock = class extends MockWebSocket {
-    constructor(_url: string) {
+    constructor(url: string) {
       super();
+      mockUrls.push(url);
       mockInstance = this;
       mockInstances.push(this);
     }
@@ -129,6 +132,9 @@ describe('useWebSocket', () => {
     });
 
     expect(mockInstances).toHaveLength(1);
+    expect(mockUrls[0]).toContain('canvas_schema_version=1');
+    expect(mockUrls[0]).toContain('runtime_version=42');
+    expect(mockUrls[0]).toContain('runtime_identity=rt-sha256%3Aabc');
 
     act(() => {
       mockInstance.simulateOpen();
