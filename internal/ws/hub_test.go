@@ -191,6 +191,28 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncOnlyForHTTPBootstrapClient(t
 	}
 }
 
+func TestClientAcceptHelloClearsQueuedOverviewMessages(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+	client.needsResync = true
+	client.overviewSend <- []byte("stale-runtime-delta")
+	client.overviewSend <- []byte("stale-resync-marker")
+
+	version := uint64(12)
+	client.acceptHello(clientControlMessage{
+		Type:           MessageTypeHello,
+		RuntimeVersion: &version,
+	})
+
+	if client.needsResync {
+		t.Fatal("expected client hello to clear HTTP resync marker")
+	}
+	if got := len(client.overviewSend); got != 0 {
+		t.Fatalf("overview mailbox length = %d, want 0", got)
+	}
+}
+
 func TestHubOverviewSnapshotSendsResyncOnlyForHTTPBootstrapClient(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)

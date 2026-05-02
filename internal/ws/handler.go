@@ -107,6 +107,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 		}
 		bootstrapDecision = MessageTypeResyncRequired
+		client.markHTTPRuntimeResyncPending()
 	} else {
 		bootstrapMessage = NewSnapshotMessage(snapshot, version)
 	}

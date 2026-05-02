@@ -484,6 +484,7 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	c.mu.Lock()
 	c.usesHTTPRuntimeBootstrap = true
 	c.needsResync = false
+	clearQueuedMessages(c.overviewSend)
 	c.mu.Unlock()
 
 	if c.hello == nil {
@@ -494,6 +495,14 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	case c.hello <- cmd:
 	default:
 	}
+}
+
+func (c *Client) markHTTPRuntimeResyncPending() {
+	c.mu.Lock()
+	c.usesHTTPRuntimeBootstrap = true
+	c.needsResync = true
+	clearQueuedMessages(c.overviewSend)
+	c.mu.Unlock()
 }
 
 func (c *Client) usesHTTPBootstrap() bool {

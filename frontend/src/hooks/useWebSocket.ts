@@ -382,6 +382,14 @@ export function useWebSocket(
         });
       }
 
+      function getRawMessageType(raw: unknown): string | null {
+        if (raw === null || typeof raw !== 'object') {
+          return null;
+        }
+        const type = (raw as { type?: unknown }).type;
+        return typeof type === 'string' ? type : null;
+      }
+
       ws.onopen = () => {
         if (disposed.current) {
           ws.close();
@@ -417,8 +425,9 @@ export function useWebSocket(
       };
 
       ws.onmessage = (event: MessageEvent<string>) => {
+        let raw: unknown;
         try {
-          const raw = JSON.parse(event.data) as unknown;
+          raw = JSON.parse(event.data) as unknown;
           const message = parseWSMessage(raw);
           const messageAt = new Date().toISOString();
           updateCanvasDiagnosticsState({
@@ -659,6 +668,10 @@ export function useWebSocket(
           }
         } catch (error) {
           console.error('Failed to parse WebSocket message', error);
+          const messageType = getRawMessageType(raw);
+          if (messageType === 'runtime_delta' || messageType === 'snapshot_delta') {
+            requestClientResync('client_resync_scheduled', 'invalid_runtime_delta_payload');
+          }
         }
       };
 

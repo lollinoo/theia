@@ -1659,6 +1659,55 @@ describe('useWebSocket', () => {
     expect(result.current.snapshot).toBeNull();
   });
 
+  it('requests resync when a runtime_delta payload cannot be parsed', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 7,
+          snapshot: {
+            devices: { 'dev-1': makeDeviceRuntime() },
+            links: {},
+          },
+        },
+      });
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 7,
+          version: 8,
+          delta: {
+            devices: {
+              'dev-1': {
+                primary_health: 'not-a-runtime-health',
+              },
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    expect(mockInstance.close).toHaveBeenCalled();
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'backend-resync-required',
+        detail: {
+          scope: 'overview',
+          reason: 'client_resync_scheduled',
+        },
+      }),
+    );
+    expect(exportCanvasDiagnostics().diagnostics.websocket.lastRejectedDeltaReason).toBe(
+      'invalid_runtime_delta_payload',
+    );
+  });
+
   it('snapshot_delta without core changes leaves snapshot unchanged', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 

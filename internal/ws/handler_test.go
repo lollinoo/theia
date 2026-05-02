@@ -711,3 +711,71 @@ func TestHandlerServeHTTP_StaleHelloRequestsHTTPResyncInsteadOfSnapshot(t *testi
 	}
 	conn.SetReadDeadline(time.Time{})
 }
+
+func TestHandlerServeHTTP_StaleHelloMarksClientAwaitingHTTPResync(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			return snapshot, 2
+		},
+		func() AlertMessagePayload {
+			return AlertMessagePayload{Version: 7, Alerts: []AlertDTO{}}
+		},
+		func() PrometheusStatusPayload {
+			return PrometheusStatusPayload{}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial websocket test server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"canvas_schema_version": 1,
+			"runtime_version":       1,
+			"runtime_identity":      "rt-sha256:stale",
+		},
+	}); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read bootstrap websocket message: %v", err)
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("failed to decode bootstrap websocket message: %v", err)
+	}
+	if message.Type != MessageTypeResyncRequired {
+		t.Fatalf("first bootstrap message = %q, want resync_required", message.Type)
+	}
+
+	clients := hub.copyClients()
+	if len(clients) != 1 {
+		t.Fatalf("connected clients = %d, want 1", len(clients))
+	}
+	clients[0].mu.Lock()
+	needsResync := clients[0].needsResync
+	clients[0].mu.Unlock()
+	if !needsResync {
+		t.Fatal("expected stale hello client to be marked as awaiting HTTP resync")
+	}
+	conn.SetReadDeadline(time.Time{})
+}
