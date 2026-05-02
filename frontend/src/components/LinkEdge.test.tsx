@@ -100,10 +100,11 @@ describe('LinkEdge', () => {
     expect(content).not.toContain('bg-bg/95');
   });
 
-  it('keeps telemetry label pills on a solid tokenized surface', () => {
+  it('keeps telemetry label pills on a solid tokenized surface without repeated shadows', () => {
     const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
     expect(content).toContain('bg-surface-container-high');
-    expect(content).toContain('shadow-pill');
+    expect(content).toContain('topology-link-badge');
+    expect(content).not.toContain('shadow-pill');
     expect(content).toContain('data-testid={`${id}-badge-${badge.key}`}');
   });
 

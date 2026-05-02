@@ -351,7 +351,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       <>
         <Handle type="target" position={Position.Top} className={universalHandleClassName} />
         <div
-          className="w-[132px] cursor-pointer rounded-2xl border border-dashed border-outline bg-surface/72 px-3 py-2 text-center transition-[border-color,background-color,color] duration-150 hover:bg-surface-container"
+          className="topology-node-card topology-render-contained w-[132px] cursor-pointer rounded-2xl border border-dashed border-outline bg-surface/72 px-3 py-2 text-center transition-[border-color,background-color,color] duration-150 hover:bg-surface-container"
           style={ghostFrameStyle(firstColor)}
           onClick={() => data.onGhostClick?.(data.device.id)}
           role="button"
@@ -377,7 +377,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   return (
     <div
       data-testid="device-node-card"
-      className={`group relative w-full rounded-[20px] border border-outline bg-surface transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-outline-strong ${isVirtual ? 'min-h-[160px] min-w-[200px] max-h-[235px] max-w-[285px]' : 'min-h-[140px]'} ${statusStyles.frameClass ?? ''}`}
+      className={`topology-node-card topology-render-contained group relative w-full rounded-[20px] border border-outline bg-surface transition-[border-color] duration-150 hover:border-outline-strong ${isVirtual ? 'min-h-[160px] min-w-[200px] max-h-[235px] max-w-[285px]' : 'min-h-[140px]'} ${statusStyles.frameClass ?? ''}`}
       style={statusStyles.frameStyle}
       onContextMenu={(event) => {
         if (!data.onContextMenu) return;
@@ -389,7 +389,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       {primarySelfLink ? (
         <button
           type="button"
-          className="absolute left-1/2 top-0 z-20 flex max-w-[calc(100%-1rem)] -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full border border-primary/25 bg-surface-container-high/95 px-3 py-1.5 text-left shadow-floating backdrop-blur-sm transition-[border-color,transform] duration-150 hover:-translate-y-[55%] hover:border-primary/45"
+          className="absolute left-1/2 top-0 z-20 flex max-w-[calc(100%-1rem)] -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full border border-primary/25 bg-surface-container-high px-3 py-1.5 text-left transition-[border-color,background-color] duration-150 hover:border-primary/45"
           onMouseDown={(event) => {
             event.stopPropagation();
           }}
@@ -574,7 +574,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
               ) : null}
 
-              <div className="flex h-[56px] w-[56px] items-center justify-center rounded-[22px] border border-outline bg-surface-container-high text-on-bg shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
+              <div className="flex h-[56px] w-[56px] items-center justify-center rounded-[22px] border border-outline bg-surface-container-high text-on-bg">
                 <VendorIcon vendor={data.device.vendor} size={20} />
               </div>
 

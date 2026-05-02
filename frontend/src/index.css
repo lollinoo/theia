@@ -320,9 +320,28 @@
     box-shadow: var(--nt-node-shadow);
   }
 
+  .topology-render-contained {
+    contain: layout style;
+  }
+
+  .topology-link-badge {
+    box-shadow: none;
+  }
+
+  .topology-interacting .topology-node-card,
+  .topology-interacting .topology-link-badge,
+  .topology-interacting .topology-render-contained {
+    transition: none !important;
+  }
+
   .topology-node-down-pulse {
     animation: topology-node-down-pulse 1.35s ease-in-out infinite;
     will-change: background-color;
+  }
+
+  .topology-interacting .topology-node-down-pulse {
+    animation: none;
+    will-change: auto;
   }
 }
 
