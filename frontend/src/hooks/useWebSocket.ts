@@ -137,6 +137,37 @@ export function useWebSocket(
   const topologyChangedCountRef = useRef(0);
   const disposed = useRef(false);
 
+  function buildHelloPayload(): CanvasHelloPayload {
+    const diagnostics = getCanvasDiagnosticsSnapshot();
+    const hasRuntimeBase = hasRuntimeSnapshotRef.current;
+    return {
+      canvas_schema_version: canvasSchemaVersion,
+      topology_version: diagnostics.topology.topologyVersion,
+      runtime_version: hasRuntimeBase ? (snapshotVersionRef.current ?? undefined) : undefined,
+      runtime_identity: hasRuntimeBase ? (runtimeIdentityRef.current ?? undefined) : undefined,
+      alert_version: alertVersionRef.current ?? undefined,
+      subscriptions: {
+        runtime: true,
+        topology: true,
+        alerts: true,
+        details_device_id: detailDeviceIdRef.current,
+      },
+    };
+  }
+
+  function sendHello(socket: WebSocket | null = socketRef.current): void {
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: 'hello',
+        payload: buildHelloPayload(),
+      }),
+    );
+  }
+
   function publishRuntimeSnapshot(nextSnapshot: SnapshotPayload | null): void {
     snapshotStateRef.current = nextSnapshot;
     if (runtimeUpdatesPausedRef.current) {
@@ -211,6 +242,7 @@ export function useWebSocket(
           runtimeIdentity: bootstrap.runtimeIdentity,
         },
       });
+      sendHello();
     });
   }, [requireRuntimeBootstrap]);
 
@@ -284,24 +316,6 @@ export function useWebSocket(
         socketRef.current = null;
       }
 
-      function buildHelloPayload(): CanvasHelloPayload {
-        const diagnostics = getCanvasDiagnosticsSnapshot();
-        const hasRuntimeBase = hasRuntimeSnapshotRef.current;
-        return {
-          canvas_schema_version: canvasSchemaVersion,
-          topology_version: diagnostics.topology.topologyVersion,
-          runtime_version: hasRuntimeBase ? (snapshotVersionRef.current ?? undefined) : undefined,
-          runtime_identity: hasRuntimeBase ? (runtimeIdentityRef.current ?? undefined) : undefined,
-          alert_version: alertVersionRef.current ?? undefined,
-          subscriptions: {
-            runtime: true,
-            topology: true,
-            alerts: true,
-            details_device_id: detailDeviceIdRef.current,
-          },
-        };
-      }
-
       resetAlertState();
       const initialHelloPayload = buildHelloPayload();
       const ws = new WebSocket(appendHelloQueryParams(buildWebSocketURL(url), initialHelloPayload));
@@ -311,15 +325,6 @@ export function useWebSocket(
         window.dispatchEvent(
           new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
             detail: payload,
-          }),
-        );
-      }
-
-      function sendHello(): void {
-        ws.send(
-          JSON.stringify({
-            type: 'hello',
-            payload: buildHelloPayload(),
           }),
         );
       }
@@ -401,7 +406,7 @@ export function useWebSocket(
           event: wasReconnect ? 'websocket.reconnected' : 'websocket.connected',
           message: wasReconnect ? 'Canvas WebSocket reconnected' : 'Canvas WebSocket connected',
         });
-        sendHello();
+        sendHello(ws);
         if (wasReconnect) {
           window.dispatchEvent(new Event('backend-reconnected'));
         }

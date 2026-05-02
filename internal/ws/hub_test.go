@@ -130,7 +130,7 @@ func TestHubOverviewBufferAbsorbsShortClientStalls(t *testing.T) {
 	}
 }
 
-func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshot(t *testing.T) {
+func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshotForLegacyClient(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
 	for i := 0; i < cap(client.overviewSend); i++ {
@@ -152,6 +152,63 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshot(t *testing.T) {
 	}
 	if client.needsResync {
 		t.Fatal("expected client resync flag to clear after fallback snapshot")
+	}
+}
+
+func TestHubOverviewDelta_FullMailboxSchedulesResyncOnlyForHTTPBootstrapClient(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	fallback := EmptySnapshot()
+	fallback.DeviceStatuses["dev-1"] = "up"
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
+		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), MessageTypeSnapshot) {
+		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
+	}
+	if !client.needsResync {
+		t.Fatal("expected client to remain marked for HTTP resync")
+	}
+
+	version := uint64(2)
+	client.acceptHello(clientControlMessage{
+		Type:           MessageTypeHello,
+		RuntimeVersion: &version,
+	})
+	if client.needsResync {
+		t.Fatal("expected client hello to clear HTTP resync marker")
+	}
+}
+
+func TestHubOverviewSnapshotSendsResyncOnlyForHTTPBootstrapClient(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+
+	snapshot := EmptySnapshot()
+	snapshot.DeviceStatuses["dev-1"] = "up"
+	hub.BroadcastOverviewSnapshot(snapshot, 4)
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
+		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), MessageTypeSnapshot) {
+		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
 	}
 }
 

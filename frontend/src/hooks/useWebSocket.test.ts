@@ -160,6 +160,61 @@ describe('useWebSocket', () => {
     );
   });
 
+  it('sends a fresh hello after HTTP runtime resync on an open socket', () => {
+    renderHook(() =>
+      useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
+    );
+
+    act(() => {
+      publishCanvasRuntimeBootstrap({
+        snapshot: { devices: {}, links: {} },
+        runtimeVersion: 10,
+        runtimeIdentity: 'rt-sha256:initial',
+      });
+    });
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    mockInstance.send.mockClear();
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'resync_required',
+        payload: {
+          scope: 'overview',
+          reason: 'client_resync_scheduled',
+        },
+      });
+      publishCanvasRuntimeBootstrap({
+        snapshot: { devices: {}, links: {} },
+        runtimeVersion: 12,
+        runtimeIdentity: 'rt-sha256:resynced',
+      });
+    });
+
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'hello',
+        payload: {
+          canvas_schema_version: 1,
+          topology_version: undefined,
+          runtime_version: 12,
+          runtime_identity: 'rt-sha256:resynced',
+          alert_version: undefined,
+          subscriptions: {
+            runtime: true,
+            topology: true,
+            alerts: true,
+            details_device_id: null,
+          },
+        },
+      }),
+    );
+    expect(mockInstance.close).not.toHaveBeenCalled();
+  });
+
   it('sets connected=true after open', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 

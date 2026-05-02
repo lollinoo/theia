@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestHubBroadcastMarksClientForResyncWhenMailboxIsFull(t *testing.T) {
+func TestHubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
 	for i := 0; i < cap(client.overviewSend); i++ {
@@ -45,6 +45,32 @@ func TestHubBroadcastMarksClientForResyncWhenMailboxIsFull(t *testing.T) {
 	}
 	if resyncPayload.Reason != ResyncReasonClientResync {
 		t.Fatalf("resync reason = %q, want %q", resyncPayload.Reason, ResyncReasonClientResync)
+	}
+}
+
+func TestHubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	fallback := EmptySnapshot()
+	fallback.DeviceStatuses["dev-1"] = "up"
+
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 5, 6, fallback)
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	if !client.needsResync {
+		t.Fatal("expected client to remain marked for HTTP resync")
+	}
+
+	first := decodeHubStressMessage(t, <-client.overviewSend)
+	if first.Type != MessageTypeResyncRequired {
+		t.Fatalf("message type = %q, want %q", first.Type, MessageTypeResyncRequired)
 	}
 }
 

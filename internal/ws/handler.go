@@ -64,6 +64,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		disconnected: make(chan struct{}),
 	}
 
+	hello, hasHello := clientHelloFromRequest(r)
+	client.usesHTTPRuntimeBootstrap = hasHello
 	h.hub.addClient(client)
 	go client.readPump()
 
@@ -74,7 +76,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		snapshot = CloneSnapshot(snapshot)
 	}
 
-	hello, hasHello := clientHelloFromRequest(r)
 	connected := true
 	helloTimedOut := false
 	if !hasHello {
