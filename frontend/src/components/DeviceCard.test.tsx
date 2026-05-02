@@ -116,6 +116,11 @@ describe('DeviceCard', () => {
   it('renders physical node card body with hostname, status, address, telemetry, and compact runtime readouts', () => {
     renderDeviceCard({ metrics: mockMetrics() });
 
+    expect(screen.getByTestId('device-node-card')).toHaveClass(
+      'topology-node-card',
+      'topology-render-contained',
+    );
+    expect(screen.getByTestId('device-node-card')).not.toHaveClass('hover:-translate-y-0.5');
     expect(screen.getByText('router-01')).toBeInTheDocument();
     expect(screen.getByText('Up')).toBeInTheDocument();
     expect(screen.getByText('IP 10.0.0.1')).toBeInTheDocument();
@@ -131,6 +136,25 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('Late')).toBeNull();
     expect(screen.queryByText('Partial')).toBeNull();
     expect(screen.queryByText(/Polling every/)).toBeNull();
+  });
+
+  it('keeps self-link details visible without backdrop blur or floating shadows on repeated cards', () => {
+    renderDeviceCard({
+      metrics: mockMetrics(),
+      selfLinks: [
+        mockLink({
+          id: 'self-link-1',
+          source_if_name: 'ether1',
+          target_if_name: 'ether9',
+        }),
+      ],
+    });
+
+    const selfLinkButton = screen.getByRole('button', { name: /view details for self link/i });
+    expect(selfLinkButton).toHaveTextContent('Self');
+    expect(selfLinkButton).toHaveTextContent('ether1');
+    expect(selfLinkButton).not.toHaveClass('shadow-floating');
+    expect(selfLinkButton).not.toHaveClass('backdrop-blur-sm');
   });
 
   it('records a render metric sample when canvas render metrics are enabled', () => {

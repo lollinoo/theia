@@ -135,14 +135,19 @@ describe('LinkEdge render', () => {
     }
   });
 
-  it('suppresses telemetry badges while the canvas is being interacted with', () => {
+  it('keeps telemetry badges visible during canvas interaction without paint-heavy badge chrome', () => {
     renderEdge(
       { id: 'edge-interactive' },
       { interactionMode: 'interactive', throughputLabel: 'TX: 500M / RX: 300M' },
     );
 
-    expect(screen.queryByTestId('edge-interactive-badge-stack')).not.toBeInTheDocument();
-    expect(screen.queryByText('1 Gbps')).not.toBeInTheDocument();
+    expect(screen.getByTestId('edge-interactive-badge-stack')).toHaveClass(
+      'topology-render-contained',
+      'transition-none',
+    );
+    expect(screen.getByText('1 Gbps')).toBeInTheDocument();
+    expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
+    expect(screen.getByTestId('edge-interactive-badge-rate')).not.toHaveClass('shadow-pill');
     expect(screen.getByTestId('edge-interactive')).toHaveStyle({ transition: 'none' });
   });
 });

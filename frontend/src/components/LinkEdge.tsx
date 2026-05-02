@@ -75,21 +75,19 @@ function LinkEdgeInner({
   const labelYOffset = labelY + labelOffsetY;
   const badgePresentation = useMemo(
     () =>
-      isInteractive
-        ? null
-        : resolveLinkBadgePresentation({
-            data,
-            zoom: 1,
-            path: edgePath,
-            fallbackX: labelX,
-            fallbackY: labelYOffset,
-            edgeTone: tone,
-            parallelIndex: data?.parallelIndex,
-            isActive,
-            isConnected,
-            isMuted,
-          }),
-    [data, edgePath, isActive, isConnected, isInteractive, isMuted, labelX, labelYOffset, tone],
+      resolveLinkBadgePresentation({
+        data,
+        zoom: 1,
+        path: edgePath,
+        fallbackX: labelX,
+        fallbackY: labelYOffset,
+        edgeTone: tone,
+        parallelIndex: data?.parallelIndex,
+        isActive,
+        isConnected,
+        isMuted,
+      }),
+    [data, edgePath, isActive, isConnected, isMuted, labelX, labelYOffset, tone],
   );
 
   return (
@@ -146,7 +144,9 @@ function LinkEdgeInner({
         <EdgeLabelRenderer>
           <div
             data-testid={`${id}-badge-stack`}
-            className="pointer-events-none absolute top-0 left-0 z-10 flex flex-col items-center gap-1.5 transition-[opacity,transform] duration-150"
+            className={`topology-render-contained pointer-events-none absolute top-0 left-0 z-10 flex flex-col items-center gap-1.5 ${
+              isInteractive ? 'transition-none' : 'transition-[opacity,transform] duration-150'
+            }`}
             style={{
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${badgePresentation.anchor.x}px, ${badgePresentation.anchor.y}px) scale(${linkBadgeReadabilityScaleCssVar})`,
@@ -158,7 +158,9 @@ function LinkEdgeInner({
                 key={`${id}-${badge.key}`}
                 data-testid={`${id}-badge-${badge.key}`}
                 title={badge.title}
-                className={`inline-flex min-h-7 items-center gap-2 whitespace-nowrap rounded-full border bg-surface-container-high px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none tracking-[0.06em] shadow-pill transition-[border-color,color] duration-150 ${badge.className}`}
+                className={`topology-link-badge topology-render-contained inline-flex min-h-7 items-center gap-2 whitespace-nowrap rounded-full border bg-surface-container-high px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none tracking-[0.06em] ${
+                  isInteractive ? 'transition-none' : 'transition-[border-color,color] duration-150'
+                } ${badge.className}`}
                 style={badge.style}
               >
                 <span>{badge.text}</span>
