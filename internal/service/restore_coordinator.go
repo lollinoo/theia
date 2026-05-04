@@ -31,6 +31,8 @@ var terminatePostgresConnections = func(ctx context.Context, dsn string) error {
 	return nil
 }
 
+var restoreCoordinatorAfterDBActivationHook func() error
+
 type restoreMarker struct {
 	StagedDB         string `json:"staged_db"`
 	StagedBackups    string `json:"staged_backups"`
@@ -139,15 +141,22 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		}
 	}
 
+	if restoreCoordinatorAfterDBActivationHook != nil {
+		if err := restoreCoordinatorAfterDBActivationHook(); err != nil {
+			return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("after db activation hook: %w", err))
+		}
+	}
+
 	if marker.StagedBackups != "" && marker.DeviceBackupDir != "" {
 		if info, err := os.Stat(marker.StagedBackups); err == nil {
-			if info.IsDir() {
-				if err := validateOptionalStagedBackupDir(marker.StagedBackups); err != nil {
-					return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("validate staged backup dir: %w", err))
-				}
-				if err := replaceDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
-					return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("activate staged backup dir: %w", err))
-				}
+			if !info.IsDir() {
+				return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("validate staged backup dir: staged backup dir must be a directory"))
+			}
+			if err := validateOptionalStagedBackupDir(marker.StagedBackups); err != nil {
+				return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("validate staged backup dir: %w", err))
+			}
+			if err := replaceDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
+				return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("activate staged backup dir: %w", err))
 			}
 		} else if !os.IsNotExist(err) {
 			return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("stat staged backup dir: %w", err))
