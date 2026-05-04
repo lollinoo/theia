@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   type HealthVersion,
   fetchHealthVersion,
-  fetchSettings,
+  fetchSettingsWithMetadata,
   updateSetting,
 } from '../api/client';
 import type { TopologyDiscoveryMode } from '../types/api';
@@ -216,6 +216,7 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   const [savedDeviceInterval, setSavedDeviceInterval] = useState(false);
   const [savedDeviceRetention, setSavedDeviceRetention] = useState(false);
   const [bridgeSecret, setBridgeSecret] = useState('');
+  const [bridgeSecretConfigured, setBridgeSecretConfigured] = useState(false);
   const [savedBridgeSecret, setSavedBridgeSecret] = useState(false);
   const [bridgePort, setBridgePort] = useState('1337');
   const [savedBridgePort, setSavedBridgePort] = useState(false);
@@ -248,8 +249,8 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
   );
 
   useEffect(() => {
-    fetchSettings()
-      .then((settings) => {
+    fetchSettingsWithMetadata()
+      .then(({ data: settings, secrets }) => {
         const interval = settings['polling_interval_seconds'] ?? '60';
         if (PRESET_VALUES.has(interval)) {
           setPollingValue(interval);
@@ -266,7 +267,8 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         );
         setDeviceBackupInterval(settings['device_backup_interval_hours'] ?? '0');
         setDeviceBackupRetention(settings['device_backup_retention_count'] ?? '5');
-        setBridgeSecret(settings['bridge_secret'] ?? '');
+        setBridgeSecret('');
+        setBridgeSecretConfigured(secrets['bridge_secret']?.present === true);
         setBridgePort(settings['bridge_port'] ?? '1337');
         setWorkerSettings((prev) => {
           const next = { ...prev };
@@ -436,11 +438,13 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
 
   function handleBridgeSecretChange(value: string) {
     setBridgeSecret(value);
+    setBridgeSecretConfigured(false);
     if (bridgeSecretTimerRef.current !== null) window.clearTimeout(bridgeSecretTimerRef.current);
     bridgeSecretTimerRef.current = window.setTimeout(() => {
-      void updateSetting('bridge_secret', value).then(() =>
-        showSaved(setSavedBridgeSecret, savedBridgeSecretTimerRef),
-      );
+      void updateSetting('bridge_secret', value).then(() => {
+        setBridgeSecretConfigured(value.trim() !== '');
+        showSaved(setSavedBridgeSecret, savedBridgeSecretTimerRef);
+      });
     }, 500);
   }
 
@@ -716,7 +720,11 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
         <input
           type="text"
           value={bridgeSecret}
-          placeholder="Paste 64-char hex key from config.json"
+          placeholder={
+            bridgeSecretConfigured
+              ? 'Configured (redacted); paste a new key to replace'
+              : 'Paste 64-char hex key from config.json'
+          }
           onChange={(e) => handleBridgeSecretChange(e.target.value)}
           className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none font-mono"
         />

@@ -11,6 +11,7 @@ import {
   fetchDevices,
   fetchLinks,
   fetchSettings,
+  fetchSettingsWithMetadata,
   resetCanvasBootstrapRequestCache,
   restoreInstanceBackup,
   revealSNMPProfile,
@@ -262,6 +263,28 @@ describe('fetchSettings', () => {
     );
 
     await expect(fetchSettings()).rejects.toThrow('Failed to fetch settings');
+  });
+});
+
+describe('fetchSettingsWithMetadata', () => {
+  it('preserves redacted secret metadata without putting secret values in data', async () => {
+    const payload = {
+      data: {
+        bridge_port: '1337',
+      },
+      meta: {
+        secrets: {
+          bridge_secret: { present: true, redacted: true },
+        },
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(payload)));
+
+    const result = await fetchSettingsWithMetadata();
+
+    expect(result.data.bridge_port).toBe('1337');
+    expect(result.data.bridge_secret).toBeUndefined();
+    expect(result.secrets.bridge_secret).toEqual({ present: true, redacted: true });
   });
 });
 

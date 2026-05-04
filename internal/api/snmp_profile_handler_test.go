@@ -511,6 +511,29 @@ func TestSNMPProfileHandlerUpdate_PreservesExistingSecretsWhenRedactedFieldsOmit
 	}
 }
 
+func TestSNMPProfileHandlerUpdate_ClearsV3SecretsWhenSecurityLevelNoLongerUsesThem(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	id := seedV3Profile(t, repo)
+	h := NewSNMPProfileHandler(repo)
+
+	body := `{"name":"updated-v3","snmp":{"version":"3","username":"readonly","security_level":"noAuthNoPriv"}}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/snmp-profiles/"+id.String(), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	updated := repo.profiles[id]
+	if updated.Credentials.V3.AuthPassword != "" {
+		t.Fatalf("expected auth password to be cleared, got %q", updated.Credentials.V3.AuthPassword)
+	}
+	if updated.Credentials.V3.PrivPassword != "" {
+		t.Fatalf("expected priv password to be cleared, got %q", updated.Credentials.V3.PrivPassword)
+	}
+}
+
 func TestSNMPProfileHandlerUpdate_PreservesExistingV2cCommunityWhenOmitted(t *testing.T) {
 	repo := newMockSNMPProfileRepo()
 	id := seedV2cProfile(t, repo)

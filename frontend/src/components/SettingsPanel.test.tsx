@@ -5,6 +5,7 @@ import { SettingsPanel } from './SettingsPanel';
 // Mock API calls made in SettingsPanel on mount
 vi.mock('../api/client', () => ({
   fetchSettings: vi.fn().mockResolvedValue({}),
+  fetchSettingsWithMetadata: vi.fn().mockResolvedValue({ data: {}, secrets: {} }),
   updateSetting: vi.fn().mockResolvedValue(undefined),
   fetchHealthVersion: vi
     .fn()
@@ -271,10 +272,13 @@ describe('SettingsPanel — Device Backups helper text when disabled (Gap 5)', (
 
 describe('SettingsPanel — Device Backups values loaded from fetchSettings on mount (Gap 6)', () => {
   it('schedule dropdown reflects device_backup_interval_hours from fetchSettings', async () => {
-    const { fetchSettings } = await import('../api/client');
-    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      device_backup_interval_hours: '24',
-      device_backup_retention_count: '10',
+    const { fetchSettingsWithMetadata } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        device_backup_interval_hours: '24',
+        device_backup_retention_count: '10',
+      },
+      secrets: {},
     });
 
     render(<SettingsPanel />);
@@ -299,10 +303,13 @@ describe('SettingsPanel — Device Backups values loaded from fetchSettings on m
   });
 
   it('helper text changes from "Scheduling disabled" to interval description after loading 24h setting', async () => {
-    const { fetchSettings } = await import('../api/client');
-    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      device_backup_interval_hours: '24',
-      device_backup_retention_count: '10',
+    const { fetchSettingsWithMetadata } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        device_backup_interval_hours: '24',
+        device_backup_retention_count: '10',
+      },
+      secrets: {},
     });
 
     render(<SettingsPanel />);
@@ -315,6 +322,28 @@ describe('SettingsPanel — Device Backups values loaded from fetchSettings on m
     await waitFor(() => {
       expect(screen.getByText('Backups run every 24 hours')).toBeInTheDocument();
     });
+  });
+});
+
+describe('SettingsPanel — redacted secret state', () => {
+  it('shows an already configured bridge secret as redacted instead of blank', async () => {
+    const { fetchSettingsWithMetadata } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        bridge_port: '1337',
+      },
+      secrets: {
+        bridge_secret: { present: true, redacted: true },
+      },
+    });
+
+    render(<SettingsPanel />);
+
+    const bridgeSecretInput = await screen.findByPlaceholderText(
+      'Configured (redacted); paste a new key to replace',
+    );
+
+    expect(bridgeSecretInput).toHaveValue('');
   });
 });
 
@@ -368,10 +397,13 @@ describe('SettingsPanel — Instance Backups collapsible section (Gap 14)', () =
 
 describe('SettingsPanel — Polling Workers settings', () => {
   beforeEach(async () => {
-    const { fetchSettings, updateSetting } = await import('../api/client');
-    (fetchSettings as ReturnType<typeof vi.fn>).mockClear();
+    const { fetchSettingsWithMetadata, updateSetting } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockClear();
     (updateSetting as ReturnType<typeof vi.fn>).mockClear();
-    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: {},
+      secrets: {},
+    });
   });
 
   afterEach(() => {
@@ -397,16 +429,19 @@ describe('SettingsPanel — Polling Workers settings', () => {
   });
 
   it('loads worker setting values from fetchSettings', async () => {
-    const { fetchSettings } = await import('../api/client');
-    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      polling_essential_workers: '64',
-      snmp_worker_pool_performance_size: '12',
-      snmp_worker_pool_operational_size: '6',
-      snmp_worker_pool_static_size: '3',
-      polling_max_workers_per_device: '2',
-      polling_max_workers_per_site: '64',
-      polling_max_workers_per_subnet: '8',
-      polling_max_inflight_per_snmp_profile: '64',
+    const { fetchSettingsWithMetadata } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        polling_essential_workers: '64',
+        snmp_worker_pool_performance_size: '12',
+        snmp_worker_pool_operational_size: '6',
+        snmp_worker_pool_static_size: '3',
+        polling_max_workers_per_device: '2',
+        polling_max_workers_per_site: '64',
+        polling_max_workers_per_subnet: '8',
+        polling_max_inflight_per_snmp_profile: '64',
+      },
+      secrets: {},
     });
 
     render(<SettingsPanel />);
