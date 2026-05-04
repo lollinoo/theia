@@ -125,6 +125,47 @@ func TestRuntimeBootstrapRunWrapsLoadConfigError(t *testing.T) {
 	}
 }
 
+func TestRuntimeBootstrapRunRejectsUnsafeProductionSecretsBeforeOpeningDatabase(t *testing.T) {
+	bootstrap := &runtimeBootstrap{}
+	runtimeDir := t.TempDir()
+
+	originalLoadRuntimeConfig := loadRuntimeConfig
+	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
+		return &runtimeConfig{
+			DeploymentEnv: "production",
+			DBDriver:      "postgres",
+			DBDSN:         "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable",
+			DBPath:        filepath.Join(runtimeDir, "theia.db"),
+			DataDir:       runtimeDir,
+			ListenAddr:    ":0",
+			LogLevel:      "info",
+		}, nil
+	}
+	t.Cleanup(func() { loadRuntimeConfig = originalLoadRuntimeConfig })
+
+	openCalled := false
+	originalOpenPrimaryDB := openPrimaryRuntimeDB
+	openPrimaryRuntimeDB = func(driver, path, dsn string) (*sql.DB, sqlite.Dialect, error) {
+		openCalled = true
+		return nil, "", errors.New("open should not be called")
+	}
+	t.Cleanup(func() { openPrimaryRuntimeDB = originalOpenPrimaryDB })
+
+	t.Setenv("THEIA_ENCRYPTION_KEY", "change-me")
+	t.Setenv("POSTGRES_PASSWORD", "strong-password")
+
+	err := bootstrap.Run("/tmp/theia.yaml")
+	if err == nil {
+		t.Fatal("Run() error = nil, want unsafe secret rejection")
+	}
+	if got := err.Error(); !strings.Contains(got, "THEIA_ENCRYPTION_KEY") || !strings.Contains(got, "example") {
+		t.Fatalf("Run() error = %q, want encryption key example rejection", got)
+	}
+	if openCalled {
+		t.Fatal("openPrimaryRuntimeDB was called before unsafe secret rejection")
+	}
+}
+
 func TestRuntimeBootstrapStopRuntimeStopsChildrenInReverseOrder(t *testing.T) {
 	bootstrap := &runtimeBootstrap{}
 	var order []string
@@ -376,6 +417,12 @@ func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(
 		{
 			name: "production rejects example db dsn keyword password",
 			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "host=postgres user=theia password='change-me' dbname=theia sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_DB_DSN", "example"},
+		},
+		{
+			name: "production rejects duplicate keyword dsn placeholder password",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "host=postgres user=theia password=strong-password password=change-me dbname=theia sslmode=disable"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
 			want: []string{"THEIA_DB_DSN", "example"},
 		},
