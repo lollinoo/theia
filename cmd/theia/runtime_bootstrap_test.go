@@ -344,6 +344,12 @@ func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(
 			want: []string{"THEIA_ENCRYPTION_KEY", "required"},
 		},
 		{
+			name: "production rejects example encryption key",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "change-me", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_ENCRYPTION_KEY", "example"},
+		},
+		{
 			name: "staging rejects example encryption key",
 			cfg:  &runtimeConfig{DeploymentEnv: "staging", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "change-me", "POSTGRES_PASSWORD": "strong-password"},
