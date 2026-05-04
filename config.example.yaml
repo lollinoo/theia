@@ -27,8 +27,8 @@ listen_addr: ":8080"
 db_path: "./data/theia.db"
 
 # PostgreSQL DSN. Required when db_driver=postgres.
-# Example local dev value for this config file:
-db_dsn: "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable"
+# DSN shape: postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable
+db_dsn: ""
 
 # Local app data directory used for known_hosts and backup files.
 # Default: "./data"

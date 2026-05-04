@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -114,12 +115,17 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 		path                 string
 		deploymentEnv        string
 		requireBlankEnvValue bool
+		requirePostgresEnv   bool
+		rejectConcreteDSN    bool
 	}{
-		{path: ".env.prod.example", deploymentEnv: "production", requireBlankEnvValue: true},
-		{path: ".env.staging.example", deploymentEnv: "staging", requireBlankEnvValue: true},
-		{path: "docker-compose.prod.yml", deploymentEnv: "production"},
-		{path: "docker-compose.staging.yml", deploymentEnv: "staging"},
+		{path: ".env.prod.example", deploymentEnv: "production", requireBlankEnvValue: true, rejectConcreteDSN: true},
+		{path: ".env.staging.example", deploymentEnv: "staging", requireBlankEnvValue: true, rejectConcreteDSN: true},
+		{path: "docker-compose.prod.yml", deploymentEnv: "production", requirePostgresEnv: true},
+		{path: "docker-compose.staging.yml", deploymentEnv: "staging", requirePostgresEnv: true},
 		{path: "Makefile"},
+		{path: "SETUP.md", rejectConcreteDSN: true},
+		{path: "config.example.yaml", rejectConcreteDSN: true},
+		{path: "cmd/theia/runtime_bootstrap.go", rejectConcreteDSN: true},
 	}
 	unsafeFragments := []struct {
 		name  string
@@ -131,6 +137,26 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 		{name: "placeholder PostgreSQL DSN password", value: "THEIA_DB_DSN=postgres://theia:change-me@"},
 		{name: "PostgreSQL password fallback", value: "POSTGRES_PASSWORD:-"},
 		{name: "PostgreSQL DSN fallback", value: "THEIA_DB_DSN:-postgres://"},
+	}
+	concreteDSNFragments := []struct {
+		name  string
+		value string
+	}{
+		{name: "concrete local PostgreSQL DSN example", value: "postgres://theia:theia@"},
+		{name: "concrete yaml PostgreSQL DSN example", value: "db_dsn: \"postgres://"},
+	}
+
+	if isTracked, err := gitPathIsTracked(repoRoot, "config.yaml"); err != nil {
+		t.Fatalf("check tracked config.yaml: %v", err)
+	} else if isTracked {
+		t.Error("config.yaml must not be tracked because local config files may contain secrets")
+	}
+	gitignoreBytes, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil {
+		t.Fatalf("ReadFile(.gitignore): %v", err)
+	}
+	if !gitignoreHasPattern(string(gitignoreBytes), "config.yaml") {
+		t.Error(".gitignore must ignore config.yaml")
 	}
 
 	for _, surface := range surfaces {
@@ -149,6 +175,13 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 					t.Errorf("%s contains unsafe %s fragment %q", surface.path, unsafe.name, unsafe.value)
 				}
 			}
+			if surface.rejectConcreteDSN {
+				for _, unsafe := range concreteDSNFragments {
+					if strings.Contains(content, unsafe.value) {
+						t.Errorf("%s contains unsafe %s fragment %q", surface.path, unsafe.name, unsafe.value)
+					}
+				}
+			}
 			if surface.requireBlankEnvValue {
 				for _, key := range []string{"THEIA_DB_DSN", "POSTGRES_PASSWORD"} {
 					value, ok := envExampleAssignment(content, key)
@@ -161,8 +194,52 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 					}
 				}
 			}
+			if surface.requirePostgresEnv {
+				const postgresPasswordRequirement = "- POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
+				if got := countActiveLines(content, postgresPasswordRequirement); got < 2 {
+					t.Errorf("%s must pass POSTGRES_PASSWORD to both backend and postgres service; found %d active entries", surface.path, got)
+				}
+			}
 		})
 	}
+}
+
+func gitPathIsTracked(repoRoot, path string) (bool, error) {
+	cmd := exec.Command("git", "ls-files", "--error-unmatch", path)
+	cmd.Dir = repoRoot
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return false, nil
+	}
+	return false, err
+}
+
+func gitignoreHasPattern(content, pattern string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == pattern {
+			return true
+		}
+	}
+	return false
+}
+
+func countActiveLines(content, want string) int {
+	count := 0
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if line == want {
+			count++
+		}
+	}
+	return count
 }
 
 func surfaceContainsDeploymentEnv(content, deploymentEnv string) bool {
