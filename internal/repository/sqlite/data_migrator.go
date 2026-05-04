@@ -336,14 +336,14 @@ func clearTargetTables(targetTx *Tx, specs []tableCopySpec) error {
 	if targetTx.dialect == DialectPostgres {
 		tableNames := make([]string, 0, len(specs))
 		for _, spec := range specs {
-			tableNames = append(tableNames, spec.name)
+			tableNames = append(tableNames, quoteStaticIdentifier(spec.name))
 		}
 		_, err := targetTx.Exec("TRUNCATE TABLE " + strings.Join(tableNames, ", ") + " CASCADE")
 		return err
 	}
 
 	for i := len(specs) - 1; i >= 0; i-- {
-		if _, err := targetTx.Exec("DELETE FROM " + specs[i].name); err != nil {
+		if _, err := targetTx.Exec("DELETE FROM " + quoteStaticIdentifier(specs[i].name)); err != nil {
 			return fmt.Errorf("deleting %s: %w", specs[i].name, err)
 		}
 	}
@@ -416,15 +416,45 @@ func normalizeCredentialProfileSecretForCopy(tableName, columnName string, value
 	return base64.StdEncoding.EncodeToString([]byte(text))
 }
 
-func buildSelectQuery(spec tableCopySpec) string {
-	columnNames := make([]string, 0, len(spec.columns))
-	for _, column := range spec.columns {
-		columnNames = append(columnNames, column.name)
+func quoteStaticIdentifier(identifier string) string {
+	if identifier == "" {
+		panic("static identifier must not be empty")
 	}
+	if identifier[0] < 'a' || identifier[0] > 'z' {
+		panic(fmt.Sprintf("unsafe static identifier %q", identifier))
+	}
+	for i := 1; i < len(identifier); i++ {
+		char := identifier[i]
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_' {
+			continue
+		}
+		panic(fmt.Sprintf("unsafe static identifier %q", identifier))
+	}
+	return `"` + identifier + `"`
+}
 
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(columnNames, ", "), spec.name)
+func quoteStaticIdentifiers(identifiers []string) []string {
+	quoted := make([]string, len(identifiers))
+	for i, identifier := range identifiers {
+		quoted[i] = quoteStaticIdentifier(identifier)
+	}
+	return quoted
+}
+
+func quotedColumnNames(spec tableCopySpec) []string {
+	columnNames := make([]string, len(spec.columns))
+	for i, column := range spec.columns {
+		columnNames[i] = quoteStaticIdentifier(column.name)
+	}
+	return columnNames
+}
+
+func buildSelectQuery(spec tableCopySpec) string {
+	columnNames := quotedColumnNames(spec)
+
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(columnNames, ", "), quoteStaticIdentifier(spec.name))
 	if len(spec.keyColumns) > 0 {
-		query += " ORDER BY " + strings.Join(spec.keyColumns, ", ")
+		query += " ORDER BY " + strings.Join(quoteStaticIdentifiers(spec.keyColumns), ", ")
 	}
 	return query
 }
@@ -447,15 +477,12 @@ func insertBatch(targetTx *Tx, spec tableCopySpec, rows [][]any) error {
 }
 
 func buildBatchInsertQuery(spec tableCopySpec, rowCount int) string {
-	columnNames := make([]string, 0, len(spec.columns))
-	for _, column := range spec.columns {
-		columnNames = append(columnNames, column.name)
-	}
+	columnNames := quotedColumnNames(spec)
 
 	var builder strings.Builder
 	builder.Grow((len(columnNames) + 4) * rowCount)
 	builder.WriteString("INSERT INTO ")
-	builder.WriteString(spec.name)
+	builder.WriteString(quoteStaticIdentifier(spec.name))
 	builder.WriteString(" (")
 	builder.WriteString(strings.Join(columnNames, ", "))
 	builder.WriteString(") VALUES ")
@@ -479,7 +506,7 @@ func buildBatchInsertQuery(spec tableCopySpec, rowCount int) string {
 	}
 
 	builder.WriteString(" ON CONFLICT (")
-	builder.WriteString(strings.Join(spec.keyColumns, ", "))
+	builder.WriteString(strings.Join(quoteStaticIdentifiers(spec.keyColumns), ", "))
 	builder.WriteByte(')')
 
 	updateColumns := make([]string, 0, len(spec.columns))
@@ -504,9 +531,9 @@ func buildBatchInsertQuery(spec tableCopySpec, rowCount int) string {
 		if i > 0 {
 			builder.WriteString(", ")
 		}
-		builder.WriteString(columnName)
+		builder.WriteString(quoteStaticIdentifier(columnName))
 		builder.WriteString(" = EXCLUDED.")
-		builder.WriteString(columnName)
+		builder.WriteString(quoteStaticIdentifier(columnName))
 	}
 
 	return builder.String()
