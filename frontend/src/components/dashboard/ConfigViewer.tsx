@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   backupFileDownloadUrl,
   fetchBackupFileContent,
@@ -32,25 +32,41 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   const [contentLoading, setContentLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const data = await fetchLatestBackupJob(deviceId);
-      setJob(data);
-      // Default to first available file type
-      if (data?.files?.length) {
-        const firstType = FILE_TYPE_ORDER.find((t) => data.files.some((f) => f.file_type === t));
-        if (firstType) setActiveTab(firstType);
-      }
-    } catch (err) {
-      console.error('Failed to fetch config:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [deviceId]);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+
+    setLoading(true);
+    setJob(null);
+    setContent(null);
+    setContentLoading(false);
+    setActiveTab('running');
+
+    fetchLatestBackupJob(deviceId)
+      .then((data) => {
+        if (cancelled) return;
+
+        setJob(data);
+        // Default to first available file type
+        if (data?.files?.length) {
+          const firstType = FILE_TYPE_ORDER.find((t) => data.files.some((f) => f.file_type === t));
+          if (firstType) setActiveTab(firstType);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Failed to fetch config:', err);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId]);
 
   const activeFile: BackupFile | undefined = job?.files?.find((f) => f.file_type === activeTab);
   const activeContent = content && content.fileId === activeFile?.id ? content.value : null;
@@ -80,6 +96,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   useEffect(() => {
     if (!activeFile || activeTab === 'binary') {
       setContent(null);
+      setContentLoading(false);
       return;
     }
 

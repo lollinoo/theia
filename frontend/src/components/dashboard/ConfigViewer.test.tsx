@@ -4,20 +4,28 @@ import { ConfigViewer } from './ConfigViewer';
 
 vi.mock('../../api/client', () => ({
   fetchLatestBackupJob: vi.fn(),
-  fetchBackupFileContent: vi.fn().mockResolvedValue({
+  fetchBackupFileContent: vi.fn(),
+  backupFileDownloadUrl: vi.fn(),
+}));
+
+import {
+  backupFileDownloadUrl,
+  fetchBackupFileContent,
+  fetchLatestBackupJob,
+} from '../../api/client';
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(fetchBackupFileContent).mockResolvedValue({
     content: '# config content',
     inline: true,
     download_url: '/api/v1/backup-files/f-1/download',
     size_bytes: 16,
     max_inline_size_bytes: 1048576,
-  }),
-  backupFileDownloadUrl: vi.fn((id: string) => `/api/v1/backup-files/${id}/download`),
-}));
-
-import { fetchBackupFileContent, fetchLatestBackupJob } from '../../api/client';
-
-beforeEach(() => {
-  vi.clearAllMocks();
+  });
+  vi.mocked(backupFileDownloadUrl).mockImplementation(
+    (id: string) => `/api/v1/backup-files/${id}/download`,
+  );
 });
 
 function deferred<T>() {
@@ -202,6 +210,94 @@ describe('ConfigViewer', () => {
       screen
         .queryAllByRole('link', { name: /download/i })
         .some((link) => link.getAttribute('href') === '/api/v1/backup-files/f-running/download'),
+    ).toBe(false);
+  });
+
+  it('ignores stale job loads after switching devices', async () => {
+    const deviceAJob = deferred<Awaited<ReturnType<typeof fetchLatestBackupJob>>>();
+
+    vi.mocked(fetchLatestBackupJob).mockImplementation((requestedDeviceId: string) => {
+      if (requestedDeviceId === 'device-a') {
+        return deviceAJob.promise;
+      }
+      return Promise.resolve({
+        id: 'job-b',
+        device_id: 'device-b',
+        status: 'success',
+        error_message: '',
+        created_at: '2026-01-01T00:00:00Z',
+        files: [
+          {
+            id: 'b-running',
+            job_id: 'job-b',
+            file_type: 'running',
+            file_name: 'device-b.rsc',
+            file_hash: 'b123',
+            size_bytes: 100,
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ],
+      });
+    });
+    vi.mocked(fetchBackupFileContent).mockImplementation((fileId: string) => {
+      if (fileId === 'a-running') {
+        return Promise.resolve({
+          content: '# device a stale',
+          inline: false,
+          download_url: '/api/v1/backup-files/a-running/download',
+          reason: 'too_large',
+          size_bytes: 1048577,
+          max_inline_size_bytes: 1048576,
+        });
+      }
+      return Promise.resolve({
+        content: '# device b config',
+        inline: true,
+        download_url: '/api/v1/backup-files/b-running/download',
+        size_bytes: 100,
+        max_inline_size_bytes: 1048576,
+      });
+    });
+
+    const { rerender } = render(<ConfigViewer deviceId="device-a" />);
+
+    await waitFor(() => {
+      expect(fetchLatestBackupJob).toHaveBeenCalledWith('device-a');
+    });
+
+    rerender(<ConfigViewer deviceId="device-b" />);
+
+    expect(await screen.findByText('# device b config')).toBeInTheDocument();
+
+    await act(async () => {
+      deviceAJob.resolve({
+        id: 'job-a',
+        device_id: 'device-a',
+        status: 'success',
+        error_message: '',
+        created_at: '2026-01-01T00:00:00Z',
+        files: [
+          {
+            id: 'a-running',
+            job_id: 'job-a',
+            file_type: 'running',
+            file_name: 'device-a.rsc',
+            file_hash: 'a123',
+            size_bytes: 1048577,
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ],
+      });
+      await deviceAJob.promise;
+    });
+
+    expect(screen.getByText('# device b config')).toBeInTheDocument();
+    expect(screen.queryByText('# device a stale')).not.toBeInTheDocument();
+    expect(screen.queryByText('Preview unavailable')).not.toBeInTheDocument();
+    expect(
+      screen
+        .queryAllByRole('link', { name: /download/i })
+        .some((link) => link.getAttribute('href') === '/api/v1/backup-files/a-running/download'),
     ).toBe(false);
   });
 });
