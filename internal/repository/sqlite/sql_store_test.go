@@ -118,6 +118,44 @@ func TestRebindQuery_PostgresDoesNotTreatProjectionPlaceholdersAsJSONOperators(t
 	}
 }
 
+func TestRebindQuery_PostgresDoesNotTreatPlaceholderAdjacentOperatorsAsJSONOperators(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{
+			name:  "concat-after-placeholder",
+			query: `SELECT ?||'x'`,
+			want:  `SELECT $1||'x'`,
+		},
+		{
+			name:  "bitwise-and-after-placeholder",
+			query: `SELECT flags FROM devices WHERE flags = ?&1`,
+			want:  `SELECT flags FROM devices WHERE flags = $1&1`,
+		},
+		{
+			name:  "bitwise-or-after-placeholder",
+			query: `SELECT flags FROM devices WHERE flags = ?|1`,
+			want:  `SELECT flags FROM devices WHERE flags = $1|1`,
+		},
+		{
+			name:  "spaced-at-placeholder",
+			query: `SELECT @ ? FROM metrics`,
+			want:  `SELECT @ $1 FROM metrics`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rebindQuery(DialectPostgres, tt.query)
+			if got != tt.want {
+				t.Fatalf("rebindQuery() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRebindQuery_PostgresHandlesAdditionalSQLSyntax(t *testing.T) {
 	tests := []struct {
 		name  string
