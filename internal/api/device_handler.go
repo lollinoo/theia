@@ -178,6 +178,22 @@ type batchAddResponse struct {
 	Count   int    `json:"count"`
 }
 
+type validatedCreateDeviceRequest struct {
+	IP                    string
+	Hostname              string
+	DeviceType            domain.DeviceType
+	SNMPCredentials       domain.SNMPCredentials
+	Tags                  map[string]string
+	Vendor                string
+	MetricsSource         domain.MetricsSource
+	PrometheusLabelName   string
+	PrometheusLabelValue  string
+	TopologyDiscoveryMode domain.TopologyDiscoveryMode
+	AreaIDs               []uuid.UUID
+	Notes                 *string
+	Virtual               bool
+}
+
 // HandleCreate handles POST /api/v1/devices
 func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req createDeviceRequest
@@ -185,142 +201,23 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine device type
-	deviceType := domain.DeviceType(req.DeviceType)
-
-	if deviceType == domain.DeviceTypeVirtual {
-		// Per D-08: Virtual devices allow empty IP, skip SNMP validation
-		// Per D-09: Require display_name and valid virtual_subtype
-		if req.Tags == nil {
-			req.Tags = make(map[string]string)
-		}
-		displayName := strings.TrimSpace(req.Tags["display_name"])
-		if displayName == "" {
-			writeError(w, http.StatusBadRequest, "tags.display_name is required for virtual devices")
-			return
-		}
-		subtype := strings.TrimSpace(req.Tags["virtual_subtype"])
-		validSubtypes := map[string]bool{"internet": true, "cloud": true, "server": true, "generic": true}
-		if !validSubtypes[subtype] {
-			writeError(w, http.StatusBadRequest, "tags.virtual_subtype must be one of: internet, cloud, server, generic")
-			return
-		}
-
-		// Parse optional area IDs (same logic as regular devices)
-		var areaIDs []uuid.UUID
-		for _, idStr := range req.AreaIDs {
-			if idStr == "" {
-				continue
-			}
-			parsed, err := uuid.Parse(idStr)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid area_id: "+idStr)
-				return
-			}
-			areaIDs = append(areaIDs, parsed)
-		}
-
-		device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
-			domain.DeviceTypeVirtual,
-			domain.SNMPCredentials{}, req.Tags, "", "", "", "", "", areaIDs, req.Notes)
-		if err != nil {
-			if isDeviceIPConflict(err) {
-				writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(req.IP))
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "failed to create virtual device", err)
-			return
-		}
-
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(jsonAPISingle{Data: h.deviceToResource(device)})
-		return
-	}
-
-	// Per D-10: Regular device creation retains "ip is required" validation
-	if req.IP == "" {
-		writeError(w, http.StatusBadRequest, "ip is required")
-		return
-	}
-	if !isValidIPOrHostname(req.IP) {
-		writeError(w, http.StatusBadRequest, "ip must be a valid IP address or hostname")
-		return
-	}
-	if req.Hostname != "" {
-		req.Hostname = strings.TrimSpace(req.Hostname)
-		if len(req.Hostname) > 253 {
-			writeError(w, http.StatusBadRequest, "hostname too long (max 253 characters)")
-			return
-		}
-	}
-	if !validDeviceTypes[req.DeviceType] {
-		writeError(w, http.StatusBadRequest, "invalid device_type")
-		return
-	}
-	if !validMetricsSources[req.MetricsSource] {
-		writeError(w, http.StatusBadRequest, "invalid metrics_source")
-		return
-	}
-	if !validTopologyDiscoveryModes[req.TopologyDiscoveryMode] {
-		writeError(w, http.StatusBadRequest, "invalid topology_discovery_mode")
-		return
-	}
-	if len(req.Vendor) > 255 {
-		writeError(w, http.StatusBadRequest, "vendor too long (max 255 characters)")
-		return
-	}
-	if len(req.PrometheusLabelName) > 255 {
-		writeError(w, http.StatusBadRequest, "prometheus_label_name too long (max 255 characters)")
-		return
-	}
-	if len(req.PrometheusLabelValue) > 255 {
-		writeError(w, http.StatusBadRequest, "prometheus_label_value too long (max 255 characters)")
-		return
-	}
-	for k, v := range req.Tags {
-		if len(k) > 255 {
-			writeError(w, http.StatusBadRequest, "tag key too long (max 255 characters)")
-			return
-		}
-		if len(v) > 255 {
-			writeError(w, http.StatusBadRequest, "tag value too long (max 255 characters)")
-			return
-		}
-	}
-
-	creds, err := parseSNMPCreds(req.SNMP)
+	validated, err := validateCreateDeviceRequest(req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	metricsSource := domain.MetricsSource(req.MetricsSource)
-	prometheusLabelName := req.PrometheusLabelName
-	prometheusLabelValue := req.PrometheusLabelValue
-
-	var areaIDs []uuid.UUID
-	for _, idStr := range req.AreaIDs {
-		if idStr == "" {
-			continue
-		}
-		parsed, err := uuid.Parse(idStr)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid area_id: "+idStr)
-			return
-		}
-		areaIDs = append(areaIDs, parsed)
-	}
-
-	if deviceType == "" {
-		deviceType = domain.DeviceTypeUnknown
-	}
-	device, err := h.svc.AddDevice(r.Context(), req.IP, req.Hostname,
-		deviceType,
-		creds, req.Tags, req.Vendor, metricsSource,
-		prometheusLabelName, prometheusLabelValue, domain.TopologyDiscoveryMode(req.TopologyDiscoveryMode), areaIDs, req.Notes)
+	device, err := h.svc.AddDevice(r.Context(), validated.IP, validated.Hostname,
+		validated.DeviceType,
+		validated.SNMPCredentials, validated.Tags, validated.Vendor, validated.MetricsSource,
+		validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.Notes)
 	if err != nil {
 		if isDeviceIPConflict(err) {
-			writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(req.IP))
+			writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(validated.IP))
+			return
+		}
+		if validated.Virtual {
+			writeError(w, http.StatusInternalServerError, "failed to create virtual device", err)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to create device", err)
@@ -601,6 +498,125 @@ func (h *DeviceHandler) HandleTestSNMP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDeviceRequest, error) {
+	deviceType := domain.DeviceType(req.DeviceType)
+
+	if deviceType == domain.DeviceTypeVirtual {
+		if req.Tags == nil {
+			req.Tags = make(map[string]string)
+		}
+		displayName := strings.TrimSpace(req.Tags["display_name"])
+		if displayName == "" {
+			return validatedCreateDeviceRequest{}, errors.New("tags.display_name is required for virtual devices")
+		}
+		subtype := strings.TrimSpace(req.Tags["virtual_subtype"])
+		validSubtypes := map[string]bool{"internet": true, "cloud": true, "server": true, "generic": true}
+		if !validSubtypes[subtype] {
+			return validatedCreateDeviceRequest{}, errors.New("tags.virtual_subtype must be one of: internet, cloud, server, generic")
+		}
+
+		areaIDs, err := parseCreateAreaIDs(req.AreaIDs)
+		if err != nil {
+			return validatedCreateDeviceRequest{}, err
+		}
+
+		return validatedCreateDeviceRequest{
+			IP:              req.IP,
+			Hostname:        req.Hostname,
+			DeviceType:      domain.DeviceTypeVirtual,
+			SNMPCredentials: domain.SNMPCredentials{},
+			Tags:            req.Tags,
+			MetricsSource:   domain.MetricsSourceNone,
+			AreaIDs:         areaIDs,
+			Notes:           req.Notes,
+			Virtual:         true,
+		}, nil
+	}
+
+	if req.IP == "" {
+		return validatedCreateDeviceRequest{}, errors.New("ip is required")
+	}
+	if !isValidIPOrHostname(req.IP) {
+		return validatedCreateDeviceRequest{}, errors.New("ip must be a valid IP address or hostname")
+	}
+	if req.Hostname != "" {
+		req.Hostname = strings.TrimSpace(req.Hostname)
+		if len(req.Hostname) > 253 {
+			return validatedCreateDeviceRequest{}, errors.New("hostname too long (max 253 characters)")
+		}
+	}
+	if !validDeviceTypes[req.DeviceType] {
+		return validatedCreateDeviceRequest{}, errors.New("invalid device_type")
+	}
+	if !validMetricsSources[req.MetricsSource] {
+		return validatedCreateDeviceRequest{}, errors.New("invalid metrics_source")
+	}
+	if !validTopologyDiscoveryModes[req.TopologyDiscoveryMode] {
+		return validatedCreateDeviceRequest{}, errors.New("invalid topology_discovery_mode")
+	}
+	if len(req.Vendor) > 255 {
+		return validatedCreateDeviceRequest{}, errors.New("vendor too long (max 255 characters)")
+	}
+	if len(req.PrometheusLabelName) > 255 {
+		return validatedCreateDeviceRequest{}, errors.New("prometheus_label_name too long (max 255 characters)")
+	}
+	if len(req.PrometheusLabelValue) > 255 {
+		return validatedCreateDeviceRequest{}, errors.New("prometheus_label_value too long (max 255 characters)")
+	}
+	for k, v := range req.Tags {
+		if len(k) > 255 {
+			return validatedCreateDeviceRequest{}, errors.New("tag key too long (max 255 characters)")
+		}
+		if len(v) > 255 {
+			return validatedCreateDeviceRequest{}, errors.New("tag value too long (max 255 characters)")
+		}
+	}
+
+	creds, err := parseSNMPCreds(req.SNMP)
+	if err != nil {
+		return validatedCreateDeviceRequest{}, err
+	}
+
+	areaIDs, err := parseCreateAreaIDs(req.AreaIDs)
+	if err != nil {
+		return validatedCreateDeviceRequest{}, err
+	}
+
+	if deviceType == "" {
+		deviceType = domain.DeviceTypeUnknown
+	}
+
+	return validatedCreateDeviceRequest{
+		IP:                    req.IP,
+		Hostname:              req.Hostname,
+		DeviceType:            deviceType,
+		SNMPCredentials:       creds,
+		Tags:                  req.Tags,
+		Vendor:                req.Vendor,
+		MetricsSource:         domain.MetricsSource(req.MetricsSource),
+		PrometheusLabelName:   req.PrometheusLabelName,
+		PrometheusLabelValue:  req.PrometheusLabelValue,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryMode(req.TopologyDiscoveryMode),
+		AreaIDs:               areaIDs,
+		Notes:                 req.Notes,
+	}, nil
+}
+
+func parseCreateAreaIDs(rawIDs []string) ([]uuid.UUID, error) {
+	var areaIDs []uuid.UUID
+	for _, idStr := range rawIDs {
+		if idStr == "" {
+			continue
+		}
+		parsed, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid area_id: %s", idStr)
+		}
+		areaIDs = append(areaIDs, parsed)
+	}
+	return areaIDs, nil
+}
+
 // HandleBatchAdd handles POST /api/v1/devices/batch
 func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 	var req batchAddRequest
@@ -623,24 +639,15 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 
 	// Add each device
 	for _, d := range req.Devices {
-		if d.IP != "" && !isValidIPOrHostname(d.IP) {
-			failures = append(failures, batchAddFailure{IP: d.IP, Reason: "invalid IP address or hostname"})
-			continue
-		}
-		creds, err := parseSNMPCreds(d.SNMP)
+		validated, err := validateCreateDeviceRequest(d)
 		if err != nil {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 			continue
 		}
-		ms := domain.MetricsSource(d.MetricsSource)
-		batchDeviceType := domain.DeviceType(d.DeviceType)
-		if batchDeviceType == "" {
-			batchDeviceType = domain.DeviceTypeUnknown
-		}
-		if _, err := h.svc.AddDevice(r.Context(), d.IP, d.Hostname,
-			batchDeviceType,
-			creds, d.Tags, d.Vendor, ms,
-			d.PrometheusLabelName, d.PrometheusLabelValue, domain.TopologyDiscoveryMode(d.TopologyDiscoveryMode), nil, d.Notes); err != nil {
+		if _, err := h.svc.AddDevice(r.Context(), validated.IP, validated.Hostname,
+			validated.DeviceType,
+			validated.SNMPCredentials, validated.Tags, validated.Vendor, validated.MetricsSource,
+			validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.Notes); err != nil {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 		}
 	}
