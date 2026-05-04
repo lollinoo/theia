@@ -904,8 +904,8 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 		targetPath := filepath.Join(destDir, cleanName)
 
 		if header.Typeflag == tar.TypeDir {
-			if !isAllowedArchiveEntry(cleanName) {
-				continue
+			if !isAllowedRestoreArchiveDirectory(cleanName) {
+				return fmt.Errorf("disallowed restore archive entry: %s", cleanName)
 			}
 			if err := os.MkdirAll(targetPath, 0700); err != nil {
 				return fmt.Errorf("creating directory %s: %w", cleanName, err)
@@ -928,7 +928,7 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 		}
 
 		// Security: regular files outside the restore archive contract are rejected.
-		if !isAllowedArchiveEntry(cleanName) {
+		if !isAllowedRestoreArchiveFile(cleanName) {
 			return fmt.Errorf("disallowed restore archive entry: %s", cleanName)
 		}
 
@@ -962,14 +962,19 @@ func archiveEntryHasTraversal(name string) bool {
 	return false
 }
 
-// isAllowedArchiveEntry checks if a tar entry name matches the restore archive contract.
-func isAllowedArchiveEntry(name string) bool {
+// isAllowedRestoreArchiveFile checks if a regular file entry matches the restore archive contract.
+func isAllowedRestoreArchiveFile(name string) bool {
 	switch name {
-	case "manifest.json", sqliteArchiveDBEntry, postgresArchiveDBEntry, "known_hosts", "backups":
+	case "manifest.json", sqliteArchiveDBEntry, postgresArchiveDBEntry, "known_hosts":
 		return true
 	default:
 		return strings.HasPrefix(name, "backups/")
 	}
+}
+
+// isAllowedRestoreArchiveDirectory checks if a directory entry matches the restore archive contract.
+func isAllowedRestoreArchiveDirectory(name string) bool {
+	return name == "backups" || strings.HasPrefix(name, "backups/")
 }
 
 // copyFile copies a single file from src to dst with private file permissions.
