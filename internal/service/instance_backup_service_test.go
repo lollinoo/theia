@@ -435,6 +435,16 @@ func requireRestoreLimitError(t *testing.T, err error) {
 	}
 }
 
+func requireDisallowedRestoreArchiveEntry(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected disallowed archive entry error")
+	}
+	if !strings.Contains(err.Error(), "disallowed restore archive entry") {
+		t.Fatalf("error = %q, want disallowed restore archive entry", err.Error())
+	}
+}
+
 func TestValidateAndStageRestore(t *testing.T) {
 	t.Run("valid archive returns RestoreReport with Valid=true", func(t *testing.T) {
 		ts := setupInstanceBackupTest(t)
@@ -830,12 +840,43 @@ func TestValidateAndStageRestoreRejectsSingletonPrefixArchiveEntries(t *testing.
 
 			_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
 
-			if err == nil {
-				t.Fatal("expected disallowed archive entry error")
+			requireDisallowedRestoreArchiveEntry(t, err)
+		})
+	}
+}
+
+func TestValidateAndStageRestoreRejectsTypeMismatchedArchiveEntries(t *testing.T) {
+	t.Run("regular file named backups", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		if err := addFileToTestArchive(archivePath, "backups", []byte("not a directory")); err != nil {
+			t.Fatalf("adding backups file entry: %v", err)
+		}
+
+		_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		requireDisallowedRestoreArchiveEntry(t, err)
+	})
+
+	for _, entryName := range []string{
+		"known_hosts/",
+		"database.dump/",
+	} {
+		t.Run("directory "+entryName, func(t *testing.T) {
+			ts := setupInstanceBackupTest(t)
+			archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+			err := addTarEntryToTestArchive(archivePath, &tar.Header{
+				Name:     entryName,
+				Typeflag: tar.TypeDir,
+				Mode:     0700,
+			}, nil)
+			if err != nil {
+				t.Fatalf("adding singleton directory entry: %v", err)
 			}
-			if !strings.Contains(err.Error(), "disallowed restore archive entry") {
-				t.Fatalf("error = %q, want disallowed restore archive entry", err.Error())
-			}
+
+			_, err = ts.svc.ValidateAndStageRestore(archivePath, true)
+
+			requireDisallowedRestoreArchiveEntry(t, err)
 		})
 	}
 }
