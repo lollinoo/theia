@@ -315,11 +315,9 @@ func TestSNMPProfileHandlerDelete_NotFound(t *testing.T) {
 	}
 }
 
-// --- v3 profile credential tests ---
-// Profiles exist specifically to share credentials across devices.
-// The API must return passwords so the frontend can apply them to devices.
+// --- explicit reveal semantics ---
 
-func TestSNMPProfileHandlerGet_V3CredentialsIncluded(t *testing.T) {
+func TestSNMPProfileHandlerGet_RedactsCredentialSecrets(t *testing.T) {
 	repo := newMockSNMPProfileRepo()
 	id := seedV3Profile(t, repo)
 	h := NewSNMPProfileHandler(repo)
@@ -333,35 +331,45 @@ func TestSNMPProfileHandlerGet_V3CredentialsIncluded(t *testing.T) {
 		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
 	}
 
+	body := rec.Body.String()
+	if strings.Contains(body, "super-secret-auth-pass") || strings.Contains(body, "super-secret-priv-pass") {
+		t.Fatalf("metadata response leaked credential secret: %s", body)
+	}
+
 	var resp struct {
 		Data snmpProfileResponse `json:"data"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	// All v3 fields must be present so frontend can apply them to devices
 	if resp.Data.SNMP.Username != "admin" {
 		t.Fatalf("expected username=admin, got %s", resp.Data.SNMP.Username)
 	}
 	if resp.Data.SNMP.AuthProtocol != "SHA" {
 		t.Fatalf("expected auth_protocol=SHA, got %s", resp.Data.SNMP.AuthProtocol)
 	}
-	if resp.Data.SNMP.AuthPassword != "super-secret-auth-pass" {
-		t.Fatalf("expected auth_password to be returned, got %q", resp.Data.SNMP.AuthPassword)
+	if resp.Data.SNMP.AuthPassword != "" {
+		t.Fatalf("expected auth_password to be redacted, got %q", resp.Data.SNMP.AuthPassword)
 	}
 	if resp.Data.SNMP.PrivProtocol != "AES" {
 		t.Fatalf("expected priv_protocol=AES, got %s", resp.Data.SNMP.PrivProtocol)
 	}
-	if resp.Data.SNMP.PrivPassword != "super-secret-priv-pass" {
-		t.Fatalf("expected priv_password to be returned, got %q", resp.Data.SNMP.PrivPassword)
+	if resp.Data.SNMP.PrivPassword != "" {
+		t.Fatalf("expected priv_password to be redacted, got %q", resp.Data.SNMP.PrivPassword)
 	}
 	if resp.Data.SNMP.SecurityLevel != "authPriv" {
 		t.Fatalf("expected security_level=authPriv, got %s", resp.Data.SNMP.SecurityLevel)
 	}
+	if !resp.Data.SNMP.AuthPasswordSet {
+		t.Fatal("expected auth_password_set=true")
+	}
+	if !resp.Data.SNMP.PrivPasswordSet {
+		t.Fatal("expected priv_password_set=true")
+	}
 }
 
-func TestSNMPProfileHandlerList_V3CredentialsIncluded(t *testing.T) {
+func TestSNMPProfileHandlerList_RedactsCredentialSecrets(t *testing.T) {
 	repo := newMockSNMPProfileRepo()
 	seedV3Profile(t, repo)
 	h := NewSNMPProfileHandler(repo)
@@ -375,25 +383,172 @@ func TestSNMPProfileHandlerList_V3CredentialsIncluded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 
+	body := rec.Body.String()
+	if strings.Contains(body, "super-secret-auth-pass") || strings.Contains(body, "super-secret-priv-pass") {
+		t.Fatalf("metadata list leaked credential secret: %s", body)
+	}
+
 	var resp struct {
 		Data []snmpProfileResponse `json:"data"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 	if len(resp.Data) != 1 {
 		t.Fatalf("expected 1 profile, got %d", len(resp.Data))
 	}
 
-	// Passwords must be included so frontend can apply profile credentials to devices
-	if resp.Data[0].SNMP.AuthPassword != "super-secret-auth-pass" {
-		t.Fatalf("expected auth_password in list response, got %q", resp.Data[0].SNMP.AuthPassword)
+	if resp.Data[0].SNMP.AuthPassword != "" {
+		t.Fatalf("expected auth_password to be redacted, got %q", resp.Data[0].SNMP.AuthPassword)
 	}
-	if resp.Data[0].SNMP.PrivPassword != "super-secret-priv-pass" {
-		t.Fatalf("expected priv_password in list response, got %q", resp.Data[0].SNMP.PrivPassword)
+	if resp.Data[0].SNMP.PrivPassword != "" {
+		t.Fatalf("expected priv_password to be redacted, got %q", resp.Data[0].SNMP.PrivPassword)
 	}
 	if resp.Data[0].SNMP.Username != "admin" {
 		t.Fatalf("expected username=admin, got %s", resp.Data[0].SNMP.Username)
+	}
+	if !resp.Data[0].SNMP.AuthPasswordSet || !resp.Data[0].SNMP.PrivPasswordSet {
+		t.Fatalf("expected v3 secret metadata to be present, got %+v", resp.Data[0].SNMP)
+	}
+}
+
+func TestSNMPProfileHandlerList_RedactsV2cCommunity(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	seedV2cProfile(t, repo)
+	h := NewSNMPProfileHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/snmp-profiles", nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "public") {
+		t.Fatalf("metadata list leaked v2c community: %s", body)
+	}
+
+	var resp struct {
+		Data []snmpProfileResponse `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 profile, got %d", len(resp.Data))
+	}
+	if resp.Data[0].SNMP.Community != "" {
+		t.Fatalf("expected community to be redacted, got %q", resp.Data[0].SNMP.Community)
+	}
+	if !resp.Data[0].SNMP.CommunitySet {
+		t.Fatal("expected community_set=true")
+	}
+}
+
+func TestSNMPProfileHandlerCreateAndUpdate_RedactCredentialSecrets(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	h := NewSNMPProfileHandler(repo)
+
+	createBody := `{"name":"new-profile","snmp":{"version":"2c","community":"private-community"}}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles", strings.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+
+	h.HandleCreate(createRec, createReq)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body=%s", createRec.Code, createRec.Body.String())
+	}
+	if strings.Contains(createRec.Body.String(), "private-community") {
+		t.Fatalf("create response leaked v2c community: %s", createRec.Body.String())
+	}
+
+	var createResp struct {
+		Data snmpProfileResponse `json:"data"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if !createResp.Data.SNMP.CommunitySet {
+		t.Fatal("expected community_set=true on create")
+	}
+
+	updateBody := `{"name":"updated-name","snmp":{"version":"3","username":"admin","auth_protocol":"SHA","auth_password":"auth-pass-value","priv_protocol":"AES","priv_password":"priv-pass-value","security_level":"authPriv"}}`
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/snmp-profiles/"+createResp.Data.ID, strings.NewReader(updateBody))
+	updateRec := httptest.NewRecorder()
+
+	h.HandleUpdate(updateRec, updateReq)
+
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	if strings.Contains(updateRec.Body.String(), "auth-pass-value") || strings.Contains(updateRec.Body.String(), "priv-pass-value") {
+		t.Fatalf("update response leaked v3 password: %s", updateRec.Body.String())
+	}
+}
+
+func TestSNMPProfileHandlerReveal_ReturnsCredentialSecretsWithNoStore(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	id := seedV3Profile(t, repo)
+	h := NewSNMPProfileHandler(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+id.String()+"/reveal", strings.NewReader(`{"reason":"apply profile to device"}`))
+	req.Header.Set("User-Agent", "theia-test")
+	rec := httptest.NewRecorder()
+
+	h.HandleReveal(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected Cache-Control no-store, got %q", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("expected Pragma no-cache, got %q", got)
+	}
+
+	var resp struct {
+		Data snmpProfileResponse `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Data.SNMP.AuthPassword != "super-secret-auth-pass" {
+		t.Fatalf("expected auth_password reveal, got %q", resp.Data.SNMP.AuthPassword)
+	}
+	if resp.Data.SNMP.PrivPassword != "super-secret-priv-pass" {
+		t.Fatalf("expected priv_password reveal, got %q", resp.Data.SNMP.PrivPassword)
+	}
+}
+
+func TestSNMPProfileHandlerReveal_RequiresReason(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	id := seedV2cProfile(t, repo)
+	h := NewSNMPProfileHandler(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+id.String()+"/reveal", strings.NewReader(`{"reason":"   "}`))
+	rec := httptest.NewRecorder()
+
+	h.HandleReveal(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSNMPProfileHandlerReveal_NotFound(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	h := NewSNMPProfileHandler(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+uuid.New().String()+"/reveal", strings.NewReader(`{"reason":"apply profile to device"}`))
+	rec := httptest.NewRecorder()
+
+	h.HandleReveal(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

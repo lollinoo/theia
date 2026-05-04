@@ -266,6 +266,10 @@ func NewRouter(
 	})
 
 	mux.HandleFunc("/api/v1/snmp-profiles/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/reveal") {
+			snmpProfileHandler.HandleReveal(w, r)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			snmpProfileHandler.HandleGet(w, r)
