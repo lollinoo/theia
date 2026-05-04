@@ -2583,6 +2583,33 @@ func TestDeleteDevice_RemovesDeviceAndLinks(t *testing.T) {
 	}
 }
 
+func TestDeleteDevice_ResetsRuntimeStateAfterSuccessfulDelete(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	resetter := &recordingRuntimeResetter{}
+	svc.SetRuntimeResetter(resetter)
+
+	device := &domain.Device{
+		ID:      uuid.New(),
+		IP:      "10.0.0.10",
+		Managed: true,
+		Status:  domain.DeviceStatusUp,
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.DeleteDevice(context.Background(), device.ID); err != nil {
+		t.Fatalf("DeleteDevice failed: %v", err)
+	}
+
+	if got := len(resetter.deviceIDs); got != 1 {
+		t.Fatalf("runtime reset call count = %d, want 1", got)
+	}
+	if resetter.deviceIDs[0] != device.ID {
+		t.Fatalf("runtime reset device ID = %s, want %s", resetter.deviceIDs[0], device.ID)
+	}
+}
+
 func TestGetAllDevices_ReturnsAllWithInterfaces(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
 
