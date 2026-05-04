@@ -108,6 +108,85 @@ func TestRuntimeDebugSettingsSummaryIncludesEffectivePollingConfig(t *testing.T)
 	}
 }
 
+func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	surfaces := []struct {
+		path                 string
+		deploymentEnv        string
+		requireBlankEnvValue bool
+	}{
+		{path: ".env.prod.example", deploymentEnv: "production", requireBlankEnvValue: true},
+		{path: ".env.staging.example", deploymentEnv: "staging", requireBlankEnvValue: true},
+		{path: "docker-compose.prod.yml", deploymentEnv: "production"},
+		{path: "docker-compose.staging.yml", deploymentEnv: "staging"},
+	}
+	unsafeFragments := []struct {
+		name  string
+		value string
+	}{
+		{name: "placeholder PostgreSQL password", value: "POSTGRES_PASSWORD=change-me"},
+		{name: "concrete PostgreSQL DSN example", value: "THEIA_DB_DSN=postgres://"},
+		{name: "placeholder PostgreSQL DSN password", value: "THEIA_DB_DSN=postgres://theia:change-me@"},
+		{name: "PostgreSQL password fallback", value: "POSTGRES_PASSWORD:-"},
+		{name: "PostgreSQL DSN fallback", value: "THEIA_DB_DSN:-postgres://"},
+	}
+
+	for _, surface := range surfaces {
+		t.Run(surface.path, func(t *testing.T) {
+			contentBytes, err := os.ReadFile(filepath.Join(repoRoot, surface.path))
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", surface.path, err)
+			}
+			content := string(contentBytes)
+
+			if !surfaceContainsDeploymentEnv(content, surface.deploymentEnv) {
+				t.Errorf("%s must set THEIA_DEPLOYMENT_ENV for %s validation", surface.path, surface.deploymentEnv)
+			}
+			for _, unsafe := range unsafeFragments {
+				if strings.Contains(content, unsafe.value) {
+					t.Errorf("%s contains unsafe %s fragment %q", surface.path, unsafe.name, unsafe.value)
+				}
+			}
+			if surface.requireBlankEnvValue {
+				for _, key := range []string{"THEIA_DB_DSN", "POSTGRES_PASSWORD"} {
+					value, ok := envExampleAssignment(content, key)
+					if !ok {
+						t.Errorf("%s must include %s=", surface.path, key)
+						continue
+					}
+					if value != "" {
+						t.Errorf("%s must leave %s blank in the tracked example", surface.path, key)
+					}
+				}
+			}
+		})
+	}
+}
+
+func surfaceContainsDeploymentEnv(content, deploymentEnv string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "THEIA_DEPLOYMENT_ENV=") && strings.Contains(line, deploymentEnv) {
+			return true
+		}
+	}
+	return false
+}
+
+func envExampleAssignment(content, key string) (string, bool) {
+	prefix := key + "="
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix)), true
+		}
+	}
+	return "", false
+}
+
 func TestRuntimeBootstrapRunWrapsLoadConfigError(t *testing.T) {
 	bootstrap := &runtimeBootstrap{}
 	original := loadRuntimeConfig

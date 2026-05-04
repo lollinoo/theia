@@ -120,7 +120,7 @@ Once an installation outgrows the small-install envelope, migration to PostgreSQ
 
 ```bash
 make postgres-up
-export THEIA_DB_DSN='postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable'
+export THEIA_DB_DSN='<postgresql-target-dsn>'
 make migrate-postgres
 ```
 
@@ -132,7 +132,7 @@ You can also run the migrator directly if you have a local Go toolchain installe
 go run ./cmd/theia-db-migrate \
   -config config.yaml \
   -source-sqlite ./data/theia.db \
-  -target-dsn 'postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable' \
+  -target-dsn '<postgresql-target-dsn>' \
   -truncate-target
 ```
 
@@ -266,10 +266,19 @@ The production stack uses compiled images — no hot-reload, no source mounts, n
 
 ### 1. Configure environment
 
+`.env.prod.example` is a placeholder template only. Copy it to `.env.prod`, fill the required values locally, and keep `.env.prod` plus any production `config.yaml` override local and untracked because they can contain deployment secrets.
+
+Production startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=production` is set. The backend rejects missing or example secret values before opening the database.
+
+Required operator inputs for the standard bundled PostgreSQL stack:
+
+- `THEIA_ENCRYPTION_KEY`
+- `THEIA_DB_DSN`
+- `POSTGRES_PASSWORD` for the bundled `postgres` service
+
 ```bash
 cp .env.prod.example .env.prod
-# Set THEIA_ENCRYPTION_KEY before first start
-# Replace example POSTGRES_PASSWORD / THEIA_DB_DSN values
+# Fill required operator-provided values before first start
 ```
 
 ### 2. Start the stack
@@ -350,10 +359,19 @@ The staging stack pulls pre-built images from GHCR and keeps them updated with W
 
 ### 1. Configure environment
 
+`.env.staging.example` is a placeholder template only. Copy it to `.env.staging`, fill the required values locally, and keep `.env.staging` plus any staging `config.yaml` override local and untracked because they can contain deployment secrets.
+
+Staging startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=staging` is set. The backend rejects missing or example secret values before opening the database.
+
+Required operator inputs for the standard bundled PostgreSQL stack:
+
+- `THEIA_ENCRYPTION_KEY`
+- `THEIA_DB_DSN`
+- `POSTGRES_PASSWORD` for the bundled `postgres` service
+
 ```bash
 cp .env.staging.example .env.staging
-# Set THEIA_ENCRYPTION_KEY before first start
-# Replace example POSTGRES_PASSWORD / THEIA_DB_DSN values
+# Fill required operator-provided values before first start
 ```
 
 ### 2. Start the stack
@@ -399,9 +417,10 @@ Configuration is loaded from `config.yaml` (or `config.example.yaml` as a templa
 | config.yaml key | Environment variable | Default | Description |
 |-----------------|---------------------|---------|-------------|
 | `db_driver` | `THEIA_DB_DRIVER` | `postgres` | Primary database driver: `postgres` by default; `sqlite` only with explicit small-install opt-in |
+| `deployment_env` | `THEIA_DEPLOYMENT_ENV` | none | Set to `production` or `staging` for deployed environments so startup enforces required secret validation |
 | `listen_addr` | `THEIA_LISTEN_ADDR` | `:8080` | HTTP server bind address |
 | `db_path` | `THEIA_DB_PATH` | `./data/theia.db` | SQLite database file path |
-| `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN for the standard postgres path; `config.Load()` does not inject one, so set it explicitly or use a config/env example such as `postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable` |
+| `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN for the standard postgres path; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
 | `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Optional directory containing pre-built bridge binaries; leave empty to disable bridge downloads |
 | `log_level` | `THEIA_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
