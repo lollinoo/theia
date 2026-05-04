@@ -1576,6 +1576,83 @@ func TestHandleBatchAdd_InvalidIP_ReturnsFailures(t *testing.T) {
 	}
 }
 
+func TestHandleBatchAdd_RejectsSingleCreateValidationFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		deviceJSON string
+		wantReason string
+	}{
+		{
+			name:       "regular device requires ip",
+			deviceJSON: `{"hostname":"missing-ip","snmp":{"version":"2c","community":"public"}}`,
+			wantReason: "ip is required",
+		},
+		{
+			name:       "invalid device type",
+			deviceJSON: `{"ip":"10.0.0.10","device_type":"refrigerator","snmp":{"version":"2c","community":"public"}}`,
+			wantReason: "invalid device_type",
+		},
+		{
+			name:       "invalid metrics source",
+			deviceJSON: `{"ip":"10.0.0.11","metrics_source":"magic","snmp":{"version":"2c","community":"public"}}`,
+			wantReason: "invalid metrics_source",
+		},
+		{
+			name:       "invalid topology discovery mode",
+			deviceJSON: `{"ip":"10.0.0.12","topology_discovery_mode":"bogus","snmp":{"version":"2c","community":"public"}}`,
+			wantReason: "invalid topology_discovery_mode",
+		},
+		{
+			name:       "tag key too long",
+			deviceJSON: fmt.Sprintf(`{"ip":"10.0.0.13","tags":{"%s":"value"},"snmp":{"version":"2c","community":"public"}}`, strings.Repeat("k", 256)),
+			wantReason: "tag key too long",
+		},
+		{
+			name:       "prometheus label value too long",
+			deviceJSON: fmt.Sprintf(`{"ip":"10.0.0.14","prometheus_label_value":"%s","snmp":{"version":"2c","community":"public"}}`, strings.Repeat("v", 256)),
+			wantReason: "prometheus_label_value too long",
+		},
+		{
+			name:       "virtual missing display name",
+			deviceJSON: `{"device_type":"virtual","tags":{"virtual_subtype":"internet"}}`,
+			wantReason: "tags.display_name is required for virtual devices",
+		},
+		{
+			name:       "virtual invalid subtype",
+			deviceJSON: `{"device_type":"virtual","tags":{"display_name":"Cloud","virtual_subtype":"gateway"}}`,
+			wantReason: "tags.virtual_subtype must be one of",
+		},
+		{
+			name:       "invalid area id",
+			deviceJSON: `{"ip":"10.0.0.15","area_ids":["not-a-uuid"],"snmp":{"version":"2c","community":"public"}}`,
+			wantReason: "invalid area_id: not-a-uuid",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, repo, _ := newTestDeviceHandler(t)
+			body := fmt.Sprintf(`{"devices":[%s]}`, tc.deviceJSON)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/batch", strings.NewReader(body))
+			rec := httptest.NewRecorder()
+
+			handler.HandleBatchAdd(rec, req)
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+			assertBatchFailureReason(t, rec.Body.String(), tc.wantReason)
+			devices, err := repo.GetAll()
+			if err != nil {
+				t.Fatalf("GetAll failed: %v", err)
+			}
+			if len(devices) != 0 {
+				t.Fatalf("expected invalid batch row not to create a device, got %d", len(devices))
+			}
+		})
+	}
+}
+
 func TestHandleBatchAdd_AllValid_EmptyFailures(t *testing.T) {
 	handler, _, _ := newTestDeviceHandler(t)
 
@@ -1604,5 +1681,28 @@ func TestHandleBatchAdd_AllValid_EmptyFailures(t *testing.T) {
 	}
 	if len(failureList) != 0 {
 		t.Errorf("expected 0 failures for valid IPs, got %d: %v", len(failureList), failureList)
+	}
+}
+
+func assertBatchFailureReason(t *testing.T, body string, wantReason string) {
+	t.Helper()
+	var resp map[string]interface{}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	failureList, ok := resp["failures"].([]interface{})
+	if !ok {
+		t.Fatalf("expected failures array, got %T in %s", resp["failures"], body)
+	}
+	if len(failureList) != 1 {
+		t.Fatalf("expected 1 failure, got %d: %s", len(failureList), body)
+	}
+	failure, ok := failureList[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected failure object, got %T", failureList[0])
+	}
+	reason, _ := failure["reason"].(string)
+	if !strings.Contains(reason, wantReason) {
+		t.Fatalf("expected failure reason to contain %q, got %q", wantReason, reason)
 	}
 }
