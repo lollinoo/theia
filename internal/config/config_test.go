@@ -25,6 +25,7 @@ func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 	t.Setenv("THEIA_DB_DRIVER", "postgres")
 	t.Setenv("THEIA_DB_DSN", "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable")
 	t.Setenv("THEIA_DATA_DIR", "/tmp/theia-data")
+	t.Setenv("THEIA_DEPLOYMENT_ENV", "production")
 
 	cfg, err := Load("/nonexistent-config.yaml")
 	if err != nil {
@@ -40,17 +41,20 @@ func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 	if cfg.DataDir != "/tmp/theia-data" {
 		t.Fatalf("DataDir = %q, want /tmp/theia-data", cfg.DataDir)
 	}
+	if cfg.DeploymentEnv != "production" {
+		t.Fatalf("DeploymentEnv = %q, want production", cfg.DeploymentEnv)
+	}
 }
 
 func TestLoad_FileHandling(t *testing.T) {
 	tests := []struct {
-		name        string
-		contents    string
-		env         map[string]string
-		assert      func(t *testing.T, cfg *Config, err error)
+		name     string
+		contents string
+		env      map[string]string
+		assert   func(t *testing.T, cfg *Config, err error)
 	}{
 		{
-			name: "loads values from yaml file",
+			name:     "loads values from yaml file",
 			contents: "db_driver: sqlite\nlisten_addr: \":9090\"\ndb_path: ./custom.db\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\n",
 			assert: func(t *testing.T, cfg *Config, err error) {
 				t.Helper()

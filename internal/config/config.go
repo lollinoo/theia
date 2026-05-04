@@ -18,6 +18,7 @@ type Config struct {
 	DataDir           string `yaml:"data_dir"`
 	LogLevel          string `yaml:"log_level"`
 	BridgeBinariesDir string `yaml:"bridge_binaries_dir"`
+	DeploymentEnv     string `yaml:"deployment_env"`
 }
 
 // defaults returns a Config with sensible default values.
@@ -42,6 +43,7 @@ func defaults() *Config {
 //   - THEIA_DATA_DIR
 //   - THEIA_LOG_LEVEL
 //   - THEIA_BRIDGE_BINARIES_DIR
+//   - THEIA_DEPLOYMENT_ENV
 func Load(path string) (*Config, error) {
 	cfg := defaults()
 
@@ -78,6 +80,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("THEIA_BRIDGE_BINARIES_DIR"); v != "" {
 		cfg.BridgeBinariesDir = v
+	}
+	if v := os.Getenv("THEIA_DEPLOYMENT_ENV"); v != "" {
+		cfg.DeploymentEnv = v
 	}
 
 	return cfg, nil
