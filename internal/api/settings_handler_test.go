@@ -42,6 +42,41 @@ func TestSettingsHandlerGetAll(t *testing.T) {
 	}
 }
 
+func TestSettingsHandlerGetAll_RedactsBridgeSecret(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.settings[domain.SettingBridgeSecret] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	h := NewSettingsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleGetAll(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "0123456789abcdef") {
+		t.Fatalf("settings response leaked bridge secret: %s", rec.Body.String())
+	}
+
+	var resp struct {
+		Data map[string]string `json:"data"`
+		Meta struct {
+			Secrets map[string]settingSecretState `json:"secrets"`
+		} `json:"meta"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := resp.Data[domain.SettingBridgeSecret]; ok {
+		t.Fatal("expected bridge_secret to be omitted from settings data")
+	}
+	state := resp.Meta.Secrets[domain.SettingBridgeSecret]
+	if !state.Present || !state.Redacted {
+		t.Fatalf("expected bridge_secret metadata present/redacted, got %+v", state)
+	}
+}
+
 func TestSettingsHandlerGetAll_RepoError(t *testing.T) {
 	h := NewSettingsHandler(&failingSettingsRepo{})
 
@@ -72,6 +107,63 @@ func TestSettingsHandlerUpdate_HappyPath(t *testing.T) {
 	got, _ := repo.Get(domain.SettingPollingInterval)
 	if got != "30" {
 		t.Fatalf("expected polling_interval_seconds=30, got %s", got)
+	}
+}
+
+func TestSettingsHandlerGet_BridgeSecretRedacted(t *testing.T) {
+	repo := newMockSettingsRepo()
+	repo.settings[domain.SettingBridgeSecret] = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	h := NewSettingsHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/"+domain.SettingBridgeSecret, nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleGet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "abcdefabcdef") {
+		t.Fatalf("settings get leaked bridge secret: %s", rec.Body.String())
+	}
+
+	var resp struct {
+		Data map[string]string `json:"data"`
+		Meta struct {
+			Secrets map[string]settingSecretState `json:"secrets"`
+		} `json:"meta"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Data[domain.SettingBridgeSecret] != "" {
+		t.Fatalf("expected redacted bridge_secret data value to be empty, got %q", resp.Data[domain.SettingBridgeSecret])
+	}
+	state := resp.Meta.Secrets[domain.SettingBridgeSecret]
+	if !state.Present || !state.Redacted {
+		t.Fatalf("expected bridge_secret metadata present/redacted, got %+v", state)
+	}
+}
+
+func TestSettingsHandlerUpdate_BridgeSecretDoesNotEchoValue(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingBridgeSecret, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "0123456789abcdef") {
+		t.Fatalf("settings update leaked bridge secret: %s", rec.Body.String())
+	}
+	got, _ := repo.Get(domain.SettingBridgeSecret)
+	if got == "" {
+		t.Fatal("expected bridge_secret to be stored")
 	}
 }
 

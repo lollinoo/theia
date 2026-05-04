@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
+	"time"
 
 	"fyne.io/systray"
 )
@@ -35,9 +36,10 @@ type launchRequest struct {
 
 // launchCredentials is the plaintext payload embedded inside the encrypted token.
 type launchCredentials struct {
-	IP       string `json:"ip"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	IP        string `json:"ip"`
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+	ExpiresAt string `json:"expires_at"`
 }
 
 // --- Crypto helpers ---
@@ -78,6 +80,16 @@ func decryptLaunchToken(tokenHex, secretHex string) (launchCredentials, error) {
 
 	if err := json.Unmarshal(plaintext, &creds); err != nil {
 		return creds, fmt.Errorf("decode credentials: %w", err)
+	}
+	if creds.ExpiresAt == "" {
+		return creds, fmt.Errorf("token missing expiration")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, creds.ExpiresAt)
+	if err != nil {
+		return creds, fmt.Errorf("invalid token expiration")
+	}
+	if !time.Now().Before(expiresAt) {
+		return creds, fmt.Errorf("token expired")
 	}
 	return creds, nil
 }

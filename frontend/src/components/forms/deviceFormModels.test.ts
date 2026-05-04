@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Device } from '../../types/api';
 import {
+  applySNMPProfile,
   createAddDeviceFormModel,
   createDeviceConfigFormModel,
   resetDeviceFormMode,
@@ -77,5 +78,61 @@ describe('deviceFormModels', () => {
     expect(next.mode).toBe('virtual');
     expect(next.hostname).toBe('');
     expect(next.prometheus.labelValue).toBe('');
+  });
+
+  it('applies revealed SNMP profile credentials to add-device state', () => {
+    const form = createAddDeviceFormModel();
+    const next = applySNMPProfile(form, {
+      id: 'profile-1',
+      name: 'Office',
+      description: '',
+      snmp: {
+        version: '3',
+        username: 'snmp-user',
+        auth_protocol: 'SHA',
+        auth_password: 'auth-pass',
+        priv_protocol: 'AES',
+        priv_password: 'priv-pass',
+        security_level: 'authPriv',
+        auth_password_set: true,
+        priv_password_set: true,
+      },
+      created_at: '',
+      updated_at: '',
+    });
+
+    expect(next.snmp.version).toBe('3');
+    expect(next.snmp.username).toBe('snmp-user');
+    expect(next.snmp.authPassword).toBe('auth-pass');
+    expect(next.snmp.privPassword).toBe('priv-pass');
+  });
+
+  it('does not overwrite current secrets from redacted SNMP profile metadata', () => {
+    const form = {
+      ...createAddDeviceFormModel(),
+      snmp: {
+        ...createAddDeviceFormModel().snmp,
+        community: 'current-community',
+        authPassword: 'current-auth',
+        privPassword: 'current-priv',
+      },
+    };
+    const next = applySNMPProfile(form, {
+      id: 'profile-1',
+      name: 'Office',
+      description: '',
+      snmp: {
+        version: '2c',
+        community_set: true,
+        auth_password_set: false,
+        priv_password_set: false,
+      },
+      created_at: '',
+      updated_at: '',
+    });
+
+    expect(next.snmp.community).toBe('current-community');
+    expect(next.snmp.authPassword).toBe('current-auth');
+    expect(next.snmp.privPassword).toBe('current-priv');
   });
 });

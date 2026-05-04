@@ -488,6 +488,49 @@ func TestSNMPProfileHandlerCreateAndUpdate_RedactCredentialSecrets(t *testing.T)
 	}
 }
 
+func TestSNMPProfileHandlerUpdate_PreservesExistingSecretsWhenRedactedFieldsOmitted(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	id := seedV3Profile(t, repo)
+	h := NewSNMPProfileHandler(repo)
+
+	body := `{"name":"updated-v3","snmp":{"version":"3","username":"admin","auth_protocol":"SHA","priv_protocol":"AES","security_level":"authPriv"}}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/snmp-profiles/"+id.String(), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	updated := repo.profiles[id]
+	if updated.Credentials.V3.AuthPassword != "super-secret-auth-pass" {
+		t.Fatalf("expected auth password to be preserved, got %q", updated.Credentials.V3.AuthPassword)
+	}
+	if updated.Credentials.V3.PrivPassword != "super-secret-priv-pass" {
+		t.Fatalf("expected priv password to be preserved, got %q", updated.Credentials.V3.PrivPassword)
+	}
+}
+
+func TestSNMPProfileHandlerUpdate_PreservesExistingV2cCommunityWhenOmitted(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	id := seedV2cProfile(t, repo)
+	h := NewSNMPProfileHandler(repo)
+
+	body := `{"name":"updated-v2c","snmp":{"version":"2c"}}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/snmp-profiles/"+id.String(), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	updated := repo.profiles[id]
+	if updated.Credentials.V2c.Community != "public" {
+		t.Fatalf("expected v2c community to be preserved, got %q", updated.Credentials.V2c.Community)
+	}
+}
+
 func TestSNMPProfileHandlerReveal_ReturnsCredentialSecretsWithNoStore(t *testing.T) {
 	repo := newMockSNMPProfileRepo()
 	id := seedV3Profile(t, repo)
@@ -549,6 +592,61 @@ func TestSNMPProfileHandlerReveal_NotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSNMPProfileHandlerReveal_RejectsExtraPathSegments(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	id := seedV3Profile(t, repo)
+	h := NewSNMPProfileHandler(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+id.String()+"/extra/reveal", strings.NewReader(`{"reason":"apply profile to device"}`))
+	rec := httptest.NewRecorder()
+
+	h.HandleReveal(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "super-secret-auth-pass") || strings.Contains(rec.Body.String(), "super-secret-priv-pass") {
+		t.Fatalf("invalid reveal path leaked credentials: %s", rec.Body.String())
+	}
+}
+
+func TestSNMPProfileHandlerGet_IncludesFalseSecretMetadata(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	p := &domain.SNMPProfile{
+		Name: "test-v3-no-secrets",
+		Credentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV3,
+			V3: &domain.SNMPv3Credentials{
+				Username:      "readonly",
+				SecurityLevel: "noAuthNoPriv",
+			},
+		},
+	}
+	if err := repo.Create(p); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	h := NewSNMPProfileHandler(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/snmp-profiles/"+p.ID.String(), nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleGet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"community_set":false`) {
+		t.Fatalf("expected community_set false metadata in body: %s", body)
+	}
+	if !strings.Contains(body, `"auth_password_set":false`) {
+		t.Fatalf("expected auth_password_set false metadata in body: %s", body)
+	}
+	if !strings.Contains(body, `"priv_password_set":false`) {
+		t.Fatalf("expected priv_password_set false metadata in body: %s", body)
 	}
 }
 

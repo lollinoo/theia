@@ -643,15 +643,21 @@ export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCr
   return parseWinBoxCredentialsResponse(payload);
 }
 
+export async function revealSNMPProfile(id: string, reason: string): Promise<SNMPProfile> {
+  return parseSNMPProfileResponse(
+    await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}/reveal`, 'POST', {
+      reason,
+    }),
+  );
+}
+
 // fetchBridgeToken requests an AES-GCM encrypted credential token from the backend.
-// The token is encrypted with bridgeSecret (the 64-char hex key stored in the bridge's config.json)
-// and can only be decrypted by the bridge binary.  The plaintext credentials never appear in the
-// browser's network traffic to the bridge.
-export async function fetchBridgeToken(deviceId: string, bridgeSecret: string): Promise<string> {
+// The backend reads the stored bridge secret server-side, so the browser never receives or replays
+// that shared secret. The plaintext credentials only appear inside the encrypted local bridge token.
+export async function fetchBridgeToken(deviceId: string): Promise<string> {
   const payload = await requestJSONWithBody(
     `/api/v1/bridge/token/${encodeURIComponent(deviceId)}`,
     'POST',
-    { bridge_secret: bridgeSecret },
   );
   const p = payload as Record<string, unknown>;
   if (typeof p?.token !== 'string' || p.token === '') {

@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/service"
 )
@@ -22,6 +24,7 @@ type BridgeHandler struct {
 	binariesDir           string
 	backupSvc             *service.BackupService
 	credentialProfileRepo *sqlite.CredentialProfileRepo
+	settingsRepo          domain.SettingsRepository
 }
 
 // NewBridgeHandler creates a new BridgeHandler.
@@ -39,11 +42,13 @@ func NewBridgeHandlerWithCredentials(
 	binariesDir string,
 	backupSvc *service.BackupService,
 	credentialProfileRepo *sqlite.CredentialProfileRepo,
+	settingsRepo domain.SettingsRepository,
 ) *BridgeHandler {
 	return &BridgeHandler{
 		binariesDir:           binariesDir,
 		backupSvc:             backupSvc,
 		credentialProfileRepo: credentialProfileRepo,
+		settingsRepo:          settingsRepo,
 	}
 }
 
@@ -96,20 +101,20 @@ func (h *BridgeHandler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 // bridge secret supplied in the request body, and returns the hex-encoded
 // AES-GCM ciphertext.  The bridge binary decrypts the token on POST /launch.
 //
-// Request body: {"bridge_secret": "<64-hex-char key>"}
-// Response:     {"token": "<hex-encoded AES-GCM ciphertext>"}
+// Request body: optional and ignored.
+// Response:     {"token": "<hex-encoded AES-GCM ciphertext>", "expires_at": "..."}
 //
 // The bridge secret is a 32-byte key (64 hex chars) stored in the bridge's
-// config.json (~/.config/winbox-bridge/config.json).  It is never stored on
-// the Theia backend — it is sent per-request and used only for one-time
-// encryption of a short-lived credential bundle.
+// config.json (~/.config/winbox-bridge/config.json) and mirrored in settings.
+// It is read server-side so the browser does not receive or replay the shared
+// secret while requesting a short-lived credential bundle.
 func (h *BridgeHandler) HandleBridgeToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	if h.backupSvc == nil || h.credentialProfileRepo == nil {
+	if h.backupSvc == nil || h.credentialProfileRepo == nil || h.settingsRepo == nil {
 		writeError(w, http.StatusServiceUnavailable, "bridge token endpoint not configured")
 		return
 	}
@@ -121,19 +126,14 @@ func (h *BridgeHandler) HandleBridgeToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var body struct {
-		BridgeSecret string `json:"bridge_secret"`
-	}
-	if !decodeJSON(w, r, &body) {
+	bridgeSecret, err := h.settingsRepo.Get(domain.SettingBridgeSecret)
+	if err != nil || strings.TrimSpace(bridgeSecret) == "" {
+		writeError(w, http.StatusUnprocessableEntity, "bridge secret not configured")
 		return
 	}
-	if body.BridgeSecret == "" {
-		writeError(w, http.StatusBadRequest, "bridge_secret is required")
-		return
-	}
-	keyBytes, err := hex.DecodeString(body.BridgeSecret)
+	keyBytes, err := hex.DecodeString(strings.TrimSpace(bridgeSecret))
 	if err != nil || len(keyBytes) != 32 {
-		writeError(w, http.StatusBadRequest, "bridge_secret must be a 64-character hex string (32 bytes)")
+		writeError(w, http.StatusBadRequest, "configured bridge_secret must be a 64-character hex string (32 bytes)")
 		return
 	}
 
@@ -158,11 +158,14 @@ func (h *BridgeHandler) HandleBridgeToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	expiresAt := time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
+
 	// Build plaintext credential bundle
 	payload := map[string]string{
-		"ip":       ip,
-		"username": assignment.Username,
-		"password": password,
+		"ip":         ip,
+		"username":   assignment.Username,
+		"password":   password,
+		"expires_at": expiresAt,
 	}
 	plaintext, err := json.Marshal(payload)
 	if err != nil {
@@ -189,6 +192,7 @@ func (h *BridgeHandler) HandleBridgeToken(w http.ResponseWriter, r *http.Request
 	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
 
 	json.NewEncoder(w).Encode(map[string]string{
-		"token": hex.EncodeToString(ciphertext),
+		"token":      hex.EncodeToString(ciphertext),
+		"expires_at": expiresAt,
 	})
 }

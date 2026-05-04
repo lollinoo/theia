@@ -2,10 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
@@ -39,14 +41,14 @@ type snmpProfileResponse struct {
 type snmpCredsResponse struct {
 	Version         string `json:"version"`
 	Community       string `json:"community,omitempty"`
-	CommunitySet    bool   `json:"community_set,omitempty"`
+	CommunitySet    bool   `json:"community_set"`
 	Username        string `json:"username,omitempty"`
 	AuthProtocol    string `json:"auth_protocol,omitempty"`
 	AuthPassword    string `json:"auth_password,omitempty"`
-	AuthPasswordSet bool   `json:"auth_password_set,omitempty"`
+	AuthPasswordSet bool   `json:"auth_password_set"`
 	PrivProtocol    string `json:"priv_protocol,omitempty"`
 	PrivPassword    string `json:"priv_password,omitempty"`
-	PrivPasswordSet bool   `json:"priv_password_set,omitempty"`
+	PrivPasswordSet bool   `json:"priv_password_set"`
 	SecurityLevel   string `json:"security_level,omitempty"`
 }
 
@@ -169,6 +171,7 @@ func (h *SNMPProfileHandler) HandleUpdate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	preserveSNMPProfileSecrets(&creds, profile.Credentials, req.SNMP)
 
 	profile.Name = strings.TrimSpace(req.Name)
 	profile.Description = strings.TrimSpace(req.Description)
@@ -193,8 +196,7 @@ func (h *SNMPProfileHandler) HandleReveal(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	trimmedPath := strings.TrimSuffix(r.URL.Path, "/reveal")
-	id, err := extractIDFromPath(trimmedPath, "/api/v1/snmp-profiles/")
+	id, err := extractRevealSNMPProfileID(r.URL.Path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid profile ID")
 		return
@@ -291,4 +293,31 @@ func profileToRevealResponse(p *domain.SNMPProfile) snmpProfileResponse {
 		resp.SNMP.PrivPassword = p.Credentials.V3.PrivPassword
 	}
 	return resp
+}
+
+func preserveSNMPProfileSecrets(next *domain.SNMPCredentials, existing domain.SNMPCredentials, req snmpCredsRequest) {
+	if next.V2c != nil && existing.V2c != nil && strings.TrimSpace(req.Community) == "" {
+		next.V2c.Community = existing.V2c.Community
+	}
+	if next.V3 == nil || existing.V3 == nil {
+		return
+	}
+	if strings.TrimSpace(req.AuthPassword) == "" {
+		next.V3.AuthPassword = existing.V3.AuthPassword
+	}
+	if strings.TrimSpace(req.PrivPassword) == "" {
+		next.V3.PrivPassword = existing.V3.PrivPassword
+	}
+}
+
+func extractRevealSNMPProfileID(path string) (uuid.UUID, error) {
+	const prefix = "/api/v1/snmp-profiles/"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, "/reveal") {
+		return uuid.Nil, fmt.Errorf("invalid reveal path")
+	}
+	idPart := strings.TrimSuffix(strings.TrimPrefix(path, prefix), "/reveal")
+	if idPart == "" || strings.Contains(idPart, "/") {
+		return uuid.Nil, fmt.Errorf("invalid reveal path")
+	}
+	return uuid.Parse(idPart)
 }

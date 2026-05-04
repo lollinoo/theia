@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- Test helpers ---
@@ -84,7 +85,12 @@ func encryptToken(t *testing.T, creds launchCredentials, secretHex string) strin
 // validToken builds a valid encrypted token for standard test credentials using testSecret.
 func validToken(t *testing.T) string {
 	t.Helper()
-	return encryptToken(t, launchCredentials{IP: "192.168.1.1", Username: "admin", Password: "pass123"}, testSecret)
+	return encryptToken(t, launchCredentials{
+		IP:        "192.168.1.1",
+		Username:  "admin",
+		Password:  "pass123",
+		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+	}, testSecret)
 }
 
 // --- Security: Origin validation ---
@@ -276,7 +282,12 @@ func TestLaunch_InvalidTokenReturns400(t *testing.T) {
 func TestLaunch_TokenWrongSecretReturns400(t *testing.T) {
 	// Encrypt with a different secret — bridge should reject it
 	otherSecret := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-	token := encryptToken(t, launchCredentials{IP: "10.0.0.1", Username: "admin", Password: "x"}, otherSecret)
+	token := encryptToken(t, launchCredentials{
+		IP:        "10.0.0.1",
+		Username:  "admin",
+		Password:  "x",
+		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+	}, otherSecret)
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
@@ -355,7 +366,12 @@ func TestLaunch_PlaintextFieldsInBodyAreRejected(t *testing.T) {
 // --- decryptLaunchToken unit tests ---
 
 func TestDecryptLaunchToken_RoundTrip(t *testing.T) {
-	creds := launchCredentials{IP: "10.1.2.3", Username: "user", Password: "s3cr3t"}
+	creds := launchCredentials{
+		IP:        "10.1.2.3",
+		Username:  "user",
+		Password:  "pass-value",
+		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+	}
 	token := encryptToken(t, creds, testSecret)
 	got, err := decryptLaunchToken(token, testSecret)
 	if err != nil {
@@ -367,7 +383,12 @@ func TestDecryptLaunchToken_RoundTrip(t *testing.T) {
 }
 
 func TestDecryptLaunchToken_WrongKey(t *testing.T) {
-	token := encryptToken(t, launchCredentials{IP: "1.2.3.4", Username: "u", Password: "p"}, testSecret)
+	token := encryptToken(t, launchCredentials{
+		IP:        "1.2.3.4",
+		Username:  "u",
+		Password:  "p",
+		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+	}, testSecret)
 	otherKey := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	_, err := decryptLaunchToken(token, otherKey)
 	if err == nil {
@@ -376,7 +397,12 @@ func TestDecryptLaunchToken_WrongKey(t *testing.T) {
 }
 
 func TestDecryptLaunchToken_TamperedToken(t *testing.T) {
-	token := encryptToken(t, launchCredentials{IP: "1.2.3.4", Username: "u", Password: "p"}, testSecret)
+	token := encryptToken(t, launchCredentials{
+		IP:        "1.2.3.4",
+		Username:  "u",
+		Password:  "p",
+		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+	}, testSecret)
 	// Flip one byte in the middle
 	b, _ := hex.DecodeString(token)
 	b[len(b)/2] ^= 0xff
@@ -398,6 +424,19 @@ func TestDecryptLaunchToken_InvalidSecret(t *testing.T) {
 	_, err := decryptLaunchToken("aabbcc", "not-a-hex-key")
 	if err == nil {
 		t.Error("expected error for invalid secret, got nil")
+	}
+}
+
+func TestDecryptLaunchToken_ExpiredToken(t *testing.T) {
+	token := encryptToken(t, launchCredentials{
+		IP:        "1.2.3.4",
+		Username:  "u",
+		Password:  "p",
+		ExpiresAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+	}, testSecret)
+	_, err := decryptLaunchToken(token, testSecret)
+	if err == nil {
+		t.Error("expected error for expired token, got nil")
 	}
 }
 

@@ -27,7 +27,7 @@ func setupDeviceCredentialProfileTest(t *testing.T) (
 	*sql.DB,
 	uuid.UUID, // deviceID
 	uuid.UUID, // profileID
-	[]byte,    // encKey (for test crypto ops)
+	[]byte, // encKey (for test crypto ops)
 ) {
 	t.Helper()
 
@@ -319,9 +319,22 @@ func TestDeviceCredentialProfile_ClearWinbox_Idempotent(t *testing.T) {
 	}
 }
 
-// --- HandleGetWinboxCredentials ---
+// --- HandleGetWinboxCredentials / HandleRevealWinboxCredentials ---
 
-func TestDeviceCredentialProfile_GetWinboxCredentials_HappyPath(t *testing.T) {
+func TestDeviceCredentialProfile_GetWinboxCredentials_Gone(t *testing.T) {
+	handler, _, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
+
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/v1/devices/%s/winbox-credentials", deviceID), nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetWinboxCredentials(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeviceCredentialProfile_RevealWinboxCredentials_HappyPath(t *testing.T) {
 	handler, repo, db, deviceID, profileID, encKey := setupDeviceCredentialProfileTest(t)
 
 	// Update the profile to have an encrypted password
@@ -345,36 +358,56 @@ func TestDeviceCredentialProfile_GetWinboxCredentials_HappyPath(t *testing.T) {
 		t.Fatalf("set winbox profile: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/v1/devices/%s/winbox-credentials", deviceID), nil)
+	req := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/devices/%s/winbox-credentials/reveal", deviceID),
+		strings.NewReader(`{"reason":"manual diagnostic reveal"}`))
 	rec := httptest.NewRecorder()
-	handler.HandleGetWinboxCredentials(rec, req)
+	handler.HandleRevealWinboxCredentials(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected Cache-Control no-store, got %q", got)
 	}
 	var resp map[string]interface{}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp["password"] != "test-pass" {
-		t.Fatalf("expected password='test-pass', got %v", resp["password"])
+	data := resp["data"].(map[string]interface{})
+	if data["password"] != "test-pass" {
+		t.Fatalf("expected password='test-pass', got %v", data["password"])
 	}
-	if resp["ip"] != "192.168.1.1" {
-		t.Fatalf("expected ip='192.168.1.1', got %v", resp["ip"])
+	if data["ip"] != "192.168.1.1" {
+		t.Fatalf("expected ip='192.168.1.1', got %v", data["ip"])
 	}
-	if resp["username"] != "admin" {
-		t.Fatalf("expected username='admin', got %v", resp["username"])
+	if data["username"] != "admin" {
+		t.Fatalf("expected username='admin', got %v", data["username"])
 	}
 }
 
-func TestDeviceCredentialProfile_GetWinboxCredentials_NoWinboxProfile_Returns404(t *testing.T) {
+func TestDeviceCredentialProfile_RevealWinboxCredentials_RequiresReason(t *testing.T) {
 	handler, _, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
 
-	req := httptest.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/v1/devices/%s/winbox-credentials", deviceID), nil)
+	req := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/devices/%s/winbox-credentials/reveal", deviceID),
+		strings.NewReader(`{"reason":" "}`))
 	rec := httptest.NewRecorder()
-	handler.HandleGetWinboxCredentials(rec, req)
+	handler.HandleRevealWinboxCredentials(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeviceCredentialProfile_RevealWinboxCredentials_NoWinboxProfile_Returns404(t *testing.T) {
+	handler, _, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
+
+	req := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/devices/%s/winbox-credentials/reveal", deviceID),
+		strings.NewReader(`{"reason":"manual diagnostic reveal"}`))
+	rec := httptest.NewRecorder()
+	handler.HandleRevealWinboxCredentials(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d; body: %s", rec.Code, rec.Body.String())

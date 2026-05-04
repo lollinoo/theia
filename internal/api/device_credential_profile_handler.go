@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -226,20 +228,46 @@ func (h *DeviceCredentialProfileHandler) HandleClearWinbox(w http.ResponseWriter
 // --- HandleGetWinboxCredentials ---
 
 // HandleGetWinboxCredentials handles GET /api/v1/devices/{id}/winbox-credentials
-// Returns decrypted IP + username + password for the designated WinBox profile.
-// NOTE: Flat JSON response (no {"data":...} envelope) per D-10 spec.
-// T-24-05 mitigation: decryption happens in BackupService, never in the handler.
+// Plaintext WinBox credential retrieval is no longer available as a normal GET.
+// Use the bridge token endpoint for launches or POST /winbox-credentials/reveal
+// for explicit audited reveal.
 func (h *DeviceCredentialProfileHandler) HandleGetWinboxCredentials(w http.ResponseWriter, r *http.Request) {
-	trimmed := strings.TrimSuffix(r.URL.Path, "/winbox-credentials")
-	deviceID, err := extractIDFromPath(trimmed, "/api/v1/devices/")
+	writeError(w, http.StatusGone, "plaintext WinBox credentials require an explicit reveal operation; use bridge token by default")
+}
+
+// HandleRevealWinboxCredentials handles POST /api/v1/devices/{id}/winbox-credentials/reveal.
+func (h *DeviceCredentialProfileHandler) HandleRevealWinboxCredentials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	deviceID, err := extractWinboxCredentialsRevealDeviceID(r.URL.Path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid device ID")
+		return
+	}
+
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if reason == "" {
+		writeError(w, http.StatusBadRequest, "reason is required")
+		return
+	}
+	if len(reason) > 255 {
+		writeError(w, http.StatusBadRequest, "reason too long (max 255 characters)")
 		return
 	}
 
 	assignment, err := h.credentialProfileRepo.GetWinboxAssignment(deviceID)
 	if err != nil {
 		// "no WinBox profile designated" is the canonical message from the repo
+		log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=not_found", deviceID, reason, r.RemoteAddr, r.UserAgent())
 		writeError(w, http.StatusNotFound, "no WinBox profile designated")
 		return
 	}
@@ -247,21 +275,41 @@ func (h *DeviceCredentialProfileHandler) HandleGetWinboxCredentials(w http.Respo
 	ip, password, err := h.svc.GetWinboxCredentials(deviceID, assignment.EncryptedSecret, assignment.Username)
 	if err != nil {
 		if strings.Contains(err.Error(), "no password") {
+			log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=no_password", deviceID, reason, r.RemoteAddr, r.UserAgent())
 			writeError(w, http.StatusUnprocessableEntity, "WinBox profile has no password configured")
 			return
 		}
 		if strings.Contains(err.Error(), "not found") {
+			log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=not_found", deviceID, reason, r.RemoteAddr, r.UserAgent())
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=error", deviceID, reason, r.RemoteAddr, r.UserAgent())
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
-	// Flat response per D-10 spec (no {"data":...} envelope)
-	json.NewEncoder(w).Encode(map[string]string{
-		"ip":       ip,
-		"username": assignment.Username,
-		"password": password,
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=success", deviceID, reason, r.RemoteAddr, r.UserAgent())
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data": map[string]string{
+			"ip":       ip,
+			"username": assignment.Username,
+			"password": password,
+		},
 	})
+}
+
+func extractWinboxCredentialsRevealDeviceID(path string) (uuid.UUID, error) {
+	const prefix = "/api/v1/devices/"
+	suffix := strings.TrimPrefix(path, prefix)
+	if suffix == path {
+		return uuid.Nil, fmt.Errorf("invalid reveal path")
+	}
+	parts := strings.Split(suffix, "/")
+	if len(parts) != 3 || parts[1] != "winbox-credentials" || parts[2] != "reveal" {
+		return uuid.Nil, fmt.Errorf("invalid reveal path")
+	}
+	return uuid.Parse(parts[0])
 }

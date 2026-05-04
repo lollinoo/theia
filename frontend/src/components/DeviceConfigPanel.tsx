@@ -9,6 +9,7 @@ import {
   fetchDeviceCredentialProfiles,
   fetchSNMPProfiles,
   fetchSettings,
+  revealSNMPProfile,
   runTopologyDiscovery,
   setWinBoxProfile,
   testSNMPConnection,
@@ -318,10 +319,16 @@ export function DeviceConfigPanel({
     setFieldErrors({});
   }, [deviceConfigSyncKey, isVirtual]);
 
-  function applyProfile(profileId: string) {
+  async function applyProfile(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) return;
-    setForm((current) => applySNMPProfile(current, profile));
+    setEditError(null);
+    try {
+      const revealed = await revealSNMPProfile(profile.id, 'apply SNMP profile to device config');
+      setForm((current) => applySNMPProfile(current, revealed));
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Failed to reveal SNMP profile.');
+    }
   }
 
   function showSaved(
@@ -1209,7 +1216,7 @@ export function DeviceConfigPanel({
                     <select
                       defaultValue=""
                       onChange={(e) => {
-                        applyProfile(e.target.value);
+                        void applyProfile(e.target.value);
                         e.target.value = '';
                       }}
                       className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"

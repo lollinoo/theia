@@ -24,6 +24,20 @@ func NewSettingsHandler(repo domain.SettingsRepository) *SettingsHandler {
 	return &SettingsHandler{repo: repo}
 }
 
+type settingSecretState struct {
+	Present  bool `json:"present"`
+	Redacted bool `json:"redacted"`
+}
+
+type settingsResponseMeta struct {
+	Secrets map[string]settingSecretState `json:"secrets,omitempty"`
+}
+
+type settingsResponse struct {
+	Data map[string]string     `json:"data"`
+	Meta *settingsResponseMeta `json:"meta,omitempty"`
+}
+
 // validSettingKeys is the allowlist of permitted setting keys. Unknown keys are rejected.
 var validSettingKeys = map[string]bool{
 	domain.SettingPrometheusURL:                 true,
@@ -165,7 +179,7 @@ func (h *SettingsHandler) HandleGetAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": settings})
+	json.NewEncoder(w).Encode(buildSettingsResponse(settings))
 }
 
 // HandleGet handles GET /api/v1/settings/{key}
@@ -187,9 +201,12 @@ func (h *SettingsHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data": map[string]string{key: value},
-	})
+	if settingResponseSensitive(key) {
+		json.NewEncoder(w).Encode(buildSettingsResponse(map[string]string{key: value}))
+		return
+	}
+
+	json.NewEncoder(w).Encode(settingsResponse{Data: map[string]string{key: value}})
 }
 
 // HandleUpdate handles PUT /api/v1/settings/{key}
@@ -225,9 +242,39 @@ func (h *SettingsHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		debugSettingAffects(key),
 	)
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data": map[string]string{key: req.Value},
-	})
+	if settingResponseSensitive(key) {
+		json.NewEncoder(w).Encode(buildSettingsResponse(map[string]string{key: req.Value}))
+		return
+	}
+
+	json.NewEncoder(w).Encode(settingsResponse{Data: map[string]string{key: req.Value}})
+}
+
+func buildSettingsResponse(settings map[string]string) settingsResponse {
+	data := make(map[string]string, len(settings))
+	secrets := make(map[string]settingSecretState)
+	for key, value := range settings {
+		if settingResponseSensitive(key) {
+			secrets[key] = settingSecretState{
+				Present:  strings.TrimSpace(value) != "",
+				Redacted: true,
+			}
+			continue
+		}
+		data[key] = value
+	}
+
+	if len(secrets) == 0 {
+		return settingsResponse{Data: data}
+	}
+	return settingsResponse{
+		Data: data,
+		Meta: &settingsResponseMeta{Secrets: secrets},
+	}
+}
+
+func settingResponseSensitive(key string) bool {
+	return key == domain.SettingBridgeSecret
 }
 
 func debugSettingValue(key string, value string, err error) string {
