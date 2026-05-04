@@ -150,7 +150,7 @@ func copyEscapeStringSQL(builder *strings.Builder, query string, start int) int 
 	i := start + 2
 	for i < len(query) {
 		if query[i] == '\'' {
-			if i > start+2 && query[i-1] == '\\' {
+			if hasOddBackslashRunBefore(query, i) {
 				i++
 				continue
 			}
@@ -165,6 +165,14 @@ func copyEscapeStringSQL(builder *strings.Builder, query string, start int) int 
 	}
 	builder.WriteString(query[start:i])
 	return i
+}
+
+func hasOddBackslashRunBefore(query string, index int) bool {
+	count := 0
+	for i := index - 1; i >= 0 && query[i] == '\\'; i-- {
+		count++
+	}
+	return count%2 == 1
 }
 
 func copyDoubleQuotedSQL(builder *strings.Builder, query string, start int) int {
@@ -253,6 +261,9 @@ func copyDollarQuotedSQL(builder *strings.Builder, query string, start int, tag 
 }
 
 func isPostgresQuestionOperator(query string, index int) bool {
+	if index > 0 && query[index-1] == '@' {
+		return true
+	}
 	if index+1 < len(query) && (query[index+1] == '|' || query[index+1] == '&') {
 		return true
 	}

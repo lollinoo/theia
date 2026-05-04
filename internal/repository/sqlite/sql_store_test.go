@@ -54,6 +54,11 @@ func TestRebindQuery_PostgresPreservesJSONQuestionOperators(t *testing.T) {
 			query: `SELECT metadata ? ? FROM devices WHERE id = ?`,
 			want:  `SELECT metadata ? $1 FROM devices WHERE id = $2`,
 		},
+		{
+			name:  "jsonpath-question-operator",
+			query: `SELECT metadata @? '$.interfaces[*] ? (@.name == "ether1")' FROM devices WHERE id = ?`,
+			want:  `SELECT metadata @? '$.interfaces[*] ? (@.name == "ether1")' FROM devices WHERE id = $1`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -121,8 +126,18 @@ func TestRebindQuery_PostgresHandlesAdditionalSQLSyntax(t *testing.T) {
 	}{
 		{
 			name:  "escape-string-literal",
-			query: `SELECT E'it\\'s ?' AS literal WHERE id = ?`,
-			want:  `SELECT E'it\\'s ?' AS literal WHERE id = $1`,
+			query: `SELECT E'plain ?' AS literal WHERE id = ?`,
+			want:  `SELECT E'plain ?' AS literal WHERE id = $1`,
+		},
+		{
+			name:  "escape-string-odd-backslash-escaped-quote",
+			query: `SELECT E'it\'s ?' AS literal WHERE id = ?`,
+			want:  `SELECT E'it\'s ?' AS literal WHERE id = $1`,
+		},
+		{
+			name:  "escape-string-even-backslash-closing-quote",
+			query: `SELECT E'path\\' AS literal WHERE id = ?`,
+			want:  `SELECT E'path\\' AS literal WHERE id = $1`,
 		},
 		{
 			name:  "nested-block-comment",
