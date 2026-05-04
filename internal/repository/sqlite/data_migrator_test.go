@@ -128,6 +128,23 @@ func TestBuildSelectQueryQuotesStaticIdentifiers(t *testing.T) {
 	}
 }
 
+func TestBuildSelectQueryQuotesCompositeKeyOrder(t *testing.T) {
+	spec := tableCopySpec{
+		name: "device_areas",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "area_id", kind: columnKindText},
+		},
+		keyColumns: []string{"device_id", "area_id"},
+	}
+
+	got := buildSelectQuery(spec)
+	want := `SELECT "device_id", "area_id" FROM "device_areas" ORDER BY "device_id", "area_id"`
+	if got != want {
+		t.Fatalf("buildSelectQuery() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildBatchInsertQueryQuotesStaticIdentifiers(t *testing.T) {
 	spec := tableCopySpec{
 		name: "device_positions",
@@ -141,6 +158,23 @@ func TestBuildBatchInsertQueryQuotesStaticIdentifiers(t *testing.T) {
 
 	got := buildBatchInsertQuery(spec, 2)
 	want := `INSERT INTO "device_positions" ("device_id", "x", "updated_at") VALUES (?, ?, ?), (?, ?, ?) ON CONFLICT ("device_id") DO UPDATE SET "x" = EXCLUDED."x", "updated_at" = EXCLUDED."updated_at"`
+	if got != want {
+		t.Fatalf("buildBatchInsertQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildBatchInsertQueryQuotesCompositeConflictTarget(t *testing.T) {
+	spec := tableCopySpec{
+		name: "device_areas",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "area_id", kind: columnKindText},
+		},
+		keyColumns: []string{"device_id", "area_id"},
+	}
+
+	got := buildBatchInsertQuery(spec, 1)
+	want := `INSERT INTO "device_areas" ("device_id", "area_id") VALUES (?, ?) ON CONFLICT ("device_id", "area_id") DO NOTHING`
 	if got != want {
 		t.Fatalf("buildBatchInsertQuery() = %q, want %q", got, want)
 	}
@@ -169,10 +203,18 @@ func TestQuoteStaticIdentifierRejectsInvalidIdentifiers(t *testing.T) {
 }
 
 func TestQuoteStaticIdentifierAcceptsKnownIdentifierShape(t *testing.T) {
-	got := quoteStaticIdentifier("sys_name_lookup")
-	want := `"sys_name_lookup"`
-	if got != want {
-		t.Fatalf("quoteStaticIdentifier() = %q, want %q", got, want)
+	tests := map[string]string{
+		"sys_name_lookup": `"sys_name_lookup"`,
+		"sha256":          `"sha256"`,
+	}
+
+	for input, want := range tests {
+		t.Run(input, func(t *testing.T) {
+			got := quoteStaticIdentifier(input)
+			if got != want {
+				t.Fatalf("quoteStaticIdentifier() = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
