@@ -145,7 +145,6 @@ prod-metrics: ## Start production stack with Prometheus + SNMP exporter
 prod-postgres: ## Start production stack on PostgreSQL
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
 	THEIA_DB_DRIVER=postgres \
-	THEIA_DB_DSN="$${THEIA_DB_DSN:-postgres://$${POSTGRES_USER:-theia}:$${POSTGRES_PASSWORD:-theia}@postgres:5432/$${POSTGRES_DB:-theia}?sslmode=disable}" \
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d
 	@echo ""
 	@echo "MikroTik Theia production stack is running on PostgreSQL."
@@ -153,7 +152,6 @@ prod-postgres: ## Start production stack on PostgreSQL
 prod-postgres-metrics: ## Start production stack on PostgreSQL with metrics
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
 	THEIA_DB_DRIVER=postgres \
-	THEIA_DB_DSN="$${THEIA_DB_DSN:-postgres://$${POSTGRES_USER:-theia}:$${POSTGRES_PASSWORD:-theia}@postgres:5432/$${POSTGRES_DB:-theia}?sslmode=disable}" \
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres --profile metrics up -d
 	@echo ""
 	@echo "MikroTik Theia production metrics stack is running on PostgreSQL."
@@ -185,7 +183,6 @@ staging: ## Start staging stack (auto-updates via Watchtower)
 staging-postgres: ## Start staging stack on PostgreSQL
 	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d postgres
 	THEIA_DB_DRIVER=postgres \
-	THEIA_DB_DSN="$${THEIA_DB_DSN:-postgres://$${POSTGRES_USER:-theia}:$${POSTGRES_PASSWORD:-theia}@postgres:5432/$${POSTGRES_DB:-theia}?sslmode=disable}" \
 	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d
 	@echo ""
 	@echo "MikroTik Theia staging stack is running on PostgreSQL."

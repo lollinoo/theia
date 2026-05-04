@@ -42,7 +42,7 @@ services:
     volumes:
       - theia-staging-data:/data
     environment:
-      - THEIA_DEPLOYMENT_ENV=${THEIA_DEPLOYMENT_ENV:-staging}
+      - THEIA_DEPLOYMENT_ENV=staging
       - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-postgres}
       - THEIA_ALLOW_SQLITE_SMALL_INSTALL=${THEIA_ALLOW_SQLITE_SMALL_INSTALL:-}
       - THEIA_DB_PATH=${THEIA_DB_PATH:-/data/theia.db}

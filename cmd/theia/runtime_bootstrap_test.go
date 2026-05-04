@@ -119,11 +119,13 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 		{path: ".env.staging.example", deploymentEnv: "staging", requireBlankEnvValue: true},
 		{path: "docker-compose.prod.yml", deploymentEnv: "production"},
 		{path: "docker-compose.staging.yml", deploymentEnv: "staging"},
+		{path: "Makefile"},
 	}
 	unsafeFragments := []struct {
 		name  string
 		value string
 	}{
+		{name: "overrideable deployment environment", value: "THEIA_DEPLOYMENT_ENV=${THEIA_DEPLOYMENT_ENV:-"},
 		{name: "placeholder PostgreSQL password", value: "POSTGRES_PASSWORD=change-me"},
 		{name: "concrete PostgreSQL DSN example", value: "THEIA_DB_DSN=postgres://"},
 		{name: "placeholder PostgreSQL DSN password", value: "THEIA_DB_DSN=postgres://theia:change-me@"},
@@ -139,7 +141,7 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 			}
 			content := string(contentBytes)
 
-			if !surfaceContainsDeploymentEnv(content, surface.deploymentEnv) {
+			if surface.deploymentEnv != "" && !surfaceContainsDeploymentEnv(content, surface.deploymentEnv) {
 				t.Errorf("%s must set THEIA_DEPLOYMENT_ENV for %s validation", surface.path, surface.deploymentEnv)
 			}
 			for _, unsafe := range unsafeFragments {
@@ -169,7 +171,7 @@ func surfaceContainsDeploymentEnv(content, deploymentEnv string) bool {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
-		if strings.Contains(line, "THEIA_DEPLOYMENT_ENV=") && strings.Contains(line, deploymentEnv) {
+		if line == "THEIA_DEPLOYMENT_ENV="+deploymentEnv || line == "- THEIA_DEPLOYMENT_ENV="+deploymentEnv {
 			return true
 		}
 	}
