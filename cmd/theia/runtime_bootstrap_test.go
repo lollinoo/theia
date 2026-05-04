@@ -350,6 +350,12 @@ func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(
 			want: []string{"THEIA_ENCRYPTION_KEY", "example"},
 		},
 		{
+			name: "staging missing encryption key",
+			cfg:  &runtimeConfig{DeploymentEnv: "staging", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_ENCRYPTION_KEY", "required"},
+		},
+		{
 			name: "production rejects example db dsn password",
 			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "postgres://theia:change-me@postgres:5432/theia?sslmode=disable"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
@@ -362,8 +368,32 @@ func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(
 			want: []string{"THEIA_DB_DSN", "example"},
 		},
 		{
+			name: "production rejects example db dsn keyword password",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "host=postgres user=theia password='change-me' dbname=theia sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_DB_DSN", "example"},
+		},
+		{
+			name: "production rejects example db dsn url query password",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "postgres://theia@postgres:5432/theia?password=change-me&sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_DB_DSN", "example"},
+		},
+		{
+			name: "staging rejects example db dsn password",
+			cfg:  &runtimeConfig{DeploymentEnv: "staging", DBDriver: "postgres", DBDSN: "host=postgres user=theia password=change-me dbname=theia sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_DB_DSN", "example"},
+		},
+		{
 			name: "production rejects postgres password env placeholder",
 			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "change-me"},
+			want: []string{"POSTGRES_PASSWORD", "example"},
+		},
+		{
+			name: "staging rejects postgres password env placeholder",
+			cfg:  &runtimeConfig{DeploymentEnv: "staging", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "change-me"},
 			want: []string{"POSTGRES_PASSWORD", "example"},
 		},

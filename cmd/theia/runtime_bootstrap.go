@@ -121,12 +121,111 @@ func isKnownSecretPlaceholder(value string) bool {
 }
 
 func isPostgresDSNPasswordPlaceholder(dsn string) bool {
+	for _, password := range postgresDSNPasswords(dsn) {
+		if isKnownSecretPlaceholder(password) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func postgresDSNPasswords(dsn string) []string {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" {
+		return nil
+	}
+
+	var passwords []string
 	parsed, err := url.Parse(dsn)
-	if err != nil || parsed.User == nil {
+	if err == nil && parsed.Scheme != "" {
+		if parsed.User != nil {
+			if password, ok := parsed.User.Password(); ok {
+				passwords = append(passwords, password)
+			}
+		}
+		for _, password := range parsed.Query()["password"] {
+			passwords = append(passwords, password)
+		}
+		return passwords
+	}
+
+	if password, ok := postgresKeywordDSNValue(dsn, "password"); ok {
+		passwords = append(passwords, password)
+	}
+	return passwords
+}
+
+func postgresKeywordDSNValue(dsn, wantKey string) (string, bool) {
+	for i := 0; i < len(dsn); {
+		for i < len(dsn) && isPostgresDSNSpace(dsn[i]) {
+			i++
+		}
+		if i >= len(dsn) {
+			return "", false
+		}
+
+		keyStart := i
+		for i < len(dsn) && dsn[i] != '=' && !isPostgresDSNSpace(dsn[i]) {
+			i++
+		}
+		key := dsn[keyStart:i]
+		for i < len(dsn) && isPostgresDSNSpace(dsn[i]) {
+			i++
+		}
+		if key == "" || i >= len(dsn) || dsn[i] != '=' {
+			return "", false
+		}
+		i++
+		for i < len(dsn) && isPostgresDSNSpace(dsn[i]) {
+			i++
+		}
+
+		var value strings.Builder
+		if i < len(dsn) && dsn[i] == '\'' {
+			i++
+			for i < len(dsn) {
+				if dsn[i] == '\\' && i+1 < len(dsn) {
+					i++
+					value.WriteByte(dsn[i])
+					i++
+					continue
+				}
+				if dsn[i] == '\'' {
+					i++
+					break
+				}
+				value.WriteByte(dsn[i])
+				i++
+			}
+		} else {
+			for i < len(dsn) && !isPostgresDSNSpace(dsn[i]) {
+				if dsn[i] == '\\' && i+1 < len(dsn) {
+					i++
+					value.WriteByte(dsn[i])
+					i++
+					continue
+				}
+				value.WriteByte(dsn[i])
+				i++
+			}
+		}
+
+		if strings.EqualFold(key, wantKey) {
+			return value.String(), true
+		}
+	}
+
+	return "", false
+}
+
+func isPostgresDSNSpace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\n', '\r':
+		return true
+	default:
 		return false
 	}
-	password, ok := parsed.User.Password()
-	return ok && isKnownSecretPlaceholder(password)
 }
 
 func wrapPostgresConnectError(err error) error {
