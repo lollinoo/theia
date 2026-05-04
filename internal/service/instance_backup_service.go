@@ -870,7 +870,7 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 
 	tr := tar.NewReader(gr)
 	var totalBytes int64
-	var fileEntries int
+	var archiveEntries int
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -885,9 +885,11 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 			return fmt.Errorf("archive contains disallowed link entry: %s", header.Name)
 		}
 
+		regularFile := header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA
+
 		// Security: only allow regular files and directories
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeDir {
-			continue // skip unknown types
+		if !regularFile && header.Typeflag != tar.TypeDir {
+			return fmt.Errorf("unsupported restore archive entry type %c: %s", header.Typeflag, header.Name)
 		}
 
 		entryName := strings.TrimPrefix(header.Name, "./")
@@ -902,6 +904,14 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 		}
 
 		targetPath := filepath.Join(destDir, cleanName)
+		archiveEntries++
+		if archiveEntries > limits.MaxFileEntries {
+			return newRestoreLimitError(
+				"archive file count exceeds restore limit (archive entry count exceeds): %d entries > %d entries",
+				archiveEntries,
+				limits.MaxFileEntries,
+			)
+		}
 
 		if header.Typeflag == tar.TypeDir {
 			if !isAllowedRestoreArchiveDirectory(cleanName) {
@@ -921,10 +931,6 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 		}
 		if header.Size > limits.MaxTotalBytes-totalBytes {
 			return newRestoreLimitError("expanded archive exceeds restore limit: %d bytes > %d bytes", totalBytes+header.Size, limits.MaxTotalBytes)
-		}
-		fileEntries++
-		if fileEntries > limits.MaxFileEntries {
-			return newRestoreLimitError("archive file count exceeds restore limit: %d files > %d files", fileEntries, limits.MaxFileEntries)
 		}
 
 		// Security: regular files outside the restore archive contract are rejected.

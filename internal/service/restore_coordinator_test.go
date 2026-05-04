@@ -779,7 +779,7 @@ func TestRestoreCoordinatorApplyPendingRestoreTreatsChangedStagedBackupsFileAsRe
 	}
 }
 
-func TestRestoreCoordinatorApplyPendingRestoreRevalidatesStagingDirAfterDBActivation(t *testing.T) {
+func TestRestoreCoordinatorApplyPendingRestoreDoesNotRepairRetryStateThroughUnsafeStagingDir(t *testing.T) {
 	runtimeDir := t.TempDir()
 	dbPath := filepath.Join(runtimeDir, "theia.db")
 	deviceBackupDir := filepath.Join(runtimeDir, "device-backups")
@@ -847,8 +847,8 @@ func TestRestoreCoordinatorApplyPendingRestoreRevalidatesStagingDirAfterDBActiva
 	} else if info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("staging path should remain a symlink after retryable failure, mode=%v", info.Mode())
 	}
-	if got := readRestoreTestFile(t, filepath.Join(externalStagingDir, "theia.db")); got != "staged-db" {
-		t.Fatalf("retry staged db through changed staging dir = %q, want staged-db", got)
+	if _, err := os.Lstat(filepath.Join(externalStagingDir, "theia.db")); !os.IsNotExist(err) {
+		t.Fatalf("external staging target should not receive retry DB copy, lstat err = %v", err)
 	}
 }
 
