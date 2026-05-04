@@ -73,19 +73,198 @@ func rebindQuery(dialect Dialect, query string) string {
 		return query
 	}
 
+	return rebindPostgresQuestionPlaceholders(query)
+}
+
+func rebindPostgresQuestionPlaceholders(query string) string {
 	var builder strings.Builder
 	builder.Grow(len(query) + 8)
 
 	placeholder := 1
-	for _, r := range query {
-		if r == '?' {
+	for i := 0; i < len(query); {
+		switch {
+		case query[i] == '\'':
+			i = copySingleQuotedSQL(&builder, query, i)
+		case query[i] == '"':
+			i = copyDoubleQuotedSQL(&builder, query, i)
+		case query[i] == '-' && i+1 < len(query) && query[i+1] == '-':
+			i = copyLineCommentSQL(&builder, query, i)
+		case query[i] == '/' && i+1 < len(query) && query[i+1] == '*':
+			i = copyBlockCommentSQL(&builder, query, i)
+		case query[i] == '$':
+			if tag, ok := readDollarQuoteTag(query, i); ok {
+				i = copyDollarQuotedSQL(&builder, query, i, tag)
+				continue
+			}
+			builder.WriteByte(query[i])
+			i++
+		case query[i] == '?':
+			if isPostgresQuestionOperator(query, i) {
+				builder.WriteByte(query[i])
+				i++
+				continue
+			}
 			builder.WriteByte('$')
 			builder.WriteString(strconv.Itoa(placeholder))
 			placeholder++
-			continue
+			i++
+		default:
+			builder.WriteByte(query[i])
+			i++
 		}
-		builder.WriteRune(r)
 	}
 
 	return builder.String()
+}
+
+func copySingleQuotedSQL(builder *strings.Builder, query string, start int) int {
+	i := start + 1
+	for i < len(query) {
+		if query[i] == '\'' {
+			if i+1 < len(query) && query[i+1] == '\'' {
+				i += 2
+				continue
+			}
+			i++
+			break
+		}
+		i++
+	}
+	builder.WriteString(query[start:i])
+	return i
+}
+
+func copyDoubleQuotedSQL(builder *strings.Builder, query string, start int) int {
+	i := start + 1
+	for i < len(query) {
+		if query[i] == '"' {
+			if i+1 < len(query) && query[i+1] == '"' {
+				i += 2
+				continue
+			}
+			i++
+			break
+		}
+		i++
+	}
+	builder.WriteString(query[start:i])
+	return i
+}
+
+func copyLineCommentSQL(builder *strings.Builder, query string, start int) int {
+	i := start + 2
+	for i < len(query) && query[i] != '\n' {
+		i++
+	}
+	if i < len(query) {
+		i++
+	}
+	builder.WriteString(query[start:i])
+	return i
+}
+
+func copyBlockCommentSQL(builder *strings.Builder, query string, start int) int {
+	i := start + 2
+	for i+1 < len(query) {
+		if query[i] == '*' && query[i+1] == '/' {
+			i += 2
+			builder.WriteString(query[start:i])
+			return i
+		}
+		i++
+	}
+	builder.WriteString(query[start:])
+	return len(query)
+}
+
+func readDollarQuoteTag(query string, start int) (string, bool) {
+	if start+1 >= len(query) {
+		return "", false
+	}
+	if query[start+1] == '$' {
+		return "$$", true
+	}
+	if !isDollarQuoteTagStart(query[start+1]) {
+		return "", false
+	}
+
+	i := start + 2
+	for i < len(query) && isDollarQuoteTagContinue(query[i]) {
+		i++
+	}
+	if i < len(query) && query[i] == '$' {
+		return query[start : i+1], true
+	}
+	return "", false
+}
+
+func copyDollarQuotedSQL(builder *strings.Builder, query string, start int, tag string) int {
+	contentStart := start + len(tag)
+	if end := strings.Index(query[contentStart:], tag); end >= 0 {
+		i := contentStart + end + len(tag)
+		builder.WriteString(query[start:i])
+		return i
+	}
+	builder.WriteString(query[start:])
+	return len(query)
+}
+
+func isPostgresQuestionOperator(query string, index int) bool {
+	if index+1 < len(query) && (query[index+1] == '|' || query[index+1] == '&') {
+		return true
+	}
+
+	prev := previousNonSpaceIndex(query, index-1)
+	if prev < 0 || !isPostgresExpressionEnd(query[prev]) {
+		return false
+	}
+
+	next := nextNonSpaceIndex(query, index+1)
+	if next < 0 || !isPostgresExpressionStart(query[next]) {
+		return false
+	}
+
+	return true
+}
+
+func previousNonSpaceIndex(query string, index int) int {
+	for index >= 0 && isSQLSpace(query[index]) {
+		index--
+	}
+	return index
+}
+
+func nextNonSpaceIndex(query string, index int) int {
+	for index < len(query) && isSQLSpace(query[index]) {
+		index++
+	}
+	return index
+}
+
+func isPostgresExpressionEnd(b byte) bool {
+	return isASCIIAlphaNumeric(b) || b == '_' || b == '\'' || b == '"' || b == ')' || b == ']' || b == '}'
+}
+
+func isPostgresExpressionStart(b byte) bool {
+	return isASCIIAlphaNumeric(b) || b == '_' || b == '\'' || b == '"' || b == '$' || b == '(' || b == '[' || b == '{' || b == '?'
+}
+
+func isDollarQuoteTagStart(b byte) bool {
+	return isASCIILetter(b) || b == '_'
+}
+
+func isDollarQuoteTagContinue(b byte) bool {
+	return isASCIIAlphaNumeric(b) || b == '_'
+}
+
+func isASCIIAlphaNumeric(b byte) bool {
+	return isASCIILetter(b) || ('0' <= b && b <= '9')
+}
+
+func isASCIILetter(b byte) bool {
+	return ('A' <= b && b <= 'Z') || ('a' <= b && b <= 'z')
+}
+
+func isSQLSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '\v'
 }
