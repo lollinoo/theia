@@ -142,6 +142,9 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	if marker.StagedBackups != "" && marker.DeviceBackupDir != "" {
 		if info, err := os.Stat(marker.StagedBackups); err == nil {
 			if info.IsDir() {
+				if err := validateOptionalStagedBackupDir(marker.StagedBackups); err != nil {
+					return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("validate staged backup dir: %w", err))
+				}
 				if err := replaceDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
 					return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("activate staged backup dir: %w", err))
 				}
@@ -153,6 +156,9 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 
 	if marker.StagedKnownHosts != "" && marker.KnownHostsPath != "" {
 		if _, err := os.Stat(marker.StagedKnownHosts); err == nil {
+			if err := validateOptionalStagedKnownHosts(marker.StagedKnownHosts); err != nil {
+				return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("validate staged known_hosts: %w", err))
+			}
 			if err := replaceFileForRestore(marker.StagedKnownHosts, marker.KnownHostsPath); err != nil {
 				return false, c.restoreRetryableError(marker.StagedDB, dialect, fmt.Errorf("activate staged known_hosts: %w", err))
 			}
@@ -186,13 +192,8 @@ func (c *RestoreCoordinator) validateStagedRestoreArtifacts(marker restoreMarker
 	if marker.StagedDB != expectedStagedDB {
 		return fmt.Errorf("restore marker staged db path does not match runtime staging path")
 	}
-
-	info, err := os.Lstat(marker.StagedDB)
-	if err != nil {
-		return fmt.Errorf("stat staged db: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("staged db must be a regular file")
+	if err := validateStagedDBFile(marker.StagedDB); err != nil {
+		return err
 	}
 
 	expectedStagedBackups := filepath.Join(stagingDir, "backups")
@@ -215,6 +216,17 @@ func (c *RestoreCoordinator) validateStagedRestoreArtifacts(marker restoreMarker
 		}
 	}
 
+	return nil
+}
+
+func validateStagedDBFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("stat staged db: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("staged db must be a regular file")
+	}
 	return nil
 }
 
@@ -251,8 +263,12 @@ func validateOptionalStagedBackupDir(path string) error {
 		if err != nil {
 			return err
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("staged backup entry must not be a symlink: %s", entryPath)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+			return fmt.Errorf("staged backup entry must be a regular file or directory: %s", entryPath)
 		}
 		return nil
 	})
@@ -273,6 +289,10 @@ func validateOptionalStagedKnownHosts(path string) error {
 }
 
 func (c *RestoreCoordinator) applySQLiteRestore(stagedDB string) error {
+	if err := validateStagedDBFile(stagedDB); err != nil {
+		return err
+	}
+
 	if _, err := os.Stat(c.dbPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("stat live db: %w", err)
 	}
@@ -307,6 +327,9 @@ func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB 
 		return fmt.Errorf("build postgres conninfo: %w", err)
 	}
 	if err := terminatePostgresConnections(ctx, c.dbDSN); err != nil {
+		return err
+	}
+	if err := validateStagedDBFile(stagedDB); err != nil {
 		return err
 	}
 	if _, err := runExternalCommandWithEnv(
@@ -438,8 +461,8 @@ func copyDirForRestore(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("restore directory entry must not be a symlink: %s", path)
+		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+			return fmt.Errorf("restore directory entry must be a regular file or directory: %s", path)
 		}
 
 		rel, err := filepath.Rel(src, path)
@@ -457,6 +480,10 @@ func copyDirForRestore(src, dst string) error {
 }
 
 func replaceFileForRestore(src, dst string) error {
+	if err := validateOptionalStagedKnownHosts(src); err != nil {
+		return err
+	}
+
 	tmpPath := dst + ".restore-tmp"
 	backupPath := dst + ".restore-old"
 
@@ -500,6 +527,10 @@ func replaceFileForRestore(src, dst string) error {
 }
 
 func replaceDirForRestore(src, dst string) error {
+	if err := validateOptionalStagedBackupDir(src); err != nil {
+		return err
+	}
+
 	tmpPath := dst + ".restore-tmp"
 	backupPath := dst + ".restore-old"
 
