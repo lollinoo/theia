@@ -93,10 +93,11 @@ func TestLoad_FileHandling(t *testing.T) {
 		},
 		{
 			name:     "environment overrides yaml values",
-			contents: "db_driver: sqlite\ndata_dir: ./from-file\n",
+			contents: "db_driver: sqlite\ndata_dir: ./from-file\ndeployment_env: staging\n",
 			env: map[string]string{
-				"THEIA_DB_DRIVER": "postgres",
-				"THEIA_DATA_DIR":  "./from-env",
+				"THEIA_DB_DRIVER":      "postgres",
+				"THEIA_DATA_DIR":       "./from-env",
+				"THEIA_DEPLOYMENT_ENV": "production",
 			},
 			assert: func(t *testing.T, cfg *Config, err error) {
 				t.Helper()
@@ -108,6 +109,9 @@ func TestLoad_FileHandling(t *testing.T) {
 				}
 				if cfg.DataDir != "./from-env" {
 					t.Fatalf("DataDir = %q, want ./from-env", cfg.DataDir)
+				}
+				if cfg.DeploymentEnv != "production" {
+					t.Fatalf("DeploymentEnv = %q, want production", cfg.DeploymentEnv)
 				}
 			},
 		},
