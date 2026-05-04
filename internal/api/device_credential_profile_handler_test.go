@@ -400,6 +400,29 @@ func TestDeviceCredentialProfile_RevealWinboxCredentials_RequiresReason(t *testi
 	}
 }
 
+func TestDeviceCredentialProfile_RevealWinboxCredentials_GetReturns405(t *testing.T) {
+	handler, _, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
+
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/v1/devices/%s/winbox-credentials/reveal", deviceID), nil)
+	rec := httptest.NewRecorder()
+	handler.HandleRevealWinboxCredentials(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRouterPath_WinboxCredentialsRevealMatchesAnyMethod(t *testing.T) {
+	deviceID := uuid.New()
+	if !isWinboxCredentialsRevealPath("/api/v1/devices/" + deviceID.String() + "/winbox-credentials/reveal") {
+		t.Fatal("expected exact WinBox credentials reveal path to match")
+	}
+	if isWinboxCredentialsRevealPath("/api/v1/devices/" + deviceID.String() + "/winbox-credentials/reveal/extra") {
+		t.Fatal("expected reveal path with extra segment not to match")
+	}
+}
+
 func TestDeviceCredentialProfile_RevealWinboxCredentials_NoWinboxProfile_Returns404(t *testing.T) {
 	handler, _, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
 

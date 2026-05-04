@@ -371,6 +371,22 @@ func TestBridgeToken_UsesStoredBridgeSecretWithoutRequestBody(t *testing.T) {
 	}
 }
 
+func TestBridgeToken_RejectsExtraPathSegments(t *testing.T) {
+	deviceCredHandler, repo, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
+	settingsRepo := newMockSettingsRepo()
+	settingsRepo.settings[domain.SettingBridgeSecret] = testBridgeSecret
+	handler := NewBridgeHandlerWithCredentials("", deviceCredHandler.svc, repo, settingsRepo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+deviceID.String()+"/extra", nil)
+	w := httptest.NewRecorder()
+	handler.HandleBridgeToken(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body=%s", resp.StatusCode, w.Body.String())
+	}
+}
+
 func TestBridgeToken_MissingStoredBridgeSecretReturns422(t *testing.T) {
 	deviceCredHandler, repo, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
 	settingsRepo := newMockSettingsRepo()

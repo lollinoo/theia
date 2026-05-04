@@ -180,7 +180,7 @@ func NewRouter(
 		}
 
 		// Explicit WinBox credential reveal endpoint
-		if strings.HasSuffix(r.URL.Path, "/winbox-credentials/reveal") && r.Method == http.MethodPost {
+		if isWinboxCredentialsRevealPath(r.URL.Path) {
 			deviceCredHandler.HandleRevealWinboxCredentials(w, r)
 			return
 		}
@@ -515,6 +515,19 @@ func NewRouter(
 
 		handler.ServeHTTP(w, r)
 	})
+}
+
+func isWinboxCredentialsRevealPath(path string) bool {
+	const prefix = "/api/v1/devices/"
+	suffix, ok := strings.CutPrefix(path, prefix)
+	if !ok {
+		return false
+	}
+	parts := strings.Split(suffix, "/")
+	return len(parts) == 3 &&
+		parts[0] != "" &&
+		parts[1] == "winbox-credentials" &&
+		parts[2] == "reveal"
 }
 
 func indexOf(s, substr string) int {

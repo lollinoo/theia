@@ -302,6 +302,18 @@ func preserveSNMPProfileSecrets(next *domain.SNMPCredentials, existing domain.SN
 	if next.V3 == nil || existing.V3 == nil {
 		return
 	}
+	switch strings.TrimSpace(next.V3.SecurityLevel) {
+	case "noAuthNoPriv":
+		next.V3.AuthPassword = ""
+		next.V3.PrivPassword = ""
+		return
+	case "authNoPriv":
+		if strings.TrimSpace(req.AuthPassword) == "" {
+			next.V3.AuthPassword = existing.V3.AuthPassword
+		}
+		next.V3.PrivPassword = ""
+		return
+	}
 	if strings.TrimSpace(req.AuthPassword) == "" {
 		next.V3.AuthPassword = existing.V3.AuthPassword
 	}

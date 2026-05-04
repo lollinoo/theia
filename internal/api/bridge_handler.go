@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/service"
@@ -119,8 +120,7 @@ func (h *BridgeHandler) HandleBridgeToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Extract device ID from path: /api/v1/bridge/token/{deviceId}
-	deviceID, err := extractIDFromPath(r.URL.Path, "/api/v1/bridge/token/")
+	deviceID, err := extractBridgeTokenDeviceID(r.URL.Path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
@@ -195,4 +195,16 @@ func (h *BridgeHandler) HandleBridgeToken(w http.ResponseWriter, r *http.Request
 		"token":      hex.EncodeToString(ciphertext),
 		"expires_at": expiresAt,
 	})
+}
+
+func extractBridgeTokenDeviceID(path string) (uuid.UUID, error) {
+	const prefix = "/api/v1/bridge/token/"
+	if !strings.HasPrefix(path, prefix) {
+		return uuid.Nil, fmt.Errorf("invalid bridge token path")
+	}
+	idPart := strings.TrimPrefix(path, prefix)
+	if idPart == "" || strings.Contains(idPart, "/") {
+		return uuid.Nil, fmt.Errorf("invalid bridge token path")
+	}
+	return uuid.Parse(idPart)
 }

@@ -286,26 +286,72 @@ async function requestJSONWithBody(path: string, method: string, body?: unknown)
   return payload;
 }
 
-export async function fetchSettings(): Promise<Record<string, string>> {
-  try {
-    const payload = await requestJSON('/api/v1/settings');
-    if (
-      typeof payload === 'object' &&
-      payload !== null &&
-      'data' in payload &&
-      typeof (payload as Record<string, unknown>).data === 'object' &&
-      (payload as Record<string, unknown>).data !== null
-    ) {
-      const data = (payload as Record<string, unknown>).data as Record<string, unknown>;
-      return Object.fromEntries(
-        Object.entries(data).map(([k, v]) => [k, typeof v === 'string' ? v : String(v ?? '')]),
+export interface SettingSecretState {
+  present: boolean;
+  redacted: boolean;
+}
+
+export interface SettingsWithMetadata {
+  data: Record<string, string>;
+  secrets: Record<string, SettingSecretState>;
+}
+
+function parseSettingsPayload(payload: unknown): SettingsWithMetadata {
+  const result: SettingsWithMetadata = { data: {}, secrets: {} };
+  if (typeof payload !== 'object' || payload === null) {
+    return result;
+  }
+
+  const record = payload as Record<string, unknown>;
+  if (typeof record.data === 'object' && record.data !== null) {
+    result.data = Object.fromEntries(
+      Object.entries(record.data as Record<string, unknown>).map(([key, value]) => [
+        key,
+        typeof value === 'string' ? value : String(value ?? ''),
+      ]),
+    );
+  }
+
+  const meta = record.meta;
+  if (typeof meta === 'object' && meta !== null) {
+    const secrets = (meta as Record<string, unknown>).secrets;
+    if (typeof secrets === 'object' && secrets !== null) {
+      result.secrets = Object.fromEntries(
+        Object.entries(secrets as Record<string, unknown>).flatMap(([key, value]) => {
+          if (typeof value !== 'object' || value === null) {
+            return [];
+          }
+          const secret = value as Record<string, unknown>;
+          return [
+            [
+              key,
+              {
+                present: secret.present === true,
+                redacted: secret.redacted === true,
+              },
+            ],
+          ];
+        }),
       );
     }
-    return {};
+  }
+
+  return result;
+}
+
+export async function fetchSettingsWithMetadata(): Promise<SettingsWithMetadata> {
+  try {
+    const payload = await requestJSON('/api/v1/settings');
+    return parseSettingsPayload(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
     throw new Error(`Failed to fetch settings: ${message}`);
   }
+}
+
+export async function fetchSettings(): Promise<Record<string, string>> {
+  const settings = await fetchSettingsWithMetadata();
+  return settings.data;
 }
 
 export async function updateSetting(key: string, value: string): Promise<void> {
