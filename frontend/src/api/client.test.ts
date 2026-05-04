@@ -5,6 +5,7 @@ import {
   deleteDevice,
   fetchBackupFileContent,
   fetchBackupJobs,
+  fetchBridgeToken,
   fetchCanvasBootstrap,
   fetchCanvasTopology,
   fetchDevices,
@@ -12,6 +13,7 @@ import {
   fetchSettings,
   resetCanvasBootstrapRequestCache,
   restoreInstanceBackup,
+  revealSNMPProfile,
   runTopologyDiscovery,
   updateDevice,
 } from './client';
@@ -260,6 +262,58 @@ describe('fetchSettings', () => {
     );
 
     await expect(fetchSettings()).rejects.toThrow('Failed to fetch settings');
+  });
+});
+
+describe('fetchBridgeToken', () => {
+  it('requests a server-side bridge token without sending bridge_secret in the body', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        mockResponse({ token: 'encrypted-token', expires_at: '2026-05-04T19:15:00Z' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const token = await fetchBridgeToken('device-1');
+
+    expect(token).toBe('encrypted-token');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/bridge/token/device-1');
+    expect(options.method).toBe('POST');
+    expect(options.body).toBeUndefined();
+  });
+});
+
+describe('revealSNMPProfile', () => {
+  it('posts an explicit reveal reason and parses revealed credentials', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: {
+          id: 'profile-1',
+          name: 'Office SNMP',
+          description: '',
+          snmp: {
+            version: '2c',
+            community: 'profile-community',
+            community_set: true,
+            auth_password_set: false,
+            priv_password_set: false,
+          },
+          created_at: '',
+          updated_at: '',
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const profile = await revealSNMPProfile('profile-1', 'apply profile');
+
+    expect(profile.snmp.community).toBe('profile-community');
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/snmp-profiles/profile-1/reveal');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(options.body)).toEqual({ reason: 'apply profile' });
   });
 });
 

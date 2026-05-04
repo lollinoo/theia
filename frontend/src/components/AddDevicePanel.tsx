@@ -6,6 +6,7 @@ import {
   fetchAreas,
   fetchCredentialProfiles,
   fetchSNMPProfiles,
+  revealSNMPProfile,
   setWinBoxProfile,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
@@ -140,10 +141,16 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       });
   }, []);
 
-  function applyProfile(profileId: string) {
+  async function applyProfile(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) return;
-    setForm((current) => applySNMPProfile(current, profile));
+    setError(null);
+    try {
+      const revealed = await revealSNMPProfile(profile.id, 'apply SNMP profile to device form');
+      setForm((current) => applySNMPProfile(current, revealed));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reveal SNMP profile.');
+    }
   }
 
   function handleMetricsModeChange(value: MetricsMode) {
@@ -550,7 +557,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                   <select
                     defaultValue=""
                     onChange={(e) => {
-                      applyProfile(e.target.value);
+                      void applyProfile(e.target.value);
                       e.target.value = '';
                     }}
                     className={selectClass}

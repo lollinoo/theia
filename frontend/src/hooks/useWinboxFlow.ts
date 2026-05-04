@@ -18,7 +18,6 @@ export function useWinboxFlow(): {
   const [bridgePort, setBridgePort] = useState('1337');
   const [winboxError, setWinboxError] = useState<string | null>(null);
   const bridgePortRef = useRef('1337');
-  const bridgeSecretRef = useRef('');
   const settingsLoadedRef = useRef(false);
   const settingsLoadPromiseRef = useRef<Promise<void> | null>(null);
   const { bridgeRunning, bridgeChecked, bridgeError, checkBridgeHealth } =
@@ -29,9 +28,7 @@ export function useWinboxFlow(): {
   useEffect(() => {
     settingsLoadPromiseRef.current = fetchSettings()
       .then((settings) => {
-        const nextBridgeSecret = settings.bridge_secret ?? '';
         const nextBridgePort = settings.bridge_port ?? '1337';
-        bridgeSecretRef.current = nextBridgeSecret;
         bridgePortRef.current = nextBridgePort;
         setBridgePort(nextBridgePort);
       })
@@ -75,14 +72,9 @@ export function useWinboxFlow(): {
       await settingsLoadPromiseRef.current;
     }
 
-    if (!bridgeSecretRef.current) {
-      setWinboxError('Bridge secret not configured');
-      return;
-    }
-
     let token: string;
     try {
-      token = await fetchBridgeToken(deviceId, bridgeSecretRef.current);
+      token = await fetchBridgeToken(deviceId);
     } catch (error) {
       setWinboxError(error instanceof Error ? error.message : 'Failed to launch WinBox');
       return;

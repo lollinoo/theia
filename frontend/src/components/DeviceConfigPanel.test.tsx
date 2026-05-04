@@ -7,6 +7,7 @@ import { DeviceConfigPanel } from './DeviceConfigPanel';
 // Mock all API calls used in useEffect
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
+  revealSNMPProfile: vi.fn(),
   fetchCredentialProfiles: vi.fn().mockResolvedValue([
     {
       id: 'p1',

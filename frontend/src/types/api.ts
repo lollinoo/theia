@@ -13,11 +13,14 @@ export interface SNMPProfile {
   snmp: {
     version: string;
     community?: string;
+    community_set?: boolean;
     username?: string;
     auth_protocol?: string;
     auth_password?: string;
+    auth_password_set?: boolean;
     priv_protocol?: string;
     priv_password?: string;
+    priv_password_set?: boolean;
     security_level?: string;
   };
   created_at: string;
@@ -460,11 +463,14 @@ export function parseSNMPProfilesResponse(payload: unknown): SNMPProfile[] {
       snmp: {
         version: readString(snmp, 'version', '2c'),
         community: typeof snmp.community === 'string' ? snmp.community : undefined,
+        community_set: readBoolean(snmp, 'community_set'),
         username: typeof snmp.username === 'string' ? snmp.username : undefined,
         auth_protocol: typeof snmp.auth_protocol === 'string' ? snmp.auth_protocol : undefined,
         auth_password: typeof snmp.auth_password === 'string' ? snmp.auth_password : undefined,
+        auth_password_set: readBoolean(snmp, 'auth_password_set'),
         priv_protocol: typeof snmp.priv_protocol === 'string' ? snmp.priv_protocol : undefined,
         priv_password: typeof snmp.priv_password === 'string' ? snmp.priv_password : undefined,
+        priv_password_set: readBoolean(snmp, 'priv_password_set'),
         security_level: typeof snmp.security_level === 'string' ? snmp.security_level : undefined,
       },
       created_at: readString(item, 'created_at'),
@@ -486,11 +492,14 @@ export function parseSNMPProfileResponse(payload: unknown): SNMPProfile {
     snmp: {
       version: readString(snmp, 'version', '2c'),
       community: typeof snmp.community === 'string' ? snmp.community : undefined,
+      community_set: readBoolean(snmp, 'community_set'),
       username: typeof snmp.username === 'string' ? snmp.username : undefined,
       auth_protocol: typeof snmp.auth_protocol === 'string' ? snmp.auth_protocol : undefined,
       auth_password: typeof snmp.auth_password === 'string' ? snmp.auth_password : undefined,
+      auth_password_set: readBoolean(snmp, 'auth_password_set'),
       priv_protocol: typeof snmp.priv_protocol === 'string' ? snmp.priv_protocol : undefined,
       priv_password: typeof snmp.priv_password === 'string' ? snmp.priv_password : undefined,
+      priv_password_set: readBoolean(snmp, 'priv_password_set'),
       security_level: typeof snmp.security_level === 'string' ? snmp.security_level : undefined,
     },
     created_at: readString(data, 'created_at'),

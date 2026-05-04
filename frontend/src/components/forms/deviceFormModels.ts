@@ -111,17 +111,18 @@ export function resetDeviceFormMode(
 }
 
 export function applySNMPProfile(form: DeviceFormModel, profile: SNMPProfile): DeviceFormModel {
+  const currentDefaults = createAddDeviceFormModel().snmp;
   return {
     ...form,
     snmp: {
       version: profile.snmp.version === '3' ? '3' : '2c',
-      community: profile.snmp.community ?? 'public',
+      community: profile.snmp.community ?? form.snmp.community,
       username: profile.snmp.username ?? '',
-      securityLevel: profile.snmp.security_level ?? 'authPriv',
-      authProtocol: profile.snmp.auth_protocol ?? 'SHA',
-      authPassword: profile.snmp.auth_password ?? '',
-      privProtocol: profile.snmp.priv_protocol ?? 'AES',
-      privPassword: profile.snmp.priv_password ?? '',
+      securityLevel: profile.snmp.security_level ?? currentDefaults.securityLevel,
+      authProtocol: profile.snmp.auth_protocol ?? currentDefaults.authProtocol,
+      authPassword: profile.snmp.auth_password ?? form.snmp.authPassword,
+      privProtocol: profile.snmp.priv_protocol ?? currentDefaults.privProtocol,
+      privPassword: profile.snmp.priv_password ?? form.snmp.privPassword,
     },
   };
 }

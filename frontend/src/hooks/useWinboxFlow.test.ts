@@ -23,7 +23,6 @@ describe('useWinboxFlow', () => {
     vi.stubGlobal('fetch', vi.fn());
     apiMocks.fetchSettings.mockResolvedValue({
       bridge_port: '1337',
-      bridge_secret: 'secret',
     });
   });
 
@@ -32,8 +31,10 @@ describe('useWinboxFlow', () => {
     vi.unstubAllGlobals();
   });
 
-  it('gates launch when the bridge secret is missing', async () => {
+  it('launches with a server-side bridge token without reading bridge_secret from settings', async () => {
     apiMocks.fetchSettings.mockResolvedValue({ bridge_port: '1337' });
+    apiMocks.fetchBridgeToken.mockResolvedValue('bridge-token');
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 
     const { result } = renderHook(() => useWinboxFlow());
 
@@ -45,8 +46,8 @@ describe('useWinboxFlow', () => {
       await result.current.launchWinbox('dev-1');
     });
 
-    expect(result.current.winboxError).toBe('Bridge secret not configured');
-    expect(apiMocks.fetchBridgeToken).not.toHaveBeenCalled();
+    expect(result.current.winboxError).toBeNull();
+    expect(apiMocks.fetchBridgeToken).toHaveBeenCalledWith('dev-1');
   });
 
   it('refreshes a stale false WinBox cache when reopening the same device menu', async () => {
@@ -94,8 +95,7 @@ describe('useWinboxFlow', () => {
   });
 
   it('waits for settings to load before deciding the bridge secret is missing', async () => {
-    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null =
-      null;
+    let resolveSettings: ((value: { bridge_port: string }) => void) | null = null;
     apiMocks.fetchSettings.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -113,17 +113,16 @@ describe('useWinboxFlow', () => {
     expect(result.current.winboxError).toBeNull();
 
     await act(async () => {
-      resolveSettings?.({ bridge_port: '1337', bridge_secret: 'secret' });
+      resolveSettings?.({ bridge_port: '1337' });
       await launchPromise;
     });
 
-    expect(apiMocks.fetchBridgeToken).toHaveBeenCalledWith('dev-1', 'secret');
+    expect(apiMocks.fetchBridgeToken).toHaveBeenCalledWith('dev-1');
     expect(result.current.winboxError).toBeNull();
   });
 
   it('waits for settings before the first bridge health check on a non-default port', async () => {
-    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null =
-      null;
+    let resolveSettings: ((value: { bridge_port: string }) => void) | null = null;
     apiMocks.fetchSettings.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -144,7 +143,7 @@ describe('useWinboxFlow', () => {
     expect(global.fetch).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveSettings?.({ bridge_port: '9000', bridge_secret: 'secret' });
+      resolveSettings?.({ bridge_port: '9000' });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -156,8 +155,7 @@ describe('useWinboxFlow', () => {
   });
 
   it('refreshes device WinBox availability immediately before settings resolve', async () => {
-    let resolveSettings: ((value: { bridge_port: string; bridge_secret: string }) => void) | null =
-      null;
+    let resolveSettings: ((value: { bridge_port: string }) => void) | null = null;
     apiMocks.fetchSettings.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -180,7 +178,7 @@ describe('useWinboxFlow', () => {
     expect(global.fetch).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveSettings?.({ bridge_port: '9000', bridge_secret: 'secret' });
+      resolveSettings?.({ bridge_port: '9000' });
       await Promise.resolve();
       await Promise.resolve();
     });

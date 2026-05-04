@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -9,6 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/lollinoo/theia/internal/crypto"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 // setupBridgeTest creates a temp dir and optionally populates it with dummy bridge binaries.
@@ -268,7 +274,7 @@ func TestBridgeToken_GetMethodReturns405(t *testing.T) {
 
 // TestBridgeToken_MissingSecretReturns400 verifies that omitting bridge_secret returns 400.
 func TestBridgeToken_MissingSecretReturns400(t *testing.T) {
-	handler := NewBridgeHandlerWithCredentials("", nil, nil)
+	handler := NewBridgeHandlerWithCredentials("", nil, nil, nil)
 	// Override nil check: use a handler where backupSvc check won't trigger —
 	// we need to reach the bridge_secret validation. Use a non-nil handler by
 	// testing through request body validation using NewBridgeHandler directly
@@ -309,6 +315,109 @@ func TestBridgeToken_ShortSecretReturns400(t *testing.T) {
 		t.Error("expected key shorter than 32 bytes")
 	}
 	// The handler would return 400 for this — the guard is: len(keyBytes) != 32
+}
+
+func TestBridgeToken_UsesStoredBridgeSecretWithoutRequestBody(t *testing.T) {
+	deviceCredHandler, repo, db, deviceID, profileID, encKey := setupDeviceCredentialProfileTest(t)
+	encryptedPwd, err := crypto.Encrypt([]byte("token-pass-value"), encKey)
+	if err != nil {
+		t.Fatalf("encrypt password: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE credential_profiles SET encrypted_secret = ? WHERE id = ?`, string(encryptedPwd), profileID.String()); err != nil {
+		t.Fatalf("update profile secret: %v", err)
+	}
+	if err := repo.AssignProfile(deviceID, profileID); err != nil {
+		t.Fatalf("assign profile: %v", err)
+	}
+	if err := repo.SetWinboxProfile(deviceID, profileID); err != nil {
+		t.Fatalf("set winbox profile: %v", err)
+	}
+	settingsRepo := newMockSettingsRepo()
+	settingsRepo.settings[domain.SettingBridgeSecret] = testBridgeSecret
+	handler := NewBridgeHandlerWithCredentials("", deviceCredHandler.svc, repo, settingsRepo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+deviceID.String(), nil)
+	w := httptest.NewRecorder()
+	handler.HandleBridgeToken(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", resp.StatusCode, w.Body.String())
+	}
+	var body struct {
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Token == "" {
+		t.Fatal("expected token")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, body.ExpiresAt)
+	if err != nil {
+		t.Fatalf("expected RFC3339 expires_at, got %q: %v", body.ExpiresAt, err)
+	}
+	if !expiresAt.After(time.Now()) {
+		t.Fatalf("expected future expires_at, got %s", body.ExpiresAt)
+	}
+
+	payload := decryptBridgeTokenPayload(t, body.Token, testBridgeSecret)
+	if payload["password"] != "token-pass-value" {
+		t.Fatalf("expected encrypted payload password to round-trip, got %q", payload["password"])
+	}
+	if payload["expires_at"] != body.ExpiresAt {
+		t.Fatalf("expected encrypted payload expires_at=%q, got %q", body.ExpiresAt, payload["expires_at"])
+	}
+}
+
+func TestBridgeToken_MissingStoredBridgeSecretReturns422(t *testing.T) {
+	deviceCredHandler, repo, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
+	settingsRepo := newMockSettingsRepo()
+	delete(settingsRepo.settings, domain.SettingBridgeSecret)
+	handler := NewBridgeHandlerWithCredentials("", deviceCredHandler.svc, repo, settingsRepo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+deviceID.String(), nil)
+	w := httptest.NewRecorder()
+	handler.HandleBridgeToken(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d; body=%s", resp.StatusCode, w.Body.String())
+	}
+}
+
+func decryptBridgeTokenPayload(t *testing.T, tokenHex, secretHex string) map[string]string {
+	t.Helper()
+	key, err := hex.DecodeString(secretHex)
+	if err != nil {
+		t.Fatalf("decode key: %v", err)
+	}
+	ciphertext, err := hex.DecodeString(tokenHex)
+	if err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("new cipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("new gcm: %v", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		t.Fatalf("token too short")
+	}
+	plaintext, err := gcm.Open(nil, ciphertext[:nonceSize], ciphertext[nonceSize:], nil)
+	if err != nil {
+		t.Fatalf("decrypt token: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(plaintext, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	return payload
 }
 
 // testDeviceID is a valid UUID used in bridge token tests.

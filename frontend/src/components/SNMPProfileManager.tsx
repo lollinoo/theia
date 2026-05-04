@@ -55,7 +55,7 @@ function profileToForm(p: SNMPProfile): FormState {
     name: p.name,
     description: p.description,
     version: p.snmp.version,
-    community: p.snmp.community ?? 'public',
+    community: p.snmp.community ?? '',
     username: p.snmp.username ?? '',
     securityLevel: p.snmp.security_level ?? 'authPriv',
     authProtocol: p.snmp.auth_protocol ?? 'SHA',
@@ -387,7 +387,7 @@ export function SNMPProfileManager() {
     void load();
   }, []);
 
-  function formToPayload(form: FormState) {
+  function formToPayload(form: FormState, preserveEmptySecrets = false) {
     const isV3 = form.version === '3';
     const needsAuth = form.securityLevel === 'authNoPriv' || form.securityLevel === 'authPriv';
     const needsPriv = form.securityLevel === 'authPriv';
@@ -400,15 +400,27 @@ export function SNMPProfileManager() {
             username: form.username.trim(),
             security_level: form.securityLevel,
             ...(needsAuth
-              ? { auth_protocol: form.authProtocol, auth_password: form.authPassword }
+              ? {
+                  auth_protocol: form.authProtocol,
+                  ...(form.authPassword !== '' || !preserveEmptySecrets
+                    ? { auth_password: form.authPassword }
+                    : {}),
+                }
               : {}),
             ...(needsPriv
-              ? { priv_protocol: form.privProtocol, priv_password: form.privPassword }
+              ? {
+                  priv_protocol: form.privProtocol,
+                  ...(form.privPassword !== '' || !preserveEmptySecrets
+                    ? { priv_password: form.privPassword }
+                    : {}),
+                }
               : {}),
           }
         : {
             version: form.version,
-            community: form.community.trim() || 'public',
+            ...(form.community.trim() !== '' || !preserveEmptySecrets
+              ? { community: form.community.trim() || 'public' }
+              : {}),
           },
     };
   }
@@ -421,7 +433,7 @@ export function SNMPProfileManager() {
 
   async function handleUpdate(form: FormState) {
     if (!editing) return;
-    await updateSNMPProfile(editing.id, formToPayload(form));
+    await updateSNMPProfile(editing.id, formToPayload(form, true));
     setMode('list');
     setEditing(null);
     void load();

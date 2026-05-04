@@ -7,6 +7,7 @@ import { AddDevicePanel } from './AddDevicePanel';
 // Mock API calls that fire in useEffect
 vi.mock('../api/client', () => ({
   fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
+  revealSNMPProfile: vi.fn(),
   fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
   assignCredentialProfile: vi.fn().mockResolvedValue(undefined),
   setWinBoxProfile: vi.fn().mockResolvedValue(undefined),

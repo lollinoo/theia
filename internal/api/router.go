@@ -56,7 +56,7 @@ func NewRouter(
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(instanceBackupService, restoreRestarter)
-	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo)
+	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo, settingsRepo)
 
 	// Canvas topology read model route
 	mux.HandleFunc("/api/v1/topology/canvas", func(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +179,13 @@ func NewRouter(
 			return
 		}
 
-		// WinBox credentials endpoint
+		// Explicit WinBox credential reveal endpoint
+		if strings.HasSuffix(r.URL.Path, "/winbox-credentials/reveal") && r.Method == http.MethodPost {
+			deviceCredHandler.HandleRevealWinboxCredentials(w, r)
+			return
+		}
+
+		// Legacy WinBox credentials endpoint
 		if strings.HasSuffix(r.URL.Path, "/winbox-credentials") && r.Method == http.MethodGet {
 			deviceCredHandler.HandleGetWinboxCredentials(w, r)
 			return
