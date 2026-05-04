@@ -83,6 +83,8 @@ func rebindPostgresQuestionPlaceholders(query string) string {
 	placeholder := 1
 	for i := 0; i < len(query); {
 		switch {
+		case isPostgresEscapeStringStart(query, i):
+			i = copyEscapeStringSQL(&builder, query, i)
 		case query[i] == '\'':
 			i = copySingleQuotedSQL(&builder, query, i)
 		case query[i] == '"':
@@ -134,6 +136,37 @@ func copySingleQuotedSQL(builder *strings.Builder, query string, start int) int 
 	return i
 }
 
+func isPostgresEscapeStringStart(query string, index int) bool {
+	if index+1 >= len(query) || query[index+1] != '\'' {
+		return false
+	}
+	if query[index] != 'E' && query[index] != 'e' {
+		return false
+	}
+	return index == 0 || !isSQLIdentifierByte(query[index-1])
+}
+
+func copyEscapeStringSQL(builder *strings.Builder, query string, start int) int {
+	i := start + 2
+	for i < len(query) {
+		if query[i] == '\'' {
+			if i > start+2 && query[i-1] == '\\' {
+				i++
+				continue
+			}
+			if i+1 < len(query) && query[i+1] == '\'' {
+				i += 2
+				continue
+			}
+			i++
+			break
+		}
+		i++
+	}
+	builder.WriteString(query[start:i])
+	return i
+}
+
 func copyDoubleQuotedSQL(builder *strings.Builder, query string, start int) int {
 	i := start + 1
 	for i < len(query) {
@@ -165,11 +198,21 @@ func copyLineCommentSQL(builder *strings.Builder, query string, start int) int {
 
 func copyBlockCommentSQL(builder *strings.Builder, query string, start int) int {
 	i := start + 2
+	depth := 1
 	for i+1 < len(query) {
-		if query[i] == '*' && query[i+1] == '/' {
+		if query[i] == '/' && query[i+1] == '*' {
+			depth++
 			i += 2
-			builder.WriteString(query[start:i])
-			return i
+			continue
+		}
+		if query[i] == '*' && query[i+1] == '/' {
+			depth--
+			i += 2
+			if depth == 0 {
+				builder.WriteString(query[start:i])
+				return i
+			}
+			continue
 		}
 		i++
 	}
@@ -280,6 +323,12 @@ func isSQLStructuralKeyword(token string) bool {
 		"else",
 		"limit",
 		"offset",
+		"fetch",
+		"first",
+		"next",
+		"row",
+		"rows",
+		"only",
 		"returning",
 		"join",
 		"on",
