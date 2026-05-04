@@ -35,6 +35,7 @@ type InstanceBackupService struct {
 	dbPath          string // live DB path
 	dbDSN           string // live DB DSN for postgres backups/restores
 	encryptionKey   []byte // for key hash in manifest
+	restoreLimits   RestoreArchiveLimits
 }
 
 // backupManifest describes the contents and metadata of an instance backup archive.
@@ -56,6 +57,22 @@ const (
 	sqliteArchiveDBEntry   = "theia.db"
 	postgresArchiveDBEntry = "database.dump"
 )
+
+// RestoreArchiveLimits defines defensive quotas for uploaded restore archives.
+type RestoreArchiveLimits struct {
+	MaxCompressedBytes int64
+	MaxTotalBytes      int64
+	MaxEntryBytes      int64
+	MaxFileEntries     int
+}
+
+// DefaultRestoreArchiveLimits caps restore uploads and extracted archive content.
+var DefaultRestoreArchiveLimits = RestoreArchiveLimits{
+	MaxCompressedBytes: 256 << 20, // 256 MiB uploaded .tar.gz
+	MaxTotalBytes:      1 << 30,   // 1 GiB expanded regular-file content
+	MaxEntryBytes:      512 << 20, // 512 MiB per regular file
+	MaxFileEntries:     25000,
+}
 
 type databaseBackupArtifact struct {
 	tempPath         string
@@ -86,7 +103,30 @@ func NewInstanceBackupService(
 		dbPath:          dbPath,
 		dbDSN:           strings.TrimSpace(dbDSN),
 		encryptionKey:   encryptionKey,
+		restoreLimits:   DefaultRestoreArchiveLimits,
 	}
+}
+
+// SetRestoreArchiveLimitsForTest overrides restore archive quotas in focused tests.
+func (s *InstanceBackupService) SetRestoreArchiveLimitsForTest(limits RestoreArchiveLimits) {
+	s.restoreLimits = normalizeRestoreArchiveLimits(limits)
+}
+
+func normalizeRestoreArchiveLimits(limits RestoreArchiveLimits) RestoreArchiveLimits {
+	defaults := DefaultRestoreArchiveLimits
+	if limits.MaxCompressedBytes <= 0 {
+		limits.MaxCompressedBytes = defaults.MaxCompressedBytes
+	}
+	if limits.MaxTotalBytes <= 0 {
+		limits.MaxTotalBytes = defaults.MaxTotalBytes
+	}
+	if limits.MaxEntryBytes <= 0 {
+		limits.MaxEntryBytes = defaults.MaxEntryBytes
+	}
+	if limits.MaxFileEntries <= 0 {
+		limits.MaxFileEntries = defaults.MaxFileEntries
+	}
+	return limits
 }
 
 // Create produces a full instance backup archive with trigger set to "manual".
@@ -586,6 +626,11 @@ type RestoreReport struct {
 // and a marker file is written for the restart-based restore flow.
 func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryRun bool) (*RestoreReport, error) {
 	ctx := context.Background()
+	limits := normalizeRestoreArchiveLimits(s.restoreLimits)
+
+	if err := validateRestoreArchiveFile(archivePath, limits); err != nil {
+		return nil, err
+	}
 
 	// Step 1: Create temp extraction dir
 	tempDir, err := os.MkdirTemp("", "theia-restore-*")
@@ -595,7 +640,7 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	defer os.RemoveAll(tempDir)
 
 	// Step 2: Extract archive
-	if err := extractArchive(archivePath, tempDir); err != nil {
+	if err := extractArchive(archivePath, tempDir, limits); err != nil {
 		return nil, err
 	}
 
@@ -776,8 +821,22 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	return report, nil
 }
 
-// extractArchive extracts a .tar.gz archive to the given directory with security validation.
-func extractArchive(archivePath, destDir string) error {
+func validateRestoreArchiveFile(archivePath string, limits RestoreArchiveLimits) error {
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return fmt.Errorf("statting archive: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("restore archive must be a regular file")
+	}
+	if info.Size() > limits.MaxCompressedBytes {
+		return fmt.Errorf("compressed archive exceeds restore limit: %d bytes > %d bytes", info.Size(), limits.MaxCompressedBytes)
+	}
+	return nil
+}
+
+// extractArchive extracts a .tar.gz archive to the given directory with security validation and quotas.
+func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) error {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("opening archive: %w", err)
@@ -791,6 +850,8 @@ func extractArchive(archivePath, destDir string) error {
 	defer gr.Close()
 
 	tr := tar.NewReader(gr)
+	var totalBytes int64
+	var fileEntries int
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -833,6 +894,20 @@ func extractArchive(archivePath, destDir string) error {
 			continue
 		}
 
+		if header.Size < 0 {
+			return fmt.Errorf("archive entry %s has invalid negative size", cleanName)
+		}
+		if header.Size > limits.MaxEntryBytes {
+			return fmt.Errorf("archive entry %s exceeds per-entry restore limit: %d bytes > %d bytes", cleanName, header.Size, limits.MaxEntryBytes)
+		}
+		if header.Size > limits.MaxTotalBytes-totalBytes {
+			return fmt.Errorf("expanded archive exceeds restore limit: %d bytes > %d bytes", totalBytes+header.Size, limits.MaxTotalBytes)
+		}
+		fileEntries++
+		if fileEntries > limits.MaxFileEntries {
+			return fmt.Errorf("archive file count exceeds restore limit: %d files > %d files", fileEntries, limits.MaxFileEntries)
+		}
+
 		// Ensure parent directory exists
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0700); err != nil {
 			return fmt.Errorf("creating parent directory for %s: %w", cleanName, err)
@@ -847,6 +922,7 @@ func extractArchive(archivePath, destDir string) error {
 			return fmt.Errorf("writing file %s: %w", cleanName, err)
 		}
 		outFile.Close()
+		totalBytes += header.Size
 	}
 
 	return nil

@@ -28,6 +28,7 @@ func NewRouter(
 	vendorConfigRepo domain.VendorConfigRepository,
 	poller statusProvider,
 	instanceBackupService *service.InstanceBackupService,
+	restoreRestarter func(),
 	bridgeBinariesDir string,
 	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64),
 	wsHandler *ws.Handler,
@@ -54,7 +55,7 @@ func NewRouter(
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
-	instanceBackupHandler := NewInstanceBackupHandler(instanceBackupService)
+	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(instanceBackupService, restoreRestarter)
 	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo)
 
 	// Canvas topology read model route
@@ -490,9 +491,9 @@ func NewRouter(
 			return
 		}
 
-		// Instance backup restore bypasses body size and JSON content-type middleware (multipart upload)
+		// Instance backup restore bypasses JSON content-type but keeps a restore-specific body cap.
 		if r.URL.Path == "/api/v1/instance-backups/restore" && r.Method == http.MethodPost {
-			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			CORS(RequestLogger(MaxBodySize(service.DefaultRestoreArchiveLimits.MaxCompressedBytes)(mux))).ServeHTTP(w, r)
 			return
 		}
 
