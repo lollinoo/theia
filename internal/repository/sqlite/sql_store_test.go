@@ -66,6 +66,39 @@ func TestRebindQuery_PostgresPreservesJSONQuestionOperators(t *testing.T) {
 	}
 }
 
+func TestRebindQuery_PostgresDoesNotTreatKeywordPlaceholdersAsJSONOperators(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{
+			name:  "between",
+			query: `SELECT * FROM metrics WHERE observed_at BETWEEN ? AND ?`,
+			want:  `SELECT * FROM metrics WHERE observed_at BETWEEN $1 AND $2`,
+		},
+		{
+			name:  "like-escape",
+			query: `SELECT * FROM devices WHERE hostname LIKE ? ESCAPE ?`,
+			want:  `SELECT * FROM devices WHERE hostname LIKE $1 ESCAPE $2`,
+		},
+		{
+			name:  "limit-offset",
+			query: `SELECT * FROM devices ORDER BY hostname LIMIT ? OFFSET ?`,
+			want:  `SELECT * FROM devices ORDER BY hostname LIMIT $1 OFFSET $2`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rebindQuery(DialectPostgres, tt.query)
+			if got != tt.want {
+				t.Fatalf("rebindQuery() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRebindQuery_PostgresNumbersOnlyBindablePlaceholders(t *testing.T) {
 	query := `INSERT INTO audit_log (message, device_id, payload) VALUES ('why?', ?, ?)`
 	got := rebindQuery(DialectPostgres, query)

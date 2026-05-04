@@ -218,13 +218,34 @@ func isPostgresQuestionOperator(query string, index int) bool {
 	if prev < 0 || !isPostgresExpressionEnd(query[prev]) {
 		return false
 	}
+	if previousSQLTokenExpectsValuePlaceholder(query, prev) {
+		return false
+	}
 
 	next := nextNonSpaceIndex(query, index+1)
-	if next < 0 || !isPostgresExpressionStart(query[next]) {
+	if next >= len(query) || !isPostgresExpressionStart(query[next]) {
 		return false
 	}
 
 	return true
+}
+
+func previousSQLTokenExpectsValuePlaceholder(query string, end int) bool {
+	if !isSQLIdentifierByte(query[end]) {
+		return false
+	}
+
+	start := end
+	for start > 0 && isSQLIdentifierByte(query[start-1]) {
+		start--
+	}
+	token := query[start : end+1]
+
+	return strings.EqualFold(token, "between") ||
+		strings.EqualFold(token, "like") ||
+		strings.EqualFold(token, "escape") ||
+		strings.EqualFold(token, "limit") ||
+		strings.EqualFold(token, "offset")
 }
 
 func previousNonSpaceIndex(query string, index int) int {
@@ -247,6 +268,10 @@ func isPostgresExpressionEnd(b byte) bool {
 
 func isPostgresExpressionStart(b byte) bool {
 	return isASCIIAlphaNumeric(b) || b == '_' || b == '\'' || b == '"' || b == '$' || b == '(' || b == '[' || b == '{' || b == '?'
+}
+
+func isSQLIdentifierByte(b byte) bool {
+	return isASCIIAlphaNumeric(b) || b == '_'
 }
 
 func isDollarQuoteTagStart(b byte) bool {
