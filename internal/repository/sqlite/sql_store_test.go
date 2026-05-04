@@ -78,6 +78,11 @@ func TestRebindQuery_PostgresDoesNotTreatKeywordPlaceholdersAsJSONOperators(t *t
 			want:  `SELECT * FROM metrics WHERE observed_at BETWEEN $1 AND $2`,
 		},
 		{
+			name:  "between-with-continuation",
+			query: `SELECT * FROM metrics WHERE observed_at BETWEEN ? AND ? AND status = ?`,
+			want:  `SELECT * FROM metrics WHERE observed_at BETWEEN $1 AND $2 AND status = $3`,
+		},
+		{
 			name:  "like-escape",
 			query: `SELECT * FROM devices WHERE hostname LIKE ? ESCAPE ?`,
 			want:  `SELECT * FROM devices WHERE hostname LIKE $1 ESCAPE $2`,

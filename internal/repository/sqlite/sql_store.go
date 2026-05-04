@@ -242,6 +242,8 @@ func previousSQLTokenExpectsValuePlaceholder(query string, end int) bool {
 	token := query[start : end+1]
 
 	return strings.EqualFold(token, "between") ||
+		strings.EqualFold(token, "and") ||
+		strings.EqualFold(token, "or") ||
 		strings.EqualFold(token, "like") ||
 		strings.EqualFold(token, "escape") ||
 		strings.EqualFold(token, "limit") ||
