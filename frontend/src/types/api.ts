@@ -550,6 +550,15 @@ export interface BackupFile {
   created_at: string;
 }
 
+export interface BackupFileContent {
+  content: string;
+  inline: boolean;
+  download_url: string;
+  reason?: 'unsupported_type' | 'too_large' | string;
+  size_bytes: number;
+  max_inline_size_bytes: number;
+}
+
 export interface BackupJob {
   id: string;
   device_id: string;

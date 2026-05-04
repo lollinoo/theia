@@ -4,7 +4,7 @@ import {
   fetchBackupFileContent,
   fetchLatestBackupJob,
 } from '../../api/client';
-import { type BackupFile, type BackupJob } from '../../types/api';
+import { type BackupFile, type BackupFileContent, type BackupJob } from '../../types/api';
 
 interface ConfigViewerProps {
   deviceId: string;
@@ -23,7 +23,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   const [job, setJob] = useState<BackupJob | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('running');
-  const [content, setContent] = useState<string | null>(null);
+  const [content, setContent] = useState<BackupFileContent | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -48,13 +48,17 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   }, [load]);
 
   const activeFile: BackupFile | undefined = job?.files?.find((f) => f.file_type === activeTab);
+  const contentText = content?.inline ? content.content : '';
+  const activeDownloadUrl =
+    content?.download_url || (activeFile ? backupFileDownloadUrl(activeFile.id) : '');
+  const textPreviewUnavailable = activeTab !== 'binary' && content !== null && !content.inline;
   const contentLines = (() => {
-    if (!content) {
+    if (!contentText) {
       return [] as Array<{ key: string; line: string; number: number }>;
     }
 
     const seen = new Map<string, number>();
-    return content.split('\n').map((line, index) => {
+    return contentText.split('\n').map((line, index) => {
       const occurrence = (seen.get(line) ?? 0) + 1;
       seen.set(line, occurrence);
       return {
@@ -79,14 +83,14 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   }, [activeFile?.id, activeTab]);
 
   const handleCopy = async () => {
-    if (!content) return;
+    if (!contentText) return;
     try {
-      await navigator.clipboard.writeText(content);
+      await navigator.clipboard.writeText(contentText);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
       const textarea = document.createElement('textarea');
-      textarea.value = content;
+      textarea.value = contentText;
       document.body.appendChild(textarea);
       textarea.select();
       document.execCommand('copy');
@@ -173,6 +177,14 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
             >
               Download .backup
             </a>
+          ) : textPreviewUnavailable ? (
+            <a
+              href={activeDownloadUrl}
+              className="rounded-md bg-surface-high px-2.5 py-1 text-[10px] font-medium text-on-bg-secondary hover:text-on-bg hover:bg-elevated transition-colors"
+              download
+            >
+              Download
+            </a>
           ) : (
             <button
               type="button"
@@ -204,7 +216,18 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
         </div>
       ) : contentLoading ? (
         <div className="text-xs text-on-bg-secondary">Loading file content...</div>
-      ) : content ? (
+      ) : textPreviewUnavailable ? (
+        <div className="rounded-lg bg-surface-high p-4 text-center">
+          <div className="text-xs text-on-bg-secondary mb-3">Preview unavailable</div>
+          <a
+            href={activeDownloadUrl}
+            className="inline-block rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 transition-colors"
+            download
+          >
+            Download {formatSize(content.size_bytes)}
+          </a>
+        </div>
+      ) : contentText ? (
         <div className="rounded-lg bg-surface-high overflow-auto max-h-[calc(100vh-220px)]">
           <pre className="font-mono text-[11px] leading-[1.6] p-0 m-0">
             <code>

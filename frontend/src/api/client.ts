@@ -1,6 +1,7 @@
 import {
   type Area,
   type BackupFile,
+  type BackupFileContent,
   type BackupJob,
   type BackupStatus,
   type CanvasTopologyResponse,
@@ -771,10 +772,35 @@ export function backupFileDownloadUrl(fileId: string): string {
   return `/api/v1/backup-files/${encodeURIComponent(fileId)}/download`;
 }
 
-export async function fetchBackupFileContent(fileId: string): Promise<string> {
+function parseBackupFileContent(data: Record<string, unknown>, fileId: string): BackupFileContent {
+  const content = typeof data.content === 'string' ? data.content : '';
+  const inline = typeof data.inline === 'boolean' ? data.inline : content.length > 0;
+  const downloadURL =
+    typeof data.download_url === 'string' && data.download_url
+      ? data.download_url
+      : backupFileDownloadUrl(fileId);
+  const reason = typeof data.reason === 'string' ? data.reason : undefined;
+
+  return {
+    content,
+    inline,
+    download_url: downloadURL,
+    ...(reason ? { reason } : {}),
+    size_bytes: typeof data.size_bytes === 'number' ? data.size_bytes : 0,
+    max_inline_size_bytes:
+      typeof data.max_inline_size_bytes === 'number' ? data.max_inline_size_bytes : 0,
+  };
+}
+
+export async function fetchBackupFileContent(fileId: string): Promise<BackupFileContent> {
   const payload = await requestJSON(`/api/v1/backup-files/${encodeURIComponent(fileId)}/content`);
-  const data = (payload as Record<string, unknown>)?.data as Record<string, unknown>;
-  return typeof data?.content === 'string' ? data.content : '';
+  const payloadRecord =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const data =
+    typeof payloadRecord.data === 'object' && payloadRecord.data !== null
+      ? (payloadRecord.data as Record<string, unknown>)
+      : {};
+  return parseBackupFileContent(data, fileId);
 }
 
 // --- Bulk Backup ---
