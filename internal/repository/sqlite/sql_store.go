@@ -265,14 +265,13 @@ func copyDollarQuotedSQL(builder *strings.Builder, query string, start int, tag 
 
 func isPostgresQuestionOperator(query string, index int) bool {
 	if index > 0 && query[index-1] == '@' {
-		return true
+		return hasPostgresQuestionOperatorLeftOperand(query, index-1)
 	}
 	if index+1 < len(query) && (query[index+1] == '|' || query[index+1] == '&') {
-		return true
+		return hasPostgresQuestionOperatorLeftOperand(query, index)
 	}
 
-	prev := previousNonSpaceIndex(query, index-1)
-	if prev < 0 || !isPostgresExpressionEnd(query[prev]) {
+	if !hasPostgresQuestionOperatorLeftOperand(query, index) {
 		return false
 	}
 
@@ -280,17 +279,29 @@ func isPostgresQuestionOperator(query string, index int) bool {
 	if next >= len(query) || !isPostgresExpressionStart(query[next]) {
 		return false
 	}
-	if adjacentSQLStructuralKeyword(query, prev, next) {
+	if nextSQLStructuralKeyword(query, next) {
 		return false
 	}
 
 	return true
 }
 
-func adjacentSQLStructuralKeyword(query string, prev int, next int) bool {
+func hasPostgresQuestionOperatorLeftOperand(query string, operatorStart int) bool {
+	prev := previousNonSpaceIndex(query, operatorStart-1)
+	if prev < 0 || !isPostgresExpressionEnd(query[prev]) {
+		return false
+	}
+	return !previousSQLStructuralKeyword(query, prev)
+}
+
+func previousSQLStructuralKeyword(query string, prev int) bool {
 	if token, ok := sqlIdentifierTokenEndingAt(query, prev); ok && isSQLStructuralKeyword(token) {
 		return true
 	}
+	return false
+}
+
+func nextSQLStructuralKeyword(query string, next int) bool {
 	if token, ok := sqlIdentifierTokenStartingAt(query, next); ok && isSQLStructuralKeyword(token) {
 		return true
 	}
