@@ -822,6 +822,28 @@ func TestValidateAndStageRestoreRejectsUnsafeArchiveEntries(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("unsupported fifo entry", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		err := addTarEntryToTestArchive(archivePath, &tar.Header{
+			Name:     "backups/router/fifo",
+			Typeflag: tar.TypeFifo,
+			Mode:     0600,
+		}, nil)
+		if err != nil {
+			t.Fatalf("adding fifo entry: %v", err)
+		}
+
+		_, err = ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected unsupported entry type error")
+		}
+		if !strings.Contains(err.Error(), "unsupported restore archive entry type") {
+			t.Fatalf("error = %q, want unsupported entry type error", err.Error())
+		}
+	})
 }
 
 func TestValidateAndStageRestoreRejectsSingletonPrefixArchiveEntries(t *testing.T) {
@@ -981,6 +1003,35 @@ func TestValidateAndStageRestoreRejectsArchiveQuotaViolations(t *testing.T) {
 		requireRestoreLimitError(t, err)
 		if !strings.Contains(err.Error(), "archive file count exceeds") {
 			t.Fatalf("error = %q, want file count quota error", err.Error())
+		}
+	})
+
+	t.Run("directory entry count limit", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		baseEntries := readArchiveEntries(t, archivePath)
+		for _, name := range []string{"backups/router", "backups/router/nested"} {
+			err := addTarEntryToTestArchive(archivePath, &tar.Header{
+				Name:     name,
+				Typeflag: tar.TypeDir,
+				Mode:     0700,
+			}, nil)
+			if err != nil {
+				t.Fatalf("adding directory entry %s: %v", name, err)
+			}
+		}
+		limits := service.DefaultRestoreArchiveLimits
+		limits.MaxFileEntries = len(baseEntries) + 1
+		ts.svc.SetRestoreArchiveLimitsForTest(limits)
+
+		_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected directory entry count quota error")
+		}
+		requireRestoreLimitError(t, err)
+		if !strings.Contains(err.Error(), "archive entry count exceeds") {
+			t.Fatalf("error = %q, want entry count quota error", err.Error())
 		}
 	})
 
