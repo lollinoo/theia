@@ -386,6 +386,169 @@ func (d *mockSSHDialerForBackup) Dial(addr string, config *gossh.ClientConfig) (
 	return nil, nil
 }
 
+func decodeBackupContentData(t *testing.T, body io.Reader) map[string]interface{} {
+	t.Helper()
+
+	var resp struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	if err := json.NewDecoder(body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Data == nil {
+		t.Fatal("expected data object in response")
+	}
+	return resp.Data
+}
+
+func TestBackupContent_SmallTextReturnsInlineContent(t *testing.T) {
+	handler, _, fileRepo := setupBackupHandler(t)
+
+	dir := t.TempDir()
+	content := "/system identity set name=router\n"
+	path := filepath.Join(dir, "running.rsc")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("creating backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "running",
+		FileName: "running.rsc",
+		FilePath: path,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-files/"+fileID.String()+"/content", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBackupFileContent(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	data := decodeBackupContentData(t, rec.Body)
+
+	if got := data["inline"]; got != true {
+		t.Fatalf("expected inline true, got %#v", got)
+	}
+	if got := data["content"]; got != content {
+		t.Fatalf("expected content %q, got %#v", content, got)
+	}
+	if got := data["download_url"]; got != "/api/v1/backup-files/"+fileID.String()+"/download" {
+		t.Fatalf("unexpected download_url: %#v", got)
+	}
+	if got := data["size_bytes"]; got != float64(len(content)) {
+		t.Fatalf("expected size_bytes %d, got %#v", len(content), got)
+	}
+	if got := data["max_inline_size_bytes"]; got != float64(1<<20) {
+		t.Fatalf("expected max_inline_size_bytes %d, got %#v", 1<<20, got)
+	}
+}
+
+func TestBackupContent_LargeTextReturnsDownloadMetadata(t *testing.T) {
+	handler, _, fileRepo := setupBackupHandler(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.rsc")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating backup file: %v", err)
+	}
+	if err := f.Truncate(1<<20 + 1); err != nil {
+		f.Close()
+		t.Fatalf("sizing backup file: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "running",
+		FileName: "large.rsc",
+		FilePath: path,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-files/"+fileID.String()+"/content", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBackupFileContent(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	data := decodeBackupContentData(t, rec.Body)
+
+	if got := data["inline"]; got != false {
+		t.Fatalf("expected inline false, got %#v", got)
+	}
+	if got := data["content"]; got != "" {
+		t.Fatalf("expected empty content, got %#v", got)
+	}
+	if got := data["download_url"]; got != "/api/v1/backup-files/"+fileID.String()+"/download" {
+		t.Fatalf("unexpected download_url: %#v", got)
+	}
+	if got := data["reason"]; got != "too_large" {
+		t.Fatalf("expected reason too_large, got %#v", got)
+	}
+	if got := data["size_bytes"]; got != float64(1<<20+1) {
+		t.Fatalf("expected size_bytes %d, got %#v", 1<<20+1, got)
+	}
+	if got := data["max_inline_size_bytes"]; got != float64(1<<20) {
+		t.Fatalf("expected max_inline_size_bytes %d, got %#v", 1<<20, got)
+	}
+}
+
+func TestBackupContent_BinaryReturnsDownloadMetadata(t *testing.T) {
+	handler, _, fileRepo := setupBackupHandler(t)
+
+	dir := t.TempDir()
+	binaryContent := []byte{0x00, 0x01, 0x02, 0xff}
+	path := filepath.Join(dir, "router.backup")
+	if err := os.WriteFile(path, binaryContent, 0644); err != nil {
+		t.Fatalf("creating backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "binary",
+		FileName: "router.backup",
+		FilePath: path,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-files/"+fileID.String()+"/content", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBackupFileContent(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	data := decodeBackupContentData(t, rec.Body)
+
+	if got := data["inline"]; got != false {
+		t.Fatalf("expected inline false, got %#v", got)
+	}
+	if got := data["content"]; got != "" {
+		t.Fatalf("expected empty content, got %#v", got)
+	}
+	if got := data["download_url"]; got != "/api/v1/backup-files/"+fileID.String()+"/download" {
+		t.Fatalf("unexpected download_url: %#v", got)
+	}
+	if got := data["reason"]; got != "unsupported_type" {
+		t.Fatalf("expected reason unsupported_type, got %#v", got)
+	}
+	if got := data["size_bytes"]; got != float64(len(binaryContent)) {
+		t.Fatalf("expected size_bytes %d, got %#v", len(binaryContent), got)
+	}
+	if got := data["max_inline_size_bytes"]; got != float64(1<<20) {
+		t.Fatalf("expected max_inline_size_bytes %d, got %#v", 1<<20, got)
+	}
+}
+
 func TestBackupHandlerListBackups_HappyPath(t *testing.T) {
 	handler, jobRepo, _ := setupBackupHandler(t)
 
