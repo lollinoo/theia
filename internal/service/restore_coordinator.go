@@ -119,8 +119,9 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		return false, fmt.Errorf("restore marker targets do not match runtime paths")
 	}
 
-	if _, err := os.Stat(marker.StagedDB); err != nil {
-		return false, fmt.Errorf("stat staged db: %w", err)
+	stagingDir := filepath.Join(filepath.Dir(c.dbPath), ".restore-staging")
+	if err := c.validateStagedRestoreArtifacts(marker, dialect, stagingDir); err != nil {
+		return false, err
 	}
 
 	if err := c.backupLiveDB(dialect); err != nil {
@@ -164,7 +165,6 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		return false, fmt.Errorf("remove restore marker: %w", err)
 	}
 
-	stagingDir := filepath.Dir(marker.StagedDB)
 	if stagingDir != "" && stagingDir != "." {
 		if err := os.RemoveAll(stagingDir); err != nil {
 			return false, fmt.Errorf("remove staging dir: %w", err)
@@ -172,6 +172,86 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	}
 
 	return true, nil
+}
+
+func (c *RestoreCoordinator) validateStagedRestoreArtifacts(marker restoreMarker, dialect sqlite.Dialect, stagingDir string) error {
+	expectedStagedDB := filepath.Join(stagingDir, "theia.db")
+	if dialect == sqlite.DialectPostgres {
+		expectedStagedDB = filepath.Join(stagingDir, "database.dump")
+	}
+	if marker.StagedDB != expectedStagedDB {
+		return fmt.Errorf("restore marker staged db path does not match runtime staging path")
+	}
+
+	info, err := os.Lstat(marker.StagedDB)
+	if err != nil {
+		return fmt.Errorf("stat staged db: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("staged db must be a regular file")
+	}
+
+	expectedStagedBackups := filepath.Join(stagingDir, "backups")
+	if marker.StagedBackups != "" {
+		if marker.StagedBackups != expectedStagedBackups {
+			return fmt.Errorf("restore marker staged backups path does not match runtime staging path")
+		}
+		if err := validateOptionalStagedBackupDir(marker.StagedBackups); err != nil {
+			return err
+		}
+	}
+
+	expectedStagedKnownHosts := filepath.Join(stagingDir, "known_hosts")
+	if marker.StagedKnownHosts != "" {
+		if marker.StagedKnownHosts != expectedStagedKnownHosts {
+			return fmt.Errorf("restore marker staged known_hosts path does not match runtime staging path")
+		}
+		if err := validateOptionalStagedKnownHosts(marker.StagedKnownHosts); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateOptionalStagedBackupDir(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat staged backup dir: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("staged backup dir must not be a symlink")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("staged backup dir must be a directory")
+	}
+
+	return filepath.WalkDir(path, func(entryPath string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("staged backup entry must not be a symlink: %s", entryPath)
+		}
+		return nil
+	})
+}
+
+func validateOptionalStagedKnownHosts(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat staged known_hosts: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("staged known_hosts must be a regular file")
+	}
+	return nil
 }
 
 func (c *RestoreCoordinator) applySQLiteRestore(stagedDB string) error {
@@ -339,6 +419,9 @@ func copyDirForRestore(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("restore directory entry must not be a symlink: %s", path)
 		}
 
 		rel, err := filepath.Rel(src, path)
