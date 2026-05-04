@@ -161,6 +161,15 @@ func TestRebindQuery_PostgresHandlesAdditionalSQLSyntax(t *testing.T) {
 	}
 }
 
+func TestRebindQuery_PostgresDoesNotTreatDollarInsideIdentifierAsDollarQuote(t *testing.T) {
+	query := `SELECT foo$bar$ FROM devices WHERE id = ?`
+	got := rebindQuery(DialectPostgres, query)
+	want := `SELECT foo$bar$ FROM devices WHERE id = $1`
+	if got != want {
+		t.Fatalf("rebindQuery() = %q, want %q", got, want)
+	}
+}
+
 func TestRebindQuery_PostgresNumbersOnlyBindablePlaceholders(t *testing.T) {
 	query := `INSERT INTO audit_log (message, device_id, payload) VALUES ('why?', ?, ?)`
 	got := rebindQuery(DialectPostgres, query)

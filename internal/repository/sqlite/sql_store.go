@@ -232,6 +232,9 @@ func readDollarQuoteTag(query string, start int) (string, bool) {
 	if start+1 >= len(query) {
 		return "", false
 	}
+	if start > 0 && isSQLIdentifierOrDollarByte(query[start-1]) {
+		return "", false
+	}
 	if query[start+1] == '$' {
 		return "$$", true
 	}
@@ -382,6 +385,10 @@ func isPostgresExpressionStart(b byte) bool {
 
 func isSQLIdentifierByte(b byte) bool {
 	return isASCIIAlphaNumeric(b) || b == '_'
+}
+
+func isSQLIdentifierOrDollarByte(b byte) bool {
+	return isSQLIdentifierByte(b) || b == '$'
 }
 
 func isDollarQuoteTagStart(b byte) bool {
