@@ -774,7 +774,7 @@ export function backupFileDownloadUrl(fileId: string): string {
 
 function parseBackupFileContent(data: Record<string, unknown>, fileId: string): BackupFileContent {
   const content = typeof data.content === 'string' ? data.content : '';
-  const inline = typeof data.inline === 'boolean' ? data.inline : content.length > 0;
+  const inline = data.inline !== false;
   const downloadURL =
     typeof data.download_url === 'string' && data.download_url
       ? data.download_url

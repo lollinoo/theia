@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigViewer } from './ConfigViewer';
 
@@ -19,6 +19,14 @@ import { fetchBackupFileContent, fetchLatestBackupJob } from '../../api/client';
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 describe('ConfigViewer', () => {
   it('renders yellow partial-backup banner', async () => {
@@ -120,5 +128,80 @@ describe('ConfigViewer', () => {
     }
     expect(screen.queryByRole('button', { name: /^copy$/i })).not.toBeInTheDocument();
     expect(screen.getByText('Preview unavailable')).toBeInTheDocument();
+  });
+
+  it('ignores stale content responses after switching text tabs', async () => {
+    const runningContent = deferred<Awaited<ReturnType<typeof fetchBackupFileContent>>>();
+
+    vi.mocked(fetchLatestBackupJob).mockResolvedValue({
+      id: 'job-4',
+      device_id: 'dev-1',
+      status: 'success',
+      error_message: '',
+      created_at: '2026-01-01T00:00:00Z',
+      files: [
+        {
+          id: 'f-running',
+          job_id: 'job-4',
+          file_type: 'running',
+          file_name: 'running.rsc',
+          file_hash: 'run123',
+          size_bytes: 100,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'f-verbose',
+          job_id: 'job-4',
+          file_type: 'verbose',
+          file_name: 'verbose.rsc',
+          file_hash: 'verb123',
+          size_bytes: 120,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    vi.mocked(fetchBackupFileContent).mockImplementation((fileId: string) => {
+      if (fileId === 'f-running') {
+        return runningContent.promise;
+      }
+      return Promise.resolve({
+        content: '# verbose config',
+        inline: true,
+        download_url: '/api/v1/backup-files/f-verbose/download',
+        size_bytes: 120,
+        max_inline_size_bytes: 1048576,
+      });
+    });
+
+    render(<ConfigViewer deviceId="dev-1" />);
+
+    await waitFor(() => {
+      expect(fetchBackupFileContent).toHaveBeenCalledWith('f-running');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Verbose' }));
+
+    expect(await screen.findByText('# verbose config')).toBeInTheDocument();
+
+    await act(async () => {
+      runningContent.resolve({
+        content: '# running stale',
+        inline: false,
+        download_url: '/api/v1/backup-files/f-running/download',
+        reason: 'too_large',
+        size_bytes: 1048577,
+        max_inline_size_bytes: 1048576,
+      });
+      await runningContent.promise;
+    });
+
+    expect(screen.getByText('# verbose config')).toBeInTheDocument();
+    expect(screen.queryByText('# running stale')).not.toBeInTheDocument();
+    expect(screen.queryByText('Preview unavailable')).not.toBeInTheDocument();
+    expect(
+      screen
+        .queryAllByRole('link', { name: /download/i })
+        .some((link) => link.getAttribute('href') === '/api/v1/backup-files/f-running/download'),
+    ).toBe(false);
   });
 });

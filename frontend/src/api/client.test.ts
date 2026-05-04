@@ -3,6 +3,7 @@ import {
   type CreateDevicePayload,
   createDevice,
   deleteDevice,
+  fetchBackupFileContent,
   fetchBackupJobs,
   fetchCanvasBootstrap,
   fetchCanvasTopology,
@@ -672,6 +673,22 @@ describe('fetchBackupJobs', () => {
 
     const result = await fetchBackupJobs('dev-1');
     expect(result).toEqual([]);
+  });
+});
+
+describe('fetchBackupFileContent', () => {
+  it('defaults missing inline metadata to inline with a download URL fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ data: { content: '' } })));
+
+    const result = await fetchBackupFileContent('file-1');
+
+    expect(result).toEqual({
+      content: '',
+      inline: true,
+      download_url: '/api/v1/backup-files/file-1/download',
+      size_bytes: 0,
+      max_inline_size_bytes: 0,
+    });
   });
 });
 

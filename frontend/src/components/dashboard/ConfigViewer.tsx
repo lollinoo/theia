@@ -19,11 +19,16 @@ const FILE_TYPE_LABELS: Record<string, string> = {
 
 const FILE_TYPE_ORDER = ['running', 'verbose', 'compact', 'binary'];
 
+type LoadedBackupContent = {
+  fileId: string;
+  value: BackupFileContent;
+};
+
 export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   const [job, setJob] = useState<BackupJob | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('running');
-  const [content, setContent] = useState<BackupFileContent | null>(null);
+  const [content, setContent] = useState<LoadedBackupContent | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -48,10 +53,12 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   }, [load]);
 
   const activeFile: BackupFile | undefined = job?.files?.find((f) => f.file_type === activeTab);
-  const contentText = content?.inline ? content.content : '';
+  const activeContent = content && content.fileId === activeFile?.id ? content.value : null;
+  const contentText = activeContent?.inline ? activeContent.content : '';
   const activeDownloadUrl =
-    content?.download_url || (activeFile ? backupFileDownloadUrl(activeFile.id) : '');
-  const textPreviewUnavailable = activeTab !== 'binary' && content !== null && !content.inline;
+    activeContent?.download_url || (activeFile ? backupFileDownloadUrl(activeFile.id) : '');
+  const textPreviewUnavailable =
+    activeTab !== 'binary' && activeContent !== null && !activeContent.inline;
   const contentLines = (() => {
     if (!contentText) {
       return [] as Array<{ key: string; line: string; number: number }>;
@@ -75,11 +82,31 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
       setContent(null);
       return;
     }
+
+    let cancelled = false;
+    const fileId = activeFile.id;
+    setContent(null);
     setContentLoading(true);
-    fetchBackupFileContent(activeFile.id)
-      .then(setContent)
-      .catch(() => setContent(null))
-      .finally(() => setContentLoading(false));
+    fetchBackupFileContent(fileId)
+      .then((value) => {
+        if (!cancelled) {
+          setContent({ fileId, value });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setContent(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setContentLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeFile?.id, activeTab]);
 
   const handleCopy = async () => {
@@ -224,7 +251,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
             className="inline-block rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 transition-colors"
             download
           >
-            Download {formatSize(content.size_bytes)}
+            Download {formatSize(activeContent?.size_bytes ?? activeFile?.size_bytes ?? 0)}
           </a>
         </div>
       ) : contentText ? (
