@@ -218,36 +218,84 @@ func isPostgresQuestionOperator(query string, index int) bool {
 	if prev < 0 || !isPostgresExpressionEnd(query[prev]) {
 		return false
 	}
-	if previousSQLTokenExpectsValuePlaceholder(query, prev) {
-		return false
-	}
 
 	next := nextNonSpaceIndex(query, index+1)
 	if next >= len(query) || !isPostgresExpressionStart(query[next]) {
+		return false
+	}
+	if adjacentSQLStructuralKeyword(query, prev, next) {
 		return false
 	}
 
 	return true
 }
 
-func previousSQLTokenExpectsValuePlaceholder(query string, end int) bool {
+func adjacentSQLStructuralKeyword(query string, prev int, next int) bool {
+	if token, ok := sqlIdentifierTokenEndingAt(query, prev); ok && isSQLStructuralKeyword(token) {
+		return true
+	}
+	if token, ok := sqlIdentifierTokenStartingAt(query, next); ok && isSQLStructuralKeyword(token) {
+		return true
+	}
+	return false
+}
+
+func sqlIdentifierTokenEndingAt(query string, end int) (string, bool) {
 	if !isSQLIdentifierByte(query[end]) {
-		return false
+		return "", false
 	}
 
 	start := end
 	for start > 0 && isSQLIdentifierByte(query[start-1]) {
 		start--
 	}
-	token := query[start : end+1]
+	return query[start : end+1], true
+}
 
-	return strings.EqualFold(token, "between") ||
-		strings.EqualFold(token, "and") ||
-		strings.EqualFold(token, "or") ||
-		strings.EqualFold(token, "like") ||
-		strings.EqualFold(token, "escape") ||
-		strings.EqualFold(token, "limit") ||
-		strings.EqualFold(token, "offset")
+func sqlIdentifierTokenStartingAt(query string, start int) (string, bool) {
+	if !isSQLIdentifierByte(query[start]) {
+		return "", false
+	}
+
+	end := start + 1
+	for end < len(query) && isSQLIdentifierByte(query[end]) {
+		end++
+	}
+	return query[start:end], true
+}
+
+func isSQLStructuralKeyword(token string) bool {
+	switch strings.ToLower(token) {
+	case "select",
+		"from",
+		"where",
+		"and",
+		"or",
+		"not",
+		"in",
+		"values",
+		"set",
+		"when",
+		"then",
+		"else",
+		"limit",
+		"offset",
+		"returning",
+		"join",
+		"on",
+		"by",
+		"as",
+		"distinct",
+		"between",
+		"like",
+		"escape",
+		"order",
+		"group",
+		"having":
+		return true
+	default:
+		return false
+	}
 }
 
 func previousNonSpaceIndex(query string, index int) int {
