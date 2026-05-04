@@ -330,6 +330,96 @@ func TestRuntimeBootstrapRunTreatsBlankDriverAsPostgresDefault(t *testing.T) {
 	}
 }
 
+func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *runtimeConfig
+		env  map[string]string
+		want []string
+	}{
+		{
+			name: "production missing encryption key",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_ENCRYPTION_KEY", "required"},
+		},
+		{
+			name: "staging rejects example encryption key",
+			cfg:  &runtimeConfig{DeploymentEnv: "staging", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "change-me", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_ENCRYPTION_KEY", "example"},
+		},
+		{
+			name: "production rejects example db dsn password",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "postgres://theia:change-me@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_DB_DSN", "example"},
+		},
+		{
+			name: "production rejects example db dsn password after postgres driver normalization",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: " postgresql ", DBDSN: "postgres://theia:change-me@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_DB_DSN", "example"},
+		},
+		{
+			name: "production rejects postgres password env placeholder",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "change-me"},
+			want: []string{"POSTGRES_PASSWORD", "example"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+			err := validateDeploymentSecretPolicy(tt.cfg)
+			if err == nil {
+				t.Fatal("validateDeploymentSecretPolicy() error = nil, want rejection")
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %q, want %q", err.Error(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateDeploymentSecretPolicyAllowsDevelopmentBlankAndSafeProductionSecrets(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *runtimeConfig
+		env  map[string]string
+	}{
+		{
+			name: "blank deployment env does not enforce secret policy",
+			cfg:  &runtimeConfig{DeploymentEnv: "", DBDriver: "postgres", DBDSN: "postgres://theia:change-me@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "", "POSTGRES_PASSWORD": "change-me"},
+		},
+		{
+			name: "development deployment env does not enforce secret policy",
+			cfg:  &runtimeConfig{DeploymentEnv: "development", DBDriver: "postgres", DBDSN: "postgres://theia:change-me@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "change-me", "POSTGRES_PASSWORD": "change-me"},
+		},
+		{
+			name: "production accepts non-placeholder secrets",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDriver: "postgres", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "another-strong-password"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+			if err := validateDeploymentSecretPolicy(tt.cfg); err != nil {
+				t.Fatalf("validateDeploymentSecretPolicy() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestRuntimeBootstrapRunWrapsPostgresConnectFailureWithGuidance(t *testing.T) {
 	bootstrap := &runtimeBootstrap{}
 	runtimeDir := t.TempDir()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -54,6 +55,17 @@ var loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
 
 var openPrimaryRuntimeDB = sqlite.OpenPrimaryDB
 
+var knownSecretPlaceholders = map[string]struct{}{
+	"change-me":        {},
+	"changeme":         {},
+	"example":          {},
+	"example-secret":   {},
+	"password":         {},
+	"secret":           {},
+	"theia":            {},
+	"devkey1234567890": {},
+}
+
 func validateDatabasePolicy(cfg *runtimeConfig, dialect sqlite.Dialect) error {
 	switch dialect {
 	case sqlite.DialectSQLite:
@@ -74,6 +86,47 @@ func validateDatabasePolicy(cfg *runtimeConfig, dialect sqlite.Dialect) error {
 	}
 
 	return nil
+}
+
+func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
+	deploymentEnv := strings.ToLower(strings.TrimSpace(cfg.DeploymentEnv))
+	if deploymentEnv != "production" && deploymentEnv != "staging" {
+		return nil
+	}
+
+	encryptionKey := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
+	if encryptionKey == "" {
+		return fmt.Errorf("THEIA_ENCRYPTION_KEY is required for %s deployment", deploymentEnv)
+	}
+	if isKnownSecretPlaceholder(encryptionKey) {
+		return fmt.Errorf("%s deployment rejects example THEIA_ENCRYPTION_KEY values", deploymentEnv)
+	}
+
+	dialect, err := sqlite.NormalizeDialect(runtimeDBDriver(cfg.DBDriver))
+	if err == nil && dialect == sqlite.DialectPostgres {
+		if isPostgresDSNPasswordPlaceholder(cfg.DBDSN) {
+			return fmt.Errorf("%s deployment rejects example THEIA_DB_DSN password values", deploymentEnv)
+		}
+		if postgresPassword := os.Getenv("POSTGRES_PASSWORD"); isKnownSecretPlaceholder(postgresPassword) {
+			return fmt.Errorf("%s deployment rejects example POSTGRES_PASSWORD values", deploymentEnv)
+		}
+	}
+
+	return nil
+}
+
+func isKnownSecretPlaceholder(value string) bool {
+	_, ok := knownSecretPlaceholders[strings.ToLower(strings.TrimSpace(value))]
+	return ok
+}
+
+func isPostgresDSNPasswordPlaceholder(dsn string) bool {
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.User == nil {
+		return false
+	}
+	password, ok := parsed.User.Password()
+	return ok && isKnownSecretPlaceholder(password)
 }
 
 func wrapPostgresConnectError(err error) error {
@@ -118,6 +171,9 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	dialect, err := sqlite.NormalizeDialect(runtimeDriver)
 	if err != nil {
 		return fmt.Errorf("invalid database driver: %w", err)
+	}
+	if err := validateDeploymentSecretPolicy(cfg); err != nil {
+		return err
 	}
 	if err := validateDatabasePolicy(cfg, dialect); err != nil {
 		return err
