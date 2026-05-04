@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -91,14 +92,27 @@ func setupPostgresServiceTest(t *testing.T) *postgresServiceTestSetup {
 func stubExternalCommands(t *testing.T, runner func(context.Context, string, ...string) ([]byte, error)) {
 	t.Helper()
 
+	stubExternalCommandsWithEnv(t, func(ctx context.Context, _ []string, name string, args ...string) ([]byte, error) {
+		return runner(ctx, name, args...)
+	})
+}
+
+func stubExternalCommandsWithEnv(t *testing.T, runner func(context.Context, []string, string, ...string) ([]byte, error)) {
+	t.Helper()
+
 	originalRunner := runExternalCommand
+	originalRunnerWithEnv := runExternalCommandWithEnv
 	originalLookup := lookupExternalCommand
-	runExternalCommand = runner
+	runExternalCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return runner(ctx, nil, name, args...)
+	}
+	runExternalCommandWithEnv = runner
 	lookupExternalCommand = func(name string) (string, error) {
 		return "/usr/bin/" + name, nil
 	}
 	t.Cleanup(func() {
 		runExternalCommand = originalRunner
+		runExternalCommandWithEnv = originalRunnerWithEnv
 		lookupExternalCommand = originalLookup
 	})
 }
@@ -197,15 +211,28 @@ func commandFlagValue(args []string, flag string) string {
 	return ""
 }
 
+func commandEnvValue(env []string, key string) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix)
+		}
+	}
+	return ""
+}
+
 func TestInstanceBackupServiceCreate_PostgresArchive(t *testing.T) {
 	ts := setupPostgresServiceTest(t)
 
-	stubExternalCommands(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "pg_dump":
+			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
+				t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
+			}
 			connInfo := commandFlagValue(args, "--dbname")
-			if !strings.Contains(connInfo, "password='n3wpr3srl@2026'") {
-				t.Fatalf("pg_dump conninfo = %q, want libpq-safe password", connInfo)
+			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "n3wpr3srl@2026") {
+				t.Fatalf("pg_dump conninfo leaked password material: %q", connInfo)
 			}
 			if strings.Contains(connInfo, "postgres://") {
 				t.Fatalf("pg_dump conninfo should not use raw URL dsn: %q", connInfo)
@@ -248,6 +275,57 @@ func TestInstanceBackupServiceCreate_PostgresArchive(t *testing.T) {
 	}
 	if backup.Status != "success" {
 		t.Fatalf("backup.Status = %q, want success", backup.Status)
+	}
+}
+
+func TestInstanceBackupServiceCreate_PostgresFailureRedactsCommandSecrets(t *testing.T) {
+	ts := setupPostgresServiceTest(t)
+	const sensitive = "should-not-appear"
+	ts.svc.dbDSN = "postgres://theia:" + sensitive + "@localhost:5432/theia?sslmode=disable"
+
+	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+		if name != "pg_dump" {
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+		if commandEnvValue(env, "PGPASSWORD") != sensitive {
+			t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
+		}
+		output := []byte("FATAL: password=" + sensitive)
+		return output, externalCommandError(name, args, errors.New("exit status 1"), output)
+	})
+
+	_, err := ts.svc.Create(context.Background())
+	if err == nil {
+		t.Fatal("Create() error = nil, want pg_dump failure")
+	}
+
+	for _, message := range []string{err.Error()} {
+		if strings.Contains(message, sensitive) {
+			t.Fatal("returned error leaked sensitive DSN password")
+		}
+		if strings.Contains(message, "postgres://theia:"+sensitive+"@localhost") {
+			t.Fatal("returned error leaked raw postgres DSN")
+		}
+		if !strings.Contains(message, "--dbname [redacted]") {
+			t.Fatalf("returned error missing redacted command context: %q", message)
+		}
+	}
+
+	backups, listErr := ts.svc.List(context.Background())
+	if listErr != nil {
+		t.Fatalf("List() error = %v", listErr)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("backup count = %d, want 1", len(backups))
+	}
+	if backups[0].Status != "failed" {
+		t.Fatalf("backup status = %q, want failed", backups[0].Status)
+	}
+	if strings.Contains(backups[0].ErrorMessage, sensitive) {
+		t.Fatal("stored backup error message leaked sensitive DSN password")
+	}
+	if !strings.Contains(backups[0].ErrorMessage, "--dbname [redacted]") {
+		t.Fatalf("stored backup error missing redacted command context: %q", backups[0].ErrorMessage)
 	}
 }
 
@@ -356,12 +434,15 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	terminatePostgresConnections = func(ctx context.Context, dsn string) error { return nil }
 	t.Cleanup(func() { terminatePostgresConnections = originalTerminate })
 
-	stubExternalCommands(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "pg_dump":
+			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
+				t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
+			}
 			connInfo := commandFlagValue(args, "--dbname")
-			if !strings.Contains(connInfo, "password='n3wpr3srl@2026'") {
-				t.Fatalf("pg_dump conninfo = %q, want libpq-safe password", connInfo)
+			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "n3wpr3srl@2026") {
+				t.Fatalf("pg_dump conninfo leaked password material: %q", connInfo)
 			}
 			dest := commandFlagValue(args, "--file")
 			if dest == "" {
@@ -372,9 +453,12 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			}
 			return nil, nil
 		case "pg_restore":
+			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
+				t.Fatal("pg_restore PGPASSWORD env does not match DSN password")
+			}
 			connInfo := commandFlagValue(args, "--dbname")
-			if !strings.Contains(connInfo, "password='n3wpr3srl@2026'") {
-				t.Fatalf("pg_restore conninfo = %q, want libpq-safe password", connInfo)
+			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "n3wpr3srl@2026") {
+				t.Fatalf("pg_restore conninfo leaked password material: %q", connInfo)
 			}
 			if strings.Contains(connInfo, "postgres://") {
 				t.Fatalf("pg_restore conninfo should not use raw URL dsn: %q", connInfo)
@@ -441,16 +525,17 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 }
 
 func TestPostgresCLIConnInfo_RewritesURLDSNWithSpecialPassword(t *testing.T) {
-	connInfo, err := postgresCLIConnInfo("postgres://theia:n3wpr3srl@2026@postgres:5432/theia?sslmode=disable&application_name=theia")
+	const sensitive = "should-not-appear"
+	conn, err := postgresCLIConnInfo("postgres://theia:" + sensitive + "@postgres:5432/theia?sslmode=disable&application_name=theia")
 	if err != nil {
 		t.Fatalf("postgresCLIConnInfo() error = %v", err)
 	}
 
+	connInfo := conn.connInfo
 	checks := []string{
 		"host='postgres'",
 		"port='5432'",
 		"user='theia'",
-		"password='n3wpr3srl@2026'",
 		"dbname='theia'",
 		"sslmode='disable'",
 		"application_name='theia'",
@@ -462,5 +547,37 @@ func TestPostgresCLIConnInfo_RewritesURLDSNWithSpecialPassword(t *testing.T) {
 	}
 	if strings.Contains(connInfo, "postgres://") {
 		t.Fatalf("connInfo should not contain raw URL dsn: %q", connInfo)
+	}
+	if strings.Contains(connInfo, "password") || strings.Contains(connInfo, sensitive) {
+		t.Fatalf("connInfo leaked password material: %q", connInfo)
+	}
+	if commandEnvValue(conn.env, "PGPASSWORD") != sensitive {
+		t.Fatal("PGPASSWORD env does not match URL DSN password")
+	}
+}
+
+func TestPostgresCLIConnInfo_MovesKeywordPasswordToEnvironment(t *testing.T) {
+	const sensitive = "should-not-appear"
+	conn, err := postgresCLIConnInfo("host=postgres user=theia password='" + sensitive + "' dbname=theia sslmode=disable")
+	if err != nil {
+		t.Fatalf("postgresCLIConnInfo() error = %v", err)
+	}
+
+	connInfo := conn.connInfo
+	for _, want := range []string{
+		"host='postgres'",
+		"user='theia'",
+		"dbname='theia'",
+		"sslmode='disable'",
+	} {
+		if !strings.Contains(connInfo, want) {
+			t.Fatalf("connInfo = %q, want substring %q", connInfo, want)
+		}
+	}
+	if strings.Contains(connInfo, "password") || strings.Contains(connInfo, sensitive) {
+		t.Fatalf("connInfo leaked password material: %q", connInfo)
+	}
+	if commandEnvValue(conn.env, "PGPASSWORD") != sensitive {
+		t.Fatal("PGPASSWORD env does not match keyword DSN password")
 	}
 }
