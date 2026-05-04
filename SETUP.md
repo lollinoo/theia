@@ -276,6 +276,14 @@ Required operator inputs for the standard bundled PostgreSQL stack:
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
 
+For bundled PostgreSQL, use this DSN shape:
+
+```text
+postgres://<postgres-user>:<postgres-password>@postgres:5432/<postgres-db>?sslmode=disable
+```
+
+The DSN user, password, and database placeholders must match `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
+
 ```bash
 cp .env.prod.example .env.prod
 # Fill required operator-provided values before first start
@@ -368,6 +376,14 @@ Required operator inputs for the standard bundled PostgreSQL stack:
 - `THEIA_ENCRYPTION_KEY`
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
+
+For bundled PostgreSQL, use this DSN shape:
+
+```text
+postgres://<postgres-user>:<postgres-password>@postgres:5432/<postgres-db>?sslmode=disable
+```
+
+The DSN user, password, and database placeholders must match `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
 
 ```bash
 cp .env.staging.example .env.staging
