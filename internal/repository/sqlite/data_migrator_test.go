@@ -110,6 +110,72 @@ func TestNormalizeCredentialProfileSecretForCopy_LeavesValidUTF8Unchanged(t *tes
 	}
 }
 
+func TestBuildSelectQueryQuotesStaticIdentifiers(t *testing.T) {
+	spec := tableCopySpec{
+		name: "device_positions",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "x", kind: columnKindFloat64},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"device_id"},
+	}
+
+	got := buildSelectQuery(spec)
+	want := `SELECT "device_id", "x", "updated_at" FROM "device_positions" ORDER BY "device_id"`
+	if got != want {
+		t.Fatalf("buildSelectQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildBatchInsertQueryQuotesStaticIdentifiers(t *testing.T) {
+	spec := tableCopySpec{
+		name: "device_positions",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "x", kind: columnKindFloat64},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"device_id"},
+	}
+
+	got := buildBatchInsertQuery(spec, 2)
+	want := `INSERT INTO "device_positions" ("device_id", "x", "updated_at") VALUES (?, ?, ?), (?, ?, ?) ON CONFLICT ("device_id") DO UPDATE SET "x" = EXCLUDED."x", "updated_at" = EXCLUDED."updated_at"`
+	if got != want {
+		t.Fatalf("buildBatchInsertQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestQuoteStaticIdentifierRejectsInvalidIdentifiers(t *testing.T) {
+	tests := []string{
+		"",
+		"device positions",
+		"devices; DROP TABLE devices",
+		"devices.name",
+		"DeviceName",
+		"1device",
+	}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("quoteStaticIdentifier(%q) did not panic", input)
+				}
+			}()
+			_ = quoteStaticIdentifier(input)
+		})
+	}
+}
+
+func TestQuoteStaticIdentifierAcceptsKnownIdentifierShape(t *testing.T) {
+	got := quoteStaticIdentifier("sys_name_lookup")
+	want := `"sys_name_lookup"`
+	if got != want {
+		t.Fatalf("quoteStaticIdentifier() = %q, want %q", got, want)
+	}
+}
+
 func seedCopyTestSource(t *testing.T, db testExecer) {
 	t.Helper()
 
