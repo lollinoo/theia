@@ -358,6 +358,45 @@ func TestHandleRestore_DryRunReturnsManifestDetails(t *testing.T) {
 	}
 }
 
+func TestHandleRestore_RejectsUploadAboveCompressedLimit(t *testing.T) {
+	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+	archiveData := buildValidTarGz(t, dbPath, encKey)
+	handler.restoreUploadLimitBytes = int64(len(archiveData) - 1)
+
+	req := buildMultipartRequest(t, "backup.tar.gz", archiveData, true)
+	rec := httptest.NewRecorder()
+
+	handler.HandleRestore(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleRestore_NonDryRunUsesInjectedRestarter(t *testing.T) {
+	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+	restarted := make(chan struct{}, 1)
+	handler.restarter = func() {
+		restarted <- struct{}{}
+	}
+
+	archiveData := buildValidTarGz(t, dbPath, encKey)
+	req := buildMultipartRequest(t, "backup.tar.gz", archiveData, false)
+	rec := httptest.NewRecorder()
+
+	handler.HandleRestore(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case <-restarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected injected restarter to be called")
+	}
+}
+
 // --- Phase 16 gap tests (SC-1 through SC-6) ---
 
 // TestHandleCreate_Returns202WithRunningStatus verifies that a POST to the instance-backups

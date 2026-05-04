@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -332,9 +333,33 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	deviceBackupScheduler.Start(ctx)
 
 	wsHandler := ws.NewHandler(hub, pipeline.GetOverviewSnapshot, pipeline.GetAlerts, pipeline.GetPrometheusStatus)
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler)
+	children := runtimeChildren{pipeline}
+	if backupScheduler != nil {
+		children = append(children, backupScheduler)
+	}
+	children = append(children, deviceBackupScheduler)
+
+	var server *http.Server
+	var restoreShutdownOnce sync.Once
+	restoreRestarter := func() {
+		restoreShutdownOnce.Do(func() {
+			log.Printf("Restore staged successfully; shutting down so the configured supervisor can restart Theia")
+			cancel()
+			b.stopRuntime(children)
+
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer shutdownCancel()
+			if server != nil {
+				if err := server.Shutdown(shutdownCtx); err != nil {
+					log.Printf("HTTP server shutdown error after restore staging: %v", err)
+				}
+			}
+		})
+	}
+
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler)
 	metricsHandler := observability.Handler()
-	server := &http.Server{
+	server = &http.Server{
 		Addr: cfg.ListenAddr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/metrics" {
@@ -345,11 +370,6 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		}),
 	}
 
-	children := runtimeChildren{pipeline}
-	if backupScheduler != nil {
-		children = append(children, backupScheduler)
-	}
-	children = append(children, deviceBackupScheduler)
 	b.handleShutdown(cancel, server, children)
 
 	log.Printf("Theia %s (commit=%s built=%s) starting on %s", version.Version, version.GitCommit, version.BuildDate, cfg.ListenAddr)

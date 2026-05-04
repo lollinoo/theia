@@ -732,6 +732,106 @@ func TestValidateAndStageRestoreTightensExistingMarkerPermissions(t *testing.T) 
 	assertPathMode(t, markerPath, 0600)
 }
 
+func TestValidateAndStageRestoreRejectsArchiveQuotaViolations(t *testing.T) {
+	t.Run("compressed size limit", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		info, err := os.Stat(archivePath)
+		if err != nil {
+			t.Fatalf("stat archive: %v", err)
+		}
+		limits := service.DefaultRestoreArchiveLimits
+		limits.MaxCompressedBytes = info.Size() - 1
+		ts.svc.SetRestoreArchiveLimitsForTest(limits)
+
+		_, err = ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected compressed quota error")
+		}
+		if !strings.Contains(err.Error(), "compressed archive exceeds") {
+			t.Fatalf("error = %q, want compressed archive quota error", err.Error())
+		}
+	})
+
+	t.Run("per-entry expanded size limit", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		dbInfo, err := os.Stat(ts.dbPath)
+		if err != nil {
+			t.Fatalf("stat db: %v", err)
+		}
+		largeBackup := bytes.Repeat([]byte("x"), int(dbInfo.Size()+1))
+		if err := addFileToTestArchive(archivePath, "backups/router/large.rsc", largeBackup); err != nil {
+			t.Fatalf("adding backup entry: %v", err)
+		}
+		limits := service.DefaultRestoreArchiveLimits
+		limits.MaxEntryBytes = dbInfo.Size()
+		ts.svc.SetRestoreArchiveLimitsForTest(limits)
+
+		_, err = ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected per-entry quota error")
+		}
+		if !strings.Contains(err.Error(), "archive entry backups/router/large.rsc exceeds") {
+			t.Fatalf("error = %q, want per-entry quota error", err.Error())
+		}
+	})
+
+	t.Run("total expanded size limit", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		baseEntries := readArchiveEntries(t, archivePath)
+		var baseTotal int64
+		for _, data := range baseEntries {
+			baseTotal += int64(len(data))
+		}
+		if err := addFileToTestArchive(archivePath, "backups/router/a.rsc", bytes.Repeat([]byte("a"), 8)); err != nil {
+			t.Fatalf("adding first backup entry: %v", err)
+		}
+		if err := addFileToTestArchive(archivePath, "backups/router/b.rsc", bytes.Repeat([]byte("b"), 8)); err != nil {
+			t.Fatalf("adding second backup entry: %v", err)
+		}
+		limits := service.DefaultRestoreArchiveLimits
+		limits.MaxTotalBytes = baseTotal + 8
+		ts.svc.SetRestoreArchiveLimitsForTest(limits)
+
+		_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected total expanded quota error")
+		}
+		if !strings.Contains(err.Error(), "expanded archive exceeds") {
+			t.Fatalf("error = %q, want total expanded quota error", err.Error())
+		}
+	})
+
+	t.Run("file count limit", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		baseEntries := readArchiveEntries(t, archivePath)
+		if err := addFileToTestArchive(archivePath, "backups/router/a.rsc", []byte("a")); err != nil {
+			t.Fatalf("adding first backup entry: %v", err)
+		}
+		if err := addFileToTestArchive(archivePath, "backups/router/b.rsc", []byte("b")); err != nil {
+			t.Fatalf("adding second backup entry: %v", err)
+		}
+		limits := service.DefaultRestoreArchiveLimits
+		limits.MaxFileEntries = len(baseEntries) + 1
+		ts.svc.SetRestoreArchiveLimitsForTest(limits)
+
+		_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected file count quota error")
+		}
+		if !strings.Contains(err.Error(), "archive file count exceeds") {
+			t.Fatalf("error = %q, want file count quota error", err.Error())
+		}
+	})
+}
+
 func assertPathMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 
