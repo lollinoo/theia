@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,34 @@ import (
 
 	"os"
 )
+
+func createRestoreTestUnixSocket(t *testing.T, path string) func() {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("creating parent dir for %s: %v", path, err)
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Skipf("unix socket restore test unsupported on this platform: %v", err)
+	}
+	return func() {
+		_ = listener.Close()
+	}
+}
+
+func newShortRestoreTestDir(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "tr")
+	if err != nil {
+		t.Fatalf("MkdirTemp(short restore dir): %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return dir
+}
 
 func writeRestoreTestFile(t *testing.T, path string, contents string, mode os.FileMode) {
 	t.Helper()
@@ -521,6 +550,171 @@ func TestRestoreCoordinatorApplyPendingRestoreRejectsSymlinkedStagedBackupRootBe
 	}
 	if got := readRestoreTestFile(t, filepath.Join(externalBackups, "router.cfg")); got != "staged-backup" {
 		t.Fatalf("external staged backup content = %q, want staged-backup", got)
+	}
+}
+
+func TestRestoreCoordinatorApplyPendingRestoreRejectsSocketInStagedBackupsBeforeDBActivation(t *testing.T) {
+	runtimeDir := newShortRestoreTestDir(t)
+	dbPath := filepath.Join(runtimeDir, "theia.db")
+	deviceBackupDir := filepath.Join(runtimeDir, "device-backups")
+	knownHostsPath := filepath.Join(runtimeDir, "known_hosts")
+	stagingDir := filepath.Join(runtimeDir, ".restore-staging")
+	stagedDB := filepath.Join(stagingDir, "theia.db")
+	stagedBackups := filepath.Join(stagingDir, "backups")
+	socketPath := filepath.Join(stagedBackups, "backup.sock")
+	markerPath := filepath.Join(runtimeDir, ".theia-restore-pending")
+
+	writeRestoreTestFile(t, dbPath, "live-db", 0644)
+	writeRestoreTestFile(t, stagedDB, "staged-db", 0644)
+	closeSocket := createRestoreTestUnixSocket(t, socketPath)
+	defer closeSocket()
+
+	writeRestoreMarker(t, markerPath, restoreMarker{
+		StagedDB:        stagedDB,
+		StagedBackups:   stagedBackups,
+		DBPath:          dbPath,
+		DeviceBackupDir: deviceBackupDir,
+		KnownHostsPath:  knownHostsPath,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+	})
+
+	coordinator := NewRestoreCoordinator(dbPath, deviceBackupDir, knownHostsPath)
+
+	applied, err := coordinator.ApplyPendingRestore()
+	if err == nil {
+		t.Fatal("ApplyPendingRestore() error = nil, want staged backup socket error")
+	}
+	if applied {
+		t.Fatal("ApplyPendingRestore() applied = true, want false")
+	}
+	if got := readRestoreTestFile(t, dbPath); got != "live-db" {
+		t.Fatalf("db content = %q, want live-db", got)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("restore marker should remain after preflight failure, stat err = %v", err)
+	}
+}
+
+func TestRestoreCoordinatorApplyPendingRestoreRejectsPostgresStagedDumpSymlinkBeforeDBActivation(t *testing.T) {
+	runtimeDir := t.TempDir()
+	dbPath := filepath.Join(runtimeDir, "theia.db")
+	deviceBackupDir := filepath.Join(runtimeDir, "device-backups")
+	knownHostsPath := filepath.Join(runtimeDir, "known_hosts")
+	stagingDir := filepath.Join(runtimeDir, ".restore-staging")
+	stagedDump := filepath.Join(stagingDir, "database.dump")
+	externalDump := filepath.Join(runtimeDir, "external-database.dump")
+	markerPath := filepath.Join(runtimeDir, ".theia-restore-pending")
+
+	writeRestoreTestFile(t, dbPath, "live-db", 0644)
+	writeRestoreTestFile(t, externalDump, "staged-postgres-dump", 0644)
+	if err := os.MkdirAll(stagingDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", stagingDir, err)
+	}
+	if err := os.Symlink(externalDump, stagedDump); err != nil {
+		t.Fatalf("Symlink staged postgres dump: %v", err)
+	}
+
+	writeRestoreMarker(t, markerPath, restoreMarker{
+		StagedDB:        stagedDump,
+		DBDriver:        "postgres",
+		DBPath:          dbPath,
+		DeviceBackupDir: deviceBackupDir,
+		KnownHostsPath:  knownHostsPath,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+	})
+
+	coordinator := NewRestoreCoordinatorWithDSN(dbPath, "postgres://theia:secret@localhost:5432/theia?sslmode=disable", deviceBackupDir, knownHostsPath)
+
+	applied, err := coordinator.ApplyPendingRestore()
+	if err == nil {
+		t.Fatal("ApplyPendingRestore() error = nil, want staged postgres dump symlink error")
+	}
+	if applied {
+		t.Fatal("ApplyPendingRestore() applied = true, want false")
+	}
+	if got := readRestoreTestFile(t, dbPath); got != "live-db" {
+		t.Fatalf("db content = %q, want live-db", got)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("restore marker should remain after preflight failure, stat err = %v", err)
+	}
+	if got := readRestoreTestFile(t, externalDump); got != "staged-postgres-dump" {
+		t.Fatalf("external postgres dump content = %q, want staged-postgres-dump", got)
+	}
+}
+
+func TestRestoreCoordinatorApplyPendingRestoreRevalidatesStagedDBBeforeSQLiteActivation(t *testing.T) {
+	runtimeDir := t.TempDir()
+	dbPath := filepath.Join(runtimeDir, "theia.db")
+	stagedDB := filepath.Join(runtimeDir, ".restore-staging", "theia.db")
+	externalStagedDB := filepath.Join(runtimeDir, "external-theia.db")
+
+	writeRestoreTestFile(t, dbPath, "live-db", 0644)
+	writeRestoreTestFile(t, externalStagedDB, "staged-db", 0644)
+	if err := os.MkdirAll(filepath.Dir(stagedDB), 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(stagedDB), err)
+	}
+	if err := os.Symlink(externalStagedDB, stagedDB); err != nil {
+		t.Fatalf("Symlink staged db: %v", err)
+	}
+
+	coordinator := NewRestoreCoordinator(dbPath, filepath.Join(runtimeDir, "device-backups"), filepath.Join(runtimeDir, "known_hosts"))
+
+	err := coordinator.applySQLiteRestore(stagedDB)
+	if err == nil {
+		t.Fatal("applySQLiteRestore() error = nil, want staged db symlink error")
+	}
+	if got := readRestoreTestFile(t, dbPath); got != "live-db" {
+		t.Fatalf("db content = %q, want live-db", got)
+	}
+	if got := readRestoreTestFile(t, externalStagedDB); got != "staged-db" {
+		t.Fatalf("external staged db content = %q, want staged-db", got)
+	}
+}
+
+func TestRestoreCoordinatorApplyPendingRestoreRevalidatesStagedKnownHostsBeforeActivation(t *testing.T) {
+	runtimeDir := t.TempDir()
+	liveKnownHosts := filepath.Join(runtimeDir, "known_hosts")
+	stagedKnownHosts := filepath.Join(runtimeDir, ".restore-staging", "known_hosts")
+	externalKnownHosts := filepath.Join(runtimeDir, "external-known-hosts")
+
+	writeRestoreTestFile(t, liveKnownHosts, "live-known-hosts", 0644)
+	writeRestoreTestFile(t, externalKnownHosts, "staged-known-hosts", 0644)
+	if err := os.MkdirAll(filepath.Dir(stagedKnownHosts), 0755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(stagedKnownHosts), err)
+	}
+	if err := os.Symlink(externalKnownHosts, stagedKnownHosts); err != nil {
+		t.Fatalf("Symlink staged known_hosts: %v", err)
+	}
+
+	err := replaceFileForRestore(stagedKnownHosts, liveKnownHosts)
+	if err == nil {
+		t.Fatal("replaceFileForRestore() error = nil, want staged known_hosts symlink error")
+	}
+	if got := readRestoreTestFile(t, liveKnownHosts); got != "live-known-hosts" {
+		t.Fatalf("known_hosts content = %q, want live-known-hosts", got)
+	}
+	if got := readRestoreTestFile(t, externalKnownHosts); got != "staged-known-hosts" {
+		t.Fatalf("external known_hosts content = %q, want staged-known-hosts", got)
+	}
+}
+
+func TestRestoreCoordinatorApplyPendingRestoreRevalidatesStagedBackupsBeforeActivation(t *testing.T) {
+	runtimeDir := newShortRestoreTestDir(t)
+	liveBackups := filepath.Join(runtimeDir, "device-backups")
+	stagedBackups := filepath.Join(runtimeDir, ".restore-staging", "backups")
+	socketPath := filepath.Join(stagedBackups, "backup.sock")
+
+	writeRestoreTestFile(t, filepath.Join(liveBackups, "router.cfg"), "live-backup", 0644)
+	closeSocket := createRestoreTestUnixSocket(t, socketPath)
+	defer closeSocket()
+
+	err := replaceDirForRestore(stagedBackups, liveBackups)
+	if err == nil {
+		t.Fatal("replaceDirForRestore() error = nil, want staged backup socket error")
+	}
+	if got := readRestoreTestFile(t, filepath.Join(liveBackups, "router.cfg")); got != "live-backup" {
+		t.Fatalf("backup content = %q, want live-backup", got)
 	}
 }
 
