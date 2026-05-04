@@ -113,6 +113,39 @@ func TestRebindQuery_PostgresDoesNotTreatProjectionPlaceholdersAsJSONOperators(t
 	}
 }
 
+func TestRebindQuery_PostgresHandlesAdditionalSQLSyntax(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{
+			name:  "escape-string-literal",
+			query: `SELECT E'it\\'s ?' AS literal WHERE id = ?`,
+			want:  `SELECT E'it\\'s ?' AS literal WHERE id = $1`,
+		},
+		{
+			name:  "nested-block-comment",
+			query: `SELECT 1 /* outer /* inner */ ? */ WHERE id = ?`,
+			want:  `SELECT 1 /* outer /* inner */ ? */ WHERE id = $1`,
+		},
+		{
+			name:  "fetch-first-rows",
+			query: `SELECT * FROM devices ORDER BY hostname FETCH FIRST ? ROWS ONLY`,
+			want:  `SELECT * FROM devices ORDER BY hostname FETCH FIRST $1 ROWS ONLY`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rebindQuery(DialectPostgres, tt.query)
+			if got != tt.want {
+				t.Fatalf("rebindQuery() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRebindQuery_PostgresNumbersOnlyBindablePlaceholders(t *testing.T) {
 	query := `INSERT INTO audit_log (message, device_id, payload) VALUES ('why?', ?, ?)`
 	got := rebindQuery(DialectPostgres, query)
