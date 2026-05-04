@@ -56,6 +56,12 @@ make dev
 
 This builds all images and starts the full stack in the background. First build takes 2–4 minutes to compile Go and download npm packages.
 
+`config.yaml` is a local-only file and is ignored by git because it can contain a database DSN or other deployment-specific values. The dev stack works through environment variables without it. If you need a local config file, start from the template:
+
+```bash
+cp config.example.yaml config.yaml
+```
+
 `make install-hooks` is a one-time setup step per clone. It enables the repo-managed Git hooks so local commits must follow the conventional commits format, for example `feat(api): add device backup endpoint`. GitHub Actions validates the same rule again in CI.
 
 ### 2. Verify everything is up
@@ -428,7 +434,7 @@ make staging-logs      # Follow staging backend logs
 
 ### Backend
 
-Configuration is loaded from `config.yaml` (or `config.example.yaml` as a template). All keys can be overridden with environment variables.
+Configuration is loaded from local `config.yaml` when present. The tracked `config.example.yaml` is a placeholder template; copy it to `config.yaml` only when you need local file-based overrides. All keys can be overridden with environment variables.
 
 | config.yaml key | Environment variable | Default | Description |
 |-----------------|---------------------|---------|-------------|

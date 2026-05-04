@@ -1,6 +1,7 @@
 # Local development artifacts
 tmp/
 /data/
+config.yaml
 !internal/vendor/data/
 *.db
 .gemini/

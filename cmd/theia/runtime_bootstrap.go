@@ -80,7 +80,7 @@ func validateDatabasePolicy(cfg *runtimeConfig, dialect sqlite.Dialect) error {
 		if strings.TrimSpace(cfg.DBDSN) == "" {
 			return fmt.Errorf(
 				"postgres is the default database driver and requires db_dsn; " +
-					"set THEIA_DB_DSN (for example postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable), start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
+					"set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable, start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
 			)
 		}
 	}
@@ -231,7 +231,7 @@ func wrapPostgresConnectError(err error) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"connect to database: %w; set THEIA_DB_DSN (for example postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable), start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
+		"connect to database: %w; set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable, start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
 		err,
 	)
 }
@@ -241,7 +241,7 @@ func wrapPostgresOpenError(err error) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"open database: %w; set THEIA_DB_DSN (for example postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable), start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
+		"open database: %w; set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable, start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
 		err,
 	)
 }
