@@ -8,20 +8,28 @@ import (
 	"strings"
 )
 
-func postgresCLIConnInfo(dsn string) (string, error) {
+type postgresCLIConnectionInfo struct {
+	connInfo string
+	env      []string
+}
+
+func postgresCLIConnInfo(dsn string) (postgresCLIConnectionInfo, error) {
 	trimmed := strings.TrimSpace(dsn)
 	if trimmed == "" {
-		return "", fmt.Errorf("postgres dsn is empty")
+		return postgresCLIConnectionInfo{}, fmt.Errorf("postgres dsn is empty")
 	}
 
 	lower := strings.ToLower(trimmed)
 	if !strings.HasPrefix(lower, "postgres://") && !strings.HasPrefix(lower, "postgresql://") {
-		return trimmed, nil
+		if conn, ok, err := postgresKeywordCLIConnInfo(trimmed); ok || err != nil {
+			return conn, err
+		}
+		return postgresCLIConnectionInfo{connInfo: trimmed}, nil
 	}
 
 	parsed, err := parsePostgresURLDSN(trimmed)
 	if err != nil {
-		return "", err
+		return postgresCLIConnectionInfo{}, err
 	}
 
 	parts := make([]string, 0, 6+len(parsed.params))
@@ -35,7 +43,6 @@ func postgresCLIConnInfo(dsn string) (string, error) {
 	appendPart("host", parsed.host)
 	appendPart("port", parsed.port)
 	appendPart("user", parsed.user)
-	appendPart("password", parsed.password)
 	appendPart("dbname", parsed.dbname)
 
 	keys := make([]string, 0, len(parsed.params))
@@ -52,7 +59,10 @@ func postgresCLIConnInfo(dsn string) (string, error) {
 		appendPart(key, parsed.params[key])
 	}
 
-	return strings.Join(parts, " "), nil
+	return postgresCLIConnectionInfo{
+		connInfo: strings.Join(parts, " "),
+		env:      postgresPasswordEnv(parsed.password),
+	}, nil
 }
 
 type parsedPostgresURL struct {
@@ -194,4 +204,122 @@ func quoteLibpqConnValue(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
 	return "'" + escaped + "'"
+}
+
+type postgresConnInfoParam struct {
+	key   string
+	value string
+}
+
+func postgresKeywordCLIConnInfo(connInfo string) (postgresCLIConnectionInfo, bool, error) {
+	params, ok, err := parsePostgresKeywordConnInfo(connInfo)
+	if !ok || err != nil {
+		return postgresCLIConnectionInfo{}, ok, err
+	}
+
+	password := ""
+	parts := make([]string, 0, len(params))
+	for _, param := range params {
+		if strings.EqualFold(param.key, "password") {
+			password = param.value
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", param.key, quoteLibpqConnValue(param.value)))
+	}
+
+	return postgresCLIConnectionInfo{
+		connInfo: strings.Join(parts, " "),
+		env:      postgresPasswordEnv(password),
+	}, true, nil
+}
+
+func parsePostgresKeywordConnInfo(connInfo string) ([]postgresConnInfoParam, bool, error) {
+	params := []postgresConnInfoParam{}
+	index := 0
+	for {
+		skipPostgresConnInfoSpaces(connInfo, &index)
+		if index >= len(connInfo) {
+			break
+		}
+
+		keyStart := index
+		for index < len(connInfo) && connInfo[index] != '=' && !isPostgresConnInfoSpace(connInfo[index]) {
+			index++
+		}
+		if keyStart == index {
+			return nil, len(params) > 0, fmt.Errorf("parse postgres conninfo near %q", connInfo[index:])
+		}
+		key := connInfo[keyStart:index]
+		skipPostgresConnInfoSpaces(connInfo, &index)
+		if index >= len(connInfo) || connInfo[index] != '=' {
+			if len(params) == 0 {
+				return nil, false, nil
+			}
+			return nil, true, fmt.Errorf("parse postgres conninfo key %q: missing '='", key)
+		}
+		index++
+		skipPostgresConnInfoSpaces(connInfo, &index)
+
+		value, err := parsePostgresConnInfoValue(connInfo, &index)
+		if err != nil {
+			return nil, true, err
+		}
+		params = append(params, postgresConnInfoParam{key: key, value: value})
+	}
+
+	if len(params) == 0 {
+		return nil, false, nil
+	}
+	return params, true, nil
+}
+
+func parsePostgresConnInfoValue(connInfo string, index *int) (string, error) {
+	if *index >= len(connInfo) {
+		return "", nil
+	}
+	if connInfo[*index] != '\'' {
+		start := *index
+		for *index < len(connInfo) && !isPostgresConnInfoSpace(connInfo[*index]) {
+			*index = *index + 1
+		}
+		return connInfo[start:*index], nil
+	}
+
+	*index = *index + 1
+	var value strings.Builder
+	for *index < len(connInfo) {
+		ch := connInfo[*index]
+		*index = *index + 1
+		if ch == '\'' {
+			return value.String(), nil
+		}
+		if ch == '\\' && *index < len(connInfo) {
+			ch = connInfo[*index]
+			*index = *index + 1
+		}
+		value.WriteByte(ch)
+	}
+	return "", fmt.Errorf("parse postgres conninfo: unterminated quoted value")
+}
+
+func skipPostgresConnInfoSpaces(connInfo string, index *int) {
+	for *index < len(connInfo) && isPostgresConnInfoSpace(connInfo[*index]) {
+		*index = *index + 1
+	}
+}
+
+func isPostgresConnInfoSpace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\r', '\f', '\v':
+		return true
+	default:
+		return false
+	}
+}
+
+func postgresPasswordEnv(password string) []string {
+	if password == "" {
+		return nil
+	}
+	return []string{"PGPASSWORD=" + password}
 }

@@ -442,18 +442,19 @@ func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, dest
 	if err := ensureExternalCommand("pg_dump"); err != nil {
 		return databaseBackupArtifact{}, err
 	}
-	connInfo, err := postgresCLIConnInfo(s.dbDSN)
+	conn, err := postgresCLIConnInfo(s.dbDSN)
 	if err != nil {
 		return databaseBackupArtifact{}, fmt.Errorf("build postgres conninfo: %w", err)
 	}
-	if _, err := runExternalCommand(
+	if _, err := runExternalCommandWithEnv(
 		ctx,
+		conn.env,
 		"pg_dump",
 		"--format=custom",
 		"--no-owner",
 		"--no-privileges",
 		"--file", destPath,
-		"--dbname", connInfo,
+		"--dbname", conn.connInfo,
 	); err != nil {
 		return databaseBackupArtifact{}, fmt.Errorf("pg_dump failed: %w", err)
 	}
