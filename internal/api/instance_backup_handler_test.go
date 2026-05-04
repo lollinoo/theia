@@ -298,6 +298,57 @@ func TestHandleRestore_WrongEncryptionKeyReturns400(t *testing.T) {
 	_ = errMsg // content verified by service-level tests; 400 status is sufficient here
 }
 
+func TestHandleRestore_UsesServiceCompressedLimitDynamically(t *testing.T) {
+	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+	archiveData := buildValidTarGz(t, dbPath, encKey)
+	limits := handler.svc.RestoreArchiveLimits()
+	limits.MaxCompressedBytes = int64(len(archiveData) - 1)
+	handler.svc.SetRestoreArchiveLimitsForTest(limits)
+
+	req := buildMultipartRequest(t, "backup.tar.gz", archiveData, true)
+	rec := httptest.NewRecorder()
+
+	handler.HandleRestore(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleRestore_ServiceExtractionQuotaViolationReturns413(t *testing.T) {
+	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+	archiveData := buildValidTarGz(t, dbPath, encKey)
+	limits := handler.svc.RestoreArchiveLimits()
+	limits.MaxFileEntries = 1
+	handler.svc.SetRestoreArchiveLimitsForTest(limits)
+
+	req := buildMultipartRequest(t, "backup.tar.gz", archiveData, true)
+	rec := httptest.NewRecorder()
+
+	handler.HandleRestore(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleRestore_AllowsMultipartEnvelopeAboveCompressedLimit(t *testing.T) {
+	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+	archiveData := buildValidTarGz(t, dbPath, encKey)
+	limits := handler.svc.RestoreArchiveLimits()
+	limits.MaxCompressedBytes = int64(len(archiveData))
+	handler.svc.SetRestoreArchiveLimitsForTest(limits)
+
+	req := buildMultipartRequest(t, "backup.tar.gz", archiveData, true)
+	rec := httptest.NewRecorder()
+
+	handler.HandleRestore(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestHandleRestore_MethodNotAllowedForGet verifies that a GET request to the
 // restore endpoint returns 405.
 func TestHandleRestore_MethodNotAllowedForGet(t *testing.T) {
@@ -361,7 +412,9 @@ func TestHandleRestore_DryRunReturnsManifestDetails(t *testing.T) {
 func TestHandleRestore_RejectsUploadAboveCompressedLimit(t *testing.T) {
 	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
 	archiveData := buildValidTarGz(t, dbPath, encKey)
-	handler.restoreUploadLimitBytes = int64(len(archiveData) - 1)
+	limits := handler.svc.RestoreArchiveLimits()
+	limits.MaxCompressedBytes = int64(len(archiveData) - 1)
+	handler.svc.SetRestoreArchiveLimitsForTest(limits)
 
 	req := buildMultipartRequest(t, "backup.tar.gz", archiveData, true)
 	rec := httptest.NewRecorder()

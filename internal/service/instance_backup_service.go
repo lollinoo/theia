@@ -66,6 +66,19 @@ type RestoreArchiveLimits struct {
 	MaxFileEntries     int
 }
 
+// RestoreLimitError marks restore validation failures caused by defensive quota limits.
+type RestoreLimitError struct {
+	message string
+}
+
+func (e *RestoreLimitError) Error() string {
+	return e.message
+}
+
+func newRestoreLimitError(format string, args ...interface{}) error {
+	return &RestoreLimitError{message: fmt.Sprintf(format, args...)}
+}
+
 // DefaultRestoreArchiveLimits caps restore uploads and extracted archive content.
 var DefaultRestoreArchiveLimits = RestoreArchiveLimits{
 	MaxCompressedBytes: 256 << 20, // 256 MiB uploaded .tar.gz
@@ -110,6 +123,11 @@ func NewInstanceBackupService(
 // SetRestoreArchiveLimitsForTest overrides restore archive quotas in focused tests.
 func (s *InstanceBackupService) SetRestoreArchiveLimitsForTest(limits RestoreArchiveLimits) {
 	s.restoreLimits = normalizeRestoreArchiveLimits(limits)
+}
+
+// RestoreArchiveLimits returns the normalized current restore archive limits.
+func (s *InstanceBackupService) RestoreArchiveLimits() RestoreArchiveLimits {
+	return normalizeRestoreArchiveLimits(s.restoreLimits)
 }
 
 func normalizeRestoreArchiveLimits(limits RestoreArchiveLimits) RestoreArchiveLimits {
@@ -831,7 +849,7 @@ func validateRestoreArchiveFile(archivePath string, limits RestoreArchiveLimits)
 		return fmt.Errorf("restore archive must be a regular file")
 	}
 	if info.Size() > limits.MaxCompressedBytes {
-		return fmt.Errorf("compressed archive exceeds restore limit: %d bytes > %d bytes", info.Size(), limits.MaxCompressedBytes)
+		return newRestoreLimitError("compressed archive exceeds restore limit: %d bytes > %d bytes", info.Size(), limits.MaxCompressedBytes)
 	}
 	return nil
 }
@@ -872,23 +890,23 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 			continue // skip unknown types
 		}
 
+		entryName := strings.TrimPrefix(header.Name, "./")
+
 		// Security: validate path has no traversal (T-17-01)
-		cleanName := filepath.Clean(header.Name)
-		if strings.Contains(cleanName, "..") {
+		if archiveEntryHasTraversal(entryName) {
 			return fmt.Errorf("archive contains path traversal: %s", header.Name)
 		}
+		cleanName := filepath.Clean(entryName)
 		if filepath.IsAbs(cleanName) {
 			return fmt.Errorf("archive contains absolute path: %s", header.Name)
-		}
-
-		// Security: only allow known prefixes (T-17-01)
-		if !isAllowedArchiveEntry(cleanName) {
-			continue // skip unknown entries
 		}
 
 		targetPath := filepath.Join(destDir, cleanName)
 
 		if header.Typeflag == tar.TypeDir {
+			if !isAllowedArchiveEntry(cleanName) {
+				continue
+			}
 			if err := os.MkdirAll(targetPath, 0700); err != nil {
 				return fmt.Errorf("creating directory %s: %w", cleanName, err)
 			}
@@ -899,14 +917,19 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 			return fmt.Errorf("archive entry %s has invalid negative size", cleanName)
 		}
 		if header.Size > limits.MaxEntryBytes {
-			return fmt.Errorf("archive entry %s exceeds per-entry restore limit: %d bytes > %d bytes", cleanName, header.Size, limits.MaxEntryBytes)
+			return newRestoreLimitError("archive entry %s exceeds per-entry restore limit: %d bytes > %d bytes", cleanName, header.Size, limits.MaxEntryBytes)
 		}
 		if header.Size > limits.MaxTotalBytes-totalBytes {
-			return fmt.Errorf("expanded archive exceeds restore limit: %d bytes > %d bytes", totalBytes+header.Size, limits.MaxTotalBytes)
+			return newRestoreLimitError("expanded archive exceeds restore limit: %d bytes > %d bytes", totalBytes+header.Size, limits.MaxTotalBytes)
 		}
 		fileEntries++
 		if fileEntries > limits.MaxFileEntries {
-			return fmt.Errorf("archive file count exceeds restore limit: %d files > %d files", fileEntries, limits.MaxFileEntries)
+			return newRestoreLimitError("archive file count exceeds restore limit: %d files > %d files", fileEntries, limits.MaxFileEntries)
+		}
+
+		// Security: regular files outside the restore archive contract are rejected.
+		if !isAllowedArchiveEntry(cleanName) {
+			return fmt.Errorf("disallowed restore archive entry: %s", cleanName)
 		}
 
 		// Ensure parent directory exists
@@ -929,15 +952,24 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 	return nil
 }
 
-// isAllowedArchiveEntry checks if a tar entry name matches known allowed prefixes.
-func isAllowedArchiveEntry(name string) bool {
-	allowed := []string{"manifest.json", sqliteArchiveDBEntry, postgresArchiveDBEntry, "backups/", "known_hosts"}
-	for _, prefix := range allowed {
-		if name == prefix || strings.HasPrefix(name, prefix) {
+func archiveEntryHasTraversal(name string) bool {
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	for _, part := range strings.Split(normalized, "/") {
+		if part == ".." {
 			return true
 		}
 	}
 	return false
+}
+
+// isAllowedArchiveEntry checks if a tar entry name matches the restore archive contract.
+func isAllowedArchiveEntry(name string) bool {
+	switch name {
+	case "manifest.json", sqliteArchiveDBEntry, postgresArchiveDBEntry, "known_hosts", "backups":
+		return true
+	default:
+		return strings.HasPrefix(name, "backups/")
+	}
 }
 
 // copyFile copies a single file from src to dst with private file permissions.
