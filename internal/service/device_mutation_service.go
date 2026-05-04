@@ -284,7 +284,13 @@ func (m *deviceMutationService) DeleteDevice(ctx context.Context, id uuid.UUID) 
 		}
 	}
 
-	return m.deviceRepo.Delete(id)
+	if err := m.deviceRepo.Delete(id); err != nil {
+		return err
+	}
+	if resetter := *m.runtimeResetter; resetter != nil {
+		resetter.ResetDeviceRuntime(id)
+	}
+	return nil
 }
 
 func (m *deviceMutationService) GetDevice(ctx context.Context, id uuid.UUID) (*domain.Device, error) {
