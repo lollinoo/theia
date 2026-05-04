@@ -16,6 +16,11 @@ import (
 	"github.com/lollinoo/theia/internal/service"
 )
 
+// maxInlineBackupContentBytes caps JSON previews so backup content is not
+// loaded into memory for large files. Full content remains available through
+// the download endpoint.
+const maxInlineBackupContentBytes int64 = 1 << 20
+
 // BackupHandler provides HTTP handlers for SSH credentials and config backups.
 type BackupHandler struct {
 	svc          *service.BackupService
@@ -203,6 +208,32 @@ func (h *BackupHandler) HandleGetBackupFileContent(w http.ResponseWriter, r *htt
 		return
 	}
 
+	file, err := h.svc.GetBackupFile(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	if file == nil {
+		writeError(w, http.StatusNotFound, "backup file not found")
+		return
+	}
+
+	info, err := os.Stat(file.FilePath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+
+	sizeBytes := info.Size()
+	if !isInlineBackupTextFile(file) {
+		writeBackupContentMetadata(w, id, false, "", sizeBytes, "unsupported_type")
+		return
+	}
+	if sizeBytes > maxInlineBackupContentBytes {
+		writeBackupContentMetadata(w, id, false, "", sizeBytes, "too_large")
+		return
+	}
+
 	rc, _, err := h.svc.GetBackupFileContent(r.Context(), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -214,17 +245,41 @@ func (h *BackupHandler) HandleGetBackupFileContent(w http.ResponseWriter, r *htt
 	}
 	defer rc.Close()
 
-	content, err := io.ReadAll(rc)
+	content, err := io.ReadAll(io.LimitReader(rc, maxInlineBackupContentBytes+1))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
+	if int64(len(content)) > maxInlineBackupContentBytes {
+		writeBackupContentMetadata(w, id, false, "", sizeBytes, "too_large")
+		return
+	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data": map[string]interface{}{
-			"content": string(content),
-		},
-	})
+	writeBackupContentMetadata(w, id, true, string(content), sizeBytes, "")
+}
+
+func isInlineBackupTextFile(file *domain.BackupFile) bool {
+	switch file.FileType {
+	case "running", "verbose", "compact":
+		return filepath.Ext(file.FileName) == ".rsc"
+	default:
+		return false
+	}
+}
+
+func writeBackupContentMetadata(w http.ResponseWriter, id uuid.UUID, inline bool, content string, sizeBytes int64, reason string) {
+	data := map[string]interface{}{
+		"content":               content,
+		"inline":                inline,
+		"download_url":          "/api/v1/backup-files/" + id.String() + "/download",
+		"size_bytes":            sizeBytes,
+		"max_inline_size_bytes": maxInlineBackupContentBytes,
+	}
+	if reason != "" {
+		data["reason"] = reason
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
 }
 
 // HandleBulkBackup handles POST /api/v1/backups/bulk
