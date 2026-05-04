@@ -104,6 +104,15 @@ func TestRebindQuery_PostgresDoesNotTreatKeywordPlaceholdersAsJSONOperators(t *t
 	}
 }
 
+func TestRebindQuery_PostgresDoesNotTreatProjectionPlaceholdersAsJSONOperators(t *testing.T) {
+	query := `SELECT ? FROM devices WHERE id = ?`
+	got := rebindQuery(DialectPostgres, query)
+	want := `SELECT $1 FROM devices WHERE id = $2`
+	if got != want {
+		t.Fatalf("rebindQuery() = %q, want %q", got, want)
+	}
+}
+
 func TestRebindQuery_PostgresNumbersOnlyBindablePlaceholders(t *testing.T) {
 	query := `INSERT INTO audit_log (message, device_id, payload) VALUES ('why?', ?, ?)`
 	got := rebindQuery(DialectPostgres, query)
