@@ -150,19 +150,17 @@ func postgresDSNPasswords(dsn string) []string {
 		return passwords
 	}
 
-	if password, ok := postgresKeywordDSNValue(dsn, "password"); ok {
-		passwords = append(passwords, password)
-	}
-	return passwords
+	return append(passwords, postgresKeywordDSNValues(dsn, "password")...)
 }
 
-func postgresKeywordDSNValue(dsn, wantKey string) (string, bool) {
+func postgresKeywordDSNValues(dsn, wantKey string) []string {
+	var values []string
 	for i := 0; i < len(dsn); {
 		for i < len(dsn) && isPostgresDSNSpace(dsn[i]) {
 			i++
 		}
 		if i >= len(dsn) {
-			return "", false
+			return values
 		}
 
 		keyStart := i
@@ -174,7 +172,7 @@ func postgresKeywordDSNValue(dsn, wantKey string) (string, bool) {
 			i++
 		}
 		if key == "" || i >= len(dsn) || dsn[i] != '=' {
-			return "", false
+			return values
 		}
 		i++
 		for i < len(dsn) && isPostgresDSNSpace(dsn[i]) {
@@ -212,11 +210,11 @@ func postgresKeywordDSNValue(dsn, wantKey string) (string, bool) {
 		}
 
 		if strings.EqualFold(key, wantKey) {
-			return value.String(), true
+			values = append(values, value.String())
 		}
 	}
 
-	return "", false
+	return values
 }
 
 func isPostgresDSNSpace(value byte) bool {

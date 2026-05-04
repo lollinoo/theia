@@ -55,7 +55,7 @@ func TestLoad_FileHandling(t *testing.T) {
 	}{
 		{
 			name:     "loads values from yaml file",
-			contents: "db_driver: sqlite\nlisten_addr: \":9090\"\ndb_path: ./custom.db\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\n",
+			contents: "db_driver: sqlite\nlisten_addr: \":9090\"\ndb_path: ./custom.db\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\ndeployment_env: staging\n",
 			assert: func(t *testing.T, cfg *Config, err error) {
 				t.Helper()
 				if err != nil {
@@ -75,6 +75,9 @@ func TestLoad_FileHandling(t *testing.T) {
 				}
 				if cfg.BridgeBinariesDir != "./bridges" {
 					t.Fatalf("BridgeBinariesDir = %q, want ./bridges", cfg.BridgeBinariesDir)
+				}
+				if cfg.DeploymentEnv != "staging" {
+					t.Fatalf("DeploymentEnv = %q, want staging", cfg.DeploymentEnv)
 				}
 			},
 		},
