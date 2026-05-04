@@ -175,6 +175,10 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 }
 
 func (c *RestoreCoordinator) validateStagedRestoreArtifacts(marker restoreMarker, dialect sqlite.Dialect, stagingDir string) error {
+	if err := validateRestoreStagingDir(stagingDir); err != nil {
+		return err
+	}
+
 	expectedStagedDB := filepath.Join(stagingDir, "theia.db")
 	if dialect == sqlite.DialectPostgres {
 		expectedStagedDB = filepath.Join(stagingDir, "database.dump")
@@ -211,6 +215,20 @@ func (c *RestoreCoordinator) validateStagedRestoreArtifacts(marker restoreMarker
 		}
 	}
 
+	return nil
+}
+
+func validateRestoreStagingDir(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("stat restore staging dir: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("restore staging dir must not be a symlink")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("restore staging dir must be a directory")
+	}
 	return nil
 }
 
