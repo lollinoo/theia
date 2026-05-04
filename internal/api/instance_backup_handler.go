@@ -19,11 +19,12 @@ import (
 
 // InstanceBackupHandler provides HTTP handlers for instance backup operations.
 type InstanceBackupHandler struct {
-	svc                     *service.InstanceBackupService
-	mu                      sync.Mutex
-	restoreUploadLimitBytes int64
-	restarter               func()
+	svc       *service.InstanceBackupService
+	mu        sync.Mutex
+	restarter func()
 }
+
+const restoreMultipartEnvelopeOverheadBytes int64 = 1 << 20
 
 // NewInstanceBackupHandler creates a new InstanceBackupHandler.
 func NewInstanceBackupHandler(svc *service.InstanceBackupService) *InstanceBackupHandler {
@@ -36,9 +37,8 @@ func NewInstanceBackupHandlerWithRestarter(svc *service.InstanceBackupService, r
 		restarter = func() {}
 	}
 	return &InstanceBackupHandler{
-		svc:                     svc,
-		restoreUploadLimitBytes: service.DefaultRestoreArchiveLimits.MaxCompressedBytes,
-		restarter:               restarter,
+		svc:       svc,
+		restarter: restarter,
 	}
 }
 
@@ -223,10 +223,12 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	}
 
 	dryRun := r.URL.Query().Get("dry_run") == "true"
+	limits := h.svc.RestoreArchiveLimits()
+	compressedLimit := limits.MaxCompressedBytes
 
 	// Parse multipart form (32MB memory buffer; larger files spill to disk)
-	if h.restoreUploadLimitBytes > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, h.restoreUploadLimitBytes)
+	if compressedLimit > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, compressedLimit+restoreMultipartEnvelopeOverheadBytes)
 	}
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		if isRequestBodyTooLarge(err) {
@@ -263,12 +265,12 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	defer tmpFile.Close()
 
 	// Stream file to temp
-	written, err := copyRestoreUpload(tmpFile, file, h.restoreUploadLimitBytes)
+	written, err := copyRestoreUpload(tmpFile, file, compressedLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "writing upload to temp file", err)
 		return
 	}
-	if h.restoreUploadLimitBytes > 0 && written > h.restoreUploadLimitBytes {
+	if compressedLimit > 0 && written > compressedLimit {
 		writeError(w, http.StatusRequestEntityTooLarge, "restore upload exceeds maximum compressed size")
 		return
 	}
@@ -277,6 +279,11 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	// Validate and stage restore
 	report, err := h.svc.ValidateAndStageRestore(tmpFile.Name(), dryRun)
 	if err != nil {
+		var limitErr *service.RestoreLimitError
+		if errors.As(err, &limitErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

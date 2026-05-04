@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -314,6 +315,10 @@ func createTestArchiveWithCorruptDB(t *testing.T, dbPath string, encryptionKey [
 }
 
 func addFileToTestArchive(archivePath, name string, data []byte) error {
+	return addTarEntryToTestArchive(archivePath, &tar.Header{Name: name, Mode: 0644, Size: int64(len(data))}, data)
+}
+
+func addTarEntryToTestArchive(archivePath string, newHeader *tar.Header, data []byte) error {
 	original, err := os.ReadFile(archivePath)
 	if err != nil {
 		return err
@@ -384,7 +389,7 @@ func addFileToTestArchive(archivePath, name string, data []byte) error {
 		return err
 	}
 
-	if err := tarWriter.WriteHeader(&tar.Header{Name: name, Mode: 0644, Size: int64(len(data))}); err != nil {
+	if err := tarWriter.WriteHeader(newHeader); err != nil {
 		_ = tarWriter.Close()
 		_ = gzWriter.Close()
 		_ = f.Close()
@@ -420,6 +425,14 @@ func addFileToTestArchive(archivePath, name string, data []byte) error {
 	}
 
 	return nil
+}
+
+func requireRestoreLimitError(t *testing.T, err error) {
+	t.Helper()
+	var limitErr *service.RestoreLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("error = %v, want RestoreLimitError", err)
+	}
 }
 
 func TestValidateAndStageRestore(t *testing.T) {
@@ -732,6 +745,101 @@ func TestValidateAndStageRestoreTightensExistingMarkerPermissions(t *testing.T) 
 	assertPathMode(t, markerPath, 0600)
 }
 
+func TestValidateAndStageRestoreRejectsUnsafeArchiveEntries(t *testing.T) {
+	t.Run("path traversal entry", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		if err := addFileToTestArchive(archivePath, "backups/../evil.txt", []byte("evil")); err != nil {
+			t.Fatalf("adding traversal entry: %v", err)
+		}
+
+		_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected traversal error")
+		}
+		if !strings.Contains(err.Error(), "path traversal") {
+			t.Fatalf("error = %q, want path traversal error", err.Error())
+		}
+	})
+
+	t.Run("absolute path entry", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		if err := addFileToTestArchive(archivePath, "/tmp/evil.txt", []byte("evil")); err != nil {
+			t.Fatalf("adding absolute entry: %v", err)
+		}
+
+		_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected absolute path error")
+		}
+		if !strings.Contains(err.Error(), "absolute path") {
+			t.Fatalf("error = %q, want absolute path error", err.Error())
+		}
+	})
+
+	t.Run("symlink and hardlink entries", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			typeflag byte
+		}{
+			{name: "symlink", typeflag: tar.TypeSymlink},
+			{name: "hardlink", typeflag: tar.TypeLink},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ts := setupInstanceBackupTest(t)
+				archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+				err := addTarEntryToTestArchive(archivePath, &tar.Header{
+					Name:     "backups/router/link",
+					Typeflag: tc.typeflag,
+					Linkname: "manifest.json",
+					Mode:     0644,
+				}, nil)
+				if err != nil {
+					t.Fatalf("adding link entry: %v", err)
+				}
+
+				_, err = ts.svc.ValidateAndStageRestore(archivePath, true)
+
+				if err == nil {
+					t.Fatal("expected link entry error")
+				}
+				if !strings.Contains(err.Error(), "disallowed link entry") {
+					t.Fatalf("error = %q, want disallowed link entry error", err.Error())
+				}
+			})
+		}
+	})
+}
+
+func TestValidateAndStageRestoreRejectsSingletonPrefixArchiveEntries(t *testing.T) {
+	for _, entryName := range []string{
+		"known_hosts/child",
+		"known_hosts_extra",
+		"theia.db.bak",
+		"manifest.json.bak",
+	} {
+		t.Run(entryName, func(t *testing.T) {
+			ts := setupInstanceBackupTest(t)
+			archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+			if err := addFileToTestArchive(archivePath, entryName, []byte("unexpected")); err != nil {
+				t.Fatalf("adding singleton-prefix entry: %v", err)
+			}
+
+			_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
+
+			if err == nil {
+				t.Fatal("expected disallowed archive entry error")
+			}
+			if !strings.Contains(err.Error(), "disallowed restore archive entry") {
+				t.Fatalf("error = %q, want disallowed restore archive entry", err.Error())
+			}
+		})
+	}
+}
+
 func TestValidateAndStageRestoreRejectsArchiveQuotaViolations(t *testing.T) {
 	t.Run("compressed size limit", func(t *testing.T) {
 		ts := setupInstanceBackupTest(t)
@@ -749,6 +857,7 @@ func TestValidateAndStageRestoreRejectsArchiveQuotaViolations(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected compressed quota error")
 		}
+		requireRestoreLimitError(t, err)
 		if !strings.Contains(err.Error(), "compressed archive exceeds") {
 			t.Fatalf("error = %q, want compressed archive quota error", err.Error())
 		}
@@ -774,6 +883,7 @@ func TestValidateAndStageRestoreRejectsArchiveQuotaViolations(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected per-entry quota error")
 		}
+		requireRestoreLimitError(t, err)
 		if !strings.Contains(err.Error(), "archive entry backups/router/large.rsc exceeds") {
 			t.Fatalf("error = %q, want per-entry quota error", err.Error())
 		}
@@ -802,6 +912,7 @@ func TestValidateAndStageRestoreRejectsArchiveQuotaViolations(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected total expanded quota error")
 		}
+		requireRestoreLimitError(t, err)
 		if !strings.Contains(err.Error(), "expanded archive exceeds") {
 			t.Fatalf("error = %q, want total expanded quota error", err.Error())
 		}
@@ -826,8 +937,35 @@ func TestValidateAndStageRestoreRejectsArchiveQuotaViolations(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected file count quota error")
 		}
+		requireRestoreLimitError(t, err)
 		if !strings.Contains(err.Error(), "archive file count exceeds") {
 			t.Fatalf("error = %q, want file count quota error", err.Error())
+		}
+	})
+
+	t.Run("unknown regular file size cannot bypass quota", func(t *testing.T) {
+		ts := setupInstanceBackupTest(t)
+		archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+		dbInfo, err := os.Stat(ts.dbPath)
+		if err != nil {
+			t.Fatalf("stat db: %v", err)
+		}
+		unknownPayload := bytes.Repeat([]byte("u"), int(dbInfo.Size()+1))
+		if err := addFileToTestArchive(archivePath, "unexpected.bin", unknownPayload); err != nil {
+			t.Fatalf("adding unknown entry: %v", err)
+		}
+		limits := service.DefaultRestoreArchiveLimits
+		limits.MaxEntryBytes = dbInfo.Size()
+		ts.svc.SetRestoreArchiveLimitsForTest(limits)
+
+		_, err = ts.svc.ValidateAndStageRestore(archivePath, true)
+
+		if err == nil {
+			t.Fatal("expected unknown entry quota error")
+		}
+		requireRestoreLimitError(t, err)
+		if !strings.Contains(err.Error(), "archive entry unexpected.bin exceeds") {
+			t.Fatalf("error = %q, want unknown entry quota error", err.Error())
 		}
 	})
 }

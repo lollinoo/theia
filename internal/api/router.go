@@ -503,7 +503,11 @@ func NewRouter(
 
 		// Instance backup restore bypasses JSON content-type but keeps a restore-specific body cap.
 		if r.URL.Path == "/api/v1/instance-backups/restore" && r.Method == http.MethodPost {
-			CORS(RequestLogger(MaxBodySize(service.DefaultRestoreArchiveLimits.MaxCompressedBytes)(mux))).ServeHTTP(w, r)
+			restoreLimit := service.DefaultRestoreArchiveLimits.MaxCompressedBytes
+			if instanceBackupService != nil {
+				restoreLimit = instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
+			}
+			CORS(RequestLogger(MaxBodySize(restoreLimit+restoreMultipartEnvelopeOverheadBytes)(mux))).ServeHTTP(w, r)
 			return
 		}
 
