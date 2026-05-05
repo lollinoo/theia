@@ -464,7 +464,7 @@ func insertBatch(targetTx *Tx, spec tableCopySpec, rows [][]any) error {
 		return nil
 	}
 
-	query := buildBatchInsertQuery(spec, len(rows))
+	query := buildBatchInsertQuery(spec, len(rows), targetTx.dialect)
 	args := make([]any, 0, len(rows)*len(spec.columns))
 	for _, row := range rows {
 		args = append(args, row...)
@@ -476,7 +476,7 @@ func insertBatch(targetTx *Tx, spec tableCopySpec, rows [][]any) error {
 	return nil
 }
 
-func buildBatchInsertQuery(spec tableCopySpec, rowCount int) string {
+func buildBatchInsertQuery(spec tableCopySpec, rowCount int, dialect Dialect) string {
 	columnNames := quotedColumnNames(spec)
 
 	var builder strings.Builder
@@ -496,7 +496,13 @@ func buildBatchInsertQuery(spec tableCopySpec, rowCount int) string {
 			if colIndex > 0 {
 				builder.WriteString(", ")
 			}
-			builder.WriteByte('?')
+			if dialect == DialectPostgres {
+				placeholderIndex := rowIndex*len(spec.columns) + colIndex + 1
+				builder.WriteByte('$')
+				builder.WriteString(strconv.Itoa(placeholderIndex))
+			} else {
+				builder.WriteByte('?')
+			}
 		}
 		builder.WriteByte(')')
 	}

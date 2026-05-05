@@ -156,8 +156,26 @@ func TestBuildBatchInsertQueryQuotesStaticIdentifiers(t *testing.T) {
 		keyColumns: []string{"device_id"},
 	}
 
-	got := buildBatchInsertQuery(spec, 2)
+	got := buildBatchInsertQuery(spec, 2, DialectSQLite)
 	want := `INSERT INTO "device_positions" ("device_id", "x", "updated_at") VALUES (?, ?, ?), (?, ?, ?) ON CONFLICT ("device_id") DO UPDATE SET "x" = EXCLUDED."x", "updated_at" = EXCLUDED."updated_at"`
+	if got != want {
+		t.Fatalf("buildBatchInsertQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildBatchInsertQueryUsesPostgresPlaceholders(t *testing.T) {
+	spec := tableCopySpec{
+		name: "device_positions",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "x", kind: columnKindFloat64},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"device_id"},
+	}
+
+	got := buildBatchInsertQuery(spec, 2, DialectPostgres)
+	want := `INSERT INTO "device_positions" ("device_id", "x", "updated_at") VALUES ($1, $2, $3), ($4, $5, $6) ON CONFLICT ("device_id") DO UPDATE SET "x" = EXCLUDED."x", "updated_at" = EXCLUDED."updated_at"`
 	if got != want {
 		t.Fatalf("buildBatchInsertQuery() = %q, want %q", got, want)
 	}
@@ -173,11 +191,65 @@ func TestBuildBatchInsertQueryQuotesCompositeConflictTarget(t *testing.T) {
 		keyColumns: []string{"device_id", "area_id"},
 	}
 
-	got := buildBatchInsertQuery(spec, 1)
+	got := buildBatchInsertQuery(spec, 1, DialectSQLite)
 	want := `INSERT INTO "device_areas" ("device_id", "area_id") VALUES (?, ?) ON CONFLICT ("device_id", "area_id") DO NOTHING`
 	if got != want {
 		t.Fatalf("buildBatchInsertQuery() = %q, want %q", got, want)
 	}
+}
+
+func TestPrimaryDataCopySpecsHaveStaticIdentifierGuardrails(t *testing.T) {
+	seenTables := make(map[string]int, len(primaryDataCopySpecs))
+
+	for specIndex, spec := range primaryDataCopySpecs {
+		if spec.name == "" {
+			t.Errorf("spec[%d] has empty table name", specIndex)
+		} else {
+			assertStaticIdentifierQuoted(t, "table name", spec.name)
+		}
+
+		if previousIndex, ok := seenTables[spec.name]; ok {
+			t.Errorf("duplicate table name %q at spec[%d], first seen at spec[%d]", spec.name, specIndex, previousIndex)
+		}
+		seenTables[spec.name] = specIndex
+
+		if len(spec.columns) == 0 {
+			t.Errorf("spec[%d] table %q has no columns", specIndex, spec.name)
+		}
+
+		seenColumns := make(map[string]int, len(spec.columns))
+		for columnIndex, column := range spec.columns {
+			assertStaticIdentifierQuoted(t, "column name", column.name)
+			if previousIndex, ok := seenColumns[column.name]; ok {
+				t.Errorf(
+					"table %q has duplicate column %q at columns[%d], first seen at columns[%d]",
+					spec.name,
+					column.name,
+					columnIndex,
+					previousIndex,
+				)
+			}
+			seenColumns[column.name] = columnIndex
+		}
+
+		for keyIndex, keyColumn := range spec.keyColumns {
+			assertStaticIdentifierQuoted(t, "key column", keyColumn)
+			if _, ok := seenColumns[keyColumn]; !ok {
+				t.Errorf("table %q keyColumns[%d] %q is not present in columns", spec.name, keyIndex, keyColumn)
+			}
+		}
+	}
+}
+
+func assertStaticIdentifierQuoted(t *testing.T, label, identifier string) {
+	t.Helper()
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Errorf("%s %q did not pass quoteStaticIdentifier: %v", label, identifier, recovered)
+		}
+	}()
+	_ = quoteStaticIdentifier(identifier)
 }
 
 func TestQuoteStaticIdentifierRejectsInvalidIdentifiers(t *testing.T) {
