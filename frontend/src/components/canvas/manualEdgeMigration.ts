@@ -8,6 +8,7 @@ export interface LegacyManualEdge {
 }
 
 export type ManualEdgeMigrationStatus = 'idle' | 'pending' | 'retried' | 'applied' | 'failed';
+export const manualEdgeMigrationMaxAttempts = 3;
 
 export interface ManualEdgeMigrationState {
   schema_version: 1;
@@ -60,6 +61,7 @@ const migrationStatuses = new Set<ManualEdgeMigrationStatus>([
   'applied',
   'failed',
 ]);
+const retryLimitError = 'Manual edge migration retry limit reached';
 
 function idleManualEdgeMigrationState(): ManualEdgeMigrationState {
   return {
@@ -290,7 +292,18 @@ export async function migrateStoredManualEdges({
   now = () => new Date().toISOString(),
 }: MigrateStoredManualEdgesOptions): Promise<ManualEdgeMigrationResult> {
   const previous = readManualEdgeMigrationState(storage, stateStorageKey);
-  const pendingEdges = parseStoredManualEdges(storage.getItem(pendingStorageKey));
+  const pendingRaw = storage.getItem(pendingStorageKey);
+  if (pendingRaw === null) {
+    return {
+      state: previous,
+      attemptedCount: 0,
+      appliedCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+    };
+  }
+
+  const pendingEdges = parseStoredManualEdges(pendingRaw);
   const previousAppliedKeys = new Set(previous.applied_keys);
   const previousFailedKeys = new Set(previous.failed_keys);
   const existingLinkKeys = new Set(
@@ -299,11 +312,20 @@ export async function migrateStoredManualEdges({
     ),
   );
   const skippedEdges: LegacyManualEdge[] = [];
+  const exhaustedEdges: LegacyManualEdge[] = [];
   const edgesToAttempt: LegacyManualEdge[] = [];
 
   for (const edge of pendingEdges) {
     if (previousAppliedKeys.has(edge.migrationKey) || existingLinkKeys.has(edge.migrationKey)) {
       skippedEdges.push(edge);
+      continue;
+    }
+
+    if (
+      previousFailedKeys.has(edge.migrationKey) &&
+      previous.attempt_count >= manualEdgeMigrationMaxAttempts
+    ) {
+      exhaustedEdges.push(edge);
       continue;
     }
 
@@ -366,22 +388,38 @@ export async function migrateStoredManualEdges({
     firstFailureReason ??= result.reason;
   }
 
-  if (failedEdges.length === 0) {
+  const retryLimitReached =
+    failedEdges.length > 0 && attemptCount >= manualEdgeMigrationMaxAttempts;
+  const pendingFailedEdges = retryLimitReached ? [] : failedEdges;
+  const terminalFailedEdges = retryLimitReached
+    ? [...exhaustedEdges, ...failedEdges]
+    : exhaustedEdges;
+
+  if (pendingFailedEdges.length === 0) {
     storage.removeItem(pendingStorageKey);
   } else {
-    storage.setItem(pendingStorageKey, JSON.stringify(failedEdges.map(storedManualEdge)));
+    storage.setItem(pendingStorageKey, JSON.stringify(pendingFailedEdges.map(storedManualEdge)));
   }
 
+  const finalFailedKeys = [...pendingFailedEdges, ...terminalFailedEdges].map(
+    (edge) => edge.migrationKey,
+  );
+  const lastError =
+    firstFailureReason === undefined
+      ? terminalFailedEdges.length > 0
+        ? retryLimitError
+        : undefined
+      : safeErrorMessage(firstFailureReason);
   const finalState = buildMigrationState({
-    status: failedEdges.length === 0 ? 'applied' : 'failed',
+    status: finalFailedKeys.length === 0 ? 'applied' : 'failed',
     attemptCount,
-    pendingCount: failedEdges.length,
+    pendingCount: pendingFailedEdges.length,
     appliedKeys: [...previous.applied_keys, ...appliedKeys],
-    failedKeys: failedEdges.map((edge) => edge.migrationKey),
+    failedKeys: finalFailedKeys,
     skippedCount: skippedEdges.length,
     lastAttemptAt,
     lastCompletedAt: now(),
-    lastError: firstFailureReason === undefined ? undefined : safeErrorMessage(firstFailureReason),
+    lastError,
   });
 
   writeManualEdgeMigrationState(storage, stateStorageKey, finalState);
@@ -390,7 +428,7 @@ export async function migrateStoredManualEdges({
     state: finalState,
     attemptedCount,
     appliedCount: appliedKeys.length,
-    failedCount: failedEdges.length,
+    failedCount: finalFailedKeys.length,
     skippedCount: skippedEdges.length,
   };
 }

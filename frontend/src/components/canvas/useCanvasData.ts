@@ -630,19 +630,21 @@ export function useCanvasData({
             },
           });
 
-          const manualEdgeMigrationResult = await migrateStoredManualEdges({
-            storage: window.localStorage,
-            pendingStorageKey: manualEdgeStorageKey,
-            stateStorageKey: manualEdgeMigrationStorageKey,
-            existingLinks: fetchedLinks,
-            createLink,
-          });
-          recordManualEdgeMigrationDiagnostics(
-            manualEdgeMigrationResult,
-            hadPendingManualEdgeMigration,
-          );
-          if (manualEdgeMigrationResult.appliedCount > 0) {
-            lastCanvasTopologyEtagRef.current = null;
+          if (hadPendingManualEdgeMigration) {
+            const manualEdgeMigrationResult = await migrateStoredManualEdges({
+              storage: window.localStorage,
+              pendingStorageKey: manualEdgeStorageKey,
+              stateStorageKey: manualEdgeMigrationStorageKey,
+              existingLinks: fetchedLinks,
+              createLink,
+            });
+            recordManualEdgeMigrationDiagnostics(
+              manualEdgeMigrationResult,
+              hadPendingManualEdgeMigration,
+            );
+            if (manualEdgeMigrationResult.appliedCount > 0) {
+              lastCanvasTopologyEtagRef.current = null;
+            }
           }
 
           const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
