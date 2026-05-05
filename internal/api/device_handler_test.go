@@ -1576,7 +1576,7 @@ func TestHandleBatchAdd_InvalidIP_ReturnsFailures(t *testing.T) {
 	}
 }
 
-func TestHandleBatchAdd_RejectsSingleCreateValidationFailures(t *testing.T) {
+func TestHandleBatchAdd_ValidationParityWithSingleCreate(t *testing.T) {
 	tests := []struct {
 		name       string
 		deviceJSON string
@@ -1608,8 +1608,18 @@ func TestHandleBatchAdd_RejectsSingleCreateValidationFailures(t *testing.T) {
 			wantReason: "tag key too long",
 		},
 		{
+			name:       "tag value too long",
+			deviceJSON: fmt.Sprintf(`{"ip":"10.0.0.14","tags":{"role":"%s"},"snmp":{"version":"2c","community":"public"}}`, strings.Repeat("v", 256)),
+			wantReason: "tag value too long",
+		},
+		{
+			name:       "prometheus label name too long",
+			deviceJSON: fmt.Sprintf(`{"ip":"10.0.0.15","prometheus_label_name":"%s","snmp":{"version":"2c","community":"public"}}`, strings.Repeat("n", 256)),
+			wantReason: "prometheus_label_name too long",
+		},
+		{
 			name:       "prometheus label value too long",
-			deviceJSON: fmt.Sprintf(`{"ip":"10.0.0.14","prometheus_label_value":"%s","snmp":{"version":"2c","community":"public"}}`, strings.Repeat("v", 256)),
+			deviceJSON: fmt.Sprintf(`{"ip":"10.0.0.16","prometheus_label_value":"%s","snmp":{"version":"2c","community":"public"}}`, strings.Repeat("v", 256)),
 			wantReason: "prometheus_label_value too long",
 		},
 		{
@@ -1624,24 +1634,46 @@ func TestHandleBatchAdd_RejectsSingleCreateValidationFailures(t *testing.T) {
 		},
 		{
 			name:       "invalid area id",
-			deviceJSON: `{"ip":"10.0.0.15","area_ids":["not-a-uuid"],"snmp":{"version":"2c","community":"public"}}`,
+			deviceJSON: `{"ip":"10.0.0.17","area_ids":["not-a-uuid"],"snmp":{"version":"2c","community":"public"}}`,
 			wantReason: "invalid area_id: not-a-uuid",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			handler, repo, _ := newTestDeviceHandler(t)
+			createHandler, _, _ := newTestDeviceHandler(t)
+			createReq := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(tc.deviceJSON))
+			createRec := httptest.NewRecorder()
+
+			createHandler.HandleCreate(createRec, createReq)
+
+			if createRec.Code != http.StatusBadRequest {
+				t.Fatalf("expected single create 400, got %d; body: %s", createRec.Code, createRec.Body.String())
+			}
+			if !strings.Contains(createRec.Body.String(), tc.wantReason) {
+				t.Fatalf("expected single create reason to contain %q, got: %s", tc.wantReason, createRec.Body.String())
+			}
+
+			batchHandler, repo, _ := newTestDeviceHandler(t)
 			body := fmt.Sprintf(`{"devices":[%s]}`, tc.deviceJSON)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/batch", strings.NewReader(body))
 			rec := httptest.NewRecorder()
 
-			handler.HandleBatchAdd(rec, req)
+			batchHandler.HandleBatchAdd(rec, req)
 
 			if rec.Code != http.StatusAccepted {
 				t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
 			}
-			assertBatchFailureReason(t, rec.Body.String(), tc.wantReason)
+			resp := decodeBatchAddTestResponse(t, rec.Body.String())
+			if resp.Count != 1 {
+				t.Fatalf("expected batch count 1, got %d; body: %s", resp.Count, rec.Body.String())
+			}
+			if len(resp.Failures) != 1 {
+				t.Fatalf("expected 1 batch failure, got %d: %s", len(resp.Failures), rec.Body.String())
+			}
+			if !strings.Contains(resp.Failures[0].Reason, tc.wantReason) {
+				t.Fatalf("expected batch failure reason to contain %q, got %q", tc.wantReason, resp.Failures[0].Reason)
+			}
 			devices, err := repo.GetAll()
 			if err != nil {
 				t.Fatalf("GetAll failed: %v", err)
@@ -1653,10 +1685,32 @@ func TestHandleBatchAdd_RejectsSingleCreateValidationFailures(t *testing.T) {
 	}
 }
 
-func TestHandleBatchAdd_AllValid_EmptyFailures(t *testing.T) {
-	handler, _, _ := newTestDeviceHandler(t)
+func TestHandleBatchAdd_ValidRowsPersistBatchOnlyFields(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	regularAreaID := uuid.New()
+	regularAreaID2 := uuid.New()
+	virtualAreaID := uuid.New()
 
-	body := `{"devices":[{"ip":"10.0.0.1","snmp":{"version":"2c","community":"public"}},{"ip":"10.0.0.2","snmp":{"version":"2c","community":"public"}}]}`
+	body := fmt.Sprintf(`{"devices":[
+		{
+			"ip":"10.20.0.1",
+			"hostname":"batch-regular",
+			"tags":{"role":"aggregation","site":"lab"},
+			"metrics_source":"prometheus_snmp_fallback",
+			"prometheus_label_name":"instance",
+			"prometheus_label_value":"batch-regular:9100",
+			"topology_discovery_mode":"lldp_cdp",
+			"area_ids":["%s","%s"],
+			"snmp":{"version":"2c","community":"public"}
+		},
+		{
+			"ip":"10.20.0.2",
+			"device_type":"virtual",
+			"metrics_source":"prometheus",
+			"tags":{"display_name":"Internet Edge","virtual_subtype":"internet","role":"wan"},
+			"area_ids":["%s"]
+		}
+	]}`, regularAreaID.String(), regularAreaID2.String(), virtualAreaID.String())
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/batch", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.HandleBatchAdd(rec, req)
@@ -1665,44 +1719,166 @@ func TestHandleBatchAdd_AllValid_EmptyFailures(t *testing.T) {
 		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp map[string]interface{}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	resp := decodeBatchAddTestResponse(t, rec.Body.String())
+	if resp.Count != 2 {
+		t.Fatalf("expected batch count 2, got %d; body: %s", resp.Count, rec.Body.String())
+	}
+	if len(resp.Failures) != 0 {
+		t.Fatalf("expected 0 failures for valid rows, got %d: %+v", len(resp.Failures), resp.Failures)
 	}
 
-	failures, ok := resp["failures"]
-	if !ok {
-		t.Fatal("expected 'failures' key in response")
+	devices, err := repo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("expected 2 stored devices, got %d", len(devices))
 	}
 
-	failureList, ok := failures.([]interface{})
-	if !ok {
-		t.Fatalf("expected failures to be an array, got %T", failures)
+	regular, err := repo.GetByIP("10.20.0.1")
+	if err != nil {
+		t.Fatalf("GetByIP regular failed: %v", err)
 	}
-	if len(failureList) != 0 {
-		t.Errorf("expected 0 failures for valid IPs, got %d: %v", len(failureList), failureList)
+	if regular == nil {
+		t.Fatal("expected regular batch row to be stored")
+	}
+	if got := regular.Tags["role"]; got != "aggregation" {
+		t.Fatalf("expected regular role tag aggregation, got %q", got)
+	}
+	if got := regular.Tags["site"]; got != "lab" {
+		t.Fatalf("expected regular site tag lab, got %q", got)
+	}
+	if regular.MetricsSource != domain.MetricsSourcePrometheusSNMPFallback {
+		t.Fatalf("expected regular metrics_source %q, got %q", domain.MetricsSourcePrometheusSNMPFallback, regular.MetricsSource)
+	}
+	if regular.PrometheusLabelName != "instance" {
+		t.Fatalf("expected regular prometheus_label_name instance, got %q", regular.PrometheusLabelName)
+	}
+	if regular.PrometheusLabelValue != "batch-regular:9100" {
+		t.Fatalf("expected regular prometheus_label_value batch-regular:9100, got %q", regular.PrometheusLabelValue)
+	}
+	if regular.TopologyDiscoveryMode != domain.TopologyDiscoveryModeLLDPCDP {
+		t.Fatalf("expected regular topology_discovery_mode %q, got %q", domain.TopologyDiscoveryModeLLDPCDP, regular.TopologyDiscoveryMode)
+	}
+	assertDeviceAreaIDs(t, regular, []uuid.UUID{regularAreaID, regularAreaID2})
+
+	virtual, err := repo.GetByIP("10.20.0.2")
+	if err != nil {
+		t.Fatalf("GetByIP virtual failed: %v", err)
+	}
+	if virtual == nil {
+		t.Fatal("expected virtual batch row to be stored")
+	}
+	if virtual.DeviceType != domain.DeviceTypeVirtual {
+		t.Fatalf("expected virtual device_type %q, got %q", domain.DeviceTypeVirtual, virtual.DeviceType)
+	}
+	if got := virtual.Tags["display_name"]; got != "Internet Edge" {
+		t.Fatalf("expected virtual display_name tag Internet Edge, got %q", got)
+	}
+	if got := virtual.Tags["virtual_subtype"]; got != "internet" {
+		t.Fatalf("expected virtual virtual_subtype tag internet, got %q", got)
+	}
+	if virtual.MetricsSource != domain.MetricsSourceNone {
+		t.Fatalf("expected virtual metrics_source to normalize to %q, got %q", domain.MetricsSourceNone, virtual.MetricsSource)
+	}
+	assertDeviceAreaIDs(t, virtual, []uuid.UUID{virtualAreaID})
+}
+
+func TestHandleBatchAdd_MixedRowsPreserveDiagnosticsAndCreateOnlyValidRows(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+
+	body := fmt.Sprintf(`{"devices":[
+		{"ip":"10.30.0.1","hostname":"valid-row","snmp":{"version":"2c","community":"public"}},
+		{"ip":"10.30.0.2","metrics_source":"magic","snmp":{"version":"2c","community":"public"}},
+		{"ip":"10.30.0.3","topology_discovery_mode":"bogus","snmp":{"version":"2c","community":"public"}},
+		{"ip":"10.30.0.4","tags":{"role":"%s"},"snmp":{"version":"2c","community":"public"}}
+	]}`, strings.Repeat("v", 256))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/batch", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBatchAdd(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	resp := decodeBatchAddTestResponse(t, rec.Body.String())
+	if resp.Count != 4 {
+		t.Fatalf("expected batch count 4, got %d; body: %s", resp.Count, rec.Body.String())
+	}
+	wantFailures := []struct {
+		ip     string
+		reason string
+	}{
+		{ip: "10.30.0.2", reason: "invalid metrics_source"},
+		{ip: "10.30.0.3", reason: "invalid topology_discovery_mode"},
+		{ip: "10.30.0.4", reason: "tag value too long"},
+	}
+	if len(resp.Failures) != len(wantFailures) {
+		t.Fatalf("expected %d failures, got %d: %+v", len(wantFailures), len(resp.Failures), resp.Failures)
+	}
+	for i, want := range wantFailures {
+		got := resp.Failures[i]
+		if got.IP != want.ip {
+			t.Fatalf("failure[%d].IP = %q, want %q", i, got.IP, want.ip)
+		}
+		if !strings.Contains(got.Reason, want.reason) {
+			t.Fatalf("failure[%d].Reason = %q, want reason containing %q", i, got.Reason, want.reason)
+		}
+	}
+
+	devices, err := repo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected only the valid row to be stored, got %d devices", len(devices))
+	}
+	if devices[0].IP != "10.30.0.1" {
+		t.Fatalf("expected stored device IP 10.30.0.1, got %q", devices[0].IP)
+	}
+	for _, ip := range []string{"10.30.0.2", "10.30.0.3", "10.30.0.4"} {
+		device, err := repo.GetByIP(ip)
+		if err != nil {
+			t.Fatalf("GetByIP(%s) failed: %v", ip, err)
+		}
+		if device != nil {
+			t.Fatalf("expected invalid row %s not to be stored", ip)
+		}
 	}
 }
 
-func assertBatchFailureReason(t *testing.T, body string, wantReason string) {
+type batchAddTestFailure struct {
+	IP     string `json:"ip"`
+	Reason string `json:"reason"`
+}
+
+type batchAddTestResponse struct {
+	BatchID  string                `json:"batch_id"`
+	Status   string                `json:"status"`
+	Count    int                   `json:"count"`
+	Failures []batchAddTestFailure `json:"failures"`
+}
+
+func decodeBatchAddTestResponse(t *testing.T, body string) batchAddTestResponse {
 	t.Helper()
-	var resp map[string]interface{}
+	var resp batchAddTestResponse
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	failureList, ok := resp["failures"].([]interface{})
-	if !ok {
-		t.Fatalf("expected failures array, got %T in %s", resp["failures"], body)
+	if resp.Failures == nil {
+		resp.Failures = []batchAddTestFailure{}
 	}
-	if len(failureList) != 1 {
-		t.Fatalf("expected 1 failure, got %d: %s", len(failureList), body)
+	return resp
+}
+
+func assertDeviceAreaIDs(t *testing.T, device *domain.Device, want []uuid.UUID) {
+	t.Helper()
+	if len(device.AreaIDs) != len(want) {
+		t.Fatalf("expected %s area_ids length %d, got %d: %+v", device.IP, len(want), len(device.AreaIDs), device.AreaIDs)
 	}
-	failure, ok := failureList[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected failure object, got %T", failureList[0])
-	}
-	reason, _ := failure["reason"].(string)
-	if !strings.Contains(reason, wantReason) {
-		t.Fatalf("expected failure reason to contain %q, got %q", wantReason, reason)
+	for i := range want {
+		if device.AreaIDs[i] != want[i] {
+			t.Fatalf("expected %s area_ids[%d] %s, got %s", device.IP, i, want[i], device.AreaIDs[i])
+		}
 	}
 }
