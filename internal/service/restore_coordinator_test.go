@@ -672,6 +672,37 @@ func TestRestoreCoordinatorApplyPendingRestoreRevalidatesStagedDBBeforeSQLiteAct
 	}
 }
 
+func TestRestoreCoordinatorApplyPendingRestorePreservesStagedDBAfterSQLiteActivation(t *testing.T) {
+	runtimeDir := t.TempDir()
+	dbPath := filepath.Join(runtimeDir, "theia.db")
+	stagedDB := filepath.Join(runtimeDir, ".restore-staging", "theia.db")
+
+	writeRestoreTestFile(t, dbPath, "live-db", 0644)
+	writeRestoreTestFile(t, dbPath+"-wal", "live-wal", 0644)
+	writeRestoreTestFile(t, dbPath+"-shm", "live-shm", 0644)
+	writeRestoreTestFile(t, stagedDB, "staged-db", 0644)
+
+	coordinator := NewRestoreCoordinator(dbPath, filepath.Join(runtimeDir, "device-backups"), filepath.Join(runtimeDir, "known_hosts"))
+
+	if err := coordinator.applySQLiteRestore(stagedDB); err != nil {
+		t.Fatalf("applySQLiteRestore() error = %v", err)
+	}
+
+	if got := readRestoreTestFile(t, dbPath); got != "staged-db" {
+		t.Fatalf("db content = %q, want staged-db", got)
+	}
+	assertRestorePathMode(t, dbPath, 0600)
+	if _, err := os.Stat(dbPath + "-wal"); !os.IsNotExist(err) {
+		t.Fatalf("wal file should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(dbPath + "-shm"); !os.IsNotExist(err) {
+		t.Fatalf("shm file should be removed, stat err = %v", err)
+	}
+	if got := readRestoreTestFile(t, stagedDB); got != "staged-db" {
+		t.Fatalf("staged db content = %q, want staged-db", got)
+	}
+}
+
 func TestRestoreCoordinatorApplyPendingRestoreRevalidatesStagedKnownHostsBeforeActivation(t *testing.T) {
 	runtimeDir := t.TempDir()
 	liveKnownHosts := filepath.Join(runtimeDir, "known_hosts")
