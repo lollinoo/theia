@@ -17,10 +17,10 @@ func TestDefaultPostgresPlanChecks_CoverScaleCriticalLookups(t *testing.T) {
 	}
 
 	wantIndexes := map[string]string{
-		"device-by-sysname":                     "idx_devices_sys_name_lookup",
-		"link-pair-lookup":                      "idx_links_pair_lookup",
-		"observation-ingest-lookup":             "idx_topology_observations_ingest_lookup",
-		"unresolved-neighbor-resolution-lookup": "idx_unresolved_neighbors_active_lookup",
+		"device-by-sysname":              "idx_devices_sys_name_lookup",
+		"link-pair-lookup":               "idx_links_pair_lookup",
+		"observation-ingest-lookup":      "idx_topology_observations_ingest_lookup",
+		"unresolved-neighbors-by-device": "idx_unresolved_neighbors_active",
 	}
 
 	for i, check := range checks {
@@ -51,6 +51,35 @@ func TestDefaultPostgresPlanChecks_CoverScaleCriticalLookups(t *testing.T) {
 		if !reflect.DeepEqual(check.Args, registered.Args) {
 			t.Fatalf("check %s args = %#v, want %#v", check.Name, check.Args, registered.Args)
 		}
+	}
+}
+
+func TestRepositoryPlanChecks_MatchProductionLookupShapes(t *testing.T) {
+	checks := repositoryPlanChecksByName(t)
+
+	device := checks["device-by-sysname"]
+	if !strings.Contains(device.SQLiteQuery, "sys_name_lookup = ? AND sys_name_lookup != ''") {
+		t.Fatalf("sqlite device sysname check does not match runtime partial-index predicate: %s", device.SQLiteQuery)
+	}
+	if !strings.Contains(device.PostgresQuery, "sys_name_lookup = $1 AND sys_name_lookup != ''") {
+		t.Fatalf("postgres device sysname check does not match runtime partial-index predicate: %s", device.PostgresQuery)
+	}
+
+	if _, ok := checks["unresolved-neighbor-resolution-lookup"]; ok {
+		t.Fatal("synthetic unresolved neighbor resolution lookup should not be registered")
+	}
+	unresolved := checks["unresolved-neighbors-by-device"]
+	if !strings.Contains(unresolved.SQLiteQuery, "WHERE local_device_id = ? AND resolved_at IS NULL") {
+		t.Fatalf("sqlite unresolved neighbor check does not match active list lookup predicate: %s", unresolved.SQLiteQuery)
+	}
+	if !strings.Contains(unresolved.SQLiteQuery, "ORDER BY protocol, remote_identity") {
+		t.Fatalf("sqlite unresolved neighbor check does not match active list lookup ordering: %s", unresolved.SQLiteQuery)
+	}
+	if !strings.Contains(unresolved.PostgresQuery, "WHERE local_device_id = $1 AND resolved_at IS NULL") {
+		t.Fatalf("postgres unresolved neighbor check does not match active list lookup predicate: %s", unresolved.PostgresQuery)
+	}
+	if !strings.Contains(unresolved.PostgresQuery, "ORDER BY protocol, remote_identity") {
+		t.Fatalf("postgres unresolved neighbor check does not match active list lookup ordering: %s", unresolved.PostgresQuery)
 	}
 }
 
@@ -142,4 +171,17 @@ func explainSQLiteQueryPlan(t *testing.T, db *sql.DB, query string, args []any) 
 		t.Fatalf("reading sqlite explain output: %v", err)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func repositoryPlanChecksByName(t *testing.T) map[string]repositoryPlanCheck {
+	t.Helper()
+
+	checksByName := make(map[string]repositoryPlanCheck)
+	for _, check := range repositoryPlanChecks() {
+		if _, exists := checksByName[check.Name]; exists {
+			t.Fatalf("duplicate repository plan check %q", check.Name)
+		}
+		checksByName[check.Name] = check
+	}
+	return checksByName
 }
