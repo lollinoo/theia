@@ -46,7 +46,7 @@ var defaultRepositoryPlanCheckRegistry = []repositoryPlanCheck{
 		SQLiteQuery:           `SELECT id FROM topology_observations WHERE local_device_id = ? AND remote_identity = ? AND local_port = ? AND remote_port = ? AND protocol = ?`,
 		SQLiteExpectedIndex:   "sqlite_autoindex_topology_observations_2",
 		PostgresQuery:         `SELECT id FROM topology_observations WHERE local_device_id = $1 AND remote_identity = $2 AND local_port = $3 AND remote_port = $4 AND protocol = $5`,
-		PostgresExpectedIndex: "idx_topology_observations_ingest_lookup",
+		PostgresExpectedIndex: "idx_topology_observations_remote_identity_protocol",
 		Args:                  []any{"device-a", "core-switch", "ether1", "ether10", "lldp"},
 	},
 	{
