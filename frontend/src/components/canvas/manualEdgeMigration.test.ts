@@ -5,6 +5,7 @@ import {
   type ManualEdgeMigrationResult,
   type ManualEdgeMigrationState,
   type MigrateStoredManualEdgesOptions,
+  manualEdgeMigrationMaxAttempts,
   manualEdgeMigrationKey,
   migrateStoredManualEdges,
   parseStoredManualEdges,
@@ -70,6 +71,31 @@ function migrationState(
 }
 
 describe('manual edge migration helpers', () => {
+  it('is a storage no-op when pending manual edge storage is absent', async () => {
+    const storage = new FakeStorage();
+    const createLink = vi.fn<Parameters<typeof migrateStoredManualEdges>[0]['createLink']>();
+
+    const result = await migrateStoredManualEdges({
+      storage,
+      pendingStorageKey,
+      stateStorageKey,
+      existingLinks: [],
+      createLink,
+      now: () => '2026-05-05T00:00:00.000Z',
+    });
+
+    expect(createLink).not.toHaveBeenCalled();
+    expect(storage.setCalls).toEqual([]);
+    expect(storage.removeCalls).toEqual([]);
+    expect(result).toEqual({
+      state: migrationState(),
+      attemptedCount: 0,
+      appliedCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+    });
+  });
+
   it('reads idle migration state when stored state is missing or malformed', () => {
     const storage = new FakeStorage();
 
@@ -268,6 +294,99 @@ describe('manual edge migration helpers', () => {
         last_attempt_at: '2026-05-05T00:00:00.000Z',
         last_completed_at: '2026-05-05T00:00:00.000Z',
         last_error: 'backend unavailable',
+      },
+    });
+  });
+
+  it('stops retaining failed edges after the retry limit is reached', async () => {
+    const storage = new FakeStorage();
+    storage.setItem(pendingStorageKey, JSON.stringify([{ source: 'dev-3', target: 'dev-4' }]));
+    storage.setItem(
+      stateStorageKey,
+      JSON.stringify(
+        migrationState({
+          status: 'failed',
+          attempt_count: manualEdgeMigrationMaxAttempts - 1,
+          pending_count: 1,
+          failed_count: 1,
+          failed_keys: ['dev-3::dev-4'],
+          last_error: 'backend unavailable',
+        }),
+      ),
+    );
+    const createLink = vi
+      .fn<Parameters<typeof migrateStoredManualEdges>[0]['createLink']>()
+      .mockRejectedValueOnce(new Error('still unavailable'));
+
+    const result = await migrateStoredManualEdges({
+      storage,
+      pendingStorageKey,
+      stateStorageKey,
+      existingLinks: [],
+      createLink,
+      now: () => '2026-05-05T00:02:00.000Z',
+    });
+
+    expect(createLink).toHaveBeenCalledTimes(1);
+    expect(storage.getItem(pendingStorageKey)).toBeNull();
+    expect(result).toMatchObject({
+      attemptedCount: 1,
+      appliedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      state: {
+        status: 'failed',
+        attempt_count: manualEdgeMigrationMaxAttempts,
+        pending_count: 0,
+        applied_count: 0,
+        failed_count: 1,
+        failed_keys: ['dev-3::dev-4'],
+        last_error: 'still unavailable',
+      },
+    });
+  });
+
+  it('clears exhausted pending failures without another create attempt', async () => {
+    const storage = new FakeStorage();
+    storage.setItem(pendingStorageKey, JSON.stringify([{ source: 'dev-3', target: 'dev-4' }]));
+    storage.setItem(
+      stateStorageKey,
+      JSON.stringify(
+        migrationState({
+          status: 'failed',
+          attempt_count: manualEdgeMigrationMaxAttempts,
+          pending_count: 1,
+          failed_count: 1,
+          failed_keys: ['dev-3::dev-4'],
+          last_error: 'backend unavailable',
+        }),
+      ),
+    );
+    const createLink = vi.fn<Parameters<typeof migrateStoredManualEdges>[0]['createLink']>();
+
+    const result = await migrateStoredManualEdges({
+      storage,
+      pendingStorageKey,
+      stateStorageKey,
+      existingLinks: [],
+      createLink,
+      now: () => '2026-05-05T00:03:00.000Z',
+    });
+
+    expect(createLink).not.toHaveBeenCalled();
+    expect(storage.getItem(pendingStorageKey)).toBeNull();
+    expect(result).toMatchObject({
+      attemptedCount: 0,
+      appliedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      state: {
+        status: 'failed',
+        attempt_count: manualEdgeMigrationMaxAttempts,
+        pending_count: 0,
+        failed_count: 1,
+        failed_keys: ['dev-3::dev-4'],
+        last_error: 'Manual edge migration retry limit reached',
       },
     });
   });

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  type CanvasTopologyFetchResult,
   createLink,
   fetchCanvasBootstrap,
   fetchCanvasTopology,
@@ -28,6 +29,7 @@ import {
 } from './canvasHelpers';
 import type { CanvasMeasurementRecord } from './canvasInstrumentation';
 import { buildTopologyEdges } from './edgeBuilder';
+import { manualEdgeMigrationMaxAttempts } from './manualEdgeMigration';
 import { useCanvasData } from './useCanvasData';
 
 vi.mock('../../api/client', () => ({
@@ -186,6 +188,39 @@ function storedManualEdgeMigrationState(overrides: Record<string, unknown> = {})
     applied_keys: [],
     failed_keys: [],
     ...overrides,
+  };
+}
+
+function canvasTopologyOkResponse(
+  overrides: Partial<Extract<CanvasTopologyFetchResult, { status: 'ok' }>['topology']> = {},
+): Extract<CanvasTopologyFetchResult, { status: 'ok' }> {
+  return {
+    status: 'ok',
+    etag: '"canvas-topology-1"',
+    topology: {
+      schema_version: 1,
+      topology_version: 'topo-abc123',
+      generated_at: '2026-04-30T12:00:00Z',
+      devices: [
+        mockDevice(),
+        mockDevice({
+          id: 'dev-2',
+          hostname: 'router-02',
+          ip: '10.0.0.2',
+          sys_name: 'router-02',
+        }),
+      ],
+      links: [],
+      positions: {},
+      areas: [],
+      capabilities: {
+        supports_topology_delta: false,
+        supports_position_revision: false,
+        supports_area_filtering: true,
+      },
+      settings: { layout: { version: 1 } },
+      ...overrides,
+    },
   };
 }
 
@@ -624,6 +659,23 @@ describe('useCanvasData', () => {
     });
   });
 
+  it('does not create manual edge migration state when no pending edge storage exists', async () => {
+    renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createLink).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+    expect(window.localStorage.getItem(manualEdgeMigrationStorageKey)).toBeNull();
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'idle',
+      attemptCount: 0,
+    });
+  });
+
   it('retains only failed manual edge migrations in localStorage', async () => {
     const storedEdges = [
       { id: 'edge-1', source: 'dev-1', target: 'dev-2' },
@@ -833,33 +885,7 @@ describe('useCanvasData', () => {
 
   it('bypasses cached read model ETags to retry pending manual edge migrations', async () => {
     const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
-    const topologyOkResponse = {
-      status: 'ok' as const,
-      etag: '"canvas-topology-1"',
-      topology: {
-        schema_version: 1,
-        topology_version: 'topo-abc123',
-        generated_at: '2026-04-30T12:00:00Z',
-        devices: [
-          mockDevice(),
-          mockDevice({
-            id: 'dev-2',
-            hostname: 'router-02',
-            ip: '10.0.0.2',
-            sys_name: 'router-02',
-          }),
-        ],
-        links: [],
-        positions: {},
-        areas: [],
-        capabilities: {
-          supports_topology_delta: false,
-          supports_position_revision: false,
-          supports_area_filtering: true,
-        },
-        settings: { layout: { version: 1 } },
-      },
-    };
+    const topologyOkResponse = canvasTopologyOkResponse();
     vi.mocked(fetchCanvasTopology).mockImplementation((etag?: string) => {
       if (etag === '"canvas-topology-1"') {
         return Promise.resolve({
@@ -898,6 +924,61 @@ describe('useCanvasData', () => {
       pendingCount: 0,
       attemptCount: 2,
     });
+  });
+
+  it('stops bypassing cached read model ETags after migration retry limit', async () => {
+    const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
+    const topologyOkResponse = canvasTopologyOkResponse();
+    vi.mocked(fetchCanvasTopology).mockImplementation((etag?: string) => {
+      if (etag === '"canvas-topology-1"') {
+        return Promise.resolve({
+          status: 'not-modified',
+          etag: '"canvas-topology-1"',
+        });
+      }
+
+      return Promise.resolve(topologyOkResponse);
+    });
+    vi.mocked(createLink).mockRejectedValueOnce(new Error('still unavailable') as never);
+    window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
+    window.localStorage.setItem(
+      manualEdgeMigrationStorageKey,
+      JSON.stringify(
+        storedManualEdgeMigrationState({
+          status: 'failed',
+          attempt_count: manualEdgeMigrationMaxAttempts - 1,
+          pending_count: 1,
+          failed_count: 1,
+          failed_keys: ['dev-1::dev-2'],
+          last_error: 'backend unavailable',
+        }),
+      ),
+    );
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenLastCalledWith(undefined);
+    expect(createLink).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'failed',
+      pendingCount: 0,
+      failedCount: 1,
+      attemptCount: manualEdgeMigrationMaxAttempts,
+      lastError: 'still unavailable',
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenLastCalledWith('"canvas-topology-1"');
+    expect(createLink).toHaveBeenCalledTimes(1);
   });
 
   it('does not recreate applied manual edges during backend resync refresh', async () => {
