@@ -1,8 +1,13 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -181,6 +186,23 @@ func TestBuildBatchInsertQueryUsesPostgresPlaceholders(t *testing.T) {
 	}
 }
 
+func TestBuildBatchInsertQueryUnknownDialectUsesSQLitePlaceholders(t *testing.T) {
+	spec := tableCopySpec{
+		name: "device_areas",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "area_id", kind: columnKindText},
+		},
+		keyColumns: []string{"device_id", "area_id"},
+	}
+
+	got := buildBatchInsertQuery(spec, 2, Dialect(""))
+	want := `INSERT INTO "device_areas" ("device_id", "area_id") VALUES (?, ?), (?, ?) ON CONFLICT ("device_id", "area_id") DO NOTHING`
+	if got != want {
+		t.Fatalf("buildBatchInsertQuery() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildBatchInsertQueryQuotesCompositeConflictTarget(t *testing.T) {
 	spec := tableCopySpec{
 		name: "device_areas",
@@ -195,6 +217,49 @@ func TestBuildBatchInsertQueryQuotesCompositeConflictTarget(t *testing.T) {
 	want := `INSERT INTO "device_areas" ("device_id", "area_id") VALUES (?, ?) ON CONFLICT ("device_id", "area_id") DO NOTHING`
 	if got != want {
 		t.Fatalf("buildBatchInsertQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestInsertBatchUsesTargetDialectForPostgresPlaceholders(t *testing.T) {
+	db := openCaptureExecDB(t)
+	defer db.Close()
+
+	rawTx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("beginning capture transaction: %v", err)
+	}
+	defer rawTx.Rollback() //nolint:errcheck
+
+	targetTx := &Tx{raw: rawTx, dialect: DialectPostgres}
+	spec := tableCopySpec{
+		name: "device_areas",
+		columns: []columnSpec{
+			{name: "device_id", kind: columnKindText},
+			{name: "area_id", kind: columnKindText},
+		},
+		keyColumns: []string{"device_id", "area_id"},
+	}
+
+	err = insertBatch(targetTx, spec, [][]any{
+		{"dev-1", "area-1"},
+		{"dev-2", "area-2"},
+	})
+	if err != nil {
+		t.Fatalf("insertBatch() failed: %v", err)
+	}
+
+	got := singleCapturedExecQuery(t)
+	want := `INSERT INTO "device_areas" ("device_id", "area_id") VALUES ($1, $2), ($3, $4) ON CONFLICT ("device_id", "area_id") DO NOTHING`
+	if got != want {
+		t.Fatalf("captured exec query = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "?") {
+		t.Fatalf("captured exec query contains SQLite placeholder: %q", got)
+	}
+	for _, placeholder := range []string{"$1", "$2", "$3", "$4"} {
+		if !strings.Contains(got, placeholder) {
+			t.Fatalf("captured exec query missing %s: %q", placeholder, got)
+		}
 	}
 }
 
@@ -250,6 +315,93 @@ func assertStaticIdentifierQuoted(t *testing.T, label, identifier string) {
 		}
 	}()
 	_ = quoteStaticIdentifier(identifier)
+}
+
+const captureExecDriverName = "theia_data_migrator_capture_exec"
+
+var (
+	registerCaptureExecDriverOnce sync.Once
+
+	captureExecMu      sync.Mutex
+	captureExecQueries []string
+)
+
+func openCaptureExecDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	registerCaptureExecDriverOnce.Do(func() {
+		sql.Register(captureExecDriverName, captureExecDriver{})
+	})
+
+	captureExecMu.Lock()
+	captureExecQueries = nil
+	captureExecMu.Unlock()
+
+	db, err := sql.Open(captureExecDriverName, "")
+	if err != nil {
+		t.Fatalf("opening capture exec database: %v", err)
+	}
+	return db
+}
+
+func singleCapturedExecQuery(t *testing.T) string {
+	t.Helper()
+
+	captureExecMu.Lock()
+	defer captureExecMu.Unlock()
+
+	if len(captureExecQueries) != 1 {
+		t.Fatalf("captured %d exec queries, want 1: %#v", len(captureExecQueries), captureExecQueries)
+	}
+	return captureExecQueries[0]
+}
+
+type captureExecDriver struct{}
+
+func (captureExecDriver) Open(string) (driver.Conn, error) {
+	return captureExecConn{}, nil
+}
+
+type captureExecConn struct{}
+
+func (captureExecConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("capture exec driver does not support prepared statements")
+}
+
+func (captureExecConn) Close() error {
+	return nil
+}
+
+func (captureExecConn) Begin() (driver.Tx, error) {
+	return captureExecTx{}, nil
+}
+
+func (captureExecConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	captureExecMu.Lock()
+	defer captureExecMu.Unlock()
+
+	captureExecQueries = append(captureExecQueries, query)
+	return captureExecResult{}, nil
+}
+
+type captureExecTx struct{}
+
+func (captureExecTx) Commit() error {
+	return nil
+}
+
+func (captureExecTx) Rollback() error {
+	return nil
+}
+
+type captureExecResult struct{}
+
+func (captureExecResult) LastInsertId() (int64, error) {
+	return 0, nil
+}
+
+func (captureExecResult) RowsAffected() (int64, error) {
+	return 0, nil
 }
 
 func TestQuoteStaticIdentifierRejectsInvalidIdentifiers(t *testing.T) {

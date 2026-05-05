@@ -470,7 +470,8 @@ func insertBatch(targetTx *Tx, spec tableCopySpec, rows [][]any) error {
 		args = append(args, row...)
 	}
 
-	if _, err := targetTx.Exec(query, args...); err != nil {
+	// Batch insert placeholders are already generated for targetTx.dialect.
+	if _, err := targetTx.raw.Exec(query, args...); err != nil {
 		return fmt.Errorf("executing batch insert for %s: %w", spec.name, err)
 	}
 	return nil
