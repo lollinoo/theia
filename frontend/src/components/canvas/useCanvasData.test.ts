@@ -831,6 +831,75 @@ describe('useCanvasData', () => {
     });
   });
 
+  it('bypasses cached read model ETags to retry pending manual edge migrations', async () => {
+    const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
+    const topologyOkResponse = {
+      status: 'ok' as const,
+      etag: '"canvas-topology-1"',
+      topology: {
+        schema_version: 1,
+        topology_version: 'topo-abc123',
+        generated_at: '2026-04-30T12:00:00Z',
+        devices: [
+          mockDevice(),
+          mockDevice({
+            id: 'dev-2',
+            hostname: 'router-02',
+            ip: '10.0.0.2',
+            sys_name: 'router-02',
+          }),
+        ],
+        links: [],
+        positions: {},
+        areas: [],
+        capabilities: {
+          supports_topology_delta: false,
+          supports_position_revision: false,
+          supports_area_filtering: true,
+        },
+        settings: { layout: { version: 1 } },
+      },
+    };
+    vi.mocked(fetchCanvasTopology).mockImplementation((etag?: string) => {
+      if (etag === '"canvas-topology-1"') {
+        return Promise.resolve({
+          status: 'not-modified',
+          etag: '"canvas-topology-1"',
+        });
+      }
+
+      return Promise.resolve(topologyOkResponse);
+    });
+    vi.mocked(createLink)
+      .mockRejectedValueOnce(new Error('backend unavailable') as never)
+      .mockResolvedValueOnce(undefined as never);
+    window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenLastCalledWith(undefined);
+    expect(createLink).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBe(JSON.stringify(storedEdges));
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenLastCalledWith(undefined);
+    expect(createLink).toHaveBeenCalledTimes(2);
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'applied',
+      pendingCount: 0,
+      attemptCount: 2,
+    });
+  });
+
   it('does not recreate applied manual edges during backend resync refresh', async () => {
     const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
     window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
