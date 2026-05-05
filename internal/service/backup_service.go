@@ -385,6 +385,79 @@ func (s *BackupService) waitForRemoteFile(sshClient *gossh.Client, remotePath st
 	return fmt.Errorf("timed out waiting for remote file %q after %v", remotePath, timeout)
 }
 
+func downloadSFTPFileToDiskAndHash(ctx context.Context, sshClient *gossh.Client, remotePath, localPath string) (string, int, error) {
+	if sshClient == nil {
+		return "", 0, fmt.Errorf("creating SFTP client: nil SSH client")
+	}
+	sftpClient, err := sftp.NewClient(sshClient)
+	if err != nil {
+		return "", 0, fmt.Errorf("creating SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	type result struct {
+		hash string
+		size int
+		err  error
+	}
+
+	done := make(chan result, 1)
+	go func() {
+		remoteFile, err := sftpClient.Open(remotePath)
+		if err != nil {
+			done <- result{err: fmt.Errorf("opening remote file %q: %w", remotePath, err)}
+			return
+		}
+		defer remoteFile.Close()
+
+		dir := filepath.Dir(localPath)
+		tmpFile, err := os.CreateTemp(dir, ".theia-download-*")
+		if err != nil {
+			done <- result{err: fmt.Errorf("creating temp file: %w", err)}
+			return
+		}
+		tmpPath := tmpFile.Name()
+
+		hasher := sha256.New()
+		written, err := io.Copy(io.MultiWriter(tmpFile, hasher), remoteFile)
+		if err != nil {
+			tmpFile.Close()
+			os.Remove(tmpPath)
+			done <- result{err: fmt.Errorf("downloading file: %w", err)}
+			return
+		}
+		maxInt := int64(int(^uint(0) >> 1))
+		if written > maxInt {
+			tmpFile.Close()
+			os.Remove(tmpPath)
+			done <- result{err: fmt.Errorf("downloaded file too large: %d bytes", written)}
+			return
+		}
+		if err := tmpFile.Close(); err != nil {
+			os.Remove(tmpPath)
+			done <- result{err: fmt.Errorf("closing temp file: %w", err)}
+			return
+		}
+
+		if err := os.Rename(tmpPath, localPath); err != nil {
+			os.Remove(tmpPath)
+			done <- result{err: fmt.Errorf("renaming temp file: %w", err)}
+			return
+		}
+		done <- result{
+			hash: hex.EncodeToString(hasher.Sum(nil)),
+			size: int(written),
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", 0, ctx.Err()
+	case r := <-done:
+		return r.hash, r.size, r.err
+	}
+}
+
 func (s *BackupService) runTextExport(ctx context.Context, client *ssh.Client, jobID uuid.UUID, dir, fileName, fileType, command string) error {
 	output, err := client.RunCommand(ctx, command)
 	if err != nil {
@@ -426,7 +499,8 @@ func (s *BackupService) runBinaryExport(ctx context.Context, client *ssh.Client,
 	// Step 3: Download via SFTP to disk
 	filePath := filepath.Join(dir, fileName)
 	log.Printf("Binary backup: downloading file: %s -> %s", bcfg.RemoteFilePath, filePath)
-	if err := client.DownloadFileToDisk(ctx, bcfg.RemoteFilePath, filePath); err != nil {
+	fileHash, sizeBytes, err := downloadSFTPFileToDiskAndHash(ctx, client.SSHClient(), bcfg.RemoteFilePath, filePath)
+	if err != nil {
 		return fmt.Errorf("SFTP download failed: %w", err)
 	}
 	if err := os.Chmod(filePath, 0600); err != nil {
@@ -441,21 +515,14 @@ func (s *BackupService) runBinaryExport(ctx context.Context, client *ssh.Client,
 		}
 	}
 
-	// Compute hash
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("reading downloaded file: %w", err)
-	}
-	hash := sha256.Sum256(data)
-
 	return s.fileRepo.Create(&domain.BackupFile{
 		ID:        uuid.New(),
 		JobID:     jobID,
 		FileType:  "binary",
 		FileName:  fileName,
 		FilePath:  filePath,
-		FileHash:  hex.EncodeToString(hash[:]),
-		SizeBytes: len(data),
+		FileHash:  fileHash,
+		SizeBytes: sizeBytes,
 	})
 }
 

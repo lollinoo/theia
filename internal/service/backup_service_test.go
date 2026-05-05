@@ -4,9 +4,14 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"os"
@@ -1131,6 +1136,113 @@ func TestRunBinaryExportWrites0600BackupFile(t *testing.T) {
 	}
 
 	assertBackupMode(t, filepath.Join(backupDir, "router.backup"), 0600)
+}
+
+func TestRunBinaryExportStreamsHashWithoutPostDownloadRead(t *testing.T) {
+	src, err := os.ReadFile("backup_service.go")
+	if err != nil {
+		t.Fatalf("ReadFile(backup_service.go): %v", err)
+	}
+
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "backup_service.go", src, 0)
+	if err != nil {
+		t.Fatalf("ParseFile(backup_service.go): %v", err)
+	}
+
+	var body string
+	for _, decl := range parsed.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "runBinaryExport" || fn.Body == nil {
+			continue
+		}
+		start := fset.Position(fn.Body.Pos()).Offset
+		end := fset.Position(fn.Body.End()).Offset
+		body = string(src[start:end])
+		break
+	}
+	if body == "" {
+		t.Fatal("runBinaryExport body not found")
+	}
+
+	for _, forbidden := range []string{
+		"os.ReadFile(filePath)",
+		"sha256.Sum256(data)",
+		"SizeBytes: len(data)",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("runBinaryExport must not contain post-download whole-file read pattern %q", forbidden)
+		}
+	}
+}
+
+func TestRunBinaryExportRecordsStreamedHashAndSize(t *testing.T) {
+	payload := []byte{0x00, 0xff, 'b', 'i', 'n', 'a', 'r', 'y', 0x00, 0x7f, 0xff}
+	expectedHashBytes := sha256.Sum256(payload)
+	expectedHash := hex.EncodeToString(expectedHashBytes[:])
+
+	remoteDir := t.TempDir()
+	remotePath := filepath.Join(remoteDir, "router.backup")
+	addr := startBackupTestSSHServer(t, func(command string) (string, error) {
+		switch command {
+		case "save-backup":
+			if err := os.WriteFile(remotePath, payload, 0644); err != nil {
+				return "", err
+			}
+			return "", nil
+		case "cleanup-backup":
+			if err := os.Remove(remotePath); err != nil && !os.IsNotExist(err) {
+				return "", err
+			}
+			return "", nil
+		default:
+			return "", fmt.Errorf("unexpected command: %s", command)
+		}
+	})
+
+	client, err := internalssh.NewClient(&internalssh.DefaultDialer{}, "127.0.0.1", serverPort(t, addr), "admin", "secret", 5*time.Second, ssh.InsecureIgnoreHostKey())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	backupDir := t.TempDir()
+	jobID := uuid.New()
+	fileRepo := newMockBackupFileRepo()
+	svc := &BackupService{fileRepo: fileRepo}
+	if err := svc.runBinaryExport(context.Background(), client, jobID, backupDir, "router.backup", &vendor.BinaryBackupCmd{
+		SaveCommand:    "save-backup",
+		RemoteFilePath: remotePath,
+		CleanupCommand: "cleanup-backup",
+	}); err != nil {
+		t.Fatalf("runBinaryExport: %v", err)
+	}
+
+	files, err := fileRepo.GetByJobID(jobID)
+	if err != nil {
+		t.Fatalf("GetByJobID: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("backup file count = %d, want 1", len(files))
+	}
+	got := files[0]
+	if got.FileType != "binary" {
+		t.Fatalf("FileType = %q, want %q", got.FileType, "binary")
+	}
+	if got.FileHash != expectedHash {
+		t.Fatalf("FileHash = %q, want %q", got.FileHash, expectedHash)
+	}
+	if got.SizeBytes != len(payload) {
+		t.Fatalf("SizeBytes = %d, want %d", got.SizeBytes, len(payload))
+	}
+
+	downloaded, err := os.ReadFile(filepath.Join(backupDir, "router.backup"))
+	if err != nil {
+		t.Fatalf("ReadFile(downloaded backup): %v", err)
+	}
+	if string(downloaded) != string(payload) {
+		t.Fatalf("downloaded bytes = %x, want %x", downloaded, payload)
+	}
 }
 
 func assertBackupMode(t *testing.T, path string, want os.FileMode) {
