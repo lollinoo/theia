@@ -1304,6 +1304,132 @@ func TestRunBinaryExportRecordsStreamedHashAndSize(t *testing.T) {
 	}
 }
 
+func TestRunBinaryExportRecordsStreamedHashForLargeGeneratedBackup(t *testing.T) {
+	const (
+		chunkSize  = 64 * 1024
+		chunkCount = 96
+	)
+
+	type generatedBackup struct {
+		hash string
+		size int
+	}
+
+	generated := make(chan generatedBackup, 1)
+	remoteDir := t.TempDir()
+	remotePath := filepath.Join(remoteDir, "router.backup")
+	addr := startBackupTestSSHServer(t, func(command string) (string, error) {
+		switch command {
+		case "save-backup":
+			remoteFile, err := os.OpenFile(remotePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+			if err != nil {
+				return "", err
+			}
+			defer remoteFile.Close()
+
+			hasher := sha256.New()
+			chunk := make([]byte, chunkSize)
+			size := 0
+			for chunkIndex := 0; chunkIndex < chunkCount; chunkIndex++ {
+				for i := range chunk {
+					chunk[i] = byte((chunkIndex + i*31) % 251)
+				}
+				n, err := remoteFile.Write(chunk)
+				if err != nil {
+					return "", err
+				}
+				if n != len(chunk) {
+					return "", io.ErrShortWrite
+				}
+				writtenToHash, err := hasher.Write(chunk)
+				if err != nil {
+					return "", err
+				}
+				if writtenToHash != len(chunk) {
+					return "", io.ErrShortWrite
+				}
+				size += n
+			}
+
+			metadata := generatedBackup{
+				hash: hex.EncodeToString(hasher.Sum(nil)),
+				size: size,
+			}
+			select {
+			case generated <- metadata:
+				return "", nil
+			default:
+				return "", fmt.Errorf("save-backup generated metadata more than once")
+			}
+		case "cleanup-backup":
+			if err := os.Remove(remotePath); err != nil && !os.IsNotExist(err) {
+				return "", err
+			}
+			return "", nil
+		default:
+			return "", fmt.Errorf("unexpected command: %s", command)
+		}
+	})
+
+	client, err := internalssh.NewClient(&internalssh.DefaultDialer{}, "127.0.0.1", serverPort(t, addr), "admin", "secret", 5*time.Second, ssh.InsecureIgnoreHostKey())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	backupDir := t.TempDir()
+	expectedPath := filepath.Join(backupDir, "router.backup")
+	jobID := uuid.New()
+	fileRepo := newMockBackupFileRepo()
+	svc := &BackupService{fileRepo: fileRepo}
+	if err := svc.runBinaryExport(context.Background(), client, jobID, backupDir, "router.backup", &vendor.BinaryBackupCmd{
+		SaveCommand:    "save-backup",
+		RemoteFilePath: remotePath,
+		CleanupCommand: "cleanup-backup",
+	}); err != nil {
+		t.Fatalf("runBinaryExport: %v", err)
+	}
+
+	var expected generatedBackup
+	select {
+	case expected = <-generated:
+	default:
+		t.Fatal("save-backup did not report generated backup metadata")
+	}
+
+	files, err := fileRepo.GetByJobID(jobID)
+	if err != nil {
+		t.Fatalf("GetByJobID: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("backup file count = %d, want 1", len(files))
+	}
+	got := files[0]
+	if got.FileType != "binary" {
+		t.Fatalf("FileType = %q, want %q", got.FileType, "binary")
+	}
+	if got.FileName != "router.backup" {
+		t.Fatalf("FileName = %q, want %q", got.FileName, "router.backup")
+	}
+	if got.FilePath != expectedPath {
+		t.Fatalf("FilePath = %q, want %q", got.FilePath, expectedPath)
+	}
+	if got.FileHash != expected.hash {
+		t.Fatalf("FileHash = %q, want %q", got.FileHash, expected.hash)
+	}
+	if got.SizeBytes != expected.size {
+		t.Fatalf("SizeBytes = %d, want %d", got.SizeBytes, expected.size)
+	}
+
+	downloadedInfo, err := os.Stat(expectedPath)
+	if err != nil {
+		t.Fatalf("Stat(downloaded backup): %v", err)
+	}
+	if downloadedInfo.Size() != int64(expected.size) {
+		t.Fatalf("downloaded size = %d, want %d", downloadedInfo.Size(), expected.size)
+	}
+}
+
 func assertBackupMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 
