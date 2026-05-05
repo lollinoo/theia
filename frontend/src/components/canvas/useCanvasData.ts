@@ -40,14 +40,14 @@ import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
 } from './incrementalLayout';
-import { buildAlertsPanelModel } from './panelAdapters';
-import { buildRuntimeState } from './runtimeAdapters';
 import {
   type ManualEdgeMigrationResult,
   type ManualEdgeMigrationState,
   migrateStoredManualEdges,
   readManualEdgeMigrationState,
 } from './manualEdgeMigration';
+import { buildAlertsPanelModel } from './panelAdapters';
+import { buildRuntimeState } from './runtimeAdapters';
 import {
   buildRuntimePatchPlan,
   hasRuntimePatchWork,

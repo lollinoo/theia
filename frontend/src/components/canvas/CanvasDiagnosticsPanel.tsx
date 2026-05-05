@@ -216,23 +216,11 @@ export function CanvasDiagnosticsPanel({
         <DiagnosticsSection title="Manual Edge Migration">
           <DiagnosticsRow label="status" value={snapshot.manualEdgeMigration.status} />
           <DiagnosticsRow label="attempts" value={snapshot.manualEdgeMigration.attemptCount} />
-          <DiagnosticsRow
-            label="pending edges"
-            value={snapshot.manualEdgeMigration.pendingCount}
-          />
-          <DiagnosticsRow
-            label="applied edges"
-            value={snapshot.manualEdgeMigration.appliedCount}
-          />
+          <DiagnosticsRow label="pending edges" value={snapshot.manualEdgeMigration.pendingCount} />
+          <DiagnosticsRow label="applied edges" value={snapshot.manualEdgeMigration.appliedCount} />
           <DiagnosticsRow label="failed edges" value={snapshot.manualEdgeMigration.failedCount} />
-          <DiagnosticsRow
-            label="skipped edges"
-            value={snapshot.manualEdgeMigration.skippedCount}
-          />
-          <DiagnosticsRow
-            label="last attempt"
-            value={snapshot.manualEdgeMigration.lastAttemptAt}
-          />
+          <DiagnosticsRow label="skipped edges" value={snapshot.manualEdgeMigration.skippedCount} />
+          <DiagnosticsRow label="last attempt" value={snapshot.manualEdgeMigration.lastAttemptAt} />
           <DiagnosticsRow
             label="last completed"
             value={snapshot.manualEdgeMigration.lastCompletedAt}
