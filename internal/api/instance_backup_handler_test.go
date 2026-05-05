@@ -357,6 +357,53 @@ func TestHandleRestore_AllowsMultipartEnvelopeAboveCompressedLimit(t *testing.T)
 	}
 }
 
+func TestHandleRestore_RejectsMultipartEnvelopeAboveCompressedLimitOverhead(t *testing.T) {
+	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+	archiveData := buildValidTarGz(t, dbPath, encKey)
+	limits := handler.svc.RestoreArchiveLimits()
+	limits.MaxCompressedBytes = int64(len(archiveData))
+	handler.svc.SetRestoreArchiveLimitsForTest(limits)
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+
+	field, err := mw.CreateFormField("metadata")
+	if err != nil {
+		t.Fatalf("creating metadata field: %v", err)
+	}
+	if _, err := field.Write([]byte(strings.Repeat("x", int(restoreMultipartEnvelopeOverheadBytes)+1))); err != nil {
+		t.Fatalf("writing metadata field: %v", err)
+	}
+	fw, err := mw.CreateFormFile("file", "backup.tar.gz")
+	if err != nil {
+		t.Fatalf("creating form file field: %v", err)
+	}
+	if _, err := fw.Write(archiveData); err != nil {
+		t.Fatalf("writing file data: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("closing multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instance-backups/restore", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	handler.HandleRestore(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	stagingDir := filepath.Join(filepath.Dir(dbPath), ".restore-staging")
+	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
+		t.Fatalf("staging dir should not exist after oversized multipart envelope, stat err = %v", err)
+	}
+	markerPath := filepath.Join(filepath.Dir(dbPath), ".theia-restore-pending")
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("marker should not exist after oversized multipart envelope, stat err = %v", err)
+	}
+}
+
 func TestHandleRestoreCanceledContextDoesNotStage(t *testing.T) {
 	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
 	archiveData := buildValidTarGz(t, dbPath, encKey)
