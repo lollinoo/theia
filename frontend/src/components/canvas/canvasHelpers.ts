@@ -10,6 +10,7 @@ import { formatBandwidth } from '../linkSemantics';
 export type HandleSide = 'top' | 'right' | 'bottom' | 'left';
 
 export const manualEdgeStorageKey = 'theia-manual-edges';
+export const manualEdgeMigrationStorageKey = 'theia-manual-edge-migration-v1';
 
 export const defaultPollingIntervalMs = 60_000;
 export const staleThresholdMs = defaultPollingIntervalMs * 2;
