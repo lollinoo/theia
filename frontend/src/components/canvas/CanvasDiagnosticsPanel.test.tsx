@@ -56,6 +56,17 @@ describe('CanvasDiagnosticsPanel', () => {
         lastSaveStatus: 'success',
         lastSaveDurationMs: 8,
       },
+      manualEdgeMigration: {
+        status: 'retried',
+        pendingCount: 2,
+        appliedCount: 3,
+        failedCount: 1,
+        skippedCount: 4,
+        attemptCount: 5,
+        lastAttemptAt: '2026-05-05T00:00:00.000Z',
+        lastCompletedAt: '2026-05-05T00:00:01.000Z',
+        lastError: 'backend unavailable',
+      },
     });
     recordCanvasMetric({
       name: 'areaProjection',
@@ -104,6 +115,10 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(screen.getByText('Frame p95 ms')).toBeInTheDocument();
     expect(screen.getByText('Long tasks')).toBeInTheDocument();
     expect(screen.getByText('projection.area.changed')).toBeInTheDocument();
+    expect(screen.getByText('Manual Edge Migration')).toBeInTheDocument();
+    expect(screen.getByText('retried')).toBeInTheDocument();
+    expect(screen.getByText('failed edges')).toBeInTheDocument();
+    expect(screen.getByText('backend unavailable')).toBeInTheDocument();
   });
 
   it('runs safe actions from the panel', () => {

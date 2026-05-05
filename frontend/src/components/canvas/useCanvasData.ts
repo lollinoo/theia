@@ -25,6 +25,7 @@ import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './can
 import {
   buildPositionPayload,
   isGhostDeviceNode,
+  manualEdgeMigrationStorageKey,
   manualEdgeStorageKey,
   topologyFitViewPadding,
   viewportSize,
@@ -41,6 +42,10 @@ import {
 } from './incrementalLayout';
 import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
+import {
+  type ManualEdgeMigrationResult,
+  migrateStoredManualEdges,
+} from './manualEdgeMigration';
 import {
   buildRuntimePatchPlan,
   hasRuntimePatchWork,
@@ -358,6 +363,87 @@ function roundDurationMs(durationMs: number): number {
   return Number(Math.max(0, durationMs).toFixed(3));
 }
 
+function manualEdgeMigrationHasVisibleResult(
+  result: ManualEdgeMigrationResult,
+  hadPendingStorage: boolean,
+): boolean {
+  return (
+    hadPendingStorage ||
+    result.attemptedCount > 0 ||
+    result.appliedCount > 0 ||
+    result.failedCount > 0 ||
+    result.skippedCount > 0 ||
+    result.state.pending_count > 0 ||
+    result.state.failed_count > 0
+  );
+}
+
+function recordManualEdgeMigrationDiagnostics(
+  result: ManualEdgeMigrationResult,
+  hadPendingStorage: boolean,
+): void {
+  if (!manualEdgeMigrationHasVisibleResult(result, hadPendingStorage)) {
+    return;
+  }
+
+  const state = result.state;
+  updateCanvasDiagnosticsState({
+    manualEdgeMigration: {
+      status: state.status,
+      pendingCount: state.pending_count,
+      appliedCount: state.applied_count,
+      failedCount: state.failed_count,
+      skippedCount: state.skipped_count,
+      attemptCount: state.attempt_count,
+      lastAttemptAt: state.last_attempt_at,
+      lastCompletedAt: state.last_completed_at,
+      lastError: state.last_error,
+    },
+  });
+
+  const metadata = {
+    status: state.status,
+    attemptCount: state.attempt_count,
+    pendingCount: state.pending_count,
+    appliedCount: result.appliedCount,
+    failedCount: result.failedCount,
+    skippedCount: result.skippedCount,
+  };
+
+  if (result.appliedCount > 0) {
+    recordCanvasDiagnosticEvent({
+      level: 'info',
+      source: 'topology',
+      event: 'manual_edges.migration.applied',
+      message: 'Manual edge localStorage migration applied',
+      metadata,
+    });
+  }
+
+  if (result.failedCount > 0) {
+    recordCanvasDiagnosticEvent({
+      level: 'warn',
+      source: 'topology',
+      event: 'manual_edges.migration.failed',
+      message: 'Manual edge localStorage migration failed',
+      metadata: {
+        ...metadata,
+        error: state.last_error,
+      },
+    });
+  }
+
+  if (result.skippedCount > 0) {
+    recordCanvasDiagnosticEvent({
+      level: 'info',
+      source: 'topology',
+      event: 'manual_edges.migration.skipped',
+      message: 'Manual edge localStorage migration skipped existing links',
+      metadata,
+    });
+  }
+}
+
 export function useCanvasData({
   snapshot,
   alerts = emptyAlerts,
@@ -540,6 +626,23 @@ export function useCanvasData({
             },
           });
 
+          const hadPendingManualEdgeMigration =
+            window.localStorage.getItem(manualEdgeStorageKey) !== null;
+          const manualEdgeMigrationResult = await migrateStoredManualEdges({
+            storage: window.localStorage,
+            pendingStorageKey: manualEdgeStorageKey,
+            stateStorageKey: manualEdgeMigrationStorageKey,
+            existingLinks: fetchedLinks,
+            createLink,
+          });
+          recordManualEdgeMigrationDiagnostics(
+            manualEdgeMigrationResult,
+            hadPendingManualEdgeMigration,
+          );
+          if (manualEdgeMigrationResult.appliedCount > 0) {
+            lastCanvasTopologyEtagRef.current = null;
+          }
+
           const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
           const structureChanged = lastTopologyIdentityRef.current !== topologyIdentity.signature;
           const effectivePositions = new Map(savedPositions);
@@ -567,44 +670,6 @@ export function useCanvasData({
             alerts: alertsRef.current,
             prometheusStatus,
           });
-          // Migrate localStorage manual edges to backend on first load (best-effort)
-          const storedManualRaw = window.localStorage.getItem(manualEdgeStorageKey);
-          if (storedManualRaw) {
-            try {
-              const storedManual = JSON.parse(storedManualRaw) as Array<{
-                id: string;
-                source: string;
-                target: string;
-              }>;
-              if (Array.isArray(storedManual) && storedManual.length > 0) {
-                const results = await Promise.allSettled(
-                  storedManual.map((edge) =>
-                    createLink({
-                      source_device_id: edge.source,
-                      source_if_name: '',
-                      target_device_id: edge.target,
-                      target_if_name: '',
-                    }),
-                  ),
-                );
-                const failedMigrations = storedManual.filter(
-                  (_, index) => results[index]?.status === 'rejected',
-                );
-                if (failedMigrations.length === 0) {
-                  window.localStorage.removeItem(manualEdgeStorageKey);
-                } else {
-                  window.localStorage.setItem(
-                    manualEdgeStorageKey,
-                    JSON.stringify(failedMigrations),
-                  );
-                }
-              } else {
-                window.localStorage.removeItem(manualEdgeStorageKey);
-              }
-            } catch {
-              window.localStorage.removeItem(manualEdgeStorageKey);
-            }
-          }
 
           if (!structureChanged) {
             setDevices(fetchedDevices);

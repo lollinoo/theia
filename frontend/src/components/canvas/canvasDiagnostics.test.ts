@@ -52,6 +52,14 @@ describe('canvasDiagnostics', () => {
         pendingSaveCount: 0,
         lastSaveStatus: 'idle',
       },
+      manualEdgeMigration: {
+        status: 'idle',
+        pendingCount: 0,
+        appliedCount: 0,
+        failedCount: 0,
+        skippedCount: 0,
+        attemptCount: 0,
+      },
     });
     expect(() => JSON.stringify(snapshot)).not.toThrow();
   });
@@ -74,6 +82,36 @@ describe('canvasDiagnostics', () => {
       topologyVersion: 'topo-1',
       lastTopologyLoadStatus: 'success',
       lastTopologyLoadReason: 'topology_changed',
+    });
+  });
+
+  it('merges partial manual edge migration updates without dropping previous fields', () => {
+    updateCanvasDiagnosticsState({
+      manualEdgeMigration: {
+        status: 'failed',
+        attemptCount: 2,
+        pendingCount: 1,
+        failedCount: 1,
+        lastAttemptAt: '2026-05-05T00:00:00.000Z',
+        lastError: 'backend unavailable',
+      },
+    });
+    updateCanvasDiagnosticsState({
+      manualEdgeMigration: {
+        status: 'retried',
+        pendingCount: 0,
+        skippedCount: 1,
+      },
+    });
+
+    expect(getCanvasDiagnosticsSnapshot().manualEdgeMigration).toMatchObject({
+      status: 'retried',
+      attemptCount: 2,
+      pendingCount: 0,
+      failedCount: 1,
+      skippedCount: 1,
+      lastAttemptAt: '2026-05-05T00:00:00.000Z',
+      lastError: 'backend unavailable',
     });
   });
 

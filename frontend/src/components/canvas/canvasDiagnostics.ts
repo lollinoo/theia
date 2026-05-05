@@ -2,6 +2,12 @@ import { type CanvasMetricAggregate, exportCanvasMetrics } from './canvasInstrum
 
 export type CanvasTopologyLoadStatus = 'idle' | 'loading' | 'success' | 'error';
 export type CanvasPositionSaveStatus = 'idle' | 'pending' | 'success' | 'error';
+export type CanvasManualEdgeMigrationStatus =
+  | 'idle'
+  | 'pending'
+  | 'retried'
+  | 'applied'
+  | 'failed';
 export type CanvasDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 export type CanvasDiagnosticSource =
   | 'topology'
@@ -61,6 +67,17 @@ export interface CanvasDiagnosticsSnapshot {
     lastSaveStatus: CanvasPositionSaveStatus;
     lastSaveError?: string;
     positionRevision?: string;
+  };
+  manualEdgeMigration: {
+    status: CanvasManualEdgeMigrationStatus;
+    pendingCount: number;
+    appliedCount: number;
+    failedCount: number;
+    skippedCount: number;
+    attemptCount: number;
+    lastAttemptAt?: string;
+    lastCompletedAt?: string;
+    lastError?: string;
   };
   runtime: {
     prometheusStatus?: 'unknown' | 'disabled' | 'available' | 'unavailable';
@@ -127,6 +144,14 @@ function createInitialState(): CanvasDiagnosticsState {
       pendingSaveCount: 0,
       lastSaveStatus: 'idle',
     },
+    manualEdgeMigration: {
+      status: 'idle',
+      pendingCount: 0,
+      appliedCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+      attemptCount: 0,
+    },
     runtime: {
       prometheusStatus: 'unknown',
     },
@@ -189,6 +214,7 @@ function snapshotFromState(): CanvasDiagnosticsSnapshot {
     graph: { ...diagnosticsState.graph },
     layout: { ...diagnosticsState.layout },
     positions: { ...diagnosticsState.positions },
+    manualEdgeMigration: { ...diagnosticsState.manualEdgeMigration },
     runtime: { ...diagnosticsState.runtime },
     performance: {
       metrics,
@@ -222,6 +248,10 @@ export function updateCanvasDiagnosticsState(patch: CanvasDiagnosticsPatch): voi
     graph: { ...diagnosticsState.graph, ...patch.graph },
     layout: { ...diagnosticsState.layout, ...patch.layout },
     positions: { ...diagnosticsState.positions, ...patch.positions },
+    manualEdgeMigration: {
+      ...diagnosticsState.manualEdgeMigration,
+      ...patch.manualEdgeMigration,
+    },
     runtime: { ...diagnosticsState.runtime, ...patch.runtime },
   };
   installCanvasDiagnosticsWindowHelpers();

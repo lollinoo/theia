@@ -21,7 +21,11 @@ import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metri
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { exportCanvasDiagnostics, resetCanvasDiagnostics } from './canvasDiagnostics';
-import { manualEdgeStorageKey, staleThresholdMs } from './canvasHelpers';
+import {
+  manualEdgeMigrationStorageKey,
+  manualEdgeStorageKey,
+  staleThresholdMs,
+} from './canvasHelpers';
 import type { CanvasMeasurementRecord } from './canvasInstrumentation';
 import { buildTopologyEdges } from './edgeBuilder';
 import { useCanvasData } from './useCanvasData';
@@ -168,6 +172,21 @@ function renderUseCanvasData(
 
 function canvasMetrics(): CanvasMeasurementRecord[] {
   return window.__THEIA_CANVAS_METRICS__ ?? [];
+}
+
+function storedManualEdgeMigrationState(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: 1,
+    status: 'idle',
+    attempt_count: 0,
+    pending_count: 0,
+    applied_count: 0,
+    failed_count: 0,
+    skipped_count: 0,
+    applied_keys: [],
+    failed_keys: [],
+    ...overrides,
+  };
 }
 
 describe('useCanvasData', () => {
@@ -608,7 +627,7 @@ describe('useCanvasData', () => {
   it('retains only failed manual edge migrations in localStorage', async () => {
     const storedEdges = [
       { id: 'edge-1', source: 'dev-1', target: 'dev-2' },
-      { id: 'edge-2', source: 'dev-2', target: 'dev-1' },
+      { id: 'edge-2', source: 'dev-2', target: 'dev-3' },
     ];
     vi.mocked(fetchDevices).mockResolvedValue([
       mockDevice(),
@@ -617,6 +636,12 @@ describe('useCanvasData', () => {
         hostname: 'router-02',
         ip: '10.0.0.2',
         sys_name: 'router-02',
+      }),
+      mockDevice({
+        id: 'dev-3',
+        hostname: 'router-03',
+        ip: '10.0.0.3',
+        sys_name: 'router-03',
       }),
     ]);
     vi.mocked(createLink)
@@ -632,8 +657,31 @@ describe('useCanvasData', () => {
     });
 
     expect(createLink).toHaveBeenCalledTimes(2);
+    expect(createLink).toHaveBeenNthCalledWith(1, {
+      source_device_id: 'dev-1',
+      source_if_name: '',
+      target_device_id: 'dev-2',
+      target_if_name: '',
+      migration_source: 'browser_localstorage',
+    });
+    expect(createLink).toHaveBeenNthCalledWith(2, {
+      source_device_id: 'dev-2',
+      source_if_name: '',
+      target_device_id: 'dev-3',
+      target_if_name: '',
+      migration_source: 'browser_localstorage',
+    });
     expect(window.localStorage.getItem(manualEdgeStorageKey)).toBe(
       JSON.stringify([storedEdges[1]]),
+    );
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'failed',
+      pendingCount: 1,
+      failedCount: 1,
+      lastError: 'backend unavailable',
+    });
+    expect(exportCanvasDiagnostics().events.map((event) => event.event)).toContain(
+      'manual_edges.migration.failed',
     );
   });
 
@@ -653,6 +701,152 @@ describe('useCanvasData', () => {
     renderUseCanvasData(null);
 
     await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createLink).toHaveBeenCalledTimes(1);
+    expect(createLink).toHaveBeenCalledWith({
+      source_device_id: 'dev-1',
+      source_if_name: '',
+      target_device_id: 'dev-2',
+      target_if_name: '',
+      migration_source: 'browser_localstorage',
+    });
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'applied',
+      pendingCount: 0,
+      appliedCount: 1,
+    });
+    expect(exportCanvasDiagnostics().events.map((event) => event.event)).toContain(
+      'manual_edges.migration.applied',
+    );
+  });
+
+  it('dedupes duplicate reversed manual edge migrations before creating links', async () => {
+    const storedEdges = [
+      { id: 'edge-1', source: 'dev-1', target: 'dev-2' },
+      { id: 'edge-2', source: 'dev-2', target: 'dev-1' },
+    ];
+    vi.mocked(fetchDevices).mockResolvedValue([
+      mockDevice(),
+      mockDevice({
+        id: 'dev-2',
+        hostname: 'router-02',
+        ip: '10.0.0.2',
+        sys_name: 'router-02',
+      }),
+    ]);
+    window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
+
+    renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createLink).toHaveBeenCalledTimes(1);
+    expect(createLink).toHaveBeenCalledWith({
+      source_device_id: 'dev-1',
+      source_if_name: '',
+      target_device_id: 'dev-2',
+      target_if_name: '',
+      migration_source: 'browser_localstorage',
+    });
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+  });
+
+  it('skips stale pending manual edges that were already applied', async () => {
+    const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
+    window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
+    window.localStorage.setItem(
+      manualEdgeMigrationStorageKey,
+      JSON.stringify(
+        storedManualEdgeMigrationState({
+          status: 'applied',
+          attempt_count: 1,
+          applied_count: 1,
+          applied_keys: ['dev-1::dev-2'],
+          last_attempt_at: '2026-05-05T00:00:00.000Z',
+          last_completed_at: '2026-05-05T00:00:01.000Z',
+        }),
+      ),
+    );
+
+    renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createLink).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'applied',
+      pendingCount: 0,
+      appliedCount: 1,
+      skippedCount: 1,
+    });
+    expect(exportCanvasDiagnostics().events.map((event) => event.event)).toContain(
+      'manual_edges.migration.skipped',
+    );
+  });
+
+  it('retries failed manual edge migrations on repeated topology load and then clears storage', async () => {
+    const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
+    vi.mocked(createLink)
+      .mockRejectedValueOnce(new Error('backend unavailable') as never)
+      .mockResolvedValueOnce(undefined as never);
+    window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'failed',
+      pendingCount: 1,
+      failedCount: 1,
+      attemptCount: 1,
+      lastError: 'backend unavailable',
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(createLink).toHaveBeenCalledTimes(2);
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'applied',
+      pendingCount: 0,
+      failedCount: 0,
+      attemptCount: 2,
+    });
+  });
+
+  it('does not recreate applied manual edges during backend resync refresh', async () => {
+    const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
+    window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
+
+    renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createLink).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-resync-required'));
+      await vi.advanceTimersByTimeAsync(250);
       await Promise.resolve();
       await Promise.resolve();
     });
