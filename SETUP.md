@@ -118,9 +118,21 @@ Use SQLite only when the installation stays within all of these limits:
 - one active administrative operator at a time
 - no expectation of overlapping intensive polling, topology churn, scheduled backup activity, and configuration-write bursts
 
-Instance backup / restore remains SQLite-only for now and returns `501 Not Implemented` when the backend is running on PostgreSQL.
+Instance backup / restore is supported on PostgreSQL deployments when compatible PostgreSQL client tools are available on `PATH`. PostgreSQL backup jobs require `pg_dump` 17.x; restore validation, staging, and apply require `pg_restore` 17.x; non-dry-run restore apply also requires `pg_dump` 17.x so Theia can take a pre-restore live database backup before changing the database.
 
-### 4.2 Migrate an existing SQLite dataset to PostgreSQL
+### 4.2 PostgreSQL client tools
+
+The bundled development, staging, and production compose stacks use PostgreSQL 17. Official backend images bundle these PostgreSQL 17 client tools from `postgres:17-bookworm`; custom host or custom image deployments must place compatible tools on `PATH`.
+
+| Tool | Requirement | Supported version |
+|------|-------------|-------------------|
+| `pg_dump` | Required for PostgreSQL instance backup and pre-restore live DB backup | 17.x |
+| `pg_restore` | Required for PostgreSQL restore validation and apply | 17.x |
+| `psql` | Bundled in official images for operator diagnostics/admin use; not required by backup/restore | 17.x |
+
+Missing or incompatible PostgreSQL client tools fail the backup or restore job at startup with actionable diagnostics. Error output redacts connection strings and passwords.
+
+### 4.3 Migrate an existing SQLite dataset to PostgreSQL
 
 Once an installation outgrows the small-install envelope, migration to PostgreSQL is the expected path. Stop the backend first so the SQLite source stays stable during the copy, then import the database into PostgreSQL:
 
@@ -146,7 +158,7 @@ Notes:
 
 - `-truncate-target` makes the import deterministic by clearing the target tables before copying.
 - Device backup archives and `known_hosts` remain file-based in `data_dir`; move that directory separately if you are migrating the whole deployment to another host.
-- Instance backup metadata rows are copied, but instance backup / restore APIs stay disabled when the app itself runs on PostgreSQL.
+- Instance backup metadata rows are copied. PostgreSQL-backed instance backup and restore APIs are available after migration when the target deployment has compatible PostgreSQL client tools on `PATH`.
 
 ### 5. How hot-reload works
 
