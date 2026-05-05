@@ -102,11 +102,11 @@ func (h *DeviceCredentialProfileHandler) HandleAssign(w http.ResponseWriter, r *
 	}
 
 	if err := h.credentialProfileRepo.AssignProfile(deviceID, profileID); err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "UNIQUE") {
-			writeError(w, http.StatusConflict, "profile already assigned to this device")
+		if isDeviceCredentialProfileDuplicateError(err) {
+			writeDeviceCredentialProfileAssignment(w, http.StatusOK, deviceID, profileID)
 			return
 		}
+		errStr := err.Error()
 		if strings.Contains(errStr, "FOREIGN KEY") {
 			writeError(w, http.StatusNotFound, "device or profile not found")
 			return
@@ -115,13 +115,28 @@ func (h *DeviceCredentialProfileHandler) HandleAssign(w http.ResponseWriter, r *
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	writeDeviceCredentialProfileAssignment(w, http.StatusCreated, deviceID, profileID)
+}
+
+func writeDeviceCredentialProfileAssignment(w http.ResponseWriter, status int, deviceID, profileID uuid.UUID) {
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"data": map[string]string{
 			"device_id":  deviceID.String(),
 			"profile_id": profileID.String(),
 		},
 	})
+}
+
+func isDeviceCredentialProfileDuplicateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "device_credential_profiles_pkey") ||
+		(strings.Contains(message, "duplicate key value violates unique constraint") &&
+			strings.Contains(message, "device_credential_profiles")) ||
+		strings.Contains(message, "unique constraint failed: device_credential_profiles.")
 }
 
 // --- HandleUnassign ---

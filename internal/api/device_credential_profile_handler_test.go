@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,6 +20,55 @@ import (
 	"github.com/lollinoo/theia/internal/vendor"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+const duplicateAssignmentDriverName = "theia_duplicate_assignment_driver"
+
+func init() {
+	sql.Register(duplicateAssignmentDriverName, duplicateAssignmentDriver{})
+}
+
+type duplicateAssignmentDriver struct{}
+
+func (duplicateAssignmentDriver) Open(string) (driver.Conn, error) {
+	return duplicateAssignmentConn{}, nil
+}
+
+type duplicateAssignmentConn struct{}
+
+func (duplicateAssignmentConn) Prepare(string) (driver.Stmt, error) {
+	return nil, fmt.Errorf("prepare not implemented")
+}
+
+func (duplicateAssignmentConn) Close() error {
+	return nil
+}
+
+func (duplicateAssignmentConn) Begin() (driver.Tx, error) {
+	return nil, fmt.Errorf("begin not implemented")
+}
+
+func (duplicateAssignmentConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	return nil, fmt.Errorf(`ERROR: duplicate key value violates unique constraint "device_credential_profiles_pkey" (SQLSTATE 23505)`)
+}
+
+func seedDeviceCredentialProfileDevice(t *testing.T, db *sql.DB, hostname, ip string) uuid.UUID {
+	t.Helper()
+	deviceID := uuid.New()
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		`INSERT INTO devices (id, hostname, ip, device_type, status, sys_name, sys_descr,
+		 sys_object_id, hardware_model, vendor, managed, snmp_credentials_json,
+		 metrics_source, prometheus_label_name, prometheus_label_value, tags_json,
+		 created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		deviceID.String(), hostname, ip, "router", "up", "",
+		"", "", "", "default", 1, `{}`, "none", "", "", `{}`, now, now,
+	)
+	if err != nil {
+		t.Fatalf("seeding device %q: %v", hostname, err)
+	}
+	return deviceID
+}
 
 // setupDeviceCredentialProfileTest creates an in-memory SQLite DB, runs migrations, seeds
 // a device and a credential profile, and returns a fully-wired DeviceCredentialProfileHandler.
@@ -58,20 +109,7 @@ func setupDeviceCredentialProfileTest(t *testing.T) (
 	}
 
 	// Seed a device via SQL directly (device repo needs encryption key, use SQL for simplicity)
-	deviceID := uuid.New()
-	now := time.Now().UTC()
-	_, err = db.Exec(
-		`INSERT INTO devices (id, hostname, ip, device_type, status, sys_name, sys_descr,
-		 sys_object_id, hardware_model, vendor, managed, snmp_credentials_json,
-		 metrics_source, prometheus_label_name, prometheus_label_value, tags_json,
-		 created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		deviceID.String(), "test-device", "192.168.1.1", "router", "up", "",
-		"", "", "", "default", 1, `{}`, "none", "", "", `{}`, now, now,
-	)
-	if err != nil {
-		t.Fatalf("seeding device: %v", err)
-	}
+	deviceID := seedDeviceCredentialProfileDevice(t, db, "test-device", "192.168.1.1")
 
 	// Seed a credential profile via repo
 	profile := &domain.CredentialProfile{
@@ -193,7 +231,35 @@ func TestDeviceCredentialProfile_Assign_HappyPath(t *testing.T) {
 	}
 }
 
-func TestDeviceCredentialProfile_Assign_Duplicate_Returns409(t *testing.T) {
+func TestDeviceCredentialProfile_Assign_SameProfileToMultipleDevices(t *testing.T) {
+	handler, repo, db, deviceID, profileID, _ := setupDeviceCredentialProfileTest(t)
+	otherDeviceID := seedDeviceCredentialProfileDevice(t, db, "test-device-2", "192.168.1.2")
+
+	for _, targetDeviceID := range []uuid.UUID{deviceID, otherDeviceID} {
+		body := fmt.Sprintf(`{"profile_id":"%s"}`, profileID)
+		req := httptest.NewRequest(http.MethodPost,
+			fmt.Sprintf("/api/v1/devices/%s/credential-profiles", targetDeviceID),
+			strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.HandleAssign(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for device %s, got %d; body: %s", targetDeviceID, rec.Code, rec.Body.String())
+		}
+	}
+
+	for _, targetDeviceID := range []uuid.UUID{deviceID, otherDeviceID} {
+		rows, err := repo.ListAssignedProfiles(targetDeviceID)
+		if err != nil {
+			t.Fatalf("listing assignments for device %s: %v", targetDeviceID, err)
+		}
+		if len(rows) != 1 || rows[0].ProfileID != profileID {
+			t.Fatalf("expected profile %s assigned to device %s, got %+v", profileID, targetDeviceID, rows)
+		}
+	}
+}
+
+func TestDeviceCredentialProfile_Assign_Duplicate_IsIdempotent(t *testing.T) {
 	handler, repo, _, deviceID, profileID, _ := setupDeviceCredentialProfileTest(t)
 
 	// Assign once
@@ -209,8 +275,34 @@ func TestDeviceCredentialProfile_Assign_Duplicate_Returns409(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.HandleAssign(rec, req)
 
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeviceCredentialProfile_Assign_PostgresDuplicate_IsIdempotent(t *testing.T) {
+	db, err := sql.Open(duplicateAssignmentDriverName, "")
+	if err != nil {
+		t.Fatalf("opening duplicate assignment driver: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	handler := NewDeviceCredentialProfileHandler(nil, sqlite.NewCredentialProfileRepo(db))
+	deviceID := uuid.New()
+	profileID := uuid.New()
+
+	body := fmt.Sprintf(`{"profile_id":"%s"}`, profileID)
+	req := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/devices/%s/credential-profiles", deviceID),
+		strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleAssign(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), profileID.String()) {
+		t.Fatalf("expected assigned profile response, got body: %s", rec.Body.String())
 	}
 }
 
