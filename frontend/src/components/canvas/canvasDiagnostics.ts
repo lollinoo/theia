@@ -2,12 +2,7 @@ import { type CanvasMetricAggregate, exportCanvasMetrics } from './canvasInstrum
 
 export type CanvasTopologyLoadStatus = 'idle' | 'loading' | 'success' | 'error';
 export type CanvasPositionSaveStatus = 'idle' | 'pending' | 'success' | 'error';
-export type CanvasManualEdgeMigrationStatus =
-  | 'idle'
-  | 'pending'
-  | 'retried'
-  | 'applied'
-  | 'failed';
+export type CanvasManualEdgeMigrationStatus = 'idle' | 'pending' | 'retried' | 'applied' | 'failed';
 export type CanvasDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 export type CanvasDiagnosticSource =
   | 'topology'
