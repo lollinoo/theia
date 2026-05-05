@@ -134,6 +134,12 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		return false, err
 	}
 
+	if dialect == sqlite.DialectPostgres {
+		if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore"); err != nil {
+			return false, err
+		}
+	}
+
 	if err := c.backupLiveDB(dialect); err != nil {
 		return false, err
 	}
@@ -360,7 +366,7 @@ func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB 
 	if strings.TrimSpace(c.dbDSN) == "" {
 		return fmt.Errorf("postgres restore requires db_dsn")
 	}
-	if err := ensureExternalCommand("pg_restore"); err != nil {
+	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore"); err != nil {
 		return err
 	}
 	conn, err := postgresCLIConnInfo(c.dbDSN)
@@ -428,7 +434,7 @@ func (c *RestoreCoordinator) dumpLivePostgresDatabase(ctx context.Context, destP
 	if strings.TrimSpace(c.dbDSN) == "" {
 		return fmt.Errorf("postgres backup requires db_dsn")
 	}
-	if err := ensureExternalCommand("pg_dump"); err != nil {
+	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump"); err != nil {
 		return err
 	}
 	conn, err := postgresCLIConnInfo(c.dbDSN)
