@@ -2,10 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Link } from '../../types/api';
 import {
+  type ManualEdgeMigrationResult,
   type ManualEdgeMigrationState,
+  type MigrateStoredManualEdgesOptions,
   manualEdgeMigrationKey,
   migrateStoredManualEdges,
   parseStoredManualEdges,
+  readManualEdgeMigrationState,
+  writeManualEdgeMigrationState,
 } from './manualEdgeMigration';
 
 class FakeStorage implements Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
@@ -66,6 +70,45 @@ function migrationState(
 }
 
 describe('manual edge migration helpers', () => {
+  it('reads idle migration state when stored state is missing or malformed', () => {
+    const storage = new FakeStorage();
+
+    expect(readManualEdgeMigrationState(storage, stateStorageKey)).toEqual(migrationState());
+
+    storage.setItem(stateStorageKey, '{not-json');
+    expect(readManualEdgeMigrationState(storage, stateStorageKey)).toEqual(migrationState());
+
+    storage.setItem(
+      stateStorageKey,
+      JSON.stringify({
+        schema_version: 1,
+        status: 'failed',
+        attempt_count: 1,
+      }),
+    );
+    expect(readManualEdgeMigrationState(storage, stateStorageKey)).toEqual(migrationState());
+  });
+
+  it('writes migration state as stable JSON storage', () => {
+    const storage = new FakeStorage();
+    const state = migrationState({
+      status: 'failed',
+      attempt_count: 2,
+      pending_count: 1,
+      applied_count: 1,
+      failed_count: 1,
+      applied_keys: ['dev-1::dev-2'],
+      failed_keys: ['dev-3::dev-4'],
+      last_attempt_at: '2026-05-05T00:00:00.000Z',
+      last_completed_at: '2026-05-05T00:00:01.000Z',
+      last_error: 'backend unavailable',
+    });
+
+    writeManualEdgeMigrationState(storage, stateStorageKey, state);
+
+    expect(storage.getItem(stateStorageKey)).toBe(JSON.stringify(state));
+  });
+
   it('parses valid edges with trimmed endpoints and stable de-duped keys', () => {
     const parsed = parseStoredManualEdges(
       JSON.stringify([
@@ -98,7 +141,7 @@ describe('manual edge migration helpers', () => {
     storage.setItem(pendingStorageKey, JSON.stringify([{ source: 'dev-1', target: 'dev-2' }]));
     const createLink = vi.fn<Parameters<typeof migrateStoredManualEdges>[0]['createLink']>();
 
-    const result = await migrateStoredManualEdges({
+    const options: MigrateStoredManualEdgesOptions = {
       storage,
       pendingStorageKey,
       stateStorageKey,
@@ -113,7 +156,9 @@ describe('manual edge migration helpers', () => {
       ],
       createLink,
       now: () => '2026-05-05T00:00:00.000Z',
-    });
+    };
+
+    const result: ManualEdgeMigrationResult = await migrateStoredManualEdges(options);
 
     expect(createLink).not.toHaveBeenCalled();
     expect(storage.getItem(pendingStorageKey)).toBeNull();
@@ -268,7 +313,7 @@ describe('manual edge migration helpers', () => {
       .filter((call) => call.key === stateStorageKey)
       .map((call) => JSON.parse(call.value) as ManualEdgeMigrationState);
 
-    expect(stateWrites.at(-2)).toMatchObject({
+    expect(stateWrites[stateWrites.length - 2]).toMatchObject({
       status: 'retried',
       attempt_count: 2,
       pending_count: 1,
@@ -286,5 +331,57 @@ describe('manual edge migration helpers', () => {
     });
     expect(result.state.last_error).toBeUndefined();
     expect(storage.getItem(pendingStorageKey)).toBeNull();
+  });
+
+  it('finalizes malformed pending storage after a previous failed state without create attempts', async () => {
+    const storage = new FakeStorage();
+    storage.setItem(pendingStorageKey, '{not-json');
+    storage.setItem(
+      stateStorageKey,
+      JSON.stringify(
+        migrationState({
+          status: 'failed',
+          attempt_count: 1,
+          pending_count: 1,
+          failed_count: 1,
+          failed_keys: ['dev-3::dev-4'],
+          last_attempt_at: '2026-05-05T00:00:00.000Z',
+          last_completed_at: '2026-05-05T00:00:01.000Z',
+          last_error: 'backend unavailable',
+        }),
+      ),
+    );
+    const createLink = vi.fn<Parameters<typeof migrateStoredManualEdges>[0]['createLink']>();
+
+    const result = await migrateStoredManualEdges({
+      storage,
+      pendingStorageKey,
+      stateStorageKey,
+      existingLinks: [],
+      createLink,
+      now: () => '2026-05-05T00:01:00.000Z',
+    });
+
+    expect(createLink).not.toHaveBeenCalled();
+    expect(storage.getItem(pendingStorageKey)).toBeNull();
+    expect(result).toMatchObject({
+      attemptedCount: 0,
+      appliedCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+      state: {
+        status: 'applied',
+        attempt_count: 1,
+        pending_count: 0,
+        applied_count: 0,
+        failed_count: 0,
+        skipped_count: 0,
+        applied_keys: [],
+        failed_keys: [],
+        last_attempt_at: '2026-05-05T00:00:00.000Z',
+        last_completed_at: '2026-05-05T00:01:00.000Z',
+      },
+    });
+    expect(result.state.last_error).toBeUndefined();
   });
 });
