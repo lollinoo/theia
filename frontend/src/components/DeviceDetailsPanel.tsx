@@ -99,6 +99,13 @@ export function DeviceDetailsPanel({
         </div>
       </div>
 
+      <div className="space-y-2 rounded-lg bg-surface-high p-3">
+        <p className="text-xs font-medium uppercase text-on-bg-secondary">Device Notes</p>
+        <p className="whitespace-pre-wrap text-sm text-on-bg">
+          {device.notes?.trim() ? device.notes : 'No notes saved.'}
+        </p>
+      </div>
+
       <div className="space-y-3" data-testid="device-detail-runtime">
         <div className="flex items-center justify-between">
           <p className="text-xs font-medium uppercase text-on-bg-secondary">

@@ -462,7 +462,7 @@ describe('DeviceConfigPanel', () => {
     expect(screen.queryByText('Live Detail Telemetry')).not.toBeInTheDocument();
   });
 
-  it('renders saved notes preview and editable textarea', () => {
+  it('renders editable notes textarea without saved notes preview', () => {
     render(
       <DeviceConfigPanel
         device={mockDevice({ notes: 'Check transceiver levels weekly' })}
@@ -471,13 +471,7 @@ describe('DeviceConfigPanel', () => {
       />,
     );
 
-    const savedNotesHeader = screen.getByText('Saved Notes');
-    expect(savedNotesHeader).toBeInTheDocument();
-    const savedNotesSection = savedNotesHeader.parentElement;
-    expect(savedNotesSection).not.toBeNull();
-    expect(
-      within(savedNotesSection as HTMLElement).getByText('Check transceiver levels weekly'),
-    ).toBeInTheDocument();
+    expect(screen.queryByText('Saved Notes')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Device Notes')).toHaveValue('Check transceiver levels weekly');
   });
 

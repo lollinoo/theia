@@ -73,6 +73,18 @@ describe('DeviceDetailsPanel', () => {
     expect(screen.getByText('1h 1m')).toBeInTheDocument();
   });
 
+  it('renders saved device notes for read-only viewing', () => {
+    render(
+      <DeviceDetailsPanel
+        device={mockDevice({ notes: 'Check transceiver levels weekly' })}
+        detailMetrics={mockDeviceMetrics()}
+      />,
+    );
+
+    expect(screen.getByText('Device Notes')).toBeInTheDocument();
+    expect(screen.getByText('Check transceiver levels weekly')).toBeInTheDocument();
+  });
+
   it('formats memory and last poll values for operators', () => {
     render(
       <DeviceDetailsPanel

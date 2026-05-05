@@ -861,15 +861,6 @@ export function DeviceConfigPanel({
             <p className="mt-1 text-xs text-status-down">{fieldErrors['ip']}</p>
           )}
 
-          <div className="space-y-2 rounded-lg bg-surface-high p-3">
-            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-              Saved Notes
-            </p>
-            <p className="whitespace-pre-wrap text-sm text-on-bg">
-              {device.notes?.trim() ? device.notes : 'No notes saved.'}
-            </p>
-          </div>
-
           <div className="space-y-1">
             <label
               htmlFor="device-notes"
