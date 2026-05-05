@@ -1,10 +1,17 @@
 package sqlite
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	sqlite3driver "github.com/mattn/go-sqlite3"
 )
 
 func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
@@ -167,6 +174,146 @@ func TestDeviceRepoGetBySysName_UpdateRefreshesLookupIndex(t *testing.T) {
 	if newLookup.ID != device.ID {
 		t.Fatalf("expected device %s, got %s", device.ID, newLookup.ID)
 	}
+}
+
+func TestDeviceRepoGetBySysName_RuntimeQueryUsesPartialIndex(t *testing.T) {
+	db := newCapturedQueryTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+
+	resetCapturedSQLiteQueries()
+	device, err := repo.GetBySysName("core-router")
+	if err != nil {
+		t.Fatalf("GetBySysName failed: %v", err)
+	}
+	if device != nil {
+		t.Fatalf("expected nil for missing device, got %s", device.ID)
+	}
+
+	query := findCapturedSysNameLookupQuery(t, capturedSQLiteQueries())
+	plan := explainSQLiteQueryPlan(t, db, query, []any{"core-router"})
+	if !strings.Contains(plan, "idx_devices_sys_name_lookup") {
+		t.Fatalf("runtime sysname lookup plan did not use idx_devices_sys_name_lookup:\nquery: %s\nplan: %s", compactSQL(query), plan)
+	}
+	if !strings.Contains(compactSQL(query), "sys_name_lookup = ? AND sys_name_lookup != ''") {
+		t.Fatalf("runtime sysname lookup query does not include partial index predicate: %s", compactSQL(query))
+	}
+}
+
+const capturedSQLiteDriverName = "sqlite3_capture_device_repo_test"
+
+var (
+	registerCapturedSQLiteDriver sync.Once
+	capturedSQLiteMu             sync.Mutex
+	capturedSQLiteQueriesStore   []string
+)
+
+type capturedSQLiteDriver struct {
+	inner *sqlite3driver.SQLiteDriver
+}
+
+func (d *capturedSQLiteDriver) Open(name string) (driver.Conn, error) {
+	conn, err := d.inner.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &capturedSQLiteConn{Conn: conn}, nil
+}
+
+type capturedSQLiteConn struct {
+	driver.Conn
+}
+
+func (c *capturedSQLiteConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	captureSQLiteQuery(query)
+	if queryer, ok := c.Conn.(driver.QueryerContext); ok {
+		return queryer.QueryContext(ctx, query, args)
+	}
+	return nil, driver.ErrSkip
+}
+
+func (c *capturedSQLiteConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if execer, ok := c.Conn.(driver.ExecerContext); ok {
+		return execer.ExecContext(ctx, query, args)
+	}
+	return nil, driver.ErrSkip
+}
+
+func (c *capturedSQLiteConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	if beginner, ok := c.Conn.(driver.ConnBeginTx); ok {
+		return beginner.BeginTx(ctx, opts)
+	}
+	return c.Conn.Begin()
+}
+
+func (c *capturedSQLiteConn) Ping(ctx context.Context) error {
+	if pinger, ok := c.Conn.(driver.Pinger); ok {
+		return pinger.Ping(ctx)
+	}
+	return nil
+}
+
+func newCapturedQueryTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	registerCapturedSQLiteDriver.Do(func() {
+		sql.Register(capturedSQLiteDriverName, &capturedSQLiteDriver{
+			inner: &sqlite3driver.SQLiteDriver{},
+		})
+	})
+
+	sanitized := strings.NewReplacer("/", "_", " ", "_", "=", "_", ":", "_").Replace(t.Name())
+	dsn := fmt.Sprintf(
+		"file:%s?mode=memory&cache=shared&_foreign_keys=on&_busy_timeout=%d&_txlock=immediate",
+		sanitized,
+		sqliteBusyTimeoutMS,
+	)
+	db, err := sql.Open(capturedSQLiteDriverName, dsn)
+	if err != nil {
+		t.Fatalf("opening captured sqlite test db: %v", err)
+	}
+	ConfigureSQLiteDB(db)
+	t.Cleanup(func() { db.Close() })
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("running migrations: %v", err)
+	}
+
+	return db
+}
+
+func captureSQLiteQuery(query string) {
+	capturedSQLiteMu.Lock()
+	defer capturedSQLiteMu.Unlock()
+	capturedSQLiteQueriesStore = append(capturedSQLiteQueriesStore, query)
+}
+
+func resetCapturedSQLiteQueries() {
+	capturedSQLiteMu.Lock()
+	defer capturedSQLiteMu.Unlock()
+	capturedSQLiteQueriesStore = nil
+}
+
+func capturedSQLiteQueries() []string {
+	capturedSQLiteMu.Lock()
+	defer capturedSQLiteMu.Unlock()
+	return append([]string(nil), capturedSQLiteQueriesStore...)
+}
+
+func findCapturedSysNameLookupQuery(t *testing.T, queries []string) string {
+	t.Helper()
+
+	for _, query := range queries {
+		compact := compactSQL(query)
+		if strings.Contains(compact, "FROM devices") && strings.Contains(compact, "sys_name_lookup = ?") {
+			return query
+		}
+	}
+	t.Fatalf("did not capture sysname lookup query; captured queries: %#v", queries)
+	return ""
+}
+
+func compactSQL(query string) string {
+	return strings.Join(strings.Fields(query), " ")
 }
 
 // intPtr is a local helper to create a *int from a literal int value.
