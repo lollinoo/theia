@@ -481,7 +481,7 @@ func TestInstanceBackupRouterRestoreUsesRestoreSpecificBodyLimit(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects multipart restore body above restore-specific cap", func(t *testing.T) {
+	t.Run("rejects oversized multipart restore route before staging", func(t *testing.T) {
 		handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
 		archiveData := buildValidTarGz(t, dbPath, encKey)
 		limits := handler.svc.RestoreArchiveLimits()
@@ -489,8 +489,14 @@ func TestInstanceBackupRouterRestoreUsesRestoreSpecificBodyLimit(t *testing.T) {
 		handler.svc.SetRestoreArchiveLimitsForTest(limits)
 
 		restoreCap := int64(len(archiveData)) + restoreMultipartEnvelopeOverheadBytes
-		metadataBytes := int(restoreMultipartEnvelopeOverheadBytes) + len(archiveData) + 1
+		// Put the overage in the pre-file metadata field so the route consumes
+		// it before staging instead of relying on unread trailing boundaries.
+		metadataBytes := int(restoreMultipartEnvelopeOverheadBytes) + 1
 		req := buildMultipartRestoreRequestWithMetadata(t, "backup.tar.gz", archiveData, false, metadataBytes)
+		if req.ContentLength <= restoreCap {
+			metadataBytes += int(restoreCap - req.ContentLength + 1)
+			req = buildMultipartRestoreRequestWithMetadata(t, "backup.tar.gz", archiveData, false, metadataBytes)
+		}
 		if req.ContentLength <= restoreCap {
 			t.Fatalf("test request size = %d, want above restore cap %d", req.ContentLength, restoreCap)
 		}
@@ -499,15 +505,15 @@ func TestInstanceBackupRouterRestoreUsesRestoreSpecificBodyLimit(t *testing.T) {
 		newRouter(handler.svc).ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusRequestEntityTooLarge {
-			t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+			t.Fatalf("expected route to reject oversized multipart restore request with 413, got %d; body: %s", rec.Code, rec.Body.String())
 		}
 		stagingDir := filepath.Join(filepath.Dir(dbPath), ".restore-staging")
 		if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
-			t.Fatalf("staging dir should not exist after oversized multipart envelope, stat err = %v", err)
+			t.Fatalf("staging dir should not exist after oversized multipart restore route, stat err = %v", err)
 		}
 		markerPath := filepath.Join(filepath.Dir(dbPath), ".theia-restore-pending")
 		if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
-			t.Fatalf("marker should not exist after oversized multipart envelope, stat err = %v", err)
+			t.Fatalf("marker should not exist after oversized multipart restore route, stat err = %v", err)
 		}
 	})
 }
