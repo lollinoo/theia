@@ -48,6 +48,9 @@ type LinkUpsertResult struct {
 // LinkRepository defines persistence operations for links.
 type LinkRepository interface {
 	Create(link *Link) error
+	// CreateManualIdempotent inserts a user-created manual link or returns an existing equivalent link without mutating it.
+	// When browserLocalStorageMigration is true, equivalence is any unordered device pair because legacy browser state has no interface identities.
+	CreateManualIdempotent(link *Link, browserLocalStorageMigration bool) (*Link, bool, error)
 	GetByID(id uuid.UUID) (*Link, error)
 	GetByDeviceID(deviceID uuid.UUID) ([]Link, error)
 	GetAll() ([]Link, error)

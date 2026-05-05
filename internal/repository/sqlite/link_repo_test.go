@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -297,6 +298,275 @@ func TestLinkRepo_GetAll(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Errorf("GetAll returned %d links, want 2", len(all))
+	}
+}
+
+func TestLinkRepo_CreateManualIdempotent_PreservesDiscoveredDuplicate(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	existing := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(existing); err != nil {
+		t.Fatalf("Create discovered link: %v", err)
+	}
+
+	stored, created, err := linkRepo.CreateManualIdempotent(&domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolManual,
+	}, false)
+	if err != nil {
+		t.Fatalf("CreateManualIdempotent duplicate: %v", err)
+	}
+	if created {
+		t.Fatal("expected discovered duplicate not to create a row")
+	}
+	if stored == nil {
+		t.Fatal("expected existing link to be returned")
+	}
+	if stored.ID != existing.ID {
+		t.Fatalf("returned ID = %s, want %s", stored.ID, existing.ID)
+	}
+	if stored.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("returned protocol = %q, want %q", stored.DiscoveryProtocol, domain.DiscoveryProtocolLLDP)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 stored link, got %d", len(all))
+	}
+	if all[0].DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("stored protocol = %q, want %q", all[0].DiscoveryProtocol, domain.DiscoveryProtocolLLDP)
+	}
+}
+
+func TestLinkRepo_CreateManualIdempotent_ReturnsCanonicalReverseDuplicate(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	existing := &domain.Link{
+		SourceDeviceID:    d2ID,
+		SourceIfName:      "ether2",
+		TargetDeviceID:    d1ID,
+		TargetIfName:      "ether1",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(existing); err != nil {
+		t.Fatalf("Create reverse discovered link: %v", err)
+	}
+
+	stored, created, err := linkRepo.CreateManualIdempotent(&domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolManual,
+	}, false)
+	if err != nil {
+		t.Fatalf("CreateManualIdempotent reverse duplicate: %v", err)
+	}
+	if created {
+		t.Fatal("expected reverse duplicate not to create a row")
+	}
+	if stored == nil {
+		t.Fatal("expected existing link to be returned")
+	}
+	if stored.ID != existing.ID {
+		t.Fatalf("returned ID = %s, want %s", stored.ID, existing.ID)
+	}
+	if stored.SourceDeviceID != existing.SourceDeviceID || stored.SourceIfName != existing.SourceIfName ||
+		stored.TargetDeviceID != existing.TargetDeviceID || stored.TargetIfName != existing.TargetIfName {
+		t.Fatalf("returned orientation = %+v, want stored orientation %+v", *stored, *existing)
+	}
+	if stored.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("returned protocol = %q, want %q", stored.DiscoveryProtocol, domain.DiscoveryProtocolLLDP)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 stored link, got %d", len(all))
+	}
+}
+
+func TestLinkRepo_CreateManualIdempotent_AllowsParallelManualLinks(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	first, firstCreated, err := linkRepo.CreateManualIdempotent(&domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolManual,
+	}, false)
+	if err != nil {
+		t.Fatalf("CreateManualIdempotent first link: %v", err)
+	}
+	if !firstCreated {
+		t.Fatal("expected first manual link to be created")
+	}
+
+	second, secondCreated, err := linkRepo.CreateManualIdempotent(&domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether3",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether4",
+		DiscoveryProtocol: domain.DiscoveryProtocolManual,
+	}, false)
+	if err != nil {
+		t.Fatalf("CreateManualIdempotent second link: %v", err)
+	}
+	if !secondCreated {
+		t.Fatal("expected parallel manual link to be created")
+	}
+	if first.ID == second.ID {
+		t.Fatalf("parallel manual links returned the same ID %s", first.ID)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 stored manual links, got %d", len(all))
+	}
+}
+
+func TestLinkRepo_CreateManualIdempotent_BrowserMigrationUsesDevicePair(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	existing := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(existing); err != nil {
+		t.Fatalf("Create discovered link: %v", err)
+	}
+
+	stored, created, err := linkRepo.CreateManualIdempotent(&domain.Link{
+		SourceDeviceID:    d2ID,
+		SourceIfName:      "",
+		TargetDeviceID:    d1ID,
+		TargetIfName:      "",
+		DiscoveryProtocol: domain.DiscoveryProtocolManual,
+	}, true)
+	if err != nil {
+		t.Fatalf("CreateManualIdempotent browser migration duplicate: %v", err)
+	}
+	if created {
+		t.Fatal("expected browser migration device-pair duplicate not to create a row")
+	}
+	if stored == nil {
+		t.Fatal("expected existing link to be returned")
+	}
+	if stored.ID != existing.ID {
+		t.Fatalf("returned ID = %s, want %s", stored.ID, existing.ID)
+	}
+	if stored.SourceIfName != "ether1" || stored.TargetIfName != "ether2" {
+		t.Fatalf("returned interfaces = %q/%q, want ether1/ether2", stored.SourceIfName, stored.TargetIfName)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 stored link, got %d", len(all))
+	}
+	if all[0].SourceIfName == "" || all[0].TargetIfName == "" {
+		t.Fatalf("expected no empty-interface duplicate, stored link: %+v", all[0])
+	}
+}
+
+func TestLinkRepo_CreateManualIdempotent_ConcurrentReverseCreatesCreateOneRow(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	start := make(chan struct{})
+	type result struct {
+		created bool
+		err     error
+	}
+	results := make(chan result, 2)
+
+	var wg sync.WaitGroup
+	for _, link := range []*domain.Link{
+		{
+			SourceDeviceID:    d1ID,
+			SourceIfName:      "ether1",
+			TargetDeviceID:    d2ID,
+			TargetIfName:      "ether2",
+			DiscoveryProtocol: domain.DiscoveryProtocolManual,
+		},
+		{
+			SourceDeviceID:    d2ID,
+			SourceIfName:      "ether2",
+			TargetDeviceID:    d1ID,
+			TargetIfName:      "ether1",
+			DiscoveryProtocol: domain.DiscoveryProtocolManual,
+		},
+	} {
+		link := link
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, created, err := linkRepo.CreateManualIdempotent(link, false)
+			results <- result{created: created, err: err}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(results)
+
+	createdCount := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("CreateManualIdempotent concurrent create: %v", result.err)
+		}
+		if result.created {
+			createdCount++
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("created result count = %d, want 1", createdCount)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 stored link after concurrent reverse creates, got %d", len(all))
 	}
 }
 
