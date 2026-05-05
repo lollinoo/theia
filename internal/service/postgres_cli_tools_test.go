@@ -106,6 +106,30 @@ func TestPostgresCLITools_RejectsUnparsableVersionOutput(t *testing.T) {
 	assertPostgresCLIActionableError(t, err.Error(), "pg_dump")
 }
 
+func TestPostgresCLITools_RejectsMalformedVersionToken(t *testing.T) {
+	for _, output := range []string{
+		"pg_dump (PostgreSQL) 17beta1\n",
+		"pg_dump (PostgreSQL) 17foo\n",
+	} {
+		t.Run(strings.TrimSpace(output), func(t *testing.T) {
+			stubPostgresCLIToolCommands(t,
+				func(name string) (string, error) {
+					return "/usr/bin/" + name, nil
+				},
+				func(_ context.Context, name string, args ...string) ([]byte, error) {
+					return []byte(output), nil
+				},
+			)
+
+			err := ensureSupportedPostgresCLITools(context.Background(), "pg_dump")
+			if err == nil {
+				t.Fatal("ensureSupportedPostgresCLITools() error = nil, want malformed version error")
+			}
+			assertPostgresCLIActionableError(t, err.Error(), "pg_dump")
+		})
+	}
+}
+
 func TestPostgresCLITools_RedactsFailedVersionProbeDiagnostics(t *testing.T) {
 	const sensitive = "should-not-appear"
 	stubPostgresCLIToolCommands(t,

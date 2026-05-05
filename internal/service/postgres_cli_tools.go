@@ -10,7 +10,7 @@ import (
 
 const supportedPostgresCLIToolMajorVersion = 17
 
-var postgresCLIToolVersionPattern = regexp.MustCompile(`(?i)\(PostgreSQL\)\s+([0-9]+)(?:\.[0-9]+)?`)
+var postgresCLIToolVersionPattern = regexp.MustCompile(`(?i)\(PostgreSQL\)[[:space:]]+([0-9]+)(?:\.[0-9]+)?(?:[[:space:]]|$)`)
 
 func ensureSupportedPostgresCLITools(ctx context.Context, names ...string) error {
 	for _, name := range names {
