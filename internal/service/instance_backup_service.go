@@ -1338,6 +1338,11 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 		report.Message = "Validation passed. Archive is ready to restore."
 		return report, nil
 	}
+	if archiveDialect == sqlite.DialectPostgres {
+		if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore"); err != nil {
+			return nil, err
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
