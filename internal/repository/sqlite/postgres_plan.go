@@ -15,41 +15,47 @@ type PostgresPlanCheck struct {
 }
 
 type repositoryPlanCheck struct {
-	Name          string
-	SQLiteQuery   string
-	PostgresQuery string
-	Args          []any
-	ExpectedIndex string
+	Name        string
+	SQLiteQuery string
+	// SQLite can prefer generated unique-constraint indexes over matching named indexes.
+	SQLiteExpectedIndex   string
+	PostgresQuery         string
+	PostgresExpectedIndex string
+	Args                  []any
 }
 
 var defaultRepositoryPlanCheckRegistry = []repositoryPlanCheck{
 	{
-		Name:          "device-by-sysname",
-		SQLiteQuery:   `SELECT id FROM devices INDEXED BY idx_devices_sys_name_lookup WHERE sys_name_lookup = ? AND sys_name_lookup != '' ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
-		PostgresQuery: `SELECT id FROM devices WHERE sys_name_lookup = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
-		Args:          []any{"core-router"},
-		ExpectedIndex: "idx_devices_sys_name_lookup",
+		Name:                  "device-by-sysname",
+		SQLiteQuery:           `SELECT id FROM devices WHERE sys_name_lookup = ? AND sys_name_lookup != '' ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+		SQLiteExpectedIndex:   "idx_devices_sys_name_lookup",
+		PostgresQuery:         `SELECT id FROM devices WHERE sys_name_lookup = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+		PostgresExpectedIndex: "idx_devices_sys_name_lookup",
+		Args:                  []any{"core-router"},
 	},
 	{
-		Name:          "link-pair-lookup",
-		SQLiteQuery:   `SELECT id FROM links INDEXED BY idx_links_pair_lookup WHERE source_device_id = ? AND target_device_id = ? AND target_if_name = ? AND (source_if_name = ? OR source_if_name = '' OR ? = '')`,
-		PostgresQuery: `SELECT id FROM links WHERE source_device_id = $1 AND target_device_id = $2 AND target_if_name = $3 AND (source_if_name = $4 OR source_if_name = '' OR $5 = '')`,
-		Args:          []any{"device-a", "device-b", "ether10", "ether1", "ether1"},
-		ExpectedIndex: "idx_links_pair_lookup",
+		Name:                  "link-pair-lookup",
+		SQLiteQuery:           `SELECT id FROM links WHERE source_device_id = ? AND target_device_id = ? AND target_if_name = ? AND (source_if_name = ? OR source_if_name = '' OR ? = '')`,
+		SQLiteExpectedIndex:   "idx_links_pair_lookup",
+		PostgresQuery:         `SELECT id FROM links WHERE source_device_id = $1 AND target_device_id = $2 AND target_if_name = $3 AND (source_if_name = $4 OR source_if_name = '' OR $5 = '')`,
+		PostgresExpectedIndex: "idx_links_pair_lookup",
+		Args:                  []any{"device-a", "device-b", "ether10", "ether1", "ether1"},
 	},
 	{
-		Name:          "observation-ingest-lookup",
-		SQLiteQuery:   `SELECT id FROM topology_observations INDEXED BY idx_topology_observations_ingest_lookup WHERE local_device_id = ? AND remote_identity = ? AND local_port = ? AND remote_port = ? AND protocol = ?`,
-		PostgresQuery: `SELECT id FROM topology_observations WHERE local_device_id = $1 AND remote_identity = $2 AND local_port = $3 AND remote_port = $4 AND protocol = $5`,
-		Args:          []any{"device-a", "core-switch", "ether1", "ether10", "lldp"},
-		ExpectedIndex: "idx_topology_observations_ingest_lookup",
+		Name:                  "observation-ingest-lookup",
+		SQLiteQuery:           `SELECT id FROM topology_observations WHERE local_device_id = ? AND remote_identity = ? AND local_port = ? AND remote_port = ? AND protocol = ?`,
+		SQLiteExpectedIndex:   "sqlite_autoindex_topology_observations_2",
+		PostgresQuery:         `SELECT id FROM topology_observations WHERE local_device_id = $1 AND remote_identity = $2 AND local_port = $3 AND remote_port = $4 AND protocol = $5`,
+		PostgresExpectedIndex: "idx_topology_observations_ingest_lookup",
+		Args:                  []any{"device-a", "core-switch", "ether1", "ether10", "lldp"},
 	},
 	{
-		Name:          "unresolved-neighbor-resolution-lookup",
-		SQLiteQuery:   `SELECT id FROM unresolved_neighbors INDEXED BY idx_unresolved_neighbors_active_lookup WHERE local_device_id = ? AND remote_identity = ? AND protocol = ? AND resolved_at IS NULL`,
-		PostgresQuery: `SELECT id FROM unresolved_neighbors WHERE local_device_id = $1 AND remote_identity = $2 AND protocol = $3 AND resolved_at IS NULL`,
-		Args:          []any{"device-a", "unknown-neighbor", "lldp"},
-		ExpectedIndex: "idx_unresolved_neighbors_active_lookup",
+		Name:                  "unresolved-neighbor-resolution-lookup",
+		SQLiteQuery:           `SELECT id FROM unresolved_neighbors WHERE local_device_id = ? AND remote_identity = ? AND protocol = ? AND resolved_at IS NULL`,
+		SQLiteExpectedIndex:   "sqlite_autoindex_unresolved_neighbors_2",
+		PostgresQuery:         `SELECT id FROM unresolved_neighbors WHERE local_device_id = $1 AND remote_identity = $2 AND protocol = $3 AND resolved_at IS NULL`,
+		PostgresExpectedIndex: "idx_unresolved_neighbors_active_lookup",
+		Args:                  []any{"device-a", "unknown-neighbor", "lldp"},
 	},
 }
 
@@ -70,7 +76,7 @@ func DefaultPostgresPlanChecks() []PostgresPlanCheck {
 			Name:          check.Name,
 			Query:         check.PostgresQuery,
 			Args:          append([]any(nil), check.Args...),
-			ExpectedIndex: check.ExpectedIndex,
+			ExpectedIndex: check.PostgresExpectedIndex,
 		}
 	}
 	return checks
