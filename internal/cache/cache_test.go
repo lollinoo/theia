@@ -42,7 +42,10 @@ type legacyMockLinkRepo struct {
 	links       []domain.Link
 }
 
-func (r *legacyMockLinkRepo) Create(_ *domain.Link) error               { return nil }
+func (r *legacyMockLinkRepo) Create(_ *domain.Link) error { return nil }
+func (r *legacyMockLinkRepo) CreateManualIdempotent(link *domain.Link, _ bool) (*domain.Link, bool, error) {
+	return link, true, nil
+}
 func (r *legacyMockLinkRepo) GetByID(_ uuid.UUID) (*domain.Link, error) { return nil, errNotFound }
 func (r *legacyMockLinkRepo) GetByDeviceID(_ uuid.UUID) ([]domain.Link, error) {
 	return nil, nil
@@ -162,6 +165,9 @@ func newMockLinkRepo(links ...domain.Link) *mockLinkRepo {
 }
 
 func (r *mockLinkRepo) Create(_ *domain.Link) error { return nil }
+func (r *mockLinkRepo) CreateManualIdempotent(link *domain.Link, _ bool) (*domain.Link, bool, error) {
+	return link, true, nil
+}
 func (r *mockLinkRepo) GetByDeviceID(_ uuid.UUID) ([]domain.Link, error) {
 	return nil, nil
 }

@@ -81,7 +81,10 @@ type mockWorkerLinkRepo struct {
 	links []domain.Link
 }
 
-func (r *mockWorkerLinkRepo) Create(_ *domain.Link) error                      { return nil }
+func (r *mockWorkerLinkRepo) Create(_ *domain.Link) error { return nil }
+func (r *mockWorkerLinkRepo) CreateManualIdempotent(link *domain.Link, _ bool) (*domain.Link, bool, error) {
+	return link, true, nil
+}
 func (r *mockWorkerLinkRepo) GetByID(_ uuid.UUID) (*domain.Link, error)        { return nil, nil }
 func (r *mockWorkerLinkRepo) GetByDeviceID(_ uuid.UUID) ([]domain.Link, error) { return nil, nil }
 func (r *mockWorkerLinkRepo) GetAll() ([]domain.Link, error) {
