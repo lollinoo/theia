@@ -44,7 +44,7 @@ func TestDefaultPostgresPlanChecks_CoverScaleCriticalLookups(t *testing.T) {
 		if check.Query != registered.PostgresQuery {
 			t.Fatalf("check %s postgres query differs from registry", check.Name)
 		}
-		if check.ExpectedIndex != registered.ExpectedIndex {
+		if check.ExpectedIndex != registered.PostgresExpectedIndex {
 			t.Fatalf("check %s expected index differs from registry", check.Name)
 		}
 		if !reflect.DeepEqual(check.Args, registered.Args) {
@@ -69,11 +69,20 @@ func TestRepositoryPlanChecks_DefineExplicitDialectSQL(t *testing.T) {
 			if check.PostgresQuery == "" {
 				t.Fatal("postgres query is empty")
 			}
+			if check.SQLiteExpectedIndex == "" {
+				t.Fatal("sqlite expected index is empty")
+			}
+			if check.PostgresExpectedIndex == "" {
+				t.Fatal("postgres expected index is empty")
+			}
 			if len(check.Args) == 0 {
 				t.Fatal("registered check has no args")
 			}
 			if !strings.Contains(check.SQLiteQuery, "?") {
 				t.Fatalf("sqlite query must use ? placeholders: %s", check.SQLiteQuery)
+			}
+			if strings.Contains(strings.ToUpper(check.SQLiteQuery), "INDEXED BY") {
+				t.Fatalf("sqlite query must not force index selection: %s", check.SQLiteQuery)
 			}
 			if strings.Contains(check.PostgresQuery, "?") {
 				t.Fatalf("postgres query must not use ? placeholders: %s", check.PostgresQuery)
@@ -97,8 +106,8 @@ func TestRepositoryPlanChecks_SQLiteQueryPlansUseExpectedIndexes(t *testing.T) {
 	for _, check := range repositoryPlanChecks() {
 		t.Run(check.Name, func(t *testing.T) {
 			plan := explainSQLiteQueryPlan(t, db, check.SQLiteQuery, check.Args)
-			if !strings.Contains(plan, check.ExpectedIndex) {
-				t.Fatalf("sqlite plan did not use %s:\n%s", check.ExpectedIndex, plan)
+			if !strings.Contains(plan, check.SQLiteExpectedIndex) {
+				t.Fatalf("sqlite plan did not use %s:\n%s", check.SQLiteExpectedIndex, plan)
 			}
 		})
 	}
