@@ -91,10 +91,11 @@ func NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath
 // ApplyPendingRestore applies a staged restore after process restart.
 // Recovery semantics are marker-driven: no marker is a no-op; preflight failures
 // leave live targets unchanged and keep the marker and staging dir; post-DB
-// activation optional artifact failures keep the marker/staging and repair the
-// staged DB for retry; success removes both the marker and staging dir. SQLite
-// activation preserves the staged DB instead of moving it so interrupted
-// activation can retry from the original staged database.
+// activation optional artifact failures keep the marker/staging and refresh the
+// staged DB for retry when the retry destination remains valid and safe; success
+// removes both the marker and staging dir. SQLite activation preserves the
+// staged DB instead of moving it so interrupted activation can retry from the
+// original staged database.
 func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	ctx := context.Background()
 	markerPath := filepath.Join(filepath.Dir(c.dbPath), ".theia-restore-pending")
