@@ -567,9 +567,13 @@ export function useCanvasData({
           const includeRuntimeBootstrap =
             options.includeRuntimeBootstrap === true || trigger === 'initial_load';
           const forceRuntimeBootstrap = options.includeRuntimeBootstrap === true;
+          const hadPendingManualEdgeMigration =
+            window.localStorage.getItem(manualEdgeStorageKey) !== null;
           const topologySource = await loadCanvasTopologySource(
             fetchPositions,
-            includeRuntimeBootstrap ? null : lastCanvasTopologyEtagRef.current,
+            includeRuntimeBootstrap || hadPendingManualEdgeMigration
+              ? null
+              : lastCanvasTopologyEtagRef.current,
             includeRuntimeBootstrap,
             forceRuntimeBootstrap,
           );
@@ -626,8 +630,6 @@ export function useCanvasData({
             },
           });
 
-          const hadPendingManualEdgeMigration =
-            window.localStorage.getItem(manualEdgeStorageKey) !== null;
           const manualEdgeMigrationResult = await migrateStoredManualEdges({
             storage: window.localStorage,
             pendingStorageKey: manualEdgeStorageKey,
