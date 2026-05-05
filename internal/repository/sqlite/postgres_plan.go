@@ -54,7 +54,7 @@ var defaultRepositoryPlanCheckRegistry = []repositoryPlanCheck{
 		SQLiteQuery:           `SELECT id FROM unresolved_neighbors WHERE local_device_id = ? AND resolved_at IS NULL ORDER BY protocol, remote_identity`,
 		SQLiteExpectedIndex:   "idx_unresolved_neighbors_active",
 		PostgresQuery:         `SELECT id FROM unresolved_neighbors WHERE local_device_id = $1 AND resolved_at IS NULL ORDER BY protocol, remote_identity`,
-		PostgresExpectedIndex: "idx_unresolved_neighbors_active",
+		PostgresExpectedIndex: "idx_unresolved_neighbors_local_device_id",
 		Args:                  []any{"device-a"},
 	},
 }
