@@ -178,6 +178,39 @@ func buildMultipartRequest(t *testing.T, filename string, fileData []byte, dryRu
 	return req
 }
 
+func buildMultipartRestoreRequestWithMetadata(t *testing.T, filename string, fileData []byte, dryRun bool, metadataBytes int) *http.Request {
+	t.Helper()
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+
+	field, err := mw.CreateFormField("metadata")
+	if err != nil {
+		t.Fatalf("creating metadata field: %v", err)
+	}
+	if _, err := field.Write([]byte(strings.Repeat("x", metadataBytes))); err != nil {
+		t.Fatalf("writing metadata field: %v", err)
+	}
+	fw, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("creating form file field: %v", err)
+	}
+	if _, err := fw.Write(fileData); err != nil {
+		t.Fatalf("writing file data: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("closing multipart writer: %v", err)
+	}
+
+	url := "/api/v1/instance-backups/restore"
+	if dryRun {
+		url += "?dry_run=true"
+	}
+	req := httptest.NewRequest(http.MethodPost, url, &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return req
+}
+
 // TestHandleRestore_DryRunAcceptsValidArchive verifies that a multipart POST
 // with dry_run=true returns 200 with a valid RestoreReport and does NOT stage files.
 func TestHandleRestore_DryRunAcceptsValidArchive(t *testing.T) {
@@ -402,6 +435,81 @@ func TestHandleRestore_RejectsMultipartEnvelopeAboveCompressedLimitOverhead(t *t
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
 		t.Fatalf("marker should not exist after oversized multipart envelope, stat err = %v", err)
 	}
+}
+
+func TestInstanceBackupRouterRestoreUsesRestoreSpecificBodyLimit(t *testing.T) {
+	newRouter := func(svc *service.InstanceBackupService) http.Handler {
+		return NewRouter(
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			svc,
+			func() {},
+			"",
+			nil,
+			nil,
+		)
+	}
+
+	t.Run("allows multipart restore body above default 1MiB middleware cap", func(t *testing.T) {
+		handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+		archiveData := buildValidTarGz(t, dbPath, encKey)
+		req := buildMultipartRestoreRequestWithMetadata(t, "backup.tar.gz", archiveData, true, int(1<<20)+1024)
+
+		if req.ContentLength <= 1<<20 {
+			t.Fatalf("test request size = %d, want above default middleware cap", req.ContentLength)
+		}
+		restoreCap := handler.svc.RestoreArchiveLimits().MaxCompressedBytes + restoreMultipartEnvelopeOverheadBytes
+		if req.ContentLength > restoreCap {
+			t.Fatalf("test request size = %d, want within restore cap %d", req.ContentLength, restoreCap)
+		}
+
+		rec := httptest.NewRecorder()
+		newRouter(handler.svc).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("rejects multipart restore body above restore-specific cap", func(t *testing.T) {
+		handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+		archiveData := buildValidTarGz(t, dbPath, encKey)
+		limits := handler.svc.RestoreArchiveLimits()
+		limits.MaxCompressedBytes = int64(len(archiveData))
+		handler.svc.SetRestoreArchiveLimitsForTest(limits)
+
+		restoreCap := int64(len(archiveData)) + restoreMultipartEnvelopeOverheadBytes
+		metadataBytes := int(restoreMultipartEnvelopeOverheadBytes) + len(archiveData) + 1
+		req := buildMultipartRestoreRequestWithMetadata(t, "backup.tar.gz", archiveData, false, metadataBytes)
+		if req.ContentLength <= restoreCap {
+			t.Fatalf("test request size = %d, want above restore cap %d", req.ContentLength, restoreCap)
+		}
+
+		rec := httptest.NewRecorder()
+		newRouter(handler.svc).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+		stagingDir := filepath.Join(filepath.Dir(dbPath), ".restore-staging")
+		if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
+			t.Fatalf("staging dir should not exist after oversized multipart envelope, stat err = %v", err)
+		}
+		markerPath := filepath.Join(filepath.Dir(dbPath), ".theia-restore-pending")
+		if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+			t.Fatalf("marker should not exist after oversized multipart envelope, stat err = %v", err)
+		}
+	})
 }
 
 func TestHandleRestoreCanceledContextDoesNotStage(t *testing.T) {
