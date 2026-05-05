@@ -30,7 +30,7 @@ interface StoredManualEdge {
   target: string;
 }
 
-interface MigrateStoredManualEdgesOptions {
+export interface MigrateStoredManualEdgesOptions {
   storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
   pendingStorageKey: string;
   stateStorageKey: string;
@@ -45,7 +45,7 @@ interface MigrateStoredManualEdgesOptions {
   now?: () => string;
 }
 
-interface ManualEdgeMigrationResult {
+export interface ManualEdgeMigrationResult {
   state: ManualEdgeMigrationState;
   attemptedCount: number;
   appliedCount: number;
