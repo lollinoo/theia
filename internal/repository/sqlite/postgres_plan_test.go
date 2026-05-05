@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -87,14 +88,20 @@ func TestRepositoryPlanChecks_DefineExplicitDialectSQL(t *testing.T) {
 			if strings.Contains(check.PostgresQuery, "?") {
 				t.Fatalf("postgres query must not use ? placeholders: %s", check.PostgresQuery)
 			}
-			if !postgresPlaceholder.MatchString(check.PostgresQuery) {
+			postgresPlaceholders := postgresPlaceholder.FindAllString(check.PostgresQuery, -1)
+			if len(postgresPlaceholders) == 0 {
 				t.Fatalf("postgres query with args must use $n placeholders: %s", check.PostgresQuery)
 			}
 			if got, want := strings.Count(check.SQLiteQuery, "?"), len(check.Args); got != want {
 				t.Fatalf("sqlite placeholder count = %d, want %d", got, want)
 			}
-			if got, want := len(postgresPlaceholder.FindAllString(check.PostgresQuery, -1)), len(check.Args); got != want {
+			if got, want := len(postgresPlaceholders), len(check.Args); got != want {
 				t.Fatalf("postgres placeholder count = %d, want %d", got, want)
+			}
+			for i, placeholder := range postgresPlaceholders {
+				if want := fmt.Sprintf("$%d", i+1); placeholder != want {
+					t.Fatalf("postgres placeholder %d = %s, want %s in query: %s", i, placeholder, want, check.PostgresQuery)
+				}
 			}
 		})
 	}

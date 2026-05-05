@@ -293,7 +293,7 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 				poll_class, poll_interval_override, polling_enabled, notes,
 				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 			FROM devices
-			WHERE sys_name_lookup = ?
+			WHERE sys_name_lookup = ? AND sys_name_lookup != ''
 			ORDER BY updated_at DESC, created_at DESC
 			LIMIT 1`,
 			normalizedLookup,
