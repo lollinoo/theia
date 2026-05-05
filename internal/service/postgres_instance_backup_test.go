@@ -211,6 +211,27 @@ func commandFlagValue(args []string, flag string) string {
 	return ""
 }
 
+func commandArgsEqual(args []string, want ...string) bool {
+	if len(args) != len(want) {
+		return false
+	}
+	for i := range args {
+		if args[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func commandArgExists(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
 func commandEnvValue(env []string, key string) string {
 	prefix := key + "="
 	for _, item := range env {
@@ -227,6 +248,9 @@ func TestInstanceBackupServiceCreate_PostgresArchive(t *testing.T) {
 	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "pg_dump":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+			}
 			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
 				t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
 			}
@@ -278,6 +302,53 @@ func TestInstanceBackupServiceCreate_PostgresArchive(t *testing.T) {
 	}
 }
 
+func TestInstanceBackupServiceCreate_PostgresRejectsUnsupportedPgDumpVersionBeforeDump(t *testing.T) {
+	ts := setupPostgresServiceTest(t)
+	dumpExecuted := false
+
+	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+		if name != "pg_dump" {
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+		if commandArgsEqual(args, "--version") {
+			return []byte("pg_dump (PostgreSQL) 16.10\n"), nil
+		}
+		if commandArgExists(args, "--format=custom") {
+			dumpExecuted = true
+			dest := commandFlagValue(args, "--file")
+			if dest == "" {
+				t.Fatal("pg_dump missing --file argument")
+			}
+			if err := os.WriteFile(dest, []byte("postgres-dump-data"), 0o600); err != nil {
+				t.Fatalf("writing fake dump: %v", err)
+			}
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected pg_dump args: %v", args)
+	})
+
+	_, err := ts.svc.Create(context.Background())
+	if err == nil {
+		t.Fatal("Create() error = nil, want unsupported pg_dump version")
+	}
+	assertPostgresCLIActionableError(t, err.Error(), "pg_dump")
+	if dumpExecuted {
+		t.Fatal("pg_dump --format=custom executed before rejecting unsupported version")
+	}
+
+	backups, listErr := ts.svc.List(context.Background())
+	if listErr != nil {
+		t.Fatalf("List() error = %v", listErr)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("backup count = %d, want 1", len(backups))
+	}
+	if backups[0].Status != "failed" {
+		t.Fatalf("backup status = %q, want failed", backups[0].Status)
+	}
+	assertPostgresCLIActionableError(t, backups[0].ErrorMessage, "pg_dump")
+}
+
 func TestInstanceBackupServiceCreate_PostgresFailureRedactsCommandSecrets(t *testing.T) {
 	ts := setupPostgresServiceTest(t)
 	const sensitive = "should-not-appear"
@@ -286,6 +357,9 @@ func TestInstanceBackupServiceCreate_PostgresFailureRedactsCommandSecrets(t *tes
 	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 		if name != "pg_dump" {
 			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+		if commandArgsEqual(args, "--version") {
+			return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
 		}
 		if commandEnvValue(env, "PGPASSWORD") != sensitive {
 			t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
@@ -335,6 +409,9 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 	stubExternalCommands(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if name != "pg_restore" {
 			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+		if commandArgsEqual(args, "--version") {
+			return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
 		}
 		if len(args) < 2 || args[0] != "--list" {
 			return nil, fmt.Errorf("unexpected pg_restore args: %v", args)
@@ -399,6 +476,54 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 	}
 }
 
+func TestInstanceBackupServiceValidateAndStageRestore_PostgresRejectsUnsupportedPgRestoreVersion(t *testing.T) {
+	ts := setupPostgresServiceTest(t)
+	listExecuted := false
+
+	stubExternalCommands(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "pg_restore" {
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+		if commandArgsEqual(args, "--version") {
+			return []byte("pg_restore (PostgreSQL) 16.10\n"), nil
+		}
+		if len(args) >= 2 && args[0] == "--list" {
+			listExecuted = true
+			return []byte("archive listing"), nil
+		}
+		return nil, fmt.Errorf("unexpected pg_restore args: %v", args)
+	})
+
+	dumpData := []byte("postgres-dump-data")
+	dumpHash := sha256.Sum256(dumpData)
+	archivePath := filepath.Join(t.TempDir(), "postgres-backup.tar.gz")
+	manifest := backupManifest{
+		Version:           1,
+		AppVersion:        "dev",
+		GitCommit:         "test",
+		DBDriver:          string(reposqlite.DialectPostgres),
+		DBEntryName:       postgresArchiveDBEntry,
+		MigrationVersion:  manifestMigrationVersion(t, ts.db),
+		CreatedAt:         "2026-04-23T00:00:00Z",
+		DBSHA256:          hex.EncodeToString(dumpHash[:]),
+		BackupFileCount:   1,
+		TotalSizeBytes:    int64(len(dumpData)),
+		EncryptionKeyHash: manifestKeyHash(ts.encryptionKey),
+	}
+	writePostgresArchive(t, archivePath, manifest, map[string][]byte{
+		postgresArchiveDBEntry: dumpData,
+	})
+
+	_, err := ts.svc.ValidateAndStageRestore(archivePath, false)
+	if err == nil {
+		t.Fatal("ValidateAndStageRestore() error = nil, want unsupported pg_restore version")
+	}
+	assertPostgresCLIActionableError(t, err.Error(), "pg_restore")
+	if listExecuted {
+		t.Fatal("pg_restore --list executed before rejecting unsupported version")
+	}
+}
+
 func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	const dbDSN = "postgres://theia:n3wpr3srl@2026@localhost:5432/theia?sslmode=disable"
 
@@ -437,6 +562,9 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "pg_dump":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+			}
 			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
 				t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
 			}
@@ -453,6 +581,9 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			}
 			return nil, nil
 		case "pg_restore":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+			}
 			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
 				t.Fatal("pg_restore PGPASSWORD env does not match DSN password")
 			}
@@ -521,6 +652,106 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	}
 	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
 		t.Fatalf("staging dir should be removed, stat err = %v", err)
+	}
+}
+
+func TestRestoreCoordinatorApplyPendingRestore_PostgresChecksPgDumpAndPgRestoreBeforeSideEffects(t *testing.T) {
+	const dbDSN = "postgres://theia:n3wpr3srl@2026@localhost:5432/theia?sslmode=disable"
+
+	runtimeDir := t.TempDir()
+	dbPath := filepath.Join(runtimeDir, "theia.db")
+	deviceBackupDir := filepath.Join(runtimeDir, "device-backups")
+	knownHostsPath := filepath.Join(runtimeDir, "known_hosts")
+	stagingDir := filepath.Join(runtimeDir, ".restore-staging")
+	stagedDump := filepath.Join(stagingDir, postgresArchiveDBEntry)
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		t.Fatalf("creating staging dir: %v", err)
+	}
+	if err := os.WriteFile(stagedDump, []byte("staged-pg-dump"), 0o600); err != nil {
+		t.Fatalf("writing staged dump: %v", err)
+	}
+
+	terminateCalled := false
+	originalTerminate := terminatePostgresConnections
+	terminatePostgresConnections = func(ctx context.Context, dsn string) error {
+		terminateCalled = true
+		return nil
+	}
+	t.Cleanup(func() { terminatePostgresConnections = originalTerminate })
+
+	preRestoreDumpExecuted := false
+	actualRestoreExecuted := false
+	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "pg_dump":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+			}
+			if commandArgExists(args, "--format=custom") {
+				preRestoreDumpExecuted = true
+				dest := commandFlagValue(args, "--file")
+				if dest == "" {
+					t.Fatal("pg_dump missing --file argument")
+				}
+				if err := os.WriteFile(dest, []byte("pre-restore-pg-dump"), 0o600); err != nil {
+					t.Fatalf("writing pre-restore dump: %v", err)
+				}
+				return nil, nil
+			}
+			return nil, fmt.Errorf("unexpected pg_dump args: %v", args)
+		case "pg_restore":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_restore (PostgreSQL) 16.10\n"), nil
+			}
+			actualRestoreExecuted = true
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+	})
+
+	marker := newRestoreMarker(
+		stagedDump,
+		"",
+		"",
+		dbPath,
+		deviceBackupDir,
+		knownHostsPath,
+		"2026-04-23T00:00:00Z",
+	)
+	marker.DBDriver = string(reposqlite.DialectPostgres)
+	markerJSON, err := json.Marshal(marker)
+	if err != nil {
+		t.Fatalf("marshal marker: %v", err)
+	}
+	markerPath := filepath.Join(runtimeDir, ".theia-restore-pending")
+	if err := os.WriteFile(markerPath, markerJSON, 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	coordinator := NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath)
+	applied, err := coordinator.ApplyPendingRestore()
+	if err == nil {
+		t.Fatal("ApplyPendingRestore() error = nil, want unsupported pg_restore version")
+	}
+	if applied {
+		t.Fatal("ApplyPendingRestore() applied = true, want false")
+	}
+	assertPostgresCLIActionableError(t, err.Error(), "pg_restore")
+	if terminateCalled {
+		t.Fatal("terminatePostgresConnections called before PostgreSQL tool preflight completed")
+	}
+	if preRestoreDumpExecuted {
+		t.Fatal("pg_dump pre-restore dump executed before PostgreSQL tool preflight completed")
+	}
+	if actualRestoreExecuted {
+		t.Fatal("actual pg_restore executed after unsupported version")
+	}
+	if _, err := os.Stat(dbPath + ".pre-restore.dump"); !os.IsNotExist(err) {
+		t.Fatalf("pre-restore dump should not exist, stat err = %v", err)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("restore marker should remain: %v", err)
 	}
 }
 

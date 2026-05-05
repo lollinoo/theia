@@ -919,7 +919,7 @@ func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, dest
 	if strings.TrimSpace(s.dbDSN) == "" {
 		return databaseBackupArtifact{}, fmt.Errorf("postgres backup requires db_dsn")
 	}
-	if err := ensureExternalCommand("pg_dump"); err != nil {
+	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump"); err != nil {
 		return databaseBackupArtifact{}, err
 	}
 	conn, err := postgresCLIConnInfo(s.dbDSN)
@@ -1016,7 +1016,7 @@ func manifestDatabaseEntryName(dialect sqlite.Dialect, manifest backupManifest) 
 }
 
 func (s *InstanceBackupService) validatePostgresDump(ctx context.Context, dumpPath string) error {
-	if err := ensureExternalCommand("pg_restore"); err != nil {
+	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore"); err != nil {
 		return err
 	}
 	if _, err := runExternalCommand(ctx, "pg_restore", "--list", dumpPath); err != nil {
