@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Polling-budget controls and worker-class budgeting for static follow-up reprobes
 - Event-driven cache and websocket topology updates with incremental dirty-device application
 - PostgreSQL production validation tooling and runbooks
+- PostgreSQL backup/restore preflight checks for required 17.x `pg_dump` and `pg_restore` tools with redacted diagnostics
 - Scale-lab replay and soak harness with built-in topology stress profiles
 - Readiness audit artifacts for the pipeline rework rollout
 
@@ -42,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Changing topology discovery mode on a device now triggers the expected immediate one-shot reprobe when eligible
 - Reverse link enrichment now reconciles peer bootstrap metadata so completed links do not leave neighbors stuck in `followup_scheduled`
 - Backend logs now describe unresolved neighbors as off-map observations, and frontend status text no longer presents queued follow-ups as errors
+- Setup documentation now describes PostgreSQL instance backup/restore support and PostgreSQL client tool requirements instead of outdated PostgreSQL-disabled guidance
 
 ## [1.0.0] - 2026-03-20
 
