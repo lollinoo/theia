@@ -9,6 +9,7 @@ import {
   type Device,
   type DeviceCredentialProfile,
   type InstanceBackup,
+  type InstanceBackupProgress,
   type InstanceBackupStatus,
   type InterfaceInfo,
   type Link,
@@ -939,6 +940,7 @@ export async function updateVendorConfig(
 function parseInstanceBackup(data: Record<string, unknown>): InstanceBackup {
   const status = typeof data.status === 'string' ? data.status : 'running';
   const trigger = typeof data.trigger === 'string' ? data.trigger : 'manual';
+  const progress = parseInstanceBackupProgress(data.progress);
   return {
     id: typeof data.id === 'string' ? data.id : '',
     file_name: typeof data.file_name === 'string' ? data.file_name : '',
@@ -946,12 +948,24 @@ function parseInstanceBackup(data: Record<string, unknown>): InstanceBackup {
     sha256: typeof data.sha256 === 'string' ? data.sha256 : '',
     app_version: typeof data.app_version === 'string' ? data.app_version : '',
     migration_version: typeof data.migration_version === 'number' ? data.migration_version : 0,
-    status: (['running', 'success', 'failed'].includes(status)
+    status: (['running', 'success', 'failed', 'cancelled'].includes(status)
       ? status
       : 'running') as InstanceBackupStatus,
     error_message: typeof data.error_message === 'string' ? data.error_message : '',
+    ...(progress ? { progress } : {}),
     trigger: (trigger === 'scheduled' ? 'scheduled' : 'manual') as 'manual' | 'scheduled',
     created_at: typeof data.created_at === 'string' ? data.created_at : '',
+  };
+}
+
+function parseInstanceBackupProgress(value: unknown): InstanceBackupProgress | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  return {
+    phase: typeof record.phase === 'string' ? record.phase : '',
+    message: typeof record.message === 'string' ? record.message : '',
+    current: typeof record.current === 'number' ? record.current : 0,
+    total: typeof record.total === 'number' ? record.total : 0,
   };
 }
 
@@ -970,6 +984,15 @@ export async function fetchInstanceBackups(): Promise<InstanceBackup[]> {
 
 export async function deleteInstanceBackup(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/instance-backups/${encodeURIComponent(id)}`, 'DELETE');
+}
+
+export async function cancelInstanceBackup(id: string): Promise<InstanceBackup> {
+  const response = await requestJSONWithBody(
+    `/api/v1/instance-backups/${encodeURIComponent(id)}/cancel`,
+    'POST',
+  );
+  const data = (response as Record<string, unknown>)?.data as Record<string, unknown>;
+  return parseInstanceBackup(data);
 }
 
 export function instanceBackupDownloadUrl(id: string): string {

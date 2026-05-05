@@ -578,7 +578,14 @@ export interface BackupJob {
 }
 
 // Instance backup types
-export type InstanceBackupStatus = 'running' | 'success' | 'failed';
+export type InstanceBackupStatus = 'running' | 'success' | 'failed' | 'cancelled';
+
+export interface InstanceBackupProgress {
+  phase: string;
+  message: string;
+  current: number;
+  total: number;
+}
 
 export interface InstanceBackup {
   id: string;
@@ -589,6 +596,7 @@ export interface InstanceBackup {
   migration_version: number;
   status: InstanceBackupStatus;
   error_message: string;
+  progress?: InstanceBackupProgress;
   trigger: 'manual' | 'scheduled';
   created_at: string;
 }

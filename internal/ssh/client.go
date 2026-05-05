@@ -85,15 +85,26 @@ func NewClientWithKey(dialer Dialer, host string, port int, username string, pri
 
 // RunCommand executes a command on the remote host and returns stdout.
 func (c *Client) RunCommand(ctx context.Context, command string) (string, error) {
+	var stdout bytes.Buffer
+	if err := c.RunCommandToWriter(ctx, command, &stdout); err != nil {
+		return "", err
+	}
+	return stdout.String(), nil
+}
+
+// RunCommandToWriter executes a command and streams stdout into the provided writer.
+func (c *Client) RunCommandToWriter(ctx context.Context, command string, stdout io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
+	}
 	session, err := c.client.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("creating session: %w", err)
+		return fmt.Errorf("creating session: %w", err)
 	}
 	defer session.Close()
 
-	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	session.Stdout = &stdout
+	session.Stdout = stdout
 	session.Stderr = &stderr
 
 	done := make(chan error, 1)
@@ -104,12 +115,12 @@ func (c *Client) RunCommand(ctx context.Context, command string) (string, error)
 	select {
 	case <-ctx.Done():
 		session.Signal(ssh.SIGTERM)
-		return "", ctx.Err()
+		return ctx.Err()
 	case err := <-done:
 		if err != nil {
-			return "", fmt.Errorf("command %q: %w (stderr: %s)", command, err, stderr.String())
+			return fmt.Errorf("command %q: %w (stderr: %s)", command, err, stderr.String())
 		}
-		return stdout.String(), nil
+		return nil
 	}
 }
 

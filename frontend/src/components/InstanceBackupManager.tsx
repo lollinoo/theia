@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  cancelInstanceBackup,
   createInstanceBackup,
   deleteInstanceBackup,
   fetchInstanceBackups,
@@ -16,12 +17,14 @@ const statusColors: Record<string, string> = {
   success: 'text-status-up',
   failed: 'text-status-down',
   running: 'text-status-probing',
+  cancelled: 'text-on-bg-secondary',
 };
 
 const statusIcons: Record<string, string> = {
   success: '\u2713', // checkmark
   failed: '\u2717', // X mark
   running: '\u25CF', // filled circle
+  cancelled: '\u25CB', // hollow circle
 };
 
 export function InstanceBackupManager() {
@@ -265,6 +268,18 @@ export function InstanceBackupManager() {
     }
   };
 
+  const handleCancel = async (id: string) => {
+    try {
+      const cancelled = await cancelInstanceBackup(id);
+      setBackups((prev) => prev.map((backup) => (backup.id === id ? cancelled : backup)));
+      setCreating(cancelled.status === 'running');
+      startPolling();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Cancel failed';
+      setCreateError(message);
+    }
+  };
+
   const handleRestoreClick = () => {
     fileInputRef.current?.click();
   };
@@ -310,24 +325,29 @@ export function InstanceBackupManager() {
 
     try {
       await restoreInstanceBackup(restoreFile, false);
-      // Server will exit and restart — show a message
       setShowRestoreModal(false);
       setRestoreError('');
-      // The fetch will likely fail with a network error because the server exits.
-      // That's expected — show a "restarting" message instead.
-    } catch {
-      // Expected: server exits during restore, causing a network error.
-      // Show restarting state.
-    } finally {
-      setShowRestoreModal(false);
-      setRestoreLoading(false);
       setRestoreFile(null);
       setRestoreReport(null);
       setRestoreConfirmed(false);
-      // Show a banner that the app is restarting
       setCreateError(
         'Restore initiated. The application is restarting. Please refresh the page in a few seconds.',
       );
+    } catch (err) {
+      if (err instanceof TypeError) {
+        setShowRestoreModal(false);
+        setRestoreFile(null);
+        setRestoreReport(null);
+        setRestoreConfirmed(false);
+        setCreateError(
+          'Restore initiated. The application is restarting. Please refresh the page in a few seconds.',
+        );
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Restore failed';
+      setRestoreError(message);
+    } finally {
+      setRestoreLoading(false);
     }
   };
 
@@ -360,6 +380,17 @@ export function InstanceBackupManager() {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const formatProgress = (backup: InstanceBackup): string => {
+    if (!backup.progress) return '';
+    const message = backup.progress.message || backup.progress.phase;
+    if (!backup.progress.total) return message;
+    const percentage = Math.max(
+      0,
+      Math.min(100, Math.round((backup.progress.current / backup.progress.total) * 100)),
+    );
+    return message ? `${message} (${percentage}%)` : `${percentage}%`;
   };
 
   const hasRunning = backups.some((b) => b.status === 'running') || creating;
@@ -566,6 +597,17 @@ export function InstanceBackupManager() {
                       Download
                     </a>
                   )}
+                  {backup.status === 'running' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleCancel(backup.id);
+                      }}
+                      className="rounded px-2 py-0.5 text-[10px] font-medium text-warning border border-warning/30 hover:bg-warning/10 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  )}
                   {/* Delete button with inline confirm */}
                   <button
                     type="button"
@@ -597,6 +639,9 @@ export function InstanceBackupManager() {
                     {backup.error_message}
                   </p>
                 </button>
+              )}
+              {backup.status === 'running' && backup.progress && (
+                <div className="text-[10px] text-on-bg-secondary">{formatProgress(backup)}</div>
               )}
             </div>
           ))}
@@ -661,6 +706,12 @@ export function InstanceBackupManager() {
                 I understand this will replace all data and restart the application
               </span>
             </label>
+
+            {restoreError && (
+              <div className="rounded-md border border-status-down/20 bg-status-down/5 p-2 text-xs text-status-down">
+                {restoreError}
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex justify-end gap-2">

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -1060,6 +1061,161 @@ func TestValidateAndStageRestoreRejectsArchiveQuotaViolations(t *testing.T) {
 			t.Fatalf("error = %q, want unknown entry quota error", err.Error())
 		}
 	})
+}
+
+func TestValidateAndStageRestoreContextCanceledDoesNotStage(t *testing.T) {
+	ts := setupInstanceBackupTest(t)
+	archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := ts.svc.ValidateAndStageRestoreContext(ctx, archivePath, false)
+
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	stagingDir := filepath.Join(filepath.Dir(ts.dbPath), ".restore-staging")
+	if _, statErr := os.Stat(stagingDir); !os.IsNotExist(statErr) {
+		t.Fatalf("staging dir should not exist after canceled restore validation, stat err = %v", statErr)
+	}
+	markerPath := filepath.Join(filepath.Dir(ts.dbPath), ".theia-restore-pending")
+	if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+		t.Fatalf("marker should not exist after canceled restore validation, stat err = %v", statErr)
+	}
+}
+
+func TestValidateAndStageRestoreContextCleansStagingAfterMarkerFailure(t *testing.T) {
+	ts := setupInstanceBackupTest(t)
+	archivePath := createTestArchive(t, ts.dbPath, ts.encryptionKey, nil)
+	markerPath := filepath.Join(filepath.Dir(ts.dbPath), ".theia-restore-pending")
+	if err := os.Mkdir(markerPath, 0700); err != nil {
+		t.Fatalf("creating marker path directory: %v", err)
+	}
+
+	_, err := ts.svc.ValidateAndStageRestoreContext(t.Context(), archivePath, false)
+
+	if err == nil {
+		t.Fatal("expected marker write failure")
+	}
+	if !strings.Contains(err.Error(), "writing restore marker") {
+		t.Fatalf("error = %q, want marker write context", err.Error())
+	}
+	stagingDir := filepath.Join(filepath.Dir(ts.dbPath), ".restore-staging")
+	if _, statErr := os.Stat(stagingDir); !os.IsNotExist(statErr) {
+		t.Fatalf("staging dir should be removed after marker failure, stat err = %v", statErr)
+	}
+	if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+		t.Fatalf("marker path should be removed after marker failure, stat err = %v", statErr)
+	}
+}
+
+func TestInstanceBackupServiceCreateRejectsArchiveBackupQuotaViolations(t *testing.T) {
+	ts := setupInstanceBackupTest(t)
+	deviceDir := filepath.Join(ts.deviceBackupDir, "router-a")
+	if err := os.MkdirAll(deviceDir, 0755); err != nil {
+		t.Fatalf("creating device backup dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deviceDir, "backup-a.rsc"), bytes.Repeat([]byte("a"), 32), 0644); err != nil {
+		t.Fatalf("writing first backup file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deviceDir, "backup-b.rsc"), bytes.Repeat([]byte("b"), 32), 0644); err != nil {
+		t.Fatalf("writing second backup file: %v", err)
+	}
+	limits := service.DefaultBackupArchiveLimits
+	limits.MaxTotalBytes = 1
+	ts.svc.SetBackupArchiveLimitsForTest(limits)
+
+	backup, err := ts.svc.Create(t.Context())
+
+	if err == nil {
+		t.Fatal("expected backup quota error")
+	}
+	if backup != nil {
+		t.Fatalf("Create returned backup %+v, want nil on quota failure", backup)
+	}
+	list, listErr := ts.svc.List(t.Context())
+	if listErr != nil {
+		t.Fatalf("List after failed create: %v", listErr)
+	}
+	if len(list) != 1 {
+		t.Fatalf("backup records = %d, want 1 failed record", len(list))
+	}
+	if list[0].Status != domain.InstanceBackupStatusFailed {
+		t.Fatalf("backup status = %q, want failed", list[0].Status)
+	}
+	if !strings.Contains(list[0].ErrorMessage, "backup archive exceeds") {
+		t.Fatalf("error message = %q, want backup archive quota context", list[0].ErrorMessage)
+	}
+	if _, statErr := os.Stat(filepath.Join(ts.instanceBackupDir, list[0].ID.String())); !os.IsNotExist(statErr) {
+		t.Fatalf("failed backup directory should be removed, stat err = %v", statErr)
+	}
+}
+
+func TestInstanceBackupServiceCreateCanceledContextPersistsCancelledStatus(t *testing.T) {
+	ts := setupInstanceBackupTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	backup, err := ts.svc.Create(ctx)
+
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if backup != nil {
+		t.Fatalf("Create returned backup %+v, want nil on cancellation", backup)
+	}
+	list, listErr := ts.svc.List(t.Context())
+	if listErr != nil {
+		t.Fatalf("List after canceled create: %v", listErr)
+	}
+	if len(list) != 1 {
+		t.Fatalf("backup records = %d, want 1 cancelled record", len(list))
+	}
+	if list[0].Status != domain.InstanceBackupStatusCancelled {
+		t.Fatalf("backup status = %q, want cancelled", list[0].Status)
+	}
+}
+
+func TestInstanceBackupServiceDeleteRefusesFilePathOutsideInstanceBackupDir(t *testing.T) {
+	ts := setupInstanceBackupTest(t)
+	outsideDir := filepath.Join(ts.tmpDir, "outside-instance-backups")
+	if err := os.MkdirAll(outsideDir, 0755); err != nil {
+		t.Fatalf("creating outside dir: %v", err)
+	}
+	sentinelPath := filepath.Join(outsideDir, "sentinel.txt")
+	if err := os.WriteFile(sentinelPath, []byte("keep"), 0644); err != nil {
+		t.Fatalf("writing sentinel: %v", err)
+	}
+	backup := &domain.InstanceBackup{
+		FileName: "outside.tar.gz",
+		FilePath: filepath.Join(outsideDir, "outside.tar.gz"),
+		Status:   domain.InstanceBackupStatusSuccess,
+	}
+	if err := ts.repo.Create(backup); err != nil {
+		t.Fatalf("Create outside-path backup record: %v", err)
+	}
+
+	err := ts.svc.Delete(t.Context(), backup.ID)
+
+	if err == nil {
+		t.Fatal("expected delete to reject path outside instance backup directory")
+	}
+	if _, statErr := os.Stat(sentinelPath); statErr != nil {
+		t.Fatalf("sentinel should remain after rejected delete, stat err = %v", statErr)
+	}
+	got, getErr := ts.repo.GetByID(backup.ID)
+	if getErr != nil {
+		t.Fatalf("GetByID after rejected delete: %v", getErr)
+	}
+	if got == nil {
+		t.Fatal("backup record should remain after rejected delete")
+	}
 }
 
 func assertPathMode(t *testing.T, path string, want os.FileMode) {

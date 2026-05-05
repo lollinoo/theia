@@ -16,6 +16,8 @@ const (
 	InstanceBackupStatusSuccess InstanceBackupStatus = "success"
 	// InstanceBackupStatusFailed indicates the backup failed.
 	InstanceBackupStatusFailed InstanceBackupStatus = "failed"
+	// InstanceBackupStatusCancelled indicates the backup was cancelled before completion.
+	InstanceBackupStatusCancelled InstanceBackupStatus = "cancelled"
 )
 
 // InstanceBackupTrigger represents what initiated a backup.
@@ -30,17 +32,25 @@ const (
 
 // InstanceBackup represents a full Theia instance backup (database + config files).
 type InstanceBackup struct {
-	ID               uuid.UUID            `json:"id"`
-	FileName         string               `json:"file_name"`
-	FilePath         string               `json:"-"` // disk path, not exposed to API
-	SizeBytes        int64                `json:"size_bytes"`
-	SHA256           string               `json:"sha256"`
-	AppVersion       string               `json:"app_version"`
-	MigrationVersion int                  `json:"migration_version"`
+	ID               uuid.UUID             `json:"id"`
+	FileName         string                `json:"file_name"`
+	FilePath         string                `json:"-"` // disk path, not exposed to API
+	SizeBytes        int64                 `json:"size_bytes"`
+	SHA256           string                `json:"sha256"`
+	AppVersion       string                `json:"app_version"`
+	MigrationVersion int                   `json:"migration_version"`
 	Status           InstanceBackupStatus  `json:"status"`
 	ErrorMessage     string                `json:"error_message,omitempty"`
 	Trigger          InstanceBackupTrigger `json:"trigger"`
 	CreatedAt        time.Time             `json:"created_at"`
+}
+
+// InstanceBackupProgress describes best-effort progress for a running instance backup.
+type InstanceBackupProgress struct {
+	Phase   string `json:"phase"`
+	Message string `json:"message"`
+	Current int64  `json:"current"`
+	Total   int64  `json:"total"`
 }
 
 // InstanceBackupRepository defines persistence operations for instance backups.
