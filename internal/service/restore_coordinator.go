@@ -309,6 +309,26 @@ func (c *RestoreCoordinator) applySQLiteRestore(stagedDB string) error {
 		return fmt.Errorf("stat live db: %w", err)
 	}
 
+	tmpFile, err := os.CreateTemp(filepath.Dir(c.dbPath), ".theia-db-restore-*")
+	if err != nil {
+		return fmt.Errorf("create restored db temp: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close restored db temp: %w", err)
+	}
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := copyFileForRestore(stagedDB, tmpPath); err != nil {
+		return fmt.Errorf("copy staged db: %w", err)
+	}
+
 	if err := os.Remove(c.dbPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove live db: %w", err)
 	}
@@ -318,9 +338,10 @@ func (c *RestoreCoordinator) applySQLiteRestore(stagedDB string) error {
 	if err := os.Remove(c.dbPath + "-shm"); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove live db shm: %w", err)
 	}
-	if err := os.Rename(stagedDB, c.dbPath); err != nil {
+	if err := os.Rename(tmpPath, c.dbPath); err != nil {
 		return fmt.Errorf("activate staged db: %w", err)
 	}
+	cleanupTemp = false
 	if err := os.Chmod(c.dbPath, 0600); err != nil {
 		return fmt.Errorf("chmod restored db: %w", err)
 	}
