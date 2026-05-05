@@ -676,6 +676,39 @@ describe('useCanvasData', () => {
     });
   });
 
+  it('loads persisted terminal manual edge migration failures into diagnostics', async () => {
+    const terminalState = storedManualEdgeMigrationState({
+      status: 'failed',
+      attempt_count: manualEdgeMigrationMaxAttempts,
+      pending_count: 0,
+      failed_count: 1,
+      failed_keys: ['dev-1::dev-2'],
+      last_attempt_at: '2026-05-05T00:00:00.000Z',
+      last_completed_at: '2026-05-05T00:00:01.000Z',
+      last_error: 'still unavailable',
+    });
+    const terminalStateRaw = JSON.stringify(terminalState);
+    window.localStorage.setItem(manualEdgeMigrationStorageKey, terminalStateRaw);
+
+    renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createLink).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+    expect(window.localStorage.getItem(manualEdgeMigrationStorageKey)).toBe(terminalStateRaw);
+    expect(exportCanvasDiagnostics().diagnostics.manualEdgeMigration).toMatchObject({
+      status: 'failed',
+      pendingCount: 0,
+      failedCount: 1,
+      attemptCount: manualEdgeMigrationMaxAttempts,
+      lastError: 'still unavailable',
+    });
+  });
+
   it('retains only failed manual edge migrations in localStorage', async () => {
     const storedEdges = [
       { id: 'edge-1', source: 'dev-1', target: 'dev-2' },
