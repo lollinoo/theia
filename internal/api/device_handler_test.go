@@ -143,6 +143,26 @@ func (r *mockLinkRepo) Create(link *domain.Link) error {
 	return nil
 }
 
+func (r *mockLinkRepo) CreateManualIdempotent(link *domain.Link, browserLocalStorageMigration bool) (*domain.Link, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, existing := range r.links {
+		if mockEquivalentManualLink(existing, link, browserLocalStorageMigration) {
+			cp := *existing
+			return &cp, false, nil
+		}
+	}
+	if link.ID == uuid.Nil {
+		link.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	link.CreatedAt = now
+	link.UpdatedAt = now
+	stored := *link
+	r.links[link.ID] = &stored
+	return &stored, true, nil
+}
+
 func (r *mockLinkRepo) GetByID(id uuid.UUID) (*domain.Link, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -219,6 +239,28 @@ func (r *mockLinkRepo) Upsert(link *domain.Link) (bool, error) {
 	link.UpdatedAt = now
 	r.links[link.ID] = link
 	return true, nil
+}
+
+func mockEquivalentManualLink(existing, candidate *domain.Link, browserLocalStorageMigration bool) bool {
+	if browserLocalStorageMigration {
+		return (existing.SourceDeviceID == candidate.SourceDeviceID && existing.TargetDeviceID == candidate.TargetDeviceID) ||
+			(existing.SourceDeviceID == candidate.TargetDeviceID && existing.TargetDeviceID == candidate.SourceDeviceID)
+	}
+	return mockSameLinkEndpoints(existing, candidate) || mockReverseLinkEndpoints(existing, candidate)
+}
+
+func mockSameLinkEndpoints(a, b *domain.Link) bool {
+	return a.SourceDeviceID == b.SourceDeviceID &&
+		a.SourceIfName == b.SourceIfName &&
+		a.TargetDeviceID == b.TargetDeviceID &&
+		a.TargetIfName == b.TargetIfName
+}
+
+func mockReverseLinkEndpoints(a, b *domain.Link) bool {
+	return a.SourceDeviceID == b.TargetDeviceID &&
+		a.SourceIfName == b.TargetIfName &&
+		a.TargetDeviceID == b.SourceDeviceID &&
+		a.TargetIfName == b.SourceIfName
 }
 
 // --- Mock SettingsRepo ---

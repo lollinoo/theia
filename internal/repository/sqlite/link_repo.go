@@ -15,11 +15,12 @@ import (
 
 // LinkRepo implements domain.LinkRepository using SQLite.
 type LinkRepo struct {
-	db            *DB
-	onChange      chan<- struct{}
-	subscribersMu sync.RWMutex
-	subscribers   map[chan domain.LinkChangeEvent]struct{}
-	repairPending atomic.Bool
+	db             *DB
+	onChange       chan<- struct{}
+	manualCreateMu sync.Mutex
+	subscribersMu  sync.RWMutex
+	subscribers    map[chan domain.LinkChangeEvent]struct{}
+	repairPending  atomic.Bool
 }
 
 // NewLinkRepo creates a new SQLite-backed link repository.
@@ -113,6 +114,65 @@ func (r *LinkRepo) createOnce(link *domain.Link) error {
 	r.notify()
 	r.publishChange(domain.ChangeKindCreated, link.ID)
 	return nil
+}
+
+// CreateManualIdempotent inserts a manual link or returns the stored equivalent
+// link without mutating existing discovery-owned rows.
+func (r *LinkRepo) CreateManualIdempotent(link *domain.Link, browserLocalStorageMigration bool) (*domain.Link, bool, error) {
+	var stored *domain.Link
+	var created bool
+	err := withSQLiteBusyRetry(func() error {
+		r.manualCreateMu.Lock()
+		defer r.manualCreateMu.Unlock()
+
+		var innerErr error
+		stored, created, innerErr = r.createManualIdempotentOnce(link, browserLocalStorageMigration)
+		return innerErr
+	})
+	return stored, created, err
+}
+
+func (r *LinkRepo) createManualIdempotentOnce(link *domain.Link, browserLocalStorageMigration bool) (*domain.Link, bool, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, false, fmt.Errorf("beginning manual link create transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	existing, err := findManualCreateEquivalentLink(tx, link, browserLocalStorageMigration)
+	if err != nil {
+		return nil, false, fmt.Errorf("checking equivalent manual link: %w", err)
+	}
+	if existing != nil {
+		return existing, false, nil
+	}
+
+	now := time.Now().UTC()
+	link.CreatedAt = now
+	link.UpdatedAt = now
+	if link.ID == uuid.Nil {
+		link.ID = uuid.New()
+	}
+
+	if _, err = tx.Exec(
+		`INSERT INTO links (id, source_device_id, source_if_name,
+			target_device_id, target_if_name, discovery_protocol,
+			created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		link.ID.String(), link.SourceDeviceID.String(), link.SourceIfName,
+		link.TargetDeviceID.String(), link.TargetIfName,
+		string(link.DiscoveryProtocol), link.CreatedAt, link.UpdatedAt,
+	); err != nil {
+		return nil, false, fmt.Errorf("inserting manual link: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("committing manual link insert: %w", err)
+	}
+
+	r.notify()
+	r.publishChange(domain.ChangeKindCreated, link.ID)
+	inserted := *link
+	return &inserted, true, nil
 }
 
 // GetByID retrieves a single link by UUID.
@@ -464,6 +524,67 @@ func (r *LinkRepo) scanLinks(rows *sql.Rows) ([]domain.Link, error) {
 	}
 
 	return links, rows.Err()
+}
+
+type linkRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func findManualCreateEquivalentLink(tx *Tx, link *domain.Link, browserLocalStorageMigration bool) (*domain.Link, error) {
+	if browserLocalStorageMigration {
+		return scanLinkRow(tx.QueryRow(
+			`SELECT id, source_device_id, source_if_name,
+				target_device_id, target_if_name, discovery_protocol,
+				created_at, updated_at
+			FROM links
+			WHERE (source_device_id = ? AND target_device_id = ?)
+			   OR (source_device_id = ? AND target_device_id = ?)
+			ORDER BY created_at
+			LIMIT 1`,
+			link.SourceDeviceID.String(), link.TargetDeviceID.String(),
+			link.TargetDeviceID.String(), link.SourceDeviceID.String(),
+		))
+	}
+
+	return scanLinkRow(tx.QueryRow(
+		`SELECT id, source_device_id, source_if_name,
+			target_device_id, target_if_name, discovery_protocol,
+			created_at, updated_at
+		FROM links
+		WHERE (source_device_id = ? AND source_if_name = ?
+		       AND target_device_id = ? AND target_if_name = ?)
+		   OR (source_device_id = ? AND source_if_name = ?
+		       AND target_device_id = ? AND target_if_name = ?)
+		ORDER BY created_at
+		LIMIT 1`,
+		link.SourceDeviceID.String(), link.SourceIfName,
+		link.TargetDeviceID.String(), link.TargetIfName,
+		link.TargetDeviceID.String(), link.TargetIfName,
+		link.SourceDeviceID.String(), link.SourceIfName,
+	))
+}
+
+func scanLinkRow(row linkRowScanner) (*domain.Link, error) {
+	var link domain.Link
+	var idStr, srcDeviceID, tgtDeviceID, protocol string
+
+	err := row.Scan(
+		&idStr, &srcDeviceID, &link.SourceIfName,
+		&tgtDeviceID, &link.TargetIfName, &protocol,
+		&link.CreatedAt, &link.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	link.ID = uuid.MustParse(idStr)
+	link.SourceDeviceID = uuid.MustParse(srcDeviceID)
+	link.TargetDeviceID = uuid.MustParse(tgtDeviceID)
+	link.DiscoveryProtocol = domain.DiscoveryProtocol(protocol)
+	return &link, nil
 }
 
 type reverseLinkMatch struct {
