@@ -1139,6 +1139,34 @@ func TestRunBinaryExportWrites0600BackupFile(t *testing.T) {
 }
 
 func TestRunBinaryExportStreamsHashWithoutPostDownloadRead(t *testing.T) {
+	assertFunctionBodyExcludes(t, "runBinaryExport", []string{
+		"os.ReadFile(filePath)",
+		"sha256.Sum256(data)",
+		"SizeBytes: len(data)",
+	})
+	assertFunctionBodyExcludes(t, "downloadSFTPFileToDiskAndHash", []string{
+		"os.ReadFile(localPath)",
+		"os.ReadFile(filePath)",
+		"sha256.Sum256(data)",
+		"SizeBytes: len(data)",
+		"size: len(data)",
+	})
+}
+
+func assertFunctionBodyExcludes(t *testing.T, functionName string, forbiddenFragments []string) {
+	t.Helper()
+
+	body := backupServiceFunctionBody(t, functionName)
+	for _, forbidden := range forbiddenFragments {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("%s must not contain post-download whole-file read pattern %q", functionName, forbidden)
+		}
+	}
+}
+
+func backupServiceFunctionBody(t *testing.T, functionName string) string {
+	t.Helper()
+
 	src, err := os.ReadFile("backup_service.go")
 	if err != nil {
 		t.Fatalf("ReadFile(backup_service.go): %v", err)
@@ -1153,7 +1181,7 @@ func TestRunBinaryExportStreamsHashWithoutPostDownloadRead(t *testing.T) {
 	var body string
 	for _, decl := range parsed.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "runBinaryExport" || fn.Body == nil {
+		if !ok || fn.Name.Name != functionName || fn.Body == nil {
 			continue
 		}
 		start := fset.Position(fn.Body.Pos()).Offset
@@ -1162,18 +1190,10 @@ func TestRunBinaryExportStreamsHashWithoutPostDownloadRead(t *testing.T) {
 		break
 	}
 	if body == "" {
-		t.Fatal("runBinaryExport body not found")
+		t.Fatalf("%s body not found", functionName)
 	}
 
-	for _, forbidden := range []string{
-		"os.ReadFile(filePath)",
-		"sha256.Sum256(data)",
-		"SizeBytes: len(data)",
-	} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("runBinaryExport must not contain post-download whole-file read pattern %q", forbidden)
-		}
-	}
+	return body
 }
 
 func TestRunBinaryExportRecordsStreamedHashAndSize(t *testing.T) {
