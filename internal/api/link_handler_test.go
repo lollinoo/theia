@@ -135,6 +135,234 @@ func TestLinkHandlerCreate_DuplicateManualLinkIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestLinkHandlerCreate_DuplicateManualPreservesDiscoveredSameDirection(t *testing.T) {
+	handler, linkRepo, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	if err := deviceRepo.Create(tgtDevice); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+	existing := &domain.Link{
+		ID:                uuid.New(),
+		SourceDeviceID:    srcDevice.ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    tgtDevice.ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(existing); err != nil {
+		t.Fatalf("seed discovered link: %v", err)
+	}
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"ether1",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"ether2"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for duplicate discovered link, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	respLink := decodeLinkCreateResponse(t, rec)
+	if respLink.ID != existing.ID {
+		t.Fatalf("expected response ID %s, got %s", existing.ID, respLink.ID)
+	}
+	if respLink.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected response to preserve LLDP protocol, got %q", respLink.DiscoveryProtocol)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("get all links: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected exactly 1 stored link, got %d", len(links))
+	}
+	if links[0].DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected stored link to preserve LLDP protocol, got %q", links[0].DiscoveryProtocol)
+	}
+}
+
+func TestLinkHandlerCreate_DuplicateManualPreservesDiscoveredReverseDirection(t *testing.T) {
+	handler, linkRepo, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	if err := deviceRepo.Create(tgtDevice); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+	existing := &domain.Link{
+		ID:                uuid.New(),
+		SourceDeviceID:    tgtDevice.ID,
+		SourceIfName:      "ether2",
+		TargetDeviceID:    srcDevice.ID,
+		TargetIfName:      "ether1",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(existing); err != nil {
+		t.Fatalf("seed discovered link: %v", err)
+	}
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"ether1",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"ether2"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for reverse duplicate discovered link, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	respLink := decodeLinkCreateResponse(t, rec)
+	if respLink.ID != existing.ID {
+		t.Fatalf("expected response ID %s, got %s", existing.ID, respLink.ID)
+	}
+	if respLink.SourceDeviceID != existing.SourceDeviceID || respLink.SourceIfName != existing.SourceIfName ||
+		respLink.TargetDeviceID != existing.TargetDeviceID || respLink.TargetIfName != existing.TargetIfName {
+		t.Fatalf("expected response to use stored orientation %+v, got %+v", *existing, respLink)
+	}
+	if respLink.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected response to preserve LLDP protocol, got %q", respLink.DiscoveryProtocol)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("get all links: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected exactly 1 stored link, got %d", len(links))
+	}
+	if links[0].DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected stored link to preserve LLDP protocol, got %q", links[0].DiscoveryProtocol)
+	}
+}
+
+func TestLinkHandlerCreate_BrowserLocalStorageMigrationUsesExistingUnorderedDevicePair(t *testing.T) {
+	handler, linkRepo, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	if err := deviceRepo.Create(tgtDevice); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+	existing := &domain.Link{
+		ID:                uuid.New(),
+		SourceDeviceID:    srcDevice.ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    tgtDevice.ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(existing); err != nil {
+		t.Fatalf("seed discovered link: %v", err)
+	}
+
+	body := `{
+		"source_device_id":"` + tgtDevice.ID.String() + `",
+		"source_if_name":"",
+		"target_device_id":"` + srcDevice.ID.String() + `",
+		"target_if_name":"",
+		"migration_source":"browser_localstorage"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for localStorage duplicate device pair, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	respLink := decodeLinkCreateResponse(t, rec)
+	if respLink.ID != existing.ID {
+		t.Fatalf("expected response ID %s, got %s", existing.ID, respLink.ID)
+	}
+	if respLink.SourceIfName != existing.SourceIfName || respLink.TargetIfName != existing.TargetIfName {
+		t.Fatalf("expected response to use stored interface names %q/%q, got %q/%q",
+			existing.SourceIfName, existing.TargetIfName, respLink.SourceIfName, respLink.TargetIfName)
+	}
+	if respLink.DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected response to preserve LLDP protocol, got %q", respLink.DiscoveryProtocol)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("get all links: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected exactly 1 stored link, got %d", len(links))
+	}
+	if links[0].SourceIfName == "" || links[0].TargetIfName == "" {
+		t.Fatalf("expected no empty-interface duplicate, stored link: %+v", links[0])
+	}
+}
+
+func TestLinkHandlerCreate_UnknownMigrationSourceRejected(t *testing.T) {
+	handler, _, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	if err := deviceRepo.Create(tgtDevice); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"ether1",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"ether2",
+		"migration_source":"unknown"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown migration source, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLinkHandlerCreate_BrowserLocalStorageMigrationRejectsInterfaceNames(t *testing.T) {
+	handler, _, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	if err := deviceRepo.Create(tgtDevice); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"ether1",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"",
+		"migration_source":"browser_localstorage"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for browser_localstorage with interface names, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func decodeLinkCreateResponse(t *testing.T, rec *httptest.ResponseRecorder) domain.Link {
 	t.Helper()
 	var resp struct {

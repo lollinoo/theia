@@ -125,6 +125,14 @@ func (h *LinkHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isBrowserLocalStorageMigration := req.MigrationSource == "browser_localstorage"
+	if req.MigrationSource != "" && !isBrowserLocalStorageMigration {
+		writeError(w, http.StatusBadRequest, "unsupported migration_source")
+		return
+	}
+	if isBrowserLocalStorageMigration && (req.SourceIfName != "" || req.TargetIfName != "") {
+		writeError(w, http.StatusBadRequest, "browser_localstorage migration requires empty interface names")
+		return
+	}
 
 	// Per D-12: Allow empty if_name for the virtual side only
 	if req.SourceIfName == "" && !srcIsVirtual && !isBrowserLocalStorageMigration {
@@ -154,18 +162,59 @@ func (h *LinkHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		DiscoveryProtocol: domain.DiscoveryProtocolManual,
 	}
 
-	created, err := h.linkRepo.Upsert(link)
+	existingLinks, err := h.linkRepo.GetAll()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
-	if created {
-		w.WriteHeader(http.StatusCreated)
-	} else {
+	if existing, ok := findEquivalentCreateLink(existingLinks, *link, isBrowserLocalStorageMigration); ok {
 		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": existing})
+		return
 	}
+
+	if err := h.linkRepo.Create(link); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": link})
+}
+
+func findEquivalentCreateLink(links []domain.Link, candidate domain.Link, browserLocalStorageMigration bool) (domain.Link, bool) {
+	for _, existing := range links {
+		if browserLocalStorageMigration {
+			if sameUnorderedDevicePair(existing, candidate) {
+				return existing, true
+			}
+			continue
+		}
+		if sameLinkEndpoints(existing, candidate) || reverseLinkEndpoints(existing, candidate) {
+			return existing, true
+		}
+	}
+	return domain.Link{}, false
+}
+
+func sameLinkEndpoints(a, b domain.Link) bool {
+	return a.SourceDeviceID == b.SourceDeviceID &&
+		a.SourceIfName == b.SourceIfName &&
+		a.TargetDeviceID == b.TargetDeviceID &&
+		a.TargetIfName == b.TargetIfName
+}
+
+func reverseLinkEndpoints(a, b domain.Link) bool {
+	return a.SourceDeviceID == b.TargetDeviceID &&
+		a.SourceIfName == b.TargetIfName &&
+		a.TargetDeviceID == b.SourceDeviceID &&
+		a.TargetIfName == b.SourceIfName
+}
+
+func sameUnorderedDevicePair(a, b domain.Link) bool {
+	return (a.SourceDeviceID == b.SourceDeviceID && a.TargetDeviceID == b.TargetDeviceID) ||
+		(a.SourceDeviceID == b.TargetDeviceID && a.TargetDeviceID == b.SourceDeviceID)
 }
 
 // HandleUpdate handles PUT /api/v1/links/:id
