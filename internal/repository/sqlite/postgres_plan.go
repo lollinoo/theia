@@ -38,7 +38,7 @@ var defaultRepositoryPlanCheckRegistry = []repositoryPlanCheck{
 		SQLiteQuery:           `SELECT id FROM links WHERE source_device_id = ? AND target_device_id = ? AND target_if_name = ? AND (source_if_name = ? OR source_if_name = '' OR ? = '')`,
 		SQLiteExpectedIndex:   "idx_links_pair_lookup",
 		PostgresQuery:         `SELECT id FROM links WHERE source_device_id = $1 AND target_device_id = $2 AND target_if_name = $3 AND (source_if_name = $4 OR source_if_name = '' OR $5 = '')`,
-		PostgresExpectedIndex: "idx_links_pair_lookup",
+		PostgresExpectedIndex: "idx_links_target_device_created_at",
 		Args:                  []any{"device-a", "device-b", "ether10", "ether1", "ether1"},
 	},
 	{
