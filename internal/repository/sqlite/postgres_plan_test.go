@@ -19,7 +19,7 @@ func TestDefaultPostgresPlanChecks_CoverScaleCriticalLookups(t *testing.T) {
 	wantIndexes := map[string]string{
 		"device-by-sysname":              "idx_devices_sys_name_lookup",
 		"link-pair-lookup":               "idx_links_target_device_created_at",
-		"observation-ingest-lookup":      "idx_topology_observations_ingest_lookup",
+		"observation-ingest-lookup":      "idx_topology_observations_remote_identity_protocol",
 		"unresolved-neighbors-by-device": "idx_unresolved_neighbors_active",
 	}
 
