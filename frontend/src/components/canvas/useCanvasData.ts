@@ -44,7 +44,9 @@ import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
 import {
   type ManualEdgeMigrationResult,
+  type ManualEdgeMigrationState,
   migrateStoredManualEdges,
+  readManualEdgeMigrationState,
 } from './manualEdgeMigration';
 import {
   buildRuntimePatchPlan,
@@ -373,20 +375,23 @@ function manualEdgeMigrationHasVisibleResult(
     result.appliedCount > 0 ||
     result.failedCount > 0 ||
     result.skippedCount > 0 ||
-    result.state.pending_count > 0 ||
-    result.state.failed_count > 0
+    manualEdgeMigrationStateHasVisibleResult(result.state)
   );
 }
 
-function recordManualEdgeMigrationDiagnostics(
-  result: ManualEdgeMigrationResult,
-  hadPendingStorage: boolean,
-): void {
-  if (!manualEdgeMigrationHasVisibleResult(result, hadPendingStorage)) {
-    return;
-  }
+function manualEdgeMigrationStateHasVisibleResult(state: ManualEdgeMigrationState): boolean {
+  return (
+    state.status !== 'idle' ||
+    state.attempt_count > 0 ||
+    state.pending_count > 0 ||
+    state.applied_count > 0 ||
+    state.failed_count > 0 ||
+    state.skipped_count > 0 ||
+    state.last_error !== undefined
+  );
+}
 
-  const state = result.state;
+function updateManualEdgeMigrationDiagnosticsState(state: ManualEdgeMigrationState): void {
   updateCanvasDiagnosticsState({
     manualEdgeMigration: {
       status: state.status,
@@ -400,6 +405,29 @@ function recordManualEdgeMigrationDiagnostics(
       lastError: state.last_error,
     },
   });
+}
+
+function recordPersistedManualEdgeMigrationDiagnostics(storage: Pick<Storage, 'getItem'>): void {
+  if (storage.getItem(manualEdgeMigrationStorageKey) === null) {
+    return;
+  }
+
+  const state = readManualEdgeMigrationState(storage, manualEdgeMigrationStorageKey);
+  if (manualEdgeMigrationStateHasVisibleResult(state)) {
+    updateManualEdgeMigrationDiagnosticsState(state);
+  }
+}
+
+function recordManualEdgeMigrationDiagnostics(
+  result: ManualEdgeMigrationResult,
+  hadPendingStorage: boolean,
+): void {
+  if (!manualEdgeMigrationHasVisibleResult(result, hadPendingStorage)) {
+    return;
+  }
+
+  const state = result.state;
+  updateManualEdgeMigrationDiagnosticsState(state);
 
   const metadata = {
     status: state.status,
@@ -645,6 +673,8 @@ export function useCanvasData({
             if (manualEdgeMigrationResult.appliedCount > 0) {
               lastCanvasTopologyEtagRef.current = null;
             }
+          } else {
+            recordPersistedManualEdgeMigrationDiagnostics(window.localStorage);
           }
 
           const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
