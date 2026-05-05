@@ -24,8 +24,11 @@ export function CanvasOverlays({
 }: CanvasOverlaysProps) {
   return (
     <>
-      {/* Bottom-center stacking container for all status pills */}
-      <div className="absolute bottom-16 left-1/2 z-50 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-none">
+      {/* Responsive stacking container for all status pills */}
+      <div
+        data-testid="canvas-overlay-stack"
+        className="absolute top-20 bottom-auto left-1/2 z-50 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-none sm:top-auto sm:bottom-16"
+      >
         {selectedNodeCount > 1 && (
           <button
             type="button"

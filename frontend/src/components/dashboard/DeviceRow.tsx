@@ -28,8 +28,8 @@ export function DeviceRow({
 
   return (
     <tr className="[&:nth-child(even)]:bg-surface-high/30 hover:bg-elevated/50 transition-colors duration-150">
-      {/* Name -- sticky first column per D-20 */}
-      <td className="px-3 py-2.5 sticky left-0 z-[4] bg-inherit">
+      {/* Name */}
+      <td className="px-3 py-2.5">
         <div className="font-medium text-on-bg">{row.displayName}</div>
         {row.sysName && row.sysName !== row.displayName && (
           <div className="text-on-bg-secondary text-[11px] mt-0.5">{row.sysName}</div>

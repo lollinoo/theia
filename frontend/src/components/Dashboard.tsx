@@ -119,9 +119,9 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
     : '';
 
   return (
-    <div className="h-full pt-10 flex flex-col transition-colors duration-200">
+    <div className="h-full pt-[86px] flex flex-col transition-colors duration-200">
       {/* Filter bar */}
-      <div className="flex items-center gap-3 px-4 py-3 bg-surface/50 transition-colors duration-200">
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-surface/50 transition-colors duration-200">
         <FilterSelect
           value={statusFilter}
           onChange={setStatusFilter}
@@ -141,7 +141,10 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
           label="Area"
         />
 
-        <div className="relative flex-1">
+        <div
+          data-testid="devices-search-field"
+          className="relative min-w-[min(26rem,100%)] flex-[2_1_24rem]"
+        >
           <MaterialIcon
             name="search"
             size={14}

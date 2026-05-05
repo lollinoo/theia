@@ -56,9 +56,12 @@ describe('NavigationPill', () => {
 
   it('renders Global button and area buttons for each area', () => {
     render(<NavigationPill {...defaultProps} />);
-    expect(screen.getByText('Global')).toBeDefined();
-    expect(screen.getByText('Backbone')).toBeDefined();
-    expect(screen.getByText('Distribution')).toBeDefined();
+    const desktopAreaSelector = screen.getByTestId('desktop-area-selector');
+    expect(desktopAreaSelector.textContent).toContain('Global');
+    expect(desktopAreaSelector.textContent).toContain('Backbone');
+    expect(desktopAreaSelector.textContent).toContain('Distribution');
+    expect(desktopAreaSelector.className).toContain('hidden');
+    expect(desktopAreaSelector.className).toContain('sm:flex');
   });
 
   it('clicking Global calls onAreaSelect with null (shows full canvas)', () => {
@@ -71,20 +74,47 @@ describe('NavigationPill', () => {
         onAreaSelect={onAreaSelect}
       />,
     );
-    fireEvent.click(screen.getByText('Global'));
+    fireEvent.click(screen.getByTestId('desktop-area-selector').querySelector('button')!);
     expect(onAreaSelect).toHaveBeenCalledWith(null);
   });
 
   it('clicking an area button calls onAreaSelect with area id', () => {
     const onAreaSelect = vi.fn();
     render(<NavigationPill {...defaultProps} onAreaSelect={onAreaSelect} />);
-    fireEvent.click(screen.getByText('Backbone'));
+    fireEvent.click(screen.getByTestId('desktop-area-selector').querySelectorAll('button')[1]);
     expect(onAreaSelect).toHaveBeenCalledWith('area-1');
+  });
+
+  it('renders a mobile area select that switches between Global and areas', () => {
+    const onAreaSelect = vi.fn();
+    render(
+      <NavigationPill
+        {...defaultProps}
+        activeView="canvas"
+        selectedAreaId="area-1"
+        onAreaSelect={onAreaSelect}
+      />,
+    );
+
+    const areaSelect = screen.getByLabelText('Area selector') as HTMLSelectElement;
+    expect(areaSelect.className).toContain('sm:hidden');
+    expect(screen.getByRole('option', { name: 'Global' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Backbone' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Distribution' })).toBeInTheDocument();
+    expect(areaSelect.value).toBe('area-1');
+
+    fireEvent.change(areaSelect, { target: { value: 'area-2' } });
+    expect(onAreaSelect).toHaveBeenCalledWith('area-2');
+
+    fireEvent.change(areaSelect, { target: { value: '__global__' } });
+    expect(onAreaSelect).toHaveBeenCalledWith(null);
   });
 
   it('on Devices view pill shows simplified layout with Devices label and no area buttons', () => {
     render(<NavigationPill {...defaultProps} activeView="dashboard" />);
-    expect(screen.getByText('Devices')).toBeDefined();
+    const devicesLabel = screen.getByText('Devices');
+    expect(devicesLabel).toBeDefined();
+    expect(devicesLabel.className).toContain('flex-1');
     expect(screen.queryByText('Global')).toBeNull();
     expect(screen.queryByText('Backbone')).toBeNull();
   });
@@ -112,9 +142,9 @@ describe('NavigationPill', () => {
 
     expect(screen.getByText('THEIA')).toBeInTheDocument();
     expect(screen.getByLabelText('Area Hub')).toBeInTheDocument();
-    expect(screen.getByText('Global')).toBeInTheDocument();
-    expect(screen.getByText('Backbone')).toBeInTheDocument();
-    expect(screen.getByText('Distribution')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Global');
+    expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Backbone');
+    expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Distribution');
     expect(screen.getByLabelText('Devices Dashboard')).toBeInTheDocument();
     expect(screen.getByLabelText('Switch to light theme')).toBeInTheDocument();
     expect(container.firstElementChild?.className).toContain('topology-glass');

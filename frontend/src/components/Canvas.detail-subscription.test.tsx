@@ -206,4 +206,33 @@ describe('Canvas detail subscription', () => {
 
     expect(xyflowMocks.MiniMap).toHaveBeenCalledTimes(1);
   });
+
+  it('passes responsive placement classes to the minimap without changing its behavior props', () => {
+    render(
+      <Canvas
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    const minimapProps = xyflowMocks.MiniMap.mock.calls[0]?.[0];
+    expect(minimapProps.className).toContain('!m-0');
+    expect(minimapProps.className).toContain('!bottom-0');
+    expect(minimapProps.className).toContain('!right-4');
+    expect(minimapProps.className).not.toContain('!right-0');
+    expect(minimapProps.className).not.toContain('!bottom-5');
+    expect(minimapProps.className).not.toContain('!right-5');
+    expect(minimapProps.pannable).toBe(true);
+    expect(minimapProps.zoomable).toBe(true);
+    expect(minimapProps.nodeColor).toBeInstanceOf(Function);
+    expect(minimapProps.maskColor).toBe('var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))');
+    expect(minimapProps.style).toMatchObject({
+      backgroundColor: 'var(--nt-surface-container)',
+      border: '1px solid var(--nt-outline)',
+      borderRadius: 16,
+    });
+  });
 });

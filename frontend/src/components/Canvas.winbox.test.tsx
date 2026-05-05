@@ -293,6 +293,11 @@ describe('Canvas WinBox gating', () => {
     );
 
     expect(await screen.findByText(BRIDGE_HEALTH_TIMEOUT_MESSAGE)).toBeInTheDocument();
+    const toast = screen.getByTestId('winbox-error-toast');
+    expect(toast.className).toContain('top-20');
+    expect(toast.className).toContain('bottom-auto');
+    expect(toast.className).toContain('sm:bottom-16');
+    expect(toast.className).toContain('sm:top-auto');
   });
 
   it('launches WinBox through the flow hook from the menu action', async () => {

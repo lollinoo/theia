@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Toolbar } from './Toolbar';
 
@@ -25,9 +25,10 @@ const defaultProps = {
 describe('Toolbar (COMP-04)', () => {
   it('renders MaterialIcon components — no inline SVGs', () => {
     const { container } = render(<Toolbar {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
     // With MaterialIcon mocked, the mocked spans appear instead of SVGs
     const materialIcons = container.querySelectorAll('[data-testid^="material-icon-"]');
-    expect(materialIcons.length).toBeGreaterThanOrEqual(6);
+    expect(materialIcons.length).toBeGreaterThanOrEqual(7);
     // No real SVG elements should remain (only the mocked spans)
     const svgElements = container.querySelectorAll('svg');
     expect(svgElements.length).toBe(0);
@@ -35,13 +36,14 @@ describe('Toolbar (COMP-04)', () => {
 
   it('renders icons for all 6 toolbar actions', () => {
     render(<Toolbar {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
 
     expect(screen.getByTestId('material-icon-edit')).toBeInTheDocument();
     expect(screen.getByTestId('material-icon-search')).toBeInTheDocument();
     expect(screen.getByTestId('material-icon-add')).toBeInTheDocument();
     expect(screen.getByTestId('material-icon-link')).toBeInTheDocument();
     expect(screen.getByTestId('material-icon-notifications')).toBeInTheDocument();
-    expect(screen.getByTestId('material-icon-settings')).toBeInTheDocument();
+    expect(screen.getAllByTestId('material-icon-settings').length).toBeGreaterThanOrEqual(1);
   });
 
   it('does not render border-b separators between buttons', () => {
@@ -53,6 +55,7 @@ describe('Toolbar (COMP-04)', () => {
 
   it('renders alert count badge when alertCount > 0', () => {
     const { container } = render(<Toolbar {...defaultProps} alertCount={3} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
     // The badge span contains the count number
     const badgeEl = container.querySelector('.bg-status-down');
     expect(badgeEl).not.toBeNull();
@@ -69,6 +72,7 @@ describe('Toolbar (COMP-04)', () => {
 
   it('keeps all toolbar actions as icon buttons with accessible titles', () => {
     render(<Toolbar {...defaultProps} alertCount={8} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
 
     expect(screen.getByTitle(/Edit Mode/)).toBeInTheDocument();
     expect(screen.getByTitle(/Search/)).toBeInTheDocument();
@@ -77,5 +81,40 @@ describe('Toolbar (COMP-04)', () => {
     expect(screen.getByTitle('Alerts')).toBeInTheDocument();
     expect(screen.getByTitle(/Settings/)).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
+  });
+
+  it('keeps desktop tools mounted by default while mobile tools are collapsed', () => {
+    const { container } = render(<Toolbar {...defaultProps} />);
+
+    expect(container.firstElementChild?.className).toContain('top-20');
+    expect(container.firstElementChild?.className).not.toContain('top-16');
+    const mobileToggle = screen.getByRole('button', { name: 'Show canvas tools' });
+
+    expect(mobileToggle.className).toContain('sm:hidden');
+    expect(within(mobileToggle).getByTestId('material-icon-build')).toBeInTheDocument();
+    expect(within(mobileToggle).queryByTestId('material-icon-terminal')).not.toBeInTheDocument();
+    expect(within(mobileToggle).queryByTestId('material-icon-hub')).not.toBeInTheDocument();
+    expect(within(mobileToggle).queryByTestId('material-icon-settings')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('material-icon-filter_list')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('material-icon-widgets')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show canvas tools' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(screen.getByTitle(/Search/).className).toContain('hidden sm:flex');
+    expect(screen.getByTitle(/Add Device/).className).toContain('hidden sm:flex');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
+
+    expect(screen.getByRole('button', { name: 'Hide canvas tools' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByTitle(/Search/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Add Device/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Create Link/)).toBeInTheDocument();
+    expect(screen.getByTitle('Alerts')).toBeInTheDocument();
+    expect(screen.getByTitle(/Settings/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Search/).className).not.toContain('hidden sm:flex');
   });
 });

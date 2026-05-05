@@ -100,7 +100,6 @@ function App() {
           onViewChange={handleViewChange}
           onAreaSelect={handleAreaSelect}
         />
-        <Watermark activeView={activeView} selectedAreaId={selectedAreaId} areas={areas} />
         {/* All views stay mounted; inactive ones hidden via CSS */}
         <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
           <AreaHub
@@ -113,7 +112,8 @@ function App() {
             }}
           />
         </div>
-        <div className={activeView === 'canvas' ? 'h-full' : 'hidden'}>
+        <div className={activeView === 'canvas' ? 'relative h-full' : 'hidden'}>
+          <Watermark activeView={activeView} selectedAreaId={selectedAreaId} areas={areas} />
           <ReactFlowProvider>
             <Canvas
               snapshot={snapshot}

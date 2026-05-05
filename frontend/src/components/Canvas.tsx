@@ -84,6 +84,7 @@ const TopologyMiniMap = memo(function TopologyMiniMap() {
     <MiniMap<DeviceNode>
       pannable
       zoomable
+      className="!m-0 !right-4 !bottom-0"
       nodeColor={topologyMinimapNodeColor}
       style={minimapStyle}
       maskColor={minimapMaskColor}
@@ -905,7 +906,10 @@ export default function Canvas({
       />
       {/* WinBox launch error toast */}
       {winboxError && (
-        <div className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-status-down/35 bg-surface-container-high px-4 py-2.5 text-xs text-status-down shadow-floating">
+        <div
+          data-testid="winbox-error-toast"
+          className="absolute top-20 bottom-auto left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-status-down/35 bg-surface-container-high px-4 py-2.5 text-xs text-status-down shadow-floating sm:top-auto sm:bottom-16"
+        >
           <span>{winboxError}</span>
           <button type="button" onClick={clearWinboxError} className="ml-1 hover:opacity-70">
             &times;

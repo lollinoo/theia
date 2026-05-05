@@ -240,4 +240,14 @@ describe('App', () => {
     expect(screen.getByTestId('watermark')).toHaveAttribute('data-hidden', 'false');
     expect(watermarkPropsMock.mock.lastCall?.[0]).not.toHaveProperty('hidden');
   });
+
+  it('anchors the canvas watermark inside the canvas viewport wrapper', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+
+    const canvasViewport = screen.getByTestId('watermark').parentElement;
+    expect(canvasViewport?.className).toContain('relative');
+    expect(canvasViewport?.className).toContain('h-full');
+  });
 });

@@ -97,6 +97,15 @@ describe('DeviceTable', () => {
     expect(thead?.className).toMatch(/top-0/);
   });
 
+  it('does not keep the Name header sticky during horizontal table scrolling', () => {
+    renderTable();
+
+    const nameHeader = screen.getByText('Name').closest('th');
+    expect(nameHeader).toBeTruthy();
+    expect(nameHeader?.className).not.toContain('sticky');
+    expect(nameHeader?.className).not.toContain('left-0');
+  });
+
   it('renders correct number of DeviceRow components', () => {
     const devices = [
       mockDevice({ id: 'dev-1', hostname: 'router-01' }),

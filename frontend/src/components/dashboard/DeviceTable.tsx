@@ -84,7 +84,7 @@ export function DeviceTable({
   });
 
   const columns: { key: SortKey; label: string; className?: string }[] = [
-    { key: 'hostname', label: 'Name', className: 'sticky left-0 z-[5] bg-bg' },
+    { key: 'hostname', label: 'Name' },
     { key: 'ip', label: 'IP Address' },
     { key: 'status', label: 'Status' },
     { key: 'area', label: 'Area' },

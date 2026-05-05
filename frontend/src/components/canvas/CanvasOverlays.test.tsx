@@ -10,6 +10,26 @@ vi.mock('../ReconnectBanner', () => ({
 }));
 
 describe('CanvasOverlays', () => {
+  it('positions the status stack near the top on mobile and bottom-center on wider screens', () => {
+    const { getByTestId } = render(
+      <CanvasOverlays
+        editMode={false}
+        reconnecting={false}
+        topologyRecoveryNotice={null}
+        dismissTopologyRecoveryNotice={vi.fn()}
+        retryTopologyRefresh={vi.fn()}
+        selectedNodeCount={0}
+        prometheusDiagnosticsVisible={false}
+      />,
+    );
+
+    const stack = getByTestId('canvas-overlay-stack');
+    expect(stack.className).toContain('top-20');
+    expect(stack.className).toContain('bottom-auto');
+    expect(stack.className).toContain('sm:bottom-16');
+    expect(stack.className).toContain('sm:top-auto');
+  });
+
   it('renders a non-alerting Prometheus diagnostics pill when degraded', () => {
     const { getByText } = render(
       <CanvasOverlays

@@ -192,6 +192,27 @@ describe('Dashboard', () => {
     expect(filterBar?.className).not.toMatch(/border-b/);
   });
 
+  it('gives the Devices search textbox priority space in the filter row', () => {
+    const { container } = render(<Dashboard devices={[mockDevice()]} areas={[]} snapshot={null} />);
+
+    const filterBar = container.querySelector('.bg-surface\\/50');
+    const searchInput = screen.getByPlaceholderText('Search devices...');
+    const searchField = screen.getByTestId('devices-search-field');
+
+    expect(filterBar?.className).toContain('flex-wrap');
+    expect(searchField).toContainElement(searchInput);
+    expect(searchField.className).toContain('min-w-[min(26rem,100%)]');
+    expect(searchField.className).toContain('flex-[2_1_24rem]');
+  });
+
+  it('adds enough top padding so the fixed navigation pill does not cover controls', () => {
+    const { container } = render(<Dashboard devices={[mockDevice()]} areas={[]} snapshot={null} />);
+
+    expect(container.firstElementChild?.className).toContain('pt-[86px]');
+    expect(container.firstElementChild?.className).not.toContain('pt-10');
+    expect(container.firstElementChild?.className).not.toContain('pt-24');
+  });
+
   it('shows no-filter-matches message when filters exclude all devices', () => {
     const devices = [mockDevice({ status: 'up' })];
 

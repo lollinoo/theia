@@ -9,18 +9,18 @@ FONT_DIR="$SCRIPT_DIR/../public/fonts"
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# All icon codepoints used in the project (Material Symbols Rounded ligatures).
+# All icon codepoints used or intentionally available in the project (Material Symbols Rounded ligatures).
 # Update this list when adding new MaterialIcon usages.
 # Format: U+XXXX  icon_name
-UNICODES="U+E145,U+E15B,U+E250,U+E2BD,U+E326,U+E518,U+E51C,U+E5CD,U+E5CF,U+E73C,U+E7F5,U+E864,U+E873,U+E875,U+E894,U+E895,U+E8B3,U+E8B6,U+E8B8,U+E8FF,U+E900,U+E92E,U+E9F4,U+EA10,U+EB8E,U+F097,U+F0BE,U+0020,U+005F,0061-007A"
+UNICODES="U+E145,U+E15B,U+E250,U+E2BD,U+E326,U+E518,U+E51C,U+E5CD,U+E5CF,U+E73C,U+E7F5,U+E864,U+E869,U+E873,U+E875,U+E894,U+E895,U+E8B3,U+E8B6,U+E8B8,U+E8FF,U+E900,U+E92E,U+E9F4,U+EA10,U+EA3C,U+EB8E,U+F097,U+F0BE,U+F10B,U+0020,U+005F,0061-007A"
 # ASCII letters a-z (U+0061-U+007A), underscore (U+005F), and space (U+0020)
 # are required as ligature input glyphs for Material Symbols icon name lookup.
 # Codepoint reference:
 #   E145=add  E15B=remove  E250=link  E2BD=cloud  E326=devices  E518=edit  E51C=content_copy
-#   E5CD=close  E5CF=expand_more  E73C=key  E7F5=notifications  E864=backup  E873=description
+#   E5CD=close  E5CF=expand_more  E73C=key  E7F5=notifications  E864=backup  E869=build  E873=description
 #   E875=dns  E894=language  E895=open_in_new  E8B3=filter_list  E8B6=search  E8B8=settings
-#   E8FF=zoom_in  E900=zoom_out  E92E=delete  E9F4=hub  EA10=fit_screen
-#   EB8E=terminal  F097=swap_vert  F0BE=arrow_upward
+#   E8FF=zoom_in  E900=zoom_out  E92E=delete  E9F4=hub  EA10=fit_screen  EA3C=construction
+#   EB8E=terminal  F097=swap_vert  F0BE=arrow_upward  F10B=handyman
 
 # Download the full variable font from Google Fonts (Material Symbols Rounded)
 FULL_FONT="$WORK_DIR/MaterialSymbolsRounded.woff2"
@@ -42,7 +42,13 @@ curl -fsSL -o "$FULL_FONT" "$WOFF2_URL"
 
 echo "Subsetting font with $(echo "$UNICODES" | tr ',' '\n' | wc -l) icon codepoints..."
 
-pyftsubset "$FULL_FONT" \
+if command -v pyftsubset >/dev/null 2>&1; then
+  SUBSETTER=(pyftsubset)
+else
+  SUBSETTER=(python3 -m fontTools.subset)
+fi
+
+"${SUBSETTER[@]}" "$FULL_FONT" \
   --output-file="$FONT_DIR/material-symbols-rounded-subset.woff2" \
   --flavor=woff2 \
   --unicodes="$UNICODES" \

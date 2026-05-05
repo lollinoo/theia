@@ -121,6 +121,15 @@ function renderRow(
 }
 
 describe('DeviceRow', () => {
+  it('does not keep the Name cell sticky during horizontal table scrolling', () => {
+    renderRow();
+
+    const nameCell = screen.getByText('router-01').closest('td');
+    expect(nameCell).toBeTruthy();
+    expect(nameCell?.className).not.toContain('sticky');
+    expect(nameCell?.className).not.toContain('left-0');
+  });
+
   it('renders icon action buttons with correct titles', () => {
     renderRow();
 
