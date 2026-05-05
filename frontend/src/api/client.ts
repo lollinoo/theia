@@ -459,6 +459,7 @@ export async function createLink(payload: {
   source_if_name: string;
   target_device_id: string;
   target_if_name: string;
+  migration_source?: 'browser_localstorage';
 }): Promise<Link> {
   const response = await requestJSONWithBody('/api/v1/links', 'POST', payload);
   const data = (response as Record<string, unknown>)?.data;

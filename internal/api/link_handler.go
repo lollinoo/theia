@@ -26,10 +26,11 @@ func NewLinkHandler(linkRepo domain.LinkRepository, deviceService *service.Devic
 // --- Request types ---
 
 type createLinkRequest struct {
-	SourceDeviceID string `json:"source_device_id"`
-	SourceIfName   string `json:"source_if_name"`
-	TargetDeviceID string `json:"target_device_id"`
-	TargetIfName   string `json:"target_if_name"`
+	SourceDeviceID  string `json:"source_device_id"`
+	SourceIfName    string `json:"source_if_name"`
+	TargetDeviceID  string `json:"target_device_id"`
+	TargetIfName    string `json:"target_if_name"`
+	MigrationSource string `json:"migration_source"`
 }
 
 type updateLinkRequest struct {
@@ -123,12 +124,14 @@ func (h *LinkHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	isBrowserLocalStorageMigration := req.MigrationSource == "browser_localstorage"
+
 	// Per D-12: Allow empty if_name for the virtual side only
-	if req.SourceIfName == "" && !srcIsVirtual {
+	if req.SourceIfName == "" && !srcIsVirtual && !isBrowserLocalStorageMigration {
 		writeError(w, http.StatusBadRequest, "source_if_name is required")
 		return
 	}
-	if req.TargetIfName == "" && !tgtIsVirtual {
+	if req.TargetIfName == "" && !tgtIsVirtual && !isBrowserLocalStorageMigration {
 		writeError(w, http.StatusBadRequest, "target_if_name is required")
 		return
 	}
@@ -151,12 +154,17 @@ func (h *LinkHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		DiscoveryProtocol: domain.DiscoveryProtocolManual,
 	}
 
-	if err := h.linkRepo.Create(link); err != nil {
+	created, err := h.linkRepo.Upsert(link)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	if created {
+		w.WriteHeader(http.StatusCreated)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": link})
 }
 

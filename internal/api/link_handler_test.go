@@ -89,6 +89,63 @@ func TestLinkHandlerCreate_HappyPath(t *testing.T) {
 	}
 }
 
+func TestLinkHandlerCreate_DuplicateManualLinkIsIdempotent(t *testing.T) {
+	handler, linkRepo, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	if err := deviceRepo.Create(tgtDevice); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"ether1",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"ether2"
+	}`
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	firstRec := httptest.NewRecorder()
+	handler.HandleCreate(firstRec, firstReq)
+	if firstRec.Code != http.StatusCreated {
+		t.Fatalf("expected first request status 201, got %d; body: %s", firstRec.Code, firstRec.Body.String())
+	}
+	firstLink := decodeLinkCreateResponse(t, firstRec)
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	secondRec := httptest.NewRecorder()
+	handler.HandleCreate(secondRec, secondReq)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("expected second request status 200, got %d; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	secondLink := decodeLinkCreateResponse(t, secondRec)
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("get all links: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected exactly 1 stored link, got %d", len(links))
+	}
+	if secondLink.ID != firstLink.ID {
+		t.Fatalf("expected duplicate response ID %s, got %s", firstLink.ID, secondLink.ID)
+	}
+}
+
+func decodeLinkCreateResponse(t *testing.T, rec *httptest.ResponseRecorder) domain.Link {
+	t.Helper()
+	var resp struct {
+		Data domain.Link `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode create link response: %v", err)
+	}
+	return resp.Data
+}
+
 func TestLinkHandlerCreate_MalformedJSON(t *testing.T) {
 	handler, _, _ := newTestLinkHandler(t)
 
@@ -268,6 +325,50 @@ func TestLinkHandlerCreate_BothPhysicalRequiresBothIfNames(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "source_if_name is required") {
 		t.Errorf("expected 'source_if_name is required' error, got: %s", rec.Body.String())
+	}
+}
+
+func TestLinkHandlerCreate_BrowserLocalStorageMigrationAllowsEmptyPhysicalInterfaces(t *testing.T) {
+	handler, linkRepo, deviceRepo := newTestLinkHandler(t)
+	srcDevice := seedDevice(t, deviceRepo)
+	tgtDevice := &domain.Device{
+		ID: uuid.New(), IP: "10.0.0.2", Managed: true, Status: domain.DeviceStatusUp,
+		Tags: map[string]string{},
+	}
+	if err := deviceRepo.Create(tgtDevice); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+
+	body := `{
+		"source_device_id":"` + srcDevice.ID.String() + `",
+		"source_if_name":"",
+		"target_device_id":"` + tgtDevice.ID.String() + `",
+		"target_if_name":"",
+		"migration_source":"browser_localstorage"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/links", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("get all links: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected exactly 1 stored link, got %d", len(links))
+	}
+	if links[0].SourceIfName != "" {
+		t.Fatalf("expected empty source interface name, got %q", links[0].SourceIfName)
+	}
+	if links[0].TargetIfName != "" {
+		t.Fatalf("expected empty target interface name, got %q", links[0].TargetIfName)
+	}
+	if links[0].DiscoveryProtocol != domain.DiscoveryProtocolManual {
+		t.Fatalf("expected manual discovery protocol, got %q", links[0].DiscoveryProtocol)
 	}
 }
 
