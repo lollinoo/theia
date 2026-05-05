@@ -703,6 +703,65 @@ func TestRestoreCoordinatorApplyPendingRestorePreservesStagedDBAfterSQLiteActiva
 	}
 }
 
+func TestReplaceFileForRestoreReplacesExistingFileAndRemovesScratchPaths(t *testing.T) {
+	runtimeDir := t.TempDir()
+	liveKnownHosts := filepath.Join(runtimeDir, "known_hosts")
+	stagedKnownHosts := filepath.Join(runtimeDir, ".restore-staging", "known_hosts")
+
+	writeRestoreTestFile(t, liveKnownHosts, "live-known-hosts", 0644)
+	writeRestoreTestFile(t, stagedKnownHosts, "staged-known-hosts", 0644)
+	writeRestoreTestFile(t, liveKnownHosts+".restore-old", "stale-old", 0644)
+	writeRestoreTestFile(t, liveKnownHosts+".restore-tmp", "stale-tmp", 0644)
+
+	if err := replaceFileForRestore(stagedKnownHosts, liveKnownHosts); err != nil {
+		t.Fatalf("replaceFileForRestore() error = %v", err)
+	}
+
+	if got := readRestoreTestFile(t, liveKnownHosts); got != "staged-known-hosts" {
+		t.Fatalf("known_hosts content = %q, want staged-known-hosts", got)
+	}
+	assertRestorePathMode(t, liveKnownHosts, 0600)
+	if _, err := os.Stat(liveKnownHosts + ".restore-old"); !os.IsNotExist(err) {
+		t.Fatalf("old scratch path should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(liveKnownHosts + ".restore-tmp"); !os.IsNotExist(err) {
+		t.Fatalf("tmp scratch path should be removed, stat err = %v", err)
+	}
+}
+
+func TestReplaceDirForRestoreReplacesExistingDirectoryAndRemovesScratchPaths(t *testing.T) {
+	runtimeDir := newShortRestoreTestDir(t)
+	liveBackups := filepath.Join(runtimeDir, "device-backups")
+	stagedBackups := filepath.Join(runtimeDir, ".restore-staging", "backups")
+
+	writeRestoreTestFile(t, filepath.Join(liveBackups, "router.cfg"), "live-backup", 0644)
+	writeRestoreTestFile(t, filepath.Join(liveBackups, "live-only.cfg"), "obsolete-live-backup", 0644)
+	writeRestoreTestFile(t, filepath.Join(stagedBackups, "router.cfg"), "staged-backup", 0644)
+	writeRestoreTestFile(t, filepath.Join(stagedBackups, "nested", "switch.cfg"), "staged-switch", 0644)
+	writeRestoreTestFile(t, filepath.Join(liveBackups+".restore-old", "old.cfg"), "stale-old", 0644)
+	writeRestoreTestFile(t, filepath.Join(liveBackups+".restore-tmp", "tmp.cfg"), "stale-tmp", 0644)
+
+	if err := replaceDirForRestore(stagedBackups, liveBackups); err != nil {
+		t.Fatalf("replaceDirForRestore() error = %v", err)
+	}
+
+	if got := readRestoreTestFile(t, filepath.Join(liveBackups, "router.cfg")); got != "staged-backup" {
+		t.Fatalf("backup content = %q, want staged-backup", got)
+	}
+	if got := readRestoreTestFile(t, filepath.Join(liveBackups, "nested", "switch.cfg")); got != "staged-switch" {
+		t.Fatalf("nested backup content = %q, want staged-switch", got)
+	}
+	if _, err := os.Stat(filepath.Join(liveBackups, "live-only.cfg")); !os.IsNotExist(err) {
+		t.Fatalf("live-only backup should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(liveBackups + ".restore-old"); !os.IsNotExist(err) {
+		t.Fatalf("old scratch path should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(liveBackups + ".restore-tmp"); !os.IsNotExist(err) {
+		t.Fatalf("tmp scratch path should be removed, stat err = %v", err)
+	}
+}
+
 func TestRestoreCoordinatorApplyPendingRestoreRevalidatesStagedKnownHostsBeforeActivation(t *testing.T) {
 	runtimeDir := t.TempDir()
 	liveKnownHosts := filepath.Join(runtimeDir, "known_hosts")

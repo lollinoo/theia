@@ -641,8 +641,10 @@ type RestoreReport struct {
 }
 
 // ValidateAndStageRestore validates a backup archive and optionally stages it for restore.
-// When dryRun is true, only validation is performed. When false, validated files are staged
-// and a marker file is written for the restart-based restore flow.
+// When dryRun is true, only validation is performed. When false, this service
+// owns validation, staging, and pending marker creation. RestoreCoordinator owns
+// live activation, pre-restore DB backup, retry state, and cleanup; the
+// API/restarter layer owns the process handoff before activation.
 func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryRun bool) (*RestoreReport, error) {
 	ctx := context.Background()
 	limits := normalizeRestoreArchiveLimits(s.restoreLimits)
