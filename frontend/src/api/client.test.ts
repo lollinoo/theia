@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type CreateDevicePayload,
+  cancelInstanceBackup,
   createDevice,
   deleteDevice,
   fetchBackupFileContent,
@@ -9,6 +10,7 @@ import {
   fetchCanvasBootstrap,
   fetchCanvasTopology,
   fetchDevices,
+  fetchInstanceBackups,
   fetchLinks,
   fetchSettings,
   fetchSettingsWithMetadata,
@@ -766,6 +768,68 @@ describe('fetchBackupFileContent', () => {
       size_bytes: 0,
       max_inline_size_bytes: 0,
     });
+  });
+});
+
+describe('fetchInstanceBackups', () => {
+  it('parses cancelled status and progress metadata', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({
+          data: [
+            {
+              id: 'backup-1',
+              file_name: '',
+              size_bytes: 0,
+              sha256: '',
+              app_version: '',
+              migration_version: 0,
+              status: 'cancelled',
+              error_message: 'cancelled by user',
+              trigger: 'manual',
+              created_at: '2026-01-01T00:00:00Z',
+              progress: {
+                phase: 'cancelling',
+                message: 'Cancellation requested',
+                current: 1,
+                total: 2,
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await fetchInstanceBackups();
+
+    expect(result[0].status).toBe('cancelled');
+    expect(result[0].progress?.phase).toBe('cancelling');
+    expect(result[0].progress?.current).toBe(1);
+  });
+});
+
+describe('cancelInstanceBackup', () => {
+  it('posts to the cancel endpoint and parses the returned backup', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: {
+          id: 'backup-1',
+          file_name: '',
+          status: 'cancelled',
+          error_message: 'cancelled by user',
+          trigger: 'manual',
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await cancelInstanceBackup('backup-1');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/instance-backups/backup-1/cancel');
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST');
+    expect(result.status).toBe('cancelled');
   });
 });
 

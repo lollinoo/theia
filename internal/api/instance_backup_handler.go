@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
@@ -74,43 +72,22 @@ func (h *InstanceBackupHandler) HandleCreate(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Track current count to detect the new record regardless of status
-	prevCount := len(backups)
-
-	// Launch async backup — use context.Background() so it outlives the HTTP request
-	go func() {
-		if _, err := h.svc.Create(context.Background()); err != nil {
-			log.Printf("Instance backup failed: %v", err)
-		}
-	}()
-
+	backup, err := h.svc.StartCreateWithTrigger(context.Background(), domain.InstanceBackupTriggerManual)
 	h.mu.Unlock()
-
-	// Wait briefly for the new backup record to appear (may already be complete if DB is small)
-	var created *domain.InstanceBackup
-	for attempt := 0; attempt < 10; attempt++ {
-		time.Sleep(50 * time.Millisecond)
-		list, err := h.svc.List(r.Context())
-		if err != nil {
-			continue
+	if err != nil {
+		if errors.Is(err, service.ErrInstanceBackupAlreadyRunning) {
+			writeError(w, http.StatusConflict, "a backup is already in progress")
+			return
 		}
-		if len(list) > prevCount {
-			created = &list[0] // list is sorted newest first
-			break
-		}
+		writeError(w, http.StatusInternalServerError, "creating backup", err)
+		return
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	if created != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"data": instanceBackupToMap(*created),
-		})
-	} else {
-		// Fallback: backup is running but we couldn't fetch the record yet
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"data": map[string]interface{}{"status": "running"},
-		})
-	}
+	progress, _ := h.svc.GetProgress(backup.ID)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data": instanceBackupToMap(*backup, &progress),
+	})
 }
 
 // HandleList handles GET /api/v1/instance-backups.
@@ -125,7 +102,12 @@ func (h *InstanceBackupHandler) HandleList(w http.ResponseWriter, r *http.Reques
 	}
 	data := make([]map[string]interface{}, 0, len(backups))
 	for _, b := range backups {
-		data = append(data, instanceBackupToMap(b))
+		progress, ok := h.svc.GetProgress(b.ID)
+		if ok {
+			data = append(data, instanceBackupToMap(b, &progress))
+		} else {
+			data = append(data, instanceBackupToMap(b))
+		}
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
 }
@@ -149,9 +131,14 @@ func (h *InstanceBackupHandler) HandleGet(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "backup not found")
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data": instanceBackupToMap(*backup),
-	})
+	progress, ok := h.svc.GetProgress(backup.ID)
+	if ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": instanceBackupToMap(*backup, &progress),
+		})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": instanceBackupToMap(*backup)})
 }
 
 // HandleDownload handles GET /api/v1/instance-backups/{id}/download.
@@ -200,14 +187,49 @@ func (h *InstanceBackupHandler) HandleDelete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := h.svc.Delete(r.Context(), id); err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, service.ErrInstanceBackupNotFound) || strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrInstanceBackupNotRunning) {
+			writeError(w, http.StatusConflict, "backup is running")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "deleting backup", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleCancel handles POST /api/v1/instance-backups/{id}/cancel.
+func (h *InstanceBackupHandler) HandleCancel(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/cancel")
+	id, err := extractIDFromPath(path, "/api/v1/instance-backups/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid backup ID")
+		return
+	}
+	backup, err := h.svc.Cancel(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInstanceBackupNotFound):
+			writeError(w, http.StatusNotFound, "backup not found")
+		case errors.Is(err, service.ErrInstanceBackupNotRunning):
+			writeError(w, http.StatusConflict, "backup is not running")
+		default:
+			writeError(w, http.StatusInternalServerError, "cancelling backup", err)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	if progress, ok := h.svc.GetProgress(backup.ID); ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": instanceBackupToMap(*backup, &progress)})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": instanceBackupToMap(*backup)})
 }
 
 // HandleRestore handles POST /api/v1/instance-backups/restore.
@@ -226,31 +248,22 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	limits := h.svc.RestoreArchiveLimits()
 	compressedLimit := limits.MaxCompressedBytes
 
-	// Parse multipart form (32MB memory buffer; larger files spill to disk)
 	if compressedLimit > 0 {
 		r.Body = http.MaxBytesReader(w, r.Body, compressedLimit+restoreMultipartEnvelopeOverheadBytes)
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	file, fileName, err := restoreUploadPart(r)
+	if err != nil {
 		if isRequestBodyTooLarge(err) {
 			writeError(w, http.StatusRequestEntityTooLarge, "restore upload exceeds maximum compressed size")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "invalid multipart form data")
-		return
-	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
-	}
-
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "missing 'file' field in multipart form")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	defer file.Close()
 
 	// Validate filename
-	if !strings.HasSuffix(header.Filename, ".tar.gz") {
+	if !strings.HasSuffix(fileName, ".tar.gz") {
 		writeError(w, http.StatusBadRequest, "file must be a .tar.gz archive")
 		return
 	}
@@ -267,6 +280,10 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	// Stream file to temp
 	written, err := copyRestoreUpload(tmpFile, file, compressedLimit)
 	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "restore upload exceeds maximum compressed size")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "writing upload to temp file", err)
 		return
 	}
@@ -277,7 +294,7 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	tmpFile.Close()
 
 	// Validate and stage restore
-	report, err := h.svc.ValidateAndStageRestore(tmpFile.Name(), dryRun)
+	report, err := h.svc.ValidateAndStageRestoreContext(r.Context(), tmpFile.Name(), dryRun)
 	if err != nil {
 		var limitErr *service.RestoreLimitError
 		if errors.As(err, &limitErr) {
@@ -305,6 +322,27 @@ func isRequestBodyTooLarge(err error) bool {
 	return errors.As(err, &maxBytesErr)
 }
 
+func restoreUploadPart(r *http.Request) (io.ReadCloser, string, error) {
+	reader, err := r.MultipartReader()
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid multipart form data")
+	}
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			return nil, "", fmt.Errorf("missing 'file' field in multipart form")
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		if part.FormName() != "file" {
+			part.Close()
+			continue
+		}
+		return part, part.FileName(), nil
+	}
+}
+
 func copyRestoreUpload(dst io.Writer, src io.Reader, limit int64) (int64, error) {
 	if limit <= 0 {
 		return io.Copy(dst, src)
@@ -315,8 +353,8 @@ func copyRestoreUpload(dst io.Writer, src io.Reader, limit int64) (int64, error)
 
 // --- Helpers ---
 
-func instanceBackupToMap(b domain.InstanceBackup) map[string]interface{} {
-	return map[string]interface{}{
+func instanceBackupToMap(b domain.InstanceBackup, progress ...*domain.InstanceBackupProgress) map[string]interface{} {
+	data := map[string]interface{}{
 		"id":                b.ID.String(),
 		"file_name":         b.FileName,
 		"size_bytes":        b.SizeBytes,
@@ -328,4 +366,8 @@ func instanceBackupToMap(b domain.InstanceBackup) map[string]interface{} {
 		"trigger":           string(b.Trigger),
 		"created_at":        b.CreatedAt,
 	}
+	if len(progress) > 0 && progress[0] != nil {
+		data["progress"] = progress[0]
+	}
+	return data
 }

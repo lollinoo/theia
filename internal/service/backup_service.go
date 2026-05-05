@@ -27,6 +27,8 @@ import (
 
 var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
+const defaultBulkBackupWorkerCount = 4
+
 // BackupService orchestrates credential profile management and config backups.
 type BackupService struct {
 	jobRepo               domain.BackupJobRepository
@@ -98,6 +100,13 @@ type BulkBackupResult struct {
 	JobID      *uuid.UUID `json:"job_id,omitempty"`
 }
 
+type queuedDeviceBackup struct {
+	device    domain.Device
+	profile   *domain.CredentialProfile
+	backupCfg vendor.BackupConfig
+	jobID     uuid.UUID
+}
+
 // TriggerBulkBackup validates all devices and queues backups for eligible ones.
 func (s *BackupService) TriggerBulkBackup(ctx context.Context) ([]BulkBackupResult, error) {
 	devices, err := s.deviceRepo.GetAll()
@@ -106,6 +115,7 @@ func (s *BackupService) TriggerBulkBackup(ctx context.Context) ([]BulkBackupResu
 	}
 
 	var results []BulkBackupResult
+	queuedBackups := make([]queuedDeviceBackup, 0)
 	for i := range devices {
 		d := &devices[i]
 		name := d.Tags["display_name"]
@@ -156,7 +166,12 @@ func (s *BackupService) TriggerBulkBackup(ctx context.Context) ([]BulkBackupResu
 			continue
 		}
 
-		go s.runFullBackup(d, profile, backupCfg, job.ID)
+		queuedBackups = append(queuedBackups, queuedDeviceBackup{
+			device:    *d,
+			profile:   profile,
+			backupCfg: backupCfg,
+			jobID:     job.ID,
+		})
 
 		jobID := job.ID
 		results = append(results, BulkBackupResult{
@@ -165,7 +180,40 @@ func (s *BackupService) TriggerBulkBackup(ctx context.Context) ([]BulkBackupResu
 		})
 	}
 
+	s.startBulkBackupWorkers(queuedBackups)
+
 	return results, nil
+}
+
+func (s *BackupService) startBulkBackupWorkers(queuedBackups []queuedDeviceBackup) {
+	if len(queuedBackups) == 0 {
+		return
+	}
+
+	workerCount := defaultBulkBackupWorkerCount
+	if len(queuedBackups) < workerCount {
+		workerCount = len(queuedBackups)
+	}
+
+	go func() {
+		jobs := make(chan queuedDeviceBackup)
+		var wg sync.WaitGroup
+		wg.Add(workerCount)
+		for i := 0; i < workerCount; i++ {
+			go func() {
+				defer wg.Done()
+				for job := range jobs {
+					device := job.device
+					s.runFullBackup(&device, job.profile, job.backupCfg, job.jobID)
+				}
+			}()
+		}
+		for _, job := range queuedBackups {
+			jobs <- job
+		}
+		close(jobs)
+		wg.Wait()
+	}()
 }
 
 // BulkDownloadEntry pairs a backup file with a device-derived folder name.
@@ -459,29 +507,62 @@ func downloadSFTPFileToDiskAndHash(ctx context.Context, sshClient *gossh.Client,
 }
 
 func (s *BackupService) runTextExport(ctx context.Context, client *ssh.Client, jobID uuid.UUID, dir, fileName, fileType, command string) error {
-	output, err := client.RunCommand(ctx, command)
+	filePath := filepath.Join(dir, fileName)
+	tmpFile, err := os.CreateTemp(dir, ".theia-export-*")
 	if err != nil {
+		return fmt.Errorf("creating temp export file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	hasher := sha256.New()
+	counter := &countingWriter{w: io.MultiWriter(tmpFile, hasher)}
+	if err := client.RunCommandToWriter(ctx, command, counter); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("command %q failed: %w", command, err)
 	}
-
-	filePath := filepath.Join(dir, fileName)
-	if err := os.WriteFile(filePath, []byte(output), 0600); err != nil {
-		return fmt.Errorf("writing file: %w", err)
+	maxInt := int64(int(^uint(0) >> 1))
+	if counter.n > maxInt {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("export output too large: %d bytes", counter.n)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("closing temp export file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("restricting temp file permissions: %w", err)
+	}
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("renaming temp export file: %w", err)
 	}
 	if err := os.Chmod(filePath, 0600); err != nil {
 		return fmt.Errorf("restricting file permissions: %w", err)
 	}
 
-	hash := sha256.Sum256([]byte(output))
 	return s.fileRepo.Create(&domain.BackupFile{
 		ID:        uuid.New(),
 		JobID:     jobID,
 		FileType:  fileType,
 		FileName:  fileName,
 		FilePath:  filePath,
-		FileHash:  hex.EncodeToString(hash[:]),
-		SizeBytes: len(output),
+		FileHash:  hex.EncodeToString(hasher.Sum(nil)),
+		SizeBytes: int(counter.n),
 	})
+}
+
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	w.n += int64(n)
+	return n, err
 }
 
 func (s *BackupService) runBinaryExport(ctx context.Context, client *ssh.Client, jobID uuid.UUID, dir, fileName string, bcfg *vendor.BinaryBackupCmd) error {

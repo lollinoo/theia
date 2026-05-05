@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lollinoo/theia/internal/domain"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/lollinoo/theia/internal/repository/sqlite"
@@ -26,6 +28,12 @@ import (
 // setupInstanceBackupHandlerTest creates a real InstanceBackupService backed by an
 // in-process SQLite database. This mirrors the pattern in internal/service/instance_backup_service_test.go.
 func setupInstanceBackupHandlerTest(t *testing.T) (*InstanceBackupHandler, string, []byte) {
+	t.Helper()
+	handler, dbPath, encKey, _ := setupInstanceBackupHandlerTestWithRepo(t)
+	return handler, dbPath, encKey
+}
+
+func setupInstanceBackupHandlerTestWithRepo(t *testing.T) (*InstanceBackupHandler, string, []byte, *sqlite.InstanceBackupRepo) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -68,7 +76,7 @@ func setupInstanceBackupHandlerTest(t *testing.T) (*InstanceBackupHandler, strin
 
 	t.Cleanup(func() { db.Close() })
 
-	return NewInstanceBackupHandler(svc), dbPath, encKey[:]
+	return NewInstanceBackupHandler(svc), dbPath, encKey[:], repo
 }
 
 // buildValidTarGz creates a minimal .tar.gz archive with a valid manifest and
@@ -349,6 +357,30 @@ func TestHandleRestore_AllowsMultipartEnvelopeAboveCompressedLimit(t *testing.T)
 	}
 }
 
+func TestHandleRestoreCanceledContextDoesNotStage(t *testing.T) {
+	handler, dbPath, encKey := setupInstanceBackupHandlerTest(t)
+	archiveData := buildValidTarGz(t, dbPath, encKey)
+	req := buildMultipartRequest(t, "backup.tar.gz", archiveData, false)
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	handler.HandleRestore(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected non-200 response for canceled request context, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	stagingDir := filepath.Join(filepath.Dir(dbPath), ".restore-staging")
+	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
+		t.Fatalf("staging dir should not exist after canceled restore, stat err = %v", err)
+	}
+	markerPath := filepath.Join(filepath.Dir(dbPath), ".theia-restore-pending")
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("marker should not exist after canceled restore, stat err = %v", err)
+	}
+}
+
 // TestHandleRestore_MethodNotAllowedForGet verifies that a GET request to the
 // restore endpoint returns 405.
 func TestHandleRestore_MethodNotAllowedForGet(t *testing.T) {
@@ -484,6 +516,158 @@ func TestHandleCreate_Returns202WithRunningStatus(t *testing.T) {
 	validStatuses := map[string]bool{"running": true, "success": true, "failed": true}
 	if !validStatuses[status] {
 		t.Errorf("expected status to be running/success/failed, got %q", status)
+	}
+}
+
+func TestHandleCreate_ReturnsRunningRecordWithProgress(t *testing.T) {
+	handler, _, _ := setupInstanceBackupHandlerTest(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instance-backups", nil)
+	rec := httptest.NewRecorder()
+
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 Accepted, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]json.RawMessage
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(resp["data"], &data); err != nil {
+		t.Fatalf("decoding data: %v", err)
+	}
+	if status, _ := data["status"].(string); status != "running" {
+		t.Fatalf("status = %q, want running", status)
+	}
+	progress, ok := data["progress"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("response missing progress object: %+v", data)
+	}
+	if phase, _ := progress["phase"].(string); phase == "" {
+		t.Fatalf("progress.phase = %q, want non-empty phase", phase)
+	}
+}
+
+func TestHandleCancelRunningBackupReturns202AndPersistsCancelled(t *testing.T) {
+	handler, _, _, repo := setupInstanceBackupHandlerTestWithRepo(t)
+	backup := &domain.InstanceBackup{
+		FileName: "manual-running.tar.gz",
+		Status:   domain.InstanceBackupStatusRunning,
+		Trigger:  domain.InstanceBackupTriggerManual,
+	}
+	if err := repo.Create(backup); err != nil {
+		t.Fatalf("creating running backup record: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instance-backups/"+backup.ID.String()+"/cancel", nil)
+	rec := httptest.NewRecorder()
+
+	handler.HandleCancel(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 Accepted, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	got, err := repo.GetByID(backup.ID)
+	if err != nil {
+		t.Fatalf("GetByID after cancel: %v", err)
+	}
+	if got == nil {
+		t.Fatal("backup record missing after cancel")
+	}
+	if got.Status != domain.InstanceBackupStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", got.Status)
+	}
+}
+
+func TestHandleCancelCompletedBackupReturns409(t *testing.T) {
+	handler, _, _, repo := setupInstanceBackupHandlerTestWithRepo(t)
+	backup := &domain.InstanceBackup{
+		FileName: "completed.tar.gz",
+		Status:   domain.InstanceBackupStatusSuccess,
+		Trigger:  domain.InstanceBackupTriggerManual,
+	}
+	if err := repo.Create(backup); err != nil {
+		t.Fatalf("creating completed backup record: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instance-backups/"+backup.ID.String()+"/cancel", nil)
+	rec := httptest.NewRecorder()
+
+	handler.HandleCancel(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInstanceBackupRouterRejectsDeleteOnSubresources(t *testing.T) {
+	handler, _, _, repo := setupInstanceBackupHandlerTestWithRepo(t)
+	backup := &domain.InstanceBackup{
+		FileName: "completed.tar.gz",
+		Status:   domain.InstanceBackupStatusSuccess,
+		Trigger:  domain.InstanceBackupTriggerManual,
+	}
+	if err := repo.Create(backup); err != nil {
+		t.Fatalf("creating backup record: %v", err)
+	}
+	router := NewRouter(
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		handler.svc,
+		func() {},
+		"",
+		nil,
+		nil,
+	)
+
+	for _, tc := range []struct {
+		name string
+		path string
+		want int
+	}{
+		{
+			name: "cancel subresource does not fall through to delete",
+			path: "/api/v1/instance-backups/" + backup.ID.String() + "/cancel",
+			want: http.StatusMethodNotAllowed,
+		},
+		{
+			name: "download subresource does not fall through to delete",
+			path: "/api/v1/instance-backups/" + backup.ID.String() + "/download",
+			want: http.StatusMethodNotAllowed,
+		},
+		{
+			name: "extra path segment is not treated as backup id route",
+			path: "/api/v1/instance-backups/" + backup.ID.String() + "/download/extra",
+			want: http.StatusNotFound,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodDelete, tc.path, nil)
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tc.want, rec.Body.String())
+			}
+			got, err := repo.GetByID(backup.ID)
+			if err != nil {
+				t.Fatalf("GetByID after routed delete attempt: %v", err)
+			}
+			if got == nil {
+				t.Fatal("backup record should remain after subresource delete attempt")
+			}
+		})
 	}
 }
 

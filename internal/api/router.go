@@ -428,8 +428,29 @@ func NewRouter(
 	})
 
 	mux.HandleFunc("/api/v1/instance-backups/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/download") && r.Method == http.MethodGet {
-			instanceBackupHandler.HandleDownload(w, r)
+		rest := strings.TrimPrefix(r.URL.Path, "/api/v1/instance-backups/")
+		parts := strings.Split(rest, "/")
+		if rest == "" || len(parts) > 2 || parts[0] == "" {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if len(parts) == 2 {
+			switch parts[1] {
+			case "cancel":
+				if r.Method != http.MethodPost {
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				instanceBackupHandler.HandleCancel(w, r)
+			case "download":
+				if r.Method != http.MethodGet {
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				instanceBackupHandler.HandleDownload(w, r)
+			default:
+				writeError(w, http.StatusNotFound, "not found")
+			}
 			return
 		}
 		switch r.Method {

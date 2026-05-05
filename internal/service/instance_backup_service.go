@@ -8,12 +8,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,6 +38,10 @@ type InstanceBackupService struct {
 	dbDSN           string // live DB DSN for postgres backups/restores
 	encryptionKey   []byte // for key hash in manifest
 	restoreLimits   RestoreArchiveLimits
+	backupLimits    BackupArchiveLimits
+	createMu        sync.Mutex
+	operationMu     sync.Mutex
+	operations      map[uuid.UUID]*instanceBackupOperation
 }
 
 // backupManifest describes the contents and metadata of an instance backup archive.
@@ -93,6 +99,41 @@ type databaseBackupArtifact struct {
 	migrationVersion int
 }
 
+type archiveSourceFile struct {
+	archiveName string
+	diskPath    string
+	sizeBytes   int64
+}
+
+type instanceBackupOperation struct {
+	cancel          context.CancelFunc
+	progress        domain.InstanceBackupProgress
+	cancelRequested bool
+}
+
+// BackupArchiveLimits defines defensive quotas for instance backup archive creation.
+type BackupArchiveLimits struct {
+	MaxTotalBytes  int64
+	MaxEntryBytes  int64
+	MaxFileEntries int
+	MaxDuration    time.Duration
+}
+
+// DefaultBackupArchiveLimits caps instance backup archive creation work.
+var DefaultBackupArchiveLimits = BackupArchiveLimits{
+	MaxTotalBytes:  2 << 30, // 2 GiB expanded archive content
+	MaxEntryBytes:  1 << 30, // 1 GiB per archived file
+	MaxFileEntries: 50000,
+	MaxDuration:    30 * time.Minute,
+}
+
+// Instance backup lifecycle errors used by API handlers.
+var (
+	ErrInstanceBackupAlreadyRunning = errors.New("instance backup already in progress")
+	ErrInstanceBackupNotFound       = errors.New("instance backup not found")
+	ErrInstanceBackupNotRunning     = errors.New("instance backup is not running")
+)
+
 // NewInstanceBackupService creates a new InstanceBackupService.
 func NewInstanceBackupService(
 	db *sql.DB,
@@ -117,6 +158,8 @@ func NewInstanceBackupService(
 		dbDSN:           strings.TrimSpace(dbDSN),
 		encryptionKey:   encryptionKey,
 		restoreLimits:   DefaultRestoreArchiveLimits,
+		backupLimits:    DefaultBackupArchiveLimits,
+		operations:      make(map[uuid.UUID]*instanceBackupOperation),
 	}
 }
 
@@ -128,6 +171,16 @@ func (s *InstanceBackupService) SetRestoreArchiveLimitsForTest(limits RestoreArc
 // RestoreArchiveLimits returns the normalized current restore archive limits.
 func (s *InstanceBackupService) RestoreArchiveLimits() RestoreArchiveLimits {
 	return normalizeRestoreArchiveLimits(s.restoreLimits)
+}
+
+// SetBackupArchiveLimitsForTest overrides backup archive quotas in focused tests.
+func (s *InstanceBackupService) SetBackupArchiveLimitsForTest(limits BackupArchiveLimits) {
+	s.backupLimits = normalizeBackupArchiveLimits(limits)
+}
+
+// BackupArchiveLimits returns the normalized current backup archive limits.
+func (s *InstanceBackupService) BackupArchiveLimits() BackupArchiveLimits {
+	return normalizeBackupArchiveLimits(s.backupLimits)
 }
 
 func normalizeRestoreArchiveLimits(limits RestoreArchiveLimits) RestoreArchiveLimits {
@@ -147,6 +200,23 @@ func normalizeRestoreArchiveLimits(limits RestoreArchiveLimits) RestoreArchiveLi
 	return limits
 }
 
+func normalizeBackupArchiveLimits(limits BackupArchiveLimits) BackupArchiveLimits {
+	defaults := DefaultBackupArchiveLimits
+	if limits.MaxTotalBytes <= 0 {
+		limits.MaxTotalBytes = defaults.MaxTotalBytes
+	}
+	if limits.MaxEntryBytes <= 0 {
+		limits.MaxEntryBytes = defaults.MaxEntryBytes
+	}
+	if limits.MaxFileEntries <= 0 {
+		limits.MaxFileEntries = defaults.MaxFileEntries
+	}
+	if limits.MaxDuration <= 0 {
+		limits.MaxDuration = defaults.MaxDuration
+	}
+	return limits
+}
+
 // Create produces a full instance backup archive with trigger set to "manual".
 func (s *InstanceBackupService) Create(ctx context.Context) (*domain.InstanceBackup, error) {
 	return s.CreateWithTrigger(ctx, domain.InstanceBackupTriggerManual)
@@ -156,6 +226,47 @@ func (s *InstanceBackupService) Create(ctx context.Context) (*domain.InstanceBac
 // device config files, SSH known_hosts, and a manifest with integrity metadata.
 // The trigger field records what initiated the backup (manual or scheduled).
 func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger domain.InstanceBackupTrigger) (*domain.InstanceBackup, error) {
+	backup, backupSubDir, err := s.prepareInstanceBackup(trigger)
+	if err != nil {
+		return nil, err
+	}
+	return s.runPreparedInstanceBackup(ctx, backup, backupSubDir)
+}
+
+// StartCreateWithTrigger creates a running instance backup record and starts archive work in the background.
+func (s *InstanceBackupService) StartCreateWithTrigger(ctx context.Context, trigger domain.InstanceBackupTrigger) (*domain.InstanceBackup, error) {
+	backup, backupSubDir, err := s.prepareInstanceBackup(trigger)
+	if err != nil {
+		return nil, err
+	}
+	runCtx, cancel := s.backupRunContext(ctx)
+	s.beginInstanceBackupOperation(backup.ID, cancel, domain.InstanceBackupProgress{
+		Phase:   "queued",
+		Message: "Backup queued",
+	})
+	go func() {
+		defer s.endInstanceBackupOperation(backup.ID)
+		defer cancel()
+		if _, err := s.runPreparedInstanceBackupWithContext(runCtx, backup, backupSubDir, false); err != nil {
+			log.Printf("Instance backup %s failed: %v", backup.ID, err)
+		}
+	}()
+	return backup, nil
+}
+
+func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBackupTrigger) (*domain.InstanceBackup, string, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+
+	if s.hasActiveInstanceBackupOperation() {
+		return nil, "", ErrInstanceBackupAlreadyRunning
+	}
+	if running, err := s.hasRunningInstanceBackup(); err != nil {
+		return nil, "", fmt.Errorf("checking running backups: %w", err)
+	} else if running {
+		return nil, "", ErrInstanceBackupAlreadyRunning
+	}
+
 	backupID := uuid.New()
 	now := time.Now().UTC()
 
@@ -168,7 +279,7 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 	// Create backup subdirectory: {backupDir}/{backupID}/
 	backupSubDir := filepath.Join(s.backupDir, backupID.String())
 	if err := os.MkdirAll(backupSubDir, 0700); err != nil {
-		return nil, fmt.Errorf("creating backup directory: %w", err)
+		return nil, "", fmt.Errorf("creating backup directory: %w", err)
 	}
 
 	// Create initial DB record with status "running"
@@ -180,42 +291,406 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 	}
 	if err := s.repo.Create(backup); err != nil {
 		os.RemoveAll(backupSubDir)
-		return nil, fmt.Errorf("creating backup record: %w", err)
+		return nil, "", fmt.Errorf("creating backup record: %w", err)
 	}
 
-	// On error, mark as failed and clean up
-	var cleanupOnError = func(errMsg string) {
-		backup.Status = domain.InstanceBackupStatusFailed
-		backup.ErrorMessage = errMsg
-		if updateErr := s.repo.Update(backup); updateErr != nil {
-			log.Printf("Failed to update backup record to failed: %v", updateErr)
-		}
-		os.RemoveAll(backupSubDir)
+	return backup, backupSubDir, nil
+}
+
+func (s *InstanceBackupService) runPreparedInstanceBackup(ctx context.Context, backup *domain.InstanceBackup, backupSubDir string) (*domain.InstanceBackup, error) {
+	runCtx, cancel := s.backupRunContext(ctx)
+	s.beginInstanceBackupOperation(backup.ID, cancel, domain.InstanceBackupProgress{
+		Phase:   "starting",
+		Message: "Preparing backup",
+	})
+	defer s.endInstanceBackupOperation(backup.ID)
+	defer cancel()
+	return s.runPreparedInstanceBackupWithContext(runCtx, backup, backupSubDir, true)
+}
+
+func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context.Context, backup *domain.InstanceBackup, backupSubDir string, ownOperation bool) (*domain.InstanceBackup, error) {
+	if err := ctx.Err(); err != nil {
+		s.cleanupFailedInstanceBackup(backup, backupSubDir, "backup cancelled", err)
+		return nil, err
 	}
+
+	limits := s.BackupArchiveLimits()
+
+	cleanupOnError := func(errMsg string, err error) {
+		s.cleanupFailedInstanceBackup(backup, backupSubDir, errMsg, err)
+	}
+
+	s.updateInstanceBackupProgress(backup.ID, domain.InstanceBackupProgress{
+		Phase:   "database",
+		Message: "Creating database snapshot",
+	})
 
 	// Step 1: Create a dialect-appropriate database snapshot/dump.
 	dbArtifact, err := s.backupDatabase(ctx, backupSubDir)
 	if err != nil {
-		cleanupOnError(fmt.Sprintf("backing up database: %v", err))
+		cleanupOnError(fmt.Sprintf("backing up database: %v", err), err)
 		return nil, fmt.Errorf("backing up database: %w", err)
 	}
 	defer os.Remove(dbArtifact.tempPath)
 
-	// Step 2: Compute SHA-256 of the database copy
-	dbHash, err := computeFileHash(dbArtifact.tempPath)
+	dbInfo, err := os.Stat(dbArtifact.tempPath)
 	if err != nil {
-		cleanupOnError(fmt.Sprintf("computing DB hash: %v", err))
+		cleanupOnError(fmt.Sprintf("statting database backup: %v", err), err)
+		return nil, fmt.Errorf("statting database backup: %w", err)
+	}
+	if err := checkBackupArchiveEntryQuota(dbArtifact.archiveEntryName, dbInfo.Size(), limits); err != nil {
+		cleanupOnError(fmt.Sprintf("checking database archive quota: %v", err), err)
+		return nil, err
+	}
+
+	s.updateInstanceBackupProgress(backup.ID, domain.InstanceBackupProgress{
+		Phase:   "hashing",
+		Message: "Hashing database snapshot",
+		Current: dbInfo.Size(),
+		Total:   dbInfo.Size(),
+	})
+
+	// Step 2: Compute SHA-256 of the database copy
+	dbHash, err := computeFileHashContext(ctx, dbArtifact.tempPath)
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("computing DB hash: %v", err), err)
 		return nil, fmt.Errorf("computing DB hash: %w", err)
 	}
 
-	// Step 4: Collect device backup files
-	backupFileCount := 0
-	var deviceBackupFiles []struct {
-		archiveName string
-		diskPath    string
+	s.updateInstanceBackupProgress(backup.ID, domain.InstanceBackupProgress{
+		Phase:   "collecting",
+		Message: "Collecting device backup files",
+	})
+
+	deviceBackupFiles, backupFileCount, knownHostsFile, totalSourceBytes, archiveFileEntries, err := s.collectArchiveSourceFiles(ctx, limits, dbInfo.Size())
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("collecting backup files: %v", err), err)
+		return nil, err
 	}
+
+	// Step 5: Build manifest
+	manifest := backupManifest{
+		Version:           1,
+		AppVersion:        version.Version,
+		GitCommit:         version.GitCommit,
+		DBDriver:          string(s.dialect),
+		DBEntryName:       dbArtifact.archiveEntryName,
+		MigrationVersion:  dbArtifact.migrationVersion,
+		CreatedAt:         backup.CreatedAt.UTC().Format(time.RFC3339),
+		DBSHA256:          dbHash,
+		BackupFileCount:   backupFileCount,
+		TotalSizeBytes:    0, // will be updated after archiving
+		EncryptionKeyHash: computeEncryptionKeyHash(s.encryptionKey),
+	}
+
+	manifestJSON, err := json.MarshalIndent(&manifest, "", "  ")
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("marshaling manifest: %v", err), err)
+		return nil, fmt.Errorf("marshaling manifest: %w", err)
+	}
+	manifest.TotalSizeBytes = totalSourceBytes + int64(len(manifestJSON))
+	manifestJSON, err = json.MarshalIndent(&manifest, "", "  ")
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("marshaling manifest: %v", err), err)
+		return nil, fmt.Errorf("marshaling manifest: %w", err)
+	}
+	totalArchiveBytes := totalSourceBytes + int64(len(manifestJSON))
+	manifest.TotalSizeBytes = totalArchiveBytes
+	if err := checkBackupArchiveTotals(totalArchiveBytes, archiveFileEntries+1, limits); err != nil {
+		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
+		return nil, err
+	}
+
+	s.updateInstanceBackupProgress(backup.ID, domain.InstanceBackupProgress{
+		Phase:   "archiving",
+		Message: "Writing backup archive",
+		Total:   totalArchiveBytes,
+	})
+
+	// Step 6: Create archive at temp path
+	finalPath := filepath.Join(backupSubDir, backup.FileName)
+	tempArchivePath := finalPath + ".tmp"
+
+	totalSize, err := s.createArchive(ctx, tempArchivePath, dbArtifact, deviceBackupFiles, knownHostsFile, manifestJSON, &manifest, backup.ID)
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("creating archive: %v", err), err)
+		os.Remove(tempArchivePath)
+		return nil, fmt.Errorf("creating archive: %w", err)
+	}
+	manifest.TotalSizeBytes = totalSize
+
+	// Step 7: Rename temp archive to final path
+	if err := os.Rename(tempArchivePath, finalPath); err != nil {
+		cleanupOnError(fmt.Sprintf("renaming archive: %v", err), err)
+		os.Remove(tempArchivePath)
+		return nil, fmt.Errorf("renaming archive: %w", err)
+	}
+	if err := os.Chmod(finalPath, 0600); err != nil {
+		cleanupOnError(fmt.Sprintf("restricting archive permissions: %v", err), err)
+		return nil, fmt.Errorf("restricting archive permissions: %w", err)
+	}
+
+	s.updateInstanceBackupProgress(backup.ID, domain.InstanceBackupProgress{
+		Phase:   "hashing",
+		Message: "Hashing backup archive",
+	})
+
+	// Step 8: Compute archive SHA-256 and write sidecar
+	archiveHash, err := computeFileHashContext(ctx, finalPath)
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("computing archive hash: %v", err), err)
+		return nil, fmt.Errorf("computing archive hash: %w", err)
+	}
+
+	sidecarContent := fmt.Sprintf("%s  %s\n", archiveHash, filepath.Base(finalPath))
+	sidecarPath := finalPath + ".sha256"
+	if err := os.WriteFile(sidecarPath, []byte(sidecarContent), 0600); err != nil {
+		cleanupOnError(fmt.Sprintf("writing sidecar: %v", err), err)
+		return nil, fmt.Errorf("writing sidecar: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		cleanupOnError("backup cancelled", err)
+		return nil, err
+	}
+	if s.instanceBackupCancellationRequested(backup.ID) {
+		err := context.Canceled
+		cleanupOnError("backup cancelled", err)
+		return nil, err
+	}
+
+	// Step 9: Get archive file size
+	archiveInfo, err := os.Stat(finalPath)
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("statting archive: %v", err), err)
+		return nil, fmt.Errorf("statting archive: %w", err)
+	}
+
+	// Step 10: Update DB record to success
+	backup.FilePath = finalPath
+	backup.SizeBytes = archiveInfo.Size()
+	backup.SHA256 = archiveHash
+	backup.AppVersion = version.Version
+	backup.MigrationVersion = dbArtifact.migrationVersion
+	backup.Status = domain.InstanceBackupStatusSuccess
+	backup.ErrorMessage = ""
+
+	if err := s.completeInstanceBackupSuccess(backup, totalSize, ownOperation); err != nil {
+		if errors.Is(err, context.Canceled) {
+			cleanupOnError("backup cancelled", err)
+			return nil, err
+		}
+		return nil, fmt.Errorf("updating backup record: %w", err)
+	}
+
+	return backup, nil
+}
+
+func (s *InstanceBackupService) completeInstanceBackupSuccess(backup *domain.InstanceBackup, totalSize int64, ownOperation bool) error {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+
+	if op := s.operations[backup.ID]; op != nil && op.cancelRequested {
+		return context.Canceled
+	}
+	if err := s.repo.Update(backup); err != nil {
+		return err
+	}
+	if ownOperation {
+		if op := s.operations[backup.ID]; op != nil {
+			op.progress = domain.InstanceBackupProgress{
+				Phase:   "complete",
+				Message: "Backup complete",
+				Current: totalSize,
+				Total:   totalSize,
+			}
+		}
+	}
+	delete(s.operations, backup.ID)
+	return nil
+}
+
+func (s *InstanceBackupService) cleanupFailedInstanceBackup(backup *domain.InstanceBackup, backupSubDir string, errMsg string, err error) {
+	status := domain.InstanceBackupStatusFailed
+	if errors.Is(err, context.Canceled) || s.instanceBackupCancellationRequested(backup.ID) || backupAlreadyCancelled(s.repo, backup.ID) {
+		status = domain.InstanceBackupStatusCancelled
+		errMsg = "cancelled by user"
+	}
+	backup.Status = status
+	backup.ErrorMessage = errMsg
+	if updateErr := s.repo.Update(backup); updateErr != nil {
+		log.Printf("Failed to update backup record to %s: %v", status, updateErr)
+	}
+	os.RemoveAll(backupSubDir)
+}
+
+func backupAlreadyCancelled(repo domain.InstanceBackupRepository, id uuid.UUID) bool {
+	backup, err := repo.GetByID(id)
+	return err == nil && backup != nil && backup.Status == domain.InstanceBackupStatusCancelled
+}
+
+func (s *InstanceBackupService) backupRunContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	limits := s.BackupArchiveLimits()
+	if limits.MaxDuration > 0 {
+		return context.WithTimeout(ctx, limits.MaxDuration)
+	}
+	return context.WithCancel(ctx)
+}
+
+func (s *InstanceBackupService) hasRunningInstanceBackup() (bool, error) {
+	backups, err := s.repo.List()
+	if err != nil {
+		return false, err
+	}
+	for i := range backups {
+		if backups[i].Status == domain.InstanceBackupStatusRunning {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *InstanceBackupService) hasActiveInstanceBackupOperation() bool {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	return len(s.operations) > 0
+}
+
+func (s *InstanceBackupService) beginInstanceBackupOperation(id uuid.UUID, cancel context.CancelFunc, progress domain.InstanceBackupProgress) {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	s.operations[id] = &instanceBackupOperation{
+		cancel:   cancel,
+		progress: progress,
+	}
+}
+
+func (s *InstanceBackupService) endInstanceBackupOperation(id uuid.UUID) {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	delete(s.operations, id)
+}
+
+func (s *InstanceBackupService) updateInstanceBackupProgress(id uuid.UUID, progress domain.InstanceBackupProgress) {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	if op := s.operations[id]; op != nil {
+		op.progress = progress
+	}
+}
+
+func (s *InstanceBackupService) instanceBackupCancellationRequested(id uuid.UUID) bool {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	op := s.operations[id]
+	return op != nil && op.cancelRequested
+}
+
+// GetProgress returns best-effort in-memory progress for a running instance backup.
+func (s *InstanceBackupService) GetProgress(id uuid.UUID) (domain.InstanceBackupProgress, bool) {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	op := s.operations[id]
+	if op == nil {
+		return domain.InstanceBackupProgress{}, false
+	}
+	return op.progress, true
+}
+
+// Cancel requests cancellation of a running instance backup.
+func (s *InstanceBackupService) Cancel(ctx context.Context, id uuid.UUID) (*domain.InstanceBackup, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	s.operationMu.Lock()
+	op := s.operations[id]
+	if op != nil {
+		backup, err := s.repo.GetByID(id)
+		if err != nil {
+			s.operationMu.Unlock()
+			return nil, fmt.Errorf("getting backup for cancel: %w", err)
+		}
+		if backup == nil {
+			s.operationMu.Unlock()
+			return nil, ErrInstanceBackupNotFound
+		}
+		if backup.Status != domain.InstanceBackupStatusRunning {
+			s.operationMu.Unlock()
+			return nil, ErrInstanceBackupNotRunning
+		}
+		op.cancelRequested = true
+		op.cancel()
+		op.progress = domain.InstanceBackupProgress{
+			Phase:   "cancelling",
+			Message: "Cancellation requested",
+		}
+		s.operationMu.Unlock()
+		backup.ErrorMessage = "cancellation requested"
+		return backup, nil
+	}
+	s.operationMu.Unlock()
+
+	backup, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("getting backup for cancel: %w", err)
+	}
+	if backup == nil {
+		return nil, ErrInstanceBackupNotFound
+	}
+	if backup.Status != domain.InstanceBackupStatusRunning {
+		return nil, ErrInstanceBackupNotRunning
+	}
+
+	backup.Status = domain.InstanceBackupStatusCancelled
+	backup.ErrorMessage = "cancelled by user"
+	if err := s.repo.Update(backup); err != nil {
+		return nil, fmt.Errorf("updating cancelled backup: %w", err)
+	}
+	return backup, nil
+}
+
+func checkBackupArchiveEntryQuota(name string, size int64, limits BackupArchiveLimits) error {
+	if size > limits.MaxEntryBytes {
+		return newRestoreLimitError("backup archive entry %s exceeds per-entry backup limit: %d bytes > %d bytes", name, size, limits.MaxEntryBytes)
+	}
+	return nil
+}
+
+func checkBackupArchiveTotals(totalBytes int64, fileEntries int, limits BackupArchiveLimits) error {
+	if totalBytes > limits.MaxTotalBytes {
+		return newRestoreLimitError("backup archive exceeds expanded backup limit: %d bytes > %d bytes", totalBytes, limits.MaxTotalBytes)
+	}
+	if fileEntries > limits.MaxFileEntries {
+		return newRestoreLimitError("backup archive file count exceeds backup limit: %d entries > %d entries", fileEntries, limits.MaxFileEntries)
+	}
+	return nil
+}
+
+func isArchiveQuotaError(err error) bool {
+	var limitErr *RestoreLimitError
+	return errors.As(err, &limitErr)
+}
+
+func (s *InstanceBackupService) collectArchiveSourceFiles(ctx context.Context, limits BackupArchiveLimits, initialBytes int64) ([]archiveSourceFile, int, *archiveSourceFile, int64, int, error) {
+	if err := checkBackupArchiveTotals(initialBytes, 1, limits); err != nil {
+		return nil, 0, nil, 0, 0, err
+	}
+
+	deviceBackupFiles := make([]archiveSourceFile, 0)
+	backupFileCount := 0
+	totalBytes := initialBytes
+	fileEntries := 1 // database entry
+
 	if info, err := os.Stat(s.deviceBackupDir); err == nil && info.IsDir() {
 		err := filepath.Walk(s.deviceBackupDir, func(path string, info os.FileInfo, err error) error {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if err != nil {
 				return nil // skip files we can't read
 			}
@@ -228,6 +703,9 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 				}
 				return nil
 			}
+			if !info.Mode().IsRegular() {
+				return nil
+			}
 
 			rel, err := filepath.Rel(s.deviceBackupDir, path)
 			if err != nil {
@@ -236,108 +714,66 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 
 			// Validate archive entry name: no absolute paths, no traversal (T-15-05)
 			archiveName := filepath.ToSlash(filepath.Join("backups", rel))
-			if strings.HasPrefix(archiveName, "/") || strings.Contains(archiveName, "..") {
+			if strings.HasPrefix(archiveName, "/") || archiveEntryHasTraversal(archiveName) {
 				return nil
 			}
+			if err := checkBackupArchiveEntryQuota(archiveName, info.Size(), limits); err != nil {
+				return err
+			}
+			totalBytes += info.Size()
+			fileEntries++
+			if err := checkBackupArchiveTotals(totalBytes, fileEntries, limits); err != nil {
+				return err
+			}
 
-			deviceBackupFiles = append(deviceBackupFiles, struct {
-				archiveName string
-				diskPath    string
-			}{archiveName: archiveName, diskPath: path})
+			deviceBackupFiles = append(deviceBackupFiles, archiveSourceFile{
+				archiveName: archiveName,
+				diskPath:    path,
+				sizeBytes:   info.Size(),
+			})
 			backupFileCount++
 			return nil
 		})
 		if err != nil {
-			log.Printf("Warning: error walking device backup dir: %v", err)
+			return nil, 0, nil, 0, 0, err
 		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, 0, nil, 0, 0, fmt.Errorf("statting device backup dir: %w", err)
 	}
 
-	// Step 5: Build manifest
-	manifest := backupManifest{
-		Version:           1,
-		AppVersion:        version.Version,
-		GitCommit:         version.GitCommit,
-		DBDriver:          string(s.dialect),
-		DBEntryName:       dbArtifact.archiveEntryName,
-		MigrationVersion:  dbArtifact.migrationVersion,
-		CreatedAt:         now.Format(time.RFC3339),
-		DBSHA256:          dbHash,
-		BackupFileCount:   backupFileCount,
-		TotalSizeBytes:    0, // will be updated after archiving
-		EncryptionKeyHash: computeEncryptionKeyHash(s.encryptionKey),
+	var knownHostsFile *archiveSourceFile
+	if info, err := os.Stat(s.knownHostsPath); err == nil && !info.IsDir() && info.Mode().IsRegular() {
+		if err := checkBackupArchiveEntryQuota("known_hosts", info.Size(), limits); err != nil {
+			return nil, 0, nil, 0, 0, err
+		}
+		totalBytes += info.Size()
+		fileEntries++
+		if err := checkBackupArchiveTotals(totalBytes, fileEntries, limits); err != nil {
+			return nil, 0, nil, 0, 0, err
+		}
+		knownHostsFile = &archiveSourceFile{
+			archiveName: "known_hosts",
+			diskPath:    s.knownHostsPath,
+			sizeBytes:   info.Size(),
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, 0, nil, 0, 0, fmt.Errorf("statting known_hosts: %w", err)
 	}
 
-	// Step 6: Create archive at temp path
-	finalPath := filepath.Join(backupSubDir, fileName)
-	tempArchivePath := finalPath + ".tmp"
-
-	totalSize, err := s.createArchive(tempArchivePath, dbArtifact, deviceBackupFiles, &manifest)
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("creating archive: %v", err))
-		os.Remove(tempArchivePath)
-		return nil, fmt.Errorf("creating archive: %w", err)
-	}
-	manifest.TotalSizeBytes = totalSize
-
-	// Step 7: Rename temp archive to final path
-	if err := os.Rename(tempArchivePath, finalPath); err != nil {
-		cleanupOnError(fmt.Sprintf("renaming archive: %v", err))
-		os.Remove(tempArchivePath)
-		return nil, fmt.Errorf("renaming archive: %w", err)
-	}
-	if err := os.Chmod(finalPath, 0600); err != nil {
-		cleanupOnError(fmt.Sprintf("restricting archive permissions: %v", err))
-		return nil, fmt.Errorf("restricting archive permissions: %w", err)
-	}
-
-	// Step 8: Compute archive SHA-256 and write sidecar
-	archiveHash, err := computeFileHash(finalPath)
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("computing archive hash: %v", err))
-		return nil, fmt.Errorf("computing archive hash: %w", err)
-	}
-
-	sidecarContent := fmt.Sprintf("%s  %s\n", archiveHash, filepath.Base(finalPath))
-	sidecarPath := finalPath + ".sha256"
-	if err := os.WriteFile(sidecarPath, []byte(sidecarContent), 0600); err != nil {
-		cleanupOnError(fmt.Sprintf("writing sidecar: %v", err))
-		return nil, fmt.Errorf("writing sidecar: %w", err)
-	}
-
-	// Step 9: Get archive file size
-	archiveInfo, err := os.Stat(finalPath)
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("statting archive: %v", err))
-		return nil, fmt.Errorf("statting archive: %w", err)
-	}
-
-	// Step 10: Update DB record to success
-	backup.FileName = fileName
-	backup.FilePath = finalPath
-	backup.SizeBytes = archiveInfo.Size()
-	backup.SHA256 = archiveHash
-	backup.AppVersion = version.Version
-	backup.MigrationVersion = dbArtifact.migrationVersion
-	backup.Status = domain.InstanceBackupStatusSuccess
-	backup.ErrorMessage = ""
-
-	if err := s.repo.Update(backup); err != nil {
-		return nil, fmt.Errorf("updating backup record: %w", err)
-	}
-
-	return backup, nil
+	return deviceBackupFiles, backupFileCount, knownHostsFile, totalBytes, fileEntries, nil
 }
 
 // createArchive builds a .tar.gz archive containing manifest, database, device backups, and known_hosts.
 // Returns the total size of all archived file data.
 func (s *InstanceBackupService) createArchive(
+	ctx context.Context,
 	archivePath string,
 	dbArtifact databaseBackupArtifact,
-	deviceBackupFiles []struct {
-		archiveName string
-		diskPath    string
-	},
+	deviceBackupFiles []archiveSourceFile,
+	knownHostsFile *archiveSourceFile,
+	manifestJSON []byte,
 	manifest *backupManifest,
+	backupID uuid.UUID,
 ) (int64, error) {
 	f, err := os.OpenFile(archivePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
@@ -354,39 +790,65 @@ func (s *InstanceBackupService) createArchive(
 	var totalSize int64
 
 	// Add manifest.json
-	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return 0, fmt.Errorf("marshaling manifest: %w", err)
-	}
 	if err := addBytesToTar(tw, "manifest.json", manifestJSON, time.Now().UTC()); err != nil {
 		return 0, fmt.Errorf("adding manifest to archive: %w", err)
 	}
 	totalSize += int64(len(manifestJSON))
+	s.updateInstanceBackupProgress(backupID, domain.InstanceBackupProgress{
+		Phase:   "archiving",
+		Message: "Archived manifest",
+		Current: totalSize,
+		Total:   manifest.TotalSizeBytes,
+	})
 
 	// Add the database payload (SQLite file or PostgreSQL dump).
-	dbSize, err := addFileToTar(tw, dbArtifact.archiveEntryName, dbArtifact.tempPath)
+	dbSize, err := addFileToTarContext(ctx, tw, dbArtifact.archiveEntryName, dbArtifact.tempPath)
 	if err != nil {
 		return 0, fmt.Errorf("adding database to archive: %w", err)
 	}
 	totalSize += dbSize
+	s.updateInstanceBackupProgress(backupID, domain.InstanceBackupProgress{
+		Phase:   "archiving",
+		Message: "Archived database snapshot",
+		Current: totalSize,
+		Total:   manifest.TotalSizeBytes,
+	})
 
 	// Add device backup files under backups/
 	for _, bf := range deviceBackupFiles {
-		size, err := addFileToTar(tw, bf.archiveName, bf.diskPath)
+		size, err := addCollectedFileToTarContext(ctx, tw, bf, s.BackupArchiveLimits())
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isArchiveQuotaError(err) {
+				return 0, err
+			}
 			log.Printf("Warning: skipping device backup file %s: %v", bf.diskPath, err)
 			continue
 		}
 		totalSize += size
+		s.updateInstanceBackupProgress(backupID, domain.InstanceBackupProgress{
+			Phase:   "archiving",
+			Message: "Archived " + bf.archiveName,
+			Current: totalSize,
+			Total:   manifest.TotalSizeBytes,
+		})
 	}
 
 	// Add known_hosts if it exists
-	if info, err := os.Stat(s.knownHostsPath); err == nil && !info.IsDir() {
-		size, err := addFileToTar(tw, "known_hosts", s.knownHostsPath)
+	if knownHostsFile != nil {
+		size, err := addCollectedFileToTarContext(ctx, tw, *knownHostsFile, s.BackupArchiveLimits())
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isArchiveQuotaError(err) {
+				return 0, err
+			}
 			log.Printf("Warning: failed to add known_hosts to archive: %v", err)
 		} else {
 			totalSize += size
+			s.updateInstanceBackupProgress(backupID, domain.InstanceBackupProgress{
+				Phase:   "archiving",
+				Message: "Archived known_hosts",
+				Current: totalSize,
+				Total:   manifest.TotalSizeBytes,
+			})
 		}
 	}
 
@@ -565,6 +1027,10 @@ func (s *InstanceBackupService) validatePostgresDump(ctx context.Context, dumpPa
 
 // addFileToTar adds a file from disk to the tar archive. Returns the file size.
 func addFileToTar(tw *tar.Writer, name string, sourcePath string) (int64, error) {
+	return addFileToTarContext(context.Background(), tw, name, sourcePath)
+}
+
+func addFileToTarContext(ctx context.Context, tw *tar.Writer, name string, sourcePath string) (int64, error) {
 	f, err := os.Open(sourcePath)
 	if err != nil {
 		return 0, fmt.Errorf("opening %s: %w", sourcePath, err)
@@ -586,9 +1052,50 @@ func addFileToTar(tw *tar.Writer, name string, sourcePath string) (int64, error)
 		return 0, fmt.Errorf("writing header for %s: %w", name, err)
 	}
 
-	written, err := io.Copy(tw, f)
+	written, err := copyWithContext(ctx, tw, f)
 	if err != nil {
 		return 0, fmt.Errorf("writing data for %s: %w", name, err)
+	}
+	if written != info.Size() {
+		return 0, fmt.Errorf("writing data for %s: wrote %d bytes, expected %d bytes", name, written, info.Size())
+	}
+	return written, nil
+}
+
+func addCollectedFileToTarContext(ctx context.Context, tw *tar.Writer, source archiveSourceFile, limits BackupArchiveLimits) (int64, error) {
+	f, err := os.Open(source.diskPath)
+	if err != nil {
+		return 0, fmt.Errorf("opening %s: %w", source.diskPath, err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("statting %s: %w", source.diskPath, err)
+	}
+	if err := checkBackupArchiveEntryQuota(source.archiveName, info.Size(), limits); err != nil {
+		return 0, err
+	}
+	if info.Size() > source.sizeBytes {
+		return 0, newRestoreLimitError("backup archive entry %s grew after collection: %d bytes > %d bytes", source.archiveName, info.Size(), source.sizeBytes)
+	}
+
+	header := &tar.Header{
+		Name:    source.archiveName,
+		Size:    info.Size(),
+		Mode:    0644,
+		ModTime: info.ModTime(),
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		return 0, fmt.Errorf("writing header for %s: %w", source.archiveName, err)
+	}
+
+	written, err := copyWithContext(ctx, tw, f)
+	if err != nil {
+		return 0, fmt.Errorf("writing data for %s: %w", source.archiveName, err)
+	}
+	if written != info.Size() {
+		return 0, fmt.Errorf("writing data for %s: wrote %d bytes, expected %d bytes", source.archiveName, written, info.Size())
 	}
 	return written, nil
 }
@@ -612,6 +1119,10 @@ func addBytesToTar(tw *tar.Writer, name string, data []byte, modTime time.Time) 
 
 // computeFileHash computes the SHA-256 hash of a file using streaming I/O.
 func computeFileHash(path string) (string, error) {
+	return computeFileHashContext(context.Background(), path)
+}
+
+func computeFileHashContext(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("opening file for hash: %w", err)
@@ -619,10 +1130,45 @@ func computeFileHash(path string) (string, error) {
 	defer f.Close()
 
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := copyWithContext(ctx, h, f); err != nil {
 		return "", fmt.Errorf("hashing file: %w", err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	buf := make([]byte, 32*1024)
+	var written int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			if err := ctx.Err(); err != nil {
+				return written, err
+			}
+			nw, ew := dst.Write(buf[:nr])
+			if nw > 0 {
+				written += int64(nw)
+			}
+			if ew != nil {
+				return written, ew
+			}
+			if nr != nw {
+				return written, io.ErrShortWrite
+			}
+		}
+		if er != nil {
+			if er == io.EOF {
+				return written, nil
+			}
+			return written, er
+		}
+	}
 }
 
 // RestoreReport contains the results of archive validation and staging.
@@ -647,9 +1193,19 @@ type RestoreReport struct {
 // cleanup after activation; the API/restarter layer owns the process handoff
 // before activation.
 func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryRun bool) (*RestoreReport, error) {
-	ctx := context.Background()
+	return s.ValidateAndStageRestoreContext(context.Background(), archivePath, dryRun)
+}
+
+// ValidateAndStageRestoreContext validates and stages a restore archive while observing caller cancellation.
+func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Context, archivePath string, dryRun bool) (*RestoreReport, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	limits := normalizeRestoreArchiveLimits(s.restoreLimits)
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := validateRestoreArchiveFile(archivePath, limits); err != nil {
 		return nil, err
 	}
@@ -662,7 +1218,7 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	defer os.RemoveAll(tempDir)
 
 	// Step 2: Extract archive
-	if err := extractArchive(archivePath, tempDir, limits); err != nil {
+	if err := extractArchiveContext(ctx, archivePath, tempDir, limits); err != nil {
 		return nil, err
 	}
 
@@ -699,7 +1255,7 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	}
 
 	// Step 5: Verify DB checksum
-	actualDBHash, err := computeFileHash(extractedDBPath)
+	actualDBHash, err := computeFileHashContext(ctx, extractedDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("computing extracted DB hash: %w", err)
 	}
@@ -782,42 +1338,57 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 		report.Message = "Validation passed. Archive is ready to restore."
 		return report, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Step 14: Stage files for restore
 	stagingDir := filepath.Join(filepath.Dir(s.dbPath), ".restore-staging")
+	markerPath := filepath.Join(filepath.Dir(s.dbPath), ".theia-restore-pending")
 	if err := os.RemoveAll(stagingDir); err != nil {
 		return nil, fmt.Errorf("removing existing staging dir: %w", err)
 	}
 	if err := os.MkdirAll(stagingDir, 0700); err != nil {
 		return nil, fmt.Errorf("creating staging dir: %w", err)
 	}
+	cleanupStagingOnError := func(err error) error {
+		if removeErr := os.RemoveAll(stagingDir); removeErr != nil {
+			log.Printf("Warning: failed to remove restore staging dir after error: %v", removeErr)
+		}
+		if removeErr := os.Remove(markerPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			log.Printf("Warning: failed to remove restore marker after error: %v", removeErr)
+		}
+		return err
+	}
 
 	stagedDBName := filepath.Base(dbEntryName)
 	stagedDBPath := filepath.Join(stagingDir, stagedDBName)
 
 	// Copy the database payload to staging.
-	if err := copyFile(extractedDBPath, stagedDBPath); err != nil {
-		return nil, fmt.Errorf("staging database: %w", err)
+	if err := copyFileContext(ctx, extractedDBPath, stagedDBPath); err != nil {
+		return nil, cleanupStagingOnError(fmt.Errorf("staging database: %w", err))
 	}
 
 	// Copy backups/ directory if it exists
 	srcBackups := filepath.Join(tempDir, "backups")
 	if info, err := os.Stat(srcBackups); err == nil && info.IsDir() {
-		if err := copyDir(srcBackups, filepath.Join(stagingDir, "backups")); err != nil {
-			return nil, fmt.Errorf("staging backup files: %w", err)
+		if err := copyDirContext(ctx, srcBackups, filepath.Join(stagingDir, "backups")); err != nil {
+			return nil, cleanupStagingOnError(fmt.Errorf("staging backup files: %w", err))
 		}
 	}
 
 	// Copy known_hosts if it exists
 	srcKnownHosts := filepath.Join(tempDir, "known_hosts")
 	if _, err := os.Stat(srcKnownHosts); err == nil {
-		if err := copyFile(srcKnownHosts, filepath.Join(stagingDir, "known_hosts")); err != nil {
-			return nil, fmt.Errorf("staging known_hosts: %w", err)
+		if err := copyFileContext(ctx, srcKnownHosts, filepath.Join(stagingDir, "known_hosts")); err != nil {
+			return nil, cleanupStagingOnError(fmt.Errorf("staging known_hosts: %w", err))
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, cleanupStagingOnError(err)
 	}
 
 	// Write marker file
-	markerPath := filepath.Join(filepath.Dir(s.dbPath), ".theia-restore-pending")
 	marker := newRestoreMarker(
 		stagedDBPath,
 		filepath.Join(stagingDir, "backups"),
@@ -830,13 +1401,13 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 	marker.DBDriver = string(archiveDialect)
 	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("marshaling marker JSON: %w", err)
+		return nil, cleanupStagingOnError(fmt.Errorf("marshaling marker JSON: %w", err))
 	}
 	if err := os.WriteFile(markerPath, markerJSON, 0600); err != nil {
-		return nil, fmt.Errorf("writing restore marker: %w", err)
+		return nil, cleanupStagingOnError(fmt.Errorf("writing restore marker: %w", err))
 	}
 	if err := os.Chmod(markerPath, 0600); err != nil {
-		return nil, fmt.Errorf("restricting restore marker permissions: %w", err)
+		return nil, cleanupStagingOnError(fmt.Errorf("restricting restore marker permissions: %w", err))
 	}
 
 	report.Message = "Restore staged successfully. Server will restart to apply."
@@ -859,6 +1430,10 @@ func validateRestoreArchiveFile(archivePath string, limits RestoreArchiveLimits)
 
 // extractArchive extracts a .tar.gz archive to the given directory with security validation and quotas.
 func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) error {
+	return extractArchiveContext(context.Background(), archivePath, destDir, limits)
+}
+
+func extractArchiveContext(ctx context.Context, archivePath, destDir string, limits RestoreArchiveLimits) error {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("opening archive: %w", err)
@@ -875,6 +1450,9 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 	var totalBytes int64
 	var archiveEntries int
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		header, err := tr.Next()
 		if err == io.EOF {
 			break
@@ -950,7 +1528,7 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 		if err != nil {
 			return fmt.Errorf("creating file %s: %w", cleanName, err)
 		}
-		if _, err := io.Copy(outFile, tr); err != nil {
+		if _, err := copyWithContext(ctx, outFile, tr); err != nil {
 			outFile.Close()
 			return fmt.Errorf("writing file %s: %w", cleanName, err)
 		}
@@ -988,6 +1566,10 @@ func isAllowedRestoreArchiveDirectory(name string) bool {
 
 // copyFile copies a single file from src to dst with private file permissions.
 func copyFile(src, dst string) error {
+	return copyFileContext(context.Background(), src, dst)
+}
+
+func copyFileContext(ctx context.Context, src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", src, err)
@@ -1004,7 +1586,7 @@ func copyFile(src, dst string) error {
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, in); err != nil {
+	if _, err := copyWithContext(ctx, out, in); err != nil {
 		return fmt.Errorf("copying %s to %s: %w", src, dst, err)
 	}
 
@@ -1013,7 +1595,14 @@ func copyFile(src, dst string) error {
 
 // copyDir recursively copies a directory from srcDir to dstDir.
 func copyDir(srcDir, dstDir string) error {
+	return copyDirContext(context.Background(), srcDir, dstDir)
+}
+
+func copyDirContext(ctx context.Context, srcDir, dstDir string) error {
 	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return err
 		}
@@ -1028,7 +1617,7 @@ func copyDir(srcDir, dstDir string) error {
 			return os.MkdirAll(target, 0700)
 		}
 
-		return copyFile(path, target)
+		return copyFileContext(ctx, path, target)
 	})
 }
 
@@ -1094,13 +1683,35 @@ func (s *InstanceBackupService) Delete(ctx context.Context, id uuid.UUID) error 
 	if err != nil {
 		return fmt.Errorf("getting backup for delete: %w", err)
 	}
+	if backup == nil {
+		return ErrInstanceBackupNotFound
+	}
+	if backup.Status == domain.InstanceBackupStatusRunning {
+		return ErrInstanceBackupNotRunning
+	}
 
 	// Remove the UUID subdirectory containing the archive and sidecar
 	if backup != nil && backup.FilePath != "" {
+		if err := validateInstanceBackupFilePath(s.backupDir, backup.FilePath); err != nil {
+			return err
+		}
 		if err := os.RemoveAll(filepath.Dir(backup.FilePath)); err != nil {
 			log.Printf("Warning: failed to remove backup files at %s: %v", filepath.Dir(backup.FilePath), err)
 		}
 	}
 
 	return s.repo.Delete(id)
+}
+
+func validateInstanceBackupFilePath(rootDir string, filePath string) error {
+	root := filepath.Clean(rootDir)
+	dir := filepath.Clean(filepath.Dir(filePath))
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return fmt.Errorf("backup file path is outside instance backup directory: %w", err)
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("backup file path is outside instance backup directory")
+	}
+	return nil
 }

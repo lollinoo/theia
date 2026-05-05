@@ -11,6 +11,11 @@ vi.mock('../api/client', () => ({
   createInstanceBackup: vi
     .fn()
     .mockResolvedValue({ id: 'backup-1', status: 'running', created_at: new Date().toISOString() }),
+  cancelInstanceBackup: vi.fn().mockResolvedValue({
+    id: 'backup-1',
+    status: 'cancelled',
+    created_at: new Date().toISOString(),
+  }),
   deleteInstanceBackup: vi.fn().mockResolvedValue(undefined),
   instanceBackupDownloadUrl: vi.fn().mockReturnValue('/api/v1/instance-backups/download'),
   restoreInstanceBackup: vi.fn().mockResolvedValue({ success: true }),
@@ -270,6 +275,31 @@ describe('InstanceBackupManager — SC-5: restore UI', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Restore Now' })).not.toBeDisabled();
     });
+  });
+
+  it('confirmed restore failure stays visible instead of showing restart success', async () => {
+    const { restoreInstanceBackup } = await import('../api/client');
+    (restoreInstanceBackup as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockRejectedValueOnce(new ValidationError('restore archive invalid'));
+
+    await renderAndWait();
+
+    const file = new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' });
+    selectRestoreFile(file);
+
+    await waitFor(() => {
+      expect(screen.getByText('Confirm Restore')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('restore archive invalid')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Confirm Restore')).toBeInTheDocument();
+    expect(screen.queryByText(/Restore initiated/)).not.toBeInTheDocument();
   });
 
   it('Cancel closes the confirmation modal', async () => {
@@ -549,6 +579,26 @@ describe('InstanceBackupManager — SC-5: table renders backup row fields', () =
     expect(screen.getByText('Backup in progress...')).toBeInTheDocument();
   });
 
+  it('renders running backup progress details', async () => {
+    const { fetchInstanceBackups } = await import('../api/client');
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      mockBackup({
+        status: 'running',
+        file_name: '',
+        progress: {
+          phase: 'archiving',
+          message: 'Writing backup archive',
+          current: 50,
+          total: 100,
+        },
+      }),
+    ]);
+
+    await renderAndWait();
+
+    expect(screen.getByText('Writing backup archive (50%)')).toBeInTheDocument();
+  });
+
   it('renders size in MB for large backups', async () => {
     const { fetchInstanceBackups } = await import('../api/client');
     (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
@@ -686,6 +736,32 @@ describe('InstanceBackupManager — SC-5: Create Backup button disabled when bac
     // renders as "Creating..." and is disabled (hasRunning = true).
     const createBtn = screen.getByRole('button', { name: /creating\.\.\./i });
     expect(createBtn).toBeDisabled();
+  });
+});
+
+describe('InstanceBackupManager — running backup cancellation', () => {
+  it('calls cancelInstanceBackup when Cancel is clicked for a running backup', async () => {
+    const { cancelInstanceBackup, fetchInstanceBackups } = await import('../api/client');
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      mockBackup({ id: 'running-backup', status: 'running', file_name: '' }),
+    ]);
+    (cancelInstanceBackup as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBackup({
+        id: 'running-backup',
+        status: 'running',
+        file_name: '',
+        progress: { phase: 'cancelling', message: 'Cancellation requested', current: 0, total: 0 },
+      }),
+    );
+
+    await renderAndWait();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => {
+      expect(cancelInstanceBackup).toHaveBeenCalledWith('running-backup');
+    });
+    expect(screen.getByRole('button', { name: /creating\.\.\./i })).toBeDisabled();
   });
 });
 

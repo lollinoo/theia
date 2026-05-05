@@ -980,12 +980,29 @@ func TestRunTextExportWrites0600BackupFile(t *testing.T) {
 	defer client.Close()
 
 	backupDir := t.TempDir()
-	svc := &BackupService{fileRepo: newMockBackupFileRepo()}
-	if err := svc.runTextExport(context.Background(), client, uuid.New(), backupDir, "router.rsc", "running", "/export"); err != nil {
+	fileRepo := newMockBackupFileRepo()
+	jobID := uuid.New()
+	svc := &BackupService{fileRepo: fileRepo}
+	if err := svc.runTextExport(context.Background(), client, jobID, backupDir, "router.rsc", "running", "/export"); err != nil {
 		t.Fatalf("runTextExport: %v", err)
 	}
 
 	assertBackupMode(t, filepath.Join(backupDir, "router.rsc"), 0600)
+	files, err := fileRepo.GetByJobID(jobID)
+	if err != nil {
+		t.Fatalf("GetByJobID: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("backup files = %d, want 1", len(files))
+	}
+	output := []byte("/interface bridge add name=br0\n")
+	expectedHash := sha256.Sum256(output)
+	if files[0].FileHash != hex.EncodeToString(expectedHash[:]) {
+		t.Fatalf("FileHash = %q, want streamed output hash", files[0].FileHash)
+	}
+	if files[0].SizeBytes != len(output) {
+		t.Fatalf("SizeBytes = %d, want %d", files[0].SizeBytes, len(output))
+	}
 }
 
 func TestRunTextExportTightensExistingBackupFileOnOverwrite(t *testing.T) {
@@ -1139,6 +1156,12 @@ func TestRunBinaryExportWrites0600BackupFile(t *testing.T) {
 }
 
 func TestRunBinaryExportStreamsHashWithoutPostDownloadRead(t *testing.T) {
+	assertFunctionBodyExcludes(t, "runTextExport", []string{
+		"client.RunCommand(ctx, command)",
+		"os.WriteFile(filePath",
+		"sha256.Sum256([]byte(output))",
+		"SizeBytes: len(output)",
+	})
 	assertFunctionBodyExcludes(t, "runBinaryExport", []string{
 		"os.ReadFile(filePath)",
 		"sha256.Sum256(data)",
@@ -1151,6 +1174,22 @@ func TestRunBinaryExportStreamsHashWithoutPostDownloadRead(t *testing.T) {
 		"SizeBytes: len(data)",
 		"size: len(data)",
 	})
+}
+
+func TestTriggerBulkBackupUsesBoundedWorkerPool(t *testing.T) {
+	assertFunctionBodyExcludes(t, "TriggerBulkBackup", []string{
+		"go s.runFullBackup",
+	})
+	body := backupServiceFunctionBody(t, "startBulkBackupWorkers")
+	for _, required := range []string{
+		"defaultBulkBackupWorkerCount",
+		"workerCount",
+		"jobs := make(chan queuedDeviceBackup)",
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("startBulkBackupWorkers body missing %q", required)
+		}
+	}
 }
 
 func assertFunctionBodyExcludes(t *testing.T, functionName string, forbiddenFragments []string) {

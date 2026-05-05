@@ -31,6 +31,11 @@ func (m *mockInstanceBackupRepo) DeleteFailedOlderThan(cutoff time.Time) (int, e
 
 func (m *mockInstanceBackupRepo) Create(backup *domain.InstanceBackup) error { return nil }
 func (m *mockInstanceBackupRepo) GetByID(id uuid.UUID) (*domain.InstanceBackup, error) {
+	for i := range m.backups {
+		if m.backups[i].ID == id {
+			return &m.backups[i], nil
+		}
+	}
 	return nil, nil
 }
 func (m *mockInstanceBackupRepo) List() ([]domain.InstanceBackup, error)     { return nil, nil }
