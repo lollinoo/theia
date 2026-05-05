@@ -407,16 +407,23 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 	ts := setupPostgresServiceTest(t)
 
 	stubExternalCommands(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name != "pg_restore" {
+		switch name {
+		case "pg_restore":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+			}
+			if len(args) < 2 || args[0] != "--list" {
+				return nil, fmt.Errorf("unexpected pg_restore args: %v", args)
+			}
+			return []byte("archive listing"), nil
+		case "pg_dump":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+			}
+			return nil, fmt.Errorf("unexpected pg_dump args: %v", args)
+		default:
 			return nil, fmt.Errorf("unexpected command %s", name)
 		}
-		if commandArgsEqual(args, "--version") {
-			return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
-		}
-		if len(args) < 2 || args[0] != "--list" {
-			return nil, fmt.Errorf("unexpected pg_restore args: %v", args)
-		}
-		return []byte("archive listing"), nil
 	})
 
 	dumpData := []byte("postgres-dump-data")
@@ -521,6 +528,65 @@ func TestInstanceBackupServiceValidateAndStageRestore_PostgresRejectsUnsupported
 	assertPostgresCLIActionableError(t, err.Error(), "pg_restore")
 	if listExecuted {
 		t.Fatal("pg_restore --list executed before rejecting unsupported version")
+	}
+}
+
+func TestInstanceBackupServiceValidateAndStageRestore_PostgresRejectsUnsupportedPgDumpBeforeStaging(t *testing.T) {
+	ts := setupPostgresServiceTest(t)
+
+	stubExternalCommands(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "pg_restore":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+			}
+			if len(args) >= 2 && args[0] == "--list" {
+				return []byte("archive listing"), nil
+			}
+			return nil, fmt.Errorf("unexpected pg_restore args: %v", args)
+		case "pg_dump":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_dump (PostgreSQL) 16.10\n"), nil
+			}
+			return nil, fmt.Errorf("unexpected pg_dump args: %v", args)
+		default:
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+	})
+
+	dumpData := []byte("postgres-dump-data")
+	dumpHash := sha256.Sum256(dumpData)
+	archivePath := filepath.Join(t.TempDir(), "postgres-backup.tar.gz")
+	manifest := backupManifest{
+		Version:           1,
+		AppVersion:        "dev",
+		GitCommit:         "test",
+		DBDriver:          string(reposqlite.DialectPostgres),
+		DBEntryName:       postgresArchiveDBEntry,
+		MigrationVersion:  manifestMigrationVersion(t, ts.db),
+		CreatedAt:         "2026-04-23T00:00:00Z",
+		DBSHA256:          hex.EncodeToString(dumpHash[:]),
+		BackupFileCount:   1,
+		TotalSizeBytes:    int64(len(dumpData)),
+		EncryptionKeyHash: manifestKeyHash(ts.encryptionKey),
+	}
+	writePostgresArchive(t, archivePath, manifest, map[string][]byte{
+		postgresArchiveDBEntry: dumpData,
+	})
+
+	_, err := ts.svc.ValidateAndStageRestore(archivePath, false)
+	if err == nil {
+		t.Fatal("ValidateAndStageRestore() error = nil, want unsupported pg_dump version")
+	}
+	assertPostgresCLIActionableError(t, err.Error(), "pg_dump")
+
+	stagingDir := filepath.Join(filepath.Dir(ts.dbPath), ".restore-staging")
+	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
+		t.Fatalf("restore staging dir should not exist, stat err = %v", err)
+	}
+	markerPath := filepath.Join(filepath.Dir(ts.dbPath), ".theia-restore-pending")
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("restore marker should not exist, stat err = %v", err)
 	}
 }
 
