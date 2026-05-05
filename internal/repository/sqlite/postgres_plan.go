@@ -29,7 +29,7 @@ var defaultRepositoryPlanCheckRegistry = []repositoryPlanCheck{
 		Name:                  "device-by-sysname",
 		SQLiteQuery:           `SELECT id FROM devices WHERE sys_name_lookup = ? AND sys_name_lookup != '' ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
 		SQLiteExpectedIndex:   "idx_devices_sys_name_lookup",
-		PostgresQuery:         `SELECT id FROM devices WHERE sys_name_lookup = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+		PostgresQuery:         `SELECT id FROM devices WHERE sys_name_lookup = $1 AND sys_name_lookup != '' ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
 		PostgresExpectedIndex: "idx_devices_sys_name_lookup",
 		Args:                  []any{"core-router"},
 	},
@@ -50,12 +50,12 @@ var defaultRepositoryPlanCheckRegistry = []repositoryPlanCheck{
 		Args:                  []any{"device-a", "core-switch", "ether1", "ether10", "lldp"},
 	},
 	{
-		Name:                  "unresolved-neighbor-resolution-lookup",
-		SQLiteQuery:           `SELECT id FROM unresolved_neighbors WHERE local_device_id = ? AND remote_identity = ? AND protocol = ? AND resolved_at IS NULL`,
-		SQLiteExpectedIndex:   "sqlite_autoindex_unresolved_neighbors_2",
-		PostgresQuery:         `SELECT id FROM unresolved_neighbors WHERE local_device_id = $1 AND remote_identity = $2 AND protocol = $3 AND resolved_at IS NULL`,
-		PostgresExpectedIndex: "idx_unresolved_neighbors_active_lookup",
-		Args:                  []any{"device-a", "unknown-neighbor", "lldp"},
+		Name:                  "unresolved-neighbors-by-device",
+		SQLiteQuery:           `SELECT id FROM unresolved_neighbors WHERE local_device_id = ? AND resolved_at IS NULL ORDER BY protocol, remote_identity`,
+		SQLiteExpectedIndex:   "idx_unresolved_neighbors_active",
+		PostgresQuery:         `SELECT id FROM unresolved_neighbors WHERE local_device_id = $1 AND resolved_at IS NULL ORDER BY protocol, remote_identity`,
+		PostgresExpectedIndex: "idx_unresolved_neighbors_active",
+		Args:                  []any{"device-a"},
 	},
 }
 
