@@ -384,6 +384,25 @@ export function useWebSocket(
         });
       }
 
+      function ignoreStaleRuntimeSnapshot(
+        version: number,
+        currentVersion: number,
+        runtimeIdentity?: string,
+      ): void {
+        recordCanvasDiagnosticEvent({
+          level: 'debug',
+          source: 'runtime',
+          event: 'runtime.snapshot.ignored',
+          message: 'Runtime snapshot ignored because it is older than the current client base',
+          metadata: {
+            reason: 'stale_snapshot',
+            version,
+            currentVersion,
+            runtimeIdentity,
+          },
+        });
+      }
+
       function getRawMessageType(raw: unknown): string | null {
         if (raw === null || typeof raw !== 'object') {
           return null;
@@ -476,6 +495,16 @@ export function useWebSocket(
             });
           } else if (message.type === 'snapshot') {
             const payload = (message as SnapshotWSMessage).payload;
+            const currentVersion = snapshotVersionRef.current;
+            if (
+              payload.version !== null &&
+              currentVersion !== null &&
+              hasRuntimeSnapshotRef.current &&
+              payload.version < currentVersion
+            ) {
+              ignoreStaleRuntimeSnapshot(payload.version, currentVersion, payload.runtime_identity);
+              return;
+            }
             hasRuntimeSnapshotRef.current = true;
             snapshotVersionRef.current = payload.version;
             runtimeIdentityRef.current = payload.runtime_identity ?? null;

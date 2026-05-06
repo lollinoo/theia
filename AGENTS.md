@@ -34,3 +34,17 @@
 - Observed output: Vitest printed `Error: useTheme must be used within ThemeProvider` from `frontend/src/contexts/ThemeContext.test.tsx`.
 - Root cause: the test intentionally exercises the failure path for calling `useTheme` outside `ThemeProvider`; Vitest reports the thrown error to stderr even though the suite passes.
 - Mitigation: do not treat this stderr text alone as a failing gate. Check the command exit code and the Vitest summary; in this run it reported `96 passed` test files and `981 passed` tests.
+
+### 2026-05-06 - Intentional TDD RED For Stale Runtime Snapshot
+
+- Failing command: `npm --prefix frontend test -- --run src/hooks/useWebSocket.test.ts -t "ignores stale full snapshots"`
+- Observed error: the new regression test expected `cpu_percent` to remain `70`, but the hook applied an older full snapshot and returned `20`.
+- Root cause: `useWebSocket` rejected stale versioned deltas but did not reject older versioned full snapshot envelopes after a newer HTTP runtime bootstrap.
+- Mitigation: add stale full-snapshot rejection before applying snapshot envelopes whose version is lower than the current runtime base.
+
+### 2026-05-06 - Stale Snapshot Patch Context Miss
+
+- Failing command: `apply_patch` update for `frontend/src/hooks/useWebSocket.ts`
+- Observed error: `apply_patch verification failed: Failed to find expected lines`.
+- Root cause: the patch context around the snapshot branch did not match the current file exactly.
+- Mitigation: inspect the exact local context with `sed`, then apply a narrower patch around stable neighboring lines.

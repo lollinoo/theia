@@ -234,6 +234,30 @@ func TestHubOverviewSnapshotSendsResyncOnlyForHTTPBootstrapClient(t *testing.T) 
 	}
 }
 
+func TestHubOverviewResyncSendsMarkerOnlyForHTTPBootstrapClient(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+
+	snapshot := EmptySnapshot()
+	snapshot.DeviceStatuses["dev-1"] = "up"
+	hub.BroadcastOverviewResync(ResyncReasonStateChangesDrop, snapshot, 7)
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
+		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), MessageTypeSnapshot) {
+		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
+	}
+	if !client.needsResync {
+		t.Fatal("expected client to remain marked for HTTP resync")
+	}
+}
+
 func TestHubOverviewDeltaUsesRuntimeDeltaEnvelope(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
