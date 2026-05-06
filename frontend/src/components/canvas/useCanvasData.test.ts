@@ -1434,6 +1434,32 @@ describe('useCanvasData', () => {
     });
   });
 
+  it('applies restored backend positions after reconnect when topology is unchanged', async () => {
+    positionMocks.fetchPositions
+      .mockResolvedValueOnce(new Map([['dev-1', { x: 10, y: 20, pinned: true }]]))
+      .mockResolvedValueOnce(new Map([['dev-1', { x: 110.5, y: 220.25, pinned: true }]]));
+
+    const { result } = renderUseCanvasData(mockSnapshot());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes[0].position).toEqual({ x: 10, y: 20 });
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(positionMocks.fetchPositions).toHaveBeenCalledTimes(2);
+    expect(result.current.nodes[0].position).toEqual({ x: 110.5, y: 220.25 });
+    expect(result.current.nodes[0].data.pinned).toBe(true);
+  });
+
   it('shows resync-only recovery copy when resync is the sole structural cause', async () => {
     const { result } = renderUseCanvasData(mockSnapshot());
 

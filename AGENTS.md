@@ -68,3 +68,17 @@
 - Observed error: `unknown command "update-branch" for "gh pr"`.
 - Root cause: the installed GitHub CLI version does not provide `gh pr update-branch`.
 - Mitigation: inspect branch freshness with `git merge-base`, `git rev-parse origin/master`, and `git rev-list --left-right --count origin/master...HEAD`; use GitHub REST `PUT /repos/<owner>/<repo>/pulls/<number>/update-branch` only if the PR branch is actually behind.
+
+### 2026-05-06 - Root Package Manifest Probe
+
+- Failing command: `cat package.json`
+- Observed error: `cat: package.json: No such file or directory`
+- Root cause: this repository has the npm package manifest under `frontend/package.json`, not at the repository root.
+- Mitigation: use `npm --prefix frontend ...` or read `frontend/package.json` for frontend scripts.
+
+### 2026-05-06 - Intentional TDD RED For Restored Canvas Positions
+
+- Failing command: `npm --prefix frontend test -- --run src/components/canvas/useCanvasData.test.ts -t "applies restored backend positions"`
+- Observed error: the new regression test expected the node position to update from `{x: 10, y: 20}` to the restored backend value `{x: 110.5, y: 220.25}`, but the canvas kept `{x: 10, y: 20}` after `backend-reconnected`.
+- Root cause: `buildTopologyNodes` prefers current in-memory positions over freshly fetched persisted positions, so a restore with the same topology can leave pre-restore coordinates visible.
+- Mitigation: teach backend reconnect topology refreshes to treat fetched persisted positions as authoritative over stale in-memory positions.

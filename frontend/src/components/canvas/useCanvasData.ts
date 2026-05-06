@@ -685,6 +685,12 @@ export function useCanvasData({
               effectivePositions.set(deviceId, position);
             }
           }
+          // Backend reconnects can follow instance restore; fetched persisted
+          // positions must override stale pre-restart canvas state.
+          const currentPositionsForComposition =
+            trigger === 'backend_reconnected'
+              ? new Map<string, PositionState>()
+              : currentNodePositionsRef.current;
 
           const usablePositionState = buildUsablePositionState(
             fetchedDevices,
@@ -714,7 +720,7 @@ export function useCanvasData({
               runtimeState,
               savedPositions: effectivePositions,
               computedPositions: new Map(),
-              currentPositions: currentNodePositionsRef.current,
+              currentPositions: currentPositionsForComposition,
               defaultPosition,
               editMode,
               openDeviceMenu,
@@ -832,7 +838,7 @@ export function useCanvasData({
             runtimeState,
             savedPositions: effectivePositions,
             computedPositions,
-            currentPositions: currentNodePositionsRef.current,
+            currentPositions: currentPositionsForComposition,
             defaultPosition,
             editMode,
             openDeviceMenu,
