@@ -185,6 +185,32 @@ describe('parseWSMessage', () => {
     });
   });
 
+  it('parses runtime_delta patches that clear runtime flags', () => {
+    const message = parseWSMessage({
+      type: 'runtime_delta',
+      payload: {
+        base_version: 1,
+        version: 2,
+        delta: {
+          devices: {
+            'dev-1': {
+              device_id: 'dev-1',
+              runtime_flags: null,
+            },
+          },
+          links: {},
+        },
+      },
+    });
+
+    const payload = (message as { type: 'runtime_delta'; payload: RuntimeDeltaEnvelopePayload })
+      .payload;
+    expect(payload.delta.devices['dev-1']).toEqual({
+      device_id: 'dev-1',
+      runtime_flags: [],
+    });
+  });
+
   it('parses a sparse snapshot_delta payload without a versioned envelope', () => {
     const message = parseWSMessage({
       type: 'snapshot_delta',

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -828,6 +829,34 @@ func TestBuildRuntimeDeltaPatchIncludesOnlyChangedRuntimeFields(t *testing.T) {
 	}
 	if len(patch.Links) != 0 {
 		t.Fatalf("expected unchanged incident link to be omitted, got %#v", patch.Links)
+	}
+}
+
+func TestBuildRuntimeDeltaPatchSerializesClearedRuntimeFlagsAsArray(t *testing.T) {
+	deviceID := uuid.New().String()
+
+	previous := ws.EmptySnapshot()
+	previous.Devices[deviceID] = ws.DeviceRuntimeDTO{
+		DeviceID:     deviceID,
+		RuntimeFlags: []string{"partial_telemetry"},
+	}
+
+	delta := ws.EmptySnapshot()
+	delta.Devices[deviceID] = ws.DeviceRuntimeDTO{
+		RuntimeFlags: []string{},
+	}
+
+	patch := buildRuntimeDeltaPatch(delta, previous)
+	if patch == nil {
+		t.Fatal("expected runtime delta patch")
+	}
+
+	raw, err := json.Marshal(patch.Devices[deviceID])
+	if err != nil {
+		t.Fatalf("marshal device patch: %v", err)
+	}
+	if !strings.Contains(string(raw), `"runtime_flags":[]`) {
+		t.Fatalf("runtime_flags JSON = %s, want an empty array", raw)
 	}
 }
 

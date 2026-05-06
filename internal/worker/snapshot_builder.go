@@ -427,7 +427,7 @@ func buildDeviceRuntimePatch(current, previous ws.DeviceRuntimeDTO) map[string]a
 	addString("operational_status", current.OperationalStatus, previous.OperationalStatus)
 	addString("primary_health", current.PrimaryHealth, previous.PrimaryHealth)
 	if current.RuntimeFlags != nil && !stringSliceRuntimeEqual(current.RuntimeFlags, previous.RuntimeFlags) {
-		patch["runtime_flags"] = append([]string(nil), current.RuntimeFlags...)
+		patch["runtime_flags"] = append([]string{}, current.RuntimeFlags...)
 		changed = true
 	}
 	if validRuntimeFieldStates(current.FieldStates) && !stringMapRuntimeEqual(current.FieldStates, previous.FieldStates) {
