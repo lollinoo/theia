@@ -358,7 +358,9 @@ export function useWebSocket(
           scope: 'overview',
           reason: payloadReason,
         });
-        ws.close();
+        if (!requireRuntimeBootstrap) {
+          ws.close();
+        }
       }
 
       function ignoreStaleRuntimeDelta(

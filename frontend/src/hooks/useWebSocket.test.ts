@@ -1889,6 +1889,106 @@ describe('useWebSocket', () => {
     expect(exportCanvasDiagnostics().diagnostics.websocket.resyncRequiredCount).toBe(0);
   });
 
+  it('keeps HTTP-bootstrap socket open while requesting resync for future runtime delta base', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderHook(() =>
+      useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
+    );
+
+    act(() => {
+      publishCanvasRuntimeBootstrap({
+        snapshot: {
+          devices: {
+            'dev-1': makeDeviceRuntime({
+              cpu_percent: 70,
+              last_collected_at: '2026-01-01T00:02:00Z',
+              last_polled_at: '2026-01-01T00:02:00Z',
+            }),
+          },
+          links: {},
+        },
+        runtimeVersion: 10,
+        runtimeIdentity: 'rt-sha256:base',
+      });
+    });
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+    mockInstance.send.mockClear();
+    mockInstance.close.mockClear();
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'runtime_delta',
+        payload: {
+          base_version: 12,
+          version: 13,
+          delta: {
+            devices: {
+              'dev-1': makeDeviceRuntime({
+                cpu_percent: 99,
+                last_collected_at: '2026-01-01T00:03:00Z',
+                last_polled_at: '2026-01-01T00:03:00Z',
+              }),
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'backend-resync-required',
+        detail: {
+          scope: 'overview',
+          reason: 'client_resync_scheduled',
+        },
+      }),
+    );
+    expect(exportCanvasDiagnostics().diagnostics.websocket.lastRejectedDeltaReason).toBe(
+      'base_version_mismatch',
+    );
+
+    act(() => {
+      publishCanvasRuntimeBootstrap({
+        snapshot: {
+          devices: {
+            'dev-1': makeDeviceRuntime({
+              cpu_percent: 99,
+              last_collected_at: '2026-01-01T00:03:00Z',
+              last_polled_at: '2026-01-01T00:03:00Z',
+            }),
+          },
+          links: {},
+        },
+        runtimeVersion: 13,
+        runtimeIdentity: 'rt-sha256:fresh',
+      });
+    });
+
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'hello',
+        payload: {
+          canvas_schema_version: 1,
+          topology_version: undefined,
+          runtime_version: 13,
+          runtime_identity: 'rt-sha256:fresh',
+          alert_version: undefined,
+          subscriptions: {
+            runtime: true,
+            topology: true,
+            alerts: true,
+            details_device_id: null,
+          },
+        },
+      }),
+    );
+  });
+
   it('requests a fresh websocket snapshot when a versioned delta base is ahead of the local base', () => {
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
