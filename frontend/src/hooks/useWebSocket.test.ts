@@ -1889,6 +1889,58 @@ describe('useWebSocket', () => {
     expect(exportCanvasDiagnostics().diagnostics.websocket.resyncRequiredCount).toBe(0);
   });
 
+  it('ignores stale full snapshots after a newer HTTP bootstrap without reconnecting', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const { result } = renderHook(() =>
+      useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
+    );
+
+    act(() => {
+      publishCanvasRuntimeBootstrap({
+        snapshot: {
+          devices: {
+            'dev-1': makeDeviceRuntime({
+              cpu_percent: 70,
+              last_collected_at: '2026-01-01T00:02:00Z',
+              last_polled_at: '2026-01-01T00:02:00Z',
+            }),
+          },
+          links: {},
+        },
+        runtimeVersion: 10,
+        runtimeIdentity: 'rt-sha256:newer',
+      });
+    });
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'snapshot',
+        payload: {
+          version: 8,
+          runtime_identity: 'rt-sha256:older',
+          snapshot: {
+            devices: {
+              'dev-1': makeDeviceRuntime({
+                cpu_percent: 20,
+                last_collected_at: '2026-01-01T00:01:00Z',
+                last_polled_at: '2026-01-01T00:01:00Z',
+              }),
+            },
+            links: {},
+          },
+        },
+      });
+    });
+
+    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(70);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'backend-resync-required' }),
+    );
+    expect(exportCanvasDiagnostics().diagnostics.websocket.lastAppliedSnapshotVersion).toBe('10');
+  });
+
   it('keeps HTTP-bootstrap socket open while requesting resync for future runtime delta base', () => {
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
     renderHook(() =>
