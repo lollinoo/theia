@@ -336,6 +336,13 @@ function readRuntimeFlags(record: APIRecord, key: string): RuntimeFlag[] {
   });
 }
 
+function readRuntimeFlagsPatch(record: APIRecord, key: string): RuntimeFlag[] {
+  if (record[key] === null) {
+    return [];
+  }
+  return readRuntimeFlags(record, key);
+}
+
 function readFieldStates(
   record: APIRecord,
   key: string,
@@ -502,7 +509,7 @@ function parseDeviceRuntimePatch(value: unknown): DeviceRuntimePatch {
       patch.primary_health = readRequiredEnum(value, 'primary_health', primaryHealthStates);
     }
     if ('runtime_flags' in value) {
-      patch.runtime_flags = readRuntimeFlags(value, 'runtime_flags');
+      patch.runtime_flags = readRuntimeFlagsPatch(value, 'runtime_flags');
     }
     if ('field_states' in value) {
       patch.field_states = readFieldStates(value, 'field_states');
