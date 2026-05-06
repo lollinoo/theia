@@ -38,9 +38,7 @@ function NavigationPill({
   return (
     <div className="topology-glass topology-floating-shadow fixed left-1/2 top-4 z-30 flex w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-1 rounded-2xl px-2 py-2 transition-colors dark:backdrop-blur-[16px] sm:w-auto sm:max-w-[calc(100vw-1.5rem)] sm:rounded-full sm:px-3">
       {/* BRANDING */}
-      <span className="px-1 text-sm font-semibold tracking-[0.14em] text-on-bg sm:px-2">
-        THEIA
-      </span>
+      <span className="px-1 text-sm font-semibold tracking-[0.14em] text-on-bg sm:px-2">THEIA</span>
       {version && version !== 'unknown' && (
         <span className="hidden text-[11px] font-medium text-on-bg-secondary sm:inline">
           {`v${version}`}
