@@ -107,7 +107,7 @@ backend-fast: ## Run the required backend-fast PR gate locally
 	bash scripts/check-go-cover.sh coverage/backend-fast.out 60
 
 realtime-stress: ## Run the required realtime-stress PR gate locally
-	go test ./internal/ws ./internal/worker ./internal/service ./internal/scalelab -count=1 -run 'Test(HubBroadcastMarksClientForResyncWhenMailboxIsFull|HubRepeatedDetailSubscriptionsConvergeToSingleTarget|PipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay|RestoreCoordinatorApplyPendingRestoreIsIdempotentAfterSuccess|BurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses)'
+	go test ./internal/ws ./internal/worker ./internal/service ./internal/scalelab -count=1 -run 'Test(HubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull|HubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull|HubRepeatedDetailSubscriptionsConvergeToSingleTarget|PipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay|RestoreCoordinatorApplyPendingRestoreIsIdempotentAfterSuccess|BurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses)'
 
 collector-contract: ## Run the required collector-contract PR gate locally
 	bash scripts/run-collector-contract.sh

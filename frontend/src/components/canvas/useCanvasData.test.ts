@@ -1191,6 +1191,79 @@ describe('useCanvasData', () => {
     expect(getCanvasRuntimeBootstrap()?.snapshot.devices['dev-1'].operational_status).toBe('down');
   });
 
+  it('forces runtime bootstrap on backend resync after manual edge migration', async () => {
+    const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
+    window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
+    const dev2 = mockDevice({
+      id: 'dev-2',
+      hostname: 'router-02',
+      ip: '10.0.0.2',
+      sys_name: 'router-02',
+    });
+    const bootstrapResponse = (runtimeVersion: number, runtimeIdentity: string, cpu: number) => ({
+      topology: {
+        schema_version: 1,
+        topology_version: `topo-${runtimeVersion}`,
+        runtime_version: runtimeVersion,
+        runtime_identity: runtimeIdentity,
+        runtime_snapshot: mockSnapshot({
+          devices: {
+            'dev-1': {
+              ...mockSnapshot().devices['dev-1'],
+              cpu_percent: cpu,
+            },
+          },
+        }),
+        generated_at: '2026-04-30T12:00:00Z',
+        devices: [mockDevice(), dev2],
+        links: [],
+        positions: {},
+        areas: [],
+        capabilities: {
+          supports_topology_delta: false,
+          supports_position_revision: false,
+          supports_area_filtering: true,
+        },
+        settings: { layout: { version: 1 } },
+      },
+    });
+    vi.mocked(fetchCanvasBootstrap)
+      .mockResolvedValueOnce(bootstrapResponse(1, 'rt-sha256:initial', 42))
+      .mockResolvedValueOnce(bootstrapResponse(2, 'rt-sha256:resynced', 84));
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenNthCalledWith(1, { force: false });
+    expect(createLink).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBeNull();
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeVersion: 1,
+      runtimeIdentity: 'rt-sha256:initial',
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-resync-required'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenNthCalledWith(2, { force: true });
+    expect(createLink).toHaveBeenCalledTimes(1);
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeVersion: 2,
+      runtimeIdentity: 'rt-sha256:resynced',
+    });
+    expect(result.current.nodes.find((node) => node.id === 'dev-1')?.data.runtime.metrics).toEqual(
+      expect.objectContaining({ cpu_percent: 84 }),
+    );
+  });
+
   it('skips structural recomposition when the canvas read model is not modified', async () => {
     vi.mocked(fetchCanvasTopology)
       .mockResolvedValueOnce({
