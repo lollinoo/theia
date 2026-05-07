@@ -4,6 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import Canvas from './Canvas';
 
+const defaultCanvasProps = {
+  mapId: null,
+  mapName: 'Default',
+  maps: [],
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
+};
+
 const xyflowMocks = vi.hoisted(() => ({
   fitView: vi.fn(),
   zoomIn: vi.fn(),
@@ -34,6 +42,7 @@ vi.mock('./ContextMenu', () => ({ ContextMenu: () => null }));
 vi.mock('./SidePanel', () => ({ SidePanel: () => null }));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
 vi.mock('./Toolbar', () => ({ Toolbar: () => null }));
+vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
 vi.mock('./canvas/CanvasPanels', () => ({ CanvasPanels: () => null }));
 vi.mock('./canvas/CanvasOverlays', () => ({ CanvasOverlays: () => null }));
 vi.mock('./canvas/detailSubscription', () => ({ getCanvasDetailDeviceId: () => null }));
@@ -90,6 +99,7 @@ describe('Canvas zoom controls', () => {
 
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -110,6 +120,7 @@ describe('Canvas zoom controls', () => {
   it('opens diagnostics with the physical D key even when Ctrl+Alt changes event.key', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}

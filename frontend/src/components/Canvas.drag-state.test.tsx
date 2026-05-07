@@ -2,9 +2,17 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Device, Link } from '../types/api';
+import type { CanvasMap, Device, Link } from '../types/api';
 import Canvas from './Canvas';
 import type { DeviceNode } from './DeviceCard';
+
+const defaultCanvasProps = {
+  mapId: null,
+  mapName: 'Default',
+  maps: [],
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
+};
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -27,6 +35,23 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
     prometheus_label_name: 'instance',
     prometheus_label_value: '10.0.0.1:9100',
     area_ids: [],
+    ...overrides,
+  };
+}
+
+function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
+  return {
+    id: 'map-backbone',
+    name: 'Backbone',
+    description: '',
+    source_area_id: 'area-1',
+    filter: { area_id: 'area-1' },
+    is_default: false,
+    device_count: 1,
+    link_count: 1,
+    position_count: 1,
+    created_at: '2026-05-07T00:00:00Z',
+    updated_at: '2026-05-07T00:00:00Z',
     ...overrides,
   };
 }
@@ -54,6 +79,7 @@ const testState = vi.hoisted(() => ({
   onNodesChange: vi.fn(),
   savePositions: vi.fn(),
   updateNodePosition: vi.fn(),
+  canvasDataParams: null as null | { mapId: string | null; mapName?: string },
   reactFlowProps: {} as Record<string, unknown>,
 }));
 
@@ -163,6 +189,7 @@ vi.mock('./ContextMenu', () => ({ ContextMenu: () => null }));
 vi.mock('./SidePanel', () => ({ SidePanel: () => null }));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
 vi.mock('./Toolbar', () => ({ Toolbar: () => null }));
+vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
 vi.mock('./canvas/CanvasPanels', () => ({ CanvasPanels: () => null }));
 vi.mock('./canvas/CanvasOverlays', () => ({ CanvasOverlays: () => null }));
 vi.mock('./canvas/detailSubscription', () => ({ getCanvasDetailDeviceId: () => null }));
@@ -187,22 +214,25 @@ vi.mock('../contexts/ThemeContext', () => ({
   adaptAreaColor: (color: string) => color,
 }));
 vi.mock('./canvas/useCanvasData', () => ({
-  useCanvasData: () => ({
-    devices: testState.devices,
-    setDevices: vi.fn(),
-    topologyLinks: testState.links,
-    loading: false,
-    error: null,
-    loadTopology: vi.fn().mockResolvedValue(undefined),
-    runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
-    grafanaUrlRef: { current: '' },
-    deviceGrafanaUrlsRef: { current: new Map<string, string>() },
-    refreshSettings: vi.fn(),
-    topologyRecoveryNotice: null,
-    dismissTopologyRecoveryNotice: vi.fn(),
-    retryTopologyRefresh: vi.fn(),
-    updateNodePosition: testState.updateNodePosition,
-  }),
+  useCanvasData: (params: { mapId: string | null; mapName?: string }) => {
+    testState.canvasDataParams = params;
+    return {
+      devices: testState.devices,
+      setDevices: vi.fn(),
+      topologyLinks: testState.links,
+      loading: false,
+      error: null,
+      loadTopology: vi.fn().mockResolvedValue(undefined),
+      runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
+      grafanaUrlRef: { current: '' },
+      deviceGrafanaUrlsRef: { current: new Map<string, string>() },
+      refreshSettings: vi.fn(),
+      topologyRecoveryNotice: null,
+      dismissTopologyRecoveryNotice: vi.fn(),
+      retryTopologyRefresh: vi.fn(),
+      updateNodePosition: testState.updateNodePosition,
+    };
+  },
 }));
 
 describe('Canvas drag state ownership', () => {
@@ -249,12 +279,14 @@ describe('Canvas drag state ownership', () => {
     testState.onNodesChange.mockReset();
     testState.savePositions.mockReset();
     testState.updateNodePosition.mockReset();
+    testState.canvasDataParams = null;
     testState.reactFlowProps = {};
   });
 
   it('patches the dragged real node without replacing canonical nodes with the area projection', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -292,6 +324,7 @@ describe('Canvas drag state ownership', () => {
     } as const;
     const { rerender } = render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={props.snapshot}
         reconnecting={props.reconnecting}
         prometheusStatus={props.prometheusStatus}
@@ -316,6 +349,7 @@ describe('Canvas drag state ownership', () => {
     ];
     rerender(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={props.snapshot}
         reconnecting={props.reconnecting}
         prometheusStatus={props.prometheusStatus}
@@ -337,6 +371,7 @@ describe('Canvas drag state ownership', () => {
 
       render(
         <Canvas
+          {...defaultCanvasProps}
           snapshot={null}
           reconnecting={false}
           prometheusStatus={null}
@@ -374,6 +409,7 @@ describe('Canvas drag state ownership', () => {
   it('updates canvas readability scales from viewport changes without React state churn', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -399,6 +435,7 @@ describe('Canvas drag state ownership', () => {
   it('preserves unchanged area-colored display node references when one canonical node changes', () => {
     const { rerender } = render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -424,6 +461,7 @@ describe('Canvas drag state ownership', () => {
 
     rerender(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -438,5 +476,77 @@ describe('Canvas drag state ownership', () => {
 
     expect(testState.displayedNodes[1]).toBe(firstStableNode);
     expect(testState.displayedNodes[2]).toBe(secondStableNode);
+  });
+
+  it('passes saved map metadata to canvas data and disables area projection', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId="area-1"
+        mapId="map-backbone"
+        mapName="Backbone"
+        maps={[mockMap()]}
+        areas={[
+          { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+          { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+          { id: 'area-3', name: 'Area 3', color: '#22cc88' },
+        ]}
+      />,
+    );
+
+    expect(testState.canvasDataParams).toMatchObject({
+      mapId: 'map-backbone',
+      mapName: 'Backbone',
+    });
+    expect(testState.displayedNodes.map((node) => node.id)).toEqual(['dev-a', 'dev-b', 'dev-c']);
+    expect(testState.displayedNodes.every((node) => node.data.isGhost !== true)).toBe(true);
+  });
+
+  it('clears selected canonical nodes when the active map changes', () => {
+    const selectedNode = {
+      ...testState.canonicalNodes[0],
+      selected: true,
+    };
+    testState.canonicalNodes = [
+      selectedNode,
+      testState.canonicalNodes[1],
+      testState.canonicalNodes[2],
+    ];
+
+    const { rerender } = render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    testState.setNodes.mockClear();
+
+    rerender(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        mapId="map-backbone"
+        mapName="Backbone"
+        maps={[mockMap()]}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.setNodes).toHaveBeenCalled();
+    const clearSelection = testState.setNodes.mock.lastCall?.[0] as (
+      nodes: DeviceNode[],
+    ) => DeviceNode[];
+    expect(clearSelection([selectedNode])[0]).toMatchObject({ selected: false });
   });
 });

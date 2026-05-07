@@ -16,7 +16,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
-import type { Area, Device, Link } from '../types/api';
+import type { Area, CanvasMap, Device, Link } from '../types/api';
 import {
   type AlertDTO,
   type PrometheusStatusPayload,
@@ -26,6 +26,7 @@ import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
+import { MapSelector } from './MapSelector';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
@@ -156,10 +157,15 @@ interface CanvasProps {
   reconnecting: boolean;
   prometheusStatus: PrometheusStatusPayload | null;
   selectedAreaId: string | null;
+  mapId: string | null;
+  mapName: string;
+  maps: CanvasMap[];
   areas?: Area[];
   onDevicesChange?: (devices: Device[]) => void;
   onLinksChange?: (links: Link[]) => void;
   onAreaSelect?: (areaId: string | null) => void;
+  onMapSelect: (map: CanvasMap) => void;
+  onManageMaps: () => void;
   onAreasChange?: () => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
   onInteractionActiveChange?: (active: boolean) => void;
@@ -171,10 +177,15 @@ export default function Canvas({
   reconnecting,
   prometheusStatus,
   selectedAreaId,
+  mapId,
+  mapName,
+  maps,
   areas,
   onDevicesChange,
   onLinksChange,
   onAreaSelect,
+  onMapSelect,
+  onManageMaps,
   onAreasChange,
   onDetailDeviceChange,
   onInteractionActiveChange,
@@ -225,12 +236,62 @@ export default function Canvas({
     shortcuts,
     getPanelTitle,
   } = useCanvasMenus({ reactFlow });
+  const selectedMapKey = mapId ?? '__default__';
+  const previousMapKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     onDetailDeviceChange?.(getCanvasDetailDeviceId(panelContent));
   }, [panelContent, onDetailDeviceChange]);
 
   useEffect(() => () => onDetailDeviceChange?.(null), [onDetailDeviceChange]);
+
+  useEffect(() => {
+    if (previousMapKeyRef.current === null) {
+      previousMapKeyRef.current = selectedMapKey;
+      return;
+    }
+    if (previousMapKeyRef.current === selectedMapKey) {
+      return;
+    }
+
+    previousMapKeyRef.current = selectedMapKey;
+    setPanelContent(null);
+    setDeviceMenu(null);
+    setEdgeMenu(null);
+    setShowSearch(false);
+    setSelectedNodeCount(0);
+    ghostNodeMeasurementCacheRef.current.clear();
+    setNodes((currentNodes) => {
+      let changed = false;
+      const nextNodes = currentNodes.map((node) => {
+        if (!node.selected) {
+          return node;
+        }
+        changed = true;
+        return { ...node, selected: false };
+      });
+      return changed ? nextNodes : currentNodes;
+    });
+    setEdges((currentEdges) => {
+      let changed = false;
+      const nextEdges = currentEdges.map((edge) => {
+        if (!edge.selected) {
+          return edge;
+        }
+        changed = true;
+        return { ...edge, selected: false };
+      });
+      return changed ? nextEdges : currentEdges;
+    });
+  }, [
+    selectedMapKey,
+    setDeviceMenu,
+    setEdgeMenu,
+    setEdges,
+    setNodes,
+    setPanelContent,
+    setShowSearch,
+  ]);
 
   const setDeviceNodeReadabilityScale = useCallback((zoom: number) => {
     const nextScale = String(resolveDeviceNodeReadabilityScale(zoom));
@@ -365,8 +426,8 @@ export default function Canvas({
     retryTopologyRefresh,
     updateNodePosition,
   } = useCanvasData({
-    mapId: null,
-    mapName: 'Default',
+    mapId,
+    mapName,
     snapshot,
     alerts,
     reconnecting,
@@ -383,11 +444,13 @@ export default function Canvas({
     onLinksChange,
   });
 
+  const effectiveAreaId = mapId === null ? selectedAreaId : null;
+
   // Area filtering: derive filtered devices/links and ghost devices
   const { filteredDevices, filteredLinks, ghostDevices } = useAreaFilteredTopology(
     devices,
     topologyLinks,
-    selectedAreaId,
+    effectiveAreaId,
   );
   const runtimeState = useMemo(
     () =>
@@ -480,7 +543,7 @@ export default function Canvas({
   );
   const handleNodesChange = useCallback(
     (changes: NodeChange<DeviceNode>[]) => {
-      if (!selectedAreaId || ghostDeviceIds.size === 0) {
+      if (!effectiveAreaId || ghostDeviceIds.size === 0) {
         onNodesChange(changes);
         return;
       }
@@ -509,12 +572,12 @@ export default function Canvas({
         onNodesChange(canonicalChanges);
       }
     },
-    [ghostDeviceIds, onNodesChange, selectedAreaId],
+    [effectiveAreaId, ghostDeviceIds, onNodesChange],
   );
 
   // Build display nodes/edges by filtering the full node/edge set and adding ghost nodes
   const displayNodes = useMemo(() => {
-    if (!selectedAreaId) {
+    if (!effectiveAreaId) {
       return nodesWithAreaColor;
     }
 
@@ -575,7 +638,7 @@ export default function Canvas({
 
     return [...areaNodes, ...ghostNodes];
   }, [
-    selectedAreaId,
+    effectiveAreaId,
     nodesWithAreaColor,
     filteredDevices,
     filteredLinks,
@@ -587,14 +650,14 @@ export default function Canvas({
 
   const displayEdges = useMemo(() => {
     const selectedIds = selectedNodeIdsFromSignature(selectedRealNodeIdSignature);
-    if (!selectedAreaId) {
+    if (!effectiveAreaId) {
       return applyEdgeEmphasis(edgesWithAreaColor, selectedIds);
     }
     // Filter edges to only include filtered links
     const filteredLinkIds = new Set(filteredLinks.map((l) => l.id));
     const areaEdges = edgesWithAreaColor.filter((e) => filteredLinkIds.has(e.id));
     return applyEdgeEmphasis(areaEdges, selectedIds);
-  }, [selectedAreaId, edgesWithAreaColor, filteredLinks, selectedRealNodeIdSignature]);
+  }, [effectiveAreaId, edgesWithAreaColor, filteredLinks, selectedRealNodeIdSignature]);
 
   const renderEdges = useMemo(
     () => setEdgeInteractionMode(displayEdges, canvasInteractionActive ? 'interactive' : 'idle'),
@@ -610,14 +673,14 @@ export default function Canvas({
         displayedNodeCount: displayNodes.length,
         displayedEdgeCount: displayEdges.length,
         ghostNodeCount: ghostDevices.length,
-        selectedAreaId,
+        selectedAreaId: effectiveAreaId,
         selectedNodeCount,
         selectedEdgeCount,
       },
     });
 
     const projectionSignature = [
-      selectedAreaId ?? 'global',
+      effectiveAreaId ?? 'global',
       nodes.length,
       edges.length,
       displayNodes.length,
@@ -636,7 +699,7 @@ export default function Canvas({
       event: 'projection.area.changed',
       message: 'Canvas area projection changed',
       metadata: {
-        selectedAreaId,
+        selectedAreaId: effectiveAreaId,
         canonicalNodeCount: nodes.length,
         canonicalEdgeCount: edges.length,
         displayedNodeCount: displayNodes.length,
@@ -645,7 +708,7 @@ export default function Canvas({
       },
     });
   }, [
-    selectedAreaId,
+    effectiveAreaId,
     nodes.length,
     edges.length,
     displayNodes.length,
@@ -655,11 +718,11 @@ export default function Canvas({
     selectedNodeCount,
   ]);
 
-  // fitView when selectedAreaId changes to re-center on filtered subset
+  // fitView when effective area changes to re-center on filtered subset
   const prevAreaRef = useRef<string | null>(null);
   useEffect(() => {
-    if (prevAreaRef.current !== selectedAreaId && displayNodes.length > 0) {
-      prevAreaRef.current = selectedAreaId;
+    if (prevAreaRef.current !== effectiveAreaId && displayNodes.length > 0) {
+      prevAreaRef.current = effectiveAreaId;
       window.requestAnimationFrame(() => {
         reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
         recordCanvasDiagnosticEvent({
@@ -668,13 +731,13 @@ export default function Canvas({
           event: 'reactflow.fit_view',
           message: 'React Flow fitView requested after area change',
           metadata: {
-            selectedAreaId,
+            selectedAreaId: effectiveAreaId,
             displayedNodeCount: displayNodes.length,
           },
         });
       });
     }
-  }, [selectedAreaId, displayNodes.length, reactFlow]);
+  }, [effectiveAreaId, displayNodes.length, reactFlow]);
 
   useEffect(() => {
     setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, editMode } })));
@@ -716,7 +779,7 @@ export default function Canvas({
   function focusOnDevice(deviceID: string) {
     // If the target device is not in the current area view, switch to its area first
     const device = devices.find((d) => d.id === deviceID);
-    if (device && selectedAreaId && !device.area_ids?.includes(selectedAreaId)) {
+    if (device && effectiveAreaId && !device.area_ids?.includes(effectiveAreaId)) {
       // Switch to the device's area (or global if unassigned)
       onAreaSelect?.(device.area_ids?.[0] ?? null);
       // Defer the focus/highlight until after the area switch triggers a re-render
@@ -819,6 +882,13 @@ export default function Canvas({
         onToggleEditMode={() => setEditMode((m) => !m)}
         editMode={editMode}
         alertCount={runtimeSummary.alertCount}
+      />
+      <MapSelector
+        maps={maps}
+        selectedMapId={mapId}
+        selectedMapName={mapName}
+        onSelectMap={onMapSelect}
+        onManageMaps={onManageMaps}
       />
 
       {deviceMenu &&

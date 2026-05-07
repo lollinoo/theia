@@ -5,6 +5,14 @@ import type { Device } from '../types/api';
 import { BRIDGE_HEALTH_TIMEOUT_MESSAGE } from '../utils/bridgeRequests';
 import Canvas from './Canvas';
 
+const defaultCanvasProps = {
+  mapId: null,
+  mapName: 'Default',
+  maps: [],
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
+};
+
 const testState = vi.hoisted(() => ({
   openDeviceMenu: null as null | ((event: unknown, deviceId: string) => void),
   bridgeChecked: false,
@@ -92,6 +100,10 @@ vi.mock('./ShortcutHelp', () => ({
 
 vi.mock('./Toolbar', () => ({
   Toolbar: () => null,
+}));
+
+vi.mock('./MapSelector', () => ({
+  MapSelector: () => null,
 }));
 
 vi.mock('./canvas/CanvasPanels', () => ({
@@ -223,6 +235,7 @@ describe('Canvas WinBox gating', () => {
   it('refreshes WinBox flow state whenever the device menu opens', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -242,6 +255,7 @@ describe('Canvas WinBox gating', () => {
   it('does not keep WinBox disabled while profile availability is still unknown', async () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -262,6 +276,7 @@ describe('Canvas WinBox gating', () => {
 
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -284,6 +299,7 @@ describe('Canvas WinBox gating', () => {
 
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -305,6 +321,7 @@ describe('Canvas WinBox gating', () => {
 
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}

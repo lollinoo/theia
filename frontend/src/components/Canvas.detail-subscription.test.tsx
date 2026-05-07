@@ -5,6 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
 import Canvas from './Canvas';
 
+const defaultCanvasProps = {
+  mapId: null,
+  mapName: 'Default',
+  maps: [],
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
+};
+
 const testState = vi.hoisted(() => ({
   devices: [
     {
@@ -88,6 +96,7 @@ vi.mock('./SidePanel', () => ({
     open ? <div>{children}</div> : null,
 }));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
+vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
 vi.mock('./Toolbar', () => ({
   Toolbar: ({ onAlerts }: { onAlerts: () => void }) => (
     <button type="button" onClick={onAlerts}>
@@ -160,6 +169,7 @@ describe('Canvas detail subscription', () => {
 
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -184,6 +194,7 @@ describe('Canvas detail subscription', () => {
   it('does not re-render the minimap for runtime-only snapshot prop changes', () => {
     const { rerender } = render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -196,6 +207,7 @@ describe('Canvas detail subscription', () => {
 
     rerender(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={{ devices: {}, links: {} }}
         reconnecting={false}
         prometheusStatus={null}
@@ -210,6 +222,7 @@ describe('Canvas detail subscription', () => {
   it('passes responsive placement classes to the minimap without changing its behavior props', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}

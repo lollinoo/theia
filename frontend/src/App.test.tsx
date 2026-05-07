@@ -67,12 +67,22 @@ vi.mock('./components/NavigationPill', () => ({
 
 vi.mock('./components/Canvas', () => ({
   default: ({
+    mapId,
+    mapName,
+    maps,
     onDevicesChange,
     onLinksChange,
+    onMapSelect,
+    onManageMaps,
     onInteractionActiveChange,
   }: {
+    mapId: string | null;
+    mapName: string;
+    maps: CanvasMap[];
     onDevicesChange: (devices: Device[]) => void;
     onLinksChange: (links: Link[]) => void;
+    onMapSelect: (map: CanvasMap) => void;
+    onManageMaps: () => void;
     onInteractionActiveChange: (active: boolean) => void;
   }) => {
     useEffect(() => {
@@ -116,6 +126,30 @@ vi.mock('./components/Canvas', () => ({
 
     return (
       <div data-testid="canvas">
+        <span>{`map:${mapId ?? 'default'}:${mapName}:${maps.length}`}</span>
+        <button
+          type="button"
+          onClick={() =>
+            onMapSelect({
+              id: 'map-1',
+              name: 'Backbone',
+              description: '',
+              source_area_id: 'area-1',
+              filter: { area_id: 'area-1' },
+              is_default: false,
+              device_count: 1,
+              link_count: 1,
+              position_count: 1,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-02T00:00:00Z',
+            })
+          }
+        >
+          Open Backbone map
+        </button>
+        <button type="button" onClick={onManageMaps}>
+          Manage maps
+        </button>
         <button type="button" onClick={() => onInteractionActiveChange(true)}>
           Start interaction
         </button>
@@ -316,5 +350,23 @@ describe('App', () => {
     const canvasViewport = screen.getByTestId('watermark').parentElement;
     expect(canvasViewport?.className).toContain('relative');
     expect(canvasViewport?.className).toContain('h-full');
+  });
+
+  it('passes selected map props and callbacks to Canvas', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:default:Default:0');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Open Backbone map' }).click();
+    });
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone:0');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Manage maps' }).click();
+    });
+    expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('hidden');
   });
 });

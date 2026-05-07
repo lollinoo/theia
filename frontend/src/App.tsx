@@ -67,8 +67,6 @@ function App() {
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
 
-  void selectedMapName;
-
   useEffect(() => {
     if (canvasInteractionActive) {
       setRuntimeUpdatesPaused(true);
@@ -308,10 +306,15 @@ function App() {
               reconnecting={reconnecting}
               prometheusStatus={prometheusStatus}
               selectedAreaId={selectedAreaId}
+              mapId={selectedMapId}
+              mapName={selectedMapName}
+              maps={canvasMaps}
               areas={areas}
               onDevicesChange={handleCanvasDevicesChange}
               onLinksChange={handleCanvasLinksChange}
               onAreaSelect={handleAreaSelect}
+              onMapSelect={handleOpenMap}
+              onManageMaps={() => setActiveView('hub')}
               onAreasChange={handleAreasChange}
               onDetailDeviceChange={setDetailDeviceId}
               onInteractionActiveChange={setCanvasInteractionActive}

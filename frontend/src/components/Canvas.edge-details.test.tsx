@@ -5,6 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../types/api';
 import Canvas from './Canvas';
 
+const defaultCanvasProps = {
+  mapId: null,
+  mapName: 'Default',
+  maps: [],
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
+};
+
 const testState = vi.hoisted(() => ({
   link: {
     id: 'link-1',
@@ -138,6 +146,10 @@ vi.mock('./ShortcutHelp', () => ({
   ShortcutHelp: () => null,
 }));
 
+vi.mock('./MapSelector', () => ({
+  MapSelector: () => null,
+}));
+
 vi.mock('./Toolbar', () => ({
   Toolbar: ({
     editMode,
@@ -241,6 +253,7 @@ describe('Canvas link details edge clicks', () => {
   it('opens link details when an edge is clicked in view mode', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -257,6 +270,7 @@ describe('Canvas link details edge clicks', () => {
   it('opens link details as editable when edit mode is enabled', async () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -277,6 +291,7 @@ describe('Canvas link details edge clicks', () => {
   it('updates open link details when edit mode is toggled', async () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
