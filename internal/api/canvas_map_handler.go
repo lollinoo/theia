@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -57,8 +59,28 @@ type canvasMapCreateRequest struct {
 type canvasMapPatchRequest struct {
 	Name         *string                 `json:"name"`
 	Description  *string                 `json:"description"`
-	SourceAreaID *string                 `json:"source_area_id"`
+	SourceAreaID nullableCanvasMapString `json:"source_area_id"`
 	Filter       *domain.CanvasMapFilter `json:"filter"`
+}
+
+type nullableCanvasMapString struct {
+	Present bool
+	Value   *string
+}
+
+func (v *nullableCanvasMapString) UnmarshalJSON(data []byte) error {
+	v.Present = true
+	if strings.TrimSpace(string(data)) == "null" {
+		v.Value = nil
+		return nil
+	}
+
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	v.Value = &value
+	return nil
 }
 
 type canvasMapDuplicateRequest struct {
@@ -98,11 +120,12 @@ func (h *CanvasMapHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to list canvas map positions", err)
 			return
 		}
+		projectedPositions := filterPositionsForDevices(positions, projection.Devices)
 
 		response := mapToResponse(canvasMap)
 		response.DeviceCount = len(projection.Devices)
 		response.LinkCount = len(projection.Links)
-		response.PositionCount = len(positions)
+		response.PositionCount = len(projectedPositions)
 		responses = append(responses, response)
 	}
 
@@ -184,19 +207,23 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.SourceAreaID != nil {
-		sourceAreaID, ok := h.validateSourceAreaID(w, req.SourceAreaID)
-		if !ok {
-			return
+	if req.SourceAreaID.Present {
+		if req.SourceAreaID.Value == nil {
+			canvasMap.SourceAreaID = nil
+		} else {
+			sourceAreaID, ok := h.validateSourceAreaID(w, req.SourceAreaID.Value)
+			if !ok {
+				return
+			}
+			canvasMap.SourceAreaID = sourceAreaID
 		}
-		canvasMap.SourceAreaID = sourceAreaID
 	}
 
 	updated, err := h.mapRepo.Update(canvasMap.ID, domain.CanvasMapUpdate{
 		Name:            req.Name,
 		Description:     req.Description,
 		SourceAreaID:    canvasMap.SourceAreaID,
-		SourceAreaIDSet: req.SourceAreaID != nil,
+		SourceAreaIDSet: req.SourceAreaID.Present,
 		Filter:          req.Filter,
 	})
 	if err != nil {
@@ -424,12 +451,17 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 	}
 
 	projection := projectCanvasTopologyForMap(devices, links, projectionFilterForCanvasMap(canvasMap))
-	response := h.canvasTopology.buildResponse(projection.Devices, projection.Links, positions, areas)
+	projectedPositions := filterPositionsForDevices(positions, projection.Devices)
+	displayDevices := append([]domain.Device{}, projection.Devices...)
+	displayDevices = append(displayDevices, projection.GhostDevices...)
+
+	response := h.canvasTopology.buildResponse(displayDevices, projection.Links, projectedPositions, areas)
 	mapResponse := mapToResponse(canvasMap)
 	mapResponse.DeviceCount = len(projection.Devices)
 	mapResponse.LinkCount = len(projection.Links)
-	mapResponse.PositionCount = len(positions)
+	mapResponse.PositionCount = len(projectedPositions)
 	response.Map = &mapResponse
+	response.TopologyVersion = buildCanvasMapTopologyVersion(response)
 	return response, true
 }
 
@@ -517,6 +549,49 @@ func projectionFilterForCanvasMap(canvasMap domain.CanvasMap) domain.CanvasMapFi
 		filter.AreaID = &areaID
 	}
 	return filter
+}
+
+func filterPositionsForDevices(positions []domain.DevicePosition, devices []domain.Device) []domain.DevicePosition {
+	if len(positions) == 0 || len(devices) == 0 {
+		return []domain.DevicePosition{}
+	}
+
+	deviceIDs := make(map[uuid.UUID]struct{}, len(devices))
+	for _, device := range devices {
+		deviceIDs[device.ID] = struct{}{}
+	}
+
+	filtered := make([]domain.DevicePosition, 0, len(positions))
+	for _, position := range positions {
+		if _, ok := deviceIDs[position.DeviceID]; ok {
+			filtered = append(filtered, position)
+		}
+	}
+	return filtered
+}
+
+func buildCanvasMapTopologyVersion(response canvasTopologyResponse) string {
+	versionInput := buildCanvasTopologyVersionInput(
+		response.Devices,
+		response.Links,
+		response.Positions,
+		response.Areas,
+		response.Capabilities,
+		response.Settings,
+	)
+	payload := struct {
+		Map      *canvasMapResponse         `json:"map"`
+		Topology canvasTopologyVersionInput `json:"topology"`
+	}{
+		Map:      response.Map,
+		Topology: versionInput,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "topo-unversioned"
+	}
+	sum := sha256.Sum256(data)
+	return "topo-" + hex.EncodeToString(sum[:])[:16]
 }
 
 func isFiniteCoordinate(value float64) bool {

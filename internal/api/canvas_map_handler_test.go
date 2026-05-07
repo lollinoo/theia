@@ -313,6 +313,36 @@ func TestCanvasMapHandlerPatchSourceAreaPersistsAndAffectsProjection(t *testing.
 	}
 }
 
+func TestCanvasMapHandlerPatchSourceAreaNullClearsExistingValue(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaID := seedCanvasMapTestArea(t, fixture, "Clearable", "#2979FF")
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name":           "Clear Source Area",
+		"source_area_id": areaID.String(),
+	})
+	if canvasMap.SourceAreaID == nil || *canvasMap.SourceAreaID != areaID.String() {
+		t.Fatalf("created source_area_id = %#v, want %s", canvasMap.SourceAreaID, areaID)
+	}
+
+	rec := canvasMapRawRequest(fixture.router, http.MethodPatch, "/api/v1/canvas/maps/"+canvasMap.ID, `{"source_area_id":null}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH source_area_id null: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	cleared := decodeCanvasMapData(t, rec)
+	if cleared.SourceAreaID != nil {
+		t.Fatalf("PATCH clear source_area_id = %#v, want nil", cleared.SourceAreaID)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeCanvasMapData(t, rec)
+	if got.SourceAreaID != nil {
+		t.Fatalf("GET source_area_id = %#v, want nil", got.SourceAreaID)
+	}
+}
+
 func TestCanvasMapHandlerSourceAreaUnexpectedLookupErrorReturns500(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	handler := NewCanvasMapHandler(
@@ -333,6 +363,142 @@ func TestCanvasMapHandlerSourceAreaUnexpectedLookupErrorReturns500(t *testing.T)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCanvasMapHandlerFiltersPositionsToProjectedBaseDevices(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaA := seedCanvasMapTestArea(t, fixture, "Position Area A", "#2979FF")
+	areaB := seedCanvasMapTestArea(t, fixture, "Position Area B", "#FF6D00")
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-pos-a", "10.66.0.1", []uuid.UUID{areaA})
+	deviceB := seedCanvasMapTestDevice(t, fixture, "router-pos-b", "10.66.0.2", []uuid.UUID{areaB})
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name":           "Projected Positions",
+		"source_area_id": areaA.String(),
+	})
+	mapID := uuid.MustParse(canvasMap.ID)
+	if err := fixture.mapPositionRepo.SaveAllForMap(mapID, []domain.DevicePosition{
+		{DeviceID: deviceA.ID, X: 10, Y: 20, Pinned: true},
+		{DeviceID: deviceB.ID, X: 30, Y: 40, Pinned: true},
+	}); err != nil {
+		t.Fatalf("save map positions: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET maps: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var listResp struct {
+		Data []testCanvasMapResponse `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, rec, &listResp)
+	listed, ok := findCanvasMapTestResponse(listResp.Data, canvasMap.ID)
+	if !ok {
+		t.Fatalf("map %s missing from list: %#v", canvasMap.ID, listResp.Data)
+	}
+	if listed.PositionCount != 1 {
+		t.Fatalf("listed position_count = %d, want 1", listed.PositionCount)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if topology.Map == nil || topology.Map.PositionCount != 1 {
+		t.Fatalf("topology map position_count = %#v, want 1", topology.Map)
+	}
+	if len(topology.Positions) != 1 {
+		t.Fatalf("topology positions = %#v, want one position", topology.Positions)
+	}
+	if _, ok := topology.Positions[deviceA.ID.String()]; !ok {
+		t.Fatalf("expected position for projected device %s, got %#v", deviceA.ID, topology.Positions)
+	}
+	if _, ok := topology.Positions[deviceB.ID.String()]; ok {
+		t.Fatalf("unexpected position for filtered device %s: %#v", deviceB.ID, topology.Positions)
+	}
+}
+
+func TestCanvasMapHandlerTopologyIncludesGhostDevicesForCrossAreaLinks(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaA := seedCanvasMapTestArea(t, fixture, "Ghost Area A", "#2979FF")
+	areaB := seedCanvasMapTestArea(t, fixture, "Ghost Area B", "#FF6D00")
+	baseDevice := seedCanvasMapTestDevice(t, fixture, "router-ghost-a", "10.67.0.1", []uuid.UUID{areaA})
+	remoteDevice := seedCanvasMapTestDevice(t, fixture, "router-ghost-b", "10.67.0.2", []uuid.UUID{areaB})
+	seedCanvasMapTestLink(t, fixture, baseDevice.ID, remoteDevice.ID)
+
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name":           "Ghost Cross Area",
+		"source_area_id": areaA.String(),
+		"filter": map[string]any{
+			"include_cross_area_links": true,
+			"include_ghost_devices":    true,
+		},
+	})
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if topology.Map == nil {
+		t.Fatal("expected map metadata")
+	}
+	if topology.Map.DeviceCount != 1 {
+		t.Fatalf("map device_count = %d, want base count 1", topology.Map.DeviceCount)
+	}
+	if len(topology.Links) != 1 {
+		t.Fatalf("links = %#v, want one cross-area link", topology.Links)
+	}
+	deviceIDs := canvasTopologyTestDeviceIDs(topology.Devices)
+	if !deviceIDs[baseDevice.ID.String()] || !deviceIDs[remoteDevice.ID.String()] {
+		t.Fatalf("expected base and ghost devices in response, got %#v", deviceIDs)
+	}
+}
+
+func TestCanvasMapHandlerTopologyETagChangesForMapMetadataPatch(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	device := seedCanvasMapTestDevice(t, fixture, "router-etag", "10.68.0.1", nil)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name": "Initial Metadata",
+		"filter": map[string]any{
+			"device_ids": []string{device.ID.String()},
+		},
+	})
+
+	first := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial topology: expected 200, got %d; body: %s", first.Code, first.Body.String())
+	}
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected initial ETag")
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPatch, "/api/v1/canvas/maps/"+canvasMap.ID, map[string]any{
+		"name":        "Updated Metadata",
+		"description": "metadata-only update",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH metadata: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	req.Header.Set("If-None-Match", etag)
+	second := httptest.NewRecorder()
+	fixture.router.ServeHTTP(second, req)
+	if second.Code != http.StatusOK {
+		t.Fatalf("topology after metadata PATCH with stale ETag: expected 200, got %d; body: %s", second.Code, second.Body.String())
+	}
+	if second.Header().Get("ETag") == "" || second.Header().Get("ETag") == etag {
+		t.Fatalf("expected changed ETag, got initial=%q next=%q", etag, second.Header().Get("ETag"))
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, second, &topology)
+	if topology.Map == nil || topology.Map.Name != "Updated Metadata" || topology.Map.Description != "metadata-only update" {
+		t.Fatalf("expected updated map metadata, got %#v", topology.Map)
 	}
 }
 
@@ -560,6 +726,14 @@ func findCanvasMapTestResponse(maps []testCanvasMapResponse, id string) (testCan
 		}
 	}
 	return testCanvasMapResponse{}, false
+}
+
+func canvasTopologyTestDeviceIDs(devices []jsonAPIResource) map[string]bool {
+	ids := make(map[string]bool, len(devices))
+	for _, device := range devices {
+		ids[device.ID] = true
+	}
+	return ids
 }
 
 func canvasMapRequest(t *testing.T, router http.Handler, method string, path string, body any) *httptest.ResponseRecorder {
