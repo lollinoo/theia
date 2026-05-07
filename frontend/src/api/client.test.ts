@@ -611,13 +611,11 @@ describe('canvas map client', () => {
   it('fetches canvas maps from map list endpoint', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          mockResponse({
-            data: [{ id: 'default', name: 'Default', is_default: true, filter: {} }],
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        mockResponse({
+          data: [{ id: 'default', name: 'Default', is_default: true, filter: {} }],
+        }),
+      ),
     );
 
     await expect(fetchCanvasMaps()).resolves.toHaveLength(1);
@@ -663,7 +661,7 @@ describe('canvas map client', () => {
     );
   });
 
-  it('uses the raw map id as the bootstrap cache key', async () => {
+  it('isolates default bootstrap cache from saved map bootstrap entries', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -677,9 +675,85 @@ describe('canvas map client', () => {
     const defaultBootstrap = await fetchCanvasBootstrap();
     const mapBootstrap = await fetchCanvasMapBootstrap('__default__');
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/__default__/bootstrap',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
     expect(defaultBootstrap.topology.topology_version).toBe('default-bootstrap');
-    expect(mapBootstrap.topology.topology_version).toBe('default-bootstrap');
+    expect(mapBootstrap.topology.topology_version).toBe('map-bootstrap');
+  });
+
+  it('isolates saved map bootstrap cache entries by map id', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-a' }))
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-b' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mapA = await fetchCanvasMapBootstrap('map-a');
+    const mapB = await fetchCanvasMapBootstrap('map-b');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas/maps/map-a/bootstrap',
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/map-b/bootstrap',
+      expect.any(Object),
+    );
+    expect(mapA.topology.topology_version).toBe('map-a');
+    expect(mapB.topology.topology_version).toBe('map-b');
+  });
+
+  it('bypasses the saved map bootstrap cache when forced', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-initial' }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-forced' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const initial = await fetchCanvasMapBootstrap('map-1');
+    const forced = await fetchCanvasMapBootstrap('map-1', { force: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(initial.topology.topology_version).toBe('map-1-initial');
+    expect(forced.topology.topology_version).toBe('map-1-forced');
+  });
+
+  it('clears saved map bootstrap cache entries on reset', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-before-reset' }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-after-reset' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const beforeReset = await fetchCanvasMapBootstrap('map-1');
+    resetCanvasBootstrapRequestCache();
+    const afterReset = await fetchCanvasMapBootstrap('map-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(beforeReset.topology.topology_version).toBe('map-1-before-reset');
+    expect(afterReset.topology.topology_version).toBe('map-1-after-reset');
   });
 
   it('updates and duplicates canvas maps through their map endpoints', async () => {

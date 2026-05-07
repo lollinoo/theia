@@ -409,28 +409,41 @@ function parseCanvasMapFilter(value: unknown): CanvasMapFilter {
   const filter: CanvasMapFilter = {};
 
   if ('area_id' in value) {
-    filter.area_id =
-      value.area_id === null || typeof value.area_id === 'string' ? value.area_id : null;
+    if (value.area_id !== null && typeof value.area_id !== 'string') {
+      throw new Error('invalid canvas map filter');
+    }
+    filter.area_id = value.area_id;
   }
 
-  if (Array.isArray(value.device_ids)) {
-    filter.device_ids = value.device_ids.filter((id): id is string => typeof id === 'string');
+  if ('device_ids' in value) {
+    if (
+      !Array.isArray(value.device_ids) ||
+      !value.device_ids.every((id) => typeof id === 'string')
+    ) {
+      throw new Error('invalid canvas map filter');
+    }
+    filter.device_ids = value.device_ids;
   }
 
-  if (typeof value.include_cross_area_links === 'boolean') {
+  if ('include_cross_area_links' in value) {
+    if (typeof value.include_cross_area_links !== 'boolean') {
+      throw new Error('invalid canvas map filter');
+    }
     filter.include_cross_area_links = value.include_cross_area_links;
   }
 
-  if (typeof value.include_ghost_devices === 'boolean') {
+  if ('include_ghost_devices' in value) {
+    if (typeof value.include_ghost_devices !== 'boolean') {
+      throw new Error('invalid canvas map filter');
+    }
     filter.include_ghost_devices = value.include_ghost_devices;
   }
 
-  if (isRecord(value.tags)) {
-    filter.tags = Object.fromEntries(
-      Object.entries(value.tags).filter(
-        (entry): entry is [string, string] => typeof entry[1] === 'string',
-      ),
-    );
+  if ('tags' in value) {
+    if (!isRecord(value.tags) || Object.values(value.tags).some((tag) => typeof tag !== 'string')) {
+      throw new Error('invalid canvas map filter');
+    }
+    filter.tags = value.tags as Record<string, string>;
   }
 
   return filter;
@@ -496,7 +509,7 @@ export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyRes
         ? undefined
         : parseSnapshotPayload(payload.runtime_snapshot),
     generated_at: readString(payload, 'generated_at'),
-    map: isRecord(payload.map) ? parseCanvasMapResponse(payload.map) : undefined,
+    map: payload.map === undefined ? undefined : parseCanvasMapResponse(payload.map),
     devices: parseDevicesResponse({
       data: Array.isArray(payload.devices) ? payload.devices : [],
     }),

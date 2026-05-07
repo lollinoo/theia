@@ -114,7 +114,11 @@ export function resetCanvasBootstrapRequestCache(): void {
 export async function fetchCanvasBootstrap(
   options: FetchCanvasBootstrapOptions = {},
 ): Promise<{ topology: CanvasTopologyResponse }> {
-  return fetchCanvasBootstrapWithCache(defaultCanvasBootstrapCacheKey, '/api/v1/canvas', options);
+  return fetchCanvasBootstrapWithCache(
+    `default:${defaultCanvasBootstrapCacheKey}`,
+    '/api/v1/canvas',
+    options,
+  );
 }
 
 function fetchCanvasBootstrapWithCache(
@@ -278,7 +282,7 @@ export async function fetchCanvasMapBootstrap(
   options: FetchCanvasBootstrapOptions = {},
 ): Promise<{ topology: CanvasTopologyResponse }> {
   return fetchCanvasBootstrapWithCache(
-    mapId,
+    `map:${mapId}`,
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/bootstrap`,
     options,
   );

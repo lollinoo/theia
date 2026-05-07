@@ -42,6 +42,29 @@ function deviceResource(id: string, deviceType: string) {
   };
 }
 
+function canvasTopologyPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: 1,
+    topology_version: 'topo-test',
+    generated_at: '2026-05-07T00:00:00Z',
+    devices: [],
+    links: [],
+    positions: {},
+    areas: [],
+    capabilities: {
+      supports_topology_delta: false,
+      supports_position_revision: false,
+      supports_area_filtering: true,
+    },
+    settings: {
+      layout: {
+        version: 1,
+      },
+    },
+    ...overrides,
+  };
+}
+
 describe('parseDevicesResponse', () => {
   it('maps backend access-point values to ap and preserves firewall devices', () => {
     const devices = parseDevicesResponse({
@@ -132,6 +155,18 @@ describe('parseCanvasMapResponse', () => {
 
   it('rejects invalid map filter payloads', () => {
     expect(() => parseCanvasMapResponse({ id: 'map-1', name: 'Broken', filter: 'area-a' })).toThrow(
+      'invalid canvas map filter',
+    );
+  });
+
+  it.each([
+    ['area_id', { area_id: 123 }],
+    ['device_ids', { device_ids: ['device-1', 123] }],
+    ['include_cross_area_links', { include_cross_area_links: 'yes' }],
+    ['include_ghost_devices', { include_ghost_devices: 'no' }],
+    ['tags', { tags: { role: 'core', invalid: 123 } }],
+  ])('rejects invalid %s filter fields', (_field, filter) => {
+    expect(() => parseCanvasMapResponse({ id: 'map-1', name: 'Broken', filter })).toThrow(
       'invalid canvas map filter',
     );
   });
@@ -259,5 +294,30 @@ describe('parseCanvasTopologyResponse', () => {
     expect(topology.areas[0].name).toBe('Backbone');
     expect(topology.capabilities.supports_area_filtering).toBe(true);
     expect(topology.settings.layout.version).toBe(1);
+  });
+
+  it('leaves missing map metadata undefined', () => {
+    expect(parseCanvasTopologyResponse(canvasTopologyPayload()).map).toBeUndefined();
+  });
+
+  it('rejects invalid present map metadata', () => {
+    expect(() => parseCanvasTopologyResponse(canvasTopologyPayload({ map: 'map-1' }))).toThrow(
+      'invalid canvas map payload',
+    );
+  });
+
+  it('rejects invalid fields in present map metadata', () => {
+    expect(() =>
+      parseCanvasTopologyResponse(
+        canvasTopologyPayload({
+          map: {
+            id: 'map-1',
+            name: 'Broken',
+            is_default: false,
+            filter: { device_ids: ['device-1', 123] },
+          },
+        }),
+      ),
+    ).toThrow('invalid canvas map filter');
   });
 });
