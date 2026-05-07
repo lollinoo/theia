@@ -117,6 +117,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     maps,
     mapsLoading,
     mapsError,
+    savedMapsEnabled,
   }: {
     devices: Device[];
     links: Link[];
@@ -124,6 +125,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     maps: CanvasMap[];
     mapsLoading: boolean;
     mapsError: string | null;
+    savedMapsEnabled: boolean;
   }) => (
     <div data-testid="topology-hub">
       <span>{`devices:${devices.length}`}</span>
@@ -132,6 +134,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
       <span>{`maps:${maps.length}`}</span>
       <span>{`loading:${String(mapsLoading)}`}</span>
       <span>{`error:${mapsError ?? 'none'}`}</span>
+      <span>{`savedMapsEnabled:${String(savedMapsEnabled)}`}</span>
     </div>
   ),
 }));
@@ -187,6 +190,7 @@ describe('App', () => {
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('links:1');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('snapshot:down');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('maps:0');
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('savedMapsEnabled:false');
     expect(fetchCanvasMapsMock).not.toHaveBeenCalled();
 
     screen.getByRole('button', { name: 'Dashboard' }).click();

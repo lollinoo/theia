@@ -169,6 +169,7 @@ function App() {
             maps={mapsForHub}
             mapsLoading={mapsLoadingForHub}
             mapsError={mapsErrorForHub}
+            savedMapsEnabled={enableSavedMaps}
             onOpenGlobal={handleOpenGlobal}
             onOpenArea={(areaId) => handleAreaSelect(areaId)}
             onOpenMap={handleOpenMap}

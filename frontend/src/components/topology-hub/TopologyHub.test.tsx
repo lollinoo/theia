@@ -103,6 +103,7 @@ describe('TopologyHub', () => {
         maps={[mockMap()]}
         mapsLoading={false}
         mapsError={null}
+        savedMapsEnabled={true}
         onOpenGlobal={onOpenGlobal}
         onOpenArea={onOpenArea}
         onOpenMap={vi.fn()}
@@ -124,5 +125,56 @@ describe('TopologyHub', () => {
     expect(onOpenGlobal).toHaveBeenCalledOnce();
     expect(onOpenArea).toHaveBeenCalledWith('area-1');
     expect(onCreateMapFromArea).toHaveBeenCalledWith(area);
+  });
+
+  it('hides saved map management controls when saved maps are disabled', () => {
+    render(
+      <TopologyHub
+        devices={[mockDevice()]}
+        areas={[mockArea()]}
+        links={[mockLink()]}
+        snapshot={null}
+        maps={[mockMap()]}
+        mapsLoading={false}
+        mapsError="Map service unavailable"
+        savedMapsEnabled={false}
+        onOpenGlobal={vi.fn()}
+        onOpenArea={vi.fn()}
+        onOpenMap={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+        onDuplicateMap={vi.fn()}
+        onDeleteMap={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Create map from area Backbone' })).toBeNull();
+    expect(screen.queryByText('Saved maps')).toBeNull();
+    expect(screen.queryByText('Map service unavailable')).toBeNull();
+  });
+
+  it('shows saved map management controls when saved maps are enabled', () => {
+    render(
+      <TopologyHub
+        devices={[mockDevice()]}
+        areas={[mockArea()]}
+        links={[mockLink()]}
+        snapshot={null}
+        maps={[mockMap()]}
+        mapsLoading={false}
+        mapsError={null}
+        savedMapsEnabled={true}
+        onOpenGlobal={vi.fn()}
+        onOpenArea={vi.fn()}
+        onOpenMap={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+        onDuplicateMap={vi.fn()}
+        onDeleteMap={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Create map from area Backbone' })).toBeInTheDocument();
+    expect(screen.getByText('Saved maps')).toBeInTheDocument();
   });
 });

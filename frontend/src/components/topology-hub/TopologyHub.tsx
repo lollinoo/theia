@@ -13,6 +13,7 @@ export interface TopologyHubProps {
   maps: CanvasMap[];
   mapsLoading: boolean;
   mapsError: string | null;
+  savedMapsEnabled: boolean;
   onOpenGlobal: () => void;
   onOpenArea: (areaId: string) => void;
   onOpenMap: (map: CanvasMap) => void;
@@ -55,6 +56,7 @@ export function TopologyHub({
   maps,
   mapsLoading,
   mapsError,
+  savedMapsEnabled,
   onOpenGlobal,
   onOpenArea,
   onOpenMap,
@@ -64,7 +66,8 @@ export function TopologyHub({
   onOpenSettings,
 }: TopologyHubProps) {
   const model = buildTopologyHubModel({ devices, areas, links, snapshot, maps });
-  const showSavedMaps = mapsLoading || mapsError !== null || model.maps.length > 0;
+  const showSavedMaps =
+    savedMapsEnabled && (mapsLoading || mapsError !== null || model.maps.length > 0);
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-6 pb-12 pt-20 sm:px-8">
@@ -112,6 +115,7 @@ export function TopologyHub({
               <AreaSummaryCard
                 key={areaModel.area.id}
                 areaModel={areaModel}
+                savedMapsEnabled={savedMapsEnabled}
                 onOpenArea={onOpenArea}
                 onCreateMapFromArea={onCreateMapFromArea}
               />

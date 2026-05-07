@@ -4,12 +4,14 @@ import type { TopologyHubAreaModel } from './topologyHubModel';
 
 export interface AreaSummaryCardProps {
   areaModel: TopologyHubAreaModel;
+  savedMapsEnabled: boolean;
   onOpenArea: (areaId: string) => void;
   onCreateMapFromArea: (area: Area) => void;
 }
 
 export function AreaSummaryCard({
   areaModel,
+  savedMapsEnabled,
   onOpenArea,
   onCreateMapFromArea,
 }: AreaSummaryCardProps) {
@@ -30,15 +32,17 @@ export function AreaSummaryCard({
             <p className="mt-1 line-clamp-2 text-xs text-on-bg-secondary">{area.description}</p>
           )}
         </div>
-        <button
-          type="button"
-          aria-label={`Create map from area ${area.name}`}
-          title="Create map"
-          onClick={() => onCreateMapFromArea(area)}
-          className="rounded-full p-1.5 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        >
-          <MaterialIcon name="add_location_alt" size={18} />
-        </button>
+        {savedMapsEnabled && (
+          <button
+            type="button"
+            aria-label={`Create map from area ${area.name}`}
+            title="Create map"
+            onClick={() => onCreateMapFromArea(area)}
+            className="rounded-full p-1.5 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          >
+            <MaterialIcon name="add_location_alt" size={18} />
+          </button>
+        )}
       </div>
 
       <dl className="mt-4 grid grid-cols-3 gap-2 text-xs">
