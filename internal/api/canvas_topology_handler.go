@@ -57,12 +57,27 @@ type canvasTopologyResponse struct {
 	RuntimeIdentity string                       `json:"runtime_identity,omitempty"`
 	RuntimeSnapshot *ws.SnapshotPayload          `json:"runtime_snapshot,omitempty"`
 	GeneratedAt     string                       `json:"generated_at"`
+	Map             *canvasMapResponse           `json:"map,omitempty"`
 	Devices         []jsonAPIResource            `json:"devices"`
 	Links           []enrichedLinkResponse       `json:"links"`
 	Positions       map[string]canvasPosition    `json:"positions"`
 	Areas           []areaResponse               `json:"areas"`
 	Capabilities    canvasTopologyCapabilities   `json:"capabilities"`
 	Settings        canvasTopologyCanvasSettings `json:"settings"`
+}
+
+type canvasMapResponse struct {
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
+	SourceAreaID  *string                `json:"source_area_id"`
+	Filter        domain.CanvasMapFilter `json:"filter"`
+	IsDefault     bool                   `json:"is_default"`
+	DeviceCount   int                    `json:"device_count"`
+	LinkCount     int                    `json:"link_count"`
+	PositionCount int                    `json:"position_count"`
+	CreatedAt     string                 `json:"created_at"`
+	UpdatedAt     string                 `json:"updated_at"`
 }
 
 type canvasPosition struct {
@@ -417,6 +432,40 @@ func stableCanvasTopologyDeviceAttributes(attributes map[string]interface{}) map
 		stable[key] = value
 	}
 	return stable
+}
+
+func mapToResponse(m domain.CanvasMap) canvasMapResponse {
+	filter, err := domain.ParseCanvasMapFilter(m.FilterJSON)
+	if err != nil {
+		filter, _ = domain.ParseCanvasMapFilter("")
+	}
+
+	var sourceAreaID *string
+	if m.SourceAreaID != nil {
+		value := m.SourceAreaID.String()
+		sourceAreaID = &value
+	}
+
+	return canvasMapResponse{
+		ID:            m.ID.String(),
+		Name:          m.Name,
+		Description:   m.Description,
+		SourceAreaID:  sourceAreaID,
+		Filter:        filter,
+		IsDefault:     m.IsDefault,
+		DeviceCount:   m.DeviceCount,
+		LinkCount:     m.LinkCount,
+		PositionCount: m.PositionCount,
+		CreatedAt:     formatCanvasMapTimestamp(m.CreatedAt),
+		UpdatedAt:     formatCanvasMapTimestamp(m.UpdatedAt),
+	}
+}
+
+func formatCanvasMapTimestamp(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func requestETagMatches(headerValue string, etag string) bool {

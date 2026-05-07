@@ -1,0 +1,489 @@
+package api
+
+import (
+	"bytes"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/snmp"
+	"github.com/lollinoo/theia/internal/ws"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+type canvasMapIntegrationRouter struct {
+	router          http.Handler
+	db              *sql.DB
+	deviceRepo      *sqlite.DeviceRepo
+	linkRepo        *sqlite.LinkRepo
+	positionRepo    *sqlite.PositionRepo
+	mapRepo         *sqlite.CanvasMapRepo
+	mapPositionRepo *sqlite.CanvasMapPositionRepo
+	areaRepo        *sqlite.AreaRepo
+}
+
+type testCanvasMapResponse struct {
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
+	SourceAreaID  *string                `json:"source_area_id"`
+	Filter        domain.CanvasMapFilter `json:"filter"`
+	IsDefault     bool                   `json:"is_default"`
+	DeviceCount   int                    `json:"device_count"`
+	LinkCount     int                    `json:"link_count"`
+	PositionCount int                    `json:"position_count"`
+	CreatedAt     string                 `json:"created_at"`
+	UpdatedAt     string                 `json:"updated_at"`
+}
+
+func newCanvasMapIntegrationRouter(t *testing.T) canvasMapIntegrationRouter {
+	t.Helper()
+
+	dbName := strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(t.Name())
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=memory&cache=shared&_foreign_keys=on", dbName))
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	sqlite.ConfigureSQLiteDB(db)
+	t.Cleanup(func() { _ = db.Close() })
+
+	encryptionKey := []byte("test-encryption-key-32-bytes!!!!")
+	if err := sqlite.RunMigrations(db, encryptionKey); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	deviceRepo := sqlite.NewDeviceRepo(db, encryptionKey, nil)
+	linkRepo := sqlite.NewLinkRepo(db, nil)
+	positionRepo := sqlite.NewPositionRepo(db)
+	settingsRepo := sqlite.NewSettingsRepo(db)
+	areaRepo := sqlite.NewAreaRepo(db)
+	snmpProfileRepo := sqlite.NewSNMPProfileRepo(db, encryptionKey)
+	credentialProfileRepo := sqlite.NewCredentialProfileRepo(db)
+	vendorConfigRepo := sqlite.NewVendorConfigRepo(db)
+	mapRepo := sqlite.NewCanvasMapRepo(db)
+	mapPositionRepo := sqlite.NewCanvasMapPositionRepo(db)
+
+	discoverFn := func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		return &snmp.DiscoveryResult{}, nil
+	}
+	deviceService := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	runtimeSnapshotFunc := func() (*ws.SnapshotPayload, uint64) {
+		return ws.EmptySnapshot(), 42
+	}
+
+	router := NewRouter(
+		db,
+		deviceService,
+		linkRepo,
+		positionRepo,
+		mapRepo,
+		mapPositionRepo,
+		settingsRepo,
+		snmpProfileRepo,
+		credentialProfileRepo,
+		areaRepo,
+		nil,
+		buildTestVendorRegistry(),
+		vendorConfigRepo,
+		nil,
+		nil,
+		func() {},
+		"",
+		runtimeSnapshotFunc,
+		nil,
+	)
+
+	return canvasMapIntegrationRouter{
+		router:          router,
+		db:              db,
+		deviceRepo:      deviceRepo,
+		linkRepo:        linkRepo,
+		positionRepo:    positionRepo,
+		mapRepo:         mapRepo,
+		mapPositionRepo: mapPositionRepo,
+		areaRepo:        areaRepo,
+	}
+}
+
+func TestCanvasMapHandlerCRUDRejectsDefaultDelete(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET maps: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var listResp struct {
+		Data []testCanvasMapResponse `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, rec, &listResp)
+	if len(listResp.Data) != 1 {
+		t.Fatalf("expected one seeded default map, got %#v", listResp.Data)
+	}
+	defaultMap := listResp.Data[0]
+	if !defaultMap.IsDefault || defaultMap.Name != "Default" {
+		t.Fatalf("expected seeded default map, got %#v", defaultMap)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodDelete, "/api/v1/canvas/maps/"+defaultMap.ID, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("DELETE default map: expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCanvasMapHandlerCreatesDuplicatesAndUsesMapPositions(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps", map[string]any{
+		"name":        "Backbone",
+		"description": "Backbone saved layout",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST map: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	created := decodeCanvasMapData(t, rec)
+	if created.ID == "" || created.Name != "Backbone" || created.IsDefault {
+		t.Fatalf("unexpected created map: %#v", created)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodPut, "/api/v1/canvas/maps/"+created.ID+"/positions", map[string]any{
+		"positions": []any{},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT empty map positions: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps/"+created.ID+"/duplicate", map[string]any{
+		"name": "Backbone Copy",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST duplicate: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	copyMap := decodeCanvasMapData(t, rec)
+	if copyMap.ID == created.ID || copyMap.Name != "Backbone Copy" || copyMap.IsDefault {
+		t.Fatalf("unexpected duplicate map: %#v, source %#v", copyMap, created)
+	}
+}
+
+func TestCanvasMapHandlerMapScopedRoutesReturn404ForInvalidAndMissingMap(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{name: "get invalid uuid", method: http.MethodGet, path: "/api/v1/canvas/maps/not-a-uuid"},
+		{name: "patch invalid uuid", method: http.MethodPatch, path: "/api/v1/canvas/maps/not-a-uuid", body: map[string]any{"name": "x"}},
+		{name: "delete invalid uuid", method: http.MethodDelete, path: "/api/v1/canvas/maps/not-a-uuid"},
+		{name: "duplicate invalid uuid", method: http.MethodPost, path: "/api/v1/canvas/maps/not-a-uuid/duplicate", body: map[string]any{"name": "x"}},
+		{name: "topology invalid uuid", method: http.MethodGet, path: "/api/v1/canvas/maps/not-a-uuid/topology"},
+		{name: "bootstrap invalid uuid", method: http.MethodGet, path: "/api/v1/canvas/maps/not-a-uuid/bootstrap"},
+		{name: "positions get invalid uuid", method: http.MethodGet, path: "/api/v1/canvas/maps/not-a-uuid/positions"},
+		{name: "positions put invalid uuid", method: http.MethodPut, path: "/api/v1/canvas/maps/not-a-uuid/positions", body: map[string]any{"positions": []any{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := canvasMapRequest(t, fixture.router, tc.method, tc.path, tc.body)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("expected 404, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	missingID := uuid.New().String()
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{name: "get missing", method: http.MethodGet, path: "/api/v1/canvas/maps/" + missingID},
+		{name: "topology missing", method: http.MethodGet, path: "/api/v1/canvas/maps/" + missingID + "/topology"},
+		{name: "positions get missing", method: http.MethodGet, path: "/api/v1/canvas/maps/" + missingID + "/positions"},
+		{name: "positions put missing", method: http.MethodPut, path: "/api/v1/canvas/maps/" + missingID + "/positions", body: map[string]any{"positions": []any{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := canvasMapRequest(t, fixture.router, tc.method, tc.path, tc.body)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("expected 404, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestCanvasMapHandlerRejectsUnknownSourceAreaOnCreateAndUpdate(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	unknownAreaID := uuid.New().String()
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps", map[string]any{
+		"name":           "Unknown Area",
+		"source_area_id": unknownAreaID,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST unknown source_area_id: expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	created := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Patch Target"})
+	rec = canvasMapRequest(t, fixture.router, http.MethodPatch, "/api/v1/canvas/maps/"+created.ID, map[string]any{
+		"source_area_id": unknownAreaID,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH unknown source_area_id: expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCanvasMapHandlerListComputesCountsFromProjection(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-a", "10.60.0.1", nil)
+	deviceB := seedCanvasMapTestDevice(t, fixture, "router-b", "10.60.0.2", nil)
+	seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
+
+	defaultMap, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("get default map: %v", err)
+	}
+	if err := fixture.mapPositionRepo.SaveAllForMap(defaultMap.ID, []domain.DevicePosition{
+		{DeviceID: deviceA.ID, X: 10, Y: 20, Pinned: true},
+	}); err != nil {
+		t.Fatalf("save default map positions: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET maps: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var listResp struct {
+		Data []testCanvasMapResponse `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, rec, &listResp)
+	if len(listResp.Data) != 1 {
+		t.Fatalf("expected one default map, got %#v", listResp.Data)
+	}
+	got := listResp.Data[0]
+	if got.DeviceCount != 2 || got.LinkCount != 1 || got.PositionCount != 1 {
+		t.Fatalf("counts = devices:%d links:%d positions:%d, want 2/1/1", got.DeviceCount, got.LinkCount, got.PositionCount)
+	}
+}
+
+func TestCanvasMapHandlerTopologyUsesMapProjectionFilter(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-a", "10.61.0.1", nil)
+	deviceB := seedCanvasMapTestDevice(t, fixture, "router-b", "10.61.0.2", nil)
+	seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
+
+	filteredMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name": "Single Device",
+		"filter": map[string]any{
+			"device_ids": []string{deviceA.ID.String()},
+		},
+	})
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+filteredMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &resp)
+	if resp.Map == nil {
+		t.Fatal("expected map metadata on topology response")
+	}
+	if resp.Map.DeviceCount != 1 || resp.Map.LinkCount != 0 {
+		t.Fatalf("map counts = devices:%d links:%d, want 1/0", resp.Map.DeviceCount, resp.Map.LinkCount)
+	}
+	if len(resp.Devices) != 1 || resp.Devices[0].ID != deviceA.ID.String() {
+		t.Fatalf("expected only device %s, got %#v", deviceA.ID, resp.Devices)
+	}
+	if len(resp.Links) != 0 {
+		t.Fatalf("expected filtered links, got %#v", resp.Links)
+	}
+}
+
+func TestCanvasMapHandlerSavePositionsRejectsUnknownDevicesAndInvalidCoordinates(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Positions"})
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPut, "/api/v1/canvas/maps/"+canvasMap.ID+"/positions", map[string]any{
+		"positions": []map[string]any{
+			{"device_id": uuid.New().String(), "x": 10, "y": 20},
+		},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown device position: expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	device := seedCanvasMapTestDevice(t, fixture, "router-a", "10.62.0.1", nil)
+	body := `{"positions":[{"device_id":"` + device.ID.String() + `","x":1e999,"y":20}]}`
+	rec = canvasMapRawRequest(fixture.router, http.MethodPut, "/api/v1/canvas/maps/"+canvasMap.ID+"/positions", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("non-finite coordinate: expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPositionHandlerLegacySaveWritesDefaultMapAndLegacyPositions(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	device := seedCanvasMapTestDevice(t, fixture, "router-a", "10.63.0.1", nil)
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPut, "/api/v1/positions", map[string]any{
+		"positions": []map[string]any{
+			{"device_id": device.ID.String(), "x": 100, "y": 200, "pinned": true},
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT legacy positions: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	legacyPositions, err := fixture.positionRepo.GetAll()
+	if err != nil {
+		t.Fatalf("get legacy positions: %v", err)
+	}
+	if len(legacyPositions) != 1 || legacyPositions[0].DeviceID != device.ID || legacyPositions[0].X != 100 {
+		t.Fatalf("unexpected legacy positions: %#v", legacyPositions)
+	}
+
+	defaultMap, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("get default map: %v", err)
+	}
+	mapPositions, err := fixture.mapPositionRepo.GetAllForMap(defaultMap.ID)
+	if err != nil {
+		t.Fatalf("get default map positions: %v", err)
+	}
+	if len(mapPositions) != 1 || mapPositions[0].DeviceID != device.ID || mapPositions[0].X != 100 {
+		t.Fatalf("unexpected default map positions: %#v", mapPositions)
+	}
+}
+
+func TestPositionHandlerLegacyListReadsDefaultMapPositionsWhenConfigured(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	device := seedCanvasMapTestDevice(t, fixture, "router-a", "10.64.0.1", nil)
+	defaultMap, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("get default map: %v", err)
+	}
+	if err := fixture.positionRepo.SaveAll([]domain.DevicePosition{
+		{DeviceID: device.ID, X: 1, Y: 2},
+	}); err != nil {
+		t.Fatalf("save legacy position: %v", err)
+	}
+	if err := fixture.mapPositionRepo.SaveAllForMap(defaultMap.ID, []domain.DevicePosition{
+		{DeviceID: device.ID, X: 300, Y: 400, Pinned: true},
+	}); err != nil {
+		t.Fatalf("save default map position: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/positions", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET legacy positions: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data []domain.DevicePosition `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, rec, &resp)
+	if len(resp.Data) != 1 || resp.Data[0].DeviceID != device.ID || resp.Data[0].X != 300 || !resp.Data[0].Pinned {
+		t.Fatalf("expected default map positions, got %#v", resp.Data)
+	}
+}
+
+func mustCreateCanvasMapForTest(t *testing.T, fixture canvasMapIntegrationRouter, payload map[string]any) testCanvasMapResponse {
+	t.Helper()
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps", payload)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create map: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	return decodeCanvasMapData(t, rec)
+}
+
+func seedCanvasMapTestDevice(t *testing.T, fixture canvasMapIntegrationRouter, hostname string, ip string, areaIDs []uuid.UUID) domain.Device {
+	t.Helper()
+	device := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      hostname,
+		IP:            ip,
+		DeviceType:    domain.DeviceTypeRouter,
+		Status:        domain.DeviceStatusUp,
+		SysName:       hostname,
+		Vendor:        "default",
+		Managed:       true,
+		Tags:          map[string]string{},
+		AreaIDs:       areaIDs,
+		MetricsSource: domain.MetricsSourceNone,
+		Interfaces: []domain.Interface{
+			{IfName: "ether1", Speed: 1000000000, OperStatus: "up"},
+		},
+	}
+	if err := fixture.deviceRepo.Create(device); err != nil {
+		t.Fatalf("seed device %s: %v", hostname, err)
+	}
+	return *device
+}
+
+func seedCanvasMapTestLink(t *testing.T, fixture canvasMapIntegrationRouter, sourceID uuid.UUID, targetID uuid.UUID) domain.Link {
+	t.Helper()
+	link := &domain.Link{
+		ID:                uuid.New(),
+		SourceDeviceID:    sourceID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    targetID,
+		TargetIfName:      "ether1",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := fixture.linkRepo.Create(link); err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+	return *link
+}
+
+func canvasMapRequest(t *testing.T, router http.Handler, method string, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	if body == nil {
+		return canvasMapRawRequest(router, method, path, "")
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	return canvasMapRawRequest(router, method, path, string(payload))
+}
+
+func canvasMapRawRequest(router http.Handler, method string, path string, body string) *httptest.ResponseRecorder {
+	var reader *bytes.Reader
+	if body == "" {
+		reader = bytes.NewReader(nil)
+	} else {
+		reader = bytes.NewReader([]byte(body))
+	}
+	req := httptest.NewRequest(method, path, reader)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func decodeCanvasMapData(t *testing.T, rec *httptest.ResponseRecorder) testCanvasMapResponse {
+	t.Helper()
+	var resp struct {
+		Data testCanvasMapResponse `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, rec, &resp)
+	return resp.Data
+}
+
+func decodeCanvasMapTestResponse(t *testing.T, rec *httptest.ResponseRecorder, target any) {
+	t.Helper()
+	if err := json.NewDecoder(rec.Body).Decode(target); err != nil {
+		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
+	}
+}

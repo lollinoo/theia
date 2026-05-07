@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/service"
@@ -19,44 +20,43 @@ func NewRouter(
 	deviceService *service.DeviceService,
 	linkRepo domain.LinkRepository,
 	positionRepo domain.PositionRepository,
-	settingsRepo domain.SettingsRepository,
-	snmpProfileRepo domain.SNMPProfileRepository,
-	credentialProfileRepo *sqlite.CredentialProfileRepo,
-	areaRepo domain.AreaRepository,
-	backupService *service.BackupService,
-	vendorRegistry *vendor.Registry,
-	vendorConfigRepo domain.VendorConfigRepository,
-	poller statusProvider,
-	instanceBackupService *service.InstanceBackupService,
-	restoreRestarter func(),
-	bridgeBinariesDir string,
-	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64),
-	wsHandler *ws.Handler,
+	routerArgs ...any,
 ) http.Handler {
+	deps := parseRouterDependencies(routerArgs)
 	mux := http.NewServeMux()
 
-	deviceHandler := NewDeviceHandler(deviceService, credentialProfileRepo, vendorRegistry)
+	deviceHandler := NewDeviceHandler(deviceService, deps.credentialProfileRepo, deps.vendorRegistry)
 	linkHandler := NewLinkHandler(linkRepo, deviceService)
-	positionHandler := NewPositionHandler(positionRepo)
+	positionHandler := NewPositionHandler(positionRepo, deps.canvasMapRepo, deps.canvasMapPositionRepo)
 	canvasTopologyHandler := NewCanvasTopologyHandler(
 		deviceService,
 		linkRepo,
 		positionRepo,
-		areaRepo,
-		vendorRegistry,
-		runtimeSnapshotFunc,
+		deps.areaRepo,
+		deps.vendorRegistry,
+		deps.runtimeSnapshotFunc,
 	)
-	settingsHandler := NewSettingsHandler(settingsRepo)
-	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
-	areaHandler := NewAreaHandler(areaRepo)
-	backupHandler := NewBackupHandler(backupService, settingsRepo)
-	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
-	deviceCredHandler := NewDeviceCredentialProfileHandler(backupService, credentialProfileRepo)
-	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
-	healthHandler := NewHealthHandler(db, poller)
-	prometheusHandler := NewPrometheusHandler(settingsRepo)
-	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(instanceBackupService, restoreRestarter)
-	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo, settingsRepo)
+	canvasMapHandler := NewCanvasMapHandler(
+		deps.canvasMapRepo,
+		deps.canvasMapPositionRepo,
+		positionRepo,
+		canvasTopologyHandler,
+		deviceService,
+		linkRepo,
+		deps.areaRepo,
+		deps.runtimeSnapshotFunc,
+	)
+	settingsHandler := NewSettingsHandler(deps.settingsRepo)
+	snmpProfileHandler := NewSNMPProfileHandler(deps.snmpProfileRepo)
+	areaHandler := NewAreaHandler(deps.areaRepo)
+	backupHandler := NewBackupHandler(deps.backupService, deps.settingsRepo)
+	credentialProfileHandler := NewCredentialProfileHandler(deps.backupService, deps.credentialProfileRepo)
+	deviceCredHandler := NewDeviceCredentialProfileHandler(deps.backupService, deps.credentialProfileRepo)
+	vendorHandler := NewVendorHandler(deps.vendorRegistry, deps.vendorConfigRepo)
+	healthHandler := NewHealthHandler(db, deps.poller)
+	prometheusHandler := NewPrometheusHandler(deps.settingsRepo)
+	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(deps.instanceBackupService, deps.restoreRestarter)
+	bridgeHandler := NewBridgeHandlerWithCredentials(deps.bridgeBinariesDir, deps.backupService, deps.credentialProfileRepo, deps.settingsRepo)
 
 	// Canvas topology read model route
 	mux.HandleFunc("/api/v1/topology/canvas", func(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +73,68 @@ func NewRouter(
 			return
 		}
 		canvasTopologyHandler.HandleGetCanvas(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/canvas/maps", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			canvasMapHandler.HandleList(w, r)
+		case http.MethodPost:
+			canvasMapHandler.HandleCreate(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	mux.HandleFunc("/api/v1/canvas/maps/", func(w http.ResponseWriter, r *http.Request) {
+		_, action, ok := parseCanvasMapRoute(r.URL.Path)
+		if !ok {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+
+		switch action {
+		case "":
+			switch r.Method {
+			case http.MethodGet:
+				canvasMapHandler.HandleGet(w, r)
+			case http.MethodPatch:
+				canvasMapHandler.HandlePatch(w, r)
+			case http.MethodDelete:
+				canvasMapHandler.HandleDelete(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		case "duplicate":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleDuplicate(w, r)
+		case "topology":
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleTopology(w, r)
+		case "bootstrap":
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleBootstrap(w, r)
+		case "positions":
+			switch r.Method {
+			case http.MethodGet:
+				canvasMapHandler.HandleListPositions(w, r)
+			case http.MethodPut:
+				canvasMapHandler.HandleSavePositions(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		default:
+			writeError(w, http.StatusNotFound, "not found")
+		}
 	})
 
 	// Device routes
@@ -491,8 +553,8 @@ func NewRouter(
 		prometheusHandler.HandleHealth(w, r)
 	})
 
-	if wsHandler != nil {
-		mux.Handle("/api/v1/ws", wsHandler)
+	if deps.wsHandler != nil {
+		mux.Handle("/api/v1/ws", deps.wsHandler)
 	}
 
 	// Apply middleware chain: CORS -> Logger -> MaxBodySize -> JSON Content-Type
@@ -505,8 +567,8 @@ func NewRouter(
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// WebSocket upgrades must bypass the JSON/logger middleware chain because
 		// the wrapped ResponseWriter does not expose the hijacker interface.
-		if wsHandler != nil && r.URL.Path == "/api/v1/ws" {
-			wsHandler.ServeHTTP(w, r)
+		if deps.wsHandler != nil && r.URL.Path == "/api/v1/ws" {
+			deps.wsHandler.ServeHTTP(w, r)
 			return
 		}
 
@@ -525,8 +587,8 @@ func NewRouter(
 		// Instance backup restore bypasses JSON content-type but keeps a restore-specific body cap.
 		if r.URL.Path == "/api/v1/instance-backups/restore" && r.Method == http.MethodPost {
 			restoreLimit := service.DefaultRestoreArchiveLimits.MaxCompressedBytes
-			if instanceBackupService != nil {
-				restoreLimit = instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
+			if deps.instanceBackupService != nil {
+				restoreLimit = deps.instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
 			}
 			CORS(RequestLogger(MaxBodySize(restoreLimit+restoreMultipartEnvelopeOverheadBytes)(mux))).ServeHTTP(w, r)
 			return
@@ -540,6 +602,84 @@ func NewRouter(
 
 		handler.ServeHTTP(w, r)
 	})
+}
+
+type routerDependencies struct {
+	canvasMapRepo         domain.CanvasMapRepository
+	canvasMapPositionRepo domain.CanvasMapPositionRepository
+	settingsRepo          domain.SettingsRepository
+	snmpProfileRepo       domain.SNMPProfileRepository
+	credentialProfileRepo *sqlite.CredentialProfileRepo
+	areaRepo              domain.AreaRepository
+	backupService         *service.BackupService
+	vendorRegistry        *vendor.Registry
+	vendorConfigRepo      domain.VendorConfigRepository
+	poller                statusProvider
+	instanceBackupService *service.InstanceBackupService
+	restoreRestarter      func()
+	bridgeBinariesDir     string
+	runtimeSnapshotFunc   func() (*ws.SnapshotPayload, uint64)
+	wsHandler             *ws.Handler
+}
+
+func parseRouterDependencies(args []any) routerDependencies {
+	deps := routerDependencies{}
+	offset := 0
+	if len(args) == 15 {
+		deps.canvasMapRepo = routerArgAs[domain.CanvasMapRepository](args, 0)
+		deps.canvasMapPositionRepo = routerArgAs[domain.CanvasMapPositionRepository](args, 1)
+		offset = 2
+	}
+
+	args = args[offset:]
+	deps.settingsRepo = routerArgAs[domain.SettingsRepository](args, 0)
+	deps.snmpProfileRepo = routerArgAs[domain.SNMPProfileRepository](args, 1)
+	deps.credentialProfileRepo = routerArgAs[*sqlite.CredentialProfileRepo](args, 2)
+	deps.areaRepo = routerArgAs[domain.AreaRepository](args, 3)
+	deps.backupService = routerArgAs[*service.BackupService](args, 4)
+	deps.vendorRegistry = routerArgAs[*vendor.Registry](args, 5)
+	deps.vendorConfigRepo = routerArgAs[domain.VendorConfigRepository](args, 6)
+	deps.poller = routerArgAs[statusProvider](args, 7)
+	deps.instanceBackupService = routerArgAs[*service.InstanceBackupService](args, 8)
+	deps.restoreRestarter = routerArgAs[func()](args, 9)
+	deps.bridgeBinariesDir = routerArgAs[string](args, 10)
+	deps.runtimeSnapshotFunc = routerArgAs[func() (*ws.SnapshotPayload, uint64)](args, 11)
+	deps.wsHandler = routerArgAs[*ws.Handler](args, 12)
+	return deps
+}
+
+func routerArgAs[T any](args []any, index int) T {
+	var zero T
+	if index >= len(args) || args[index] == nil {
+		return zero
+	}
+	value, ok := args[index].(T)
+	if !ok {
+		return zero
+	}
+	return value
+}
+
+func parseCanvasMapRoute(path string) (uuid.UUID, string, bool) {
+	const prefix = "/api/v1/canvas/maps/"
+	suffix, ok := strings.CutPrefix(path, prefix)
+	if !ok || suffix == "" {
+		return uuid.Nil, "", false
+	}
+
+	parts := strings.Split(suffix, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return uuid.Nil, "", false
+	}
+	mapID, err := uuid.Parse(parts[0])
+	if err != nil {
+		return uuid.Nil, "", false
+	}
+	action := strings.Join(parts[1:], "/")
+	if strings.Contains(action, "//") {
+		return uuid.Nil, "", false
+	}
+	return mapID, action, true
 }
 
 func isWinboxCredentialsRevealPath(path string) bool {
