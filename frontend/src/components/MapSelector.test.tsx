@@ -216,7 +216,7 @@ describe('MapSelector', () => {
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 
-  it('clamps the trigger and dropdown width for narrow viewports', () => {
+  it('preserves the desktop trigger cap while clamping the dropdown for narrow viewports', () => {
     render(
       <MapSelector
         maps={maps}
@@ -228,7 +228,7 @@ describe('MapSelector', () => {
     );
 
     const button = screen.getByRole('button', { name: /select topology map/i });
-    expect(button.className).toContain('max-w-[calc(100vw-6rem)]');
+    expect(button.className).toContain('max-w-[min(15rem,calc(100vw-6rem))]');
 
     fireEvent.click(button);
 
