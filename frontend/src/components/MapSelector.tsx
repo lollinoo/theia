@@ -24,6 +24,10 @@ const fallbackDefaultMap: CanvasMap = {
   updated_at: '',
 };
 
+function isSelectedMap(map: CanvasMap, selectedMapId: string | null) {
+  return (map.is_default && selectedMapId === null) || map.id === selectedMapId;
+}
+
 export function MapSelector({
   maps,
   selectedMapId,
@@ -33,10 +37,30 @@ export function MapSelector({
 }: MapSelectorProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const menuMaps = useMemo(() => {
     const defaultMap = maps.find((map) => map.is_default) ?? fallbackDefaultMap;
     return [defaultMap, ...maps.filter((map) => !map.is_default)];
   }, [maps]);
+  const selectedOptionIndex = useMemo(() => {
+    const index = menuMaps.findIndex((map) => isSelectedMap(map, selectedMapId));
+    return index >= 0 ? index : 0;
+  }, [menuMaps, selectedMapId]);
+
+  const closeMenu = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const selectMap = (map: CanvasMap) => {
+    closeMenu();
+    onSelectMap(map);
+  };
+
+  const focusOption = (index: number) => {
+    optionRefs.current[index]?.focus();
+  };
 
   useEffect(() => {
     if (!open) {
@@ -45,13 +69,13 @@ export function MapSelector({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setOpen(false);
+        closeMenu();
       }
     };
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node) || !rootRef.current?.contains(target)) {
-        setOpen(false);
+        closeMenu();
       }
     };
 
@@ -63,15 +87,22 @@ export function MapSelector({
     };
   }, [open]);
 
+  useEffect(() => {
+    if (open) {
+      focusOption(selectedOptionIndex);
+    }
+  }, [open, selectedOptionIndex]);
+
   return (
     <div ref={rootRef} className="absolute right-20 top-20 z-10">
       <button
+        ref={triggerRef}
         type="button"
-        aria-label="Select topology map"
-        aria-haspopup="menu"
+        aria-label={`Select topology map, current map ${selectedMapName}`}
+        aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="topology-glass topology-floating-shadow flex h-11 max-w-[15rem] items-center gap-2 rounded-[16px] px-3 text-sm font-medium text-on-bg transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        className="topology-glass topology-floating-shadow flex h-11 max-w-[calc(100vw-6rem)] items-center gap-2 rounded-[16px] px-3 text-sm font-medium text-on-bg transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         title="Select topology map"
       >
         <MaterialIcon name="map" className="text-[20px]" />
@@ -80,40 +111,67 @@ export function MapSelector({
       </button>
 
       {open && (
-        <div
-          role="menu"
-          className="topology-glass topology-floating-shadow absolute right-0 mt-2 w-64 overflow-hidden rounded-[16px] p-1.5"
-        >
-          {menuMaps.map((map) => {
-            const selected =
-              (map.is_default && selectedMapId === null) || map.id === selectedMapId;
-            return (
-              <button
-                key={map.id}
-                type="button"
-                role="menuitem"
-                aria-current={selected ? 'true' : undefined}
-                onClick={() => {
-                  setOpen(false);
-                  onSelectMap(map);
-                }}
-                className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors duration-150 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring ${
-                  selected ? 'text-primary' : 'text-on-bg'
-                }`}
-              >
-                <span className="flex h-5 w-5 items-center justify-center">
-                  {selected && <MaterialIcon name="check" className="text-[18px]" />}
-                </span>
-                <span className="min-w-0 flex-1 truncate">{map.name}</span>
-              </button>
-            );
-          })}
+        <div className="topology-glass topology-floating-shadow absolute right-0 mt-2 w-[min(16rem,calc(100vw-6rem))] overflow-hidden rounded-[16px] p-1.5">
+          <div role="listbox" aria-label="Topology maps" tabIndex={-1}>
+            {menuMaps.map((map, index) => {
+              const selected = isSelectedMap(map, selectedMapId);
+              return (
+                <button
+                  key={map.id}
+                  ref={(element) => {
+                    optionRefs.current[index] = element;
+                  }}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  tabIndex={-1}
+                  onClick={() => selectMap(map)}
+                  onKeyDown={(event) => {
+                    switch (event.key) {
+                      case 'ArrowDown':
+                        event.preventDefault();
+                        focusOption(Math.min(index + 1, menuMaps.length - 1));
+                        break;
+                      case 'ArrowUp':
+                        event.preventDefault();
+                        focusOption(Math.max(index - 1, 0));
+                        break;
+                      case 'Home':
+                        event.preventDefault();
+                        focusOption(0);
+                        break;
+                      case 'End':
+                        event.preventDefault();
+                        focusOption(menuMaps.length - 1);
+                        break;
+                      case 'Enter':
+                      case ' ':
+                        event.preventDefault();
+                        selectMap(map);
+                        break;
+                      case 'Escape':
+                        event.preventDefault();
+                        closeMenu();
+                        break;
+                    }
+                  }}
+                  className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors duration-150 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring ${
+                    selected ? 'text-primary' : 'text-on-bg'
+                  }`}
+                >
+                  <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center">
+                    {selected && <MaterialIcon name="check" className="text-[18px]" />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{map.name}</span>
+                </button>
+              );
+            })}
+          </div>
           <div className="my-1 h-px bg-outline-subtle" />
           <button
             type="button"
-            role="menuitem"
             onClick={() => {
-              setOpen(false);
+              closeMenu();
               onManageMaps();
             }}
             className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-on-bg-secondary transition-colors duration-150 hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"

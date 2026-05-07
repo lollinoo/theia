@@ -41,9 +41,36 @@ const maps = [
     link_count: 2,
     position_count: 3,
   }),
+  mockMap({
+    id: 'map-edge',
+    name: 'Edge',
+    description: 'Edge network',
+    source_area_id: 'area-edge',
+    filter: { area_id: 'area-edge' },
+    is_default: false,
+    device_count: 2,
+    link_count: 1,
+    position_count: 2,
+  }),
 ];
 
 describe('MapSelector', () => {
+  it('includes the current map in the trigger accessible name while remaining discoverable', () => {
+    render(
+      <MapSelector
+        maps={maps}
+        selectedMapId="map-backbone"
+        selectedMapName="Backbone"
+        onSelectMap={vi.fn()}
+        onManageMaps={vi.fn()}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: /select topology map/i });
+
+    expect(button).toHaveAccessibleName(/current map Backbone/i);
+  });
+
   it('renders maps, shows the current map, and selects a saved map', () => {
     const onSelectMap = vi.fn();
     const onManageMaps = vi.fn();
@@ -57,17 +84,95 @@ describe('MapSelector', () => {
       />,
     );
 
-    const button = screen.getByRole('button', { name: 'Select topology map' });
+    const button = screen.getByRole('button', { name: /select topology map/i });
     expect(button).toHaveTextContent('Default');
 
     fireEvent.click(button);
 
-    const menu = screen.getByRole('menu');
-    expect(within(menu).getByRole('menuitem', { name: /Default/ })).toBeInTheDocument();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: /Backbone/ }));
+    const listbox = screen.getByRole('listbox');
+    expect(within(listbox).getByRole('option', { name: /Default/ })).toBeInTheDocument();
+    fireEvent.click(within(listbox).getByRole('option', { name: /Backbone/ }));
 
     expect(onSelectMap).toHaveBeenCalledWith(maps[1]);
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('focuses the selected map option when opened', () => {
+    render(
+      <MapSelector
+        maps={maps}
+        selectedMapId="map-backbone"
+        selectedMapName="Backbone"
+        onSelectMap={vi.fn()}
+        onManageMaps={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /select topology map/i }));
+
+    const selectedOption = screen.getByRole('option', { name: /Backbone/ });
+    expect(selectedOption).toHaveAttribute('aria-selected', 'true');
+    expect(selectedOption).toHaveFocus();
+  });
+
+  it('moves focus across map options with ArrowDown, ArrowUp, Home, and End', () => {
+    render(
+      <MapSelector
+        maps={maps}
+        selectedMapId="map-backbone"
+        selectedMapName="Backbone"
+        onSelectMap={vi.fn()}
+        onManageMaps={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /select topology map/i }));
+
+    const defaultOption = screen.getByRole('option', { name: /Default/ });
+    const backboneOption = screen.getByRole('option', { name: /Backbone/ });
+    const edgeOption = screen.getByRole('option', { name: /Edge/ });
+
+    expect(backboneOption).toHaveFocus();
+
+    fireEvent.keyDown(backboneOption, { key: 'ArrowDown' });
+    expect(edgeOption).toHaveFocus();
+
+    fireEvent.keyDown(edgeOption, { key: 'ArrowUp' });
+    expect(backboneOption).toHaveFocus();
+
+    fireEvent.keyDown(backboneOption, { key: 'Home' });
+    expect(defaultOption).toHaveFocus();
+
+    fireEvent.keyDown(defaultOption, { key: 'End' });
+    expect(edgeOption).toHaveFocus();
+  });
+
+  it.each([
+    ['Enter', 'Enter'],
+    ['Space', ' '],
+  ])('selects the focused map with %s and closes', (_label, key) => {
+    const onSelectMap = vi.fn();
+    render(
+      <MapSelector
+        maps={maps}
+        selectedMapId="map-backbone"
+        selectedMapName="Backbone"
+        onSelectMap={onSelectMap}
+        onManageMaps={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /select topology map/i }));
+    const backboneOption = screen.getByRole('option', { name: /Backbone/ });
+    fireEvent.keyDown(backboneOption, { key: 'ArrowDown' });
+
+    const edgeOption = screen.getByRole('option', { name: /Edge/ });
+    expect(edgeOption).toHaveFocus();
+
+    fireEvent.keyDown(edgeOption, { key });
+
+    expect(onSelectMap).toHaveBeenCalledWith(maps[2]);
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 
   it('closes the map menu with Escape', () => {
@@ -81,12 +186,12 @@ describe('MapSelector', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select topology map' }));
-    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /select topology map/i }));
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 
   it('uses a fallback default map and closes before managing maps', () => {
@@ -101,13 +206,34 @@ describe('MapSelector', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select topology map' }));
+    fireEvent.click(screen.getByRole('button', { name: /select topology map/i }));
 
-    const menu = screen.getByRole('menu');
-    expect(within(menu).getByRole('menuitem', { name: /Default/ })).toBeInTheDocument();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: /Manage maps/ }));
+    const listbox = screen.getByRole('listbox');
+    expect(within(listbox).getByRole('option', { name: /Default/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Manage maps/ }));
 
     expect(onManageMaps).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('clamps the trigger and dropdown width for narrow viewports', () => {
+    render(
+      <MapSelector
+        maps={maps}
+        selectedMapId="map-backbone"
+        selectedMapName="Backbone"
+        onSelectMap={vi.fn()}
+        onManageMaps={vi.fn()}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: /select topology map/i });
+    expect(button.className).toContain('max-w-[calc(100vw-6rem)]');
+
+    fireEvent.click(button);
+
+    expect(screen.getByRole('listbox').parentElement?.className).toContain(
+      'w-[min(16rem,calc(100vw-6rem))]',
+    );
   });
 });
