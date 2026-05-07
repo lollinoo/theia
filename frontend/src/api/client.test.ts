@@ -2,12 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type CreateDevicePayload,
   cancelInstanceBackup,
+  createCanvasMap,
   createDevice,
+  deleteCanvasMap,
   deleteDevice,
+  duplicateCanvasMap,
   fetchBackupFileContent,
   fetchBackupJobs,
   fetchBridgeToken,
   fetchCanvasBootstrap,
+  fetchCanvasMapBootstrap,
+  fetchCanvasMapTopology,
+  fetchCanvasMaps,
   fetchCanvasTopology,
   fetchDevices,
   fetchInstanceBackups,
@@ -18,9 +24,11 @@ import {
   restoreInstanceBackup,
   revealSNMPProfile,
   runTopologyDiscovery,
+  updateCanvasMap,
   updateDevice,
+  ValidationError,
 } from './client';
-import { ServerError, ValidationError } from './errors';
+import { ServerError } from './errors';
 
 // Helper to create a mock Response
 function mockResponse(
@@ -68,6 +76,24 @@ function deviceResource(id: string, hostname: string, ip: string) {
     relationships: {
       interfaces: { data: [] },
     },
+  };
+}
+
+function emptyTopologyPayload() {
+  return {
+    schema_version: 1,
+    topology_version: 'topo-empty',
+    generated_at: '2026-05-07T00:00:00Z',
+    devices: [],
+    links: [],
+    positions: {},
+    areas: [],
+    capabilities: {
+      supports_topology_delta: false,
+      supports_position_revision: false,
+      supports_area_filtering: true,
+    },
+    settings: { layout: { version: 1 } },
   };
 }
 
@@ -574,6 +600,113 @@ describe('fetchCanvasBootstrap', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(first.topology.runtime_version).toBe(42);
     expect(second.topology.runtime_version).toBe(43);
+  });
+});
+
+describe('canvas map client', () => {
+  beforeEach(() => {
+    resetCanvasBootstrapRequestCache();
+  });
+
+  it('fetches canvas maps from map list endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse({
+            data: [{ id: 'default', name: 'Default', is_default: true, filter: {} }],
+          }),
+        ),
+    );
+
+    await expect(fetchCanvasMaps()).resolves.toHaveLength(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
+  });
+
+  it('normalizes create conflicts as ValidationError', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'name exists' },
+            { ok: false, status: 409, statusText: 'Conflict' },
+          ),
+        ),
+    );
+
+    await expect(createCanvasMap({ name: 'Default' })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('uses map-specific topology and bootstrap endpoints', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(emptyTopologyPayload())));
+
+    await fetchCanvasMapBootstrap('map-1');
+    await fetchCanvasMapTopology('map-1', 'etag-1');
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas/maps/map-1/bootstrap',
+      expect.any(Object),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/map-1/topology',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'If-None-Match': 'etag-1' }),
+      }),
+    );
+  });
+
+  it('updates and duplicates canvas maps through their map endpoints', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    await updateCanvasMap('map-1', { source_area_id: null });
+    await duplicateCanvasMap('map-1', { name: 'Backbone Copy' });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas/maps/map-1',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/map-1/duplicate',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('deletes canvas maps through the map endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' })),
+    );
+
+    await deleteCanvasMap('map-1');
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map-1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
   });
 });
 

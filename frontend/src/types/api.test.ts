@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseCanvasTopologyResponse, parseDevicesResponse } from './api';
+import {
+  parseCanvasMapResponse,
+  parseCanvasMapsResponse,
+  parseCanvasTopologyResponse,
+  parseDevicesResponse,
+} from './api';
 
 function deviceResource(id: string, deviceType: string) {
   return {
@@ -99,6 +104,49 @@ describe('parseDevicesResponse', () => {
   });
 });
 
+describe('parseCanvasMapResponse', () => {
+  it('parses wrapped canvas map payloads and defaults counts', () => {
+    const map = parseCanvasMapResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: 'Backbone map',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+
+    expect(map).toMatchObject({
+      id: 'map-1',
+      name: 'Backbone',
+      source_area_id: null,
+      filter: {},
+      device_count: 0,
+      link_count: 0,
+      position_count: 0,
+    });
+  });
+
+  it('rejects invalid map filter payloads', () => {
+    expect(() => parseCanvasMapResponse({ id: 'map-1', name: 'Broken', filter: 'area-a' })).toThrow(
+      'invalid canvas map filter',
+    );
+  });
+});
+
+describe('parseCanvasMapsResponse', () => {
+  it('parses map list payloads', () => {
+    expect(
+      parseCanvasMapsResponse({
+        data: [{ id: 'default', name: 'Default', is_default: true, filter: {} }],
+      }),
+    ).toHaveLength(1);
+  });
+});
+
 describe('parseCanvasTopologyResponse', () => {
   it('parses the versioned canvas read model into frontend topology types', () => {
     const payload = {
@@ -140,6 +188,7 @@ describe('parseCanvasTopologyResponse', () => {
         links: {},
       },
       generated_at: '2026-04-30T12:00:00Z',
+      map: { id: 'map-1', name: 'Backbone', is_default: false, filter: {} },
       devices: [deviceResource('router-1', 'router')],
       links: [
         {
@@ -193,6 +242,7 @@ describe('parseCanvasTopologyResponse', () => {
     expect(topology.runtime_version).toBe(456);
     expect(topology.runtime_identity).toBe('rt-sha256:abc');
     expect(topology.runtime_snapshot?.devices['router-1'].operational_status).toBe('down');
+    expect(topology.map?.id).toBe('map-1');
     expect(topology.devices[0].hostname).toBe('router-1.example.test');
     expect(topology.links[0]).toMatchObject({
       id: 'link-1',
