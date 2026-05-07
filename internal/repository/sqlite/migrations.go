@@ -597,7 +597,11 @@ func devicePollClassColumnExists(db *sql.DB) bool {
 func migrateDefaultCanvasMap(db *sql.DB) error {
 	dialect := detectDialectFromDB(db)
 	wrapped := wrapDB(db)
-	if !tableExists(wrapped, dialect, "canvas_maps") {
+	hasCanvasMapsTable, err := tableExists(wrapped, dialect, "canvas_maps")
+	if err != nil {
+		return fmt.Errorf("checking canvas_maps table: %w", err)
+	}
+	if !hasCanvasMapsTable {
 		return nil
 	}
 
@@ -652,7 +656,7 @@ func migrateDefaultCanvasMap(db *sql.DB) error {
 	return nil
 }
 
-func tableExists(db *DB, dialect Dialect, tableName string) bool {
+func tableExists(db *DB, dialect Dialect, tableName string) (bool, error) {
 	var count int
 	var err error
 	if dialect == DialectSQLite {
@@ -662,11 +666,17 @@ func tableExists(db *DB, dialect Dialect, tableName string) bool {
 		).Scan(&count)
 	} else {
 		err = db.QueryRow(
-			`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?`,
+			`SELECT COUNT(*) FROM pg_catalog.pg_class c
+			WHERE c.relkind IN ('r', 'p')
+				AND c.relname = ?
+				AND pg_catalog.pg_table_is_visible(c.oid)`,
 			tableName,
 		).Scan(&count)
 	}
-	return err == nil && count > 0
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // seedDefaultSettings inserts default settings without overwriting existing values.
