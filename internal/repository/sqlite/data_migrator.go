@@ -396,8 +396,32 @@ func clearGeneratedTargetDefaultCanvasMapForCopy(sourceTx *sql.Tx, targetTx *Tx,
 		return fmt.Errorf("target default canvas map conflicts with copied source default: %s", targetDefault.id)
 	}
 
-	if _, err := targetTx.Exec(`DELETE FROM canvas_maps WHERE id = ?`, targetDefault.id); err != nil {
+	return deleteFreshGeneratedTargetDefaultCanvasMap(targetTx, targetDefault)
+}
+
+func deleteFreshGeneratedTargetDefaultCanvasMap(targetTx *Tx, targetDefault targetDefaultCanvasMapCopyState) error {
+	result, err := targetTx.Exec(
+		`DELETE FROM canvas_maps
+		 WHERE id = ?
+		   AND is_default = ?
+		   AND name = 'Default'
+		   AND description = 'Global canvas layout'
+		   AND source_area_id IS NULL
+		   AND filter_json = '{}'
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_positions)
+		   AND (SELECT COUNT(*) FROM canvas_maps) = 1`,
+		targetDefault.id,
+		true,
+	)
+	if err != nil {
 		return fmt.Errorf("deleting generated target default canvas map %s: %w", targetDefault.id, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking generated target default canvas map delete %s: %w", targetDefault.id, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("target default canvas map conflicts with copied source default: %s", targetDefault.id)
 	}
 	return nil
 }
