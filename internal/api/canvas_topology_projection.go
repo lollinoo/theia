@@ -16,6 +16,7 @@ func projectCanvasTopologyForMap(
 	links []domain.Link,
 	filter domain.CanvasMapFilter,
 ) canvasTopologyProjection {
+	knownDeviceIDs := make(map[uuid.UUID]struct{}, len(devices))
 	baseDeviceIDs := make(map[uuid.UUID]struct{}, len(devices))
 	selectedDeviceIDs := make(map[uuid.UUID]struct{}, len(filter.DeviceIDs))
 	for _, deviceID := range filter.DeviceIDs {
@@ -27,6 +28,8 @@ func projectCanvasTopologyForMap(
 		Links:   make([]domain.Link, 0, len(links)),
 	}
 	for _, device := range devices {
+		knownDeviceIDs[device.ID] = struct{}{}
+
 		baseDevice := false
 		switch {
 		case len(selectedDeviceIDs) > 0:
@@ -46,6 +49,12 @@ func projectCanvasTopologyForMap(
 
 	ghostDeviceIDs := make(map[uuid.UUID]struct{})
 	for _, link := range links {
+		_, sourceKnown := knownDeviceIDs[link.SourceDeviceID]
+		_, targetKnown := knownDeviceIDs[link.TargetDeviceID]
+		if !sourceKnown || !targetKnown {
+			continue
+		}
+
 		_, sourceIsBase := baseDeviceIDs[link.SourceDeviceID]
 		_, targetIsBase := baseDeviceIDs[link.TargetDeviceID]
 		includeLink := sourceIsBase && targetIsBase
@@ -94,7 +103,8 @@ func deviceHasArea(device domain.Device, areaID uuid.UUID) bool {
 
 func deviceMatchesTags(device domain.Device, tags map[string]string) bool {
 	for key, expected := range tags {
-		if device.Tags[key] != expected {
+		actual, ok := device.Tags[key]
+		if !ok || actual != expected {
 			return false
 		}
 	}
