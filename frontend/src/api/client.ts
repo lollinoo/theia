@@ -252,7 +252,7 @@ export async function updateCanvasMap(
   }>,
 ): Promise<CanvasMap> {
   return parseCanvasMapResponse(
-    await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'PUT', payload),
+    await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'PATCH', payload),
   );
 }
 
@@ -278,7 +278,7 @@ export async function fetchCanvasMapBootstrap(
   options: FetchCanvasBootstrapOptions = {},
 ): Promise<{ topology: CanvasTopologyResponse }> {
   return fetchCanvasBootstrapWithCache(
-    `map:${mapId}`,
+    mapId,
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/bootstrap`,
     options,
   );

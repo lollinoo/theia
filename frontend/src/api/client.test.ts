@@ -663,6 +663,25 @@ describe('canvas map client', () => {
     );
   });
 
+  it('uses the raw map id as the bootstrap cache key', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'default-bootstrap' }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-bootstrap' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const defaultBootstrap = await fetchCanvasBootstrap();
+    const mapBootstrap = await fetchCanvasMapBootstrap('__default__');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(defaultBootstrap.topology.topology_version).toBe('default-bootstrap');
+    expect(mapBootstrap.topology.topology_version).toBe('default-bootstrap');
+  });
+
   it('updates and duplicates canvas maps through their map endpoints', async () => {
     const response = mockResponse({
       data: {
@@ -684,7 +703,7 @@ describe('canvas map client', () => {
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       '/api/v1/canvas/maps/map-1',
-      expect.objectContaining({ method: 'PUT' }),
+      expect.objectContaining({ method: 'PATCH' }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
