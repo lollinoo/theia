@@ -530,6 +530,9 @@ export function useCanvasData({
   const devicesRef = useRef<Device[]>([]);
   const topologyLinksRef = useRef<Link[]>([]);
   const nodesRef = useRef<DeviceNode[]>(nodes);
+  const activeMapKeyRef = useRef<string>(mapKey);
+  const mountedMapKeyRef = useRef<string | null>(null);
+  const topologyLoadSequenceRef = useRef(0);
   const nodesOwnerMapKeyRef = useRef<string>(mapKey);
   const lastTopologyIdentityByMapRef = useRef<Map<string, string | null>>(new Map());
   const lastCanvasTopologyEtagByMapRef = useRef<Map<string, string | null>>(new Map());
@@ -537,6 +540,7 @@ export function useCanvasData({
   const currentNodePositionsByMapRef = useRef<Map<string, Map<string, PositionState>>>(
     new Map(),
   );
+  const skippedSavedMapManualEdgeMigrationRef = useRef<Set<string>>(new Set());
   const grafanaUrlRef = useRef<string>('');
   const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
   const { fetchPositions, savePositions } = usePositions(mapId);
@@ -573,6 +577,7 @@ export function useCanvasData({
   devicesRef.current = devices;
   topologyLinksRef.current = topologyLinks;
   nodesRef.current = nodes;
+  activeMapKeyRef.current = mapKey;
   currentNodePositionsByMapRef.current.set(
     nodesOwnerMapKeyRef.current,
     nodePositionsToPositionMap(nodes),
@@ -596,6 +601,16 @@ export function useCanvasData({
       options: LoadTopologyOptions = {},
     ) =>
       measureCanvasAsyncWork('theia:canvas:topology-load', trigger, async () => {
+        const requestMapKey = mapKey;
+        if (activeMapKeyRef.current !== requestMapKey) {
+          return;
+        }
+        const requestSequence = topologyLoadSequenceRef.current + 1;
+        topologyLoadSequenceRef.current = requestSequence;
+        const isCurrentTopologyLoad = () =>
+          topologyLoadSequenceRef.current === requestSequence &&
+          activeMapKeyRef.current === requestMapKey;
+
         const loadStartedAt = nowMs();
         const topologyLoadMetadata = {
           reason: trigger,
@@ -627,30 +642,42 @@ export function useCanvasData({
           const includeRuntimeBootstrap =
             options.includeRuntimeBootstrap === true || trigger === 'initial_load';
           const forceRuntimeBootstrap = options.includeRuntimeBootstrap === true;
-          const hadPendingManualEdgeMigration =
-            window.localStorage.getItem(manualEdgeStorageKey) !== null;
+          const pendingManualEdgeStorageValue = window.localStorage.getItem(manualEdgeStorageKey);
+          const hadPendingManualEdgeMigration = pendingManualEdgeStorageValue !== null;
           const canRunLegacyManualEdgeMigration = mapId === null;
           const shouldBypassReadModelEtagForManualEdgeMigration =
             canRunLegacyManualEdgeMigration && hadPendingManualEdgeMigration;
           const lastCanvasTopologyEtag =
             lastCanvasTopologyEtagByMapRef.current.get(mapKey) ?? null;
+          const renderedNodesOwnedByMap = nodesOwnerMapKeyRef.current === mapKey;
+          const topologyEtag =
+            includeRuntimeBootstrap ||
+            shouldBypassReadModelEtagForManualEdgeMigration ||
+            !renderedNodesOwnedByMap
+              ? null
+              : lastCanvasTopologyEtag;
           const topologySource = await loadCanvasTopologySource(
             mapId,
             fetchPositions,
-            includeRuntimeBootstrap || shouldBypassReadModelEtagForManualEdgeMigration
-              ? null
-              : lastCanvasTopologyEtag,
+            topologyEtag,
             includeRuntimeBootstrap,
             forceRuntimeBootstrap,
           );
+          if (!isCurrentTopologyLoad()) {
+            return;
+          }
           if (hadPendingManualEdgeMigration && !canRunLegacyManualEdgeMigration) {
-            recordCanvasDiagnosticEvent({
-              level: 'info',
-              source: 'topology',
-              event: 'manual_edges.migration.skipped_saved_map',
-              message: 'Manual edge localStorage migration skipped for saved map',
-              metadata: { mapId },
-            });
+            const skipDiagnosticKey = `${mapKey}:${pendingManualEdgeStorageValue}`;
+            if (!skippedSavedMapManualEdgeMigrationRef.current.has(skipDiagnosticKey)) {
+              skippedSavedMapManualEdgeMigrationRef.current.add(skipDiagnosticKey);
+              recordCanvasDiagnosticEvent({
+                level: 'info',
+                source: 'topology',
+                event: 'manual_edges.migration.skipped_saved_map',
+                message: 'Manual edge localStorage migration skipped for saved map',
+                metadata: { ...topologyLoadMetadata, mapId },
+              });
+            }
           }
           if (topologySource.status === 'not-modified') {
             lastCanvasTopologyEtagByMapRef.current.set(
@@ -715,6 +742,9 @@ export function useCanvasData({
               existingLinks: fetchedLinks,
               createLink,
             });
+            if (!isCurrentTopologyLoad()) {
+              return;
+            }
             recordManualEdgeMigrationDiagnostics(
               manualEdgeMigrationResult,
               hadPendingManualEdgeMigration,
@@ -930,6 +960,9 @@ export function useCanvasData({
 
           if (trigger === 'initial_load' || shouldAutoFitView) {
             window.requestAnimationFrame(() => {
+              if (!isCurrentTopologyLoad()) {
+                return;
+              }
               reactFlow.fitView({ padding: topologyFitViewPadding, duration: 320 });
             });
           }
@@ -967,6 +1000,9 @@ export function useCanvasData({
             },
           });
         } catch (loadError) {
+          if (!isCurrentTopologyLoad()) {
+            return;
+          }
           const topologyError =
             loadError instanceof Error ? loadError : new Error('Failed to load topology');
           updateCanvasDiagnosticsState({
@@ -1000,7 +1036,7 @@ export function useCanvasData({
             throw topologyError;
           }
         } finally {
-          if (!isSilentRefresh) {
+          if (isCurrentTopologyLoad() && !isSilentRefresh) {
             setLoading(false);
           }
         }
@@ -1120,6 +1156,20 @@ export function useCanvasData({
   useEffect(() => {
     void loadTopology(false, undefined, 'initial_load');
   }, []);
+
+  useEffect(() => {
+    if (mountedMapKeyRef.current === null) {
+      mountedMapKeyRef.current = mapKey;
+      return;
+    }
+
+    if (mountedMapKeyRef.current === mapKey) {
+      return;
+    }
+
+    mountedMapKeyRef.current = mapKey;
+    void loadTopology(false, undefined, 'manual_refresh');
+  }, [loadTopology, mapKey]);
 
   useEffect(() => {
     window.__THEIA_CANVAS_FORCE_REFRESH__ = () => {
