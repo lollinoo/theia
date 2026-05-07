@@ -163,20 +163,19 @@ func (r *CanvasMapRepo) Update(id uuid.UUID, input domain.CanvasMapUpdate) (doma
 
 // Delete removes a saved canvas map unless it is the default map.
 func (r *CanvasMapRepo) Delete(id uuid.UUID) error {
-	canvasMap, err := r.GetByID(id)
-	if err != nil {
-		return err
-	}
-	if canvasMap.IsDefault {
-		return fmt.Errorf("cannot delete default canvas map")
-	}
-
-	result, err := r.db.Exec(`DELETE FROM canvas_maps WHERE id = ?`, id.String())
+	result, err := r.db.Exec(`DELETE FROM canvas_maps WHERE id = ? AND is_default = ?`, id.String(), false)
 	if err != nil {
 		return fmt.Errorf("deleting canvas map: %w", err)
 	}
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
+		canvasMap, err := r.GetByID(id)
+		if err != nil {
+			return err
+		}
+		if canvasMap.IsDefault {
+			return fmt.Errorf("cannot delete default canvas map")
+		}
 		return fmt.Errorf("canvas map not found: %s", id)
 	}
 	return nil

@@ -166,6 +166,99 @@ func TestDefaultCanvasMapAfterCopy_CopiesCopiedLegacyPositions(t *testing.T) {
 	}
 }
 
+func TestCopyPrimaryData_DefaultConflictPreservesGeneratedLookingTargetDefault(t *testing.T) {
+	source := openTestDB(t)
+	target := openTestDB(t)
+
+	if err := RunMigrations(source, testKey); err != nil {
+		t.Fatalf("RunMigrations(source) failed: %v", err)
+	}
+	if err := RunMigrations(target, testKey); err != nil {
+		t.Fatalf("RunMigrations(target) failed: %v", err)
+	}
+
+	const sourceDefaultMapID = "00000000-0000-0000-0000-000000000911"
+	const targetDefaultMapID = "00000000-0000-0000-0000-000000000912"
+	setDefaultCanvasMapID(t, source, sourceDefaultMapID)
+	setDefaultCanvasMapID(t, target, targetDefaultMapID)
+
+	if _, err := target.Exec(
+		`INSERT INTO canvas_maps (id, name, description, filter_json, is_default, created_at, updated_at)
+		 VALUES (
+			'00000000-0000-0000-0000-000000000913',
+			'Target Operations',
+			'User-created target map',
+			'{}',
+			0,
+			'2026-04-10 00:00:00',
+			'2026-04-10 00:00:00'
+		 )`,
+	); err != nil {
+		t.Fatalf("inserting target user-created map: %v", err)
+	}
+
+	err := CopyPrimaryData(source, target, CopyOptions{BatchSize: 2})
+	if err == nil {
+		t.Fatal("CopyPrimaryData() succeeded, want target default conflict")
+	}
+	if !strings.Contains(err.Error(), "target default canvas map conflicts with copied source default") {
+		t.Fatalf("CopyPrimaryData() error = %v, want target default conflict", err)
+	}
+
+	var targetDefaultCount int
+	if err := target.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ? AND is_default = 1`, targetDefaultMapID).Scan(&targetDefaultCount); err != nil {
+		t.Fatalf("querying preserved target default: %v", err)
+	}
+	if targetDefaultCount != 1 {
+		t.Fatalf("preserved target default count = %d, want 1", targetDefaultCount)
+	}
+
+	var sourceDefaultCount int
+	if err := target.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, sourceDefaultMapID).Scan(&sourceDefaultCount); err != nil {
+		t.Fatalf("querying copied source default after conflict: %v", err)
+	}
+	if sourceDefaultCount != 0 {
+		t.Fatalf("copied source default count after conflict = %d, want 0", sourceDefaultCount)
+	}
+}
+
+func TestCopyPrimaryData_DeletesFreshGeneratedTargetDefaultBeforeCopyingSourceDefault(t *testing.T) {
+	source := openTestDB(t)
+	target := openTestDB(t)
+
+	if err := RunMigrations(source, testKey); err != nil {
+		t.Fatalf("RunMigrations(source) failed: %v", err)
+	}
+	if err := RunMigrations(target, testKey); err != nil {
+		t.Fatalf("RunMigrations(target) failed: %v", err)
+	}
+
+	const sourceDefaultMapID = "00000000-0000-0000-0000-000000000921"
+	const targetGeneratedMapID = "00000000-0000-0000-0000-000000000922"
+	setDefaultCanvasMapID(t, source, sourceDefaultMapID)
+	setDefaultCanvasMapID(t, target, targetGeneratedMapID)
+
+	if err := CopyPrimaryData(source, target, CopyOptions{BatchSize: 2}); err != nil {
+		t.Fatalf("CopyPrimaryData() failed: %v", err)
+	}
+
+	var copiedDefaultID string
+	if err := target.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = 1`).Scan(&copiedDefaultID); err != nil {
+		t.Fatalf("querying copied target default: %v", err)
+	}
+	if copiedDefaultID != sourceDefaultMapID {
+		t.Fatalf("target default map id = %s, want copied source default %s", copiedDefaultID, sourceDefaultMapID)
+	}
+
+	var generatedDefaultCount int
+	if err := target.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, targetGeneratedMapID).Scan(&generatedDefaultCount); err != nil {
+		t.Fatalf("querying generated target default: %v", err)
+	}
+	if generatedDefaultCount != 0 {
+		t.Fatalf("generated target default count = %d, want 0", generatedDefaultCount)
+	}
+}
+
 func TestNormalizeCredentialProfileSecretForCopy_Base64EncodesInvalidUTF8(t *testing.T) {
 	raw := string([]byte{0x9d, 0x01, 0x02})
 

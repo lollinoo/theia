@@ -389,17 +389,26 @@ func clearGeneratedTargetDefaultCanvasMapForCopy(sourceTx *sql.Tx, targetTx *Tx,
 	if !ok {
 		return nil
 	}
-	if _, alreadyCopiedDefaultID := sourceDefaultIDs[targetDefault.id]; alreadyCopiedDefaultID {
+	if !sourceHasDifferentDefaultCanvasMapID(sourceDefaultIDs, targetDefault.id) {
 		return nil
 	}
-	if !targetDefault.isGeneratedMigrationDefault() {
-		return nil
+	if !targetDefault.isFreshGeneratedMigrationDefault() {
+		return fmt.Errorf("target default canvas map conflicts with copied source default: %s", targetDefault.id)
 	}
 
 	if _, err := targetTx.Exec(`DELETE FROM canvas_maps WHERE id = ?`, targetDefault.id); err != nil {
 		return fmt.Errorf("deleting generated target default canvas map %s: %w", targetDefault.id, err)
 	}
 	return nil
+}
+
+func sourceHasDifferentDefaultCanvasMapID(sourceDefaultIDs map[string]struct{}, targetDefaultID string) bool {
+	for sourceDefaultID := range sourceDefaultIDs {
+		if sourceDefaultID != targetDefaultID {
+			return true
+		}
+	}
+	return false
 }
 
 func sourceDefaultCanvasMapIDs(sourceTx *sql.Tx, sourceDialect Dialect) (map[string]struct{}, error) {
@@ -429,29 +438,43 @@ func sourceDefaultCanvasMapIDs(sourceTx *sql.Tx, sourceDialect Dialect) (map[str
 }
 
 type targetDefaultCanvasMapCopyState struct {
-	id            string
-	name          string
-	description   string
-	filterJSON    string
-	positionCount int
+	id                 string
+	name               string
+	description        string
+	sourceAreaID       sql.NullString
+	filterJSON         string
+	positionCount      int
+	mapCount           int
+	totalPositionCount int
 }
 
 func targetDefaultCanvasMapForCopy(targetTx *Tx) (targetDefaultCanvasMapCopyState, bool, error) {
 	var targetDefault targetDefaultCanvasMapCopyState
 	err := targetTx.QueryRow(
-		`SELECT cm.id, cm.name, cm.description, cm.filter_json, COUNT(cmp.device_id)
+		`SELECT
+			cm.id,
+			cm.name,
+			cm.description,
+			cm.source_area_id,
+			cm.filter_json,
+			COUNT(cmp.device_id),
+			(SELECT COUNT(*) FROM canvas_maps),
+			(SELECT COUNT(*) FROM canvas_map_positions)
 		 FROM canvas_maps cm
 		 LEFT JOIN canvas_map_positions cmp ON cmp.map_id = cm.id
 		 WHERE cm.is_default = ?
-		 GROUP BY cm.id, cm.name, cm.description, cm.filter_json
+		 GROUP BY cm.id, cm.name, cm.description, cm.source_area_id, cm.filter_json
 		 LIMIT 1`,
 		true,
 	).Scan(
 		&targetDefault.id,
 		&targetDefault.name,
 		&targetDefault.description,
+		&targetDefault.sourceAreaID,
 		&targetDefault.filterJSON,
 		&targetDefault.positionCount,
+		&targetDefault.mapCount,
+		&targetDefault.totalPositionCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -462,11 +485,14 @@ func targetDefaultCanvasMapForCopy(targetTx *Tx) (targetDefaultCanvasMapCopyStat
 	return targetDefault, true, nil
 }
 
-func (state targetDefaultCanvasMapCopyState) isGeneratedMigrationDefault() bool {
+func (state targetDefaultCanvasMapCopyState) isFreshGeneratedMigrationDefault() bool {
 	return state.name == "Default" &&
 		state.description == "Global canvas layout" &&
+		!state.sourceAreaID.Valid &&
 		state.filterJSON == "{}" &&
-		state.positionCount == 0
+		state.positionCount == 0 &&
+		state.mapCount == 1 &&
+		state.totalPositionCount == 0
 }
 
 func clearTargetTables(targetTx *Tx, specs []tableCopySpec) error {
