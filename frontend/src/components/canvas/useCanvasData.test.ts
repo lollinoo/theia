@@ -340,6 +340,61 @@ describe('useCanvasData', () => {
     expect(fetchCanvasTopology).not.toHaveBeenCalled();
   });
 
+  it('treats a saved map id matching the old internal default key as distinct from the default canvas', async () => {
+    const defaultDevice = mockDevice({
+      id: 'default-dev',
+      hostname: 'default-router',
+      ip: '10.0.0.10',
+      sys_name: 'default-router',
+    });
+    const savedMapDevice = mockDevice({
+      id: 'saved-default-dev',
+      hostname: 'saved-default-router',
+      ip: '10.0.0.20',
+      sys_name: 'saved-default-router',
+    });
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [defaultDevice],
+        topology_version: 'topo-default-bootstrap',
+      }),
+    );
+    vi.mocked(fetchCanvasMapTopology).mockImplementation((requestedMapId: string) => {
+      if (requestedMapId === '__default__') {
+        return Promise.resolve(
+          canvasTopologyOkResponse({
+            devices: [savedMapDevice],
+            topology_version: 'topo-saved-default-id',
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected map id ${requestedMapId}`));
+    });
+
+    const { result, rerender } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes.map((node) => node.id)).toEqual(['default-dev']);
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: '__default__',
+      currentMapName: 'Saved Default',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('__default__', undefined);
+    expect(result.current.nodes.map((node) => node.id)).toEqual(['saved-default-dev']);
+  });
+
   it('skips legacy manual edge migration for saved maps and retains localStorage', async () => {
     const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
     window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
@@ -598,6 +653,36 @@ describe('useCanvasData', () => {
     });
 
     expect(fetchCanvasMapTopology).toHaveBeenCalledWith('map-1', undefined);
+  });
+
+  it('does not reload topology when only the map name changes', async () => {
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
+    const { rerender } = renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    vi.mocked(fetchCanvasMapBootstrap).mockClear();
+    vi.mocked(fetchCanvasMapTopology).mockClear();
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: 'map-1',
+      currentMapName: 'Renamed Core Map',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasMapBootstrap).not.toHaveBeenCalled();
+    expect(fetchCanvasMapTopology).not.toHaveBeenCalled();
   });
 
   it('emits saved-map manual edge migration skip diagnostics once per pending payload', async () => {
@@ -1860,6 +1945,72 @@ describe('useCanvasData', () => {
     ]);
   });
 
+  it('ignores retained drag callbacks after the active map changes before the next map finishes loading', async () => {
+    const mapLoad = deferred<CanvasTopologyFetchResult>();
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        positions: {
+          'dev-1': {
+            device_id: 'dev-1',
+            x: 10,
+            y: 20,
+            pinned: true,
+          },
+        },
+      }),
+    );
+    vi.mocked(fetchCanvasMapTopology).mockReturnValueOnce(mapLoad.promise);
+
+    const { result, rerender } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const staleUpdateNodePosition = result.current.updateNodePosition;
+    expect(result.current.nodes[0].position).toEqual({ x: 10, y: 20 });
+    positionMocks.savePositions.mockClear();
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: 'map-1',
+      currentMapName: 'Core Map',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      staleUpdateNodePosition('dev-1', { x: 321, y: 654 });
+    });
+
+    expect(positionMocks.savePositions).not.toHaveBeenCalled();
+    expect(result.current.nodes[0].position).toEqual({ x: 10, y: 20 });
+
+    await act(async () => {
+      mapLoad.resolve(
+        canvasTopologyOkResponse({
+          devices: [
+            mockDevice({
+              id: 'map-dev',
+              hostname: 'map-router',
+              ip: '10.0.0.20',
+              sys_name: 'map-router',
+            }),
+          ],
+          topology_version: 'topo-map-1',
+        }),
+      );
+      await mapLoad.promise;
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes.map((node) => node.id)).toEqual(['map-dev']);
+  });
+
   it('ignores ghost node move requests before they can mutate canonical state', async () => {
     const { result } = renderUseCanvasData(mockSnapshot());
 
@@ -1916,6 +2067,96 @@ describe('useCanvasData', () => {
       tone: 'success',
       message: 'Topology refreshed after reconnect',
     });
+  });
+
+  it('does not apply a recovery notice from a stale structural refresh after the active map changes', async () => {
+    const map1Refresh = deferred<CanvasTopologyFetchResult>();
+    const map1Device = mockDevice({
+      id: 'map-1-dev',
+      hostname: 'map-1-router',
+      ip: '10.0.0.11',
+      sys_name: 'map-1-router',
+    });
+    const map2Device = mockDevice({
+      id: 'map-2-dev',
+      hostname: 'map-2-router',
+      ip: '10.0.0.12',
+      sys_name: 'map-2-router',
+    });
+
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [map1Device],
+        topology_version: 'topo-map-1-bootstrap',
+      }),
+    );
+    vi.mocked(fetchCanvasMapTopology).mockImplementation((requestedMapId: string) => {
+      if (requestedMapId === 'map-1') {
+        return map1Refresh.promise;
+      }
+      if (requestedMapId === 'map-2') {
+        return Promise.resolve(
+          canvasTopologyOkResponse({
+            devices: [map2Device],
+            topology_version: 'topo-map-2',
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected map id ${requestedMapId}`));
+    });
+
+    const { result, rerender } = renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Map 1',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes.map((node) => node.id)).toEqual(['map-1-dev']);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+    });
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: 'map-2',
+      currentMapName: 'Map 2',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes.map((node) => node.id)).toEqual(['map-2-dev']);
+
+    await act(async () => {
+      map1Refresh.resolve(
+        canvasTopologyOkResponse({
+          devices: [
+            mockDevice({
+              id: 'stale-map-1-dev',
+              hostname: 'stale-map-1-router',
+              ip: '10.0.0.21',
+              sys_name: 'stale-map-1-router',
+            }),
+          ],
+          topology_version: 'topo-map-1-stale',
+        }),
+      );
+      await map1Refresh.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes.map((node) => node.id)).toEqual(['map-2-dev']);
+    expect(result.current.topologyRecoveryNotice).toBeNull();
   });
 
   it('applies restored backend positions after reconnect when topology is unchanged', async () => {

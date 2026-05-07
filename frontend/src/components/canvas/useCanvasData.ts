@@ -121,6 +121,8 @@ interface LoadTopologyOptions {
   includeRuntimeBootstrap?: boolean;
 }
 
+type LoadTopologyResult = 'applied' | 'stale' | 'failed';
+
 type CanvasTopologySource =
   | {
       status: 'ok';
@@ -143,6 +145,10 @@ const structuralRefreshDebounceMs = 250;
 const topologyRefreshRetryActionLabel = 'Retry topology refresh';
 const topologyRefreshDelayedMessage = 'Live topology refresh delayed';
 const emptyAlerts: AlertDTO[] = [];
+
+function canvasMapKey(mapId: string | null): string {
+  return mapId === null ? 'default:' : `map:${mapId}`;
+}
 
 function runtimeAlertStatusForDevice(
   deviceId: string,
@@ -516,7 +522,7 @@ export function useCanvasData({
   onDevicesChange,
   onLinksChange,
 }: UseCanvasDataParams): UseCanvasDataReturn {
-  const mapKey = mapId ?? '__default__';
+  const mapKey = canvasMapKey(mapId);
   const diagnosticMapId = mapId ?? 'default';
   const diagnosticMapName = mapName ?? 'Default';
   const [devices, setDevices] = useState<Device[]>([]);
@@ -599,11 +605,11 @@ export function useCanvasData({
       defaultPosition?: { x: number; y: number },
       trigger: CanvasMeasurementTrigger = 'manual_refresh',
       options: LoadTopologyOptions = {},
-    ) =>
+    ): Promise<LoadTopologyResult> =>
       measureCanvasAsyncWork('theia:canvas:topology-load', trigger, async () => {
         const requestMapKey = mapKey;
         if (activeMapKeyRef.current !== requestMapKey) {
-          return;
+          return 'stale';
         }
         const requestSequence = topologyLoadSequenceRef.current + 1;
         topologyLoadSequenceRef.current = requestSequence;
@@ -664,7 +670,7 @@ export function useCanvasData({
             forceRuntimeBootstrap,
           );
           if (!isCurrentTopologyLoad()) {
-            return;
+            return 'stale';
           }
           if (hadPendingManualEdgeMigration && !canRunLegacyManualEdgeMigration) {
             const skipDiagnosticKey = `${mapKey}:${pendingManualEdgeStorageValue}`;
@@ -703,7 +709,7 @@ export function useCanvasData({
                 notModified: true,
               },
             });
-            return;
+            return 'applied';
           }
 
           lastCanvasTopologyEtagByMapRef.current.set(mapKey, topologySource.etag ?? null);
@@ -743,7 +749,7 @@ export function useCanvasData({
               createLink,
             });
             if (!isCurrentTopologyLoad()) {
-              return;
+              return 'stale';
             }
             recordManualEdgeMigrationDiagnostics(
               manualEdgeMigrationResult,
@@ -851,7 +857,7 @@ export function useCanvasData({
                 structureChanged,
               },
             });
-            return;
+            return 'applied';
           }
 
           const placementDeviceIds = collectPlacementDeviceIds(
@@ -999,9 +1005,10 @@ export function useCanvasData({
               structureChanged,
             },
           });
+          return 'applied';
         } catch (loadError) {
           if (!isCurrentTopologyLoad()) {
-            return;
+            return 'stale';
           }
           const topologyError =
             loadError instanceof Error ? loadError : new Error('Failed to load topology');
@@ -1035,6 +1042,7 @@ export function useCanvasData({
           if (options.rethrowOnError) {
             throw topologyError;
           }
+          return 'failed';
         } finally {
           if (isCurrentTopologyLoad() && !isSilentRefresh) {
             setLoading(false);
@@ -1062,6 +1070,17 @@ export function useCanvasData({
     setTopologyRecoveryNotice(null);
   }, []);
 
+  const loadTopologyForConsumer = useCallback(
+    async (
+      isSilentRefresh = false,
+      defaultPosition?: { x: number; y: number },
+      trigger: CanvasMeasurementTrigger = 'manual_refresh',
+    ) => {
+      await loadTopology(isSilentRefresh, defaultPosition, trigger);
+    },
+    [loadTopology],
+  );
+
   const runStructuralRefresh = useCallback(
     async (causes: Set<StructuralRefreshCause>) => {
       const refreshCauses = new Set(causes);
@@ -1069,11 +1088,14 @@ export function useCanvasData({
       setTopologyRecoveryNotice(null);
 
       try {
-        await loadTopology(true, undefined, measurementTriggerForCauses(refreshCauses), {
+        const loadResult = await loadTopology(true, undefined, measurementTriggerForCauses(refreshCauses), {
           suppressBlockingError: true,
           rethrowOnError: true,
           includeRuntimeBootstrap: refreshCauses.has('backend-resync-required'),
         });
+        if (loadResult !== 'applied') {
+          return;
+        }
         setTopologyRecoveryNotice(buildTopologyRecoveryNotice(refreshCauses));
       } catch {
         setTopologyRecoveryNotice({
@@ -1096,6 +1118,11 @@ export function useCanvasData({
 
   const updateNodePosition = useCallback(
     (deviceId: string, position: { x: number; y: number }) => {
+      const activeMapKey = activeMapKeyRef.current;
+      if (mapKey !== activeMapKey || nodesOwnerMapKeyRef.current !== activeMapKey) {
+        return;
+      }
+
       let changed = false;
       const nextNodes = nodesRef.current.map((node) =>
         node.id === deviceId && !isGhostDeviceNode(node)
@@ -1127,7 +1154,7 @@ export function useCanvasData({
         const existingEdgeData = new Map(currentEdges.map((edge) => [edge.id, edge.data ?? {}]));
         return buildTopologyEdges(links, devicesById, nextNodes, existingEdgeData, openEdgeMenu);
       });
-      if (ownerMapKey === mapKey) {
+      if (ownerMapKey === activeMapKeyRef.current) {
         void savePositions(buildPositionPayload(nextNodes));
       }
     },
@@ -1368,7 +1395,7 @@ export function useCanvasData({
     runtimeSummary,
     loading,
     error,
-    loadTopology,
+    loadTopology: loadTopologyForConsumer,
     grafanaUrlRef,
     deviceGrafanaUrlsRef,
     refreshSettings,
