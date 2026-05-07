@@ -272,6 +272,9 @@ func MigrateSQLiteToPostgres(sourcePath, targetDSN string, opts CopyOptions) err
 	if err := CopyPrimaryData(sourceDB, targetDB, opts); err != nil {
 		return err
 	}
+	if err := seedTargetDefaultCanvasMapAfterCopy(targetDB); err != nil {
+		return err
+	}
 
 	if _, err := wrapDB(targetDB).Exec("ANALYZE"); err != nil {
 		return fmt.Errorf("analyzing target database: %w", err)
@@ -328,6 +331,13 @@ func CopyPrimaryData(source, target *sql.DB, opts CopyOptions) error {
 
 	if err := targetTx.Commit(); err != nil {
 		return fmt.Errorf("committing target transaction: %w", err)
+	}
+	return nil
+}
+
+func seedTargetDefaultCanvasMapAfterCopy(target *sql.DB) error {
+	if err := migrateDefaultCanvasMap(target); err != nil {
+		return fmt.Errorf("seeding target default canvas map after copy: %w", err)
 	}
 	return nil
 }

@@ -87,6 +87,77 @@ func TestCopyPrimaryData_TruncateTargetRemovesStaleRows(t *testing.T) {
 	assertCopyTargetState(t, target, "core-router", "https://prom.example", true, "core", intPtr(45))
 }
 
+func TestDefaultCanvasMapAfterCopy_CopiesCopiedLegacyPositions(t *testing.T) {
+	source := openTestDB(t)
+	target := openTestDB(t)
+
+	if err := RunMigrations(source, testKey); err != nil {
+		t.Fatalf("RunMigrations(source) failed: %v", err)
+	}
+	if err := RunMigrations(target, testKey); err != nil {
+		t.Fatalf("RunMigrations(target) failed: %v", err)
+	}
+
+	const deviceID = "00000000-0000-0000-0000-000000000301"
+	if _, err := source.Exec(
+		`INSERT INTO devices (
+			id, hostname, ip, snmp_credentials_json, device_type, status, sys_name, sys_descr,
+			sys_object_id, hardware_model, vendor, managed, tags_json, created_at, updated_at,
+			metrics_source, prometheus_label_name, prometheus_label_value, sys_name_lookup,
+			poll_class, poll_interval_override, polling_enabled, notes
+		) VALUES (
+			?, 'router-301', '10.0.3.1', '{}', 'router', 'up', 'router-301', '',
+			'', 'CCR2004', 'mikrotik', 1, '{}', '2026-04-10 00:00:00',
+			'2026-04-10 00:00:00', 'prometheus', 'instance', 'router-301:9100', 'router-301',
+			'core', 60, 1, 'Canvas copy regression device'
+		)`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("inserting source device: %v", err)
+	}
+	if _, err := source.Exec(
+		`INSERT INTO device_positions (device_id, x, y, pinned, updated_at)
+		 VALUES (?, 71.5, 82.25, 1, '2026-04-10 03:04:05')`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("inserting source legacy position: %v", err)
+	}
+
+	if err := CopyPrimaryData(source, target, CopyOptions{BatchSize: 2}); err != nil {
+		t.Fatalf("CopyPrimaryData() failed: %v", err)
+	}
+
+	var preSeedCount int
+	if err := target.QueryRow(`SELECT COUNT(*) FROM canvas_map_positions`).Scan(&preSeedCount); err != nil {
+		t.Fatalf("counting pre-seed canvas_map_positions: %v", err)
+	}
+	if preSeedCount != 0 {
+		t.Fatalf("pre-seed canvas_map_positions count = %d, want 0", preSeedCount)
+	}
+
+	if err := seedTargetDefaultCanvasMapAfterCopy(target); err != nil {
+		t.Fatalf("seedTargetDefaultCanvasMapAfterCopy() failed: %v", err)
+	}
+
+	var mapID string
+	if err := target.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = 1`).Scan(&mapID); err != nil {
+		t.Fatalf("querying target default map: %v", err)
+	}
+
+	var x, y float64
+	var pinned int
+	if err := target.QueryRow(
+		`SELECT x, y, pinned FROM canvas_map_positions WHERE map_id = ? AND device_id = ?`,
+		mapID,
+		deviceID,
+	).Scan(&x, &y, &pinned); err != nil {
+		t.Fatalf("querying seeded canvas map position: %v", err)
+	}
+	if x != 71.5 || y != 82.25 || pinned != 1 {
+		t.Fatalf("seeded position = (%v, %v, pinned=%d), want (71.5, 82.25, pinned=1)", x, y, pinned)
+	}
+}
+
 func TestNormalizeCredentialProfileSecretForCopy_Base64EncodesInvalidUTF8(t *testing.T) {
 	raw := string([]byte{0x9d, 0x01, 0x02})
 
