@@ -3,6 +3,7 @@ import {
   type Connection,
   ConnectionMode,
   type EdgeChange,
+  type NodeChange,
   MiniMap,
   type OnMove,
   ReactFlow,
@@ -190,6 +191,9 @@ export default function Canvas({
   const interactionIdleTimerRef = useRef<number | null>(null);
   const areaColorNodeCacheRef = useRef(
     new Map<string, { source: DeviceNode; colorSignature: string; node: DeviceNode }>(),
+  );
+  const ghostNodeMeasurementCacheRef = useRef(
+    new Map<string, NonNullable<DeviceNode['measured']>>(),
   );
   const lastProjectionDiagnosticsSignatureRef = useRef<string>('');
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
@@ -468,6 +472,43 @@ export default function Canvas({
         .join('\u0000'),
     [nodes],
   );
+  const ghostDeviceIds = useMemo(
+    () => new Set(ghostDevices.map((device) => device.id)),
+    [ghostDevices],
+  );
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<DeviceNode>[]) => {
+      if (!selectedAreaId || ghostDeviceIds.size === 0) {
+        onNodesChange(changes);
+        return;
+      }
+
+      const canonicalChanges: NodeChange<DeviceNode>[] = [];
+      for (const change of changes) {
+        if (change.type === 'add') {
+          canonicalChanges.push(change);
+          continue;
+        }
+
+        if (!ghostDeviceIds.has(change.id)) {
+          canonicalChanges.push(change);
+          continue;
+        }
+
+        if (change.type === 'dimensions' && change.dimensions) {
+          ghostNodeMeasurementCacheRef.current.set(change.id, {
+            width: change.dimensions.width,
+            height: change.dimensions.height,
+          });
+        }
+      }
+
+      if (canonicalChanges.length > 0) {
+        onNodesChange(canonicalChanges);
+      }
+    },
+    [ghostDeviceIds, onNodesChange, selectedAreaId],
+  );
 
   // Build display nodes/edges by filtering the full node/edge set and adding ghost nodes
   const displayNodes = useMemo(() => {
@@ -507,6 +548,7 @@ export default function Canvas({
         id: device.id,
         type: 'device',
         position: basePos,
+        measured: ghostNodeMeasurementCacheRef.current.get(device.id),
         draggable: false,
         data: {
           kind: 'ghost-device',
@@ -958,7 +1000,7 @@ export default function Canvas({
         edges={renderEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={handleConnect}
         onConnectStart={beginCanvasInteraction}

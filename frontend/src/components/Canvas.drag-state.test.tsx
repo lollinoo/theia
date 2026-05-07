@@ -72,6 +72,7 @@ vi.mock('@xyflow/react', () => ({
     onConnectStart,
     onConnectEnd,
     onNodeDragStop,
+    onNodesChange,
   }: {
     children: React.ReactNode;
     nodes: DeviceNode[];
@@ -82,6 +83,7 @@ vi.mock('@xyflow/react', () => ({
     onConnectStart?: () => void;
     onConnectEnd?: () => void;
     onNodeDragStop?: (event: unknown, node: DeviceNode) => void;
+    onNodesChange?: (changes: unknown[]) => void;
   }) => {
     testState.displayedNodes = nodes;
     testState.reactFlowProps = {
@@ -119,6 +121,20 @@ vi.mock('@xyflow/react', () => ({
           }}
         >
           Drag area node
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            onNodesChange?.([
+              {
+                id: 'dev-c',
+                type: 'dimensions',
+                dimensions: { width: 132, height: 58 },
+              },
+            ])
+          }
+        >
+          Measure ghost node
         </button>
         {children}
       </div>
@@ -261,6 +277,57 @@ describe('Canvas drag state ownership', () => {
     expect(testState.setNodes).not.toHaveBeenCalled();
     expect(testState.savePositions).not.toHaveBeenCalled();
     expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', { x: 444, y: 555 });
+  });
+
+  it('keeps ghost node measurements out of canonical node state', () => {
+    const props = {
+      snapshot: null,
+      reconnecting: false,
+      prometheusStatus: null,
+      selectedAreaId: 'area-1',
+      areas: [
+        { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+        { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+      ],
+    } as const;
+    const { rerender } = render(
+      <Canvas
+        snapshot={props.snapshot}
+        reconnecting={props.reconnecting}
+        prometheusStatus={props.prometheusStatus}
+        selectedAreaId={props.selectedAreaId}
+        areas={props.areas}
+      />,
+    );
+
+    expect(testState.displayedNodes.find((node) => node.id === 'dev-c')?.data.isGhost).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Measure ghost node' }));
+
+    expect(testState.onNodesChange).not.toHaveBeenCalled();
+
+    testState.canonicalNodes = [
+      {
+        ...testState.canonicalNodes[0],
+        position: { x: 125, y: 125 },
+      },
+      testState.canonicalNodes[1],
+      testState.canonicalNodes[2],
+    ];
+    rerender(
+      <Canvas
+        snapshot={props.snapshot}
+        reconnecting={props.reconnecting}
+        prometheusStatus={props.prometheusStatus}
+        selectedAreaId={props.selectedAreaId}
+        areas={props.areas}
+      />,
+    );
+
+    expect(testState.displayedNodes.find((node) => node.id === 'dev-c')?.measured).toEqual({
+      width: 132,
+      height: 58,
+    });
   });
 
   it('keeps visible-element rendering enabled and the minimap visible during canvas gestures', () => {
