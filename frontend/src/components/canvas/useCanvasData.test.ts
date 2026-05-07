@@ -7,6 +7,8 @@ import {
   type CanvasTopologyFetchResult,
   createLink,
   fetchCanvasBootstrap,
+  fetchCanvasMapBootstrap,
+  fetchCanvasMapTopology,
   fetchCanvasTopology,
   fetchDevices,
   fetchLinks,
@@ -34,6 +36,8 @@ import { useCanvasData } from './useCanvasData';
 
 vi.mock('../../api/client', () => ({
   fetchCanvasBootstrap: vi.fn(),
+  fetchCanvasMapBootstrap: vi.fn(),
+  fetchCanvasMapTopology: vi.fn(),
   fetchCanvasTopology: vi.fn(),
   fetchDevices: vi.fn(),
   fetchLinks: vi.fn(),
@@ -41,16 +45,21 @@ vi.mock('../../api/client', () => ({
   createLink: vi.fn(),
 }));
 
-const positionMocks = vi.hoisted(() => ({
-  fetchPositions: vi.fn(),
-  savePositions: vi.fn(),
-}));
+const positionMocks = vi.hoisted(() => {
+  const fetchPositions = vi.fn();
+  const savePositions = vi.fn();
+  return {
+    fetchPositions,
+    savePositions,
+    usePositions: vi.fn((_mapId: string | null) => ({
+      fetchPositions,
+      savePositions,
+    })),
+  };
+});
 
 vi.mock('../../hooks/usePositions', () => ({
-  usePositions: () => ({
-    fetchPositions: positionMocks.fetchPositions,
-    savePositions: positionMocks.savePositions,
-  }),
+  usePositions: positionMocks.usePositions,
 }));
 
 vi.mock('../../hooks/useAutoLayout', () => ({
@@ -124,6 +133,8 @@ function renderUseCanvasData(
   snapshot: SnapshotPayload | null,
   prometheusStatus: PrometheusStatusPayload | null = null,
   options: {
+    mapId?: string | null;
+    mapName?: string;
     onDevicesChange?: (devices: Device[]) => void;
   } = {},
 ) {
@@ -134,11 +145,13 @@ function renderUseCanvasData(
   const openEdgeMenu = vi.fn();
 
   const rendered = renderHook(
-    ({ currentSnapshot }) => {
+    ({ currentSnapshot, currentMapId = null, currentMapName = 'Default' }) => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
       const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
       const hook = useCanvasData({
+        mapId: currentMapId,
+        mapName: currentMapName,
         snapshot: currentSnapshot,
         reconnecting: false,
         prometheusStatus,
@@ -162,6 +175,8 @@ function renderUseCanvasData(
     {
       initialProps: {
         currentSnapshot: snapshot,
+        currentMapId: options.mapId ?? null,
+        currentMapName: options.mapName ?? 'Default',
       },
     },
   );
@@ -224,13 +239,25 @@ function canvasTopologyOkResponse(
   };
 }
 
+function canvasBootstrapResponse(
+  overrides: Partial<Extract<CanvasTopologyFetchResult, { status: 'ok' }>['topology']> = {},
+): { topology: Extract<CanvasTopologyFetchResult, { status: 'ok' }>['topology'] } {
+  return { topology: canvasTopologyOkResponse(overrides).topology };
+}
+
 describe('useCanvasData', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-13T12:00:00Z'));
+    positionMocks.usePositions.mockImplementation((_mapId: string | null) => ({
+      fetchPositions: positionMocks.fetchPositions,
+      savePositions: positionMocks.savePositions,
+    }));
     positionMocks.fetchPositions.mockResolvedValue(new Map());
     vi.mocked(fetchCanvasBootstrap).mockRejectedValue({ status: 404 });
+    vi.mocked(fetchCanvasMapBootstrap).mockRejectedValue({ status: 404 });
+    vi.mocked(fetchCanvasMapTopology).mockRejectedValue({ status: 404 });
     vi.mocked(fetchCanvasTopology).mockRejectedValue({ status: 404 });
     vi.mocked(fetchDevices).mockResolvedValue([mockDevice()]);
     vi.mocked(fetchLinks).mockResolvedValue([]);
@@ -250,6 +277,178 @@ describe('useCanvasData', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('uses default bootstrap when mapId is null', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
+
+    renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(positionMocks.usePositions).toHaveBeenCalledWith(null);
+    expect(fetchCanvasBootstrap).toHaveBeenCalledWith({ force: false });
+    expect(fetchCanvasMapBootstrap).not.toHaveBeenCalled();
+  });
+
+  it('uses saved map bootstrap on initial load when mapId is set', async () => {
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
+
+    renderUseCanvasData(null, null, { mapId: 'map-1', mapName: 'Core Map' });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(positionMocks.usePositions).toHaveBeenCalledWith('map-1');
+    expect(fetchCanvasMapBootstrap).toHaveBeenCalledWith('map-1', { force: false });
+    expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
+  });
+
+  it('uses saved map topology on silent refresh when mapId is set', async () => {
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(canvasTopologyOkResponse());
+    const { result } = renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('map-1', undefined);
+    expect(fetchCanvasTopology).not.toHaveBeenCalled();
+  });
+
+  it('skips legacy manual edge migration for saved maps and retains localStorage', async () => {
+    const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
+    window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [
+          mockDevice(),
+          mockDevice({
+            id: 'dev-2',
+            hostname: 'router-02',
+            ip: '10.0.0.2',
+            sys_name: 'router-02',
+          }),
+        ],
+      }),
+    );
+
+    renderUseCanvasData(null, null, { mapId: 'map-1', mapName: 'Core Map' });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createLink).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(manualEdgeStorageKey)).toBe(JSON.stringify(storedEdges));
+    expect(exportCanvasDiagnostics().events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: 'manual_edges.migration.skipped_saved_map',
+          metadata: expect.objectContaining({ mapId: 'map-1' }),
+        }),
+      ]),
+    );
+  });
+
+  it('keeps cached topology ETags scoped by map key', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      {
+        ...canvasTopologyOkResponse({ topology_version: 'topo-default' }),
+        etag: '"default-etag"',
+      },
+    );
+    vi.mocked(fetchCanvasMapTopology)
+      .mockResolvedValueOnce(
+        {
+          ...canvasTopologyOkResponse({
+            topology_version: 'topo-map-1',
+          }),
+          etag: '"map-etag"',
+        },
+      )
+      .mockResolvedValueOnce({
+        status: 'not-modified',
+        etag: '"map-etag"',
+      });
+    const { result, rerender } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: 'map-1',
+      currentMapName: 'Core Map',
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenCalledWith(undefined);
+    expect(fetchCanvasMapTopology).toHaveBeenNthCalledWith(1, 'map-1', undefined);
+    expect(fetchCanvasMapTopology).toHaveBeenNthCalledWith(2, 'map-1', '"map-etag"');
+  });
+
+  it('records topology diagnostics with map metadata', async () => {
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
+
+    renderUseCanvasData(null, null, { mapId: 'map-1', mapName: 'Core Map' });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(exportCanvasDiagnostics().events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: 'topology.load.started',
+          metadata: expect.objectContaining({
+            reason: 'initial_load',
+            silent: false,
+            mapId: 'map-1',
+            mapName: 'Core Map',
+          }),
+        }),
+        expect.objectContaining({
+          event: 'topology.load.succeeded',
+          metadata: expect.objectContaining({
+            reason: 'initial_load',
+            silent: false,
+            mapId: 'map-1',
+            mapName: 'Core Map',
+          }),
+        }),
+      ]),
+    );
   });
 
   it('snapshot application keeps overview metadata attached when device status is down', async () => {
@@ -494,6 +693,8 @@ describe('useCanvasData', () => {
       const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
       return useCanvasData({
+        mapId: null,
+        mapName: 'Default',
         snapshot: null,
         alerts,
         reconnecting: false,
@@ -606,6 +807,8 @@ describe('useCanvasData', () => {
       const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
       return useCanvasData({
+        mapId: null,
+        mapName: 'Default',
         snapshot,
         alerts,
         reconnecting: false,

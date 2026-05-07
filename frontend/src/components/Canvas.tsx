@@ -365,6 +365,8 @@ export default function Canvas({
     retryTopologyRefresh,
     updateNodePosition,
   } = useCanvasData({
+    mapId: null,
+    mapName: 'Default',
     snapshot,
     alerts,
     reconnecting,
