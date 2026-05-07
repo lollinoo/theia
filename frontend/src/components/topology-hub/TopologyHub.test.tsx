@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
-import type { SnapshotPayload } from '../../types/metrics';
+import type { DeviceRuntimeDTO, SnapshotPayload } from '../../types/metrics';
 import { TopologyHub } from './TopologyHub';
 
 function mockArea(overrides: Partial<Area> = {}): Area {
@@ -83,16 +83,53 @@ function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
   };
 }
 
+function mockDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRuntimeDTO {
+  return {
+    device_id: 'device-1',
+    operational_status: 'up',
+    primary_health: 'up_fresh',
+    runtime_flags: [],
+    field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+    network_reachable: 'true',
+    snmp_reachable: 'true',
+    reachability: 'up',
+    health: 'healthy',
+    freshness: 'fresh',
+    primary_reason: 'ok',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    alert_status: 'normal',
+    firing_alert_count: 0,
+    last_collected_at: '2026-01-01T00:00:00Z',
+    last_polled_at: '2026-01-01T00:00:00Z',
+    expected_poll_interval_seconds: 30,
+    cpu_percent: 50,
+    mem_percent: 25,
+    temp_celsius: null,
+    uptime_secs: 86400,
+    ...overrides,
+  };
+}
+
 describe('TopologyHub', () => {
   it('renders runtime-aware hub content without legacy OSPF text', () => {
     const area = mockArea();
     const onOpenGlobal = vi.fn();
     const onOpenArea = vi.fn();
     const onCreateMapFromArea = vi.fn();
-    const snapshot = {
-      devices: { 'device-1': { status: 'down', alert_status: 'critical' } },
+    const snapshot: SnapshotPayload = {
+      devices: {
+        'device-1': mockDeviceRuntime({
+          operational_status: 'down',
+          primary_health: 'unreachable',
+          network_reachable: 'false',
+          reachability: 'hard_down',
+          health: 'critical',
+          alert_status: 'down',
+        }),
+      },
       links: {},
-    } as unknown as SnapshotPayload;
+    };
 
     const { container } = render(
       <TopologyHub
@@ -174,7 +211,34 @@ describe('TopologyHub', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Create map from area Backbone' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Create map from area Backbone' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('Saved maps')).toBeInTheDocument();
+  });
+
+  it('shows the saved maps empty state when saved maps are enabled with no maps', () => {
+    render(
+      <TopologyHub
+        devices={[mockDevice()]}
+        areas={[mockArea()]}
+        links={[mockLink()]}
+        snapshot={null}
+        maps={[]}
+        mapsLoading={false}
+        mapsError={null}
+        savedMapsEnabled={true}
+        onOpenGlobal={vi.fn()}
+        onOpenArea={vi.fn()}
+        onOpenMap={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+        onDuplicateMap={vi.fn()}
+        onDeleteMap={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Saved maps')).toBeInTheDocument();
+    expect(screen.getByText('No saved maps')).toBeInTheDocument();
   });
 });

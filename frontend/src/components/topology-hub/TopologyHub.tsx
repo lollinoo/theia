@@ -66,8 +66,6 @@ export function TopologyHub({
   onOpenSettings,
 }: TopologyHubProps) {
   const model = buildTopologyHubModel({ devices, areas, links, snapshot, maps });
-  const showSavedMaps =
-    savedMapsEnabled && (mapsLoading || mapsError !== null || model.maps.length > 0);
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-6 pb-12 pt-20 sm:px-8">
@@ -136,7 +134,7 @@ export function TopologyHub({
         )}
       </section>
 
-      {showSavedMaps && (
+      {savedMapsEnabled && (
         <SavedMapsSection
           maps={model.maps}
           loading={mapsLoading}

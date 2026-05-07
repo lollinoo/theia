@@ -1,19 +1,54 @@
 import { ReactFlowProvider } from '@xyflow/react';
 import { useCallback, useEffect, useState } from 'react';
-import { fetchAreas, fetchCanvasMaps } from './api/client';
+import {
+  createCanvasMap,
+  deleteCanvasMap,
+  duplicateCanvasMap,
+  fetchAreas,
+  fetchCanvasMaps,
+} from './api/client';
 import Canvas from './components/Canvas';
 import { Dashboard } from './components/Dashboard';
 import NavigationPill from './components/NavigationPill';
+import {
+  CreateMapDialog,
+  type CreateMapDialogSubmit,
+} from './components/topology-hub/CreateMapDialog';
+import {
+  DuplicateMapDialog,
+  type DuplicateMapDialogSubmit,
+} from './components/topology-hub/DuplicateMapDialog';
 import TopologyHub from './components/topology-hub/TopologyHub';
 import { Watermark } from './components/Watermark';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useWebSocket } from './hooks/useWebSocket';
-import type { Area, CanvasMap, Device, Link } from './types/api';
+import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api';
 
 export type ActiveView = 'hub' | 'canvas' | 'dashboard';
 
 const runtimeUpdatePauseIdleDelayMs = 1500;
 const enableSavedMaps = false;
+
+function canvasMapErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function mapFilterForArea(area: Area): CanvasMapFilter {
+  return {
+    area_id: area.id,
+    include_cross_area_links: true,
+    include_ghost_devices: true,
+  };
+}
+
+function upsertCanvasMap(maps: CanvasMap[], map: CanvasMap): CanvasMap[] {
+  const existingIndex = maps.findIndex((candidate) => candidate.id === map.id);
+  if (existingIndex === -1) {
+    return [...maps, map];
+  }
+
+  return maps.map((candidate, index) => (index === existingIndex ? map : candidate));
+}
 
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>('canvas');
@@ -27,10 +62,11 @@ function App() {
   const [canvasMaps, setCanvasMaps] = useState<CanvasMap[]>([]);
   const [canvasMapsLoading, setCanvasMapsLoading] = useState(false);
   const [canvasMapsError, setCanvasMapsError] = useState<string | null>(null);
+  const [createMapSourceArea, setCreateMapSourceArea] = useState<Area | null>(null);
+  const [duplicateMapSource, setDuplicateMapSource] = useState<CanvasMap | null>(null);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
 
-  void selectedMapId;
   void selectedMapName;
 
   useEffect(() => {
@@ -67,18 +103,21 @@ function App() {
       });
   }, []);
 
-  const loadCanvasMaps = useCallback(async () => {
+  const loadCanvasMaps = useCallback(async (): Promise<CanvasMap[] | null> => {
     if (!enableSavedMaps) {
-      return;
+      return null;
     }
 
     setCanvasMapsLoading(true);
     setCanvasMapsError(null);
 
     try {
-      setCanvasMaps(await fetchCanvasMaps());
+      const maps = await fetchCanvasMaps();
+      setCanvasMaps(maps);
+      return maps;
     } catch (error) {
-      setCanvasMapsError(error instanceof Error ? error.message : 'Failed to load maps');
+      setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to load maps'));
+      return null;
     } finally {
       setCanvasMapsLoading(false);
     }
@@ -134,16 +173,95 @@ function App() {
   }, []);
 
   const handleCreateMapFromArea = useCallback((area: Area) => {
-    void area;
+    if (!enableSavedMaps) {
+      return;
+    }
+
+    setCanvasMapsError(null);
+    setCreateMapSourceArea(area);
   }, []);
 
   const handleDuplicateMap = useCallback((map: CanvasMap) => {
-    void map;
+    if (!enableSavedMaps) {
+      return;
+    }
+
+    setCanvasMapsError(null);
+    setDuplicateMapSource(map);
   }, []);
 
-  const handleDeleteMap = useCallback((map: CanvasMap) => {
-    void map;
-  }, []);
+  const handleCreateMap = useCallback(
+    async ({ name, sourceArea }: CreateMapDialogSubmit) => {
+      if (!enableSavedMaps) {
+        return;
+      }
+
+      setCanvasMapsError(null);
+
+      try {
+        const createdMap = await createCanvasMap({
+          name,
+          source_area_id: sourceArea?.id ?? null,
+          filter: sourceArea ? mapFilterForArea(sourceArea) : {},
+        });
+        setCreateMapSourceArea(null);
+        setCanvasMaps((maps) => upsertCanvasMap(maps, createdMap));
+        handleOpenMap(createdMap);
+        void loadCanvasMaps();
+      } catch (error) {
+        setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to create map'));
+      }
+    },
+    [handleOpenMap, loadCanvasMaps],
+  );
+
+  const handleDuplicateMapSubmit = useCallback(
+    async ({ name, sourceMap }: DuplicateMapDialogSubmit) => {
+      if (!enableSavedMaps) {
+        return;
+      }
+
+      setCanvasMapsError(null);
+
+      try {
+        const duplicatedMap = await duplicateCanvasMap(sourceMap.id, { name });
+        setDuplicateMapSource(null);
+        setCanvasMaps((maps) => upsertCanvasMap(maps, duplicatedMap));
+        handleOpenMap(duplicatedMap);
+        void loadCanvasMaps();
+      } catch (error) {
+        setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to duplicate map'));
+      }
+    },
+    [handleOpenMap, loadCanvasMaps],
+  );
+
+  const handleDeleteMap = useCallback(
+    async (map: CanvasMap) => {
+      if (!enableSavedMaps || map.is_default) {
+        return;
+      }
+
+      if (!window.confirm(`Delete map "${map.name}"?`)) {
+        return;
+      }
+
+      setCanvasMapsError(null);
+
+      try {
+        await deleteCanvasMap(map.id);
+        setCanvasMaps((maps) => maps.filter((candidate) => candidate.id !== map.id));
+        if (selectedMapId === map.id) {
+          setSelectedMapId(null);
+          setSelectedMapName('Default');
+        }
+        void loadCanvasMaps();
+      } catch (error) {
+        setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to delete map'));
+      }
+    },
+    [loadCanvasMaps, selectedMapId],
+  );
 
   const mapsForHub = enableSavedMaps ? canvasMaps : [];
   const mapsLoadingForHub = enableSavedMaps ? canvasMapsLoading : false;
@@ -203,6 +321,22 @@ function App() {
         <div className={activeView === 'dashboard' ? 'h-full' : 'hidden'}>
           <Dashboard devices={canvasDevices} areas={areas} snapshot={snapshot} />
         </div>
+        {enableSavedMaps && (
+          <>
+            <CreateMapDialog
+              open={createMapSourceArea !== null}
+              sourceArea={createMapSourceArea}
+              onCreate={handleCreateMap}
+              onClose={() => setCreateMapSourceArea(null)}
+            />
+            <DuplicateMapDialog
+              open={duplicateMapSource !== null}
+              sourceMap={duplicateMapSource}
+              onDuplicate={handleDuplicateMapSubmit}
+              onClose={() => setDuplicateMapSource(null)}
+            />
+          </>
+        )}
       </div>
     </ThemeProvider>
   );

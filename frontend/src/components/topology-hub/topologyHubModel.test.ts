@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
-import type { SnapshotPayload } from '../../types/metrics';
+import type { DeviceRuntimeDTO, SnapshotPayload } from '../../types/metrics';
 import { buildTopologyHubModel } from './topologyHubModel';
 
 function mockArea(overrides: Partial<Area> = {}): Area {
@@ -82,6 +82,34 @@ function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
   };
 }
 
+function mockDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRuntimeDTO {
+  return {
+    device_id: 'device-1',
+    operational_status: 'up',
+    primary_health: 'up_fresh',
+    runtime_flags: [],
+    field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+    network_reachable: 'true',
+    snmp_reachable: 'true',
+    reachability: 'up',
+    health: 'healthy',
+    freshness: 'fresh',
+    primary_reason: 'ok',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    alert_status: 'normal',
+    firing_alert_count: 0,
+    last_collected_at: '2026-01-01T00:00:00Z',
+    last_polled_at: '2026-01-01T00:00:00Z',
+    expected_poll_interval_seconds: 30,
+    cpu_percent: 50,
+    mem_percent: 25,
+    temp_celsius: null,
+    uptime_secs: 86400,
+    ...overrides,
+  };
+}
+
 describe('buildTopologyHubModel', () => {
   it('uses runtime snapshot status for aggregate and area health', () => {
     const areas = [mockArea()];
@@ -91,12 +119,20 @@ describe('buildTopologyHubModel', () => {
     ];
     const links = [mockLink()];
     const maps = [mockMap()];
-    const snapshot = {
+    const snapshot: SnapshotPayload = {
       devices: {
-        'device-1': { status: 'down', alert_status: 'critical' },
+        'device-1': mockDeviceRuntime({
+          device_id: 'device-1',
+          operational_status: 'down',
+          primary_health: 'unreachable',
+          network_reachable: 'false',
+          reachability: 'hard_down',
+          health: 'critical',
+          alert_status: 'down',
+        }),
       },
       links: {},
-    } as unknown as SnapshotPayload;
+    };
 
     const model = buildTopologyHubModel({ areas, devices, links, snapshot, maps });
 
@@ -115,6 +151,75 @@ describe('buildTopologyHubModel', () => {
       healthLabel: 'Needs attention',
     });
     expect(model.maps).toBe(maps);
+  });
+
+  it.each([
+    ['warning health', { health: 'warning' } satisfies Partial<DeviceRuntimeDTO>],
+    [
+      'SNMP degraded primary health',
+      {
+        primary_health: 'snmp_degraded',
+        snmp_reachable: 'false',
+        health: 'unknown',
+      } satisfies Partial<DeviceRuntimeDTO>,
+    ],
+    [
+      'hard reachability failure',
+      {
+        primary_health: 'unreachable',
+        network_reachable: 'false',
+        reachability: 'hard_down',
+        health: 'healthy',
+      } satisfies Partial<DeviceRuntimeDTO>,
+    ],
+    [
+      'soft reachability failure',
+      {
+        reachability: 'soft_down',
+        snmp_reachable: 'false',
+        health: 'healthy',
+      } satisfies Partial<DeviceRuntimeDTO>,
+    ],
+    [
+      'probing operational status',
+      {
+        operational_status: 'probing',
+        primary_health: 'probing',
+        reachability: 'soft_down',
+        health: 'warning',
+      } satisfies Partial<DeviceRuntimeDTO>,
+    ],
+    [
+      'unknown operational status',
+      {
+        operational_status: 'unknown',
+        health: 'unknown',
+        freshness: 'awaiting_poll',
+        metrics_status: 'partial',
+      } satisfies Partial<DeviceRuntimeDTO>,
+    ],
+  ])('marks %s as needing attention using runtime visual semantics', (_label, runtimeOverrides) => {
+    const device = mockDevice({ id: 'device-1', hostname: 'router-1', status: 'up' });
+    const snapshot: SnapshotPayload = {
+      devices: {
+        'device-1': mockDeviceRuntime({ device_id: 'device-1', ...runtimeOverrides }),
+      },
+      links: {},
+    };
+
+    const model = buildTopologyHubModel({
+      areas: [mockArea()],
+      devices: [device],
+      links: [],
+      snapshot,
+      maps: [],
+    });
+
+    expect(model.aggregate.degradedDevices).toBe(1);
+    expect(model.aggregate.healthPercentage).toBe(0);
+    expect(model.areas[0].degradedDeviceCount).toBe(1);
+    expect(model.areas[0].healthLabel).toBe('Needs attention');
+    expect(model.attentionDevices).toEqual([device]);
   });
 
   it('falls back to persisted device status when runtime snapshot has no device status', () => {

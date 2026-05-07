@@ -1,5 +1,11 @@
-import type { Area, CanvasMap, Device, DeviceStatus, Link } from '../../types/api';
-import type { OperationalStatus, SnapshotPayload } from '../../types/metrics';
+import type { Area, CanvasMap, Device, Link } from '../../types/api';
+import type { SnapshotPayload } from '../../types/metrics';
+import {
+  type DeviceVisualStatus,
+  resolveDeviceMonitoringState,
+  resolveDeviceOperationalStatusState,
+  resolveDeviceVisualState,
+} from '../deviceVisualState';
 
 export interface TopologyHubAggregate {
   totalDevices: number;
@@ -33,35 +39,22 @@ export interface BuildTopologyHubModelInput {
   maps: CanvasMap[];
 }
 
-type RuntimeDeviceStatus = DeviceStatus | OperationalStatus;
-type RuntimeDeviceRecord = SnapshotPayload['devices'][string] & {
-  status?: RuntimeDeviceStatus;
-  operational_status?: OperationalStatus;
-  alert_status?: string;
-  health?: string;
-};
-
-function snapshotDeviceStatus(
-  device: Device,
-  snapshot: SnapshotPayload | null,
-): RuntimeDeviceStatus {
-  const runtimeDevice = snapshot?.devices?.[device.id] as RuntimeDeviceRecord | undefined;
-  return runtimeDevice?.status ?? runtimeDevice?.operational_status ?? device.status;
-}
+const attentionVisualStatuses = new Set<DeviceVisualStatus>([
+  'critical',
+  'degraded',
+  'down',
+  'probing',
+  'unknown',
+]);
 
 function isDeviceDegraded(device: Device, snapshot: SnapshotPayload | null): boolean {
-  const runtimeDevice = snapshot?.devices?.[device.id] as RuntimeDeviceRecord | undefined;
-  const runtimeStatus = snapshotDeviceStatus(device, snapshot);
-  const alertStatus = runtimeDevice?.alert_status as string | undefined;
-  const health = runtimeDevice?.health as string | undefined;
+  const runtimeDevice = snapshot?.devices?.[device.id];
+  const monitoringState = resolveDeviceMonitoringState(device);
+  const visualState = runtimeDevice
+    ? resolveDeviceVisualState(device, runtimeDevice, monitoringState)
+    : resolveDeviceOperationalStatusState(device, monitoringState);
 
-  return (
-    runtimeStatus === 'down' ||
-    alertStatus === 'down' ||
-    alertStatus === 'critical' ||
-    alertStatus === 'degraded' ||
-    health === 'critical'
-  );
+  return attentionVisualStatuses.has(visualState.dotStatus);
 }
 
 function healthPercentage(deviceCount: number, degradedDeviceCount: number): number {

@@ -7,12 +7,30 @@ import type { SnapshotPayload } from './types/metrics';
 
 const fetchAreasMock = vi.fn<() => Promise<Area[]>>();
 const fetchCanvasMapsMock = vi.fn<() => Promise<CanvasMap[]>>();
+const createCanvasMapMock =
+  vi.fn<
+    (payload: {
+      name: string;
+      description?: string;
+      source_area_id?: string | null;
+      filter?: CanvasMap['filter'];
+    }) => Promise<CanvasMap>
+  >();
+const duplicateCanvasMapMock =
+  vi.fn<(id: string, payload: { name: string }) => Promise<CanvasMap>>();
+const deleteCanvasMapMock = vi.fn<(id: string) => Promise<void>>();
 const useWebSocketMock = vi.fn();
 const watermarkPropsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('./api/client', () => ({
   fetchAreas: () => fetchAreasMock(),
   fetchCanvasMaps: () => fetchCanvasMapsMock(),
+  createCanvasMap: (...args: Parameters<typeof createCanvasMapMock>) =>
+    createCanvasMapMock(...args),
+  duplicateCanvasMap: (...args: Parameters<typeof duplicateCanvasMapMock>) =>
+    duplicateCanvasMapMock(...args),
+  deleteCanvasMap: (...args: Parameters<typeof deleteCanvasMapMock>) =>
+    deleteCanvasMapMock(...args),
 }));
 
 vi.mock('./hooks/useWebSocket', () => ({
@@ -161,14 +179,37 @@ function mockArea(overrides: Partial<Area> = {}): Area {
   };
 }
 
+function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
+  return {
+    id: 'map-1',
+    name: 'Backbone',
+    description: '',
+    source_area_id: 'area-1',
+    filter: { area_id: 'area-1' },
+    is_default: false,
+    device_count: 1,
+    link_count: 1,
+    position_count: 1,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-02T00:00:00Z',
+    ...overrides,
+  };
+}
+
 describe('App', () => {
   beforeEach(() => {
     fetchAreasMock.mockReset();
     fetchCanvasMapsMock.mockReset();
+    createCanvasMapMock.mockReset();
+    duplicateCanvasMapMock.mockReset();
+    deleteCanvasMapMock.mockReset();
     useWebSocketMock.mockReset();
     watermarkPropsMock.mockClear();
     fetchAreasMock.mockResolvedValue([mockArea()]);
     fetchCanvasMapsMock.mockResolvedValue([]);
+    createCanvasMapMock.mockResolvedValue(mockMap());
+    duplicateCanvasMapMock.mockResolvedValue(mockMap({ id: 'map-copy', name: 'Backbone Copy' }));
+    deleteCanvasMapMock.mockResolvedValue(undefined);
     useWebSocketMock.mockReturnValue({
       snapshot: {
         devices: { 'dev-1': { status: 'down' } },
@@ -192,6 +233,10 @@ describe('App', () => {
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('maps:0');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('savedMapsEnabled:false');
     expect(fetchCanvasMapsMock).not.toHaveBeenCalled();
+    expect(createCanvasMapMock).not.toHaveBeenCalled();
+    expect(duplicateCanvasMapMock).not.toHaveBeenCalled();
+    expect(deleteCanvasMapMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     screen.getByRole('button', { name: 'Dashboard' }).click();
     expect(await screen.findByTestId('dashboard')).toHaveTextContent('devices:1');
