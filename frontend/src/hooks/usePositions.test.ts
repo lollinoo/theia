@@ -25,7 +25,7 @@ describe('usePositions diagnostics', () => {
       ok: true,
       json: vi.fn().mockResolvedValue({}),
     } as unknown as Response);
-    const { result } = renderHook(() => usePositions());
+    const { result } = renderHook(() => usePositions(null));
 
     await act(async () => {
       await result.current.savePositions([{ device_id: 'dev-1', x: 10, y: 20, pinned: true }]);
@@ -57,7 +57,7 @@ describe('usePositions diagnostics', () => {
       json: vi.fn().mockResolvedValue({ error: 'database unavailable' }),
     } as unknown as Response);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const { result } = renderHook(() => usePositions());
+    const { result } = renderHook(() => usePositions(null));
 
     await act(async () => {
       await result.current.savePositions([{ device_id: 'dev-1', x: 10, y: 20, pinned: true }]);
@@ -74,4 +74,71 @@ describe('usePositions diagnostics', () => {
       'positions.save.failed',
     );
   });
+
+  it('uses the default positions endpoint when mapId is null', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const { result } = renderHook(() => usePositions(null));
+
+    await act(async () => {
+      await result.current.fetchPositions();
+    });
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/positions', expect.any(Object));
+  });
+
+  it('uses the map positions endpoint when mapId is set', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    await act(async () => {
+      await result.current.fetchPositions();
+    });
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/canvas/maps/map-1/positions', expect.any(Object));
+  });
+
+  it('encodes map IDs in positions endpoints', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const { result } = renderHook(() => usePositions('floor 1/a'));
+
+    await act(async () => {
+      await result.current.fetchPositions();
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/floor%201%2Fa/positions',
+      expect.any(Object),
+    );
+  });
+
+  it('flushes pending saves to the previous endpoint when mapId changes', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const { result, rerender } = renderHook(({ mapId }) => usePositions(mapId), {
+      initialProps: { mapId: 'map-a' as string | null },
+    });
+
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'device-1', x: 1, y: 2, pinned: true },
+      ]);
+    });
+
+    rerender({ mapId: 'map-b' });
+
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map-a/positions',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
 });
+
+function jsonResponse(payload: unknown): Response {
+  return {
+    ok: true,
+    json: vi.fn().mockResolvedValue(payload),
+  } as unknown as Response;
+}

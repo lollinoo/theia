@@ -18,6 +18,17 @@ export interface PositionPayload {
   pinned: boolean;
 }
 
+interface PendingPositionsSave {
+  endpoint: string;
+  positions: PositionPayload[];
+}
+
+function positionsEndpoint(mapId: string | null): string {
+  return mapId === null
+    ? '/api/v1/positions'
+    : `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/positions`;
+}
+
 function toPositionMap(
   positions: DevicePosition[] | PositionPayload[],
 ): Map<string, PositionState> {
@@ -33,17 +44,18 @@ function toPositionMap(
   );
 }
 
-export function usePositions() {
+export function usePositions(mapId: string | null) {
   const [positions, setPositions] = useState<Map<string, PositionState>>(new Map());
   const [loading, setLoading] = useState(false);
   const timerRef = useRef<number | null>(null);
-  const pendingRef = useRef<PositionPayload[] | null>(null);
+  const pendingRef = useRef<PendingPositionsSave | null>(null);
   const pendingSaveCountRef = useRef(0);
+  const endpointRef = useRef(positionsEndpoint(mapId));
 
   const fetchPositions = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/v1/positions', {
+      const response = await fetch(endpointRef.current, {
         headers: {
           Accept: 'application/json',
         },
@@ -70,7 +82,7 @@ export function usePositions() {
     }
   }, []);
 
-  const commitPositions = useCallback(async (nextPositions: PositionPayload[]) => {
+  const commitPositionsToEndpoint = useCallback(async (endpoint: string, nextPositions: PositionPayload[]) => {
     const startedAt = performance.now();
     recordCanvasDiagnosticEvent({
       level: 'debug',
@@ -82,7 +94,7 @@ export function usePositions() {
       },
     });
 
-    const response = await fetch('/api/v1/positions', {
+    const response = await fetch(endpoint, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -124,10 +136,56 @@ export function usePositions() {
     });
   }, []);
 
+  const handleSaveFailure = useCallback((error: unknown, positionCount: number) => {
+    pendingSaveCountRef.current = 0;
+    const saveError = error instanceof Error ? error.message : 'Failed to save positions';
+    updateCanvasDiagnosticsState({
+      positions: {
+        pendingSaveCount: 0,
+        lastSaveAt: new Date().toISOString(),
+        lastSaveStatus: 'error',
+        lastSaveError: saveError,
+      },
+    });
+    recordCanvasDiagnosticEvent({
+      level: 'error',
+      source: 'positions',
+      event: 'positions.save.failed',
+      message: 'Canvas position save failed',
+      metadata: {
+        error: saveError,
+        positionCount,
+      },
+    });
+    console.error(error);
+  }, []);
+
+  useEffect(() => {
+    const nextEndpoint = positionsEndpoint(mapId);
+    if (endpointRef.current === nextEndpoint) {
+      return;
+    }
+
+    const pendingPayload = pendingRef.current;
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    pendingRef.current = null;
+    endpointRef.current = nextEndpoint;
+    setPositions(new Map());
+
+    if (pendingPayload !== null) {
+      void commitPositionsToEndpoint(pendingPayload.endpoint, pendingPayload.positions).catch((error) => {
+        handleSaveFailure(error, pendingPayload.positions.length);
+      });
+    }
+  }, [commitPositionsToEndpoint, handleSaveFailure, mapId]);
+
   const savePositions = useCallback(
     async (nextPositions: PositionPayload[]) => {
       setPositions(toPositionMap(nextPositions));
-      pendingRef.current = nextPositions;
+      pendingRef.current = { endpoint: endpointRef.current, positions: nextPositions };
       pendingSaveCountRef.current = 1;
       updateCanvasDiagnosticsState({
         positions: {
@@ -153,37 +211,18 @@ export function usePositions() {
       timerRef.current = window.setTimeout(() => {
         const payload = pendingRef.current;
         pendingRef.current = null;
+        timerRef.current = null;
 
         if (!payload) {
           return;
         }
 
-        void commitPositions(payload).catch((error) => {
-          pendingSaveCountRef.current = 0;
-          const saveError = error instanceof Error ? error.message : 'Failed to save positions';
-          updateCanvasDiagnosticsState({
-            positions: {
-              pendingSaveCount: 0,
-              lastSaveAt: new Date().toISOString(),
-              lastSaveStatus: 'error',
-              lastSaveError: saveError,
-            },
-          });
-          recordCanvasDiagnosticEvent({
-            level: 'error',
-            source: 'positions',
-            event: 'positions.save.failed',
-            message: 'Canvas position save failed',
-            metadata: {
-              error: saveError,
-              positionCount: payload.length,
-            },
-          });
-          console.error(error);
+        void commitPositionsToEndpoint(payload.endpoint, payload.positions).catch((error) => {
+          handleSaveFailure(error, payload.positions.length);
         });
       }, 1000);
     },
-    [commitPositions],
+    [commitPositionsToEndpoint, handleSaveFailure],
   );
 
   useEffect(() => {

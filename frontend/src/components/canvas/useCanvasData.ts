@@ -504,7 +504,7 @@ export function useCanvasData({
   const currentNodePositionsRef = useRef<Map<string, PositionState>>(new Map());
   const grafanaUrlRef = useRef<string>('');
   const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
-  const { fetchPositions, savePositions } = usePositions();
+  const { fetchPositions, savePositions } = usePositions(null);
 
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
     const runtimeState = buildRuntimeState({
