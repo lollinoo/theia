@@ -2,15 +2,17 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import type { Area, Device, Link } from './types/api';
+import type { Area, CanvasMap, Device, Link } from './types/api';
 import type { SnapshotPayload } from './types/metrics';
 
 const fetchAreasMock = vi.fn<() => Promise<Area[]>>();
+const fetchCanvasMapsMock = vi.fn<() => Promise<CanvasMap[]>>();
 const useWebSocketMock = vi.fn();
 const watermarkPropsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('./api/client', () => ({
   fetchAreas: () => fetchAreasMock(),
+  fetchCanvasMaps: () => fetchCanvasMapsMock(),
 }));
 
 vi.mock('./hooks/useWebSocket', () => ({
@@ -107,16 +109,29 @@ vi.mock('./components/Canvas', () => ({
   },
 }));
 
-vi.mock('./components/AreaHub', () => ({
+vi.mock('./components/topology-hub/TopologyHub', () => ({
   default: ({
     devices,
     links,
     snapshot,
-  }: { devices: Device[]; links: Link[]; snapshot?: SnapshotPayload | null }) => (
-    <div data-testid="area-hub">
+    maps,
+    mapsLoading,
+    mapsError,
+  }: {
+    devices: Device[];
+    links: Link[];
+    snapshot: SnapshotPayload | null;
+    maps: CanvasMap[];
+    mapsLoading: boolean;
+    mapsError: string | null;
+  }) => (
+    <div data-testid="topology-hub">
       <span>{`devices:${devices.length}`}</span>
       <span>{`links:${links.length}`}</span>
-      <span>{`snapshot:${String(snapshot)}`}</span>
+      <span>{`snapshot:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
+      <span>{`maps:${maps.length}`}</span>
+      <span>{`loading:${String(mapsLoading)}`}</span>
+      <span>{`error:${mapsError ?? 'none'}`}</span>
     </div>
   ),
 }));
@@ -125,7 +140,7 @@ vi.mock('./components/Dashboard', () => ({
   Dashboard: ({ devices, snapshot }: { devices: Device[]; snapshot: SnapshotPayload | null }) => (
     <div data-testid="dashboard">
       <span>{`devices:${devices.length}`}</span>
-      <span>{`status:${snapshot?.device_statuses['dev-1'] ?? 'none'}`}</span>
+      <span>{`status:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
     </div>
   ),
 }));
@@ -146,30 +161,33 @@ function mockArea(overrides: Partial<Area> = {}): Area {
 describe('App', () => {
   beforeEach(() => {
     fetchAreasMock.mockReset();
+    fetchCanvasMapsMock.mockReset();
     useWebSocketMock.mockReset();
     watermarkPropsMock.mockClear();
     fetchAreasMock.mockResolvedValue([mockArea()]);
+    fetchCanvasMapsMock.mockResolvedValue([]);
     useWebSocketMock.mockReturnValue({
       snapshot: {
-        device_metrics: {},
-        link_metrics: {},
-        device_statuses: { 'dev-1': 'down' },
-      } satisfies SnapshotPayload,
+        devices: { 'dev-1': { status: 'down' } },
+        links: {},
+      } as unknown as SnapshotPayload,
       alerts: [],
       reconnecting: false,
       prometheusStatus: null,
     });
   });
 
-  it('wires canvas devices and links into AreaHub and snapshot into Dashboard only', async () => {
+  it('wires canvas devices links and snapshot into TopologyHub and Dashboard', async () => {
     render(<App />);
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
 
     screen.getByRole('button', { name: 'Hub' }).click();
-    expect(await screen.findByTestId('area-hub')).toHaveTextContent('devices:1');
-    expect(screen.getByTestId('area-hub')).toHaveTextContent('links:1');
-    expect(screen.getByTestId('area-hub')).toHaveTextContent('snapshot:undefined');
+    expect(await screen.findByTestId('topology-hub')).toHaveTextContent('devices:1');
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('links:1');
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('snapshot:down');
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('maps:0');
+    expect(fetchCanvasMapsMock).not.toHaveBeenCalled();
 
     screen.getByRole('button', { name: 'Dashboard' }).click();
     expect(await screen.findByTestId('dashboard')).toHaveTextContent('devices:1');

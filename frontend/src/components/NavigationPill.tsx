@@ -56,8 +56,8 @@ function NavigationPill({
             ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
             : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
         }`}
-        aria-label="Area Hub"
-        title="Area Hub"
+        aria-label="Topology Hub"
+        title="Topology Hub"
       >
         <MaterialIcon name="hub" size={20} />
       </button>

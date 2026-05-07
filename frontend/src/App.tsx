@@ -1,28 +1,37 @@
 import { ReactFlowProvider } from '@xyflow/react';
 import { useCallback, useEffect, useState } from 'react';
-import { fetchAreas } from './api/client';
-import AreaHub from './components/AreaHub';
+import { fetchAreas, fetchCanvasMaps } from './api/client';
 import Canvas from './components/Canvas';
 import { Dashboard } from './components/Dashboard';
 import NavigationPill from './components/NavigationPill';
+import TopologyHub from './components/topology-hub/TopologyHub';
 import { Watermark } from './components/Watermark';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useWebSocket } from './hooks/useWebSocket';
-import type { Area, Device, Link } from './types/api';
+import type { Area, CanvasMap, Device, Link } from './types/api';
 
 export type ActiveView = 'hub' | 'canvas' | 'dashboard';
 
 const runtimeUpdatePauseIdleDelayMs = 1500;
+const enableSavedMaps = false;
 
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>('canvas');
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
+  const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
+  const [selectedMapName, setSelectedMapName] = useState('Default');
   const [detailDeviceId, setDetailDeviceId] = useState<string | null>(null);
   const [canvasDevices, setCanvasDevices] = useState<Device[]>([]);
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
+  const [canvasMaps, setCanvasMaps] = useState<CanvasMap[]>([]);
+  const [canvasMapsLoading, setCanvasMapsLoading] = useState(false);
+  const [canvasMapsError, setCanvasMapsError] = useState<string | null>(null);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
+
+  void selectedMapId;
+  void selectedMapName;
 
   useEffect(() => {
     if (canvasInteractionActive) {
@@ -58,14 +67,32 @@ function App() {
       });
   }, []);
 
-  // Re-fetch areas when switching to hub view (pick up changes from settings)
+  const loadCanvasMaps = useCallback(async () => {
+    if (!enableSavedMaps) {
+      return;
+    }
+
+    setCanvasMapsLoading(true);
+    setCanvasMapsError(null);
+
+    try {
+      setCanvasMaps(await fetchCanvasMaps());
+    } catch (error) {
+      setCanvasMapsError(error instanceof Error ? error.message : 'Failed to load maps');
+    } finally {
+      setCanvasMapsLoading(false);
+    }
+  }, []);
+
+  // Re-fetch areas/maps when switching to hub view (pick up changes from settings)
   useEffect(() => {
     if (activeView === 'hub') {
       fetchAreas()
         .then(setAreas)
         .catch(() => {});
+      void loadCanvasMaps();
     }
-  }, [activeView]);
+  }, [activeView, loadCanvasMaps]);
 
   const handleCanvasDevicesChange = useCallback((devices: Device[]) => {
     setCanvasDevices(devices);
@@ -79,7 +106,23 @@ function App() {
     setActiveView(view);
   }, []);
 
+  const handleOpenGlobal = useCallback(() => {
+    setSelectedMapId(null);
+    setSelectedMapName('Default');
+    setSelectedAreaId(null);
+    setActiveView('canvas');
+  }, []);
+
+  const handleOpenMap = useCallback((map: CanvasMap) => {
+    setSelectedMapId(map.is_default ? null : map.id);
+    setSelectedMapName(map.name);
+    setSelectedAreaId(null);
+    setActiveView('canvas');
+  }, []);
+
   const handleAreaSelect = useCallback((areaId: string | null) => {
+    setSelectedMapId(null);
+    setSelectedMapName('Default');
     setSelectedAreaId(areaId);
     setActiveView('canvas');
   }, []);
@@ -89,6 +132,22 @@ function App() {
       .then(setAreas)
       .catch(() => {});
   }, []);
+
+  const handleCreateMapFromArea = useCallback((area: Area) => {
+    void area;
+  }, []);
+
+  const handleDuplicateMap = useCallback((map: CanvasMap) => {
+    void map;
+  }, []);
+
+  const handleDeleteMap = useCallback((map: CanvasMap) => {
+    void map;
+  }, []);
+
+  const mapsForHub = enableSavedMaps ? canvasMaps : [];
+  const mapsLoadingForHub = enableSavedMaps ? canvasMapsLoading : false;
+  const mapsErrorForHub = enableSavedMaps ? canvasMapsError : null;
 
   return (
     <ThemeProvider>
@@ -102,11 +161,20 @@ function App() {
         />
         {/* All views stay mounted; inactive ones hidden via CSS */}
         <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
-          <AreaHub
+          <TopologyHub
             devices={canvasDevices}
             areas={areas}
             links={canvasLinks}
-            onAreaSelect={handleAreaSelect}
+            snapshot={snapshot}
+            maps={mapsForHub}
+            mapsLoading={mapsLoadingForHub}
+            mapsError={mapsErrorForHub}
+            onOpenGlobal={handleOpenGlobal}
+            onOpenArea={(areaId) => handleAreaSelect(areaId)}
+            onOpenMap={handleOpenMap}
+            onCreateMapFromArea={handleCreateMapFromArea}
+            onDuplicateMap={handleDuplicateMap}
+            onDeleteMap={handleDeleteMap}
             onOpenSettings={() => {
               setActiveView('canvas');
             }}

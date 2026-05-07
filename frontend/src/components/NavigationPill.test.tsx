@@ -122,7 +122,7 @@ describe('NavigationPill', () => {
   it('clicking Hub icon calls onViewChange hub', () => {
     const onViewChange = vi.fn();
     render(<NavigationPill {...defaultProps} activeView="dashboard" onViewChange={onViewChange} />);
-    const hubButton = screen.getByLabelText('Area Hub');
+    const hubButton = screen.getByLabelText('Topology Hub');
     fireEvent.click(hubButton);
     expect(onViewChange).toHaveBeenCalledWith('hub');
   });
@@ -141,7 +141,7 @@ describe('NavigationPill', () => {
     );
 
     expect(screen.getByText('THEIA')).toBeInTheDocument();
-    expect(screen.getByLabelText('Area Hub')).toBeInTheDocument();
+    expect(screen.getByLabelText('Topology Hub')).toBeInTheDocument();
     expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Global');
     expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Backbone');
     expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Distribution');
