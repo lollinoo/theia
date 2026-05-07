@@ -3,8 +3,10 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -71,23 +73,21 @@ func ValidateCanvasMapName(name string) error {
 	if trimmed == "" {
 		return fmt.Errorf("map name is required")
 	}
-	if len(trimmed) > CanvasMapNameMaxLength {
+	if utf8.RuneCountInString(name) > CanvasMapNameMaxLength {
 		return fmt.Errorf("map name must be %d characters or fewer", CanvasMapNameMaxLength)
 	}
 	return nil
 }
 
 func ValidateCanvasMapDescription(description string) error {
-	if len(description) > CanvasMapDescriptionMaxLength {
+	if utf8.RuneCountInString(description) > CanvasMapDescriptionMaxLength {
 		return fmt.Errorf("map description must be %d characters or fewer", CanvasMapDescriptionMaxLength)
 	}
 	return nil
 }
 
 func CanonicalCanvasMapFilterJSON(filter CanvasMapFilter) (string, error) {
-	if filter.DeviceIDs == nil {
-		filter.DeviceIDs = []uuid.UUID{}
-	}
+	filter.DeviceIDs = canonicalCanvasMapDeviceIDs(filter.DeviceIDs)
 	if filter.Tags == nil {
 		filter.Tags = map[string]string{}
 	}
@@ -96,6 +96,25 @@ func CanonicalCanvasMapFilterJSON(filter CanvasMapFilter) (string, error) {
 		return "", fmt.Errorf("encoding canvas map filter: %w", err)
 	}
 	return string(payload), nil
+}
+
+func canonicalCanvasMapDeviceIDs(deviceIDs []uuid.UUID) []uuid.UUID {
+	if len(deviceIDs) == 0 {
+		return []uuid.UUID{}
+	}
+
+	canonical := append([]uuid.UUID(nil), deviceIDs...)
+	sort.Slice(canonical, func(i, j int) bool {
+		return canonical[i].String() < canonical[j].String()
+	})
+
+	deduplicated := canonical[:0]
+	for _, deviceID := range canonical {
+		if len(deduplicated) == 0 || deduplicated[len(deduplicated)-1] != deviceID {
+			deduplicated = append(deduplicated, deviceID)
+		}
+	}
+	return deduplicated
 }
 
 func ParseCanvasMapFilter(raw string) (CanvasMapFilter, error) {
