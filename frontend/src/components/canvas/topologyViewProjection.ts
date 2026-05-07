@@ -22,43 +22,23 @@ export function projectTopologyView(input: {
   const { devices, links } = input;
   const filter = input.filter ?? {};
   const hasDeviceIds = filter.deviceIds !== undefined && filter.deviceIds.length > 0;
-  const hasAreaId = filter.areaId !== undefined && filter.areaId !== null;
-  const hasTagFilter =
-    filter.tagFilter !== undefined && Object.keys(filter.tagFilter).length > 0;
-
-  if (!hasDeviceIds && !hasAreaId && !hasTagFilter) {
-    return { filteredDevices: devices, filteredLinks: links, ghostDevices: [] };
-  }
+  const areaId = filter.areaId ?? null;
+  const hasAreaId = areaId !== null;
+  const tagFilter = filter.tagFilter ?? {};
+  const selectedDeviceIds = new Set(filter.deviceIds ?? []);
+  const knownIds = new Set(devices.map((device) => device.id));
 
   const baseIds = new Set<string>();
-  if (hasDeviceIds) {
-    for (const deviceId of filter.deviceIds ?? []) {
-      baseIds.add(deviceId);
+  for (const device of devices) {
+    let baseDevice = true;
+    if (hasDeviceIds) {
+      baseDevice = selectedDeviceIds.has(device.id);
+    } else if (hasAreaId) {
+      baseDevice = device.area_ids?.includes(areaId) === true;
     }
-  } else if (hasAreaId) {
-    for (const device of devices) {
-      if (device.area_ids?.includes(filter.areaId as string)) {
-        baseIds.add(device.id);
-      }
-    }
-  } else {
-    for (const device of devices) {
+
+    if (baseDevice && deviceMatchesTags(device, tagFilter)) {
       baseIds.add(device.id);
-    }
-  }
-
-  if (hasTagFilter) {
-    for (const device of devices) {
-      if (!baseIds.has(device.id)) {
-        continue;
-      }
-
-      const matches = Object.entries(filter.tagFilter ?? {}).every(
-        ([key, value]) => device.tags?.[key] === value,
-      );
-      if (!matches) {
-        baseIds.delete(device.id);
-      }
     }
   }
 
@@ -67,6 +47,10 @@ export function projectTopologyView(input: {
   const includeGhostDevices = filter.includeGhostDevices === true;
   const ghostIds = new Set<string>();
   const filteredLinks = links.filter((link) => {
+    if (!knownIds.has(link.source_device_id) || !knownIds.has(link.target_device_id)) {
+      return false;
+    }
+
     const sourceInBase = baseIds.has(link.source_device_id);
     const targetInBase = baseIds.has(link.target_device_id);
     const include = includeCrossAreaLinks
@@ -88,6 +72,22 @@ export function projectTopologyView(input: {
   return {
     filteredDevices,
     filteredLinks,
-    ghostDevices: devices.filter((device) => ghostIds.has(device.id)),
+    ghostDevices: devices.filter((device) => !baseIds.has(device.id) && ghostIds.has(device.id)),
   };
+}
+
+function deviceMatchesTags(device: Device, tagFilter: Record<string, string>): boolean {
+  for (const [key, expected] of Object.entries(tagFilter)) {
+    const tags = device.tags;
+    if (
+      tags === undefined ||
+      tags === null ||
+      !Object.prototype.hasOwnProperty.call(tags, key) ||
+      tags[key] !== expected
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }

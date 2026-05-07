@@ -82,3 +82,24 @@
 - Observed error: the new regression test expected the node position to update from `{x: 10, y: 20}` to the restored backend value `{x: 110.5, y: 220.25}`, but the canvas kept `{x: 10, y: 20}` after `backend-reconnected`.
 - Root cause: `buildTopologyNodes` prefers current in-memory positions over freshly fetched persisted positions, so a restore with the same topology can leave pre-restore coordinates visible.
 - Mitigation: teach backend reconnect topology refreshes to treat fetched persisted positions as authoritative over stale in-memory positions.
+
+### 2026-05-07 - Intentional TDD RED For Position Map Races
+
+- Failing command: `npm --prefix frontend test -- --run src/hooks/usePositions.test.ts`
+- Observed error: the new regression tests failed because a stale map A fetch returned and applied old positions after switching to map B, and older map-change save completions changed diagnostics from a newer pending save to success/error with `pendingSaveCount: 0`.
+- Root cause: `usePositions` does not token fetches or save completions by active endpoint/request order.
+- Mitigation: add endpoint-aware fetch sequencing and save tokens so stale completions do not mutate active state or diagnostics.
+
+### 2026-05-07 - Intentional TDD RED For Topology Projection Unknown Endpoints
+
+- Failing command: `npm --prefix frontend test -- --run src/components/canvas/topologyViewProjection.test.ts`
+- Observed error: the new regression tests failed because links referencing unknown explicit or cross-area device IDs were included in the frontend projection.
+- Root cause: `projectTopologyView` seeds base IDs directly from filter IDs and does not verify both link endpoints are present in the input devices.
+- Mitigation: build base IDs only by iterating known input devices and skip links unless both endpoints are known.
+
+### 2026-05-07 - Changed-File Biome Formatting Check
+
+- Failing command: `npm exec -- biome check src/hooks/usePositions.ts src/hooks/usePositions.test.ts src/components/canvas/topologyViewProjection.ts src/components/canvas/topologyViewProjection.test.ts`
+- Observed error: Biome reported formatter-only differences in the touched hook and projection files.
+- Root cause: manual edits did not match the repository formatter output.
+- Mitigation: run Biome `check --write` on the changed frontend files, then rerun verification.
