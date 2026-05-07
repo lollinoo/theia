@@ -254,6 +254,19 @@ function toPositionMap(positions: Iterable<DevicePosition>): Map<string, Positio
   );
 }
 
+function nodePositionsToPositionMap(nodes: DeviceNode[]): Map<string, PositionState> {
+  return new Map(
+    nodes.map((node) => [
+      node.id,
+      {
+        x: node.position.x,
+        y: node.position.y,
+        pinned: node.data.pinned ?? false,
+      },
+    ]),
+  );
+}
+
 function isCanvasTopologyUnsupported(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('status' in error)) {
     return false;
@@ -517,6 +530,7 @@ export function useCanvasData({
   const devicesRef = useRef<Device[]>([]);
   const topologyLinksRef = useRef<Link[]>([]);
   const nodesRef = useRef<DeviceNode[]>(nodes);
+  const nodesOwnerMapKeyRef = useRef<string>(mapKey);
   const lastTopologyIdentityByMapRef = useRef<Map<string, string | null>>(new Map());
   const lastCanvasTopologyEtagByMapRef = useRef<Map<string, string | null>>(new Map());
   const lastUsablePositionStateByMapRef = useRef<Map<string, string>>(new Map());
@@ -560,17 +574,8 @@ export function useCanvasData({
   topologyLinksRef.current = topologyLinks;
   nodesRef.current = nodes;
   currentNodePositionsByMapRef.current.set(
-    mapKey,
-    new Map(
-      nodes.map((node) => [
-        node.id,
-        {
-          x: node.position.x,
-          y: node.position.y,
-          pinned: node.data.pinned ?? false,
-        },
-      ]),
-    ),
+    nodesOwnerMapKeyRef.current,
+    nodePositionsToPositionMap(nodes),
   );
 
   // Propagate device state changes to parent (for Dashboard view)
@@ -776,6 +781,11 @@ export function useCanvasData({
               placementDeviceIds: new Set(),
               alerts: alertsRef.current,
             });
+            nodesOwnerMapKeyRef.current = mapKey;
+            currentNodePositionsByMapRef.current.set(
+              mapKey,
+              nodePositionsToPositionMap(nextNodes),
+            );
             setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
             setEdges(nextEdges);
             lastAppliedRuntimeSnapshotRef.current = snapshotRef.current;
@@ -902,6 +912,11 @@ export function useCanvasData({
           // sometimes causing all canvas nodes to vanish after a device delete.
           setDevices(fetchedDevices);
           setTopologyLinks(fetchedLinks);
+          nodesOwnerMapKeyRef.current = mapKey;
+          currentNodePositionsByMapRef.current.set(
+            mapKey,
+            nodePositionsToPositionMap(composedNodes),
+          );
           setNodes((currentNodes) => {
             return mergeNodePresentationState(composedNodes, currentNodes);
           });
@@ -1065,26 +1080,20 @@ export function useCanvasData({
 
       const devicesById = new Map(devicesRef.current.map((device) => [device.id, device]));
       const links = topologyLinksRef.current;
+      const ownerMapKey = nodesOwnerMapKeyRef.current;
 
       setNodes(nextNodes);
       currentNodePositionsByMapRef.current.set(
-        mapKey,
-        new Map(
-          nextNodes.map((node) => [
-            node.id,
-            {
-              x: node.position.x,
-              y: node.position.y,
-              pinned: node.data.pinned ?? false,
-            },
-          ]),
-        ),
+        ownerMapKey,
+        nodePositionsToPositionMap(nextNodes),
       );
       setEdges((currentEdges) => {
         const existingEdgeData = new Map(currentEdges.map((edge) => [edge.id, edge.data ?? {}]));
         return buildTopologyEdges(links, devicesById, nextNodes, existingEdgeData, openEdgeMenu);
       });
-      void savePositions(buildPositionPayload(nextNodes));
+      if (ownerMapKey === mapKey) {
+        void savePositions(buildPositionPayload(nextNodes));
+      }
     },
     [mapKey, openEdgeMenu, savePositions, setEdges, setNodes],
   );

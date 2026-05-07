@@ -417,6 +417,68 @@ describe('useCanvasData', () => {
     expect(fetchCanvasMapTopology).toHaveBeenNthCalledWith(2, 'map-1', '"map-etag"');
   });
 
+  it('keeps current node positions owned by their rendered map during map switches', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        positions: {
+          'dev-1': {
+            device_id: 'dev-1',
+            x: 10,
+            y: 20,
+            pinned: true,
+          },
+        },
+      }),
+    );
+
+    const { result, rerender } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.nodes[0].position).toEqual({ x: 10, y: 20 });
+
+    positionMocks.savePositions.mockClear();
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(
+      {
+        ...canvasTopologyOkResponse({
+          devices: [mockDevice()],
+          topology_version: 'topo-map-positions',
+          positions: {
+            'dev-1': {
+              device_id: 'dev-1',
+              x: 300,
+              y: 400,
+              pinned: true,
+            },
+          },
+        }),
+        etag: '"map-position-etag"',
+      },
+    );
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: 'map-1',
+      currentMapName: 'Core Map',
+    });
+
+    expect(result.current.nodes[0].position).toEqual({ x: 10, y: 20 });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('map-1', undefined);
+    expect(result.current.nodes).toHaveLength(1);
+    expect(result.current.nodes[0].position).toEqual({ x: 300, y: 400 });
+    expect(positionMocks.savePositions).not.toHaveBeenCalled();
+  });
+
   it('records topology diagnostics with map metadata', async () => {
     vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
 
