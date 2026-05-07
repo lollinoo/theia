@@ -132,6 +132,11 @@ func (r *CanvasMapRepo) Update(id uuid.UUID, input domain.CanvasMapUpdate) (doma
 		description = *input.Description
 	}
 
+	sourceAreaID := current.SourceAreaID
+	if input.SourceAreaIDSet {
+		sourceAreaID = input.SourceAreaID
+	}
+
 	filterJSON := current.FilterJSON
 	if input.Filter != nil {
 		filterJSON, err = domain.CanonicalCanvasMapFilterJSON(*input.Filter)
@@ -142,10 +147,11 @@ func (r *CanvasMapRepo) Update(id uuid.UUID, input domain.CanvasMapUpdate) (doma
 
 	result, err := r.db.Exec(
 		`UPDATE canvas_maps
-		 SET name = ?, description = ?, filter_json = ?, updated_at = ?
+		 SET name = ?, description = ?, source_area_id = ?, filter_json = ?, updated_at = ?
 		 WHERE id = ?`,
 		name,
 		description,
+		nullableUUIDString(sourceAreaID),
 		filterJSON,
 		time.Now().UTC(),
 		id.String(),

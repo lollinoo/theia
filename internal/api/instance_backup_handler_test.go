@@ -452,6 +452,8 @@ func TestInstanceBackupRouterRestoreUsesRestoreSpecificBodyLimit(t *testing.T) {
 			nil,
 			nil,
 			nil,
+			nil,
+			nil,
 			svc,
 			func() {},
 			"",
@@ -772,6 +774,8 @@ func TestInstanceBackupRouterRejectsDeleteOnSubresources(t *testing.T) {
 		t.Fatalf("creating backup record: %v", err)
 	}
 	router := NewRouter(
+		nil,
+		nil,
 		nil,
 		nil,
 		nil,

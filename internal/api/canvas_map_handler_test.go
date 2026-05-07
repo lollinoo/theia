@@ -241,6 +241,101 @@ func TestCanvasMapHandlerRejectsUnknownSourceAreaOnCreateAndUpdate(t *testing.T)
 	}
 }
 
+func TestCanvasMapHandlerPatchSourceAreaPersistsAndAffectsProjection(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaA := seedCanvasMapTestArea(t, fixture, "Area A", "#2979FF")
+	areaB := seedCanvasMapTestArea(t, fixture, "Area B", "#FF6D00")
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-a", "10.65.0.1", []uuid.UUID{areaA})
+	deviceB := seedCanvasMapTestDevice(t, fixture, "router-b", "10.65.0.2", []uuid.UUID{areaB})
+	seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
+
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Area Scoped"})
+	rec := canvasMapRequest(t, fixture.router, http.MethodPatch, "/api/v1/canvas/maps/"+canvasMap.ID, map[string]any{
+		"source_area_id": areaA.String(),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH source_area_id: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	updated := decodeCanvasMapData(t, rec)
+	if updated.SourceAreaID == nil || *updated.SourceAreaID != areaA.String() {
+		t.Fatalf("PATCH response source_area_id = %#v, want %s", updated.SourceAreaID, areaA)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodPatch, "/api/v1/canvas/maps/"+canvasMap.ID, map[string]any{
+		"description": "renamed without source area",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH without source_area_id: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeCanvasMapData(t, rec)
+	if got.SourceAreaID == nil || *got.SourceAreaID != areaA.String() {
+		t.Fatalf("GET source_area_id = %#v, want %s", got.SourceAreaID, areaA)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET maps: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var listResp struct {
+		Data []testCanvasMapResponse `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, rec, &listResp)
+	listed, ok := findCanvasMapTestResponse(listResp.Data, canvasMap.ID)
+	if !ok {
+		t.Fatalf("map %s missing from list: %#v", canvasMap.ID, listResp.Data)
+	}
+	if listed.SourceAreaID == nil || *listed.SourceAreaID != areaA.String() {
+		t.Fatalf("listed source_area_id = %#v, want %s", listed.SourceAreaID, areaA)
+	}
+	if listed.DeviceCount != 1 || listed.LinkCount != 0 {
+		t.Fatalf("listed counts = devices:%d links:%d, want 1/0", listed.DeviceCount, listed.LinkCount)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if topology.Map == nil || topology.Map.SourceAreaID == nil || *topology.Map.SourceAreaID != areaA.String() {
+		t.Fatalf("topology map source_area_id = %#v", topology.Map)
+	}
+	if len(topology.Devices) != 1 || topology.Devices[0].ID != deviceA.ID.String() {
+		t.Fatalf("expected topology to include only %s, got %#v", deviceA.ID, topology.Devices)
+	}
+	if len(topology.Links) != 0 {
+		t.Fatalf("expected area-scoped topology links to be filtered, got %#v", topology.Links)
+	}
+}
+
+func TestCanvasMapHandlerSourceAreaUnexpectedLookupErrorReturns500(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	handler := NewCanvasMapHandler(
+		fixture.mapRepo,
+		fixture.mapPositionRepo,
+		fixture.positionRepo,
+		nil,
+		nil,
+		nil,
+		errorAreaRepo{err: errMock},
+		nil,
+	)
+
+	body := `{"name":"Broken Area Lookup","source_area_id":"` + uuid.New().String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/canvas/maps", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCanvasMapHandlerListComputesCountsFromProjection(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	deviceA := seedCanvasMapTestDevice(t, fixture, "router-a", "10.60.0.1", nil)
@@ -428,6 +523,20 @@ func seedCanvasMapTestDevice(t *testing.T, fixture canvasMapIntegrationRouter, h
 	return *device
 }
 
+func seedCanvasMapTestArea(t *testing.T, fixture canvasMapIntegrationRouter, name string, color string) uuid.UUID {
+	t.Helper()
+	area := &domain.Area{
+		ID:          uuid.New(),
+		Name:        name,
+		Description: name + " test area",
+		Color:       color,
+	}
+	if err := fixture.areaRepo.Create(area); err != nil {
+		t.Fatalf("seed area %s: %v", name, err)
+	}
+	return area.ID
+}
+
 func seedCanvasMapTestLink(t *testing.T, fixture canvasMapIntegrationRouter, sourceID uuid.UUID, targetID uuid.UUID) domain.Link {
 	t.Helper()
 	link := &domain.Link{
@@ -442,6 +551,15 @@ func seedCanvasMapTestLink(t *testing.T, fixture canvasMapIntegrationRouter, sou
 		t.Fatalf("seed link: %v", err)
 	}
 	return *link
+}
+
+func findCanvasMapTestResponse(maps []testCanvasMapResponse, id string) (testCanvasMapResponse, bool) {
+	for _, canvasMap := range maps {
+		if canvasMap.ID == id {
+			return canvasMap, true
+		}
+	}
+	return testCanvasMapResponse{}, false
 }
 
 func canvasMapRequest(t *testing.T, router http.Handler, method string, path string, body any) *httptest.ResponseRecorder {
@@ -486,4 +604,32 @@ func decodeCanvasMapTestResponse(t *testing.T, rec *httptest.ResponseRecorder, t
 	if err := json.NewDecoder(rec.Body).Decode(target); err != nil {
 		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
 	}
+}
+
+type errorAreaRepo struct {
+	err error
+}
+
+func (r errorAreaRepo) Create(area *domain.Area) error {
+	return r.err
+}
+
+func (r errorAreaRepo) GetByID(id uuid.UUID) (*domain.Area, error) {
+	return nil, r.err
+}
+
+func (r errorAreaRepo) GetAll() ([]domain.Area, error) {
+	return nil, r.err
+}
+
+func (r errorAreaRepo) GetAllWithDeviceCount() ([]domain.AreaWithCount, error) {
+	return nil, r.err
+}
+
+func (r errorAreaRepo) Update(area *domain.Area) error {
+	return r.err
+}
+
+func (r errorAreaRepo) Delete(id uuid.UUID) error {
+	return r.err
 }

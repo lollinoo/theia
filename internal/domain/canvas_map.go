@@ -47,9 +47,11 @@ type CanvasMapCreate struct {
 }
 
 type CanvasMapUpdate struct {
-	Name        *string
-	Description *string
-	Filter      *CanvasMapFilter
+	Name            *string
+	Description     *string
+	SourceAreaID    *uuid.UUID
+	SourceAreaIDSet bool
+	Filter          *CanvasMapFilter
 }
 
 type CanvasMapRepository interface {

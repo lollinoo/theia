@@ -185,15 +185,19 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.SourceAreaID != nil {
-		if _, ok := h.validateSourceAreaID(w, req.SourceAreaID); !ok {
+		sourceAreaID, ok := h.validateSourceAreaID(w, req.SourceAreaID)
+		if !ok {
 			return
 		}
+		canvasMap.SourceAreaID = sourceAreaID
 	}
 
 	updated, err := h.mapRepo.Update(canvasMap.ID, domain.CanvasMapUpdate{
-		Name:        req.Name,
-		Description: req.Description,
-		Filter:      req.Filter,
+		Name:            req.Name,
+		Description:     req.Description,
+		SourceAreaID:    canvasMap.SourceAreaID,
+		SourceAreaIDSet: req.SourceAreaID != nil,
+		Filter:          req.Filter,
 	})
 	if err != nil {
 		if isCanvasMapNotFoundError(err) {
@@ -448,10 +452,15 @@ func (h *CanvasMapHandler) loadMapFromRequest(w http.ResponseWriter, r *http.Req
 }
 
 func (h *CanvasMapHandler) validateSourceAreaID(w http.ResponseWriter, raw *string) (*uuid.UUID, bool) {
-	if raw == nil || strings.TrimSpace(*raw) == "" {
+	if raw == nil {
 		return nil, true
 	}
-	areaID, err := uuid.Parse(strings.TrimSpace(*raw))
+	trimmed := strings.TrimSpace(*raw)
+	if trimmed == "" {
+		writeError(w, http.StatusBadRequest, "invalid source_area_id")
+		return nil, false
+	}
+	areaID, err := uuid.Parse(trimmed)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid source_area_id")
 		return nil, false
@@ -461,7 +470,11 @@ func (h *CanvasMapHandler) validateSourceAreaID(w http.ResponseWriter, raw *stri
 		return nil, false
 	}
 	if _, err := h.areaRepo.GetByID(areaID); err != nil {
-		writeError(w, http.StatusBadRequest, "unknown source_area_id")
+		if isAreaNotFoundError(err) {
+			writeError(w, http.StatusBadRequest, "unknown source_area_id")
+			return nil, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load source area", err)
 		return nil, false
 	}
 	return &areaID, true
@@ -512,6 +525,10 @@ func isFiniteCoordinate(value float64) bool {
 
 func isCanvasMapNotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "canvas map not found")
+}
+
+func isAreaNotFoundError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "area not found")
 }
 
 func isCanvasMapConflictError(err error) bool {

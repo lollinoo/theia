@@ -153,6 +153,50 @@ func TestCanvasMapRepoCreateAndUpdateCanonicalizeFilterJSON(t *testing.T) {
 	}
 }
 
+func TestCanvasMapRepoUpdatePersistsSourceAreaID(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	repo := NewCanvasMapRepo(db)
+
+	areaID := uuid.New()
+	if _, err := db.Exec(
+		`INSERT INTO areas (id, name, description, color, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+		areaID.String(),
+		"Source Area",
+		"source area",
+		"#2979FF",
+	); err != nil {
+		t.Fatalf("insert area: %v", err)
+	}
+
+	canvasMap, err := repo.Create(domain.CanvasMapCreate{Name: "Area Update"})
+	if err != nil {
+		t.Fatalf("create map: %v", err)
+	}
+	updated, err := repo.Update(canvasMap.ID, domain.CanvasMapUpdate{
+		SourceAreaID:    &areaID,
+		SourceAreaIDSet: true,
+	})
+	if err != nil {
+		t.Fatalf("update source area: %v", err)
+	}
+	if updated.SourceAreaID == nil || *updated.SourceAreaID != areaID {
+		t.Fatalf("updated source area = %#v, want %s", updated.SourceAreaID, areaID)
+	}
+
+	renamed := "Area Update Renamed"
+	updated, err = repo.Update(canvasMap.ID, domain.CanvasMapUpdate{Name: &renamed})
+	if err != nil {
+		t.Fatalf("update name without source area: %v", err)
+	}
+	if updated.Name != renamed {
+		t.Fatalf("updated name = %q, want %q", updated.Name, renamed)
+	}
+	if updated.SourceAreaID == nil || *updated.SourceAreaID != areaID {
+		t.Fatalf("source area after name-only update = %#v, want %s", updated.SourceAreaID, areaID)
+	}
+}
+
 func TestCanvasMapRepoDeleteRejectsDefaultMap(t *testing.T) {
 	db := openCanvasMapRepoTestDB(t)
 	repo := NewCanvasMapRepo(db)
