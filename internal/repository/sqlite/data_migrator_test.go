@@ -98,6 +98,11 @@ func TestDefaultCanvasMapAfterCopy_CopiesCopiedLegacyPositions(t *testing.T) {
 		t.Fatalf("RunMigrations(target) failed: %v", err)
 	}
 
+	const sourceDefaultMapID = "00000000-0000-0000-0000-000000000901"
+	const targetGeneratedMapID = "00000000-0000-0000-0000-000000000902"
+	setDefaultCanvasMapID(t, source, sourceDefaultMapID)
+	setDefaultCanvasMapID(t, target, targetGeneratedMapID)
+
 	const deviceID = "00000000-0000-0000-0000-000000000301"
 	if _, err := source.Exec(
 		`INSERT INTO devices (
@@ -142,6 +147,9 @@ func TestDefaultCanvasMapAfterCopy_CopiesCopiedLegacyPositions(t *testing.T) {
 	var mapID string
 	if err := target.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = 1`).Scan(&mapID); err != nil {
 		t.Fatalf("querying target default map: %v", err)
+	}
+	if mapID != sourceDefaultMapID {
+		t.Fatalf("target default map id = %s, want copied source default %s", mapID, sourceDefaultMapID)
 	}
 
 	var x, y float64
@@ -582,6 +590,22 @@ func seedCopyTestSource(t *testing.T, db testExecer) {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("executing seed statement %q: %v", statement, err)
 		}
+	}
+}
+
+func setDefaultCanvasMapID(t *testing.T, db *sql.DB, id string) {
+	t.Helper()
+
+	result, err := db.Exec(`UPDATE canvas_maps SET id = ? WHERE is_default = 1`, id)
+	if err != nil {
+		t.Fatalf("setting default canvas map id: %v", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("checking default canvas map id update: %v", err)
+	}
+	if rowsAffected != 1 {
+		t.Fatalf("updated %d default canvas maps, want 1", rowsAffected)
 	}
 }
 
