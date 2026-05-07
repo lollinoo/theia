@@ -23,12 +23,7 @@ function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
 describe('MapSummaryCard', () => {
   it('renders map identity and counts', () => {
     render(
-      <MapSummaryCard
-        map={mockMap()}
-        onOpen={vi.fn()}
-        onDuplicate={vi.fn()}
-        onDelete={vi.fn()}
-      />,
+      <MapSummaryCard map={mockMap()} onOpen={vi.fn()} onDuplicate={vi.fn()} onDelete={vi.fn()} />,
     );
 
     expect(screen.getByText('Backbone')).toBeInTheDocument();
@@ -44,12 +39,7 @@ describe('MapSummaryCard', () => {
     const onDelete = vi.fn();
 
     render(
-      <MapSummaryCard
-        map={map}
-        onOpen={onOpen}
-        onDuplicate={onDuplicate}
-        onDelete={onDelete}
-      />,
+      <MapSummaryCard map={map} onOpen={onOpen} onDuplicate={onDuplicate} onDelete={onDelete} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open map Backbone' }));

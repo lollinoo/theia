@@ -10,6 +10,7 @@ import {
 import Canvas from './components/Canvas';
 import { Dashboard } from './components/Dashboard';
 import NavigationPill from './components/NavigationPill';
+import { Watermark } from './components/Watermark';
 import {
   CreateMapDialog,
   type CreateMapDialogSubmit,
@@ -19,7 +20,6 @@ import {
   type DuplicateMapDialogSubmit,
 } from './components/topology-hub/DuplicateMapDialog';
 import TopologyHub from './components/topology-hub/TopologyHub';
-import { Watermark } from './components/Watermark';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useWebSocket } from './hooks/useWebSocket';
 import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api';
@@ -27,7 +27,7 @@ import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api
 export type ActiveView = 'hub' | 'canvas' | 'dashboard';
 
 const runtimeUpdatePauseIdleDelayMs = 1500;
-const enableSavedMaps = false;
+const enableSavedMaps = true;
 
 function canvasMapErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;

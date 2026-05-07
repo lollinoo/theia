@@ -543,9 +543,7 @@ export function useCanvasData({
   const lastTopologyIdentityByMapRef = useRef<Map<string, string | null>>(new Map());
   const lastCanvasTopologyEtagByMapRef = useRef<Map<string, string | null>>(new Map());
   const lastUsablePositionStateByMapRef = useRef<Map<string, string>>(new Map());
-  const currentNodePositionsByMapRef = useRef<Map<string, Map<string, PositionState>>>(
-    new Map(),
-  );
+  const currentNodePositionsByMapRef = useRef<Map<string, Map<string, PositionState>>>(new Map());
   const skippedSavedMapManualEdgeMigrationRef = useRef<Set<string>>(new Set());
   const grafanaUrlRef = useRef<string>('');
   const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
@@ -653,8 +651,7 @@ export function useCanvasData({
           const canRunLegacyManualEdgeMigration = mapId === null;
           const shouldBypassReadModelEtagForManualEdgeMigration =
             canRunLegacyManualEdgeMigration && hadPendingManualEdgeMigration;
-          const lastCanvasTopologyEtag =
-            lastCanvasTopologyEtagByMapRef.current.get(mapKey) ?? null;
+          const lastCanvasTopologyEtag = lastCanvasTopologyEtagByMapRef.current.get(mapKey) ?? null;
           const renderedNodesOwnedByMap = nodesOwnerMapKeyRef.current === mapKey;
           const topologyEtag =
             includeRuntimeBootstrap ||
@@ -818,10 +815,7 @@ export function useCanvasData({
               alerts: alertsRef.current,
             });
             nodesOwnerMapKeyRef.current = mapKey;
-            currentNodePositionsByMapRef.current.set(
-              mapKey,
-              nodePositionsToPositionMap(nextNodes),
-            );
+            currentNodePositionsByMapRef.current.set(mapKey, nodePositionsToPositionMap(nextNodes));
             setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
             setEdges(nextEdges);
             lastAppliedRuntimeSnapshotRef.current = snapshotRef.current;
@@ -1088,11 +1082,16 @@ export function useCanvasData({
       setTopologyRecoveryNotice(null);
 
       try {
-        const loadResult = await loadTopology(true, undefined, measurementTriggerForCauses(refreshCauses), {
-          suppressBlockingError: true,
-          rethrowOnError: true,
-          includeRuntimeBootstrap: refreshCauses.has('backend-resync-required'),
-        });
+        const loadResult = await loadTopology(
+          true,
+          undefined,
+          measurementTriggerForCauses(refreshCauses),
+          {
+            suppressBlockingError: true,
+            rethrowOnError: true,
+            includeRuntimeBootstrap: refreshCauses.has('backend-resync-required'),
+          },
+        );
         if (loadResult !== 'applied') {
           return;
         }
@@ -1146,10 +1145,7 @@ export function useCanvasData({
       const ownerMapKey = nodesOwnerMapKeyRef.current;
 
       setNodes(nextNodes);
-      currentNodePositionsByMapRef.current.set(
-        ownerMapKey,
-        nodePositionsToPositionMap(nextNodes),
-      );
+      currentNodePositionsByMapRef.current.set(ownerMapKey, nodePositionsToPositionMap(nextNodes));
       setEdges((currentEdges) => {
         const existingEdgeData = new Map(currentEdges.map((edge) => [edge.id, edge.data ?? {}]));
         return buildTopologyEdges(links, devicesById, nextNodes, existingEdgeData, openEdgeMenu);

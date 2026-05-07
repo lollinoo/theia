@@ -433,21 +433,17 @@ describe('useCanvasData', () => {
 
   it('keeps cached topology ETags scoped by map key', async () => {
     vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
-    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
-      {
-        ...canvasTopologyOkResponse({ topology_version: 'topo-default' }),
-        etag: '"default-etag"',
-      },
-    );
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce({
+      ...canvasTopologyOkResponse({ topology_version: 'topo-default' }),
+      etag: '"default-etag"',
+    });
     vi.mocked(fetchCanvasMapTopology)
-      .mockResolvedValueOnce(
-        {
-          ...canvasTopologyOkResponse({
-            topology_version: 'topo-map-1',
-          }),
-          etag: '"map-etag"',
-        },
-      )
+      .mockResolvedValueOnce({
+        ...canvasTopologyOkResponse({
+          topology_version: 'topo-map-1',
+        }),
+        etag: '"map-etag"',
+      })
       .mockResolvedValueOnce({
         status: 'not-modified',
         etag: '"map-etag"',
@@ -746,23 +742,21 @@ describe('useCanvasData', () => {
     expect(result.current.nodes[0].position).toEqual({ x: 10, y: 20 });
 
     positionMocks.savePositions.mockClear();
-    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(
-      {
-        ...canvasTopologyOkResponse({
-          devices: [mockDevice()],
-          topology_version: 'topo-map-positions',
-          positions: {
-            'dev-1': {
-              device_id: 'dev-1',
-              x: 300,
-              y: 400,
-              pinned: true,
-            },
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce({
+      ...canvasTopologyOkResponse({
+        devices: [mockDevice()],
+        topology_version: 'topo-map-positions',
+        positions: {
+          'dev-1': {
+            device_id: 'dev-1',
+            x: 300,
+            y: 400,
+            pinned: true,
           },
-        }),
-        etag: '"map-position-etag"',
-      },
-    );
+        },
+      }),
+      etag: '"map-position-etag"',
+    });
 
     rerender({
       currentSnapshot: null,

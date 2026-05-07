@@ -93,11 +93,11 @@ type CanvasBootstrapCacheKey = string;
 
 const defaultCanvasBootstrapCacheKey = '__default__';
 
-let canvasBootstrapRequests = new Map<
+const canvasBootstrapRequests = new Map<
   CanvasBootstrapCacheKey,
   Promise<{ topology: CanvasTopologyResponse }>
 >();
-let recentCanvasBootstraps = new Map<
+const recentCanvasBootstraps = new Map<
   CanvasBootstrapCacheKey,
   { value: { topology: CanvasTopologyResponse }; expiresAt: number }
 >();

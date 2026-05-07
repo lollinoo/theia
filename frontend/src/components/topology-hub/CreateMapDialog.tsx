@@ -48,9 +48,7 @@ export function CreateMapDialog({ open, sourceArea, onCreate, onClose }: CreateM
             <h2 id="create-map-title" className="text-base font-semibold text-on-bg">
               Create map
             </h2>
-            {sourceArea && (
-              <p className="mt-1 text-sm text-on-bg-secondary">{sourceArea.name}</p>
-            )}
+            {sourceArea && <p className="mt-1 text-sm text-on-bg-secondary">{sourceArea.name}</p>}
           </div>
           <button
             type="button"

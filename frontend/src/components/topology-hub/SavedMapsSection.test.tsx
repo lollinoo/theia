@@ -29,9 +29,7 @@ describe('SavedMapsSection', () => {
       onDeleteMap: vi.fn(),
     };
 
-    const { rerender } = render(
-      <SavedMapsSection {...props} loading={true} error={null} />,
-    );
+    const { rerender } = render(<SavedMapsSection {...props} loading={true} error={null} />);
     expect(screen.getByText('Loading maps')).toBeInTheDocument();
 
     rerender(<SavedMapsSection {...props} loading={false} error="Could not load maps" />);

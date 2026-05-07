@@ -15,6 +15,12 @@ const legacyDeviceSeedPayload = {
   },
 };
 
+const areaSeedPayload = {
+  name: 'Backbone',
+  description: 'Seeded area for topology hub e2e coverage',
+  color: '#2979FF',
+};
+
 async function waitForBackend(): Promise<void> {
   const startedAt = Date.now();
 
@@ -34,15 +40,15 @@ async function waitForBackend(): Promise<void> {
   throw new Error('Backend did not become healthy within 60 seconds');
 }
 
-export default async function globalSetup(): Promise<void> {
-  await waitForBackend();
-
+async function seedRouter(): Promise<void> {
   const devicesResponse = await fetch('http://127.0.0.1:38080/api/v1/devices');
   if (!devicesResponse.ok) {
     throw new Error(`Failed to fetch devices: ${devicesResponse.status}`);
   }
 
-  const devicesPayload = await devicesResponse.json() as { data?: Array<{ hostname?: string; ip?: string }> };
+  const devicesPayload = (await devicesResponse.json()) as {
+    data?: Array<{ hostname?: string; ip?: string }>;
+  };
   const alreadySeeded = (devicesPayload.data ?? []).some((device) =>
     device.hostname === deviceSeedPayload.hostname || device.ip === deviceSeedPayload.ip,
   );
@@ -76,6 +82,41 @@ export default async function globalSetup(): Promise<void> {
   });
 
   if (!legacyCreateResponse.ok) {
-    throw new Error(`Failed to seed router-a with legacy SNMP version: ${legacyCreateResponse.status}`);
+    throw new Error(
+      `Failed to seed router-a with legacy SNMP version: ${legacyCreateResponse.status}`,
+    );
   }
+}
+
+async function seedArea(): Promise<void> {
+  const areasResponse = await fetch('http://127.0.0.1:38080/api/v1/areas');
+  if (!areasResponse.ok) {
+    throw new Error(`Failed to fetch areas: ${areasResponse.status}`);
+  }
+
+  const areasPayload = (await areasResponse.json()) as { data?: Array<{ name?: string }> };
+  const alreadySeeded = (areasPayload.data ?? []).some(
+    (area) => area.name === areaSeedPayload.name,
+  );
+  if (alreadySeeded) {
+    return;
+  }
+
+  const createResponse = await fetch('http://127.0.0.1:38080/api/v1/areas', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(areaSeedPayload),
+  });
+
+  if (!createResponse.ok && createResponse.status !== 409) {
+    throw new Error(`Failed to seed Backbone area: ${createResponse.status}`);
+  }
+}
+
+export default async function globalSetup(): Promise<void> {
+  await waitForBackend();
+  await seedRouter();
+  await seedArea();
 }

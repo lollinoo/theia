@@ -260,13 +260,15 @@ describe('App', () => {
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
 
-    screen.getByRole('button', { name: 'Hub' }).click();
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByTestId('topology-hub')).toHaveTextContent('devices:1');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('links:1');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('snapshot:down');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('maps:0');
-    expect(screen.getByTestId('topology-hub')).toHaveTextContent('savedMapsEnabled:false');
-    expect(fetchCanvasMapsMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('savedMapsEnabled:true');
     expect(createCanvasMapMock).not.toHaveBeenCalled();
     expect(duplicateCanvasMapMock).not.toHaveBeenCalled();
     expect(deleteCanvasMapMock).not.toHaveBeenCalled();

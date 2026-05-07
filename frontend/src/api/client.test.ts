@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type CreateDevicePayload,
+  ValidationError,
   cancelInstanceBackup,
   createCanvasMap,
   createDevice,
@@ -26,7 +27,6 @@ import {
   runTopologyDiscovery,
   updateCanvasMap,
   updateDevice,
-  ValidationError,
 } from './client';
 import { ServerError } from './errors';
 
