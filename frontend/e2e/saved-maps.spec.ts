@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { type APIRequestContext, expect, test } from '@playwright/test';
 
 const TEST_MAP_NAME = 'Backbone e2e';
 const DUPLICATE_TEST_MAP_NAME = `Copy of ${TEST_MAP_NAME}`;
