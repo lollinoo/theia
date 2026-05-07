@@ -56,6 +56,85 @@ func TestMigrations(t *testing.T) {
 	t.Logf("schema_migrations: version=%d dirty=%v", version, dirty)
 }
 
+func TestRunMigrationsCreatesCanvasMapTables(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	for _, tableName := range []string{"canvas_maps", "canvas_map_positions"} {
+		var count int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
+			tableName,
+		).Scan(&count); err != nil {
+			t.Fatalf("querying table %s: %v", tableName, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected table %s to exist", tableName)
+		}
+	}
+}
+
+func TestRunMigrationsSeedsDefaultCanvasMapFromLegacyPositions(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("initial RunMigrations failed: %v", err)
+	}
+
+	deviceID := "00000000-0000-0000-0000-000000000101"
+	if _, err := db.Exec(
+		`INSERT INTO devices (id, hostname, ip, device_type, status, sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json, metrics_source, prometheus_label_name, prometheus_label_value, created_at, updated_at)
+		 VALUES (?, 'router-101', '10.0.1.101', 'router', 'up', 'router-101', '', '', '', 'default', 1, '{}', 'none', '', '', datetime('now'), datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert device: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO device_positions (device_id, x, y, pinned, updated_at)
+		 VALUES (?, 11, 22, 1, datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert legacy position: %v", err)
+	}
+
+	if err := migrateDefaultCanvasMap(db); err != nil {
+		t.Fatalf("migrateDefaultCanvasMap failed: %v", err)
+	}
+	if err := migrateDefaultCanvasMap(db); err != nil {
+		t.Fatalf("second migrateDefaultCanvasMap failed: %v", err)
+	}
+
+	var mapID string
+	var mapCount int
+	if err := db.QueryRow(`SELECT COUNT(*), id FROM canvas_maps WHERE is_default = 1`).Scan(&mapCount, &mapID); err != nil {
+		t.Fatalf("query default map: %v", err)
+	}
+	if mapCount != 1 {
+		t.Fatalf("expected one default map, got %d", mapCount)
+	}
+
+	var legacyCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM device_positions WHERE device_id = ?`, deviceID).Scan(&legacyCount); err != nil {
+		t.Fatalf("query legacy positions: %v", err)
+	}
+	if legacyCount != 1 {
+		t.Fatalf("expected legacy position to remain, got %d", legacyCount)
+	}
+
+	var scopedCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM canvas_map_positions WHERE map_id = ? AND device_id = ? AND x = 11 AND y = 22 AND pinned = 1`,
+		mapID,
+		deviceID,
+	).Scan(&scopedCount); err != nil {
+		t.Fatalf("query scoped positions: %v", err)
+	}
+	if scopedCount != 1 {
+		t.Fatalf("expected one copied map position, got %d", scopedCount)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestMigration000012_DefaultRole (CRED-04)
 // ---------------------------------------------------------------------------

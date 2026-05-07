@@ -63,6 +63,10 @@ func RunMigrations(db *sql.DB, encryptionKey ...[]byte) error {
 		return fmt.Errorf("backfilling device poll_class: %w", err)
 	}
 
+	if err := migrateDefaultCanvasMap(db); err != nil {
+		return fmt.Errorf("migrating default canvas map: %w", err)
+	}
+
 	// Seed default settings (INSERT OR IGNORE so existing values are not overwritten)
 	if err := seedDefaultSettings(db); err != nil {
 		return fmt.Errorf("seeding default settings: %w", err)
@@ -587,6 +591,81 @@ func devicePollClassColumnExists(db *sql.DB) bool {
 	// Postgres path: information_schema check
 	var count int
 	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_name='devices' AND column_name='poll_class'`).Scan(&count)
+	return err == nil && count > 0
+}
+
+func migrateDefaultCanvasMap(db *sql.DB) error {
+	dialect := detectDialectFromDB(db)
+	wrapped := wrapDB(db)
+	if !tableExists(wrapped, dialect, "canvas_maps") {
+		return nil
+	}
+
+	tx, err := wrapped.Begin()
+	if err != nil {
+		return fmt.Errorf("starting default canvas map migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var mapID string
+	err = tx.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = ? LIMIT 1`, true).Scan(&mapID)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			return fmt.Errorf("querying default canvas map: %w", err)
+		}
+
+		mapID = uuid.New().String()
+		now := time.Now().UTC()
+		if _, err := tx.Exec(
+			`INSERT INTO canvas_maps (id, name, description, filter_json, is_default, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			mapID,
+			"Default",
+			"Global canvas layout",
+			"{}",
+			true,
+			now,
+			now,
+		); err != nil {
+			return fmt.Errorf("creating default canvas map: %w", err)
+		}
+	}
+
+	var copyPositionsStatement string
+	if dialect == DialectSQLite {
+		copyPositionsStatement = `INSERT OR IGNORE INTO canvas_map_positions (map_id, device_id, x, y, pinned, updated_at)
+			SELECT ?, device_id, x, y, pinned, updated_at FROM device_positions`
+	} else {
+		copyPositionsStatement = `INSERT INTO canvas_map_positions (map_id, device_id, x, y, pinned, updated_at)
+			SELECT ?, device_id, x, y, pinned <> 0, updated_at FROM device_positions
+			ON CONFLICT(map_id, device_id) DO NOTHING`
+	}
+
+	if _, err := tx.Exec(copyPositionsStatement, mapID); err != nil {
+		return fmt.Errorf("copying legacy device positions into default canvas map: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing default canvas map migration: %w", err)
+	}
+
+	return nil
+}
+
+func tableExists(db *DB, dialect Dialect, tableName string) bool {
+	var count int
+	var err error
+	if dialect == DialectSQLite {
+		err = db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
+			tableName,
+		).Scan(&count)
+	} else {
+		err = db.QueryRow(
+			`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?`,
+			tableName,
+		).Scan(&count)
+	}
 	return err == nil && count > 0
 }
 
