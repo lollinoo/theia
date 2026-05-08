@@ -149,6 +149,141 @@ func TestCanvasMapMembershipRepoReplaceAndGetPersistsDevicesLinksAreas(t *testin
 	assertCanvasMapMembershipEqual(t, got, replacement)
 }
 
+func TestCanvasMapRepoAddDeviceMembershipIsIdempotentAndPreservesOtherMaps(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	repo := NewCanvasMapRepo(db)
+
+	firstMap, err := repo.Create(domain.CanvasMapCreate{Name: "First"})
+	if err != nil {
+		t.Fatalf("create first map: %v", err)
+	}
+	secondMap, err := repo.Create(domain.CanvasMapCreate{Name: "Second"})
+	if err != nil {
+		t.Fatalf("create second map: %v", err)
+	}
+
+	deviceA := uuid.MustParse("00000000-0000-0000-0000-000000000701")
+	deviceB := uuid.MustParse("00000000-0000-0000-0000-000000000702")
+	insertCanvasMapRepoTestDevice(t, db, deviceA)
+	insertCanvasMapRepoTestDevice(t, db, deviceB)
+	linkID := uuid.MustParse("00000000-0000-0000-0000-000000000703")
+	insertCanvasMapRepoTestLink(t, db, linkID, deviceA, deviceB)
+	areaID := uuid.MustParse("00000000-0000-0000-0000-000000000704")
+
+	initial := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceA, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}
+	if err := repo.ReplaceMembership(firstMap.ID, initial); err != nil {
+		t.Fatalf("replace first membership: %v", err)
+	}
+	if err := repo.ReplaceMembership(secondMap.ID, initial); err != nil {
+		t.Fatalf("replace second membership: %v", err)
+	}
+
+	addedDevice := domain.CanvasMapDeviceMembership{
+		DeviceID: deviceB,
+		Role:     domain.CanvasMapDeviceRoleBase,
+	}
+	addedArea := domain.CanvasMapAreaMembership{
+		AreaID:      areaID,
+		Name:        "Backbone",
+		Description: "Backbone devices",
+		Color:       "#00AEEF",
+	}
+	for i := 0; i < 2; i++ {
+		if err := repo.AddDeviceMembership(firstMap.ID, addedDevice, []uuid.UUID{linkID}, []domain.CanvasMapAreaMembership{addedArea}); err != nil {
+			t.Fatalf("add device membership iteration %d: %v", i, err)
+		}
+	}
+
+	firstMembership, err := repo.GetMembership(firstMap.ID)
+	if err != nil {
+		t.Fatalf("get first membership: %v", err)
+	}
+	assertCanvasMapMembershipEqual(t, firstMembership, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceA, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: deviceB, Role: domain.CanvasMapDeviceRoleBase},
+		},
+		LinkIDs: []uuid.UUID{linkID},
+		Areas:   []domain.CanvasMapAreaMembership{addedArea},
+	})
+
+	secondMembership, err := repo.GetMembership(secondMap.ID)
+	if err != nil {
+		t.Fatalf("get second membership: %v", err)
+	}
+	assertCanvasMapMembershipEqual(t, secondMembership, initial)
+}
+
+func TestCanvasMapRepoUpdateDeviceAreaMembershipsIsMapLocal(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	repo := NewCanvasMapRepo(db)
+
+	firstMap, err := repo.Create(domain.CanvasMapCreate{Name: "First Area Scope"})
+	if err != nil {
+		t.Fatalf("create first map: %v", err)
+	}
+	secondMap, err := repo.Create(domain.CanvasMapCreate{Name: "Second Area Scope"})
+	if err != nil {
+		t.Fatalf("create second map: %v", err)
+	}
+
+	deviceID := uuid.MustParse("00000000-0000-0000-0000-000000000711")
+	areaA := uuid.MustParse("00000000-0000-0000-0000-000000000712")
+	areaB := uuid.MustParse("00000000-0000-0000-0000-000000000713")
+	insertCanvasMapRepoTestDevice(t, db, deviceID)
+	insertCanvasMapRepoTestArea(t, db, areaA, "Original Area", "#111111")
+	insertCanvasMapRepoTestArea(t, db, areaB, "Copy Area", "#222222")
+	insertCanvasMapRepoTestDeviceArea(t, db, deviceID, areaA)
+
+	membership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaA}},
+		},
+		Areas: []domain.CanvasMapAreaMembership{
+			{AreaID: areaA, Name: "Original Area", Color: "#111111"},
+			{AreaID: areaB, Name: "Copy Area", Color: "#222222"},
+		},
+	}
+	if err := repo.ReplaceMembership(firstMap.ID, membership); err != nil {
+		t.Fatalf("replace first membership: %v", err)
+	}
+	if err := repo.ReplaceMembership(secondMap.ID, membership); err != nil {
+		t.Fatalf("replace second membership: %v", err)
+	}
+
+	if err := repo.UpdateDeviceAreaMemberships(firstMap.ID, []uuid.UUID{deviceID}, []uuid.UUID{areaB}); err != nil {
+		t.Fatalf("update first map device areas: %v", err)
+	}
+
+	firstMembership, err := repo.GetMembership(firstMap.ID)
+	if err != nil {
+		t.Fatalf("get first membership: %v", err)
+	}
+	if len(firstMembership.Devices) != 1 || !uuidSlicesEqual(firstMembership.Devices[0].AreaIDs, []uuid.UUID{areaB}) {
+		t.Fatalf("first map device areas = %#v, want only %s", firstMembership.Devices, areaB)
+	}
+
+	secondMembership, err := repo.GetMembership(secondMap.ID)
+	if err != nil {
+		t.Fatalf("get second membership: %v", err)
+	}
+	if len(secondMembership.Devices) != 1 || !uuidSlicesEqual(secondMembership.Devices[0].AreaIDs, []uuid.UUID{areaA}) {
+		t.Fatalf("second map device areas = %#v, want original %s", secondMembership.Devices, areaA)
+	}
+
+	var globalAreaID string
+	if err := db.QueryRow(`SELECT area_id FROM device_areas WHERE device_id = ?`, deviceID.String()).Scan(&globalAreaID); err != nil {
+		t.Fatalf("query global device area: %v", err)
+	}
+	if globalAreaID != areaA.String() {
+		t.Fatalf("global device area = %s, want %s", globalAreaID, areaA)
+	}
+}
+
 func TestCanvasMapRepoDuplicateCopiesMembershipAndPositions(t *testing.T) {
 	db := openCanvasMapRepoTestDB(t)
 	mapRepo := NewCanvasMapRepo(db)
@@ -515,7 +650,9 @@ func assertCanvasMapMembershipEqual(t *testing.T, got, want domain.CanvasMapMemb
 		t.Fatalf("device membership count = %d, want %d: %#v", len(got.Devices), len(want.Devices), got.Devices)
 	}
 	for i := range got.Devices {
-		if got.Devices[i] != want.Devices[i] {
+		if got.Devices[i].DeviceID != want.Devices[i].DeviceID ||
+			got.Devices[i].Role != want.Devices[i].Role ||
+			!uuidSlicesEqual(got.Devices[i].AreaIDs, want.Devices[i].AreaIDs) {
 			t.Fatalf("device membership[%d] = %#v, want %#v", i, got.Devices[i], want.Devices[i])
 		}
 	}
@@ -539,6 +676,18 @@ func assertCanvasMapMembershipEqual(t *testing.T, got, want domain.CanvasMapMemb
 	}
 }
 
+func uuidSlicesEqual(got, want []uuid.UUID) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func insertCanvasMapRepoTestDevice(t *testing.T, db *sql.DB, id uuid.UUID) {
 	t.Helper()
 
@@ -552,6 +701,32 @@ func insertCanvasMapRepoTestDevice(t *testing.T, db *sql.DB, id uuid.UUID) {
 		"router-"+suffix,
 	); err != nil {
 		t.Fatalf("insert device %s: %v", id, err)
+	}
+}
+
+func insertCanvasMapRepoTestArea(t *testing.T, db *sql.DB, id uuid.UUID, name string, color string) {
+	t.Helper()
+
+	if _, err := db.Exec(
+		`INSERT INTO areas (id, name, description, color, created_at, updated_at)
+		 VALUES (?, ?, '', ?, datetime('now'), datetime('now'))`,
+		id.String(),
+		name,
+		color,
+	); err != nil {
+		t.Fatalf("insert area %s: %v", id, err)
+	}
+}
+
+func insertCanvasMapRepoTestDeviceArea(t *testing.T, db *sql.DB, deviceID uuid.UUID, areaID uuid.UUID) {
+	t.Helper()
+
+	if _, err := db.Exec(
+		`INSERT INTO device_areas (device_id, area_id) VALUES (?, ?)`,
+		deviceID.String(),
+		areaID.String(),
+	); err != nil {
+		t.Fatalf("insert device area %s/%s: %v", deviceID, areaID, err)
 	}
 }
 

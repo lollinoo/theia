@@ -318,3 +318,46 @@ func (m *deviceMutationService) GetAllDevices(ctx context.Context) ([]domain.Dev
 	}
 	return devices, nil
 }
+
+func (m *deviceMutationService) GetDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
+	_ = ctx
+	if len(ids) == 0 {
+		return []domain.Device{}, nil
+	}
+
+	type deviceBatchRepository interface {
+		GetByIDs([]uuid.UUID) ([]domain.Device, error)
+	}
+
+	batchRepo, ok := m.deviceRepo.(deviceBatchRepository)
+	var devices []domain.Device
+	var err error
+	if ok {
+		devices, err = batchRepo.GetByIDs(ids)
+	} else {
+		devices, err = m.deviceRepo.GetAll()
+		if err == nil {
+			requested := make(map[uuid.UUID]struct{}, len(ids))
+			for _, id := range ids {
+				requested[id] = struct{}{}
+			}
+			filtered := devices[:0]
+			for _, device := range devices {
+				if _, include := requested[device.ID]; include {
+					filtered = append(filtered, device)
+				}
+			}
+			devices = filtered
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range devices {
+		domain.NormalizeDevicePollingEnabled(&devices[i])
+		domain.NormalizeVirtualDevice(&devices[i])
+		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
+	}
+	return devices, nil
+}

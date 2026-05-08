@@ -38,6 +38,7 @@ func (role CanvasMapDeviceRole) IsValid() bool {
 type CanvasMapDeviceMembership struct {
 	DeviceID uuid.UUID
 	Role     CanvasMapDeviceRole
+	AreaIDs  []uuid.UUID
 }
 
 type CanvasMapAreaMembership struct {

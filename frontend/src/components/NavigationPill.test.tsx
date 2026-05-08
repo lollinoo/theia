@@ -56,10 +56,7 @@ const defaultProps = {
   selectedAreaId: null as string | null,
   selectedMapId: null as string | null,
   selectedMapName: 'Default',
-  maps: [
-    mockMap(),
-    mockMap({ id: 'map-1', name: 'Backbone Map', is_default: false }),
-  ],
+  maps: [mockMap(), mockMap({ id: 'map-1', name: 'Backbone Map', is_default: false })],
   areas: [mockArea(), mockArea({ id: 'area-2', name: 'Distribution', color: '#FF5722' })],
   onViewChange: vi.fn(),
   onAreaSelect: vi.fn(),

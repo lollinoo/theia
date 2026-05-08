@@ -69,6 +69,9 @@ func RunMigrations(db *sql.DB, encryptionKey ...[]byte) error {
 	if err := migrateCanvasMapMemberships(db); err != nil {
 		return fmt.Errorf("materializing canvas map memberships: %w", err)
 	}
+	if err := migrateCanvasMapDeviceAreaMemberships(db); err != nil {
+		return fmt.Errorf("materializing canvas map device area memberships: %w", err)
+	}
 
 	// Seed default settings (INSERT OR IGNORE so existing values are not overwritten)
 	if err := seedDefaultSettings(db); err != nil {
@@ -810,7 +813,7 @@ func migrateCanvasMapMemberships(db *sql.DB) error {
 
 	for _, canvasMap := range canvasMaps {
 		membership := materializeCanvasMapMigrationMembership(devices, links, areas, canvasMap.filter)
-		for _, tableName := range []string{"canvas_map_devices", "canvas_map_links", "canvas_map_areas"} {
+		for _, tableName := range []string{"canvas_map_device_areas", "canvas_map_devices", "canvas_map_links", "canvas_map_areas"} {
 			if _, err := tx.Exec(
 				"DELETE FROM "+tableName+" WHERE map_id = ?",
 				canvasMap.id.String(),
@@ -857,6 +860,9 @@ func migrateCanvasMapMemberships(db *sql.DB) error {
 				return fmt.Errorf("inserting migrated canvas map area %s for map %s: %w", area.AreaID, canvasMap.id, err)
 			}
 		}
+		if err := insertCanvasMapDeviceAreas(tx, canvasMap.id, membership.Devices, now); err != nil {
+			return err
+		}
 		if err := pruneCanvasMapPositionsForMembership(tx, canvasMap.id, membership.Devices); err != nil {
 			return err
 		}
@@ -874,6 +880,34 @@ func migrateCanvasMapMemberships(db *sql.DB) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing canvas map membership migration: %w", err)
+	}
+	return nil
+}
+
+func migrateCanvasMapDeviceAreaMemberships(db *sql.DB) error {
+	dialect := detectDialectFromDB(db)
+	wrapped := wrapDB(db)
+	for _, tableName := range []string{"canvas_map_device_areas", "canvas_map_devices", "canvas_map_areas", "device_areas"} {
+		ok, err := tableExists(wrapped, dialect, tableName)
+		if err != nil {
+			return fmt.Errorf("checking %s table: %w", tableName, err)
+		}
+		if !ok {
+			return nil
+		}
+	}
+	if _, err := wrapped.Exec(
+		`INSERT INTO canvas_map_device_areas (map_id, device_id, area_id, assigned_at)
+		 SELECT cmd.map_id, cmd.device_id, da.area_id, ?
+		 FROM canvas_map_devices cmd
+		 JOIN device_areas da ON da.device_id = cmd.device_id
+		 JOIN canvas_map_areas cma ON cma.map_id = cmd.map_id AND cma.area_id = da.area_id
+		 WHERE cmd.role = ?
+		 ON CONFLICT(map_id, device_id, area_id) DO NOTHING`,
+		time.Now().UTC(),
+		string(domain.CanvasMapDeviceRoleBase),
+	); err != nil {
+		return fmt.Errorf("backfilling canvas map device area memberships: %w", err)
 	}
 	return nil
 }
@@ -1085,6 +1119,8 @@ func materializeCanvasMapMigrationMembership(
 	filter domain.CanvasMapFilter,
 ) domain.CanvasMapMembership {
 	projection := projectCanvasMapMigrationTopology(devices, links, filter)
+	areaMemberships := canvasMapMigrationAreasForMembership(areas, projection.Devices, filter)
+	includedAreaIDs := canvasMapMigrationAreaMembershipIDSet(areaMemberships)
 	membership := domain.CanvasMapMembership{
 		Devices: make([]domain.CanvasMapDeviceMembership, 0, len(projection.Devices)+len(projection.GhostDevices)),
 		LinkIDs: make([]uuid.UUID, 0, len(projection.Links)),
@@ -1094,6 +1130,7 @@ func materializeCanvasMapMigrationMembership(
 		membership.Devices = append(membership.Devices, domain.CanvasMapDeviceMembership{
 			DeviceID: device.ID,
 			Role:     domain.CanvasMapDeviceRoleBase,
+			AreaIDs:  canvasMapMigrationFilterDeviceAreaIDs(device.AreaIDs, includedAreaIDs),
 		})
 	}
 	for _, device := range projection.GhostDevices {
@@ -1105,7 +1142,7 @@ func materializeCanvasMapMigrationMembership(
 	for _, link := range projection.Links {
 		membership.LinkIDs = append(membership.LinkIDs, link.ID)
 	}
-	for _, area := range canvasMapMigrationAreasForMembership(areas, projection.Devices, filter) {
+	for _, area := range areaMemberships {
 		membership.Areas = append(membership.Areas, domain.CanvasMapAreaMembership{
 			AreaID:      area.ID,
 			Name:        area.Name,
@@ -1114,6 +1151,27 @@ func materializeCanvasMapMigrationMembership(
 		})
 	}
 	return membership
+}
+
+func canvasMapMigrationAreaMembershipIDSet(areas []domain.AreaWithCount) map[uuid.UUID]struct{} {
+	ids := make(map[uuid.UUID]struct{}, len(areas))
+	for _, area := range areas {
+		ids[area.ID] = struct{}{}
+	}
+	return ids
+}
+
+func canvasMapMigrationFilterDeviceAreaIDs(areaIDs []uuid.UUID, included map[uuid.UUID]struct{}) []uuid.UUID {
+	if len(areaIDs) == 0 || len(included) == 0 {
+		return []uuid.UUID{}
+	}
+	filtered := make([]uuid.UUID, 0, len(areaIDs))
+	for _, areaID := range areaIDs {
+		if _, ok := included[areaID]; ok {
+			filtered = append(filtered, areaID)
+		}
+	}
+	return filtered
 }
 
 type canvasMapMigrationProjection struct {

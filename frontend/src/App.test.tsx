@@ -13,6 +13,7 @@ const createCanvasMapMock =
       name: string;
       description?: string;
       source_area_id?: string | null;
+      source_map_id?: string | null;
       filter?: CanvasMap['filter'];
     }) => Promise<CanvasMap>
   >();
@@ -178,7 +179,7 @@ vi.mock('./components/Canvas', () => ({
           updated_at: '2026-01-01T00:00:00Z',
         },
       ]);
-    }, [onDevicesChange, onLinksChange, onTopologyAreasChange]);
+    }, [mapId, mapName, onDevicesChange, onLinksChange, onTopologyAreasChange]);
 
     return (
       <div data-testid="canvas">
@@ -197,40 +198,61 @@ vi.mock('./components/Canvas', () => ({
 vi.mock('./components/topology-hub/TopologyHub', () => ({
   default: ({
     devices,
+    areas,
     links,
     snapshot,
     maps,
     mapsLoading,
     mapsError,
     savedMapsEnabled,
+    onOpenGlobal,
     onCreateEmptyMap,
+    onCreateMapFromArea,
   }: {
     devices: Device[];
+    areas: Area[];
     links: Link[];
     snapshot: SnapshotPayload | null;
     maps: CanvasMap[];
     mapsLoading: boolean;
     mapsError: string | null;
     savedMapsEnabled: boolean;
+    onOpenGlobal: () => void;
     onCreateEmptyMap: () => void;
+    onCreateMapFromArea: (area: Area) => void;
   }) => (
     <div data-testid="topology-hub">
       <span>{`devices:${devices.length}`}</span>
+      <span>{`hub-areas:${areas.map((area) => area.name).join('|')}`}</span>
       <span>{`links:${links.length}`}</span>
       <span>{`snapshot:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
       <span>{`maps:${maps.length}`}</span>
       <span>{`loading:${String(mapsLoading)}`}</span>
       <span>{`error:${mapsError ?? 'none'}`}</span>
       <span>{`savedMapsEnabled:${String(savedMapsEnabled)}`}</span>
+      <button type="button" onClick={onOpenGlobal}>
+        Open global map
+      </button>
       <button type="button" onClick={onCreateEmptyMap}>
         Create empty map
       </button>
+      {areas.map((area) => (
+        <button key={area.id} type="button" onClick={() => onCreateMapFromArea(area)}>
+          {`Create map from area ${area.name}`}
+        </button>
+      ))}
     </div>
   ),
 }));
 
 vi.mock('./components/Dashboard', () => ({
-  Dashboard: ({ devices, snapshot }: { devices: Device[]; snapshot: SnapshotPayload | null }) => (
+  Dashboard: ({
+    devices,
+    snapshot,
+  }: {
+    devices: Device[];
+    snapshot: SnapshotPayload | null;
+  }) => (
     <div data-testid="dashboard">
       <span>{`devices:${devices.length}`}</span>
       <span>{`status:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
@@ -415,9 +437,7 @@ describe('App', () => {
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     await waitFor(() =>
-      expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
-        'pill-areas:Map Local Area',
-      ),
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
     );
 
     act(() => {
@@ -475,5 +495,71 @@ describe('App', () => {
     );
     expect(await screen.findByText('map:map-empty:Blank Map')).toBeInTheDocument();
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-empty:Blank Map');
+  });
+
+  it('opening the global map from the hub keeps global areas available in the navigation pill', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
+    );
+
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      screen.getByRole('button', { name: 'Open global map' }).click();
+    });
+
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:default:Default');
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Backbone');
+  });
+
+  it('creates a map from the active map-local area with the source map context', async () => {
+    const createdMap = mockMap({
+      id: 'map-from-area',
+      name: 'Map Local Area Copy',
+      source_area_id: 'map-area-1',
+      filter: { area_id: 'map-area-1' },
+    });
+    createCanvasMapMock.mockResolvedValue(createdMap);
+
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    act(() => {
+      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
+    });
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+
+    expect(await screen.findByTestId('topology-hub')).toHaveTextContent('hub-areas:Map Local Area');
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Create map from area Map Local Area',
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText('Map name'), {
+      target: { value: 'Map Local Area Copy' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create map' }));
+
+    await waitFor(() =>
+      expect(createCanvasMapMock).toHaveBeenCalledWith({
+        name: 'Map Local Area Copy',
+        source_area_id: 'map-area-1',
+        source_map_id: 'map-1',
+        filter: {
+          area_id: 'map-area-1',
+          include_cross_area_links: true,
+          include_ghost_devices: true,
+        },
+      }),
+    );
+    expect(await screen.findByText('map:map-from-area:Map Local Area Copy')).toBeInTheDocument();
   });
 });

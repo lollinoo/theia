@@ -149,9 +149,9 @@ function App() {
     setSelectedMapId(null);
     setSelectedMapName('Default');
     setSelectedAreaId(null);
-    setCanvasTopologyAreas([]);
+    setCanvasTopologyAreas(areas);
     setActiveView('canvas');
-  }, []);
+  }, [areas]);
 
   const handleOpenMap = useCallback((map: CanvasMap) => {
     setSelectedMapId(map.is_default ? null : map.id);
@@ -166,13 +166,16 @@ function App() {
     setActiveView('canvas');
   }, []);
 
-  const handleOpenArea = useCallback((areaId: string | null) => {
-    setSelectedMapId(null);
-    setSelectedMapName('Default');
-    setSelectedAreaId(areaId);
-    setCanvasTopologyAreas([]);
-    setActiveView('canvas');
-  }, []);
+  const handleOpenArea = useCallback(
+    (areaId: string | null) => {
+      setSelectedMapId(null);
+      setSelectedMapName('Default');
+      setSelectedAreaId(areaId);
+      setCanvasTopologyAreas(areas);
+      setActiveView('canvas');
+    },
+    [areas],
+  );
 
   const handleAreasChange = useCallback(() => {
     fetchAreas()
@@ -218,11 +221,24 @@ function App() {
       setCanvasMapsError(null);
 
       try {
-        const createdMap = await createCanvasMap({
+        const sourceMapId = sourceArea
+          ? (selectedMapId ?? canvasMaps.find((map) => map.is_default)?.id ?? null)
+          : null;
+        const payload: {
+          name: string;
+          source_area_id: string | null;
+          source_map_id?: string;
+          filter: CanvasMapFilter;
+        } = {
           name,
           source_area_id: sourceArea?.id ?? null,
           filter: sourceArea ? mapFilterForArea(sourceArea) : {},
-        });
+        };
+        if (sourceMapId) {
+          payload.source_map_id = sourceMapId;
+        }
+
+        const createdMap = await createCanvasMap(payload);
         setCreateMapDialogOpen(false);
         setCreateMapSourceArea(null);
         setCanvasMaps((maps) => upsertCanvasMap(maps, createdMap));
@@ -232,7 +248,7 @@ function App() {
         setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to create map'));
       }
     },
-    [handleOpenMap, loadCanvasMaps],
+    [canvasMaps, handleOpenMap, loadCanvasMaps, selectedMapId],
   );
 
   const handleDuplicateMapSubmit = useCallback(
@@ -311,7 +327,7 @@ function App() {
         <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
           <TopologyHub
             devices={canvasDevices}
-            areas={areas}
+            areas={navigationAreas}
             links={canvasLinks}
             snapshot={snapshot}
             maps={mapsForHub}

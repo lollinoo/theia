@@ -987,6 +987,7 @@ export default function Canvas({
           alerts={alerts}
           devices={devices}
           topologyLinks={topologyLinks}
+          topologyAreas={topologyAreas}
           loadTopology={loadTopology}
           setDevices={setDevices}
           setNodes={setNodes}

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -53,6 +54,7 @@ type canvasMapCreateRequest struct {
 	Name         string                 `json:"name"`
 	Description  string                 `json:"description"`
 	SourceAreaID *string                `json:"source_area_id"`
+	SourceMapID  *string                `json:"source_map_id"`
 	Filter       domain.CanvasMapFilter `json:"filter"`
 }
 
@@ -85,6 +87,15 @@ func (v *nullableCanvasMapString) UnmarshalJSON(data []byte) error {
 
 type canvasMapDuplicateRequest struct {
 	Name string `json:"name"`
+}
+
+type canvasMapAddDeviceRequest struct {
+	IncludeConnectedLinks *bool `json:"include_connected_links"`
+}
+
+type canvasMapUpdateDeviceAreasRequest struct {
+	DeviceIDs []string `json:"device_ids"`
+	AreaIDs   []string `json:"area_ids"`
 }
 
 func (h *CanvasMapHandler) HandleList(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +138,10 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	sourceMapID, ok := h.validateSourceMapID(w, req.SourceMapID)
+	if !ok {
+		return
+	}
 	if !h.requireTopologyDeps(w) {
 		return
 	}
@@ -145,6 +160,10 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 	if shouldCreateEmptyCanvasMapMembership(req.Filter, sourceAreaID) {
 		if err := h.mapRepo.ReplaceMembership(canvasMap.ID, domain.CanvasMapMembership{}); err != nil {
 			h.writeMapRepoMutationError(w, err)
+			return
+		}
+	} else if sourceMapID != nil {
+		if !h.replaceMaterializedMembershipFromSourceMap(w, r, canvasMap.ID, *sourceMapID, materializationFilter) {
 			return
 		}
 	} else {
@@ -333,6 +352,137 @@ func (h *CanvasMapHandler) HandleRemoveDevice(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+	if !h.requireTopologyDeps(w) {
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+	_, action, ok := parseCanvasMapRoute(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusNotFound, "canvas map not found")
+		return
+	}
+	deviceID, ok := parseCanvasMapDeviceAction(action)
+	if !ok {
+		writeError(w, http.StatusNotFound, "canvas map device not found")
+		return
+	}
+
+	req := canvasMapAddDeviceRequest{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	includeConnectedLinks := true
+	if req.IncludeConnectedLinks != nil {
+		includeConnectedLinks = *req.IncludeConnectedLinks
+	}
+
+	device, err := h.deviceService.GetDevice(r.Context(), deviceID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "canvas map device not found")
+		return
+	}
+	membership, err := h.mapRepo.GetMembership(canvasMap.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
+		return
+	}
+
+	linkIDs := []uuid.UUID{}
+	if includeConnectedLinks {
+		links, err := h.linkRepo.GetByDeviceID(deviceID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list canvas map device links", err)
+			return
+		}
+		linkIDs = canvasMapConnectedBaseLinkIDs(deviceID, membership, links)
+	}
+	areas, err := h.canvasMapAreaMembershipsForDevice(device)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map device areas", err)
+		return
+	}
+
+	adder, ok := h.mapRepo.(interface {
+		AddDeviceMembership(uuid.UUID, domain.CanvasMapDeviceMembership, []uuid.UUID, []domain.CanvasMapAreaMembership) error
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "canvas map incremental membership unavailable")
+		return
+	}
+	if err := adder.AddDeviceMembership(
+		canvasMap.ID,
+		domain.CanvasMapDeviceMembership{
+			DeviceID: deviceID,
+			Role:     domain.CanvasMapDeviceRoleBase,
+			AreaIDs:  append([]uuid.UUID(nil), device.AreaIDs...),
+		},
+		linkIDs,
+		areas,
+	); err != nil {
+		h.writeMapRepoMutationError(w, err)
+		return
+	}
+
+	updated, err := h.mapRepo.GetByID(canvasMap.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load updated canvas map", err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
+}
+
+func (h *CanvasMapHandler) HandleUpdateDeviceAreas(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	var req canvasMapUpdateDeviceAreasRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	deviceIDs, ok := parseCanvasMapRequestUUIDs(w, req.DeviceIDs, "device_id")
+	if !ok {
+		return
+	}
+	areaIDs, ok := parseCanvasMapRequestUUIDs(w, req.AreaIDs, "area_id")
+	if !ok {
+		return
+	}
+
+	updater, ok := h.mapRepo.(interface {
+		UpdateDeviceAreaMemberships(uuid.UUID, []uuid.UUID, []uuid.UUID) error
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "canvas map device area membership unavailable")
+		return
+	}
+	if err := updater.UpdateDeviceAreaMemberships(canvasMap.ID, deviceIDs, areaIDs); err != nil {
+		h.writeMapRepoMutationError(w, err)
+		return
+	}
+
+	updated, err := h.mapRepo.GetByID(canvasMap.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load updated canvas map", err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
+}
+
 func (h *CanvasMapHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	response, ok := h.buildMapTopologyResponse(w, r)
@@ -466,16 +616,6 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 		return canvasTopologyResponse{}, false
 	}
 
-	devices, err := h.deviceService.GetAllDevices(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
-		return canvasTopologyResponse{}, false
-	}
-	links, err := h.linkRepo.GetAll()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list links", err)
-		return canvasTopologyResponse{}, false
-	}
 	positions, err := h.mapPositionRepo.GetAllForMap(canvasMap.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list canvas map positions", err)
@@ -487,6 +627,16 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 		membership, err := h.mapRepo.GetMembership(canvasMap.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
+			return canvasTopologyResponse{}, false
+		}
+		devices, err := h.deviceService.GetDevicesByIDs(r.Context(), canvasMapMembershipDeviceIDs(membership.Devices))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list canvas map devices", err)
+			return canvasTopologyResponse{}, false
+		}
+		links, err := loadCanvasMapLinksByIDs(h.linkRepo, membership.LinkIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list canvas map links", err)
 			return canvasTopologyResponse{}, false
 		}
 		projection = projectCanvasTopologyForMembership(devices, links, membership)
@@ -556,6 +706,31 @@ func (h *CanvasMapHandler) validateSourceAreaID(w http.ResponseWriter, raw *stri
 	return &areaID, true
 }
 
+func (h *CanvasMapHandler) validateSourceMapID(w http.ResponseWriter, raw *string) (*uuid.UUID, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	trimmed := strings.TrimSpace(*raw)
+	if trimmed == "" {
+		writeError(w, http.StatusBadRequest, "invalid source_map_id")
+		return nil, false
+	}
+	mapID, err := uuid.Parse(trimmed)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid source_map_id")
+		return nil, false
+	}
+	if _, err := h.mapRepo.GetByID(mapID); err != nil {
+		if isCanvasMapNotFoundError(err) {
+			writeError(w, http.StatusBadRequest, "unknown source_map_id")
+			return nil, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load source map", err)
+		return nil, false
+	}
+	return &mapID, true
+}
+
 func (h *CanvasMapHandler) replaceMaterializedMembership(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -584,6 +759,66 @@ func (h *CanvasMapHandler) replaceMaterializedMembership(
 		return false
 	}
 	return true
+}
+
+func (h *CanvasMapHandler) replaceMaterializedMembershipFromSourceMap(
+	w http.ResponseWriter,
+	r *http.Request,
+	mapID uuid.UUID,
+	sourceMapID uuid.UUID,
+	filter domain.CanvasMapFilter,
+) bool {
+	sourceMembership, err := h.mapRepo.GetMembership(sourceMapID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load source map membership", err)
+		return false
+	}
+	devices, err := h.deviceService.GetDevicesByIDs(r.Context(), canvasMapMembershipDeviceIDs(sourceMembership.Devices))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list source map devices", err)
+		return false
+	}
+	links, err := loadCanvasMapLinksByIDs(h.linkRepo, sourceMembership.LinkIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list source map links", err)
+		return false
+	}
+	areaSnapshots := sourceMembership.Areas
+	if len(areaSnapshots) == 0 {
+		areas, err := h.areaRepo.GetAllWithDeviceCount()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list source map areas", err)
+			return false
+		}
+		areaSnapshots = canvasMapAreasWithCountToMembership(areas)
+	}
+
+	membership := materializeCanvasMapMembershipFromSourceMap(devices, links, sourceMembership, areaSnapshots, filter)
+	if err := h.mapRepo.ReplaceMembership(mapID, membership); err != nil {
+		h.writeMapRepoMutationError(w, err)
+		return false
+	}
+	if err := h.copyCanvasMapPositionsForMembership(mapID, sourceMapID, membership.Devices); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to copy source map positions", err)
+		return false
+	}
+	return true
+}
+
+func (h *CanvasMapHandler) copyCanvasMapPositionsForMembership(
+	mapID uuid.UUID,
+	sourceMapID uuid.UUID,
+	devices []domain.CanvasMapDeviceMembership,
+) error {
+	sourcePositions, err := h.mapPositionRepo.GetAllForMap(sourceMapID)
+	if err != nil {
+		return err
+	}
+	positions := filterPositionsForMemberDevices(sourcePositions, devices)
+	if len(positions) == 0 {
+		return nil
+	}
+	return h.mapPositionRepo.SaveAllForMap(mapID, positions)
 }
 
 func (h *CanvasMapHandler) requireMapRepos(w http.ResponseWriter) bool {
@@ -647,6 +882,8 @@ func materializeCanvasMapMembership(
 	filter domain.CanvasMapFilter,
 ) domain.CanvasMapMembership {
 	projection := projectCanvasTopologyForMap(devices, links, filter)
+	areaMemberships := canvasMapAreasForMembership(areas, projection.Devices, filter)
+	includedAreaIDs := canvasMapAreaWithCountIDSet(areaMemberships)
 	membership := domain.CanvasMapMembership{
 		Devices: make([]domain.CanvasMapDeviceMembership, 0, len(projection.Devices)+len(projection.GhostDevices)),
 		LinkIDs: make([]uuid.UUID, 0, len(projection.Links)),
@@ -657,6 +894,7 @@ func materializeCanvasMapMembership(
 		membership.Devices = append(membership.Devices, domain.CanvasMapDeviceMembership{
 			DeviceID: device.ID,
 			Role:     domain.CanvasMapDeviceRoleBase,
+			AreaIDs:  filterCanvasMapDeviceAreaIDs(device.AreaIDs, includedAreaIDs),
 		})
 	}
 	for _, device := range projection.GhostDevices {
@@ -668,7 +906,7 @@ func materializeCanvasMapMembership(
 	for _, link := range projection.Links {
 		membership.LinkIDs = append(membership.LinkIDs, link.ID)
 	}
-	for _, area := range canvasMapAreasForMembership(areas, projection.Devices, filter) {
+	for _, area := range areaMemberships {
 		membership.Areas = append(membership.Areas, domain.CanvasMapAreaMembership{
 			AreaID:      area.ID,
 			Name:        area.Name,
@@ -678,6 +916,88 @@ func materializeCanvasMapMembership(
 	}
 
 	return membership
+}
+
+func materializeCanvasMapMembershipFromSourceMap(
+	devices []domain.Device,
+	links []domain.Link,
+	sourceMembership domain.CanvasMapMembership,
+	areas []domain.CanvasMapAreaMembership,
+	filter domain.CanvasMapFilter,
+) domain.CanvasMapMembership {
+	sourceProjection := projectCanvasTopologyForMembership(devices, links, sourceMembership)
+	sourceDevices := append([]domain.Device{}, sourceProjection.Devices...)
+	sourceDevices = append(sourceDevices, sourceProjection.GhostDevices...)
+	projection := projectCanvasTopologyForMap(sourceDevices, sourceProjection.Links, filter)
+	areaMemberships := canvasMapAreaSnapshotsForMembership(areas, projection.Devices, filter)
+	includedAreaIDs := canvasMapAreaSnapshotIDSet(areaMemberships)
+	membership := domain.CanvasMapMembership{
+		Devices: make([]domain.CanvasMapDeviceMembership, 0, len(projection.Devices)+len(projection.GhostDevices)),
+		LinkIDs: make([]uuid.UUID, 0, len(projection.Links)),
+		Areas:   make([]domain.CanvasMapAreaMembership, 0, len(areas)),
+	}
+
+	for _, device := range projection.Devices {
+		membership.Devices = append(membership.Devices, domain.CanvasMapDeviceMembership{
+			DeviceID: device.ID,
+			Role:     domain.CanvasMapDeviceRoleBase,
+			AreaIDs:  filterCanvasMapDeviceAreaIDs(device.AreaIDs, includedAreaIDs),
+		})
+	}
+	for _, device := range projection.GhostDevices {
+		membership.Devices = append(membership.Devices, domain.CanvasMapDeviceMembership{
+			DeviceID: device.ID,
+			Role:     domain.CanvasMapDeviceRoleGhost,
+		})
+	}
+	for _, link := range projection.Links {
+		membership.LinkIDs = append(membership.LinkIDs, link.ID)
+	}
+	membership.Areas = append(membership.Areas, areaMemberships...)
+
+	return membership
+}
+
+func canvasMapAreaWithCountIDSet(areas []domain.AreaWithCount) map[uuid.UUID]struct{} {
+	ids := make(map[uuid.UUID]struct{}, len(areas))
+	for _, area := range areas {
+		ids[area.ID] = struct{}{}
+	}
+	return ids
+}
+
+func canvasMapAreaSnapshotIDSet(areas []domain.CanvasMapAreaMembership) map[uuid.UUID]struct{} {
+	ids := make(map[uuid.UUID]struct{}, len(areas))
+	for _, area := range areas {
+		ids[area.AreaID] = struct{}{}
+	}
+	return ids
+}
+
+func filterCanvasMapDeviceAreaIDs(areaIDs []uuid.UUID, included map[uuid.UUID]struct{}) []uuid.UUID {
+	if len(areaIDs) == 0 || len(included) == 0 {
+		return []uuid.UUID{}
+	}
+	filtered := make([]uuid.UUID, 0, len(areaIDs))
+	for _, areaID := range areaIDs {
+		if _, ok := included[areaID]; ok {
+			filtered = append(filtered, areaID)
+		}
+	}
+	return filtered
+}
+
+func canvasMapAreasWithCountToMembership(areas []domain.AreaWithCount) []domain.CanvasMapAreaMembership {
+	snapshots := make([]domain.CanvasMapAreaMembership, 0, len(areas))
+	for _, area := range areas {
+		snapshots = append(snapshots, domain.CanvasMapAreaMembership{
+			AreaID:      area.ID,
+			Name:        area.Name,
+			Description: area.Description,
+			Color:       area.Color,
+		})
+	}
+	return snapshots
 }
 
 func canvasMapAreasForMembership(
@@ -705,14 +1025,41 @@ func canvasMapAreasForMembership(
 	return filtered
 }
 
+func canvasMapAreaSnapshotsForMembership(
+	areas []domain.CanvasMapAreaMembership,
+	baseDevices []domain.Device,
+	filter domain.CanvasMapFilter,
+) []domain.CanvasMapAreaMembership {
+	includedAreaIDs := make(map[uuid.UUID]struct{})
+	if filter.AreaID != nil {
+		includedAreaIDs[*filter.AreaID] = struct{}{}
+	} else {
+		for _, device := range baseDevices {
+			for _, areaID := range device.AreaIDs {
+				includedAreaIDs[areaID] = struct{}{}
+			}
+		}
+	}
+
+	filtered := make([]domain.CanvasMapAreaMembership, 0, len(includedAreaIDs))
+	for _, area := range areas {
+		if _, ok := includedAreaIDs[area.AreaID]; ok {
+			filtered = append(filtered, area)
+		}
+	}
+	return filtered
+}
+
 func projectCanvasTopologyForMembership(
 	devices []domain.Device,
 	links []domain.Link,
 	membership domain.CanvasMapMembership,
 ) canvasTopologyProjection {
 	deviceRoles := make(map[uuid.UUID]domain.CanvasMapDeviceRole, len(membership.Devices))
+	deviceAreaIDs := make(map[uuid.UUID][]uuid.UUID, len(membership.Devices))
 	for _, device := range membership.Devices {
 		deviceRoles[device.DeviceID] = device.Role
+		deviceAreaIDs[device.DeviceID] = append([]uuid.UUID(nil), device.AreaIDs...)
 	}
 
 	linkIDs := make(map[uuid.UUID]struct{}, len(membership.LinkIDs))
@@ -730,6 +1077,7 @@ func projectCanvasTopologyForMembership(
 		if !ok {
 			continue
 		}
+		device.AreaIDs = append([]uuid.UUID(nil), deviceAreaIDs[device.ID]...)
 		if role == domain.CanvasMapDeviceRoleGhost {
 			projection.GhostDevices = append(projection.GhostDevices, device)
 			continue
@@ -751,6 +1099,93 @@ func projectCanvasTopologyForMembership(
 	}
 
 	return projection
+}
+
+func canvasMapMembershipDeviceIDs(devices []domain.CanvasMapDeviceMembership) []uuid.UUID {
+	if len(devices) == 0 {
+		return []uuid.UUID{}
+	}
+	ids := make([]uuid.UUID, 0, len(devices))
+	for _, device := range devices {
+		ids = append(ids, device.DeviceID)
+	}
+	return ids
+}
+
+func loadCanvasMapLinksByIDs(repo domain.LinkRepository, ids []uuid.UUID) ([]domain.Link, error) {
+	if len(ids) == 0 {
+		return []domain.Link{}, nil
+	}
+
+	type linkBatchRepository interface {
+		GetByIDs([]uuid.UUID) ([]domain.Link, error)
+	}
+	if batchRepo, ok := repo.(linkBatchRepository); ok {
+		return batchRepo.GetByIDs(ids)
+	}
+
+	links, err := repo.GetAll()
+	if err != nil {
+		return nil, err
+	}
+	requested := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		requested[id] = struct{}{}
+	}
+	filtered := links[:0]
+	for _, link := range links {
+		if _, ok := requested[link.ID]; ok {
+			filtered = append(filtered, link)
+		}
+	}
+	return filtered, nil
+}
+
+func canvasMapConnectedBaseLinkIDs(deviceID uuid.UUID, membership domain.CanvasMapMembership, links []domain.Link) []uuid.UUID {
+	baseDeviceIDs := make(map[uuid.UUID]struct{}, len(membership.Devices)+1)
+	for _, member := range membership.Devices {
+		if member.Role == domain.CanvasMapDeviceRoleBase {
+			baseDeviceIDs[member.DeviceID] = struct{}{}
+		}
+	}
+	baseDeviceIDs[deviceID] = struct{}{}
+
+	seen := make(map[uuid.UUID]struct{}, len(links))
+	linkIDs := make([]uuid.UUID, 0, len(links))
+	for _, link := range links {
+		if _, ok := baseDeviceIDs[link.SourceDeviceID]; !ok {
+			continue
+		}
+		if _, ok := baseDeviceIDs[link.TargetDeviceID]; !ok {
+			continue
+		}
+		if _, ok := seen[link.ID]; ok {
+			continue
+		}
+		seen[link.ID] = struct{}{}
+		linkIDs = append(linkIDs, link.ID)
+	}
+	return linkIDs
+}
+
+func (h *CanvasMapHandler) canvasMapAreaMembershipsForDevice(device *domain.Device) ([]domain.CanvasMapAreaMembership, error) {
+	if device == nil || len(device.AreaIDs) == 0 {
+		return []domain.CanvasMapAreaMembership{}, nil
+	}
+	areas := make([]domain.CanvasMapAreaMembership, 0, len(device.AreaIDs))
+	for _, areaID := range device.AreaIDs {
+		area, err := h.areaRepo.GetByID(areaID)
+		if err != nil {
+			return nil, err
+		}
+		areas = append(areas, domain.CanvasMapAreaMembership{
+			AreaID:      area.ID,
+			Name:        area.Name,
+			Description: area.Description,
+			Color:       area.Color,
+		})
+	}
+	return areas, nil
 }
 
 func canvasMapAreaMembershipToAreas(
@@ -794,6 +1229,24 @@ func parseCanvasMapDeviceAction(action string) (uuid.UUID, bool) {
 	return deviceID, true
 }
 
+func parseCanvasMapRequestUUIDs(w http.ResponseWriter, rawIDs []string, fieldName string) ([]uuid.UUID, bool) {
+	ids := make([]uuid.UUID, 0, len(rawIDs))
+	for _, rawID := range rawIDs {
+		trimmed := strings.TrimSpace(rawID)
+		if trimmed == "" {
+			writeError(w, http.StatusBadRequest, "invalid "+fieldName)
+			return nil, false
+		}
+		id, err := uuid.Parse(trimmed)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid "+fieldName)
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
 func filterPositionsForDevices(positions []domain.DevicePosition, devices []domain.Device) []domain.DevicePosition {
 	if len(positions) == 0 || len(devices) == 0 {
 		return []domain.DevicePosition{}
@@ -802,6 +1255,28 @@ func filterPositionsForDevices(positions []domain.DevicePosition, devices []doma
 	deviceIDs := make(map[uuid.UUID]struct{}, len(devices))
 	for _, device := range devices {
 		deviceIDs[device.ID] = struct{}{}
+	}
+
+	filtered := make([]domain.DevicePosition, 0, len(positions))
+	for _, position := range positions {
+		if _, ok := deviceIDs[position.DeviceID]; ok {
+			filtered = append(filtered, position)
+		}
+	}
+	return filtered
+}
+
+func filterPositionsForMemberDevices(
+	positions []domain.DevicePosition,
+	devices []domain.CanvasMapDeviceMembership,
+) []domain.DevicePosition {
+	if len(positions) == 0 || len(devices) == 0 {
+		return []domain.DevicePosition{}
+	}
+
+	deviceIDs := make(map[uuid.UUID]struct{}, len(devices))
+	for _, device := range devices {
+		deviceIDs[device.DeviceID] = struct{}{}
 	}
 
 	filtered := make([]domain.DevicePosition, 0, len(positions))
@@ -866,5 +1341,8 @@ func isCanvasMapValidationError(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "map name") ||
 		strings.Contains(message, "map description") ||
-		strings.Contains(message, "canvas map filter")
+		strings.Contains(message, "canvas map filter") ||
+		strings.Contains(message, "device_id") ||
+		strings.Contains(message, "area_id") ||
+		strings.Contains(message, "not a member")
 }

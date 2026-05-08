@@ -145,13 +145,22 @@ func NewRouter(
 			default:
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
+		case "device-areas":
+			if r.Method != http.MethodPut {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleUpdateDeviceAreas(w, r)
 		default:
 			if strings.HasPrefix(action, "devices/") {
-				if r.Method != http.MethodDelete {
+				switch r.Method {
+				case http.MethodDelete:
+					canvasMapHandler.HandleRemoveDevice(w, r)
+				case http.MethodPost:
+					canvasMapHandler.HandleAddDevice(w, r)
+				default:
 					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-					return
 				}
-				canvasMapHandler.HandleRemoveDevice(w, r)
 				return
 			}
 			writeError(w, http.StatusNotFound, "not found")

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -267,6 +268,34 @@ func (r *CanvasMapRepo) Duplicate(id uuid.UUID, name string) (domain.CanvasMap, 
 	); err != nil {
 		return domain.CanvasMap{}, fmt.Errorf("copying canvas map area membership: %w", err)
 	}
+	areaCount, err := countCanvasMapAreas(tx, copyID)
+	if err != nil {
+		return domain.CanvasMap{}, err
+	}
+	if areaCount == 0 {
+		if err := backfillCanvasMapAreasFromMemberDevices(tx, copyID); err != nil {
+			return domain.CanvasMap{}, err
+		}
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO canvas_map_device_areas (map_id, device_id, area_id, assigned_at)
+		 SELECT ?, device_id, area_id, assigned_at
+		 FROM canvas_map_device_areas
+		 WHERE map_id = ?`,
+		copyID.String(),
+		id.String(),
+	); err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("copying canvas map device area membership: %w", err)
+	}
+	deviceAreaCount, err := countCanvasMapDeviceAreas(tx, copyID)
+	if err != nil {
+		return domain.CanvasMap{}, err
+	}
+	if deviceAreaCount == 0 {
+		if err := backfillCanvasMapDeviceAreasFromMemberDevices(tx, copyID); err != nil {
+			return domain.CanvasMap{}, err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return domain.CanvasMap{}, fmt.Errorf("committing canvas map duplicate: %w", err)
@@ -319,6 +348,42 @@ func (r *CanvasMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership,
 	}
 	if err := deviceRows.Err(); err != nil {
 		return domain.CanvasMapMembership{}, fmt.Errorf("iterating canvas map device membership: %w", err)
+	}
+	deviceIndex := make(map[uuid.UUID]int, len(membership.Devices))
+	for i, device := range membership.Devices {
+		deviceIndex[device.DeviceID] = i
+	}
+	deviceAreaRows, err := r.db.Query(
+		`SELECT device_id, area_id
+		 FROM canvas_map_device_areas
+		 WHERE map_id = ?
+		 ORDER BY device_id, area_id`,
+		id.String(),
+	)
+	if err != nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("querying canvas map device area membership: %w", err)
+	}
+	defer deviceAreaRows.Close()
+
+	for deviceAreaRows.Next() {
+		var deviceIDRaw, areaIDRaw string
+		if err := deviceAreaRows.Scan(&deviceIDRaw, &areaIDRaw); err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("scanning canvas map device area membership: %w", err)
+		}
+		deviceID, err := uuid.Parse(deviceIDRaw)
+		if err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("parsing canvas map device area device id %q: %w", deviceIDRaw, err)
+		}
+		areaID, err := uuid.Parse(areaIDRaw)
+		if err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("parsing canvas map device area id %q: %w", areaIDRaw, err)
+		}
+		if index, ok := deviceIndex[deviceID]; ok {
+			membership.Devices[index].AreaIDs = append(membership.Devices[index].AreaIDs, areaID)
+		}
+	}
+	if err := deviceAreaRows.Err(); err != nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("iterating canvas map device area membership: %w", err)
 	}
 
 	linkRows, err := r.db.Query(
@@ -399,7 +464,7 @@ func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.Canvas
 		return err
 	}
 
-	for _, tableName := range []string{"canvas_map_devices", "canvas_map_links", "canvas_map_areas"} {
+	for _, tableName := range []string{"canvas_map_device_areas", "canvas_map_devices", "canvas_map_links", "canvas_map_areas"} {
 		if _, err := tx.Exec(
 			"DELETE FROM "+tableName+" WHERE map_id = ?",
 			id.String(),
@@ -448,6 +513,9 @@ func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.Canvas
 			return fmt.Errorf("inserting canvas map area membership %s: %w", area.AreaID, err)
 		}
 	}
+	if err := insertCanvasMapDeviceAreas(tx, id, membership.Devices, now); err != nil {
+		return err
+	}
 
 	if err := pruneCanvasMapPositionsForMembership(tx, id, membership.Devices); err != nil {
 		return err
@@ -466,6 +534,213 @@ func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.Canvas
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing canvas map membership: %w", err)
+	}
+	return nil
+}
+
+// AddDeviceMembership adds a device and related map-local links/areas without rebuilding the map.
+func (r *CanvasMapRepo) AddDeviceMembership(
+	id uuid.UUID,
+	device domain.CanvasMapDeviceMembership,
+	linkIDs []uuid.UUID,
+	areas []domain.CanvasMapAreaMembership,
+) error {
+	if id == uuid.Nil {
+		return fmt.Errorf("canvas map id is required")
+	}
+	if device.DeviceID == uuid.Nil {
+		return fmt.Errorf("device id is required")
+	}
+	if !device.Role.IsValid() {
+		return fmt.Errorf("invalid canvas map device role %q", device.Role)
+	}
+
+	membership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{device},
+		LinkIDs: linkIDs,
+		Areas:   areas,
+	}
+	if err := validateCanvasMapMembership(membership); err != nil {
+		return err
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting canvas map add-device transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := ensureCanvasMapExists(tx, id); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	if _, err := tx.Exec(
+		`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(map_id, device_id) DO UPDATE SET role = excluded.role`,
+		id.String(),
+		device.DeviceID.String(),
+		string(device.Role),
+		now,
+	); err != nil {
+		return fmt.Errorf("adding canvas map device membership %s: %w", device.DeviceID, err)
+	}
+
+	for _, linkID := range linkIDs {
+		if _, err := tx.Exec(
+			`INSERT INTO canvas_map_links (map_id, link_id, added_at)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT(map_id, link_id) DO NOTHING`,
+			id.String(),
+			linkID.String(),
+			now,
+		); err != nil {
+			return fmt.Errorf("adding canvas map link membership %s: %w", linkID, err)
+		}
+	}
+
+	for _, area := range areas {
+		if _, err := tx.Exec(
+			`INSERT INTO canvas_map_areas (map_id, area_id, name, description, color, added_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(map_id, area_id) DO NOTHING`,
+			id.String(),
+			area.AreaID.String(),
+			area.Name,
+			area.Description,
+			area.Color,
+			now,
+		); err != nil {
+			return fmt.Errorf("adding canvas map area membership %s: %w", area.AreaID, err)
+		}
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM canvas_map_device_areas
+		 WHERE map_id = ? AND device_id = ?`,
+		id.String(),
+		device.DeviceID.String(),
+	); err != nil {
+		return fmt.Errorf("clearing canvas map device area membership %s: %w", device.DeviceID, err)
+	}
+	if err := insertCanvasMapDeviceAreas(tx, id, []domain.CanvasMapDeviceMembership{device}, now); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(
+		`UPDATE canvas_maps
+		 SET membership_materialized = ?, updated_at = ?
+		 WHERE id = ?`,
+		true,
+		now,
+		id.String(),
+	); err != nil {
+		return fmt.Errorf("touching canvas map after add-device %s: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing canvas map add-device: %w", err)
+	}
+	return nil
+}
+
+// UpdateDeviceAreaMemberships replaces map-local area assignments for selected member devices.
+func (r *CanvasMapRepo) UpdateDeviceAreaMemberships(
+	id uuid.UUID,
+	deviceIDs []uuid.UUID,
+	areaIDs []uuid.UUID,
+) error {
+	if id == uuid.Nil {
+		return fmt.Errorf("canvas map id is required")
+	}
+	canonicalDeviceIDs, err := validateCanvasMapUUIDList(deviceIDs, "device_id")
+	if err != nil {
+		return err
+	}
+	if len(canonicalDeviceIDs) == 0 {
+		return fmt.Errorf("at least one device_id is required")
+	}
+	canonicalAreaIDs, err := validateCanvasMapUUIDList(areaIDs, "area_id")
+	if err != nil {
+		return err
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting canvas map device area update transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := ensureCanvasMapExists(tx, id); err != nil {
+		return err
+	}
+	for _, deviceID := range canonicalDeviceIDs {
+		var count int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*)
+			 FROM canvas_map_devices
+			 WHERE map_id = ? AND device_id = ?`,
+			id.String(),
+			deviceID.String(),
+		).Scan(&count); err != nil {
+			return fmt.Errorf("checking canvas map device membership %s: %w", deviceID, err)
+		}
+		if count == 0 {
+			return fmt.Errorf("canvas map device %s is not a member of map %s", deviceID, id)
+		}
+	}
+	for _, areaID := range canonicalAreaIDs {
+		var count int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*)
+			 FROM canvas_map_areas
+			 WHERE map_id = ? AND area_id = ?`,
+			id.String(),
+			areaID.String(),
+		).Scan(&count); err != nil {
+			return fmt.Errorf("checking canvas map area membership %s: %w", areaID, err)
+		}
+		if count == 0 {
+			return fmt.Errorf("canvas map area %s is not a member of map %s", areaID, id)
+		}
+	}
+
+	for _, deviceID := range canonicalDeviceIDs {
+		if _, err := tx.Exec(
+			`DELETE FROM canvas_map_device_areas
+			 WHERE map_id = ? AND device_id = ?`,
+			id.String(),
+			deviceID.String(),
+		); err != nil {
+			return fmt.Errorf("clearing canvas map device areas for %s: %w", deviceID, err)
+		}
+	}
+
+	now := time.Now().UTC()
+	for _, deviceID := range canonicalDeviceIDs {
+		for _, areaID := range canonicalAreaIDs {
+			if _, err := tx.Exec(
+				`INSERT INTO canvas_map_device_areas (map_id, device_id, area_id, assigned_at)
+				 VALUES (?, ?, ?, ?)`,
+				id.String(),
+				deviceID.String(),
+				areaID.String(),
+				now,
+			); err != nil {
+				return fmt.Errorf("assigning canvas map device %s to area %s: %w", deviceID, areaID, err)
+			}
+		}
+	}
+	if _, err := tx.Exec(
+		`UPDATE canvas_maps SET updated_at = ? WHERE id = ?`,
+		now,
+		id.String(),
+	); err != nil {
+		return fmt.Errorf("touching canvas map after device area update %s: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing canvas map device area update: %w", err)
 	}
 	return nil
 }
@@ -801,6 +1076,121 @@ func ensureCanvasMapExists(queryer canvasMapQueryRower, id uuid.UUID) error {
 	return nil
 }
 
+func countCanvasMapAreas(queryer canvasMapQueryRower, id uuid.UUID) (int, error) {
+	var count int
+	if err := queryer.QueryRow(`SELECT COUNT(*) FROM canvas_map_areas WHERE map_id = ?`, id.String()).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting canvas map areas for %s: %w", id, err)
+	}
+	return count, nil
+}
+
+func countCanvasMapDeviceAreas(queryer canvasMapQueryRower, id uuid.UUID) (int, error) {
+	var count int
+	if err := queryer.QueryRow(`SELECT COUNT(*) FROM canvas_map_device_areas WHERE map_id = ?`, id.String()).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting canvas map device areas for %s: %w", id, err)
+	}
+	return count, nil
+}
+
+func backfillCanvasMapAreasFromMemberDevices(tx *Tx, mapID uuid.UUID) error {
+	rows, err := tx.Query(
+		`SELECT DISTINCT a.id, a.name, a.description, a.color
+		 FROM canvas_map_devices cmd
+		 JOIN device_areas da ON da.device_id = cmd.device_id
+		 JOIN areas a ON a.id = da.area_id
+		 WHERE cmd.map_id = ? AND cmd.role = ?
+		 ORDER BY a.id`,
+		mapID.String(),
+		string(domain.CanvasMapDeviceRoleBase),
+	)
+	if err != nil {
+		return fmt.Errorf("querying inferred canvas map areas for %s: %w", mapID, err)
+	}
+	defer rows.Close()
+
+	areas := []domain.CanvasMapAreaMembership{}
+	for rows.Next() {
+		var area domain.CanvasMapAreaMembership
+		var areaIDRaw string
+		if err := rows.Scan(&areaIDRaw, &area.Name, &area.Description, &area.Color); err != nil {
+			return fmt.Errorf("scanning inferred canvas map area for %s: %w", mapID, err)
+		}
+		areaID, err := uuid.Parse(areaIDRaw)
+		if err != nil {
+			return fmt.Errorf("parsing inferred canvas map area id %q: %w", areaIDRaw, err)
+		}
+		area.AreaID = areaID
+		areas = append(areas, area)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating inferred canvas map areas for %s: %w", mapID, err)
+	}
+
+	now := time.Now().UTC()
+	for _, area := range areas {
+		if _, err := tx.Exec(
+			`INSERT INTO canvas_map_areas (map_id, area_id, name, description, color, added_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(map_id, area_id) DO NOTHING`,
+			mapID.String(),
+			area.AreaID.String(),
+			area.Name,
+			area.Description,
+			area.Color,
+			now,
+		); err != nil {
+			return fmt.Errorf("backfilling inferred canvas map area %s for %s: %w", area.AreaID, mapID, err)
+		}
+	}
+	return nil
+}
+
+func backfillCanvasMapDeviceAreasFromMemberDevices(tx *Tx, mapID uuid.UUID) error {
+	if _, err := tx.Exec(
+		`INSERT INTO canvas_map_device_areas (map_id, device_id, area_id, assigned_at)
+		 SELECT cmd.map_id, cmd.device_id, da.area_id, ?
+		 FROM canvas_map_devices cmd
+		 JOIN device_areas da ON da.device_id = cmd.device_id
+		 JOIN canvas_map_areas cma ON cma.map_id = cmd.map_id AND cma.area_id = da.area_id
+		 WHERE cmd.map_id = ? AND cmd.role = ?
+		 ON CONFLICT(map_id, device_id, area_id) DO NOTHING`,
+		time.Now().UTC(),
+		mapID.String(),
+		string(domain.CanvasMapDeviceRoleBase),
+	); err != nil {
+		return fmt.Errorf("backfilling canvas map device area memberships for %s: %w", mapID, err)
+	}
+	return nil
+}
+
+func insertCanvasMapDeviceAreas(
+	tx *Tx,
+	mapID uuid.UUID,
+	devices []domain.CanvasMapDeviceMembership,
+	assignedAt time.Time,
+) error {
+	for _, device := range devices {
+		areaIDs, err := validateCanvasMapUUIDList(device.AreaIDs, "device area_id")
+		if err != nil {
+			return err
+		}
+		for _, areaID := range areaIDs {
+			if _, err := tx.Exec(
+				`INSERT INTO canvas_map_device_areas (map_id, device_id, area_id, assigned_at)
+				 VALUES (?, ?, ?, ?)
+				 ON CONFLICT(map_id, device_id, area_id) DO NOTHING`,
+				mapID.String(),
+				device.DeviceID.String(),
+				areaID.String(),
+				assignedAt,
+			); err != nil {
+				return fmt.Errorf("inserting canvas map device area membership %s/%s: %w", device.DeviceID, areaID, err)
+			}
+		}
+	}
+	return nil
+}
+
 func validateCanvasMapMembership(membership domain.CanvasMapMembership) error {
 	deviceIDs := make(map[uuid.UUID]struct{}, len(membership.Devices))
 	for _, device := range membership.Devices {
@@ -814,6 +1204,9 @@ func validateCanvasMapMembership(membership domain.CanvasMapMembership) error {
 			return fmt.Errorf("duplicate canvas map device membership: %s", device.DeviceID)
 		}
 		deviceIDs[device.DeviceID] = struct{}{}
+		if _, err := validateCanvasMapUUIDList(device.AreaIDs, "device area_id"); err != nil {
+			return err
+		}
 	}
 
 	linkIDs := make(map[uuid.UUID]struct{}, len(membership.LinkIDs))
@@ -837,8 +1230,34 @@ func validateCanvasMapMembership(membership domain.CanvasMapMembership) error {
 		}
 		areaIDs[area.AreaID] = struct{}{}
 	}
+	for _, device := range membership.Devices {
+		for _, areaID := range device.AreaIDs {
+			if _, exists := areaIDs[areaID]; !exists {
+				return fmt.Errorf("canvas map device area %s is not present in area membership", areaID)
+			}
+		}
+	}
 
 	return nil
+}
+
+func validateCanvasMapUUIDList(ids []uuid.UUID, label string) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return []uuid.UUID{}, nil
+	}
+	canonical := append([]uuid.UUID(nil), ids...)
+	sort.Slice(canonical, func(i, j int) bool {
+		return canonical[i].String() < canonical[j].String()
+	})
+	for i, id := range canonical {
+		if id == uuid.Nil {
+			return nil, fmt.Errorf("canvas map %s is required", label)
+		}
+		if i > 0 && canonical[i-1] == id {
+			return nil, fmt.Errorf("duplicate canvas map %s: %s", label, id)
+		}
+	}
+	return canonical, nil
 }
 
 func rejectCanvasMapNonMemberPositions(tx *Tx, mapID uuid.UUID, positions []domain.DevicePosition) error {

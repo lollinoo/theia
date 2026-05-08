@@ -1,7 +1,7 @@
 import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices } from '../../api/client';
-import type { Device, Link } from '../../types/api';
+import type { Area, Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import { AddDevicePanel } from '../AddDevicePanel';
 import { AlertsPanel } from '../AlertsPanel';
@@ -33,6 +33,7 @@ interface CanvasPanelsProps {
   alerts?: AlertDTO[];
   devices: Device[];
   topologyLinks: Link[];
+  topologyAreas?: Area[];
   loadTopology: (silent?: boolean, pos?: { x: number; y: number }) => Promise<void>;
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
@@ -53,6 +54,7 @@ export function CanvasPanels({
   alerts = emptyAlerts,
   devices,
   topologyLinks,
+  topologyAreas = [],
   loadTopology,
   setDevices,
   setNodes,
@@ -189,9 +191,7 @@ export function CanvasPanels({
                 device={device}
                 readOnly={!editMode}
                 isVirtual={device.device_type === 'virtual'}
-                mapContext={
-                  mapId && onRemoveDeviceFromMap ? { mapId, mapName } : undefined
-                }
+                mapContext={mapId && onRemoveDeviceFromMap ? { mapId, mapName } : undefined}
                 onRemoveFromMap={onRemoveDeviceFromMap}
                 onDeviceUpdated={(updated) => {
                   const ipChanged = device.ip !== updated.ip;
@@ -253,6 +253,8 @@ export function CanvasPanels({
             return (
               <BulkEditPanel
                 devices={selectedDevices}
+                areas={topologyAreas}
+                mapContext={mapId ? { mapId, mapName } : undefined}
                 onDevicesUpdated={(updatedDevices) => {
                   setDevices((prev) => {
                     const updatedMap = new Map(updatedDevices.map((d) => [d.id, d]));

@@ -268,6 +268,36 @@ func (r *LinkRepo) GetAll() ([]domain.Link, error) {
 	return r.scanLinks(rows)
 }
 
+// GetByIDs retrieves the requested links.
+func (r *LinkRepo) GetByIDs(ids []uuid.UUID) ([]domain.Link, error) {
+	if len(ids) == 0 {
+		return []domain.Link{}, nil
+	}
+
+	placeholders := make([]string, 0, len(ids))
+	args := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		placeholders = append(placeholders, "?")
+		args = append(args, id.String())
+	}
+
+	rows, err := r.db.Query(
+		`SELECT id, source_device_id, source_if_name,
+			target_device_id, target_if_name, discovery_protocol,
+			created_at, updated_at
+		FROM links
+		WHERE id IN (`+strings.Join(placeholders, ", ")+`)
+		ORDER BY created_at`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying links by ids: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanLinks(rows)
+}
+
 // Delete removes a link by UUID.
 func (r *LinkRepo) Delete(id uuid.UUID) error {
 	return withSQLiteBusyRetry(func() error {

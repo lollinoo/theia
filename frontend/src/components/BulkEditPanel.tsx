@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { deleteDevice, fetchAreas, updateDevice } from '../api/client';
+import { deleteDevice, fetchAreas, updateCanvasMapDeviceAreas, updateDevice } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type { Area, Device } from '../types/api';
 import {
@@ -10,12 +10,20 @@ import {
 
 interface BulkEditPanelProps {
   devices: Device[];
+  areas?: Area[];
+  mapContext?: { mapId: string; mapName: string };
   onDevicesUpdated: (updated: Device[]) => void;
   onDevicesDeleted: () => void;
 }
 
-export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: BulkEditPanelProps) {
-  const [areas, setAreas] = useState<Area[]>([]);
+export function BulkEditPanel({
+  devices,
+  areas: providedAreas,
+  mapContext,
+  onDevicesUpdated,
+  onDevicesDeleted,
+}: BulkEditPanelProps) {
+  const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
   const [model, setModel] = useState<BulkEditModel>(() => createBulkEditModel(devices));
   const initialModel = createBulkEditModel(devices);
 
@@ -29,17 +37,21 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
 
   // Load reference data
   useEffect(() => {
+    if (providedAreas) {
+      return;
+    }
     fetchAreas()
-      .then(setAreas)
+      .then(setLoadedAreas)
       .catch(() => {
         /* non-fatal */
       });
-  }, []);
+  }, [providedAreas]);
 
   useEffect(() => {
     setModel(createBulkEditModel(devices));
   }, [devices]);
 
+  const areas = providedAreas ?? loadedAreas;
   const hasChanges = model.areaIds.dirty || model.metricsSource.dirty || model.vendor.dirty;
 
   async function handleSave() {
@@ -49,30 +61,57 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
     setSaved(false);
 
     try {
-      const results = await Promise.allSettled(
-        devices.map((device) => updateDevice(device.id, buildBulkUpdatePayload(device, model))),
-      );
+      const mapScopedAreaEdit = Boolean(mapContext && model.areaIds.dirty);
+      const globalModel = mapScopedAreaEdit
+        ? { ...model, areaIds: { ...model.areaIds, dirty: false } }
+        : model;
+      const hasGlobalChanges =
+        globalModel.areaIds.dirty || globalModel.metricsSource.dirty || globalModel.vendor.dirty;
 
       const updatedDevices: Device[] = [];
       const errors: string[] = [];
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
-        if (result.status === 'fulfilled') {
-          updatedDevices.push(result.value);
-        } else {
-          const reason = result.reason;
-          let errMsg: string;
-          if (reason instanceof ServerError) {
-            errMsg = reason.correlationId
-              ? `server error (ref: ${reason.correlationId})`
-              : 'server error';
-          } else if (reason instanceof ValidationError) {
-            errMsg = reason.message;
+      if (hasGlobalChanges) {
+        const results = await Promise.allSettled(
+          devices.map((device) =>
+            updateDevice(device.id, buildBulkUpdatePayload(device, globalModel)),
+          ),
+        );
+
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i];
+          if (result.status === 'fulfilled') {
+            updatedDevices.push(result.value);
           } else {
-            errMsg = reason instanceof Error ? reason.message : 'failed';
+            const reason = result.reason;
+            let errMsg: string;
+            if (reason instanceof ServerError) {
+              errMsg = reason.correlationId
+                ? `server error (ref: ${reason.correlationId})`
+                : 'server error';
+            } else if (reason instanceof ValidationError) {
+              errMsg = reason.message;
+            } else {
+              errMsg = reason instanceof Error ? reason.message : 'failed';
+            }
+            errors.push(`${devices[i].hostname || devices[i].ip}: ${errMsg}`);
           }
-          errors.push(`${devices[i].hostname || devices[i].ip}: ${errMsg}`);
         }
+      }
+
+      if (mapScopedAreaEdit && mapContext) {
+        await updateCanvasMapDeviceAreas(mapContext.mapId, {
+          device_ids: devices.map((device) => device.id),
+          area_ids: model.areaIds.value,
+        });
+        const updatedByID = new Map(updatedDevices.map((device) => [device.id, device]));
+        updatedDevices.splice(
+          0,
+          updatedDevices.length,
+          ...devices.map((device) => ({
+            ...(updatedByID.get(device.id) ?? device),
+            area_ids: [...model.areaIds.value],
+          })),
+        );
       }
 
       if (errors.length > 0) {
@@ -82,7 +121,7 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       if (updatedDevices.length > 0) {
         onDevicesUpdated(updatedDevices);
         setSaved(true);
-        setModel(createBulkEditModel(devices));
+        setModel(createBulkEditModel(updatedDevices));
         setTimeout(() => setSaved(false), 2000);
       }
     } catch (err) {

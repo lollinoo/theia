@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type CreateDevicePayload,
   ValidationError,
+  addDeviceToCanvasMap,
   cancelInstanceBackup,
   createCanvasMap,
   createDevice,
@@ -27,6 +28,7 @@ import {
   revealSNMPProfile,
   runTopologyDiscovery,
   updateCanvasMap,
+  updateCanvasMapDeviceAreas,
   updateDevice,
 } from './client';
 import { ServerError } from './errors';
@@ -817,6 +819,75 @@ describe('canvas map client', () => {
     expect(fetch).toHaveBeenCalledWith(
       '/api/v1/canvas/maps/map%2Fa/devices/device%201',
       expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
+  });
+
+  it('adds an existing device to a canvas map through the map membership endpoint', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        device_count: 2,
+        link_count: 1,
+        position_count: 0,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const map = await addDeviceToCanvasMap('map/a', 'device 1', {
+      include_connected_links: true,
+    });
+
+    expect(map.device_count).toBe(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/devices/device%201',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ include_connected_links: true }),
+      }),
+    );
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
+  });
+
+  it('updates canvas map device area membership through a map-scoped endpoint', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        device_count: 2,
+        link_count: 1,
+        position_count: 0,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const map = await updateCanvasMapDeviceAreas('map/a', {
+      device_ids: ['device 1', 'device 2'],
+      area_ids: ['area 1'],
+    });
+
+    expect(map.device_count).toBe(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/device-areas',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ device_ids: ['device 1', 'device 2'], area_ids: ['area 1'] }),
+      }),
     );
     expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
   });

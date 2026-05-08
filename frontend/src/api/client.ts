@@ -241,6 +241,7 @@ export async function createCanvasMap(payload: {
   name: string;
   description?: string;
   source_area_id?: string | null;
+  source_map_id?: string | null;
   filter?: CanvasMapFilter;
 }): Promise<CanvasMap> {
   return parseCanvasMapResponse(await requestJSONWithBody('/api/v1/canvas/maps', 'POST', payload));
@@ -268,6 +269,33 @@ export async function removeDeviceFromCanvasMap(mapId: string, deviceId: string)
   await requestJSONWithBody(
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
     'DELETE',
+  );
+}
+
+export async function addDeviceToCanvasMap(
+  mapId: string,
+  deviceId: string,
+  payload: { include_connected_links?: boolean } = {},
+): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
+      'POST',
+      payload,
+    ),
+  );
+}
+
+export async function updateCanvasMapDeviceAreas(
+  mapId: string,
+  payload: { device_ids: string[]; area_ids: string[] },
+): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/device-areas`,
+      'PUT',
+      payload,
+    ),
   );
 }
 

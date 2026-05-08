@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchAreas, updateDevice } from '../api/client';
+import { fetchAreas, updateCanvasMapDeviceAreas, updateDevice } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type { Device } from '../types/api';
 import { BulkEditPanel } from './BulkEditPanel';
@@ -10,6 +10,7 @@ vi.mock('../api/client', () => ({
   fetchAreas: vi.fn().mockResolvedValue([]),
   fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
   updateDevice: vi.fn().mockResolvedValue({}),
+  updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({}),
   deleteDevice: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -243,5 +244,45 @@ describe('BulkEditPanel — bulk save behavior', () => {
       hostname: 'router-02',
       area_ids: ['area-3'],
     });
+  });
+
+  it('updates area memberships through the map-scoped endpoint when bulk editing a saved map', async () => {
+    const updateDeviceMock = vi.mocked(updateDevice);
+    const updateCanvasMapDeviceAreasMock = vi.mocked(updateCanvasMapDeviceAreas);
+    const onDevicesUpdated = vi.fn();
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', area_ids: ['area-1'] }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2', area_ids: ['area-1'] }),
+        ]}
+        areas={[
+          { id: 'area-1', name: 'Original Area', color: '#111111' },
+          { id: 'area-2', name: 'Duplicated Map Area', color: '#222222' },
+        ]}
+        mapContext={{ mapId: 'map-copy', mapName: 'Copy' }}
+        onDevicesUpdated={onDevicesUpdated}
+        onDevicesDeleted={vi.fn()}
+      />,
+    );
+
+    const [areaSelect] = screen.getAllByRole('combobox');
+    fireEvent.change(areaSelect, { target: { value: 'area-2' } });
+    fireEvent.click(screen.getByText('Apply to 2 Devices'));
+
+    await waitFor(() => {
+      expect(updateCanvasMapDeviceAreasMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(updateCanvasMapDeviceAreasMock).toHaveBeenCalledWith('map-copy', {
+      device_ids: ['dev-1', 'dev-2'],
+      area_ids: ['area-1', 'area-2'],
+    });
+    expect(updateDeviceMock).not.toHaveBeenCalled();
+    expect(onDevicesUpdated).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'dev-1', area_ids: ['area-1', 'area-2'] }),
+      expect.objectContaining({ id: 'dev-2', area_ids: ['area-1', 'area-2'] }),
+    ]);
   });
 });

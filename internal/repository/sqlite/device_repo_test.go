@@ -95,6 +95,98 @@ func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
 	}
 }
 
+func TestDeviceRepoGetByIDsLoadsOnlyRequestedDevicesWithInterfacesAndAreas(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+	areaRepo := NewAreaRepo(db)
+
+	area := &domain.Area{
+		ID:    uuid.New(),
+		Name:  "Backbone",
+		Color: "#00AEEF",
+	}
+	if err := areaRepo.Create(area); err != nil {
+		t.Fatalf("Create area failed: %v", err)
+	}
+
+	first := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-a",
+		IP:         "10.80.0.1",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{{IfIndex: 1, IfName: "ether1", IfDescr: "uplink", Speed: 1000000000}},
+		AreaIDs:    []uuid.UUID{area.ID},
+	}
+	second := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-b",
+		IP:         "10.80.0.2",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	third := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-c",
+		IP:         "10.80.0.3",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	for _, device := range []*domain.Device{first, second, third} {
+		if err := repo.Create(device); err != nil {
+			t.Fatalf("Create device %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	devices, err := repo.GetByIDs([]uuid.UUID{second.ID, first.ID, uuid.New()})
+	if err != nil {
+		t.Fatalf("GetByIDs failed: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("GetByIDs returned %d devices, want 2: %#v", len(devices), devices)
+	}
+	byID := make(map[uuid.UUID]domain.Device, len(devices))
+	for _, device := range devices {
+		byID[device.ID] = device
+	}
+	if _, ok := byID[third.ID]; ok {
+		t.Fatalf("GetByIDs returned unrequested device %s", third.ID)
+	}
+	gotFirst := byID[first.ID]
+	if len(gotFirst.Interfaces) != 1 || gotFirst.Interfaces[0].IfName != "ether1" {
+		t.Fatalf("first interfaces = %#v, want ether1", gotFirst.Interfaces)
+	}
+	if len(gotFirst.AreaIDs) != 1 || gotFirst.AreaIDs[0] != area.ID {
+		t.Fatalf("first area IDs = %#v, want %s", gotFirst.AreaIDs, area.ID)
+	}
+
+	empty, err := repo.GetByIDs(nil)
+	if err != nil {
+		t.Fatalf("GetByIDs(nil) failed: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("GetByIDs(nil) = %#v, want empty", empty)
+	}
+}
+
 func TestDeviceRepoGetBySysName_EmptyOrUnknownLookup(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewDeviceRepo(db, testKey, nil)
