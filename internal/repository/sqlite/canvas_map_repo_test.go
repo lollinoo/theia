@@ -90,6 +90,124 @@ func TestCanvasMapRepoDuplicatesMetadataAndPositions(t *testing.T) {
 	}
 }
 
+func TestCanvasMapMembershipRepoReplaceAndGetPersistsDevicesLinksAreas(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	repo := NewCanvasMapRepo(db)
+
+	canvasMap, err := repo.Create(domain.CanvasMapCreate{Name: "Materialized POP"})
+	if err != nil {
+		t.Fatalf("create map: %v", err)
+	}
+	baseDeviceID := uuid.MustParse("00000000-0000-0000-0000-000000000601")
+	ghostDeviceID := uuid.MustParse("00000000-0000-0000-0000-000000000602")
+	insertCanvasMapRepoTestDevice(t, db, baseDeviceID)
+	insertCanvasMapRepoTestDevice(t, db, ghostDeviceID)
+
+	linkID := uuid.MustParse("00000000-0000-0000-0000-000000000603")
+	insertCanvasMapRepoTestLink(t, db, linkID, baseDeviceID, ghostDeviceID)
+
+	areaID := uuid.MustParse("00000000-0000-0000-0000-000000000604")
+	membership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: baseDeviceID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: ghostDeviceID, Role: domain.CanvasMapDeviceRoleGhost},
+		},
+		LinkIDs: []uuid.UUID{linkID},
+		Areas: []domain.CanvasMapAreaMembership{
+			{
+				AreaID:      areaID,
+				Name:        "North POP",
+				Description: "map-local north aggregation",
+				Color:       "#123456",
+			},
+		},
+	}
+
+	if err := repo.ReplaceMembership(canvasMap.ID, membership); err != nil {
+		t.Fatalf("replace membership: %v", err)
+	}
+
+	got, err := repo.GetMembership(canvasMap.ID)
+	if err != nil {
+		t.Fatalf("get membership: %v", err)
+	}
+	assertCanvasMapMembershipEqual(t, got, membership)
+
+	replacement := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: ghostDeviceID, Role: domain.CanvasMapDeviceRoleGhost},
+		},
+	}
+	if err := repo.ReplaceMembership(canvasMap.ID, replacement); err != nil {
+		t.Fatalf("replace membership with smaller set: %v", err)
+	}
+
+	got, err = repo.GetMembership(canvasMap.ID)
+	if err != nil {
+		t.Fatalf("get replacement membership: %v", err)
+	}
+	assertCanvasMapMembershipEqual(t, got, replacement)
+}
+
+func TestCanvasMapRepoDuplicateCopiesMembershipAndPositions(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	mapRepo := NewCanvasMapRepo(db)
+	positionRepo := NewCanvasMapPositionRepo(db)
+
+	source, err := mapRepo.Create(domain.CanvasMapCreate{Name: "Source Materialized"})
+	if err != nil {
+		t.Fatalf("create source map: %v", err)
+	}
+	deviceID := uuid.MustParse("00000000-0000-0000-0000-000000000611")
+	ghostDeviceID := uuid.MustParse("00000000-0000-0000-0000-000000000612")
+	insertCanvasMapRepoTestDevice(t, db, deviceID)
+	insertCanvasMapRepoTestDevice(t, db, ghostDeviceID)
+
+	linkID := uuid.MustParse("00000000-0000-0000-0000-000000000613")
+	insertCanvasMapRepoTestLink(t, db, linkID, deviceID, ghostDeviceID)
+
+	membership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: ghostDeviceID, Role: domain.CanvasMapDeviceRoleGhost},
+		},
+		LinkIDs: []uuid.UUID{linkID},
+		Areas: []domain.CanvasMapAreaMembership{
+			{
+				AreaID:      uuid.MustParse("00000000-0000-0000-0000-000000000614"),
+				Name:        "Source Area",
+				Description: "copied map-local area",
+				Color:       "#abcdef",
+			},
+		},
+	}
+	if err := mapRepo.ReplaceMembership(source.ID, membership); err != nil {
+		t.Fatalf("replace source membership: %v", err)
+	}
+	if err := positionRepo.SaveAllForMap(source.ID, []domain.DevicePosition{{DeviceID: deviceID, X: 10, Y: 20, Pinned: true}}); err != nil {
+		t.Fatalf("save source positions: %v", err)
+	}
+
+	copy, err := mapRepo.Duplicate(source.ID, "Copied Materialized")
+	if err != nil {
+		t.Fatalf("duplicate map: %v", err)
+	}
+
+	gotMembership, err := mapRepo.GetMembership(copy.ID)
+	if err != nil {
+		t.Fatalf("get copy membership: %v", err)
+	}
+	assertCanvasMapMembershipEqual(t, gotMembership, membership)
+
+	positions, err := positionRepo.GetAllForMap(copy.ID)
+	if err != nil {
+		t.Fatalf("get copy positions: %v", err)
+	}
+	if len(positions) != 1 || positions[0].DeviceID != deviceID || positions[0].X != 10 || positions[0].Y != 20 || !positions[0].Pinned {
+		t.Fatalf("unexpected copied positions: %#v", positions)
+	}
+}
+
 func TestCanvasMapRepoCreateAndUpdateCanonicalizeFilterJSON(t *testing.T) {
 	db := openCanvasMapRepoTestDB(t)
 	repo := NewCanvasMapRepo(db)
@@ -268,9 +386,48 @@ func TestCanvasMapPositionRepoSaveAllForMapUpsertsExistingCoordinates(t *testing
 	}
 }
 
-func TestPrimaryDataCopySpecsIncludeCanvasMaps(t *testing.T) {
+func TestCanvasMapPositionRepoRejectsPositionsForNonMemberDevices(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	mapRepo := NewCanvasMapRepo(db)
+	positionRepo := NewCanvasMapPositionRepo(db)
+
+	legacyMap, err := mapRepo.Create(domain.CanvasMapCreate{Name: "Legacy Positions"})
+	if err != nil {
+		t.Fatalf("create legacy map: %v", err)
+	}
+	memberID := uuid.MustParse("00000000-0000-0000-0000-000000000621")
+	nonMemberID := uuid.MustParse("00000000-0000-0000-0000-000000000622")
+	insertCanvasMapRepoTestDevice(t, db, memberID)
+	insertCanvasMapRepoTestDevice(t, db, nonMemberID)
+
+	if err := positionRepo.SaveAllForMap(legacyMap.ID, []domain.DevicePosition{{DeviceID: nonMemberID, X: 1, Y: 2}}); err != nil {
+		t.Fatalf("save position before membership exists: %v", err)
+	}
+
+	materializedMap, err := mapRepo.Create(domain.CanvasMapCreate{Name: "Materialized Positions"})
+	if err != nil {
+		t.Fatalf("create materialized map: %v", err)
+	}
+	if err := mapRepo.ReplaceMembership(materializedMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{{DeviceID: memberID, Role: domain.CanvasMapDeviceRoleBase}},
+	}); err != nil {
+		t.Fatalf("replace materialized membership: %v", err)
+	}
+
+	if err := positionRepo.SaveAllForMap(materializedMap.ID, []domain.DevicePosition{{DeviceID: nonMemberID, X: 3, Y: 4}}); err == nil {
+		t.Fatal("expected non-member device position to fail")
+	}
+	if err := positionRepo.SaveAllForMap(materializedMap.ID, []domain.DevicePosition{{DeviceID: memberID, X: 5, Y: 6, Pinned: true}}); err != nil {
+		t.Fatalf("save member position: %v", err)
+	}
+}
+
+func TestPrimaryDataCopySpecsIncludeCanvasMapMembershipTables(t *testing.T) {
 	required := map[string]bool{
 		"canvas_maps":          false,
+		"canvas_map_devices":   false,
+		"canvas_map_links":     false,
+		"canvas_map_areas":     false,
 		"canvas_map_positions": false,
 	}
 	for _, spec := range primaryDataCopySpecs {
@@ -281,6 +438,37 @@ func TestPrimaryDataCopySpecsIncludeCanvasMaps(t *testing.T) {
 	for name, found := range required {
 		if !found {
 			t.Fatalf("expected primaryDataCopySpecs to include %s", name)
+		}
+	}
+}
+
+func assertCanvasMapMembershipEqual(t *testing.T, got, want domain.CanvasMapMembership) {
+	t.Helper()
+
+	if len(got.Devices) != len(want.Devices) {
+		t.Fatalf("device membership count = %d, want %d: %#v", len(got.Devices), len(want.Devices), got.Devices)
+	}
+	for i := range got.Devices {
+		if got.Devices[i] != want.Devices[i] {
+			t.Fatalf("device membership[%d] = %#v, want %#v", i, got.Devices[i], want.Devices[i])
+		}
+	}
+
+	if len(got.LinkIDs) != len(want.LinkIDs) {
+		t.Fatalf("link membership count = %d, want %d: %#v", len(got.LinkIDs), len(want.LinkIDs), got.LinkIDs)
+	}
+	for i := range got.LinkIDs {
+		if got.LinkIDs[i] != want.LinkIDs[i] {
+			t.Fatalf("link membership[%d] = %s, want %s", i, got.LinkIDs[i], want.LinkIDs[i])
+		}
+	}
+
+	if len(got.Areas) != len(want.Areas) {
+		t.Fatalf("area membership count = %d, want %d: %#v", len(got.Areas), len(want.Areas), got.Areas)
+	}
+	for i := range got.Areas {
+		if got.Areas[i] != want.Areas[i] {
+			t.Fatalf("area membership[%d] = %#v, want %#v", i, got.Areas[i], want.Areas[i])
 		}
 	}
 }
@@ -298,5 +486,19 @@ func insertCanvasMapRepoTestDevice(t *testing.T, db *sql.DB, id uuid.UUID) {
 		"router-"+suffix,
 	); err != nil {
 		t.Fatalf("insert device %s: %v", id, err)
+	}
+}
+
+func insertCanvasMapRepoTestLink(t *testing.T, db *sql.DB, id, sourceDeviceID, targetDeviceID uuid.UUID) {
+	t.Helper()
+
+	if _, err := db.Exec(
+		`INSERT INTO links (id, source_device_id, source_if_name, target_device_id, target_if_name, discovery_protocol, created_at, updated_at)
+		 VALUES (?, ?, 'ether1', ?, 'ether2', 'manual', datetime('now'), datetime('now'))`,
+		id.String(),
+		sourceDeviceID.String(),
+		targetDeviceID.String(),
+	); err != nil {
+		t.Fatalf("insert link %s: %v", id, err)
 	}
 }

@@ -89,7 +89,13 @@ func TestRunMigrationsCreatesCanvasMapTables(t *testing.T) {
 		t.Fatalf("RunMigrations failed: %v", err)
 	}
 
-	for _, tableName := range []string{"canvas_maps", "canvas_map_positions"} {
+	for _, tableName := range []string{
+		"canvas_maps",
+		"canvas_map_devices",
+		"canvas_map_links",
+		"canvas_map_areas",
+		"canvas_map_positions",
+	} {
 		var count int
 		if err := db.QueryRow(
 			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
@@ -100,6 +106,31 @@ func TestRunMigrationsCreatesCanvasMapTables(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("expected table %s to exist", tableName)
 		}
+	}
+
+	rows, err := db.Query(`PRAGMA foreign_key_list(canvas_map_areas)`)
+	if err != nil {
+		t.Fatalf("querying canvas_map_areas foreign keys: %v", err)
+	}
+	defer rows.Close()
+
+	var referencedTables []string
+	for rows.Next() {
+		var (
+			id, seq                       int
+			tableName, from, to, onUpdate string
+			onDelete, match               string
+		)
+		if err := rows.Scan(&id, &seq, &tableName, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			t.Fatalf("scanning canvas_map_areas foreign key: %v", err)
+		}
+		referencedTables = append(referencedTables, tableName)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating canvas_map_areas foreign keys: %v", err)
+	}
+	if len(referencedTables) != 1 || referencedTables[0] != "canvas_maps" {
+		t.Fatalf("canvas_map_areas referenced tables = %#v, want only canvas_maps", referencedTables)
 	}
 }
 

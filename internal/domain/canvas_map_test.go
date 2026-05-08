@@ -135,6 +135,15 @@ func TestParseCanvasMapFilterRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestCanvasMapDeviceRoleValues(t *testing.T) {
+	if CanvasMapDeviceRoleBase != CanvasMapDeviceRole("base") {
+		t.Fatalf("CanvasMapDeviceRoleBase = %q, want base", CanvasMapDeviceRoleBase)
+	}
+	if CanvasMapDeviceRoleGhost != CanvasMapDeviceRole("ghost") {
+		t.Fatalf("CanvasMapDeviceRoleGhost = %q, want ghost", CanvasMapDeviceRoleGhost)
+	}
+}
+
 func assertUUIDSliceEqual(t *testing.T, got, want []uuid.UUID) {
 	t.Helper()
 	if len(got) != len(want) {

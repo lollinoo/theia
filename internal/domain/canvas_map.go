@@ -24,6 +24,35 @@ type CanvasMapFilter struct {
 	Tags                  map[string]string `json:"tags,omitempty"`
 }
 
+type CanvasMapDeviceRole string
+
+const (
+	CanvasMapDeviceRoleBase  CanvasMapDeviceRole = "base"
+	CanvasMapDeviceRoleGhost CanvasMapDeviceRole = "ghost"
+)
+
+func (role CanvasMapDeviceRole) IsValid() bool {
+	return role == CanvasMapDeviceRoleBase || role == CanvasMapDeviceRoleGhost
+}
+
+type CanvasMapDeviceMembership struct {
+	DeviceID uuid.UUID
+	Role     CanvasMapDeviceRole
+}
+
+type CanvasMapAreaMembership struct {
+	AreaID      uuid.UUID
+	Name        string
+	Description string
+	Color       string
+}
+
+type CanvasMapMembership struct {
+	Devices []CanvasMapDeviceMembership
+	LinkIDs []uuid.UUID
+	Areas   []CanvasMapAreaMembership
+}
+
 type CanvasMap struct {
 	ID            uuid.UUID
 	Name          string
@@ -62,6 +91,10 @@ type CanvasMapRepository interface {
 	Update(id uuid.UUID, input CanvasMapUpdate) (CanvasMap, error)
 	Delete(id uuid.UUID) error
 	Duplicate(id uuid.UUID, name string) (CanvasMap, error)
+	GetMembership(id uuid.UUID) (CanvasMapMembership, error)
+	ReplaceMembership(id uuid.UUID, membership CanvasMapMembership) error
+	RemoveDevice(id uuid.UUID, deviceID uuid.UUID) error
+	RemoveLink(id uuid.UUID, linkID uuid.UUID) error
 }
 
 type CanvasMapPositionRepository interface {

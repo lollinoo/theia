@@ -160,6 +160,28 @@ var primaryDataCopySpecs = []tableCopySpec{
 		keyColumns: []string{"map_id", "device_id"},
 	},
 	{
+		name: "canvas_map_devices",
+		columns: []columnSpec{
+			{name: "map_id", kind: columnKindText},
+			{name: "device_id", kind: columnKindText},
+			{name: "role", kind: columnKindText},
+			{name: "added_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"map_id", "device_id"},
+	},
+	{
+		name: "canvas_map_areas",
+		columns: []columnSpec{
+			{name: "map_id", kind: columnKindText},
+			{name: "area_id", kind: columnKindText},
+			{name: "name", kind: columnKindText},
+			{name: "description", kind: columnKindText},
+			{name: "color", kind: columnKindText},
+			{name: "added_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"map_id", "area_id"},
+	},
+	{
 		name: "device_areas",
 		columns: []columnSpec{
 			{name: "device_id", kind: columnKindText},
@@ -206,6 +228,15 @@ var primaryDataCopySpecs = []tableCopySpec{
 			{name: "updated_at", kind: columnKindTime},
 		},
 		keyColumns: []string{"id"},
+	},
+	{
+		name: "canvas_map_links",
+		columns: []columnSpec{
+			{name: "map_id", kind: columnKindText},
+			{name: "link_id", kind: columnKindText},
+			{name: "added_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"map_id", "link_id"},
 	},
 	{
 		name: "settings",
@@ -409,6 +440,9 @@ func deleteFreshGeneratedTargetDefaultCanvasMap(targetTx *Tx, targetDefault targ
 		   AND source_area_id IS NULL
 		   AND filter_json = '{}'
 		   AND NOT EXISTS (SELECT 1 FROM canvas_map_positions)
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_devices)
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_links)
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_areas)
 		   AND (SELECT COUNT(*) FROM canvas_maps) = 1`,
 		targetDefault.id,
 		true,
@@ -470,6 +504,9 @@ type targetDefaultCanvasMapCopyState struct {
 	positionCount      int
 	mapCount           int
 	totalPositionCount int
+	totalDeviceCount   int
+	totalLinkCount     int
+	totalAreaCount     int
 }
 
 func targetDefaultCanvasMapForCopy(targetTx *Tx) (targetDefaultCanvasMapCopyState, bool, error) {
@@ -483,7 +520,10 @@ func targetDefaultCanvasMapForCopy(targetTx *Tx) (targetDefaultCanvasMapCopyStat
 			cm.filter_json,
 			COUNT(cmp.device_id),
 			(SELECT COUNT(*) FROM canvas_maps),
-			(SELECT COUNT(*) FROM canvas_map_positions)
+			(SELECT COUNT(*) FROM canvas_map_positions),
+			(SELECT COUNT(*) FROM canvas_map_devices),
+			(SELECT COUNT(*) FROM canvas_map_links),
+			(SELECT COUNT(*) FROM canvas_map_areas)
 		 FROM canvas_maps cm
 		 LEFT JOIN canvas_map_positions cmp ON cmp.map_id = cm.id
 		 WHERE cm.is_default = ?
@@ -499,6 +539,9 @@ func targetDefaultCanvasMapForCopy(targetTx *Tx) (targetDefaultCanvasMapCopyStat
 		&targetDefault.positionCount,
 		&targetDefault.mapCount,
 		&targetDefault.totalPositionCount,
+		&targetDefault.totalDeviceCount,
+		&targetDefault.totalLinkCount,
+		&targetDefault.totalAreaCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -516,7 +559,10 @@ func (state targetDefaultCanvasMapCopyState) isFreshGeneratedMigrationDefault() 
 		state.filterJSON == "{}" &&
 		state.positionCount == 0 &&
 		state.mapCount == 1 &&
-		state.totalPositionCount == 0
+		state.totalPositionCount == 0 &&
+		state.totalDeviceCount == 0 &&
+		state.totalLinkCount == 0 &&
+		state.totalAreaCount == 0
 }
 
 func clearTargetTables(targetTx *Tx, specs []tableCopySpec) error {

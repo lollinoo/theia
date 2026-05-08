@@ -233,11 +233,284 @@ func (r *CanvasMapRepo) Duplicate(id uuid.UUID, name string) (domain.CanvasMap, 
 		return domain.CanvasMap{}, fmt.Errorf("copying canvas map positions: %w", err)
 	}
 
+	if _, err := tx.Exec(
+		`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
+		 SELECT ?, device_id, role, added_at
+		 FROM canvas_map_devices
+		 WHERE map_id = ?`,
+		copyID.String(),
+		id.String(),
+	); err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("copying canvas map device membership: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO canvas_map_links (map_id, link_id, added_at)
+		 SELECT ?, link_id, added_at
+		 FROM canvas_map_links
+		 WHERE map_id = ?`,
+		copyID.String(),
+		id.String(),
+	); err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("copying canvas map link membership: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO canvas_map_areas (map_id, area_id, name, description, color, added_at)
+		 SELECT ?, area_id, name, description, color, added_at
+		 FROM canvas_map_areas
+		 WHERE map_id = ?`,
+		copyID.String(),
+		id.String(),
+	); err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("copying canvas map area membership: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return domain.CanvasMap{}, fmt.Errorf("committing canvas map duplicate: %w", err)
 	}
 
 	return r.GetByID(copyID)
+}
+
+// GetMembership retrieves the materialized device, link, and area membership for one saved map.
+func (r *CanvasMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership, error) {
+	if id == uuid.Nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("canvas map id is required")
+	}
+	if err := ensureCanvasMapExists(r.db, id); err != nil {
+		return domain.CanvasMapMembership{}, err
+	}
+
+	membership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{},
+		LinkIDs: []uuid.UUID{},
+		Areas:   []domain.CanvasMapAreaMembership{},
+	}
+
+	deviceRows, err := r.db.Query(
+		`SELECT device_id, role
+		 FROM canvas_map_devices
+		 WHERE map_id = ?
+		 ORDER BY device_id`,
+		id.String(),
+	)
+	if err != nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("querying canvas map device membership: %w", err)
+	}
+	defer deviceRows.Close()
+
+	for deviceRows.Next() {
+		var deviceIDRaw, roleRaw string
+		if err := deviceRows.Scan(&deviceIDRaw, &roleRaw); err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("scanning canvas map device membership: %w", err)
+		}
+		deviceID, err := uuid.Parse(deviceIDRaw)
+		if err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("parsing canvas map device membership id %q: %w", deviceIDRaw, err)
+		}
+		role := domain.CanvasMapDeviceRole(roleRaw)
+		if !role.IsValid() {
+			return domain.CanvasMapMembership{}, fmt.Errorf("invalid canvas map device role %q", roleRaw)
+		}
+		membership.Devices = append(membership.Devices, domain.CanvasMapDeviceMembership{DeviceID: deviceID, Role: role})
+	}
+	if err := deviceRows.Err(); err != nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("iterating canvas map device membership: %w", err)
+	}
+
+	linkRows, err := r.db.Query(
+		`SELECT link_id
+		 FROM canvas_map_links
+		 WHERE map_id = ?
+		 ORDER BY link_id`,
+		id.String(),
+	)
+	if err != nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("querying canvas map link membership: %w", err)
+	}
+	defer linkRows.Close()
+
+	for linkRows.Next() {
+		var linkIDRaw string
+		if err := linkRows.Scan(&linkIDRaw); err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("scanning canvas map link membership: %w", err)
+		}
+		linkID, err := uuid.Parse(linkIDRaw)
+		if err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("parsing canvas map link membership id %q: %w", linkIDRaw, err)
+		}
+		membership.LinkIDs = append(membership.LinkIDs, linkID)
+	}
+	if err := linkRows.Err(); err != nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("iterating canvas map link membership: %w", err)
+	}
+
+	areaRows, err := r.db.Query(
+		`SELECT area_id, name, description, color
+		 FROM canvas_map_areas
+		 WHERE map_id = ?
+		 ORDER BY area_id`,
+		id.String(),
+	)
+	if err != nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("querying canvas map area membership: %w", err)
+	}
+	defer areaRows.Close()
+
+	for areaRows.Next() {
+		var area domain.CanvasMapAreaMembership
+		var areaIDRaw string
+		if err := areaRows.Scan(&areaIDRaw, &area.Name, &area.Description, &area.Color); err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("scanning canvas map area membership: %w", err)
+		}
+		areaID, err := uuid.Parse(areaIDRaw)
+		if err != nil {
+			return domain.CanvasMapMembership{}, fmt.Errorf("parsing canvas map area membership id %q: %w", areaIDRaw, err)
+		}
+		area.AreaID = areaID
+		membership.Areas = append(membership.Areas, area)
+	}
+	if err := areaRows.Err(); err != nil {
+		return domain.CanvasMapMembership{}, fmt.Errorf("iterating canvas map area membership: %w", err)
+	}
+
+	return membership, nil
+}
+
+// ReplaceMembership atomically replaces a map's materialized device, link, and area membership.
+func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.CanvasMapMembership) error {
+	if id == uuid.Nil {
+		return fmt.Errorf("canvas map id is required")
+	}
+	if err := validateCanvasMapMembership(membership); err != nil {
+		return err
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting canvas map membership transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := ensureCanvasMapExists(tx, id); err != nil {
+		return err
+	}
+
+	for _, tableName := range []string{"canvas_map_devices", "canvas_map_links", "canvas_map_areas"} {
+		if _, err := tx.Exec(
+			"DELETE FROM "+tableName+" WHERE map_id = ?",
+			id.String(),
+		); err != nil {
+			return fmt.Errorf("clearing %s: %w", tableName, err)
+		}
+	}
+
+	now := time.Now().UTC()
+	for _, device := range membership.Devices {
+		if _, err := tx.Exec(
+			`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
+			 VALUES (?, ?, ?, ?)`,
+			id.String(),
+			device.DeviceID.String(),
+			string(device.Role),
+			now,
+		); err != nil {
+			return fmt.Errorf("inserting canvas map device membership %s: %w", device.DeviceID, err)
+		}
+	}
+
+	for _, linkID := range membership.LinkIDs {
+		if _, err := tx.Exec(
+			`INSERT INTO canvas_map_links (map_id, link_id, added_at)
+			 VALUES (?, ?, ?)`,
+			id.String(),
+			linkID.String(),
+			now,
+		); err != nil {
+			return fmt.Errorf("inserting canvas map link membership %s: %w", linkID, err)
+		}
+	}
+
+	for _, area := range membership.Areas {
+		if _, err := tx.Exec(
+			`INSERT INTO canvas_map_areas (map_id, area_id, name, description, color, added_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			id.String(),
+			area.AreaID.String(),
+			area.Name,
+			area.Description,
+			area.Color,
+			now,
+		); err != nil {
+			return fmt.Errorf("inserting canvas map area membership %s: %w", area.AreaID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing canvas map membership: %w", err)
+	}
+	return nil
+}
+
+// RemoveDevice removes one device from a map's materialized membership and drops its map-local position.
+func (r *CanvasMapRepo) RemoveDevice(id uuid.UUID, deviceID uuid.UUID) error {
+	if id == uuid.Nil {
+		return fmt.Errorf("canvas map id is required")
+	}
+	if deviceID == uuid.Nil {
+		return fmt.Errorf("device id is required")
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting canvas map device removal transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := ensureCanvasMapExists(tx, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM canvas_map_devices WHERE map_id = ? AND device_id = ?`,
+		id.String(),
+		deviceID.String(),
+	); err != nil {
+		return fmt.Errorf("removing canvas map device membership %s: %w", deviceID, err)
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM canvas_map_positions WHERE map_id = ? AND device_id = ?`,
+		id.String(),
+		deviceID.String(),
+	); err != nil {
+		return fmt.Errorf("removing canvas map position for device %s: %w", deviceID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing canvas map device removal: %w", err)
+	}
+	return nil
+}
+
+// RemoveLink removes one link from a map's materialized membership.
+func (r *CanvasMapRepo) RemoveLink(id uuid.UUID, linkID uuid.UUID) error {
+	if id == uuid.Nil {
+		return fmt.Errorf("canvas map id is required")
+	}
+	if linkID == uuid.Nil {
+		return fmt.Errorf("link id is required")
+	}
+	if err := ensureCanvasMapExists(r.db, id); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(
+		`DELETE FROM canvas_map_links WHERE map_id = ? AND link_id = ?`,
+		id.String(),
+		linkID.String(),
+	); err != nil {
+		return fmt.Errorf("removing canvas map link membership %s: %w", linkID, err)
+	}
+	return nil
 }
 
 // GetAllForMap retrieves all persisted device positions for one saved map.
@@ -286,6 +559,10 @@ func (r *CanvasMapPositionRepo) SaveAllForMap(mapID uuid.UUID, positions []domai
 		return fmt.Errorf("starting canvas map position transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
+
+	if err := rejectCanvasMapNonMemberPositions(tx, mapID, positions); err != nil {
+		return err
+	}
 
 	stmt, err := tx.Prepare(
 		`INSERT INTO canvas_map_positions (map_id, device_id, x, y, pinned, updated_at)
@@ -354,8 +631,12 @@ func canvasMapSelectQuery(whereClause string) string {
 			cm.is_default,
 			cm.created_at,
 			cm.updated_at,
-			COUNT(cmp.device_id) AS position_count
+			COUNT(DISTINCT cmd.device_id) AS device_count,
+			COUNT(DISTINCT cml.link_id) AS link_count,
+			COUNT(DISTINCT cmp.device_id) AS position_count
 		FROM canvas_maps cm
+		LEFT JOIN canvas_map_devices cmd ON cmd.map_id = cm.id
+		LEFT JOIN canvas_map_links cml ON cml.map_id = cm.id
 		LEFT JOIN canvas_map_positions cmp ON cmp.map_id = cm.id
 		` + whereClause + `
 		GROUP BY
@@ -386,6 +667,8 @@ func scanCanvasMap(scanner rowScanner) (domain.CanvasMap, error) {
 		&isDefaultRaw,
 		&canvasMap.CreatedAt,
 		&canvasMap.UpdatedAt,
+		&canvasMap.DeviceCount,
+		&canvasMap.LinkCount,
 		&canvasMap.PositionCount,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -447,6 +730,115 @@ func scanCanvasMapPosition(scanner rowScanner) (domain.DevicePosition, error) {
 	position.Pinned = pinned
 
 	return position, nil
+}
+
+type canvasMapQueryRower interface {
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
+func ensureCanvasMapExists(queryer canvasMapQueryRower, id uuid.UUID) error {
+	var count int
+	if err := queryer.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, id.String()).Scan(&count); err != nil {
+		return fmt.Errorf("checking canvas map existence: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("canvas map not found: %s", id)
+	}
+	return nil
+}
+
+func validateCanvasMapMembership(membership domain.CanvasMapMembership) error {
+	deviceIDs := make(map[uuid.UUID]struct{}, len(membership.Devices))
+	for _, device := range membership.Devices {
+		if device.DeviceID == uuid.Nil {
+			return fmt.Errorf("canvas map membership device_id is required")
+		}
+		if !device.Role.IsValid() {
+			return fmt.Errorf("invalid canvas map device role %q", device.Role)
+		}
+		if _, exists := deviceIDs[device.DeviceID]; exists {
+			return fmt.Errorf("duplicate canvas map device membership: %s", device.DeviceID)
+		}
+		deviceIDs[device.DeviceID] = struct{}{}
+	}
+
+	linkIDs := make(map[uuid.UUID]struct{}, len(membership.LinkIDs))
+	for _, linkID := range membership.LinkIDs {
+		if linkID == uuid.Nil {
+			return fmt.Errorf("canvas map membership link_id is required")
+		}
+		if _, exists := linkIDs[linkID]; exists {
+			return fmt.Errorf("duplicate canvas map link membership: %s", linkID)
+		}
+		linkIDs[linkID] = struct{}{}
+	}
+
+	areaIDs := make(map[uuid.UUID]struct{}, len(membership.Areas))
+	for _, area := range membership.Areas {
+		if area.AreaID == uuid.Nil {
+			return fmt.Errorf("canvas map membership area_id is required")
+		}
+		if _, exists := areaIDs[area.AreaID]; exists {
+			return fmt.Errorf("duplicate canvas map area membership: %s", area.AreaID)
+		}
+		areaIDs[area.AreaID] = struct{}{}
+	}
+
+	return nil
+}
+
+func rejectCanvasMapNonMemberPositions(tx *Tx, mapID uuid.UUID, positions []domain.DevicePosition) error {
+	membershipExists, err := canvasMapMembershipExists(tx, mapID)
+	if err != nil {
+		return err
+	}
+	if !membershipExists {
+		return nil
+	}
+
+	checked := make(map[uuid.UUID]struct{}, len(positions))
+	for _, position := range positions {
+		if position.DeviceID == uuid.Nil {
+			continue
+		}
+		if _, exists := checked[position.DeviceID]; exists {
+			continue
+		}
+		checked[position.DeviceID] = struct{}{}
+
+		var count int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*)
+			 FROM canvas_map_devices
+			 WHERE map_id = ? AND device_id = ?`,
+			mapID.String(),
+			position.DeviceID.String(),
+		).Scan(&count); err != nil {
+			return fmt.Errorf("checking canvas map position membership for device %s: %w", position.DeviceID, err)
+		}
+		if count == 0 {
+			return fmt.Errorf("device %s is not a member of canvas map %s", position.DeviceID, mapID)
+		}
+	}
+
+	return nil
+}
+
+func canvasMapMembershipExists(queryer canvasMapQueryRower, mapID uuid.UUID) (bool, error) {
+	var exists int
+	if err := queryer.QueryRow(
+		`SELECT CASE WHEN
+			EXISTS (SELECT 1 FROM canvas_map_devices WHERE map_id = ?)
+			OR EXISTS (SELECT 1 FROM canvas_map_links WHERE map_id = ?)
+			OR EXISTS (SELECT 1 FROM canvas_map_areas WHERE map_id = ?)
+		 THEN 1 ELSE 0 END`,
+		mapID.String(),
+		mapID.String(),
+		mapID.String(),
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("checking canvas map membership existence: %w", err)
+	}
+	return exists != 0, nil
 }
 
 func nullableUUIDString(id *uuid.UUID) any {
