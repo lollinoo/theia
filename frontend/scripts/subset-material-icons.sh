@@ -9,18 +9,49 @@ FONT_DIR="$SCRIPT_DIR/../public/fonts"
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# All icon codepoints used or intentionally available in the project (Material Symbols Rounded ligatures).
-# Update this list when adding new MaterialIcon usages.
-# Format: U+XXXX  icon_name
-UNICODES="U+E145,U+E15B,U+E250,U+E2BD,U+E326,U+E518,U+E51C,U+E5CD,U+E5CF,U+E73C,U+E7F5,U+E864,U+E869,U+E873,U+E875,U+E894,U+E895,U+E8B3,U+E8B6,U+E8B8,U+E8FF,U+E900,U+E92E,U+E9F4,U+EA10,U+EA3C,U+EB8E,U+F097,U+F0BE,U+F10B,U+0020,U+005F,0061-007A"
+# All icon ligatures used or intentionally available in the project.
+# Update this list when adding new MaterialIcon usages. Codepoints are resolved
+# from the downloaded Material Symbols font because Google can move ligatures
+# between releases.
+ICON_NAMES=(
+  add
+  add_location_alt
+  backup
+  build
+  check
+  check_circle
+  close
+  cloud
+  content_copy
+  dark_mode
+  delete
+  devices
+  dns
+  edit
+  expand_less
+  expand_more
+  fit_screen
+  hub
+  key
+  language
+  light_mode
+  link
+  map
+  notifications
+  open_in_full
+  open_in_new
+  public
+  remove
+  search
+  settings
+  terminal
+  zoom_in
+  zoom_out
+)
+
 # ASCII letters a-z (U+0061-U+007A), underscore (U+005F), and space (U+0020)
 # are required as ligature input glyphs for Material Symbols icon name lookup.
-# Codepoint reference:
-#   E145=add  E15B=remove  E250=link  E2BD=cloud  E326=devices  E518=edit  E51C=content_copy
-#   E5CD=close  E5CF=expand_more  E73C=key  E7F5=notifications  E864=backup  E869=build  E873=description
-#   E875=dns  E894=language  E895=open_in_new  E8B3=filter_list  E8B6=search  E8B8=settings
-#   E8FF=zoom_in  E900=zoom_out  E92E=delete  E9F4=hub  EA10=fit_screen  EA3C=construction
-#   EB8E=terminal  F097=swap_vert  F0BE=arrow_upward  F10B=handyman
+INPUT_UNICODES="U+0020,U+005F,U+0061-007A"
 
 # Download the full variable font from Google Fonts (Material Symbols Rounded)
 FULL_FONT="$WORK_DIR/MaterialSymbolsRounded.woff2"
@@ -40,7 +71,56 @@ fi
 echo "Downloading full font from: $WOFF2_URL"
 curl -fsSL -o "$FULL_FONT" "$WOFF2_URL"
 
-echo "Subsetting font with $(echo "$UNICODES" | tr ',' '\n' | wc -l) icon codepoints..."
+ICON_NAMES_FILE="$WORK_DIR/material-symbols-icon-names.txt"
+printf '%s\n' "${ICON_NAMES[@]}" > "$ICON_NAMES_FILE"
+
+ICON_UNICODES=$(
+  python3 - "$FULL_FONT" "$ICON_NAMES_FILE" <<'PY'
+from fontTools.ttLib import TTFont
+import sys
+
+font_path, names_path = sys.argv[1], sys.argv[2]
+font = TTFont(font_path)
+best_cmap = font.getBestCmap()
+glyph_to_codepoint = {glyph: codepoint for codepoint, glyph in best_cmap.items()}
+glyph_to_char = {glyph: chr(codepoint) for codepoint, glyph in best_cmap.items()}
+
+ligatures = {}
+if "GSUB" in font:
+    lookup_list = font["GSUB"].table.LookupList
+    for lookup in lookup_list.Lookup:
+        for subtable in lookup.SubTable:
+            subst = getattr(subtable, "ExtSubTable", subtable)
+            if not hasattr(subst, "ligatures"):
+                continue
+            for first, ligature_set in subst.ligatures.items():
+                for ligature in ligature_set:
+                    name = "".join(
+                        [glyph_to_char.get(first, ""), *[glyph_to_char.get(component, "") for component in ligature.Component]]
+                    )
+                    ligatures[name] = ligature.LigGlyph
+
+icon_names = [line.strip() for line in open(names_path, encoding="utf-8") if line.strip()]
+missing = []
+codepoints = set()
+for icon_name in icon_names:
+    glyph = ligatures.get(icon_name)
+    codepoint = glyph_to_codepoint.get(glyph) if glyph else None
+    if codepoint is None:
+        missing.append(icon_name)
+        continue
+    codepoints.add(codepoint)
+
+if missing:
+    print(f"ERROR: Missing Material Symbols ligatures: {', '.join(missing)}", file=sys.stderr)
+    sys.exit(1)
+
+print(",".join(f"U+{codepoint:04X}" for codepoint in sorted(codepoints)))
+PY
+)
+UNICODES="$ICON_UNICODES,$INPUT_UNICODES"
+
+echo "Subsetting font with ${#ICON_NAMES[@]} icon ligatures..."
 
 if command -v pyftsubset >/dev/null 2>&1; then
   SUBSETTER=(pyftsubset)
