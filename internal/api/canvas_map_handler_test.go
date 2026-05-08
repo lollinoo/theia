@@ -373,6 +373,72 @@ func TestCanvasMapHandlerCreateMaterializesAreaMembershipOnce(t *testing.T) {
 	}
 }
 
+func TestCanvasMapHandlerCreateMapFromGlobalAreaCopiesDefaultMapPositions(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaID := seedCanvasMapTestArea(t, fixture, "Global Area", "#2979FF")
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-global-area-a", "10.73.1.1", []uuid.UUID{areaID})
+	deviceB := seedCanvasMapTestDevice(t, fixture, "router-global-area-b", "10.73.1.2", []uuid.UUID{areaID})
+	linkAB := seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
+
+	defaultMap, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("load default map: %v", err)
+	}
+	if err := fixture.mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceA.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+			{DeviceID: deviceB.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+		},
+		LinkIDs: []uuid.UUID{linkAB.ID},
+		Areas: []domain.CanvasMapAreaMembership{
+			{
+				AreaID:      areaID,
+				Name:        "Global Area",
+				Description: "Global Area test area",
+				Color:       "#2979FF",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("replace default map membership: %v", err)
+	}
+	if err := fixture.mapPositionRepo.SaveAllForMap(defaultMap.ID, []domain.DevicePosition{
+		{DeviceID: deviceA.ID, X: 140, Y: 260, Pinned: true},
+		{DeviceID: deviceB.ID, X: 380, Y: 520, Pinned: true},
+	}); err != nil {
+		t.Fatalf("save default map positions: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps", map[string]any{
+		"name":           "Global Area Copy",
+		"source_area_id": areaID.String(),
+		"filter": map[string]any{
+			"area_id":                  areaID.String(),
+			"include_cross_area_links": true,
+			"include_ghost_devices":    true,
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST global area copy: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	created := decodeCanvasMapData(t, rec)
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+created.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET global area copy topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if len(topology.Devices) != 2 || len(topology.Links) != 1 {
+		t.Fatalf("copied topology = devices:%#v links:%#v, want two devices and one link", topology.Devices, topology.Links)
+	}
+	if len(topology.Positions) != 2 {
+		t.Fatalf("copied positions = %#v, want source default positions for two devices", topology.Positions)
+	}
+	if topology.Positions[deviceA.ID.String()].X != 140 || topology.Positions[deviceB.ID.String()].Y != 520 {
+		t.Fatalf("copied positions = %#v, want default map coordinates", topology.Positions)
+	}
+}
+
 func TestCanvasMapHandlerCreateBlankMapDoesNotAutoSyncFutureDevices(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Empty Snapshot"})

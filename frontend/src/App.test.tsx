@@ -206,6 +206,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     mapsError,
     savedMapsEnabled,
     onOpenGlobal,
+    onOpenArea,
     onCreateEmptyMap,
     onCreateMapFromArea,
   }: {
@@ -218,6 +219,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     mapsError: string | null;
     savedMapsEnabled: boolean;
     onOpenGlobal: () => void;
+    onOpenArea: (areaId: string) => void;
     onCreateEmptyMap: () => void;
     onCreateMapFromArea: (area: Area) => void;
   }) => (
@@ -237,9 +239,14 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
         Create empty map
       </button>
       {areas.map((area) => (
-        <button key={area.id} type="button" onClick={() => onCreateMapFromArea(area)}>
-          {`Create map from area ${area.name}`}
-        </button>
+        <div key={area.id}>
+          <button type="button" onClick={() => onOpenArea(area.id)}>
+            {`Open area ${area.name}`}
+          </button>
+          <button type="button" onClick={() => onCreateMapFromArea(area)}>
+            {`Create map from area ${area.name}`}
+          </button>
+        </div>
       ))}
     </div>
   ),
@@ -616,5 +623,110 @@ describe('App', () => {
       }),
     );
     expect(await screen.findByText('map:map-from-area:Map Local Area Copy')).toBeInTheDocument();
+  });
+
+  it('creates a map from a global area without using the default saved map as source context', async () => {
+    const defaultMap = mockMap({
+      id: 'default-map',
+      name: 'Default',
+      source_area_id: null,
+      filter: {},
+      is_default: true,
+    });
+    const createdMap = mockMap({
+      id: 'global-area-copy',
+      name: 'Backbone Copy',
+      source_area_id: 'area-1',
+      filter: { area_id: 'area-1' },
+    });
+    fetchCanvasMapsMock.mockResolvedValue([defaultMap]);
+    createCanvasMapMock.mockResolvedValue(createdMap);
+
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      screen.getByRole('button', { name: 'Open global map' }).click();
+    });
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+
+    expect(await screen.findByTestId('topology-hub')).toHaveTextContent('hub-areas:Backbone');
+    fireEvent.click(screen.getByRole('button', { name: 'Create map from area Backbone' }));
+    fireEvent.change(await screen.findByLabelText('Map name'), {
+      target: { value: 'Backbone Copy' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create map' }));
+
+    await waitFor(() =>
+      expect(createCanvasMapMock).toHaveBeenCalledWith({
+        name: 'Backbone Copy',
+        source_area_id: 'area-1',
+        filter: {
+          area_id: 'area-1',
+          include_cross_area_links: true,
+          include_ghost_devices: true,
+        },
+      }),
+    );
+  });
+
+  it('keeps a saved map as the source after opening one of its areas from the hub', async () => {
+    const createdMap = mockMap({
+      id: 'map-from-opened-area',
+      name: 'Opened Area Copy',
+      source_area_id: 'map-area-1',
+      filter: { area_id: 'map-area-1' },
+    });
+    createCanvasMapMock.mockResolvedValue(createdMap);
+
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    act(() => {
+      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
+    });
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+
+    expect(await screen.findByTestId('topology-hub')).toHaveTextContent('hub-areas:Map Local Area');
+    act(() => {
+      screen.getByRole('button', { name: 'Open area Map Local Area' }).click();
+    });
+
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Create map from area Map Local Area',
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText('Map name'), {
+      target: { value: 'Opened Area Copy' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create map' }));
+
+    await waitFor(() =>
+      expect(createCanvasMapMock).toHaveBeenCalledWith({
+        name: 'Opened Area Copy',
+        source_area_id: 'map-area-1',
+        source_map_id: 'map-1',
+        filter: {
+          area_id: 'map-area-1',
+          include_cross_area_links: true,
+          include_ghost_devices: true,
+        },
+      }),
+    );
   });
 });

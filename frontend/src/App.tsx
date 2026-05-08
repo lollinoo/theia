@@ -176,16 +176,10 @@ function App() {
     setSelectedAreaId(areaId);
   }, []);
 
-  const handleOpenArea = useCallback(
-    (areaId: string | null) => {
-      setSelectedMapId(null);
-      setSelectedMapName('Default');
-      setSelectedAreaId(areaId);
-      setCanvasTopologyAreas(areas);
-      setActiveView('canvas');
-    },
-    [areas],
-  );
+  const handleOpenArea = useCallback((areaId: string | null) => {
+    setSelectedAreaId(areaId);
+    setActiveView('canvas');
+  }, []);
 
   const handleAreasChange = useCallback(() => {
     fetchAreas()
@@ -231,9 +225,7 @@ function App() {
       setCanvasMapsError(null);
 
       try {
-        const sourceMapId = sourceArea
-          ? (selectedMapId ?? canvasMaps.find((map) => map.is_default)?.id ?? null)
-          : null;
+        const sourceMapId = sourceArea && selectedMapId ? selectedMapId : null;
         const payload: {
           name: string;
           source_area_id: string | null;
@@ -258,7 +250,7 @@ function App() {
         setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to create map'));
       }
     },
-    [canvasMaps, handleOpenMap, loadCanvasMaps, selectedMapId],
+    [handleOpenMap, loadCanvasMaps, selectedMapId],
   );
 
   const handleDuplicateMapSubmit = useCallback(

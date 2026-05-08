@@ -170,6 +170,9 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 		if !h.replaceMaterializedMembership(w, r, canvasMap.ID, materializationFilter) {
 			return
 		}
+		if !h.copyDefaultCanvasMapPositionsForMaterializedMembership(w, canvasMap.ID) {
+			return
+		}
 	}
 	canvasMap, err = h.mapRepo.GetByID(canvasMap.ID)
 	if err != nil {
@@ -819,6 +822,46 @@ func (h *CanvasMapHandler) copyCanvasMapPositionsForMembership(
 		return nil
 	}
 	return h.mapPositionRepo.SaveAllForMap(mapID, positions)
+}
+
+func (h *CanvasMapHandler) copyDefaultCanvasMapPositionsForMaterializedMembership(
+	w http.ResponseWriter,
+	mapID uuid.UUID,
+) bool {
+	defaultMap, err := h.mapRepo.GetDefault()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load default canvas map", err)
+		return false
+	}
+	if defaultMap.ID == mapID {
+		return true
+	}
+	membership, err := h.mapRepo.GetMembership(mapID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load materialized canvas map membership", err)
+		return false
+	}
+	sourcePositions, err := h.mapPositionRepo.GetAllForMap(defaultMap.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load default canvas map positions", err)
+		return false
+	}
+	if len(sourcePositions) == 0 && h.legacyPositionRepo != nil {
+		sourcePositions, err = h.legacyPositionRepo.GetAll()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load legacy canvas positions", err)
+			return false
+		}
+	}
+	positions := filterPositionsForMemberDevices(sourcePositions, membership.Devices)
+	if len(positions) == 0 {
+		return true
+	}
+	if err := h.mapPositionRepo.SaveAllForMap(mapID, positions); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to copy default canvas map positions", err)
+		return false
+	}
+	return true
 }
 
 func (h *CanvasMapHandler) requireMapRepos(w http.ResponseWriter) bool {
