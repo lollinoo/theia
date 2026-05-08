@@ -78,8 +78,11 @@ const testState = vi.hoisted(() => ({
   setEdges: vi.fn(),
   onNodesChange: vi.fn(),
   savePositions: vi.fn(),
+  loadTopology: vi.fn(),
+  removeDeviceFromCanvasMap: vi.fn(),
   updateNodePosition: vi.fn(),
   canvasDataParams: null as null | { mapId: string | null; mapName?: string },
+  canvasPanelsProps: {} as Record<string, unknown>,
   reactFlowProps: {} as Record<string, unknown>,
 }));
 
@@ -186,11 +189,18 @@ vi.mock('./LinkEdge', () => ({ default: () => null }));
 vi.mock('./SearchOverlay', () => ({ default: () => null }));
 vi.mock('./ZoomControls', () => ({ default: () => null }));
 vi.mock('./ContextMenu', () => ({ ContextMenu: () => null }));
-vi.mock('./SidePanel', () => ({ SidePanel: () => null }));
+vi.mock('./SidePanel', () => ({
+  SidePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
 vi.mock('./Toolbar', () => ({ Toolbar: () => null }));
 vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
-vi.mock('./canvas/CanvasPanels', () => ({ CanvasPanels: () => null }));
+vi.mock('./canvas/CanvasPanels', () => ({
+  CanvasPanels: (props: Record<string, unknown>) => {
+    testState.canvasPanelsProps = props;
+    return null;
+  },
+}));
 vi.mock('./canvas/CanvasOverlays', () => ({ CanvasOverlays: () => null }));
 vi.mock('./canvas/detailSubscription', () => ({ getCanvasDetailDeviceId: () => null }));
 vi.mock('../hooks/useKeyboardShortcuts', () => ({ useKeyboardShortcuts: () => undefined }));
@@ -213,6 +223,9 @@ vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({ resolvedTheme: 'dark' as const }),
   adaptAreaColor: (color: string) => color,
 }));
+vi.mock('../api/client', () => ({
+  removeDeviceFromCanvasMap: (...args: unknown[]) => testState.removeDeviceFromCanvasMap(...args),
+}));
 vi.mock('./canvas/useCanvasData', () => ({
   useCanvasData: (params: { mapId: string | null; mapName?: string }) => {
     testState.canvasDataParams = params;
@@ -222,7 +235,7 @@ vi.mock('./canvas/useCanvasData', () => ({
       topologyLinks: testState.links,
       loading: false,
       error: null,
-      loadTopology: vi.fn().mockResolvedValue(undefined),
+      loadTopology: testState.loadTopology,
       runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
       grafanaUrlRef: { current: '' },
       deviceGrafanaUrlsRef: { current: new Map<string, string>() },
@@ -278,8 +291,13 @@ describe('Canvas drag state ownership', () => {
     testState.setEdges.mockReset();
     testState.onNodesChange.mockReset();
     testState.savePositions.mockReset();
+    testState.loadTopology.mockReset();
+    testState.loadTopology.mockResolvedValue(undefined);
+    testState.removeDeviceFromCanvasMap.mockReset();
+    testState.removeDeviceFromCanvasMap.mockResolvedValue(undefined);
     testState.updateNodePosition.mockReset();
     testState.canvasDataParams = null;
+    testState.canvasPanelsProps = {};
     testState.reactFlowProps = {};
   });
 
@@ -503,6 +521,33 @@ describe('Canvas drag state ownership', () => {
     });
     expect(testState.displayedNodes.map((node) => node.id)).toEqual(['dev-a', 'dev-b', 'dev-c']);
     expect(testState.displayedNodes.every((node) => node.data.isGhost !== true)).toBe(true);
+  });
+
+  it('passes saved map removal context to canvas panels', async () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        mapId="map-backbone"
+        mapName="Backbone"
+        maps={[mockMap()]}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.canvasPanelsProps.mapId).toBe('map-backbone');
+    expect(testState.canvasPanelsProps.mapName).toBe('Backbone');
+
+    const remove = testState.canvasPanelsProps.onRemoveDeviceFromMap as (
+      deviceId: string,
+    ) => Promise<void>;
+    await remove('dev-a');
+
+    expect(testState.removeDeviceFromCanvasMap).toHaveBeenCalledWith('map-backbone', 'dev-a');
+    expect(testState.loadTopology).toHaveBeenCalledWith(true);
   });
 
   it('clears selected canonical nodes when the active map changes', () => {

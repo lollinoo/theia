@@ -38,7 +38,10 @@ interface CanvasPanelsProps {
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   runtimeState: RuntimeState;
+  mapId?: string | null;
+  mapName?: string;
   editMode?: boolean;
+  onRemoveDeviceFromMap?: (deviceId: string) => void | Promise<void>;
   onAreasChange?: () => void;
   onSettingsChange?: () => void;
   onWinBoxAvailabilityChange?: (deviceId: string, hasWinboxProfile: boolean) => void;
@@ -55,7 +58,10 @@ export function CanvasPanels({
   setNodes,
   reactFlow,
   runtimeState,
+  mapId = null,
+  mapName = 'Default',
   editMode = false,
+  onRemoveDeviceFromMap,
   onAreasChange,
   onSettingsChange,
   onWinBoxAvailabilityChange,
@@ -183,6 +189,10 @@ export function CanvasPanels({
                 device={device}
                 readOnly={!editMode}
                 isVirtual={device.device_type === 'virtual'}
+                mapContext={
+                  mapId && onRemoveDeviceFromMap ? { mapId, mapName } : undefined
+                }
+                onRemoveFromMap={onRemoveDeviceFromMap}
                 onDeviceUpdated={(updated) => {
                   const ipChanged = device.ip !== updated.ip;
                   setDevices((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));

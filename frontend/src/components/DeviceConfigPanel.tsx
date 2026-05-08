@@ -95,8 +95,13 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
 interface DeviceConfigPanelProps {
   device: Device;
   readOnly?: boolean;
+  mapContext?: {
+    mapId: string;
+    mapName: string;
+  };
   onDeviceUpdated: (updated: Device) => void;
   onDeviceDeleted: () => void;
+  onRemoveFromMap?: (deviceId: string) => void | Promise<void>;
   onSettingsChange?: () => void;
   onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void;
   isVirtual?: boolean;
@@ -105,8 +110,10 @@ interface DeviceConfigPanelProps {
 export function DeviceConfigPanel({
   device,
   readOnly = false,
+  mapContext,
   onDeviceUpdated,
   onDeviceDeleted,
+  onRemoveFromMap,
   onSettingsChange,
   onWinBoxAvailabilityChange,
   isVirtual,
@@ -125,6 +132,7 @@ export function DeviceConfigPanel({
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [removeFromMapLoading, setRemoveFromMapLoading] = useState(false);
 
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
   const [credentialProfiles, setCredentialProfiles] = useState<CredentialProfile[]>([]);
@@ -515,6 +523,16 @@ export function DeviceConfigPanel({
     } catch {
       setDeleteLoading(false);
       setConfirmDelete(false);
+    }
+  }
+
+  async function handleRemoveFromMap() {
+    if (readOnly || !mapContext || !onRemoveFromMap) return;
+    setRemoveFromMapLoading(true);
+    try {
+      await onRemoveFromMap(device.id);
+    } finally {
+      setRemoveFromMapLoading(false);
     }
   }
 
@@ -1360,7 +1378,25 @@ export function DeviceConfigPanel({
       {/* SNMP Test — visible when metrics source uses SNMP (physical only) */}
       {!isVirtual && usesSNMP && <SNMPTestButton deviceId={device.id} />}
 
-      {/* Delete Device */}
+      {mapContext && onRemoveFromMap && (
+        <div className="mt-6 space-y-2 rounded-lg border border-outline-subtle bg-surface-container px-3 py-3">
+          <p className="text-xs text-on-bg-secondary">
+            Removes this device only from {mapContext.mapName}. Inventory and other maps are kept.
+          </p>
+          <button
+            type="button"
+            disabled={readOnly || removeFromMapLoading}
+            onClick={() => {
+              void handleRemoveFromMap();
+            }}
+            className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {removeFromMapLoading ? 'Removing...' : 'Remove from this map'}
+          </button>
+        </div>
+      )}
+
+      {/* Delete Device Everywhere */}
       <div className="mt-6 space-y-3">
         {!confirmDelete ? (
           <button
@@ -1369,11 +1405,13 @@ export function DeviceConfigPanel({
             onClick={() => setConfirmDelete(true)}
             className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Delete Device
+            Delete device everywhere
           </button>
         ) : (
           <div className="space-y-2 rounded-lg border border-status-down/30 bg-status-down/10 p-3">
-            <p className="text-sm text-status-down">Are you sure? This cannot be undone.</p>
+            <p className="text-sm text-status-down">
+              Are you sure? This deletes the device everywhere and cannot be undone.
+            </p>
             <div className="flex gap-2">
               <button
                 type="button"

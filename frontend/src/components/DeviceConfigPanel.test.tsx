@@ -694,7 +694,7 @@ describe('DeviceConfigPanel', () => {
     expect(screen.getByText('Test SNMP Connectivity')).toBeInTheDocument();
   });
 
-  it('renders delete device button', () => {
+  it('renders delete device everywhere button', () => {
     render(
       <DeviceConfigPanel
         device={mockDevice()}
@@ -703,7 +703,27 @@ describe('DeviceConfigPanel', () => {
       />,
     );
 
-    expect(screen.getByText('Delete Device')).toBeInTheDocument();
+    expect(screen.getByText('Delete device everywhere')).toBeInTheDocument();
+  });
+
+  it('removes a device from the current map without calling global delete', async () => {
+    const { deleteDevice } = await import('../api/client');
+    const onRemoveFromMap = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        onRemoveFromMap={onRemoveFromMap}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove from this map' }));
+
+    await waitFor(() => expect(onRemoveFromMap).toHaveBeenCalledWith(mockDevice().id));
+    expect(deleteDevice).not.toHaveBeenCalled();
   });
 
   it('shows auto-discovered hostname when sys_name exists', () => {

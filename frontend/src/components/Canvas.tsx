@@ -13,6 +13,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { removeDeviceFromCanvasMap } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
@@ -443,6 +444,18 @@ export default function Canvas({
     onDevicesChange,
     onLinksChange,
   });
+
+  const handleRemoveDeviceFromMap = useCallback(
+    async (deviceId: string) => {
+      if (!mapId) {
+        return;
+      }
+      await removeDeviceFromCanvasMap(mapId, deviceId);
+      setPanelContent(null);
+      await loadTopology(true);
+    },
+    [loadTopology, mapId, setPanelContent],
+  );
 
   const effectiveAreaId = mapId === null ? selectedAreaId : null;
 
@@ -990,7 +1003,10 @@ export default function Canvas({
           setNodes={setNodes}
           reactFlow={reactFlow}
           runtimeState={runtimeState}
+          mapId={mapId}
+          mapName={mapName}
           editMode={editMode}
+          onRemoveDeviceFromMap={handleRemoveDeviceFromMap}
           onAreasChange={onAreasChange}
           onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {
