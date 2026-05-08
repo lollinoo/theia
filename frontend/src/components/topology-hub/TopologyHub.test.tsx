@@ -116,6 +116,7 @@ describe('TopologyHub', () => {
     const area = mockArea();
     const onOpenGlobal = vi.fn();
     const onOpenArea = vi.fn();
+    const onCreateEmptyMap = vi.fn();
     const onCreateMapFromArea = vi.fn();
     const snapshot: SnapshotPayload = {
       devices: {
@@ -144,6 +145,7 @@ describe('TopologyHub', () => {
         onOpenGlobal={onOpenGlobal}
         onOpenArea={onOpenArea}
         onOpenMap={vi.fn()}
+        onCreateEmptyMap={onCreateEmptyMap}
         onCreateMapFromArea={onCreateMapFromArea}
         onDuplicateMap={vi.fn()}
         onDeleteMap={vi.fn()}
@@ -157,10 +159,12 @@ describe('TopologyHub', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open global map' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open area Backbone' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create empty map' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create map from area Backbone' }));
 
     expect(onOpenGlobal).toHaveBeenCalledOnce();
     expect(onOpenArea).toHaveBeenCalledWith('area-1');
+    expect(onCreateEmptyMap).toHaveBeenCalledOnce();
     expect(onCreateMapFromArea).toHaveBeenCalledWith(area);
   });
 
@@ -178,6 +182,7 @@ describe('TopologyHub', () => {
         onOpenGlobal={vi.fn()}
         onOpenArea={vi.fn()}
         onOpenMap={vi.fn()}
+        onCreateEmptyMap={vi.fn()}
         onCreateMapFromArea={vi.fn()}
         onDuplicateMap={vi.fn()}
         onDeleteMap={vi.fn()}
@@ -186,6 +191,7 @@ describe('TopologyHub', () => {
     );
 
     expect(screen.queryByRole('button', { name: 'Create map from area Backbone' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create empty map' })).toBeNull();
     expect(screen.queryByText('Saved maps')).toBeNull();
     expect(screen.queryByText('Map service unavailable')).toBeNull();
   });
@@ -204,6 +210,7 @@ describe('TopologyHub', () => {
         onOpenGlobal={vi.fn()}
         onOpenArea={vi.fn()}
         onOpenMap={vi.fn()}
+        onCreateEmptyMap={vi.fn()}
         onCreateMapFromArea={vi.fn()}
         onDuplicateMap={vi.fn()}
         onDeleteMap={vi.fn()}
@@ -214,6 +221,7 @@ describe('TopologyHub', () => {
     expect(
       screen.getByRole('button', { name: 'Create map from area Backbone' }),
     ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create empty map' })).toBeInTheDocument();
     expect(screen.getByText('Saved maps')).toBeInTheDocument();
   });
 
@@ -231,6 +239,7 @@ describe('TopologyHub', () => {
         onOpenGlobal={vi.fn()}
         onOpenArea={vi.fn()}
         onOpenMap={vi.fn()}
+        onCreateEmptyMap={vi.fn()}
         onCreateMapFromArea={vi.fn()}
         onDuplicateMap={vi.fn()}
         onDeleteMap={vi.fn()}

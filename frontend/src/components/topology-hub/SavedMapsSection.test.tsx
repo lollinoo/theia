@@ -24,6 +24,7 @@ describe('SavedMapsSection', () => {
   it('renders loading error and empty states', () => {
     const props = {
       maps: [],
+      onCreateEmptyMap: vi.fn(),
       onOpenMap: vi.fn(),
       onDuplicateMap: vi.fn(),
       onDeleteMap: vi.fn(),
@@ -42,6 +43,7 @@ describe('SavedMapsSection', () => {
   it('renders map cards and delegates callbacks', () => {
     const defaultMap = mockMap({ id: 'default', name: 'Default', is_default: true });
     const savedMap = mockMap({ id: 'map-2', name: 'Branch' });
+    const onCreateEmptyMap = vi.fn();
     const onOpenMap = vi.fn();
     const onDuplicateMap = vi.fn();
     const onDeleteMap = vi.fn();
@@ -51,6 +53,7 @@ describe('SavedMapsSection', () => {
         maps={[defaultMap, savedMap]}
         loading={false}
         error={null}
+        onCreateEmptyMap={onCreateEmptyMap}
         onOpenMap={onOpenMap}
         onDuplicateMap={onDuplicateMap}
         onDeleteMap={onDeleteMap}
@@ -60,10 +63,12 @@ describe('SavedMapsSection', () => {
     expect(screen.getByText('Default')).toBeInTheDocument();
     expect(screen.getByText('Branch')).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Create empty map' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open map Branch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Duplicate Branch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete Branch' }));
 
+    expect(onCreateEmptyMap).toHaveBeenCalledOnce();
     expect(onOpenMap).toHaveBeenCalledWith(savedMap);
     expect(onDuplicateMap).toHaveBeenCalledWith(savedMap);
     expect(onDeleteMap).toHaveBeenCalledWith(savedMap);

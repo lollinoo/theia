@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -170,6 +170,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     mapsLoading,
     mapsError,
     savedMapsEnabled,
+    onCreateEmptyMap,
   }: {
     devices: Device[];
     links: Link[];
@@ -178,6 +179,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     mapsLoading: boolean;
     mapsError: string | null;
     savedMapsEnabled: boolean;
+    onCreateEmptyMap: () => void;
   }) => (
     <div data-testid="topology-hub">
       <span>{`devices:${devices.length}`}</span>
@@ -187,6 +189,9 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
       <span>{`loading:${String(mapsLoading)}`}</span>
       <span>{`error:${mapsError ?? 'none'}`}</span>
       <span>{`savedMapsEnabled:${String(savedMapsEnabled)}`}</span>
+      <button type="button" onClick={onCreateEmptyMap}>
+        Create empty map
+      </button>
     </div>
   ),
 }));
@@ -370,5 +375,44 @@ describe('App', () => {
     });
     expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('hidden');
+  });
+
+  it('creates a blank saved map from the hub empty-map action', async () => {
+    const createdMap = mockMap({
+      id: 'map-empty',
+      name: 'Blank Map',
+      source_area_id: null,
+      filter: {},
+      device_count: 0,
+      link_count: 0,
+      position_count: 0,
+    });
+    createCanvasMapMock.mockResolvedValue(createdMap);
+    fetchCanvasMapsMock.mockResolvedValueOnce([]).mockResolvedValue([createdMap]);
+
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      screen.getByRole('button', { name: 'Create empty map' }).click();
+    });
+    fireEvent.change(await screen.findByLabelText('Map name'), {
+      target: { value: 'Blank Map' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create map' }));
+
+    await waitFor(() =>
+      expect(createCanvasMapMock).toHaveBeenCalledWith({
+        name: 'Blank Map',
+        source_area_id: null,
+        filter: {},
+      }),
+    );
+    expect(await screen.findByText('map:map-empty:Blank Map:1')).toBeInTheDocument();
   });
 });

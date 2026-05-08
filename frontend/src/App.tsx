@@ -62,6 +62,7 @@ function App() {
   const [canvasMaps, setCanvasMaps] = useState<CanvasMap[]>([]);
   const [canvasMapsLoading, setCanvasMapsLoading] = useState(false);
   const [canvasMapsError, setCanvasMapsError] = useState<string | null>(null);
+  const [createMapDialogOpen, setCreateMapDialogOpen] = useState(false);
   const [createMapSourceArea, setCreateMapSourceArea] = useState<Area | null>(null);
   const [duplicateMapSource, setDuplicateMapSource] = useState<CanvasMap | null>(null);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
@@ -177,6 +178,17 @@ function App() {
 
     setCanvasMapsError(null);
     setCreateMapSourceArea(area);
+    setCreateMapDialogOpen(true);
+  }, []);
+
+  const handleCreateEmptyMap = useCallback(() => {
+    if (!enableSavedMaps) {
+      return;
+    }
+
+    setCanvasMapsError(null);
+    setCreateMapSourceArea(null);
+    setCreateMapDialogOpen(true);
   }, []);
 
   const handleDuplicateMap = useCallback((map: CanvasMap) => {
@@ -202,6 +214,7 @@ function App() {
           source_area_id: sourceArea?.id ?? null,
           filter: sourceArea ? mapFilterForArea(sourceArea) : {},
         });
+        setCreateMapDialogOpen(false);
         setCreateMapSourceArea(null);
         setCanvasMaps((maps) => upsertCanvasMap(maps, createdMap));
         handleOpenMap(createdMap);
@@ -289,6 +302,7 @@ function App() {
             onOpenGlobal={handleOpenGlobal}
             onOpenArea={(areaId) => handleAreaSelect(areaId)}
             onOpenMap={handleOpenMap}
+            onCreateEmptyMap={handleCreateEmptyMap}
             onCreateMapFromArea={handleCreateMapFromArea}
             onDuplicateMap={handleDuplicateMap}
             onDeleteMap={handleDeleteMap}
@@ -327,10 +341,13 @@ function App() {
         {enableSavedMaps && (
           <>
             <CreateMapDialog
-              open={createMapSourceArea !== null}
+              open={createMapDialogOpen}
               sourceArea={createMapSourceArea}
               onCreate={handleCreateMap}
-              onClose={() => setCreateMapSourceArea(null)}
+              onClose={() => {
+                setCreateMapDialogOpen(false);
+                setCreateMapSourceArea(null);
+              }}
             />
             <DuplicateMapDialog
               open={duplicateMapSource !== null}

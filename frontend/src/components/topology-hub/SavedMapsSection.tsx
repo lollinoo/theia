@@ -1,10 +1,12 @@
 import type { CanvasMap } from '../../types/api';
+import { MaterialIcon } from '../MaterialIcon';
 import { MapSummaryCard } from './MapSummaryCard';
 
 export interface SavedMapsSectionProps {
   maps: CanvasMap[];
   loading: boolean;
   error: string | null;
+  onCreateEmptyMap: () => void;
   onOpenMap: (map: CanvasMap) => void;
   onDuplicateMap: (map: CanvasMap) => void;
   onDeleteMap: (map: CanvasMap) => void;
@@ -14,6 +16,7 @@ export function SavedMapsSection({
   maps,
   loading,
   error,
+  onCreateEmptyMap,
   onOpenMap,
   onDuplicateMap,
   onDeleteMap,
@@ -24,7 +27,18 @@ export function SavedMapsSection({
         <h2 id="saved-maps-heading" className="text-base font-semibold text-on-bg">
           Saved maps
         </h2>
-        <span className="font-mono text-xs text-on-bg-secondary">{maps.length}</span>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xs text-on-bg-secondary">{maps.length}</span>
+          <button
+            type="button"
+            aria-label="Create empty map"
+            onClick={onCreateEmptyMap}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-outline bg-surface px-2.5 text-xs font-medium text-on-bg transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          >
+            <MaterialIcon name="add" size={16} />
+            New
+          </button>
+        </div>
       </div>
 
       {loading ? (
