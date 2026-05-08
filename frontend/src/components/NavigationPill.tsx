@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActiveView } from '../App';
 import { fetchHealthVersion } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
@@ -32,6 +32,12 @@ function NavigationPill({
   onManageMaps,
 }: NavigationPillProps) {
   const [version, setVersion] = useState('');
+  const areaScrollerRef = useRef<HTMLDivElement>(null);
+  const [areaScrollState, setAreaScrollState] = useState({
+    hasOverflow: false,
+    canScrollLeft: false,
+    canScrollRight: false,
+  });
   const { resolvedTheme, setTheme } = useTheme();
 
   useEffect(() => {
@@ -45,6 +51,62 @@ function NavigationPill({
   const isHub = activeView === 'hub';
   const isAllAreas = activeView === 'canvas' && selectedAreaId === null;
   const isDashboard = activeView === 'dashboard';
+
+  const updateAreaScrollState = useCallback(() => {
+    const scroller = areaScrollerRef.current;
+    if (!scroller) {
+      setAreaScrollState({ hasOverflow: false, canScrollLeft: false, canScrollRight: false });
+      return;
+    }
+
+    const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    const nextState = {
+      hasOverflow: maxScrollLeft > 1,
+      canScrollLeft: scroller.scrollLeft > 1,
+      canScrollRight: scroller.scrollLeft < maxScrollLeft - 1,
+    };
+    setAreaScrollState((current) => {
+      if (
+        current.hasOverflow === nextState.hasOverflow &&
+        current.canScrollLeft === nextState.canScrollLeft &&
+        current.canScrollRight === nextState.canScrollRight
+      ) {
+        return current;
+      }
+      return nextState;
+    });
+  }, []);
+
+  useEffect(() => {
+    updateAreaScrollState();
+    const scroller = areaScrollerRef.current;
+    if (!scroller) return;
+
+    scroller.addEventListener('scroll', updateAreaScrollState, { passive: true });
+    window.addEventListener('resize', updateAreaScrollState);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateAreaScrollState) : null;
+    resizeObserver?.observe(scroller);
+
+    return () => {
+      scroller.removeEventListener('scroll', updateAreaScrollState);
+      window.removeEventListener('resize', updateAreaScrollState);
+      resizeObserver?.disconnect();
+    };
+  }, [areas.length, updateAreaScrollState]);
+
+  const scrollAreaSelector = useCallback(
+    (direction: -1 | 1) => {
+      const scroller = areaScrollerRef.current;
+      if (!scroller) return;
+      scroller.scrollBy({
+        left: direction * Math.round(Math.max(144, scroller.clientWidth * 0.65)),
+        behavior: 'smooth',
+      });
+      window.setTimeout(updateAreaScrollState, 180);
+    },
+    [updateAreaScrollState],
+  );
 
   return (
     <div className="topology-glass topology-floating-shadow fixed left-1/2 top-4 z-30 flex w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-1 rounded-2xl px-2 py-2 transition-colors dark:backdrop-blur-[16px] sm:w-auto sm:max-w-[calc(100vw-1.5rem)] sm:rounded-full sm:px-3">
@@ -105,46 +167,80 @@ function NavigationPill({
           </select>
           <div
             data-testid="desktop-area-selector"
-            className="hidden max-w-[56vw] items-center gap-1 overflow-x-auto sm:flex"
+            className="hidden max-w-[56vw] min-w-0 items-center gap-1 sm:flex"
           >
-            <button
-              type="button"
-              onClick={() => onAreaSelect(null)}
-              className={`rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
-                isAllAreas
-                  ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
-                  : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
-              }`}
+            {areaScrollState.hasOverflow && (
+              <button
+                type="button"
+                aria-label="Scroll areas left"
+                disabled={!areaScrollState.canScrollLeft}
+                onClick={() => scrollAreaSelector(-1)}
+                className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-full border border-outline-subtle bg-surface-container-high text-on-bg-secondary shadow-pill transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-35"
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-2 w-2 rotate-45 border-b-2 border-l-2 border-current"
+                />
+              </button>
+            )}
+            <div
+              ref={areaScrollerRef}
+              data-testid="desktop-area-selector-scroll"
+              className="topology-scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scroll-smooth"
             >
-              All areas
-            </button>
+              <button
+                type="button"
+                onClick={() => onAreaSelect(null)}
+                className={`rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+                  isAllAreas
+                    ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
+                    : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
+                }`}
+              >
+                All areas
+              </button>
 
-            {areas.map((area) => {
-              const isActive = activeView === 'canvas' && selectedAreaId === area.id;
-              return (
-                <button
-                  key={area.id}
-                  type="button"
-                  onClick={() => onAreaSelect(area.id)}
-                  className={`flex items-center gap-1.5 rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
-                    isActive
-                      ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
-                      : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
-                  }`}
-                >
-                  <span
-                    className="h-2 w-2 flex-shrink-0 rounded-full"
-                    style={{
-                      backgroundColor: adaptAreaColor(area.color, resolvedTheme),
-                      boxShadow: isActive
-                        ? `0 0 8px ${adaptAreaColor(area.color, resolvedTheme)}`
-                        : undefined,
-                    }}
-                  />
-                  {area.name}
-                </button>
-              );
-            })}
+              {areas.map((area) => {
+                const isActive = activeView === 'canvas' && selectedAreaId === area.id;
+                return (
+                  <button
+                    key={area.id}
+                    type="button"
+                    onClick={() => onAreaSelect(area.id)}
+                    className={`flex items-center gap-1.5 rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
+                      isActive
+                        ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
+                        : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
+                    }`}
+                  >
+                    <span
+                      className="h-2 w-2 flex-shrink-0 rounded-full"
+                      style={{
+                        backgroundColor: adaptAreaColor(area.color, resolvedTheme),
+                        boxShadow: isActive
+                          ? `0 0 8px ${adaptAreaColor(area.color, resolvedTheme)}`
+                          : undefined,
+                      }}
+                    />
+                    {area.name}
+                  </button>
+                );
+              })}
+            </div>
+            {areaScrollState.hasOverflow && (
+              <button
+                type="button"
+                aria-label="Scroll areas right"
+                disabled={!areaScrollState.canScrollRight}
+                onClick={() => scrollAreaSelector(1)}
+                className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-full border border-outline-subtle bg-surface-container-high text-on-bg-secondary shadow-pill transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-35"
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-2 w-2 rotate-45 border-t-2 border-r-2 border-current"
+                />
+              </button>
+            )}
           </div>
         </>
       )}

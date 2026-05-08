@@ -324,6 +324,15 @@
     contain: layout style;
   }
 
+  .topology-scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .topology-scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
   .topology-link-badge {
     box-shadow: none;
   }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Area, CanvasMap } from '../types/api';
 import NavigationPill from './NavigationPill';
@@ -89,6 +89,74 @@ describe('NavigationPill', () => {
     expect(desktopAreaSelector.className).toContain('sm:flex');
   });
 
+  it('hides the native area scrollbar and exposes overflow controls', async () => {
+    const scrollWidthDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollWidth',
+    );
+    const clientWidthDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'clientWidth',
+    );
+    const scrollByDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollBy');
+    const scrollBy = vi.fn();
+
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).dataset.testid === 'desktop-area-selector-scroll' ? 900 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).dataset.testid === 'desktop-area-selector-scroll' ? 320 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollBy', {
+      configurable: true,
+      writable: true,
+      value: scrollBy,
+    });
+
+    try {
+      render(
+        <NavigationPill
+          {...defaultProps}
+          activeView="canvas"
+          areas={[
+            mockArea({ id: 'area-1', name: 'Backbone' }),
+            mockArea({ id: 'area-2', name: 'Distribution' }),
+            mockArea({ id: 'area-3', name: 'Access' }),
+            mockArea({ id: 'area-4', name: 'Datacenter' }),
+          ]}
+        />,
+      );
+
+      const scroller = screen.getByTestId('desktop-area-selector-scroll');
+      await waitFor(() => {
+        expect(screen.getByLabelText('Scroll areas right')).toBeInTheDocument();
+      });
+
+      expect(scroller.className).toContain('topology-scrollbar-none');
+      fireEvent.click(screen.getByLabelText('Scroll areas right'));
+      expect(scrollBy).toHaveBeenCalledWith({ left: 208, behavior: 'smooth' });
+      expect(screen.getByLabelText('Scroll areas left')).toBeDisabled();
+    } finally {
+      if (scrollWidthDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollWidth', scrollWidthDescriptor);
+      }
+      if (clientWidthDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidthDescriptor);
+      }
+      if (scrollByDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollBy', scrollByDescriptor);
+      } else {
+        (HTMLElement.prototype as { scrollBy?: unknown }).scrollBy = undefined;
+      }
+    }
+  });
+
   it('selecting a map from the pill delegates to onMapSelect', () => {
     const onMapSelect = vi.fn();
     render(<NavigationPill {...defaultProps} onMapSelect={onMapSelect} />);
@@ -109,14 +177,14 @@ describe('NavigationPill', () => {
         onAreaSelect={onAreaSelect}
       />,
     );
-    fireEvent.click(screen.getByTestId('desktop-area-selector').querySelector('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'All areas' }));
     expect(onAreaSelect).toHaveBeenCalledWith(null);
   });
 
   it('clicking an area button calls onAreaSelect with area id', () => {
     const onAreaSelect = vi.fn();
     render(<NavigationPill {...defaultProps} onAreaSelect={onAreaSelect} />);
-    fireEvent.click(screen.getByTestId('desktop-area-selector').querySelectorAll('button')[1]);
+    fireEvent.click(screen.getByRole('button', { name: /Backbone/ }));
     expect(onAreaSelect).toHaveBeenCalledWith('area-1');
   });
 
