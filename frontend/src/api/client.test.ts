@@ -21,6 +21,7 @@ import {
   fetchLinks,
   fetchSettings,
   fetchSettingsWithMetadata,
+  removeDeviceFromCanvasMap,
   resetCanvasBootstrapRequestCache,
   restoreInstanceBackup,
   revealSNMPProfile,
@@ -800,6 +801,24 @@ describe('canvas map client', () => {
       '/api/v1/canvas/maps/map-1',
       expect.objectContaining({ method: 'DELETE' }),
     );
+  });
+
+  it('removes a device from a canvas map without calling the global device endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' })),
+    );
+
+    await removeDeviceFromCanvasMap('map/a', 'device 1');
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/devices/device%201',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
   });
 });
 
