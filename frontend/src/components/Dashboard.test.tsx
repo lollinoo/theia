@@ -153,6 +153,15 @@ describe('Dashboard', () => {
     expect(pulseElements.length).toBeGreaterThan(0);
   });
 
+  it('shows an explicit empty-map state after a loaded map has no devices', () => {
+    const { container } = render(
+      <Dashboard devices={[]} areas={[]} snapshot={null} loading={false} />,
+    );
+
+    expect(screen.getByText('No devices in this map')).toBeInTheDocument();
+    expect(container.querySelectorAll('.animate-pulse')).toHaveLength(0);
+  });
+
   it('renders without crashing with minimal props', () => {
     const { container } = render(<Dashboard devices={[]} areas={[]} snapshot={null} />);
     expect(container.firstChild).toBeTruthy();
@@ -279,5 +288,50 @@ describe('Dashboard', () => {
     });
 
     expect(screen.getByText('router-01')).toBeInTheDocument();
+  });
+
+  it('uses the selected map area from navigation as the active table area filter', () => {
+    const devices = [
+      mockDevice({ id: 'dev-1', hostname: 'router-01', area_ids: ['map-area-1'] }),
+      mockDevice({
+        id: 'dev-2',
+        hostname: 'switch-01',
+        ip: '10.0.0.2',
+        area_ids: ['map-area-2'],
+      }),
+    ];
+
+    render(
+      <Dashboard
+        devices={devices}
+        areas={[
+          {
+            id: 'map-area-1',
+            name: 'Map Local Area',
+            description: '',
+            color: '#2979FF',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 'map-area-2',
+            name: 'Access Ring',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+        snapshot={null}
+        selectedAreaId="map-area-1"
+        onAreaSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('filter-select-area')).toHaveAttribute('data-value', 'map-area-1');
+    expect(screen.getByText('router-01')).toBeInTheDocument();
+    expect(screen.queryByText('switch-01')).toBeNull();
   });
 });

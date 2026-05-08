@@ -102,7 +102,7 @@ vi.mock('./components/NavigationPill', () => ({
       >
         Pill Open Backbone map
       </button>
-      <button type="button" onClick={() => onAreaSelect('area-1')}>
+      <button type="button" onClick={() => onAreaSelect(areas[0]?.id ?? 'area-1')}>
         Pill area Backbone
       </button>
       <button type="button" onClick={() => onAreaSelect(null)}>
@@ -248,13 +248,19 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
 vi.mock('./components/Dashboard', () => ({
   Dashboard: ({
     devices,
+    areas,
+    selectedAreaId,
     snapshot,
   }: {
     devices: Device[];
+    areas: Area[];
+    selectedAreaId?: string | null;
     snapshot: SnapshotPayload | null;
   }) => (
     <div data-testid="dashboard">
       <span>{`devices:${devices.length}`}</span>
+      <span>{`dashboard-areas:${areas.map((area) => area.name).join('|')}`}</span>
+      <span>{`selected-area:${selectedAreaId ?? 'all'}`}</span>
       <span>{`status:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
     </div>
   ),
@@ -337,6 +343,55 @@ describe('App', () => {
     screen.getByRole('button', { name: 'Dashboard' }).click();
     expect(await screen.findByTestId('dashboard')).toHaveTextContent('devices:1');
     expect(screen.getByTestId('dashboard')).toHaveTextContent('status:down');
+  });
+
+  it('passes map-local areas into Devices instead of global areas', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
+    );
+
+    screen.getByRole('button', { name: 'Dashboard' }).click();
+
+    expect(await screen.findByTestId('dashboard')).toHaveTextContent(
+      'dashboard-areas:Map Local Area',
+    );
+    expect(screen.getByTestId('dashboard')).not.toHaveTextContent('dashboard-areas:Backbone');
+  });
+
+  it('keeps Devices active when selecting a map from the navigation pill', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    screen.getByRole('button', { name: 'Dashboard' }).click();
+    expect(await screen.findByTestId('dashboard')).toHaveTextContent('devices:1');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
+    });
+
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-1:Backbone');
+    expect(screen.getByTestId('dashboard').parentElement?.className).toContain('h-full');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('hidden');
+  });
+
+  it('passes selected map-local area from the navigation pill into Devices', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
+    );
+
+    screen.getByRole('button', { name: 'Dashboard' }).click();
+    act(() => {
+      screen.getByRole('button', { name: 'Pill area Backbone' }).click();
+    });
+
+    expect(screen.getByTestId('dashboard')).toHaveTextContent('selected-area:map-area-1');
+    expect(screen.getByTestId('dashboard').parentElement?.className).toContain('h-full');
   });
 
   it('keeps websocket runtime updates paused briefly after canvas interaction ends', async () => {

@@ -60,6 +60,7 @@ function App() {
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [canvasTopologyAreas, setCanvasTopologyAreas] = useState<Area[]>([]);
+  const [canvasTopologyLoading, setCanvasTopologyLoading] = useState(true);
   const [canvasMaps, setCanvasMaps] = useState<CanvasMap[]>([]);
   const [canvasMapsLoading, setCanvasMapsLoading] = useState(false);
   const [canvasMapsError, setCanvasMapsError] = useState<string | null>(null);
@@ -153,17 +154,26 @@ function App() {
     setActiveView('canvas');
   }, [areas]);
 
-  const handleOpenMap = useCallback((map: CanvasMap) => {
-    setSelectedMapId(map.is_default ? null : map.id);
-    setSelectedMapName(map.name);
-    setSelectedAreaId(null);
-    setCanvasTopologyAreas([]);
-    setActiveView('canvas');
-  }, []);
+  const handleSelectMapContext = useCallback(
+    (map: CanvasMap) => {
+      setSelectedMapId(map.is_default ? null : map.id);
+      setSelectedMapName(map.name);
+      setSelectedAreaId(null);
+      setCanvasTopologyAreas(map.is_default ? areas : []);
+    },
+    [areas],
+  );
+
+  const handleOpenMap = useCallback(
+    (map: CanvasMap) => {
+      handleSelectMapContext(map);
+      setActiveView('canvas');
+    },
+    [handleSelectMapContext],
+  );
 
   const handleAreaFilterSelect = useCallback((areaId: string | null) => {
     setSelectedAreaId(areaId);
-    setActiveView('canvas');
   }, []);
 
   const handleOpenArea = useCallback(
@@ -318,7 +328,7 @@ function App() {
           areas={navigationAreas}
           onViewChange={handleViewChange}
           onAreaSelect={handleAreaFilterSelect}
-          onMapSelect={handleOpenMap}
+          onMapSelect={handleSelectMapContext}
           onManageMaps={() => {
             setActiveView('hub');
           }}
@@ -365,6 +375,7 @@ function App() {
               onLinksChange={handleCanvasLinksChange}
               onAreaSelect={handleAreaFilterSelect}
               onTopologyAreasChange={setCanvasTopologyAreas}
+              onTopologyLoadingChange={setCanvasTopologyLoading}
               onAreasChange={handleAreasChange}
               onDetailDeviceChange={setDetailDeviceId}
               onInteractionActiveChange={setCanvasInteractionActive}
@@ -372,7 +383,14 @@ function App() {
           </ReactFlowProvider>
         </div>
         <div className={activeView === 'dashboard' ? 'h-full' : 'hidden'}>
-          <Dashboard devices={canvasDevices} areas={areas} snapshot={snapshot} />
+          <Dashboard
+            devices={canvasDevices}
+            areas={navigationAreas}
+            snapshot={snapshot}
+            selectedAreaId={selectedAreaId}
+            onAreaSelect={handleAreaFilterSelect}
+            loading={canvasTopologyLoading}
+          />
         </div>
         {enableSavedMaps && (
           <>

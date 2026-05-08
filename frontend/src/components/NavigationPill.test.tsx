@@ -213,13 +213,15 @@ describe('NavigationPill', () => {
     expect(onAreaSelect).toHaveBeenCalledWith(null);
   });
 
-  it('on Devices view pill shows simplified layout with Devices label and no area buttons', () => {
+  it('on Devices view pill keeps map and area context controls available', () => {
     render(<NavigationPill {...defaultProps} activeView="dashboard" />);
-    const devicesLabel = screen.getByText('Devices');
-    expect(devicesLabel).toBeDefined();
-    expect(devicesLabel.className).toContain('flex-1');
-    expect(screen.queryByText('All areas')).toBeNull();
-    expect(screen.queryByText('Backbone')).toBeNull();
+
+    expect(screen.getByRole('button', { name: /select topology map/i })).toHaveTextContent(
+      'Default',
+    );
+    expect(screen.getByTestId('desktop-area-selector').textContent).toContain('All areas');
+    expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Backbone');
+    expect(screen.getByLabelText('Devices Dashboard').className).toContain('border-outline-strong');
   });
 
   it('clicking Hub icon calls onViewChange hub', () => {

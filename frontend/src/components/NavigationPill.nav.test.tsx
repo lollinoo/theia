@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 /**
  * COMP-03 NavBar (NavigationPill) behavioral tests.
  * The NavBar was implemented as NavigationPill in this project.
@@ -107,5 +107,30 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
 
     expect(container.innerHTML).toContain('overflow-x-auto');
     expect(container.innerHTML).toContain('max-w-[56vw]');
+  });
+
+  it('keeps map and area controls available while viewing Devices', () => {
+    render(
+      <NavigationPill
+        {...defaultProps}
+        activeView="dashboard"
+        areas={[
+          {
+            id: 'area-1',
+            name: 'Backbone',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByLabelText(/select topology map/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Area selector')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All areas' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Backbone' })).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { fetchDeviceCredentialProfiles } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area, Device } from '../types/api';
@@ -27,9 +27,19 @@ interface DashboardProps {
   devices: Device[];
   areas: Area[];
   snapshot: SnapshotPayload | null;
+  selectedAreaId?: string | null;
+  onAreaSelect?: (areaId: string | null) => void;
+  loading?: boolean;
 }
 
-export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
+export function Dashboard({
+  devices,
+  areas,
+  snapshot,
+  selectedAreaId,
+  onAreaSelect,
+  loading = devices.length === 0,
+}: DashboardProps) {
   const { resolvedTheme } = useTheme();
   const [panel, setPanel] = useState<PanelType | null>(null);
 
@@ -43,6 +53,27 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [areaFilter, setAreaFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    if (selectedAreaId === undefined) {
+      return;
+    }
+    setAreaFilter(selectedAreaId ?? 'all');
+  }, [selectedAreaId]);
+
+  const handleAreaFilterChange = (value: string) => {
+    setAreaFilter(value);
+    if (onAreaSelect && value !== 'unassigned') {
+      onAreaSelect(value === 'all' ? null : value);
+    }
+  };
+
+  const clearFilters = () => {
+    setStatusFilter('all');
+    setTypeFilter('all');
+    handleAreaFilterChange('all');
+    setSearch('');
+  };
 
   const areaMap = useMemo(() => {
     const map = new Map<string, Area>();
@@ -136,7 +167,7 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
         />
         <FilterSelect
           value={areaFilter}
-          onChange={setAreaFilter}
+          onChange={handleAreaFilterChange}
           options={areaOptions}
           label="Area"
         />
@@ -184,19 +215,18 @@ export function Dashboard({ devices, areas, snapshot }: DashboardProps) {
       {/* Table */}
       <div className="flex-1 overflow-auto px-4 py-2">
         {devices.length === 0 ? (
-          /* D-16: Skeleton loading rows */
-          <SkeletonTable />
+          loading ? (
+            /* D-16: Skeleton loading rows */
+            <SkeletonTable />
+          ) : (
+            <EmptyMapState />
+          )
         ) : filteredRows.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 gap-2">
             <p className="text-on-bg-secondary text-sm">No devices match your filters</p>
             <button
               type="button"
-              onClick={() => {
-                setStatusFilter('all');
-                setTypeFilter('all');
-                setAreaFilter('all');
-                setSearch('');
-              }}
+              onClick={clearFilters}
               className="text-primary hover:text-primary/80 text-xs font-medium transition-colors"
             >
               Clear filters
@@ -326,5 +356,14 @@ function SkeletonTable() {
         ))}
       </tbody>
     </table>
+  );
+}
+
+function EmptyMapState() {
+  return (
+    <div className="flex h-40 flex-col items-center justify-center gap-2">
+      <p className="text-sm text-on-bg-secondary">No devices in this map</p>
+      <p className="text-xs text-on-bg-muted">Add devices from the topology canvas.</p>
+    </div>
   );
 }

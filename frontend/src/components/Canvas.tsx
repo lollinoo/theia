@@ -167,6 +167,7 @@ interface CanvasProps {
   onMapSelect?: (map: CanvasMap) => void;
   onManageMaps?: () => void;
   onTopologyAreasChange?: (areas: Area[]) => void;
+  onTopologyLoadingChange?: (loading: boolean) => void;
   onAreasChange?: () => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
   onInteractionActiveChange?: (active: boolean) => void;
@@ -184,6 +185,7 @@ export default function Canvas({
   onLinksChange,
   onAreaSelect,
   onTopologyAreasChange,
+  onTopologyLoadingChange,
   onAreasChange,
   onDetailDeviceChange,
   onInteractionActiveChange,
@@ -443,6 +445,12 @@ export default function Canvas({
     onLinksChange,
     onTopologyAreasChange,
   });
+
+  useEffect(() => {
+    onTopologyLoadingChange?.(loading);
+  }, [loading, onTopologyLoadingChange]);
+
+  useEffect(() => () => onTopologyLoadingChange?.(false), [onTopologyLoadingChange]);
 
   const handleRemoveDeviceFromMap = useCallback(
     async (deviceId: string) => {
