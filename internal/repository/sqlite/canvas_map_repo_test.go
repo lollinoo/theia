@@ -422,6 +422,50 @@ func TestCanvasMapPositionRepoRejectsPositionsForNonMemberDevices(t *testing.T) 
 	}
 }
 
+func TestCanvasMapRepoReplaceMembershipPrunesNonMemberPositions(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	mapRepo := NewCanvasMapRepo(db)
+	positionRepo := NewCanvasMapPositionRepo(db)
+
+	canvasMap, err := mapRepo.Create(domain.CanvasMapCreate{Name: "Pruned Positions"})
+	if err != nil {
+		t.Fatalf("create map: %v", err)
+	}
+	memberID := uuid.MustParse("00000000-0000-0000-0000-000000000631")
+	removedID := uuid.MustParse("00000000-0000-0000-0000-000000000632")
+	insertCanvasMapRepoTestDevice(t, db, memberID)
+	insertCanvasMapRepoTestDevice(t, db, removedID)
+
+	if err := mapRepo.ReplaceMembership(canvasMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: memberID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: removedID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("replace initial membership: %v", err)
+	}
+	if err := positionRepo.SaveAllForMap(canvasMap.ID, []domain.DevicePosition{
+		{DeviceID: memberID, X: 1, Y: 2},
+		{DeviceID: removedID, X: 3, Y: 4},
+	}); err != nil {
+		t.Fatalf("save positions: %v", err)
+	}
+
+	if err := mapRepo.ReplaceMembership(canvasMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{{DeviceID: memberID, Role: domain.CanvasMapDeviceRoleBase}},
+	}); err != nil {
+		t.Fatalf("replace pruned membership: %v", err)
+	}
+
+	positions, err := positionRepo.GetAllForMap(canvasMap.ID)
+	if err != nil {
+		t.Fatalf("get positions: %v", err)
+	}
+	if len(positions) != 1 || positions[0].DeviceID != memberID {
+		t.Fatalf("positions after pruning = %#v, want only %s", positions, memberID)
+	}
+}
+
 func TestPrimaryDataCopySpecsIncludeCanvasMapMembershipTables(t *testing.T) {
 	required := map[string]bool{
 		"canvas_maps":          false,
@@ -440,6 +484,28 @@ func TestPrimaryDataCopySpecsIncludeCanvasMapMembershipTables(t *testing.T) {
 			t.Fatalf("expected primaryDataCopySpecs to include %s", name)
 		}
 	}
+
+	var canvasMapColumns []string
+	for _, spec := range primaryDataCopySpecs {
+		if spec.name != "canvas_maps" {
+			continue
+		}
+		for _, column := range spec.columns {
+			canvasMapColumns = append(canvasMapColumns, column.name)
+		}
+	}
+	if !containsCanvasMapRepoTestColumn(canvasMapColumns, "membership_materialized") {
+		t.Fatalf("canvas_maps copy columns = %#v, want membership_materialized", canvasMapColumns)
+	}
+}
+
+func containsCanvasMapRepoTestColumn(columns []string, columnName string) bool {
+	for _, column := range columns {
+		if column == columnName {
+			return true
+		}
+	}
+	return false
 }
 
 func assertCanvasMapMembershipEqual(t *testing.T, got, want domain.CanvasMapMembership) {

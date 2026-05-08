@@ -127,6 +127,14 @@ func TestDefaultCanvasMapAfterCopy_CopiesCopiedLegacyPositions(t *testing.T) {
 	); err != nil {
 		t.Fatalf("inserting source legacy position: %v", err)
 	}
+	if _, err := source.Exec(
+		`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
+		 VALUES (?, ?, 'base', '2026-04-10 03:04:05')`,
+		sourceDefaultMapID,
+		deviceID,
+	); err != nil {
+		t.Fatalf("inserting source default map membership: %v", err)
+	}
 
 	if err := CopyPrimaryData(source, target, CopyOptions{BatchSize: 2}); err != nil {
 		t.Fatalf("CopyPrimaryData() failed: %v", err)

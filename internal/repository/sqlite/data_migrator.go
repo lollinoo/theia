@@ -142,6 +142,7 @@ var primaryDataCopySpecs = []tableCopySpec{
 			{name: "source_area_id", kind: columnKindText},
 			{name: "filter_json", kind: columnKindText},
 			{name: "is_default", kind: columnKindBool},
+			{name: "membership_materialized", kind: columnKindBool},
 			{name: "created_at", kind: columnKindTime},
 			{name: "updated_at", kind: columnKindTime},
 		},

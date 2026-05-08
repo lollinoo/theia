@@ -91,42 +91,16 @@ func (h *CanvasMapHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
 	}
-	if !h.requireTopologyDeps(w) {
-		return
-	}
 
 	maps, err := h.mapRepo.List()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list canvas maps", err)
 		return
 	}
-	devices, err := h.deviceService.GetAllDevices(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
-		return
-	}
-	links, err := h.linkRepo.GetAll()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list links", err)
-		return
-	}
 
 	responses := make([]canvasMapResponse, 0, len(maps))
 	for _, canvasMap := range maps {
-		filter := projectionFilterForCanvasMap(canvasMap)
-		projection := projectCanvasTopologyForMap(devices, links, filter)
-		positions, err := h.mapPositionRepo.GetAllForMap(canvasMap.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list canvas map positions", err)
-			return
-		}
-		projectedPositions := filterPositionsForDevices(positions, projection.Devices)
-
-		response := mapToResponse(canvasMap)
-		response.DeviceCount = len(projection.Devices)
-		response.LinkCount = len(projection.Links)
-		response.PositionCount = len(projectedPositions)
-		responses = append(responses, response)
+		responses = append(responses, mapToResponse(canvasMap))
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": responses})
@@ -153,15 +127,27 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	if !h.requireTopologyDeps(w) {
+		return
+	}
+	materializationFilter := canvasMapMaterializationFilter(req.Filter, sourceAreaID)
 
 	canvasMap, err := h.mapRepo.Create(domain.CanvasMapCreate{
 		Name:         req.Name,
 		Description:  req.Description,
 		SourceAreaID: sourceAreaID,
-		Filter:       req.Filter,
+		Filter:       materializationFilter,
 	})
 	if err != nil {
 		h.writeMapRepoMutationError(w, err)
+		return
+	}
+	if !h.replaceMaterializedMembership(w, r, canvasMap.ID, materializationFilter) {
+		return
+	}
+	canvasMap, err = h.mapRepo.GetByID(canvasMap.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load materialized canvas map", err)
 		return
 	}
 
@@ -234,6 +220,19 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 		h.writeMapRepoMutationError(w, err)
 		return
 	}
+	if req.Filter != nil || req.SourceAreaID.Present {
+		if !h.requireTopologyDeps(w) {
+			return
+		}
+		if !h.replaceMaterializedMembership(w, r, updated.ID, projectionFilterForCanvasMap(updated)) {
+			return
+		}
+		updated, err = h.mapRepo.GetByID(updated.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load materialized canvas map", err)
+			return
+		}
+	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
@@ -294,6 +293,37 @@ func (h *CanvasMapHandler) HandleDuplicate(w http.ResponseWriter, r *http.Reques
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(duplicate)})
+}
+
+func (h *CanvasMapHandler) HandleRemoveDevice(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+	_, action, ok := parseCanvasMapRoute(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusNotFound, "canvas map not found")
+		return
+	}
+	deviceID, ok := parseCanvasMapDeviceAction(action)
+	if !ok {
+		writeError(w, http.StatusNotFound, "canvas map device not found")
+		return
+	}
+
+	if err := h.mapRepo.RemoveDevice(canvasMap.ID, deviceID); err != nil {
+		if isCanvasMapNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "canvas map not found")
+			return
+		}
+		h.writeMapRepoMutationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *CanvasMapHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
@@ -444,18 +474,25 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusInternalServerError, "failed to list canvas map positions", err)
 		return canvasTopologyResponse{}, false
 	}
-	areas, err := h.areaRepo.GetAllWithDeviceCount()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list areas", err)
-		return canvasTopologyResponse{}, false
+	var projection canvasTopologyProjection
+	var areaMembership []domain.AreaWithCount
+	if canvasMap.MembershipMaterialized {
+		membership, err := h.mapRepo.GetMembership(canvasMap.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
+			return canvasTopologyResponse{}, false
+		}
+		projection = projectCanvasTopologyForMembership(devices, links, membership)
+		areaMembership = canvasMapAreaMembershipToAreas(membership.Areas, projection.Devices)
+	} else {
+		projection = canvasTopologyProjection{}
+		areaMembership = []domain.AreaWithCount{}
 	}
-
-	projection := projectCanvasTopologyForMap(devices, links, projectionFilterForCanvasMap(canvasMap))
-	projectedPositions := filterPositionsForDevices(positions, projection.Devices)
 	displayDevices := append([]domain.Device{}, projection.Devices...)
 	displayDevices = append(displayDevices, projection.GhostDevices...)
+	projectedPositions := filterPositionsForDevices(positions, displayDevices)
 
-	response := h.canvasTopology.buildResponse(displayDevices, projection.Links, projectedPositions, areas)
+	response := h.canvasTopology.buildResponse(displayDevices, projection.Links, projectedPositions, areaMembership)
 	mapResponse := mapToResponse(canvasMap)
 	mapResponse.DeviceCount = len(projection.Devices)
 	mapResponse.LinkCount = len(projection.Links)
@@ -512,6 +549,36 @@ func (h *CanvasMapHandler) validateSourceAreaID(w http.ResponseWriter, raw *stri
 	return &areaID, true
 }
 
+func (h *CanvasMapHandler) replaceMaterializedMembership(
+	w http.ResponseWriter,
+	r *http.Request,
+	mapID uuid.UUID,
+	filter domain.CanvasMapFilter,
+) bool {
+	devices, err := h.deviceService.GetAllDevices(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
+		return false
+	}
+	links, err := h.linkRepo.GetAll()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list links", err)
+		return false
+	}
+	areas, err := h.areaRepo.GetAllWithDeviceCount()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list areas", err)
+		return false
+	}
+
+	membership := materializeCanvasMapMembership(devices, links, areas, filter)
+	if err := h.mapRepo.ReplaceMembership(mapID, membership); err != nil {
+		h.writeMapRepoMutationError(w, err)
+		return false
+	}
+	return true
+}
+
 func (h *CanvasMapHandler) requireMapRepos(w http.ResponseWriter) bool {
 	if h.mapRepo == nil || h.mapPositionRepo == nil {
 		writeError(w, http.StatusNotImplemented, "canvas map repository unavailable")
@@ -549,6 +616,168 @@ func projectionFilterForCanvasMap(canvasMap domain.CanvasMap) domain.CanvasMapFi
 		filter.AreaID = &areaID
 	}
 	return filter
+}
+
+func canvasMapMaterializationFilter(filter domain.CanvasMapFilter, sourceAreaID *uuid.UUID) domain.CanvasMapFilter {
+	if filter.AreaID == nil && sourceAreaID != nil {
+		areaID := *sourceAreaID
+		filter.AreaID = &areaID
+	}
+	return filter
+}
+
+func materializeCanvasMapMembership(
+	devices []domain.Device,
+	links []domain.Link,
+	areas []domain.AreaWithCount,
+	filter domain.CanvasMapFilter,
+) domain.CanvasMapMembership {
+	projection := projectCanvasTopologyForMap(devices, links, filter)
+	membership := domain.CanvasMapMembership{
+		Devices: make([]domain.CanvasMapDeviceMembership, 0, len(projection.Devices)+len(projection.GhostDevices)),
+		LinkIDs: make([]uuid.UUID, 0, len(projection.Links)),
+		Areas:   make([]domain.CanvasMapAreaMembership, 0, len(areas)),
+	}
+
+	for _, device := range projection.Devices {
+		membership.Devices = append(membership.Devices, domain.CanvasMapDeviceMembership{
+			DeviceID: device.ID,
+			Role:     domain.CanvasMapDeviceRoleBase,
+		})
+	}
+	for _, device := range projection.GhostDevices {
+		membership.Devices = append(membership.Devices, domain.CanvasMapDeviceMembership{
+			DeviceID: device.ID,
+			Role:     domain.CanvasMapDeviceRoleGhost,
+		})
+	}
+	for _, link := range projection.Links {
+		membership.LinkIDs = append(membership.LinkIDs, link.ID)
+	}
+	for _, area := range canvasMapAreasForMembership(areas, projection.Devices, filter) {
+		membership.Areas = append(membership.Areas, domain.CanvasMapAreaMembership{
+			AreaID:      area.ID,
+			Name:        area.Name,
+			Description: area.Description,
+			Color:       area.Color,
+		})
+	}
+
+	return membership
+}
+
+func canvasMapAreasForMembership(
+	areas []domain.AreaWithCount,
+	baseDevices []domain.Device,
+	filter domain.CanvasMapFilter,
+) []domain.AreaWithCount {
+	includedAreaIDs := make(map[uuid.UUID]struct{})
+	if filter.AreaID != nil {
+		includedAreaIDs[*filter.AreaID] = struct{}{}
+	} else {
+		for _, device := range baseDevices {
+			for _, areaID := range device.AreaIDs {
+				includedAreaIDs[areaID] = struct{}{}
+			}
+		}
+	}
+
+	filtered := make([]domain.AreaWithCount, 0, len(includedAreaIDs))
+	for _, area := range areas {
+		if _, ok := includedAreaIDs[area.ID]; ok {
+			filtered = append(filtered, area)
+		}
+	}
+	return filtered
+}
+
+func projectCanvasTopologyForMembership(
+	devices []domain.Device,
+	links []domain.Link,
+	membership domain.CanvasMapMembership,
+) canvasTopologyProjection {
+	deviceRoles := make(map[uuid.UUID]domain.CanvasMapDeviceRole, len(membership.Devices))
+	for _, device := range membership.Devices {
+		deviceRoles[device.DeviceID] = device.Role
+	}
+
+	linkIDs := make(map[uuid.UUID]struct{}, len(membership.LinkIDs))
+	for _, linkID := range membership.LinkIDs {
+		linkIDs[linkID] = struct{}{}
+	}
+
+	projection := canvasTopologyProjection{
+		Devices:      []domain.Device{},
+		Links:        []domain.Link{},
+		GhostDevices: []domain.Device{},
+	}
+	for _, device := range devices {
+		role, ok := deviceRoles[device.ID]
+		if !ok {
+			continue
+		}
+		if role == domain.CanvasMapDeviceRoleGhost {
+			projection.GhostDevices = append(projection.GhostDevices, device)
+			continue
+		}
+		projection.Devices = append(projection.Devices, device)
+	}
+
+	for _, link := range links {
+		if _, ok := linkIDs[link.ID]; !ok {
+			continue
+		}
+		if _, ok := deviceRoles[link.SourceDeviceID]; !ok {
+			continue
+		}
+		if _, ok := deviceRoles[link.TargetDeviceID]; !ok {
+			continue
+		}
+		projection.Links = append(projection.Links, link)
+	}
+
+	return projection
+}
+
+func canvasMapAreaMembershipToAreas(
+	areas []domain.CanvasMapAreaMembership,
+	baseDevices []domain.Device,
+) []domain.AreaWithCount {
+	response := make([]domain.AreaWithCount, 0, len(areas))
+	for _, area := range areas {
+		response = append(response, domain.AreaWithCount{
+			Area: domain.Area{
+				ID:          area.AreaID,
+				Name:        area.Name,
+				Description: area.Description,
+				Color:       area.Color,
+			},
+			DeviceCount: canvasMapAreaDeviceCount(area.AreaID, baseDevices),
+		})
+	}
+	return response
+}
+
+func canvasMapAreaDeviceCount(areaID uuid.UUID, devices []domain.Device) int {
+	count := 0
+	for _, device := range devices {
+		if deviceHasArea(device, areaID) {
+			count++
+		}
+	}
+	return count
+}
+
+func parseCanvasMapDeviceAction(action string) (uuid.UUID, bool) {
+	rawDeviceID, ok := strings.CutPrefix(action, "devices/")
+	if !ok || rawDeviceID == "" || strings.Contains(rawDeviceID, "/") {
+		return uuid.Nil, false
+	}
+	deviceID, err := uuid.Parse(rawDeviceID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return deviceID, true
 }
 
 func filterPositionsForDevices(positions []domain.DevicePosition, devices []domain.Device) []domain.DevicePosition {

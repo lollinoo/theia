@@ -343,6 +343,178 @@ func TestCanvasMapHandlerPatchSourceAreaNullClearsExistingValue(t *testing.T) {
 	}
 }
 
+func TestCanvasMapHandlerCreateMaterializesAreaMembershipOnce(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaA := seedCanvasMapTestArea(t, fixture, "Materialized Area A", "#2979FF")
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-materialized-a", "10.69.0.1", []uuid.UUID{areaA})
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps", map[string]any{
+		"name":           "Materialized Area Map",
+		"source_area_id": areaA.String(),
+		"filter": map[string]any{
+			"area_id": areaA.String(),
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST map from area: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	canvasMap := decodeCanvasMapData(t, rec)
+
+	seedCanvasMapTestDevice(t, fixture, "router-materialized-late", "10.69.0.2", []uuid.UUID{areaA})
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if len(topology.Devices) != 1 || topology.Devices[0].ID != deviceA.ID.String() {
+		t.Fatalf("expected only initially materialized device %s, got %#v", deviceA.ID, topology.Devices)
+	}
+}
+
+func TestCanvasMapHandlerCreateBlankMapDoesNotAutoSyncFutureDevices(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Empty Snapshot"})
+
+	seedCanvasMapTestDevice(t, fixture, "router-created-after-map", "10.69.1.1", nil)
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if len(topology.Devices) != 0 {
+		t.Fatalf("expected empty materialized map to stay empty, got %#v", topology.Devices)
+	}
+}
+
+func TestCanvasMapHandlerUnmaterializedMapDoesNotUseLiveFilterFallback(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	device := seedCanvasMapTestDevice(t, fixture, "router-no-fallback", "10.69.1.2", nil)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name": "Unmaterialized Legacy",
+		"filter": map[string]any{
+			"device_ids": []string{device.ID.String()},
+		},
+	})
+	if _, err := fixture.db.Exec(
+		`UPDATE canvas_maps
+		 SET membership_materialized = 0
+		 WHERE id = ?`,
+		canvasMap.ID,
+	); err != nil {
+		t.Fatalf("force unmaterialized map: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if len(topology.Devices) != 0 {
+		t.Fatalf("expected unmaterialized map to avoid live filter fallback, got %#v", topology.Devices)
+	}
+}
+
+func TestCanvasMapHandlerCreateDeviceSubsetMaterializesOnlyMemberAreas(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaA := seedCanvasMapTestArea(t, fixture, "Subset Area A", "#2979FF")
+	areaB := seedCanvasMapTestArea(t, fixture, "Subset Area B", "#FF6D00")
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-subset-a", "10.69.2.1", []uuid.UUID{areaA})
+	seedCanvasMapTestDevice(t, fixture, "router-subset-b", "10.69.2.2", []uuid.UUID{areaB})
+
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name": "Device Subset Areas",
+		"filter": map[string]any{
+			"device_ids": []string{deviceA.ID.String()},
+		},
+	})
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if len(topology.Areas) != 1 || topology.Areas[0].ID != areaA.String() {
+		t.Fatalf("expected only member area %s, got %#v", areaA, topology.Areas)
+	}
+}
+
+func TestCanvasMapHandlerTopologyUsesMaterializedMembership(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-filtered-out", "10.70.0.1", nil)
+	deviceB := seedCanvasMapTestDevice(t, fixture, "router-member", "10.70.0.2", nil)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name": "Membership Wins",
+		"filter": map[string]any{
+			"device_ids": []string{deviceA.ID.String()},
+		},
+	})
+	mapID := uuid.MustParse(canvasMap.ID)
+	if err := fixture.mapRepo.ReplaceMembership(mapID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{{DeviceID: deviceB.ID, Role: domain.CanvasMapDeviceRoleBase}},
+	}); err != nil {
+		t.Fatalf("replace membership: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if len(topology.Devices) != 1 || topology.Devices[0].ID != deviceB.ID.String() {
+		t.Fatalf("expected materialized member %s, got %#v", deviceB.ID, topology.Devices)
+	}
+}
+
+func TestCanvasMapHandlerRemoveDeviceFromMapDoesNotDeleteGlobalDeviceOrOtherMaps(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	device := seedCanvasMapTestDevice(t, fixture, "router-map-local-remove", "10.71.0.1", nil)
+	firstMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "First Map"})
+	secondMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Second Map"})
+	for _, canvasMap := range []testCanvasMapResponse{firstMap, secondMap} {
+		if err := fixture.mapRepo.ReplaceMembership(uuid.MustParse(canvasMap.ID), domain.CanvasMapMembership{
+			Devices: []domain.CanvasMapDeviceMembership{{DeviceID: device.ID, Role: domain.CanvasMapDeviceRoleBase}},
+		}); err != nil {
+			t.Fatalf("replace membership for %s: %v", canvasMap.ID, err)
+		}
+	}
+
+	rec := canvasMapRequest(
+		t,
+		fixture.router,
+		http.MethodDelete,
+		"/api/v1/canvas/maps/"+firstMap.ID+"/devices/"+device.ID.String(),
+		nil,
+	)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE map device: expected 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := fixture.deviceRepo.GetByID(device.ID); err != nil {
+		t.Fatalf("global device was deleted: %v", err)
+	}
+	firstMembership, err := fixture.mapRepo.GetMembership(uuid.MustParse(firstMap.ID))
+	if err != nil {
+		t.Fatalf("get first membership: %v", err)
+	}
+	if len(firstMembership.Devices) != 0 {
+		t.Fatalf("first map devices = %#v, want empty", firstMembership.Devices)
+	}
+	secondMembership, err := fixture.mapRepo.GetMembership(uuid.MustParse(secondMap.ID))
+	if err != nil {
+		t.Fatalf("get second membership: %v", err)
+	}
+	if len(secondMembership.Devices) != 1 || secondMembership.Devices[0].DeviceID != device.ID {
+		t.Fatalf("second map devices = %#v, want device %s", secondMembership.Devices, device.ID)
+	}
+}
+
 func TestCanvasMapHandlerSourceAreaUnexpectedLookupErrorReturns500(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	handler := NewCanvasMapHandler(
@@ -379,7 +551,6 @@ func TestCanvasMapHandlerFiltersPositionsToProjectedBaseDevices(t *testing.T) {
 	mapID := uuid.MustParse(canvasMap.ID)
 	if err := fixture.mapPositionRepo.SaveAllForMap(mapID, []domain.DevicePosition{
 		{DeviceID: deviceA.ID, X: 10, Y: 20, Pinned: true},
-		{DeviceID: deviceB.ID, X: 30, Y: 40, Pinned: true},
 	}); err != nil {
 		t.Fatalf("save map positions: %v", err)
 	}
@@ -502,15 +673,24 @@ func TestCanvasMapHandlerTopologyETagChangesForMapMetadataPatch(t *testing.T) {
 	}
 }
 
-func TestCanvasMapHandlerListComputesCountsFromProjection(t *testing.T) {
+func TestCanvasMapHandlerListComputesCountsFromMaterializedMembership(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	deviceA := seedCanvasMapTestDevice(t, fixture, "router-a", "10.60.0.1", nil)
 	deviceB := seedCanvasMapTestDevice(t, fixture, "router-b", "10.60.0.2", nil)
-	seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
+	link := seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
 
 	defaultMap, err := fixture.mapRepo.GetDefault()
 	if err != nil {
 		t.Fatalf("get default map: %v", err)
+	}
+	if err := fixture.mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceA.ID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: deviceB.ID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+		LinkIDs: []uuid.UUID{link.ID},
+	}); err != nil {
+		t.Fatalf("replace default map membership: %v", err)
 	}
 	if err := fixture.mapPositionRepo.SaveAllForMap(defaultMap.ID, []domain.DevicePosition{
 		{DeviceID: deviceA.ID, X: 10, Y: 20, Pinned: true},
@@ -594,6 +774,15 @@ func TestCanvasMapHandlerSavePositionsRejectsUnknownDevicesAndInvalidCoordinates
 func TestPositionHandlerLegacySaveWritesDefaultMapAndLegacyPositions(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	device := seedCanvasMapTestDevice(t, fixture, "router-a", "10.63.0.1", nil)
+	defaultMap, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("get default map: %v", err)
+	}
+	if err := fixture.mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{{DeviceID: device.ID, Role: domain.CanvasMapDeviceRoleBase}},
+	}); err != nil {
+		t.Fatalf("replace default map membership: %v", err)
+	}
 
 	rec := canvasMapRequest(t, fixture.router, http.MethodPut, "/api/v1/positions", map[string]any{
 		"positions": []map[string]any{
@@ -612,10 +801,6 @@ func TestPositionHandlerLegacySaveWritesDefaultMapAndLegacyPositions(t *testing.
 		t.Fatalf("unexpected legacy positions: %#v", legacyPositions)
 	}
 
-	defaultMap, err := fixture.mapRepo.GetDefault()
-	if err != nil {
-		t.Fatalf("get default map: %v", err)
-	}
 	mapPositions, err := fixture.mapPositionRepo.GetAllForMap(defaultMap.ID)
 	if err != nil {
 		t.Fatalf("get default map positions: %v", err)
@@ -631,6 +816,11 @@ func TestPositionHandlerLegacyListReadsDefaultMapPositionsWhenConfigured(t *test
 	defaultMap, err := fixture.mapRepo.GetDefault()
 	if err != nil {
 		t.Fatalf("get default map: %v", err)
+	}
+	if err := fixture.mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{{DeviceID: device.ID, Role: domain.CanvasMapDeviceRoleBase}},
+	}); err != nil {
+		t.Fatalf("replace default map membership: %v", err)
 	}
 	if err := fixture.positionRepo.SaveAll([]domain.DevicePosition{
 		{DeviceID: device.ID, X: 1, Y: 2},

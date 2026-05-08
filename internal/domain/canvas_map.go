@@ -54,17 +54,18 @@ type CanvasMapMembership struct {
 }
 
 type CanvasMap struct {
-	ID            uuid.UUID
-	Name          string
-	Description   string
-	SourceAreaID  *uuid.UUID
-	FilterJSON    string
-	IsDefault     bool
-	DeviceCount   int
-	LinkCount     int
-	PositionCount int
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID                     uuid.UUID
+	Name                   string
+	Description            string
+	SourceAreaID           *uuid.UUID
+	FilterJSON             string
+	IsDefault              bool
+	MembershipMaterialized bool
+	DeviceCount            int
+	LinkCount              int
+	PositionCount          int
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 type CanvasMapCreate struct {

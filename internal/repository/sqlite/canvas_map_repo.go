@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -208,14 +209,15 @@ func (r *CanvasMapRepo) Duplicate(id uuid.UUID, name string) (domain.CanvasMap, 
 	copyID := uuid.New()
 	now := time.Now().UTC()
 	if _, err := tx.Exec(
-		`INSERT INTO canvas_maps (id, name, description, source_area_id, filter_json, is_default, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO canvas_maps (id, name, description, source_area_id, filter_json, is_default, membership_materialized, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		copyID.String(),
 		name,
 		source.Description,
 		nullableUUIDString(source.SourceAreaID),
 		source.FilterJSON,
 		false,
+		source.MembershipMaterialized,
 		now,
 		now,
 	); err != nil {
@@ -447,6 +449,21 @@ func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.Canvas
 		}
 	}
 
+	if err := pruneCanvasMapPositionsForMembership(tx, id, membership.Devices); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(
+		`UPDATE canvas_maps
+		 SET membership_materialized = ?, updated_at = ?
+		 WHERE id = ?`,
+		true,
+		now,
+		id.String(),
+	); err != nil {
+		return fmt.Errorf("marking canvas map membership materialized: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing canvas map membership: %w", err)
 	}
@@ -485,6 +502,26 @@ func (r *CanvasMapRepo) RemoveDevice(id uuid.UUID, deviceID uuid.UUID) error {
 	); err != nil {
 		return fmt.Errorf("removing canvas map position for device %s: %w", deviceID, err)
 	}
+	if _, err := tx.Exec(
+		`DELETE FROM canvas_map_links
+		 WHERE map_id = ?
+		   AND link_id IN (
+			 SELECT id FROM links
+			 WHERE source_device_id = ? OR target_device_id = ?
+		   )`,
+		id.String(),
+		deviceID.String(),
+		deviceID.String(),
+	); err != nil {
+		return fmt.Errorf("removing canvas map links for device %s: %w", deviceID, err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE canvas_maps SET updated_at = ? WHERE id = ?`,
+		time.Now().UTC(),
+		id.String(),
+	); err != nil {
+		return fmt.Errorf("touching canvas map after device removal %s: %w", id, err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing canvas map device removal: %w", err)
@@ -509,6 +546,13 @@ func (r *CanvasMapRepo) RemoveLink(id uuid.UUID, linkID uuid.UUID) error {
 		linkID.String(),
 	); err != nil {
 		return fmt.Errorf("removing canvas map link membership %s: %w", linkID, err)
+	}
+	if _, err := r.db.Exec(
+		`UPDATE canvas_maps SET updated_at = ? WHERE id = ?`,
+		time.Now().UTC(),
+		id.String(),
+	); err != nil {
+		return fmt.Errorf("touching canvas map after link removal %s: %w", id, err)
 	}
 	return nil
 }
@@ -629,6 +673,7 @@ func canvasMapSelectQuery(whereClause string) string {
 			cm.source_area_id,
 			cm.filter_json,
 			cm.is_default,
+			cm.membership_materialized,
 			cm.created_at,
 			cm.updated_at,
 			COUNT(DISTINCT cmd.device_id) AS device_count,
@@ -646,6 +691,7 @@ func canvasMapSelectQuery(whereClause string) string {
 			cm.source_area_id,
 			cm.filter_json,
 			cm.is_default,
+			cm.membership_materialized,
 			cm.created_at,
 			cm.updated_at`
 }
@@ -656,6 +702,7 @@ func scanCanvasMap(scanner rowScanner) (domain.CanvasMap, error) {
 		idRaw           string
 		sourceAreaIDRaw sql.NullString
 		isDefaultRaw    any
+		materializedRaw any
 	)
 
 	if err := scanner.Scan(
@@ -665,6 +712,7 @@ func scanCanvasMap(scanner rowScanner) (domain.CanvasMap, error) {
 		&sourceAreaIDRaw,
 		&canvasMap.FilterJSON,
 		&isDefaultRaw,
+		&materializedRaw,
 		&canvasMap.CreatedAt,
 		&canvasMap.UpdatedAt,
 		&canvasMap.DeviceCount,
@@ -696,6 +744,12 @@ func scanCanvasMap(scanner rowScanner) (domain.CanvasMap, error) {
 		return domain.CanvasMap{}, fmt.Errorf("normalizing canvas map is_default: %w", err)
 	}
 	canvasMap.IsDefault = isDefault
+
+	membershipMaterialized, err := normalizeBoolValue(materializedRaw)
+	if err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("normalizing canvas map membership_materialized: %w", err)
+	}
+	canvasMap.MembershipMaterialized = membershipMaterialized
 
 	return canvasMap, nil
 }
@@ -788,11 +842,11 @@ func validateCanvasMapMembership(membership domain.CanvasMapMembership) error {
 }
 
 func rejectCanvasMapNonMemberPositions(tx *Tx, mapID uuid.UUID, positions []domain.DevicePosition) error {
-	membershipExists, err := canvasMapMembershipExists(tx, mapID)
+	membershipMaterialized, err := canvasMapMembershipMaterialized(tx, mapID)
 	if err != nil {
 		return err
 	}
-	if !membershipExists {
+	if !membershipMaterialized {
 		return nil
 	}
 
@@ -824,21 +878,45 @@ func rejectCanvasMapNonMemberPositions(tx *Tx, mapID uuid.UUID, positions []doma
 	return nil
 }
 
-func canvasMapMembershipExists(queryer canvasMapQueryRower, mapID uuid.UUID) (bool, error) {
-	var exists int
+func canvasMapMembershipMaterialized(queryer canvasMapQueryRower, mapID uuid.UUID) (bool, error) {
+	var materialized any
 	if err := queryer.QueryRow(
-		`SELECT CASE WHEN
-			EXISTS (SELECT 1 FROM canvas_map_devices WHERE map_id = ?)
-			OR EXISTS (SELECT 1 FROM canvas_map_links WHERE map_id = ?)
-			OR EXISTS (SELECT 1 FROM canvas_map_areas WHERE map_id = ?)
-		 THEN 1 ELSE 0 END`,
+		`SELECT membership_materialized FROM canvas_maps WHERE id = ?`,
 		mapID.String(),
-		mapID.String(),
-		mapID.String(),
-	).Scan(&exists); err != nil {
-		return false, fmt.Errorf("checking canvas map membership existence: %w", err)
+	).Scan(&materialized); err != nil {
+		return false, fmt.Errorf("checking canvas map materialization: %w", err)
 	}
-	return exists != 0, nil
+	return normalizeBoolValue(materialized)
+}
+
+func pruneCanvasMapPositionsForMembership(
+	tx *Tx,
+	mapID uuid.UUID,
+	devices []domain.CanvasMapDeviceMembership,
+) error {
+	if len(devices) == 0 {
+		if _, err := tx.Exec(`DELETE FROM canvas_map_positions WHERE map_id = ?`, mapID.String()); err != nil {
+			return fmt.Errorf("pruning all canvas map positions for %s: %w", mapID, err)
+		}
+		return nil
+	}
+
+	args := make([]interface{}, 0, len(devices)+1)
+	args = append(args, mapID.String())
+	placeholders := make([]string, 0, len(devices))
+	for _, device := range devices {
+		placeholders = append(placeholders, "?")
+		args = append(args, device.DeviceID.String())
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM canvas_map_positions
+		 WHERE map_id = ?
+		   AND device_id NOT IN (`+strings.Join(placeholders, ", ")+`)`,
+		args...,
+	); err != nil {
+		return fmt.Errorf("pruning non-member canvas map positions for %s: %w", mapID, err)
+	}
+	return nil
 }
 
 func nullableUUIDString(id *uuid.UUID) any {
