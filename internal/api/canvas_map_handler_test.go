@@ -390,6 +390,60 @@ func TestCanvasMapHandlerCreateBlankMapDoesNotAutoSyncFutureDevices(t *testing.T
 	}
 }
 
+func TestCanvasMapHandlerCreateBlankMapDoesNotImportExistingGlobalTopology(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-existing-a", "10.69.1.10", nil)
+	deviceB := seedCanvasMapTestDevice(t, fixture, "router-existing-b", "10.69.1.11", nil)
+	seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
+	defaultMap, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("load default map: %v", err)
+	}
+	if err := fixture.mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceA.ID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: deviceB.ID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("seed default map membership: %v", err)
+	}
+	if err := fixture.mapPositionRepo.SaveAllForMap(defaultMap.ID, []domain.DevicePosition{
+		{DeviceID: deviceA.ID, X: 100, Y: 200, Pinned: true},
+		{DeviceID: deviceB.ID, X: 300, Y: 400, Pinned: true},
+	}); err != nil {
+		t.Fatalf("seed default map positions: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps", map[string]any{
+		"name":           "Blank Map",
+		"source_area_id": nil,
+		"filter":         map[string]any{},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST blank map: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	canvasMap := decodeCanvasMapData(t, rec)
+	if canvasMap.DeviceCount != 0 || canvasMap.LinkCount != 0 || canvasMap.PositionCount != 0 {
+		t.Fatalf("created blank map counts = devices:%d links:%d positions:%d, want all zero", canvasMap.DeviceCount, canvasMap.LinkCount, canvasMap.PositionCount)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET blank map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if len(topology.Devices) != 0 || len(topology.Links) != 0 || len(topology.Positions) != 0 {
+		t.Fatalf("blank map imported topology: devices=%#v links=%#v positions=%#v", topology.Devices, topology.Links, topology.Positions)
+	}
+	if topology.Map == nil {
+		t.Fatal("blank map topology response omitted map metadata")
+	}
+	if topology.Map.DeviceCount != 0 || topology.Map.LinkCount != 0 || topology.Map.PositionCount != 0 {
+		t.Fatalf("blank topology map counts = devices:%d links:%d positions:%d, want all zero", topology.Map.DeviceCount, topology.Map.LinkCount, topology.Map.PositionCount)
+	}
+}
+
 func TestCanvasMapHandlerUnmaterializedMapDoesNotUseLiveFilterFallback(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	device := seedCanvasMapTestDevice(t, fixture, "router-no-fallback", "10.69.1.2", nil)

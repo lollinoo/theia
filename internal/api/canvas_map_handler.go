@@ -142,8 +142,15 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 		h.writeMapRepoMutationError(w, err)
 		return
 	}
-	if !h.replaceMaterializedMembership(w, r, canvasMap.ID, materializationFilter) {
-		return
+	if shouldCreateEmptyCanvasMapMembership(req.Filter, sourceAreaID) {
+		if err := h.mapRepo.ReplaceMembership(canvasMap.ID, domain.CanvasMapMembership{}); err != nil {
+			h.writeMapRepoMutationError(w, err)
+			return
+		}
+	} else {
+		if !h.replaceMaterializedMembership(w, r, canvasMap.ID, materializationFilter) {
+			return
+		}
 	}
 	canvasMap, err = h.mapRepo.GetByID(canvasMap.ID)
 	if err != nil {
@@ -624,6 +631,13 @@ func canvasMapMaterializationFilter(filter domain.CanvasMapFilter, sourceAreaID 
 		filter.AreaID = &areaID
 	}
 	return filter
+}
+
+func shouldCreateEmptyCanvasMapMembership(filter domain.CanvasMapFilter, sourceAreaID *uuid.UUID) bool {
+	return sourceAreaID == nil &&
+		filter.AreaID == nil &&
+		len(filter.DeviceIDs) == 0 &&
+		len(filter.Tags) == 0
 }
 
 func materializeCanvasMapMembership(
