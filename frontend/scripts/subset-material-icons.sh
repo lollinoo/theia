@@ -25,12 +25,14 @@ ICON_NAMES=(
   content_copy
   dark_mode
   delete
+  description
   devices
   dns
   edit
   expand_less
   expand_more
   fit_screen
+  history
   hub
   key
   language

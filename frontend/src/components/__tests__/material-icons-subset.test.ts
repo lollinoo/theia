@@ -17,6 +17,8 @@ const REQUIRED_TOPOLOGY_HUB_ICONS = [
   'public',
 ] as const;
 
+const REQUIRED_DASHBOARD_DEVICE_ACTION_ICONS = ['description', 'history'] as const;
+
 function iconNamesFromScript(): Set<string> {
   const match = subsetScript.match(/ICON_NAMES=\(\n(?<body>[\s\S]*?)\n\)/);
   if (!match?.groups?.body) {
@@ -33,6 +35,14 @@ describe('Material Symbols subset contract', () => {
     const iconNames = iconNamesFromScript();
 
     for (const iconName of REQUIRED_TOPOLOGY_HUB_ICONS) {
+      expect(iconNames.has(iconName), iconName).toBe(true);
+    }
+  });
+
+  it('declares every Devices table action icon in the generated subset inputs', () => {
+    const iconNames = iconNamesFromScript();
+
+    for (const iconName of REQUIRED_DASHBOARD_DEVICE_ACTION_ICONS) {
       expect(iconNames.has(iconName), iconName).toBe(true);
     }
   });
