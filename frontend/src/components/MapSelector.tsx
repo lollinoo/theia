@@ -8,6 +8,7 @@ interface MapSelectorProps {
   selectedMapName: string;
   onSelectMap: (map: CanvasMap) => void;
   onManageMaps: () => void;
+  placement?: 'floating' | 'inline';
 }
 
 const fallbackDefaultMap: CanvasMap = {
@@ -34,6 +35,7 @@ export function MapSelector({
   selectedMapName,
   onSelectMap,
   onManageMaps,
+  placement = 'floating',
 }: MapSelectorProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -93,8 +95,21 @@ export function MapSelector({
     }
   }, [open, selectedOptionIndex]);
 
+  const rootClassName =
+    placement === 'floating'
+      ? 'absolute right-20 top-20 z-10'
+      : 'relative min-w-[8rem] flex-1 sm:flex-none';
+  const triggerClassName =
+    placement === 'floating'
+      ? 'topology-glass topology-floating-shadow flex h-11 max-w-[min(15rem,calc(100vw-6rem))] items-center gap-2 rounded-[16px] px-3 text-sm font-medium text-on-bg transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg'
+      : 'flex h-10 max-w-[min(14rem,42vw)] items-center gap-2 rounded-full border border-outline-subtle bg-surface-container-high px-3 text-sm font-medium text-on-bg shadow-pill outline-none transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
+  const menuClassName =
+    placement === 'floating'
+      ? 'topology-glass topology-floating-shadow absolute right-0 mt-2 w-[min(16rem,calc(100vw-6rem))] overflow-hidden rounded-[16px] p-1.5'
+      : 'topology-glass topology-floating-shadow absolute left-0 mt-2 w-[min(16rem,calc(100vw-2rem))] overflow-hidden rounded-[16px] p-1.5 sm:left-auto sm:right-0';
+
   return (
-    <div ref={rootRef} className="absolute right-20 top-20 z-10">
+    <div ref={rootRef} className={rootClassName}>
       <button
         ref={triggerRef}
         type="button"
@@ -102,7 +117,7 @@ export function MapSelector({
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="topology-glass topology-floating-shadow flex h-11 max-w-[min(15rem,calc(100vw-6rem))] items-center gap-2 rounded-[16px] px-3 text-sm font-medium text-on-bg transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        className={triggerClassName}
         title="Select topology map"
       >
         <MaterialIcon name="map" className="text-[20px]" />
@@ -111,7 +126,7 @@ export function MapSelector({
       </button>
 
       {open && (
-        <div className="topology-glass topology-floating-shadow absolute right-0 mt-2 w-[min(16rem,calc(100vw-6rem))] overflow-hidden rounded-[16px] p-1.5">
+        <div className={menuClassName}>
           <div role="listbox" aria-label="Topology maps" tabIndex={-1}>
             {menuMaps.map((map, index) => {
               const selected = isSelectedMap(map, selectedMapId);

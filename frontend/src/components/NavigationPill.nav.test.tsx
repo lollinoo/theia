@@ -5,6 +5,7 @@ import { render } from '@testing-library/react';
  * These tests verify the requirements from COMP-03.
  */
 import { describe, expect, it, vi } from 'vitest';
+import type { CanvasMap } from '../types/api';
 import NavigationPill from './NavigationPill';
 
 // Mock API client
@@ -28,9 +29,28 @@ vi.mock('../contexts/ThemeContext', () => ({
 const defaultProps = {
   activeView: 'hub' as const,
   selectedAreaId: null as string | null,
+  selectedMapId: null as string | null,
+  selectedMapName: 'Default',
+  maps: [
+    {
+      id: 'default',
+      name: 'Default',
+      description: '',
+      source_area_id: null,
+      filter: {},
+      is_default: true,
+      device_count: 0,
+      link_count: 0,
+      position_count: 0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    } satisfies CanvasMap,
+  ],
   areas: [],
   onViewChange: vi.fn(),
   onAreaSelect: vi.fn(),
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
 };
 
 describe('NavigationPill (COMP-03: NavBar requirements)', () => {

@@ -496,7 +496,7 @@ describe('Canvas drag state ownership', () => {
     expect(testState.displayedNodes[2]).toBe(secondStableNode);
   });
 
-  it('passes saved map metadata to canvas data and disables area projection', () => {
+  it('passes saved map metadata to canvas data and applies map-local area projection', () => {
     render(
       <Canvas
         {...defaultCanvasProps}
@@ -519,8 +519,9 @@ describe('Canvas drag state ownership', () => {
       mapId: 'map-backbone',
       mapName: 'Backbone',
     });
-    expect(testState.displayedNodes.map((node) => node.id)).toEqual(['dev-a', 'dev-b', 'dev-c']);
-    expect(testState.displayedNodes.every((node) => node.data.isGhost !== true)).toBe(true);
+    expect(
+      testState.displayedNodes.map((node) => `${node.id}:${node.data.isGhost === true}`),
+    ).toEqual(['dev-a:false', 'dev-c:true']);
   });
 
   it('passes saved map removal context to canvas panels', async () => {

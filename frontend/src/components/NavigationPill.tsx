@@ -2,23 +2,34 @@ import { useEffect, useState } from 'react';
 import type { ActiveView } from '../App';
 import { fetchHealthVersion } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
-import type { Area } from '../types/api';
+import type { Area, CanvasMap } from '../types/api';
+import { MapSelector } from './MapSelector';
 import { MaterialIcon } from './MaterialIcon';
 
 interface NavigationPillProps {
   activeView: ActiveView;
   selectedAreaId: string | null;
+  selectedMapId: string | null;
+  selectedMapName: string;
+  maps: CanvasMap[];
   areas: Area[];
   onViewChange: (view: ActiveView) => void;
   onAreaSelect: (areaId: string | null) => void;
+  onMapSelect: (map: CanvasMap) => void;
+  onManageMaps: () => void;
 }
 
 function NavigationPill({
   activeView,
   selectedAreaId,
+  selectedMapId,
+  selectedMapName,
+  maps,
   areas,
   onViewChange,
   onAreaSelect,
+  onMapSelect,
+  onManageMaps,
 }: NavigationPillProps) {
   const [version, setVersion] = useState('');
   const { resolvedTheme, setTheme } = useTheme();
@@ -32,7 +43,7 @@ function NavigationPill({
   };
 
   const isHub = activeView === 'hub';
-  const isGlobal = activeView === 'canvas' && selectedAreaId === null;
+  const isAllAreas = activeView === 'canvas' && selectedAreaId === null;
   const isDashboard = activeView === 'dashboard';
 
   return (
@@ -62,22 +73,30 @@ function NavigationPill({
         <MaterialIcon name="hub" size={20} />
       </button>
 
-      {/* GLOBAL + AREA BUTTONS */}
+      {/* MAP + AREA BUTTONS */}
       {isDashboard ? (
         <span className="flex-1 px-3 py-2 text-sm font-semibold text-on-bg whitespace-nowrap">
           Devices
         </span>
       ) : (
         <>
+          <MapSelector
+            maps={maps}
+            selectedMapId={selectedMapId}
+            selectedMapName={selectedMapName}
+            onSelectMap={onMapSelect}
+            onManageMaps={onManageMaps}
+            placement="inline"
+          />
           <select
             aria-label="Area selector"
-            value={selectedAreaId ?? '__global__'}
+            value={selectedAreaId ?? '__all__'}
             onChange={(event) =>
-              onAreaSelect(event.target.value === '__global__' ? null : event.target.value)
+              onAreaSelect(event.target.value === '__all__' ? null : event.target.value)
             }
-            className="h-10 min-w-0 flex-1 rounded-full border border-outline-subtle bg-surface-container-high px-3 text-sm text-on-bg shadow-pill outline-none transition-colors focus:ring-2 focus:ring-focus-ring sm:hidden"
+            className="h-10 min-w-[7rem] flex-1 rounded-full border border-outline-subtle bg-surface-container-high px-3 text-sm text-on-bg shadow-pill outline-none transition-colors focus:ring-2 focus:ring-focus-ring sm:hidden"
           >
-            <option value="__global__">Global</option>
+            <option value="__all__">All areas</option>
             {areas.map((area) => (
               <option key={area.id} value={area.id}>
                 {area.name}
@@ -92,12 +111,12 @@ function NavigationPill({
               type="button"
               onClick={() => onAreaSelect(null)}
               className={`rounded-full border px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
-                isGlobal
+                isAllAreas
                   ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
                   : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
               }`}
             >
-              Global
+              All areas
             </button>
 
             {areas.map((area) => {

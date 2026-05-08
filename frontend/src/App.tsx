@@ -59,6 +59,7 @@ function App() {
   const [canvasDevices, setCanvasDevices] = useState<Device[]>([]);
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
+  const [canvasTopologyAreas, setCanvasTopologyAreas] = useState<Area[]>([]);
   const [canvasMaps, setCanvasMaps] = useState<CanvasMap[]>([]);
   const [canvasMapsLoading, setCanvasMapsLoading] = useState(false);
   const [canvasMapsError, setCanvasMapsError] = useState<string | null>(null);
@@ -148,6 +149,7 @@ function App() {
     setSelectedMapId(null);
     setSelectedMapName('Default');
     setSelectedAreaId(null);
+    setCanvasTopologyAreas([]);
     setActiveView('canvas');
   }, []);
 
@@ -155,13 +157,20 @@ function App() {
     setSelectedMapId(map.is_default ? null : map.id);
     setSelectedMapName(map.name);
     setSelectedAreaId(null);
+    setCanvasTopologyAreas([]);
     setActiveView('canvas');
   }, []);
 
-  const handleAreaSelect = useCallback((areaId: string | null) => {
+  const handleAreaFilterSelect = useCallback((areaId: string | null) => {
+    setSelectedAreaId(areaId);
+    setActiveView('canvas');
+  }, []);
+
+  const handleOpenArea = useCallback((areaId: string | null) => {
     setSelectedMapId(null);
     setSelectedMapName('Default');
     setSelectedAreaId(areaId);
+    setCanvasTopologyAreas([]);
     setActiveView('canvas');
   }, []);
 
@@ -265,6 +274,8 @@ function App() {
         if (selectedMapId === map.id) {
           setSelectedMapId(null);
           setSelectedMapName('Default');
+          setSelectedAreaId(null);
+          setCanvasTopologyAreas([]);
         }
         void loadCanvasMaps();
       } catch (error) {
@@ -277,6 +288,7 @@ function App() {
   const mapsForHub = enableSavedMaps ? canvasMaps : [];
   const mapsLoadingForHub = enableSavedMaps ? canvasMapsLoading : false;
   const mapsErrorForHub = enableSavedMaps ? canvasMapsError : null;
+  const navigationAreas = canvasTopologyAreas;
 
   return (
     <ThemeProvider>
@@ -284,9 +296,16 @@ function App() {
         <NavigationPill
           activeView={activeView}
           selectedAreaId={selectedAreaId}
-          areas={areas}
+          selectedMapId={selectedMapId}
+          selectedMapName={selectedMapName}
+          maps={canvasMaps}
+          areas={navigationAreas}
           onViewChange={handleViewChange}
-          onAreaSelect={handleAreaSelect}
+          onAreaSelect={handleAreaFilterSelect}
+          onMapSelect={handleOpenMap}
+          onManageMaps={() => {
+            setActiveView('hub');
+          }}
         />
         {/* All views stay mounted; inactive ones hidden via CSS */}
         <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
@@ -300,7 +319,7 @@ function App() {
             mapsError={mapsErrorForHub}
             savedMapsEnabled={enableSavedMaps}
             onOpenGlobal={handleOpenGlobal}
-            onOpenArea={(areaId) => handleAreaSelect(areaId)}
+            onOpenArea={(areaId) => handleOpenArea(areaId)}
             onOpenMap={handleOpenMap}
             onCreateEmptyMap={handleCreateEmptyMap}
             onCreateMapFromArea={handleCreateMapFromArea}
@@ -312,7 +331,11 @@ function App() {
           />
         </div>
         <div className={activeView === 'canvas' ? 'relative h-full' : 'hidden'}>
-          <Watermark activeView={activeView} selectedAreaId={selectedAreaId} areas={areas} />
+          <Watermark
+            activeView={activeView}
+            selectedAreaId={selectedAreaId}
+            areas={navigationAreas}
+          />
           <ReactFlowProvider>
             <Canvas
               snapshot={snapshot}
@@ -322,13 +345,10 @@ function App() {
               selectedAreaId={selectedAreaId}
               mapId={selectedMapId}
               mapName={selectedMapName}
-              maps={canvasMaps}
-              areas={areas}
               onDevicesChange={handleCanvasDevicesChange}
               onLinksChange={handleCanvasLinksChange}
-              onAreaSelect={handleAreaSelect}
-              onMapSelect={handleOpenMap}
-              onManageMaps={() => setActiveView('hub')}
+              onAreaSelect={handleAreaFilterSelect}
+              onTopologyAreasChange={setCanvasTopologyAreas}
               onAreasChange={handleAreasChange}
               onDetailDeviceChange={setDetailDeviceId}
               onInteractionActiveChange={setCanvasInteractionActive}

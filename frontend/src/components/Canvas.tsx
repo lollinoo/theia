@@ -27,7 +27,6 @@ import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
-import { MapSelector } from './MapSelector';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
@@ -160,13 +159,14 @@ interface CanvasProps {
   selectedAreaId: string | null;
   mapId: string | null;
   mapName: string;
-  maps: CanvasMap[];
+  maps?: CanvasMap[];
   areas?: Area[];
   onDevicesChange?: (devices: Device[]) => void;
   onLinksChange?: (links: Link[]) => void;
   onAreaSelect?: (areaId: string | null) => void;
-  onMapSelect: (map: CanvasMap) => void;
-  onManageMaps: () => void;
+  onMapSelect?: (map: CanvasMap) => void;
+  onManageMaps?: () => void;
+  onTopologyAreasChange?: (areas: Area[]) => void;
   onAreasChange?: () => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
   onInteractionActiveChange?: (active: boolean) => void;
@@ -180,13 +180,10 @@ export default function Canvas({
   selectedAreaId,
   mapId,
   mapName,
-  maps,
-  areas,
   onDevicesChange,
   onLinksChange,
   onAreaSelect,
-  onMapSelect,
-  onManageMaps,
+  onTopologyAreasChange,
   onAreasChange,
   onDetailDeviceChange,
   onInteractionActiveChange,
@@ -415,6 +412,7 @@ export default function Canvas({
     devices,
     setDevices,
     topologyLinks,
+    topologyAreas = [],
     loading,
     error,
     loadTopology,
@@ -443,6 +441,7 @@ export default function Canvas({
     setEdges,
     onDevicesChange,
     onLinksChange,
+    onTopologyAreasChange,
   });
 
   const handleRemoveDeviceFromMap = useCallback(
@@ -457,7 +456,7 @@ export default function Canvas({
     [loadTopology, mapId, setPanelContent],
   );
 
-  const effectiveAreaId = mapId === null ? selectedAreaId : null;
+  const effectiveAreaId = selectedAreaId;
 
   // Area filtering: derive filtered devices/links and ghost devices
   const { filteredDevices, filteredLinks, ghostDevices } = useAreaFilteredTopology(
@@ -480,13 +479,11 @@ export default function Canvas({
   // Build a lookup for area colors (adapted for current theme)
   const areaColorMap = useMemo(() => {
     const map = new Map<string, string>();
-    if (areas) {
-      for (const area of areas) {
-        map.set(area.id, adaptAreaColor(area.color, resolvedTheme));
-      }
+    for (const area of topologyAreas) {
+      map.set(area.id, adaptAreaColor(area.color, resolvedTheme));
     }
     return map;
-  }, [areas, resolvedTheme]);
+  }, [topologyAreas, resolvedTheme]);
 
   // Inject areaColors into node data based on device.area_ids
   const nodesWithAreaColor = useMemo(() => {
@@ -896,14 +893,6 @@ export default function Canvas({
         editMode={editMode}
         alertCount={runtimeSummary.alertCount}
       />
-      <MapSelector
-        maps={maps}
-        selectedMapId={mapId}
-        selectedMapName={mapName}
-        onSelectMap={onMapSelect}
-        onManageMaps={onManageMaps}
-      />
-
       {deviceMenu &&
         (() => {
           const d = devices.find((dev) => dev.id === deviceMenu.deviceId);

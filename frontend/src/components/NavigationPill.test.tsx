@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Area } from '../types/api';
+import type { Area, CanvasMap } from '../types/api';
 import NavigationPill from './NavigationPill';
 
 // Mock fetchHealthVersion
@@ -34,12 +34,37 @@ function mockArea(overrides: Partial<Area> = {}): Area {
   };
 }
 
+function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
+  return {
+    id: 'default',
+    name: 'Default',
+    description: '',
+    source_area_id: null,
+    filter: {},
+    is_default: true,
+    device_count: 0,
+    link_count: 0,
+    position_count: 0,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
 const defaultProps = {
   activeView: 'hub' as const,
   selectedAreaId: null as string | null,
+  selectedMapId: null as string | null,
+  selectedMapName: 'Default',
+  maps: [
+    mockMap(),
+    mockMap({ id: 'map-1', name: 'Backbone Map', is_default: false }),
+  ],
   areas: [mockArea(), mockArea({ id: 'area-2', name: 'Distribution', color: '#FF5722' })],
   onViewChange: vi.fn(),
   onAreaSelect: vi.fn(),
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
 };
 
 describe('NavigationPill', () => {
@@ -54,17 +79,30 @@ describe('NavigationPill', () => {
     expect(version).toBeDefined();
   });
 
-  it('renders Global button and area buttons for each area', () => {
+  it('renders the map selector and area buttons for each area', () => {
     render(<NavigationPill {...defaultProps} />);
     const desktopAreaSelector = screen.getByTestId('desktop-area-selector');
-    expect(desktopAreaSelector.textContent).toContain('Global');
+    expect(screen.getByRole('button', { name: /select topology map/i })).toHaveTextContent(
+      'Default',
+    );
+    expect(desktopAreaSelector.textContent).toContain('All areas');
     expect(desktopAreaSelector.textContent).toContain('Backbone');
     expect(desktopAreaSelector.textContent).toContain('Distribution');
     expect(desktopAreaSelector.className).toContain('hidden');
     expect(desktopAreaSelector.className).toContain('sm:flex');
   });
 
-  it('clicking Global calls onAreaSelect with null (shows full canvas)', () => {
+  it('selecting a map from the pill delegates to onMapSelect', () => {
+    const onMapSelect = vi.fn();
+    render(<NavigationPill {...defaultProps} onMapSelect={onMapSelect} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /select topology map/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Backbone Map/ }));
+
+    expect(onMapSelect).toHaveBeenCalledWith(defaultProps.maps[1]);
+  });
+
+  it('clicking All areas calls onAreaSelect with null for the current map', () => {
     const onAreaSelect = vi.fn();
     render(
       <NavigationPill
@@ -85,7 +123,7 @@ describe('NavigationPill', () => {
     expect(onAreaSelect).toHaveBeenCalledWith('area-1');
   });
 
-  it('renders a mobile area select that switches between Global and areas', () => {
+  it('renders a mobile area select that switches between All areas and map-local areas', () => {
     const onAreaSelect = vi.fn();
     render(
       <NavigationPill
@@ -98,7 +136,7 @@ describe('NavigationPill', () => {
 
     const areaSelect = screen.getByLabelText('Area selector') as HTMLSelectElement;
     expect(areaSelect.className).toContain('sm:hidden');
-    expect(screen.getByRole('option', { name: 'Global' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'All areas' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Backbone' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Distribution' })).toBeInTheDocument();
     expect(areaSelect.value).toBe('area-1');
@@ -106,7 +144,7 @@ describe('NavigationPill', () => {
     fireEvent.change(areaSelect, { target: { value: 'area-2' } });
     expect(onAreaSelect).toHaveBeenCalledWith('area-2');
 
-    fireEvent.change(areaSelect, { target: { value: '__global__' } });
+    fireEvent.change(areaSelect, { target: { value: '__all__' } });
     expect(onAreaSelect).toHaveBeenCalledWith(null);
   });
 
@@ -115,7 +153,7 @@ describe('NavigationPill', () => {
     const devicesLabel = screen.getByText('Devices');
     expect(devicesLabel).toBeDefined();
     expect(devicesLabel.className).toContain('flex-1');
-    expect(screen.queryByText('Global')).toBeNull();
+    expect(screen.queryByText('All areas')).toBeNull();
     expect(screen.queryByText('Backbone')).toBeNull();
   });
 
@@ -142,7 +180,8 @@ describe('NavigationPill', () => {
 
     expect(screen.getByText('THEIA')).toBeInTheDocument();
     expect(screen.getByLabelText('Topology Hub')).toBeInTheDocument();
-    expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Global');
+    expect(screen.getByRole('button', { name: /select topology map/i })).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-area-selector').textContent).toContain('All areas');
     expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Backbone');
     expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Distribution');
     expect(screen.getByLabelText('Devices Dashboard')).toBeInTheDocument();

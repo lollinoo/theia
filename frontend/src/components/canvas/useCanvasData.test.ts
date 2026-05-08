@@ -19,7 +19,7 @@ import {
   resetCanvasRuntimeBootstrap,
 } from '../../hooks/canvasRuntimeBootstrap';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
-import type { Device } from '../../types/api';
+import type { Area, Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -101,6 +101,19 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
   };
 }
 
+function mockArea(overrides: Partial<Area> = {}): Area {
+  return {
+    id: 'area-1',
+    name: 'Backbone',
+    description: 'Core',
+    color: '#00E676',
+    device_count: 1,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
     devices: {
@@ -136,6 +149,7 @@ function renderUseCanvasData(
     mapId?: string | null;
     mapName?: string;
     onDevicesChange?: (devices: Device[]) => void;
+    onTopologyAreasChange?: (areas: Area[]) => void;
   } = {},
 ) {
   const reactFlow = {
@@ -163,6 +177,7 @@ function renderUseCanvasData(
         setNodes,
         setEdges,
         onDevicesChange: options.onDevicesChange,
+        onTopologyAreasChange: options.onTopologyAreasChange,
       });
 
       return {
@@ -317,6 +332,28 @@ describe('useCanvasData', () => {
     expect(positionMocks.usePositions).toHaveBeenCalledWith('map-1');
     expect(fetchCanvasMapBootstrap).toHaveBeenCalledWith('map-1', { force: false });
     expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
+  });
+
+  it('publishes topology areas from the active map load', async () => {
+    const onTopologyAreasChange = vi.fn();
+    const mapArea = mockArea({ id: 'map-area-1', name: 'Map Local Area' });
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({ areas: [mapArea] }),
+    );
+
+    const { result } = renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+      onTopologyAreasChange,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.topologyAreas).toEqual([mapArea]);
+    expect(onTopologyAreasChange).toHaveBeenCalledWith([mapArea]);
   });
 
   it('uses saved map topology on silent refresh when mapId is set', async () => {

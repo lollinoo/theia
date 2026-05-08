@@ -13,7 +13,7 @@ import {
 } from '../../api/client';
 import { publishCanvasRuntimeBootstrap } from '../../hooks/canvasRuntimeBootstrap';
 import { type PositionState, usePositions } from '../../hooks/usePositions';
-import type { Device, DevicePosition, Link } from '../../types/api';
+import type { Area, Device, DevicePosition, Link } from '../../types/api';
 import {
   type AlertDTO,
   type PrometheusStatusPayload,
@@ -76,12 +76,14 @@ interface UseCanvasDataParams {
   setEdges: React.Dispatch<React.SetStateAction<LinkEdgeType[]>>;
   onDevicesChange?: (devices: Device[]) => void;
   onLinksChange?: (links: Link[]) => void;
+  onTopologyAreasChange?: (areas: Area[]) => void;
 }
 
 interface UseCanvasDataReturn {
   devices: Device[];
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
   topologyLinks: Link[];
+  topologyAreas: Area[];
   runtimeSummary: RuntimeSummary;
   loading: boolean;
   error: string | null;
@@ -128,6 +130,7 @@ type CanvasTopologySource =
       status: 'ok';
       devices: Device[];
       links: Link[];
+      areas: Area[];
       positions: Map<string, PositionState>;
       etag?: string;
       topologyVersion?: string;
@@ -300,6 +303,7 @@ async function loadCanvasTopologySource(
         status: 'ok',
         devices: topology.devices,
         links: topology.links,
+        areas: topology.areas,
         positions: toPositionMap(Object.values(topology.positions)),
         topologyVersion: topology.topology_version,
         runtimeVersion: topology.runtime_version,
@@ -325,6 +329,7 @@ async function loadCanvasTopologySource(
       status: 'ok',
       devices: topology.devices,
       links: topology.links,
+      areas: topology.areas,
       positions: toPositionMap(Object.values(topology.positions)),
       etag: result.etag,
       topologyVersion: topology.topology_version,
@@ -355,6 +360,7 @@ async function loadCanvasTopologySource(
     status: 'ok',
     devices,
     links,
+    areas: [],
     positions,
   };
 }
@@ -521,12 +527,14 @@ export function useCanvasData({
   setEdges,
   onDevicesChange,
   onLinksChange,
+  onTopologyAreasChange,
 }: UseCanvasDataParams): UseCanvasDataReturn {
   const mapKey = canvasMapKey(mapId);
   const diagnosticMapId = mapId ?? 'default';
   const diagnosticMapName = mapName ?? 'Default';
   const [devices, setDevices] = useState<Device[]>([]);
   const [topologyLinks, setTopologyLinks] = useState<Link[]>([]);
+  const [topologyAreas, setTopologyAreas] = useState<Area[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -596,6 +604,10 @@ export function useCanvasData({
   useEffect(() => {
     onLinksChange?.(topologyLinks);
   }, [topologyLinks, onLinksChange]);
+
+  useEffect(() => {
+    onTopologyAreasChange?.(topologyAreas);
+  }, [topologyAreas, onTopologyAreasChange]);
 
   const loadTopology = useCallback(
     async (
@@ -712,6 +724,7 @@ export function useCanvasData({
           lastCanvasTopologyEtagByMapRef.current.set(mapKey, topologySource.etag ?? null);
           const fetchedDevices = topologySource.devices;
           const fetchedLinks = topologySource.links;
+          const fetchedAreas = topologySource.areas;
           const savedPositions = topologySource.positions;
           const runtimeSnapshot = topologySource.runtimeSnapshot ?? snapshotRef.current;
           if (topologySource.runtimeSnapshot !== undefined) {
@@ -799,6 +812,7 @@ export function useCanvasData({
           if (!structureChanged) {
             setDevices(fetchedDevices);
             setTopologyLinks(fetchedLinks);
+            setTopologyAreas(fetchedAreas);
             const { nodes: nextNodes, edges: nextEdges } = composeCanvasTopology({
               devices: fetchedDevices,
               links: fetchedLinks,
@@ -942,6 +956,7 @@ export function useCanvasData({
           // sometimes causing all canvas nodes to vanish after a device delete.
           setDevices(fetchedDevices);
           setTopologyLinks(fetchedLinks);
+          setTopologyAreas(fetchedAreas);
           nodesOwnerMapKeyRef.current = mapKey;
           currentNodePositionsByMapRef.current.set(
             mapKey,
@@ -1388,6 +1403,7 @@ export function useCanvasData({
     devices,
     setDevices,
     topologyLinks,
+    topologyAreas,
     runtimeSummary,
     loading,
     error,

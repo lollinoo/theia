@@ -53,13 +53,62 @@ vi.mock('./components/Watermark', () => ({
 }));
 
 vi.mock('./components/NavigationPill', () => ({
-  default: ({ onViewChange }: { onViewChange: (view: 'hub' | 'canvas' | 'dashboard') => void }) => (
-    <div>
+  default: ({
+    areas,
+    maps,
+    selectedMapId,
+    selectedMapName,
+    onViewChange,
+    onAreaSelect,
+    onMapSelect,
+    onManageMaps,
+  }: {
+    areas: Area[];
+    maps: CanvasMap[];
+    selectedMapId: string | null;
+    selectedMapName: string;
+    onViewChange: (view: 'hub' | 'canvas' | 'dashboard') => void;
+    onAreaSelect: (areaId: string | null) => void;
+    onMapSelect: (map: CanvasMap) => void;
+    onManageMaps: () => void;
+  }) => (
+    <div data-testid="navigation-pill">
+      <span>{`pill-map:${selectedMapId ?? 'default'}:${selectedMapName}:${maps.length}`}</span>
+      <span>{`pill-areas:${areas.map((area) => area.name).join('|')}`}</span>
       <button type="button" onClick={() => onViewChange('hub')}>
         Hub
       </button>
       <button type="button" onClick={() => onViewChange('dashboard')}>
         Dashboard
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onMapSelect({
+            id: 'map-1',
+            name: 'Backbone',
+            description: '',
+            source_area_id: 'area-1',
+            filter: { area_id: 'area-1' },
+            is_default: false,
+            device_count: 1,
+            link_count: 1,
+            position_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-02T00:00:00Z',
+          })
+        }
+      >
+        Pill Open Backbone map
+      </button>
+      <button type="button" onClick={() => onAreaSelect('area-1')}>
+        Pill area Backbone
+      </button>
+      <button type="button" onClick={() => onAreaSelect(null)}>
+        Pill all areas
+      </button>
+      <button type="button" onClick={onManageMaps}>
+        Pill Manage maps
       </button>
     </div>
   ),
@@ -69,20 +118,16 @@ vi.mock('./components/Canvas', () => ({
   default: ({
     mapId,
     mapName,
-    maps,
     onDevicesChange,
     onLinksChange,
-    onMapSelect,
-    onManageMaps,
+    onTopologyAreasChange,
     onInteractionActiveChange,
   }: {
     mapId: string | null;
     mapName: string;
-    maps: CanvasMap[];
     onDevicesChange: (devices: Device[]) => void;
     onLinksChange: (links: Link[]) => void;
-    onMapSelect: (map: CanvasMap) => void;
-    onManageMaps: () => void;
+    onTopologyAreasChange: (areas: Area[]) => void;
     onInteractionActiveChange: (active: boolean) => void;
   }) => {
     useEffect(() => {
@@ -122,34 +167,22 @@ vi.mock('./components/Canvas', () => ({
           target_if_oper_status: 'up',
         },
       ]);
-    }, [onDevicesChange, onLinksChange]);
+      onTopologyAreasChange([
+        {
+          id: 'map-area-1',
+          name: 'Map Local Area',
+          description: 'Map scoped area',
+          color: '#2979FF',
+          device_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        },
+      ]);
+    }, [onDevicesChange, onLinksChange, onTopologyAreasChange]);
 
     return (
       <div data-testid="canvas">
-        <span>{`map:${mapId ?? 'default'}:${mapName}:${maps.length}`}</span>
-        <button
-          type="button"
-          onClick={() =>
-            onMapSelect({
-              id: 'map-1',
-              name: 'Backbone',
-              description: '',
-              source_area_id: 'area-1',
-              filter: { area_id: 'area-1' },
-              is_default: false,
-              device_count: 1,
-              link_count: 1,
-              position_count: 1,
-              created_at: '2026-01-01T00:00:00Z',
-              updated_at: '2026-01-02T00:00:00Z',
-            })
-          }
-        >
-          Open Backbone map
-        </button>
-        <button type="button" onClick={onManageMaps}>
-          Manage maps
-        </button>
+        <span>{`map:${mapId ?? 'default'}:${mapName}`}</span>
         <button type="button" onClick={() => onInteractionActiveChange(true)}>
           Start interaction
         </button>
@@ -359,22 +392,49 @@ describe('App', () => {
     expect(canvasViewport?.className).toContain('h-full');
   });
 
-  it('passes selected map props and callbacks to Canvas', async () => {
+  it('passes selected map props from the navigation pill to Canvas', async () => {
     render(<App />);
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    expect(screen.getByTestId('canvas')).toHaveTextContent('map:default:Default:0');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:default:Default');
 
     act(() => {
-      screen.getByRole('button', { name: 'Open Backbone map' }).click();
+      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
     });
-    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone:0');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
 
     act(() => {
-      screen.getByRole('button', { name: 'Manage maps' }).click();
+      screen.getByRole('button', { name: 'Pill Manage maps' }).click();
     });
     expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('hidden');
+  });
+
+  it('lets the navigation pill select maps and filter areas without leaving the selected map', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
+        'pill-areas:Map Local Area',
+      ),
+    );
+
+    act(() => {
+      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
+    });
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-1:Backbone');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Pill area Backbone' }).click();
+    });
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Pill all areas' }).click();
+    });
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
   });
 
   it('creates a blank saved map from the hub empty-map action', async () => {
@@ -413,6 +473,7 @@ describe('App', () => {
         filter: {},
       }),
     );
-    expect(await screen.findByText('map:map-empty:Blank Map:1')).toBeInTheDocument();
+    expect(await screen.findByText('map:map-empty:Blank Map')).toBeInTheDocument();
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-empty:Blank Map');
   });
 });
