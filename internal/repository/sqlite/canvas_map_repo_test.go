@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -46,6 +47,30 @@ func TestCanvasMapRepoCreatesListsAndRejectsSecondDefault(t *testing.T) {
 
 	if _, err := repo.Create(domain.CanvasMapCreate{Name: "Second Default", IsDefault: true}); err == nil {
 		t.Fatal("expected second default map create to fail")
+	}
+}
+
+func TestCanvasMapSelectQueryAggregatesCountsBeforeJoiningMaps(t *testing.T) {
+	query := canvasMapSelectQuery("")
+
+	for _, joinedTable := range []string{
+		"canvas_map_devices cmd",
+		"canvas_map_links cml",
+		"canvas_map_positions cmp",
+	} {
+		if strings.Contains(query, joinedTable) {
+			t.Fatalf("canvas map list query directly joins %s; counts must be pre-aggregated by map_id to avoid fan-out", joinedTable)
+		}
+	}
+
+	for _, countAlias := range []string{
+		"device_counts",
+		"link_counts",
+		"position_counts",
+	} {
+		if !strings.Contains(query, countAlias) {
+			t.Fatalf("canvas map list query missing pre-aggregated %s subquery", countAlias)
+		}
 	}
 }
 

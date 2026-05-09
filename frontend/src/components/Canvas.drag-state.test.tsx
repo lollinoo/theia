@@ -313,6 +313,24 @@ describe('Canvas drag state ownership', () => {
     testState.reactFlowProps = {};
   });
 
+  it('does not mount React Flow internals while the canvas is hidden', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        visible={false}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Start pan' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
+    expect(testState.displayedNodes).toEqual([]);
+  });
+
   it('patches the dragged real node without replacing canonical nodes with the area projection', () => {
     render(
       <Canvas

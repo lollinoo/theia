@@ -440,6 +440,34 @@ describe('App', () => {
     expect(screen.getByTestId('dashboard')).toHaveTextContent('status:down');
   });
 
+  it('uses cached saved maps when opening the hub instead of starting a blocking refetch', async () => {
+    const defaultMap = mockMap({
+      id: 'default-map-id',
+      name: 'Default',
+      source_area_id: null,
+      filter: {},
+      is_default: true,
+    });
+    fetchCanvasMapsMock.mockResolvedValue([defaultMap]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
+        'pill-map:default-map-id:Default',
+      ),
+    );
+    expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+
+    expect(await screen.findByTestId('topology-hub')).toHaveTextContent('maps:1');
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('loading:false');
+    expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1);
+  });
+
   it('passes map-local areas into Devices instead of global areas', async () => {
     render(<App />);
 

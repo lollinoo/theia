@@ -27,6 +27,8 @@ export function SavedMapsSection({
   onDeleteMap,
   onSetPrimaryMap,
 }: SavedMapsSectionProps) {
+  const hasMaps = maps.length > 0;
+
   return (
     <section className="flex flex-col gap-3" aria-labelledby="saved-maps-heading">
       <div className="flex items-center justify-between gap-3">
@@ -35,6 +37,11 @@ export function SavedMapsSection({
         </h2>
         <div className="flex items-center gap-2">
           <span className="font-mono text-xs text-on-bg-secondary">{maps.length}</span>
+          {loading && hasMaps && (
+            <span className="rounded-full border border-outline-subtle px-2 py-0.5 text-[11px] font-medium text-on-bg-secondary">
+              Refreshing
+            </span>
+          )}
           <button
             type="button"
             aria-label="Create empty map"
@@ -47,7 +54,7 @@ export function SavedMapsSection({
         </div>
       </div>
 
-      {loading ? (
+      {loading && !hasMaps ? (
         <div className="rounded-lg border border-outline bg-surface p-4 text-sm text-on-bg-secondary">
           Loading maps
         </div>

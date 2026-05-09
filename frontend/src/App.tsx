@@ -85,6 +85,7 @@ function App() {
   const [canvasTopologyLoading, setCanvasTopologyLoading] = useState(true);
   const [canvasMaps, setCanvasMaps] = useState<CanvasMap[]>([]);
   const [canvasMapsLoading, setCanvasMapsLoading] = useState(false);
+  const [canvasMapsLoaded, setCanvasMapsLoaded] = useState(false);
   const [canvasMapsError, setCanvasMapsError] = useState<string | null>(null);
   const [createMapDialogOpen, setCreateMapDialogOpen] = useState(false);
   const [createMapSourceArea, setCreateMapSourceArea] = useState<Area | null>(null);
@@ -140,6 +141,7 @@ function App() {
     try {
       const maps = await fetchCanvasMaps();
       setCanvasMaps(maps);
+      setCanvasMapsLoaded(true);
       return maps;
     } catch (error) {
       setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to load maps'));
@@ -159,9 +161,11 @@ function App() {
       fetchAreas()
         .then(setAreas)
         .catch(() => {});
-      void loadCanvasMaps();
+      if (!canvasMapsLoaded && !canvasMapsLoading) {
+        void loadCanvasMaps();
+      }
     }
-  }, [activeView, loadCanvasMaps]);
+  }, [activeView, canvasMapsLoaded, canvasMapsLoading, loadCanvasMaps]);
 
   const handleCanvasDevicesChange = useCallback((devices: Device[]) => {
     setCanvasDevices(devices);

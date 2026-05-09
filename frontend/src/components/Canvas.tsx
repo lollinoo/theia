@@ -953,6 +953,17 @@ export default function Canvas({
     );
   }
 
+  if (!visible) {
+    return (
+      <div
+        ref={canvasRootRef}
+        data-testid="topology-canvas-root"
+        aria-hidden="true"
+        className="topology-backdrop relative h-full w-full bg-bg"
+      />
+    );
+  }
+
   return (
     <div
       ref={canvasRootRef}

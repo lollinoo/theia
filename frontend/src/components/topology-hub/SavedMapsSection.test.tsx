@@ -87,4 +87,26 @@ describe('SavedMapsSection', () => {
     expect(screen.queryByRole('button', { name: 'Delete Default' })).not.toBeInTheDocument();
     expect(screen.getByRole('listitem', { name: 'Map Branch' })).toHaveClass('border-l-primary');
   });
+
+  it('keeps cached maps visible while a background refresh is loading', () => {
+    const savedMap = mockMap({ id: 'map-2', name: 'Branch' });
+
+    render(
+      <SavedMapsSection
+        maps={[savedMap]}
+        selectedMapId="map-2"
+        loading={true}
+        error={null}
+        onCreateEmptyMap={vi.fn()}
+        onSelectMap={vi.fn()}
+        onOpenMap={vi.fn()}
+        onDuplicateMap={vi.fn()}
+        onDeleteMap={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Loading maps')).not.toBeInTheDocument();
+    expect(screen.getByText('Branch')).toBeInTheDocument();
+    expect(screen.getByText('Refreshing')).toBeInTheDocument();
+  });
 });

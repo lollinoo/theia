@@ -1203,13 +1203,25 @@ func canvasMapSelectQuery(whereClause string) string {
 			cm.membership_materialized,
 			cm.created_at,
 			cm.updated_at,
-			COUNT(DISTINCT cmd.device_id) AS device_count,
-			COUNT(DISTINCT cml.link_id) AS link_count,
-			COUNT(DISTINCT cmp.device_id) AS position_count
+			COALESCE(device_counts.device_count, 0) AS device_count,
+			COALESCE(link_counts.link_count, 0) AS link_count,
+			COALESCE(position_counts.position_count, 0) AS position_count
 		FROM canvas_maps cm
-		LEFT JOIN canvas_map_devices cmd ON cmd.map_id = cm.id
-		LEFT JOIN canvas_map_links cml ON cml.map_id = cm.id
-		LEFT JOIN canvas_map_positions cmp ON cmp.map_id = cm.id
+		LEFT JOIN (
+			SELECT map_id, COUNT(*) AS device_count
+			FROM canvas_map_devices
+			GROUP BY map_id
+		) device_counts ON device_counts.map_id = cm.id
+		LEFT JOIN (
+			SELECT map_id, COUNT(*) AS link_count
+			FROM canvas_map_links
+			GROUP BY map_id
+		) link_counts ON link_counts.map_id = cm.id
+		LEFT JOIN (
+			SELECT map_id, COUNT(*) AS position_count
+			FROM canvas_map_positions
+			GROUP BY map_id
+		) position_counts ON position_counts.map_id = cm.id
 		` + whereClause + `
 		GROUP BY
 			cm.id,
@@ -1220,7 +1232,10 @@ func canvasMapSelectQuery(whereClause string) string {
 			cm.is_default,
 			cm.membership_materialized,
 			cm.created_at,
-			cm.updated_at`
+			cm.updated_at,
+			device_counts.device_count,
+			link_counts.link_count,
+			position_counts.position_count`
 }
 
 func scanCanvasMap(scanner rowScanner) (domain.CanvasMap, error) {
