@@ -179,7 +179,9 @@ describe('DeviceCard', () => {
       ],
     });
 
-    const selfLinkButton = screen.getByRole('button', { name: /view details for self link/i });
+    const selfLinkButton = screen.getByRole('button', {
+      name: /view details for self link/i,
+    });
     expect(selfLinkButton).toHaveTextContent('Self');
     expect(selfLinkButton).toHaveTextContent('ether1');
     expect(selfLinkButton).not.toHaveClass('shadow-floating');
@@ -217,6 +219,33 @@ describe('DeviceCard', () => {
         last_polled_at: '2026-04-13T12:00:30Z',
       }),
     });
+
+    expect(getDeviceRenderSignature(next)).toEqual(getDeviceRenderSignature(previous));
+  });
+
+  it('keeps render signature stable for React Flow geometry that the card does not render', () => {
+    const previous = {
+      ...makeNodeProps({
+        device: mockDevice(),
+        pinned: false,
+        metrics: mockMetrics(),
+      }),
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      width: 268,
+      height: 142,
+    };
+    const next = {
+      ...makeNodeProps({
+        device: mockDevice(),
+        pinned: false,
+        metrics: mockMetrics(),
+      }),
+      positionAbsoluteX: 640,
+      positionAbsoluteY: 480,
+      width: 280,
+      height: 150,
+    };
 
     expect(getDeviceRenderSignature(next)).toEqual(getDeviceRenderSignature(previous));
   });

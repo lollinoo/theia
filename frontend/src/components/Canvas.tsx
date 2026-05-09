@@ -20,11 +20,7 @@ import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
 import type { Area, CanvasMap, Device, Link } from '../types/api';
-import {
-  type AlertDTO,
-  type PrometheusStatusPayload,
-  type SnapshotPayload,
-} from '../types/metrics';
+import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
 import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
@@ -367,7 +363,10 @@ export default function Canvas({
     ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => {
       setSelectedNodeCount(selectedNodes.length);
       if (selectedNodes.length > 1 && editMode) {
-        setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
+        setPanelContent({
+          type: 'bulkEdit',
+          data: { deviceIds: selectedNodes.map((n) => n.id) },
+        });
       }
     },
     [editMode, setPanelContent],
@@ -634,7 +633,10 @@ export default function Canvas({
       const basePos =
         existingNode?.position ??
         (connectedRealNode
-          ? { x: connectedRealNode.position.x + 200, y: connectedRealNode.position.y }
+          ? {
+              x: connectedRealNode.position.x + 200,
+              y: connectedRealNode.position.y,
+            }
           : { x: 0, y: 0 });
       const runtimeDevice = runtimeState.devicesById.get(device.id);
 
@@ -879,7 +881,10 @@ export default function Canvas({
             duration: 500,
           });
           setNodes((cur) =>
-            cur.map((n) => ({ ...n, data: { ...n.data, highlighted: n.id === deviceID } })),
+            cur.map((n) => ({
+              ...n,
+              data: { ...n.data, highlighted: n.id === deviceID },
+            })),
           );
           if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
           highlightTimerRef.current = window.setTimeout(() => {
@@ -901,7 +906,10 @@ export default function Canvas({
       duration: 500,
     });
     setNodes((cur) =>
-      cur.map((n) => ({ ...n, data: { ...n.data, highlighted: n.id === deviceID } })),
+      cur.map((n) => ({
+        ...n,
+        data: { ...n.data, highlighted: n.id === deviceID },
+      })),
     );
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => {
@@ -953,17 +961,6 @@ export default function Canvas({
     );
   }
 
-  if (!visible) {
-    return (
-      <div
-        ref={canvasRootRef}
-        data-testid="topology-canvas-root"
-        aria-hidden="true"
-        className="topology-backdrop relative h-full w-full bg-bg"
-      />
-    );
-  }
-
   return (
     <div
       ref={canvasRootRef}
@@ -1008,7 +1005,11 @@ export default function Canvas({
               setDeviceMenu(null);
             },
             onConfigure: () => {
-              if (d) setPanelContent({ type: 'deviceConfig', data: { deviceId: d.id } });
+              if (d)
+                setPanelContent({
+                  type: 'deviceConfig',
+                  data: { deviceId: d.id },
+                });
               setDeviceMenu(null);
             },
           });
@@ -1037,7 +1038,11 @@ export default function Canvas({
                   label: 'Per-Interface Stats',
                   icon: 'devices',
                   onClick: () => {
-                    if (ml) setPanelContent({ type: 'interfaceStats', data: { linkId: ml.id } });
+                    if (ml)
+                      setPanelContent({
+                        type: 'interfaceStats',
+                        data: { linkId: ml.id },
+                      });
                     setEdgeMenu(null);
                   },
                 },
@@ -1054,7 +1059,11 @@ export default function Canvas({
                   icon: 'search',
                   onClick: () => {
                     const el = edges.find((e) => e.id === edgeMenu.edgeID)?.data?.link;
-                    if (el) setPanelContent({ type: 'link-details', data: { link: el } });
+                    if (el)
+                      setPanelContent({
+                        type: 'link-details',
+                        data: { link: el },
+                      });
                     setEdgeMenu(null);
                   },
                 },
@@ -1133,7 +1142,10 @@ export default function Canvas({
           void reactFlow.zoomOut({ duration: 200 });
         }}
         onFitView={() => {
-          void reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+          void reactFlow.fitView({
+            padding: topologyFitViewPadding,
+            duration: 280,
+          });
           recordCanvasDiagnosticEvent({
             level: 'debug',
             source: 'reactflow',
@@ -1150,7 +1162,10 @@ export default function Canvas({
         }}
         onForceRefresh={() => window.__THEIA_CANVAS_FORCE_REFRESH__?.()}
         onFitView={() => {
-          void reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+          void reactFlow.fitView({
+            padding: topologyFitViewPadding,
+            duration: 280,
+          });
           recordCanvasDiagnosticEvent({
             level: 'debug',
             source: 'reactflow',
@@ -1193,7 +1208,11 @@ export default function Canvas({
             });
           } else {
             const cd = devices.find((d) => d.id === node.id);
-            if (cd) setPanelContent({ type: 'deviceDetails', data: { deviceId: cd.id } });
+            if (cd)
+              setPanelContent({
+                type: 'deviceDetails',
+                data: { deviceId: cd.id },
+              });
           }
         }}
         onEdgeClick={(_ev, edge) => {

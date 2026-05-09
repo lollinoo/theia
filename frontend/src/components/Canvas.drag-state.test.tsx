@@ -209,8 +209,12 @@ vi.mock('./canvas/CanvasPanels', () => ({
   },
 }));
 vi.mock('./canvas/CanvasOverlays', () => ({ CanvasOverlays: () => null }));
-vi.mock('./canvas/detailSubscription', () => ({ getCanvasDetailDeviceId: () => null }));
-vi.mock('../hooks/useKeyboardShortcuts', () => ({ useKeyboardShortcuts: () => undefined }));
+vi.mock('./canvas/detailSubscription', () => ({
+  getCanvasDetailDeviceId: () => null,
+}));
+vi.mock('../hooks/useKeyboardShortcuts', () => ({
+  useKeyboardShortcuts: () => undefined,
+}));
 vi.mock('../hooks/usePositions', () => ({
   usePositions: () => ({ savePositions: testState.savePositions }),
 }));
@@ -313,7 +317,7 @@ describe('Canvas drag state ownership', () => {
     testState.reactFlowProps = {};
   });
 
-  it('does not mount React Flow internals while the canvas is hidden', () => {
+  it('keeps React Flow internals mounted while the canvas is hidden', () => {
     render(
       <Canvas
         {...defaultCanvasProps}
@@ -326,9 +330,9 @@ describe('Canvas drag state ownership', () => {
       />,
     );
 
-    expect(screen.queryByRole('button', { name: 'Start pan' })).not.toBeInTheDocument();
-    expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
-    expect(testState.displayedNodes).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Start pan' })).toBeInTheDocument();
+    expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
+    expect(testState.displayedNodes.map((node) => node.id)).toEqual(['dev-a', 'dev-b', 'dev-c']);
   });
 
   it('patches the dragged real node without replacing canonical nodes with the area projection', () => {
@@ -356,7 +360,10 @@ describe('Canvas drag state ownership', () => {
 
     expect(testState.setNodes).not.toHaveBeenCalled();
     expect(testState.savePositions).not.toHaveBeenCalled();
-    expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', { x: 444, y: 555 });
+    expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
+      x: 444,
+      y: 555,
+    });
   });
 
   it('keeps ghost node measurements out of canonical node state', () => {
@@ -1143,6 +1150,8 @@ describe('Canvas drag state ownership', () => {
     const clearSelection = testState.setNodes.mock.lastCall?.[0] as (
       nodes: DeviceNode[],
     ) => DeviceNode[];
-    expect(clearSelection([selectedNode])[0]).toMatchObject({ selected: false });
+    expect(clearSelection([selectedNode])[0]).toMatchObject({
+      selected: false,
+    });
   });
 });

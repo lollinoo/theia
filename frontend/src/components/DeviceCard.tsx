@@ -144,7 +144,10 @@ function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): ReadoutTone {
   }
 }
 
-function freshnessMeta(freshness: FreshnessStatus): { tone: ReadoutTone; text: string } {
+function freshnessMeta(freshness: FreshnessStatus): {
+  tone: ReadoutTone;
+  text: string;
+} {
   switch (freshness) {
     case 'fresh':
       return { tone: freshnessTone('Fresh'), text: 'Fresh telemetry' };
@@ -157,7 +160,10 @@ function freshnessMeta(freshness: FreshnessStatus): { tone: ReadoutTone; text: s
   }
 }
 
-function runtimeTelemetryMeta(metrics: DeviceMetricsDTO): { tone: ReadoutTone; text: string } {
+function runtimeTelemetryMeta(metrics: DeviceMetricsDTO): {
+  tone: ReadoutTone;
+  text: string;
+} {
   if (
     metrics.primary_health === 'snmp_degraded' ||
     metrics.reachability === 'soft_down' ||
@@ -184,7 +190,9 @@ function readoutToneClass(tone: ReadoutTone): string {
   }
 }
 
-const compactPercentFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const compactPercentFormatter = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 0,
+});
 const DEVICE_NODE_SCALE_START_ZOOM = 0.9;
 const DEVICE_NODE_MIN_SCALE_ZOOM = 0.6;
 const DEVICE_NODE_MAX_READABILITY_SCALE = 1.12;
@@ -687,10 +695,6 @@ export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
     freshness: metrics?.freshness,
     expectedPollIntervalSeconds: metrics?.expected_poll_interval_seconds,
     editMode: data.editMode,
-    positionAbsoluteX: props.positionAbsoluteX,
-    positionAbsoluteY: props.positionAbsoluteY,
-    width: props.width,
-    height: props.height,
     selected: props.selected,
   };
 }
@@ -741,10 +745,6 @@ function sameDeviceRenderSignature(
     previous.freshness === next.freshness &&
     previous.expectedPollIntervalSeconds === next.expectedPollIntervalSeconds &&
     previous.editMode === next.editMode &&
-    previous.positionAbsoluteX === next.positionAbsoluteX &&
-    previous.positionAbsoluteY === next.positionAbsoluteY &&
-    previous.width === next.width &&
-    previous.height === next.height &&
     previous.selected === next.selected
   );
 }

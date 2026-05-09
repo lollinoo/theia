@@ -468,6 +468,24 @@ describe('App', () => {
     expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the canvas mounted and opacity-masked while the hub is active', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+
+    const canvasViewport = screen.getByTestId('canvas').parentElement;
+    expect(canvasViewport).not.toHaveClass('hidden');
+    expect(canvasViewport).toHaveClass('opacity-0');
+    expect(canvasViewport).not.toHaveClass('invisible');
+    expect(canvasViewport).toHaveAttribute('inert');
+    expect(canvasViewport?.className).toContain('absolute');
+    expect(canvasViewport?.className).toContain('inset-0');
+  });
+
   it('passes map-local areas into Devices instead of global areas', async () => {
     render(<App />);
 
@@ -497,7 +515,7 @@ describe('App', () => {
 
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-1:Backbone');
     expect(screen.getByTestId('dashboard').parentElement?.className).toContain('h-full');
-    expect(screen.getByTestId('canvas').parentElement?.className).toContain('hidden');
+    expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-0');
   });
 
   it('opens the canvas and requests fit view when selecting a map from the hub navigation pill', async () => {
@@ -515,8 +533,9 @@ describe('App', () => {
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
-    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
-    expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('hidden');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
+    expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
+    expect(screen.getByTestId('topology-hub').parentElement).toHaveClass('opacity-0');
   });
 
   it('opens the selected map-local area in Canvas from the navigation pill', async () => {
@@ -533,8 +552,9 @@ describe('App', () => {
     });
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('area:map-area-1');
-    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
-    expect(screen.getByTestId('dashboard').parentElement?.className).toContain('hidden');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
+    expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
+    expect(screen.getByTestId('dashboard').parentElement).toHaveClass('opacity-0');
   });
 
   it('returns from Devices to the currently selected map', async () => {
@@ -553,8 +573,9 @@ describe('App', () => {
     });
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
-    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
-    expect(screen.getByTestId('dashboard').parentElement?.className).toContain('hidden');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
+    expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
+    expect(screen.getByTestId('dashboard').parentElement).toHaveClass('opacity-0');
   });
 
   it('keeps websocket runtime updates paused briefly after canvas interaction ends', async () => {
@@ -628,7 +649,8 @@ describe('App', () => {
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
 
     const canvasViewport = screen.getByTestId('watermark').parentElement;
-    expect(canvasViewport?.className).toContain('relative');
+    expect(canvasViewport?.className).toContain('absolute');
+    expect(canvasViewport?.className).toContain('inset-0');
     expect(canvasViewport?.className).toContain('h-full');
   });
 
@@ -647,7 +669,7 @@ describe('App', () => {
       screen.getByRole('button', { name: 'Pill Manage maps' }).click();
     });
     expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
-    expect(screen.getByTestId('canvas').parentElement?.className).toContain('hidden');
+    expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-0');
   });
 
   it('requests fit view when selecting a map from the navigation pill on the canvas', async () => {
@@ -662,7 +684,8 @@ describe('App', () => {
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
-    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
+    expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
   });
 
   it('lets the navigation pill select maps and filter areas without leaving the selected map', async () => {
@@ -765,7 +788,11 @@ describe('App', () => {
       filter: {},
       is_default: true,
     });
-    const branchMap = mockMap({ id: 'map-branch', name: 'Branch', is_default: false });
+    const branchMap = mockMap({
+      id: 'map-branch',
+      name: 'Branch',
+      is_default: false,
+    });
     fetchCanvasMapsMock.mockResolvedValue([defaultMap, branchMap]);
 
     render(<App />);
@@ -797,7 +824,8 @@ describe('App', () => {
     });
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-branch:Branch');
-    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
+    expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
   });
 
   it('sets a saved map as primary from the hub and selects it locally', async () => {
@@ -808,7 +836,11 @@ describe('App', () => {
       filter: {},
       is_default: true,
     });
-    const branchMap = mockMap({ id: 'map-branch', name: 'Branch', is_default: false });
+    const branchMap = mockMap({
+      id: 'map-branch',
+      name: 'Branch',
+      is_default: false,
+    });
     const promotedBranch = { ...branchMap, is_default: true };
     fetchCanvasMapsMock.mockResolvedValue([defaultMap, branchMap]);
     setCanvasMapPrimaryMock.mockResolvedValue(promotedBranch);
@@ -838,7 +870,11 @@ describe('App', () => {
   });
 
   it('keeps map-local areas when selecting and opening the same hub map again', async () => {
-    const savedMap = mockMap({ id: 'map-1', name: 'Backbone', is_default: false });
+    const savedMap = mockMap({
+      id: 'map-1',
+      name: 'Backbone',
+      is_default: false,
+    });
     fetchCanvasMapsMock.mockResolvedValue([savedMap]);
 
     render(<App />);
@@ -867,7 +903,8 @@ describe('App', () => {
     });
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area');
-    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
+    expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
   });
 
   it('creates a map from the active map-local area with the source map context', async () => {

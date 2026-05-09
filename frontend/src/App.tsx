@@ -30,6 +30,18 @@ export type ActiveView = 'hub' | 'canvas' | 'dashboard';
 
 const runtimeUpdatePauseIdleDelayMs = 1500;
 const enableSavedMaps = true;
+const viewLayerBaseClass = 'absolute inset-0 h-full w-full';
+
+function viewLayerClass(active: boolean, className = ''): string {
+  const activeClass = active
+    ? 'opacity-100 pointer-events-auto z-10'
+    : 'opacity-0 pointer-events-none z-0';
+  return `${viewLayerBaseClass} ${activeClass} ${className}`.trim();
+}
+
+function viewLayerStateProps(active: boolean): { 'aria-hidden': boolean; inert?: '' } {
+  return active ? { 'aria-hidden': false } : { 'aria-hidden': true, inert: '' };
+}
 
 function canvasMapErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -423,7 +435,7 @@ function App() {
 
   return (
     <ThemeProvider>
-      <div className="h-screen w-screen overflow-hidden bg-bg text-on-bg">
+      <div className="relative h-screen w-screen overflow-hidden bg-bg text-on-bg">
         <NavigationPill
           activeView={activeView}
           selectedAreaId={selectedAreaId}
@@ -438,8 +450,11 @@ function App() {
             setActiveView('hub');
           }}
         />
-        {/* All views stay mounted; inactive ones hidden via CSS */}
-        <div className={activeView === 'hub' ? 'h-full overflow-y-auto' : 'hidden'}>
+        {/* All views stay mounted; inactive ones keep dimensions for React Flow. */}
+        <div
+          {...viewLayerStateProps(activeView === 'hub')}
+          className={viewLayerClass(activeView === 'hub', 'overflow-y-auto')}
+        >
           <TopologyHub
             devices={canvasDevices}
             areas={navigationAreas}
@@ -464,7 +479,10 @@ function App() {
             }}
           />
         </div>
-        <div className={activeView === 'canvas' ? 'relative h-full' : 'hidden'}>
+        <div
+          {...viewLayerStateProps(activeView === 'canvas')}
+          className={viewLayerClass(activeView === 'canvas', 'overflow-hidden')}
+        >
           <Watermark
             activeView={activeView}
             selectedAreaId={selectedAreaId}
@@ -492,7 +510,10 @@ function App() {
             />
           </ReactFlowProvider>
         </div>
-        <div className={activeView === 'dashboard' ? 'h-full' : 'hidden'}>
+        <div
+          {...viewLayerStateProps(activeView === 'dashboard')}
+          className={viewLayerClass(activeView === 'dashboard', 'overflow-hidden')}
+        >
           <Dashboard
             devices={canvasDevices}
             areas={navigationAreas}
