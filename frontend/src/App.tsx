@@ -15,6 +15,7 @@ import {
   CreateMapDialog,
   type CreateMapDialogSubmit,
 } from './components/topology-hub/CreateMapDialog';
+import DeleteMapDialog from './components/topology-hub/DeleteMapDialog';
 import {
   DuplicateMapDialog,
   type DuplicateMapDialogSubmit,
@@ -67,6 +68,9 @@ function App() {
   const [createMapDialogOpen, setCreateMapDialogOpen] = useState(false);
   const [createMapSourceArea, setCreateMapSourceArea] = useState<Area | null>(null);
   const [duplicateMapSource, setDuplicateMapSource] = useState<CanvasMap | null>(null);
+  const [deleteMapSource, setDeleteMapSource] = useState<CanvasMap | null>(null);
+  const [deleteMapLoading, setDeleteMapLoading] = useState(false);
+  const [fitViewRevision, setFitViewRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
 
@@ -142,17 +146,32 @@ function App() {
     setCanvasLinks(links);
   }, []);
 
-  const handleViewChange = useCallback((view: ActiveView) => {
-    setActiveView(view);
+  const requestCanvasFitView = useCallback(() => {
+    setFitViewRevision((revision) => revision + 1);
   }, []);
+
+  const openCanvasView = useCallback(() => {
+    setActiveView('canvas');
+    requestCanvasFitView();
+  }, [requestCanvasFitView]);
+
+  const handleViewChange = useCallback(
+    (view: ActiveView) => {
+      setActiveView(view);
+      if (view === 'canvas') {
+        requestCanvasFitView();
+      }
+    },
+    [requestCanvasFitView],
+  );
 
   const handleOpenGlobal = useCallback(() => {
     setSelectedMapId(null);
     setSelectedMapName('Default');
     setSelectedAreaId(null);
     setCanvasTopologyAreas(areas);
-    setActiveView('canvas');
-  }, [areas]);
+    openCanvasView();
+  }, [areas, openCanvasView]);
 
   const handleSelectMapContext = useCallback(
     (map: CanvasMap) => {
@@ -167,19 +186,30 @@ function App() {
   const handleOpenMap = useCallback(
     (map: CanvasMap) => {
       handleSelectMapContext(map);
-      setActiveView('canvas');
+      openCanvasView();
     },
-    [handleSelectMapContext],
+    [handleSelectMapContext, openCanvasView],
   );
 
   const handleAreaFilterSelect = useCallback((areaId: string | null) => {
     setSelectedAreaId(areaId);
   }, []);
 
-  const handleOpenArea = useCallback((areaId: string | null) => {
-    setSelectedAreaId(areaId);
-    setActiveView('canvas');
-  }, []);
+  const handleNavigationAreaSelect = useCallback(
+    (areaId: string | null) => {
+      setSelectedAreaId(areaId);
+      openCanvasView();
+    },
+    [openCanvasView],
+  );
+
+  const handleOpenArea = useCallback(
+    (areaId: string | null) => {
+      setSelectedAreaId(areaId);
+      openCanvasView();
+    },
+    [openCanvasView],
+  );
 
   const handleAreasChange = useCallback(() => {
     fetchAreas()
@@ -274,33 +304,41 @@ function App() {
     [handleOpenMap, loadCanvasMaps],
   );
 
-  const handleDeleteMap = useCallback(
+  const handleDeleteMap = useCallback((map: CanvasMap) => {
+    if (!enableSavedMaps || map.is_default) {
+      return;
+    }
+
+    setCanvasMapsError(null);
+    setDeleteMapSource(map);
+  }, []);
+
+  const handleDeleteMapConfirm = useCallback(
     async (map: CanvasMap) => {
       if (!enableSavedMaps || map.is_default) {
         return;
       }
 
-      if (!window.confirm(`Delete map "${map.name}"?`)) {
-        return;
-      }
-
       setCanvasMapsError(null);
+      setDeleteMapLoading(true);
 
       try {
         await deleteCanvasMap(map.id);
+        setDeleteMapSource(null);
         setCanvasMaps((maps) => maps.filter((candidate) => candidate.id !== map.id));
         if (selectedMapId === map.id) {
           setSelectedMapId(null);
           setSelectedMapName('Default');
           setSelectedAreaId(null);
-          setCanvasTopologyAreas([]);
+          setCanvasTopologyAreas(areas);
         }
-        void loadCanvasMaps();
       } catch (error) {
         setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to delete map'));
+      } finally {
+        setDeleteMapLoading(false);
       }
     },
-    [loadCanvasMaps, selectedMapId],
+    [areas, selectedMapId],
   );
 
   const mapsForHub = enableSavedMaps ? canvasMaps : [];
@@ -319,7 +357,7 @@ function App() {
           maps={canvasMaps}
           areas={navigationAreas}
           onViewChange={handleViewChange}
-          onAreaSelect={handleAreaFilterSelect}
+          onAreaSelect={handleNavigationAreaSelect}
           onMapSelect={handleSelectMapContext}
           onManageMaps={() => {
             setActiveView('hub');
@@ -363,6 +401,7 @@ function App() {
               selectedAreaId={selectedAreaId}
               mapId={selectedMapId}
               mapName={selectedMapName}
+              fitViewRevision={fitViewRevision}
               onDevicesChange={handleCanvasDevicesChange}
               onLinksChange={handleCanvasLinksChange}
               onAreaSelect={handleAreaFilterSelect}
@@ -381,6 +420,7 @@ function App() {
             snapshot={snapshot}
             selectedAreaId={selectedAreaId}
             onAreaSelect={handleAreaFilterSelect}
+            onOpenMap={openCanvasView}
             loading={canvasTopologyLoading}
           />
         </div>
@@ -400,6 +440,17 @@ function App() {
               sourceMap={duplicateMapSource}
               onDuplicate={handleDuplicateMapSubmit}
               onClose={() => setDuplicateMapSource(null)}
+            />
+            <DeleteMapDialog
+              open={deleteMapSource !== null}
+              map={deleteMapSource}
+              deleting={deleteMapLoading}
+              onDelete={handleDeleteMapConfirm}
+              onClose={() => {
+                if (!deleteMapLoading) {
+                  setDeleteMapSource(null);
+                }
+              }}
             />
           </>
         )}

@@ -29,6 +29,7 @@ interface DashboardProps {
   snapshot: SnapshotPayload | null;
   selectedAreaId?: string | null;
   onAreaSelect?: (areaId: string | null) => void;
+  onOpenMap?: () => void;
   loading?: boolean;
 }
 
@@ -38,6 +39,7 @@ export function Dashboard({
   snapshot,
   selectedAreaId,
   onAreaSelect,
+  onOpenMap,
   loading = devices.length === 0,
 }: DashboardProps) {
   const { resolvedTheme } = useTheme();
@@ -189,6 +191,15 @@ export function Dashboard({
             className="w-full rounded-md bg-surface-high pl-8 pr-3 py-1.5 text-xs text-on-bg placeholder-on-bg-muted outline-none focus:ring-1 focus:ring-primary/30 transition-colors"
           />
         </div>
+
+        <button
+          type="button"
+          onClick={onOpenMap}
+          className="flex items-center gap-1.5 rounded-md bg-surface-high px-2.5 py-1.5 text-xs text-on-bg-secondary hover:bg-elevated hover:text-on-bg transition-colors"
+        >
+          <MaterialIcon name="map" size={14} />
+          Torna alla mappa
+        </button>
 
         <button
           type="button"

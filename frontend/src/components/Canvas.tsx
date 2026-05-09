@@ -159,6 +159,7 @@ interface CanvasProps {
   selectedAreaId: string | null;
   mapId: string | null;
   mapName: string;
+  fitViewRevision?: number;
   maps?: CanvasMap[];
   areas?: Area[];
   onDevicesChange?: (devices: Device[]) => void;
@@ -181,6 +182,7 @@ export default function Canvas({
   selectedAreaId,
   mapId,
   mapName,
+  fitViewRevision,
   onDevicesChange,
   onLinksChange,
   onAreaSelect,
@@ -238,6 +240,7 @@ export default function Canvas({
   } = useCanvasMenus({ reactFlow });
   const selectedMapKey = mapId ?? '__default__';
   const previousMapKeyRef = useRef<string | null>(null);
+  const previousFitViewRevisionRef = useRef(fitViewRevision);
 
   useEffect(() => {
     onDetailDeviceChange?.(getCanvasDetailDeviceId(panelContent));
@@ -756,6 +759,34 @@ export default function Canvas({
       });
     }
   }, [effectiveAreaId, displayNodes.length, reactFlow]);
+
+  useEffect(() => {
+    if (fitViewRevision === undefined) {
+      return;
+    }
+    if (previousFitViewRevisionRef.current === fitViewRevision) {
+      return;
+    }
+    previousFitViewRevisionRef.current = fitViewRevision;
+    if (displayNodes.length === 0) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+      recordCanvasDiagnosticEvent({
+        level: 'debug',
+        source: 'reactflow',
+        event: 'reactflow.fit_view',
+        message: 'React Flow fitView requested after canvas context activation',
+        metadata: {
+          selectedAreaId: effectiveAreaId,
+          mapId: mapId ?? 'default',
+          displayedNodeCount: displayNodes.length,
+        },
+      });
+    });
+  }, [displayNodes.length, effectiveAreaId, fitViewRevision, mapId, reactFlow]);
 
   useEffect(() => {
     setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, editMode } })));

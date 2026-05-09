@@ -185,7 +185,20 @@ describe('Dashboard', () => {
     expect(screen.getByTestId('filter-select-area')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Search devices...')).toBeInTheDocument();
     expect(screen.getByText('Backup All')).toBeInTheDocument();
+    expect(screen.getByText('Torna alla mappa')).toBeInTheDocument();
     expect(screen.getByText('Vendor Settings')).toBeInTheDocument();
+  });
+
+  it('calls onOpenMap from the Devices return-to-map action', () => {
+    const onOpenMap = vi.fn();
+
+    render(<Dashboard devices={[mockDevice()]} areas={[]} snapshot={null} onOpenMap={onOpenMap} />);
+
+    const returnButton = screen.getByText('Torna alla mappa').closest('button');
+    expect(returnButton).not.toBeNull();
+    fireEvent.click(returnButton as HTMLButtonElement);
+
+    expect(onOpenMap).toHaveBeenCalledTimes(1);
   });
 
   it('renders DeviceTable when devices exist', () => {

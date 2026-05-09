@@ -81,6 +81,7 @@ const testState = vi.hoisted(() => ({
   loadTopology: vi.fn(),
   removeDeviceFromCanvasMap: vi.fn(),
   updateNodePosition: vi.fn(),
+  fitView: vi.fn(),
   canvasDataParams: null as null | { mapId: string | null; mapName?: string },
   canvasPanelsProps: {} as Record<string, unknown>,
   reactFlowProps: {} as Record<string, unknown>,
@@ -172,7 +173,7 @@ vi.mock('@xyflow/react', () => ({
   applyEdgeChanges: (_changes: unknown, current: unknown) => current,
   useNodesState: () => [testState.canonicalNodes, testState.setNodes, testState.onNodesChange],
   useReactFlow: () => ({
-    fitView: vi.fn(),
+    fitView: testState.fitView,
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
     getNodes: () => testState.displayedNodes,
@@ -296,6 +297,7 @@ describe('Canvas drag state ownership', () => {
     testState.removeDeviceFromCanvasMap.mockReset();
     testState.removeDeviceFromCanvasMap.mockResolvedValue(undefined);
     testState.updateNodePosition.mockReset();
+    testState.fitView.mockReset();
     testState.canvasDataParams = null;
     testState.canvasPanelsProps = {};
     testState.reactFlowProps = {};
@@ -522,6 +524,62 @@ describe('Canvas drag state ownership', () => {
     expect(
       testState.displayedNodes.map((node) => `${node.id}:${node.data.isGhost === true}`),
     ).toEqual(['dev-a:false', 'dev-c:true']);
+  });
+
+  it('fits the visible graph when the external fitView revision changes', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
   });
 
   it('passes saved map removal context to canvas panels', async () => {

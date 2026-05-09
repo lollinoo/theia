@@ -121,6 +121,7 @@ interface LoadTopologyOptions {
   suppressBlockingError?: boolean;
   rethrowOnError?: boolean;
   includeRuntimeBootstrap?: boolean;
+  forceFitView?: boolean;
 }
 
 type LoadTopologyResult = 'applied' | 'stale' | 'failed';
@@ -626,6 +627,14 @@ export function useCanvasData({
         const isCurrentTopologyLoad = () =>
           topologyLoadSequenceRef.current === requestSequence &&
           activeMapKeyRef.current === requestMapKey;
+        const requestFitViewAfterLoad = (duration = 320) => {
+          window.requestAnimationFrame(() => {
+            if (!isCurrentTopologyLoad()) {
+              return;
+            }
+            reactFlow.fitView({ padding: topologyFitViewPadding, duration });
+          });
+        };
 
         const loadStartedAt = nowMs();
         const topologyLoadMetadata = {
@@ -699,6 +708,9 @@ export function useCanvasData({
               mapKey,
               topologySource.etag ?? lastCanvasTopologyEtag,
             );
+            if (options.forceFitView === true) {
+              requestFitViewAfterLoad();
+            }
             updateCanvasDiagnosticsState({
               topology: {
                 lastTopologyLoadAt: new Date().toISOString(),
@@ -796,6 +808,8 @@ export function useCanvasData({
             savedPositions,
           );
           const shouldAutoFitView = usablePositionState.length === 0;
+          const shouldFitViewAfterLoad =
+            options.forceFitView === true || trigger === 'initial_load' || shouldAutoFitView;
 
           // Read any pending snapshot so first-load metrics are included in the
           // initial node/edge data -- eliminates the race where the WS snapshot
@@ -865,6 +879,9 @@ export function useCanvasData({
                 structureChanged,
               },
             });
+            if (shouldFitViewAfterLoad) {
+              requestFitViewAfterLoad();
+            }
             return 'applied';
           }
 
@@ -973,13 +990,8 @@ export function useCanvasData({
             void savePositions(nextPositionPayload);
           }
 
-          if (trigger === 'initial_load' || shouldAutoFitView) {
-            window.requestAnimationFrame(() => {
-              if (!isCurrentTopologyLoad()) {
-                return;
-              }
-              reactFlow.fitView({ padding: topologyFitViewPadding, duration: 320 });
-            });
+          if (shouldFitViewAfterLoad) {
+            requestFitViewAfterLoad();
           }
 
           lastTopologyIdentityByMapRef.current.set(mapKey, topologyIdentity.signature);
@@ -1206,7 +1218,7 @@ export function useCanvasData({
     }
 
     mountedMapKeyRef.current = mapKey;
-    void loadTopology(false, undefined, 'manual_refresh');
+    void loadTopology(false, undefined, 'manual_refresh', { forceFitView: true });
   }, [loadTopology, mapKey]);
 
   useEffect(() => {

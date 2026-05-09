@@ -814,6 +814,64 @@ describe('useCanvasData', () => {
     expect(positionMocks.savePositions).not.toHaveBeenCalled();
   });
 
+  it('fits the view after switching maps even when the target map already has saved positions', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        positions: {
+          'dev-1': {
+            device_id: 'dev-1',
+            x: 10,
+            y: 20,
+            pinned: true,
+          },
+        },
+      }),
+    );
+
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce({
+      ...canvasTopologyOkResponse({
+        devices: [mockDevice()],
+        topology_version: 'topo-map-fit',
+        positions: {
+          'dev-1': {
+            device_id: 'dev-1',
+            x: 300,
+            y: 400,
+            pinned: true,
+          },
+        },
+      }),
+      etag: '"map-fit-etag"',
+    });
+
+    const { rerender, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(1);
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: 'map-1',
+      currentMapName: 'Core Map',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(2);
+    expect(reactFlow.fitView).toHaveBeenLastCalledWith({
+      padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+      duration: 320,
+    });
+  });
+
   it('records topology diagnostics with map metadata', async () => {
     vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
 
