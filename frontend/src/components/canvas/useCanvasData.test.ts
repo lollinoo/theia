@@ -1849,6 +1849,59 @@ describe('useCanvasData', () => {
     expect(getCanvasRuntimeBootstrap()?.snapshot.devices['dev-1'].operational_status).toBe('down');
   });
 
+  it('publishes runtime bootstrap even when the initial topology load becomes stale after map selection', async () => {
+    const initialBootstrap = deferred<ReturnType<typeof canvasBootstrapResponse>>();
+    vi.mocked(fetchCanvasBootstrap).mockReturnValueOnce(initialBootstrap.promise);
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        topology_version: 'topo-primary-map',
+      }),
+    );
+
+    const { rerender } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: 'primary-map',
+      currentMapName: 'Primary Map',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      initialBootstrap.resolve(
+        canvasBootstrapResponse({
+          topology_version: 'topo-stale-default',
+          runtime_version: 42,
+          runtime_identity: 'rt-sha256:abc',
+          runtime_snapshot: mockSnapshot({
+            devices: {
+              'dev-1': {
+                ...mockSnapshot().devices['dev-1'],
+                operational_status: 'down',
+              },
+            },
+          }),
+        }),
+      );
+      await initialBootstrap.promise;
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('primary-map', undefined);
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeVersion: 42,
+      runtimeIdentity: 'rt-sha256:abc',
+    });
+    expect(getCanvasRuntimeBootstrap()?.snapshot.devices['dev-1'].operational_status).toBe('down');
+  });
+
   it('forces runtime bootstrap on backend resync after manual edge migration', async () => {
     const storedEdges = [{ id: 'edge-1', source: 'dev-1', target: 'dev-2' }];
     window.localStorage.setItem(manualEdgeStorageKey, JSON.stringify(storedEdges));

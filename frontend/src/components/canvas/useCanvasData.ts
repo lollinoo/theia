@@ -689,6 +689,14 @@ export function useCanvasData({
             includeRuntimeBootstrap,
             forceRuntimeBootstrap,
           );
+          if (topologySource.status === 'ok' && topologySource.runtimeSnapshot !== undefined) {
+            publishCanvasRuntimeBootstrap({
+              snapshot: topologySource.runtimeSnapshot,
+              runtimeVersion: topologySource.runtimeVersion,
+              runtimeIdentity: topologySource.runtimeIdentity,
+            });
+            snapshotRef.current = topologySource.runtimeSnapshot;
+          }
           if (!isCurrentTopologyLoad()) {
             return 'stale';
           }
@@ -741,14 +749,6 @@ export function useCanvasData({
           const fetchedAreas = topologySource.areas;
           const savedPositions = topologySource.positions;
           const runtimeSnapshot = topologySource.runtimeSnapshot ?? snapshotRef.current;
-          if (topologySource.runtimeSnapshot !== undefined) {
-            publishCanvasRuntimeBootstrap({
-              snapshot: topologySource.runtimeSnapshot,
-              runtimeVersion: topologySource.runtimeVersion,
-              runtimeIdentity: topologySource.runtimeIdentity,
-            });
-            snapshotRef.current = topologySource.runtimeSnapshot;
-          }
           updateCanvasDiagnosticsState({
             topology: {
               topologyVersion: topologySource.topologyVersion,
