@@ -610,6 +610,21 @@ describe('App', () => {
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('hidden');
   });
 
+  it('requests fit view when selecting a map from the navigation pill on the canvas', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    expect(screen.getByTestId('canvas')).toHaveTextContent('fit:0');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
+    });
+
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
+  });
+
   it('lets the navigation pill select maps and filter areas without leaving the selected map', async () => {
     render(<App />);
 
@@ -742,6 +757,39 @@ describe('App', () => {
     });
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-branch:Branch');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
+  });
+
+  it('keeps map-local areas when selecting and opening the same hub map again', async () => {
+    const savedMap = mockMap({ id: 'map-1', name: 'Backbone', is_default: false });
+    fetchCanvasMapsMock.mockResolvedValue([savedMap]);
+
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    act(() => {
+      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
+    );
+
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('hub-areas:Map Local Area');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Select hub map Backbone' }).click();
+    });
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('hub-areas:Map Local Area');
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Open selected map' }).click();
+    });
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
   });
 

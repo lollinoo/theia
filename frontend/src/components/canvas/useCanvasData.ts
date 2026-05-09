@@ -87,6 +87,7 @@ interface UseCanvasDataReturn {
   runtimeSummary: RuntimeSummary;
   loading: boolean;
   error: string | null;
+  renderedMapKey: string | null;
   loadTopology: (
     isSilentRefresh?: boolean,
     defaultPosition?: { x: number; y: number },
@@ -536,6 +537,7 @@ export function useCanvasData({
   const [devices, setDevices] = useState<Device[]>([]);
   const [topologyLinks, setTopologyLinks] = useState<Link[]>([]);
   const [topologyAreas, setTopologyAreas] = useState<Area[]>([]);
+  const [renderedMapKey, setRenderedMapKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -843,6 +845,7 @@ export function useCanvasData({
               alerts: alertsRef.current,
             });
             nodesOwnerMapKeyRef.current = mapKey;
+            setRenderedMapKey(mapKey);
             currentNodePositionsByMapRef.current.set(mapKey, nodePositionsToPositionMap(nextNodes));
             setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
             setEdges(nextEdges);
@@ -975,6 +978,7 @@ export function useCanvasData({
           setTopologyLinks(fetchedLinks);
           setTopologyAreas(fetchedAreas);
           nodesOwnerMapKeyRef.current = mapKey;
+          setRenderedMapKey(mapKey);
           currentNodePositionsByMapRef.current.set(
             mapKey,
             nodePositionsToPositionMap(composedNodes),
@@ -1419,6 +1423,7 @@ export function useCanvasData({
     runtimeSummary,
     loading,
     error,
+    renderedMapKey,
     loadTopology: loadTopologyForConsumer,
     grafanaUrlRef,
     deviceGrafanaUrlsRef,

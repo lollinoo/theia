@@ -43,7 +43,7 @@ interface CanvasPanelsProps {
   mapName?: string;
   editMode?: boolean;
   onRemoveDeviceFromMap?: (deviceId: string) => void | Promise<void>;
-  onAreasChange?: () => void;
+  onAreasChange?: () => void | Promise<void>;
   onSettingsChange?: () => void;
   onWinBoxAvailabilityChange?: (deviceId: string, hasWinboxProfile: boolean) => void;
 }
@@ -68,6 +68,14 @@ export function CanvasPanels({
   onSettingsChange,
   onWinBoxAvailabilityChange,
 }: CanvasPanelsProps) {
+  const handleSettingsAreasChange = async () => {
+    if (mapId) {
+      await loadTopology(true);
+      return;
+    }
+    await onAreasChange?.();
+  };
+
   return (
     <>
       {panelContent?.type === 'interfaceStats' &&
@@ -119,7 +127,13 @@ export function CanvasPanels({
           );
         })()}
       {panelContent?.type === 'settings' && (
-        <SettingsPanel onAreasChange={onAreasChange} onSettingsChange={onSettingsChange} />
+        <SettingsPanel
+          onAreasChange={handleSettingsAreasChange}
+          onSettingsChange={onSettingsChange}
+          mapContext={mapId ? { mapId, mapName } : undefined}
+          areas={topologyAreas}
+          devices={devices}
+        />
       )}
       {panelContent?.type === 'addDevice' && (
         <AddDevicePanel

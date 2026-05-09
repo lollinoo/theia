@@ -173,12 +173,18 @@ function App() {
     [requestCanvasFitView],
   );
 
-  const handleSelectMapContext = useCallback((map: CanvasMap) => {
-    setSelectedMapId(map.id);
-    setSelectedMapName(map.name);
-    setSelectedAreaId(null);
-    setCanvasTopologyAreas([]);
-  }, []);
+  const handleSelectMapContext = useCallback(
+    (map: CanvasMap) => {
+      const isSameMap = selectedMapId === map.id;
+      setSelectedMapId(map.id);
+      setSelectedMapName(map.name);
+      if (!isSameMap) {
+        setSelectedAreaId(null);
+        setCanvasTopologyAreas([]);
+      }
+    },
+    [selectedMapId],
+  );
 
   const handleOpenMap = useCallback(
     (map: CanvasMap) => {
@@ -193,9 +199,11 @@ function App() {
       handleSelectMapContext(map);
       if (activeView === 'hub') {
         openCanvasView();
+      } else {
+        requestCanvasFitView();
       }
     },
-    [activeView, handleSelectMapContext, openCanvasView],
+    [activeView, handleSelectMapContext, openCanvasView, requestCanvasFitView],
   );
 
   useEffect(() => {
@@ -427,6 +435,7 @@ function App() {
               selectedAreaId={selectedAreaId}
               mapId={selectedMapId}
               mapName={selectedMapName}
+              visible={activeView === 'canvas'}
               fitViewRevision={fitViewRevision}
               onDevicesChange={handleCanvasDevicesChange}
               onLinksChange={handleCanvasLinksChange}

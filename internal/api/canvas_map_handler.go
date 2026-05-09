@@ -98,6 +98,13 @@ type canvasMapUpdateDeviceAreasRequest struct {
 	AreaIDs   []string `json:"area_ids"`
 }
 
+type canvasMapAreaRepository interface {
+	ListAreas(uuid.UUID) ([]domain.AreaWithCount, error)
+	CreateArea(uuid.UUID, domain.CanvasMapAreaMembership) (domain.AreaWithCount, error)
+	UpdateArea(uuid.UUID, uuid.UUID, domain.CanvasMapAreaMembership) (domain.AreaWithCount, error)
+	DeleteArea(uuid.UUID, uuid.UUID) error
+}
+
 func (h *CanvasMapHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -441,6 +448,126 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
+}
+
+func (h *CanvasMapHandler) HandleListAreas(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+	areaRepo, ok := h.mapAreaRepo(w)
+	if !ok {
+		return
+	}
+
+	areas, err := areaRepo.ListAreas(canvasMap.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list canvas map areas", err)
+		return
+	}
+
+	response := make([]areaResponse, 0, len(areas))
+	for i := range areas {
+		response = append(response, areaToResponse(&areas[i].Area, areas[i].DeviceCount))
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": response})
+}
+
+func (h *CanvasMapHandler) HandleCreateArea(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+	areaRepo, ok := h.mapAreaRepo(w)
+	if !ok {
+		return
+	}
+
+	var req areaRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	area, ok := canvasMapAreaMembershipFromRequest(w, req)
+	if !ok {
+		return
+	}
+
+	created, err := areaRepo.CreateArea(canvasMap.ID, area)
+	if err != nil {
+		h.writeCanvasMapAreaMutationError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": areaToResponse(&created.Area, created.DeviceCount)})
+}
+
+func (h *CanvasMapHandler) HandleUpdateArea(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+	areaRepo, ok := h.mapAreaRepo(w)
+	if !ok {
+		return
+	}
+	areaID, ok := parseCanvasMapAreaActionID(w, r)
+	if !ok {
+		return
+	}
+
+	var req areaRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	area, ok := canvasMapAreaMembershipFromRequest(w, req)
+	if !ok {
+		return
+	}
+
+	updated, err := areaRepo.UpdateArea(canvasMap.ID, areaID, area)
+	if err != nil {
+		h.writeCanvasMapAreaMutationError(w, err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": areaToResponse(&updated.Area, updated.DeviceCount)})
+}
+
+func (h *CanvasMapHandler) HandleDeleteArea(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+	areaRepo, ok := h.mapAreaRepo(w)
+	if !ok {
+		return
+	}
+	areaID, ok := parseCanvasMapAreaActionID(w, r)
+	if !ok {
+		return
+	}
+
+	if err := areaRepo.DeleteArea(canvasMap.ID, areaID); err != nil {
+		h.writeCanvasMapAreaMutationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *CanvasMapHandler) HandleUpdateDeviceAreas(w http.ResponseWriter, r *http.Request) {
@@ -880,6 +1007,15 @@ func (h *CanvasMapHandler) requireTopologyDeps(w http.ResponseWriter) bool {
 	return true
 }
 
+func (h *CanvasMapHandler) mapAreaRepo(w http.ResponseWriter) (canvasMapAreaRepository, bool) {
+	areaRepo, ok := h.mapRepo.(canvasMapAreaRepository)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "canvas map area repository unavailable")
+		return nil, false
+	}
+	return areaRepo, true
+}
+
 func (h *CanvasMapHandler) writeMapRepoMutationError(w http.ResponseWriter, err error) {
 	switch {
 	case isCanvasMapConflictError(err):
@@ -888,6 +1024,19 @@ func (h *CanvasMapHandler) writeMapRepoMutationError(w http.ResponseWriter, err 
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to mutate canvas map", err)
+	}
+}
+
+func (h *CanvasMapHandler) writeCanvasMapAreaMutationError(w http.ResponseWriter, err error) {
+	switch {
+	case isCanvasMapNotFoundError(err), isAreaNotFoundError(err):
+		writeError(w, http.StatusNotFound, err.Error())
+	case isCanvasMapConflictError(err):
+		writeError(w, http.StatusConflict, "an area with that name already exists")
+	case isCanvasMapValidationError(err):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to mutate canvas map area", err)
 	}
 }
 
@@ -1290,6 +1439,55 @@ func parseCanvasMapRequestUUIDs(w http.ResponseWriter, rawIDs []string, fieldNam
 	return ids, true
 }
 
+func parseCanvasMapAreaActionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	_, action, ok := parseCanvasMapRoute(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusNotFound, "not found")
+		return uuid.Nil, false
+	}
+	rawAreaID, ok := strings.CutPrefix(action, "areas/")
+	if !ok || rawAreaID == "" || strings.Contains(rawAreaID, "/") {
+		writeError(w, http.StatusNotFound, "not found")
+		return uuid.Nil, false
+	}
+	areaID, err := uuid.Parse(rawAreaID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid area ID")
+		return uuid.Nil, false
+	}
+	return areaID, true
+}
+
+func canvasMapAreaMembershipFromRequest(
+	w http.ResponseWriter,
+	req areaRequest,
+) (domain.CanvasMapAreaMembership, bool) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return domain.CanvasMapAreaMembership{}, false
+	}
+	if len(name) > 100 {
+		writeError(w, http.StatusBadRequest, "area name too long (max 100 characters)")
+		return domain.CanvasMapAreaMembership{}, false
+	}
+
+	color := strings.TrimSpace(req.Color)
+	if color == "" {
+		color = "#00E676"
+	}
+	if !strings.HasPrefix(color, "#") || len(color) != 7 {
+		writeError(w, http.StatusBadRequest, "invalid color format (must be #RRGGBB)")
+		return domain.CanvasMapAreaMembership{}, false
+	}
+
+	return domain.CanvasMapAreaMembership{
+		Name:        name,
+		Description: strings.TrimSpace(req.Description),
+		Color:       color,
+	}, true
+}
+
 func filterPositionsForDevices(positions []domain.DevicePosition, devices []domain.Device) []domain.DevicePosition {
 	if len(positions) == 0 || len(devices) == 0 {
 		return []domain.DevicePosition{}
@@ -1374,7 +1572,8 @@ func isCanvasMapConflictError(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "unique constraint") ||
 		strings.Contains(message, "duplicate key") ||
-		strings.Contains(message, "constraint failed")
+		strings.Contains(message, "constraint failed") ||
+		strings.Contains(message, "already exists")
 }
 
 func isCanvasMapValidationError(err error) bool {

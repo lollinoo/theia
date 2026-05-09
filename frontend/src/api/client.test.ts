@@ -5,14 +5,17 @@ import {
   addDeviceToCanvasMap,
   cancelInstanceBackup,
   createCanvasMap,
+  createCanvasMapArea,
   createDevice,
   deleteCanvasMap,
+  deleteCanvasMapArea,
   deleteDevice,
   duplicateCanvasMap,
   fetchBackupFileContent,
   fetchBackupJobs,
   fetchBridgeToken,
   fetchCanvasBootstrap,
+  fetchCanvasMapAreas,
   fetchCanvasMapBootstrap,
   fetchCanvasMapTopology,
   fetchCanvasMaps,
@@ -28,6 +31,7 @@ import {
   revealSNMPProfile,
   runTopologyDiscovery,
   updateCanvasMap,
+  updateCanvasMapArea,
   updateCanvasMapDeviceAreas,
   updateDevice,
 } from './client';
@@ -890,6 +894,69 @@ describe('canvas map client', () => {
       }),
     );
     expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
+  });
+
+  it('manages canvas map areas through map-scoped endpoints', async () => {
+    const areaPayload = {
+      data: {
+        id: 'area-1',
+        name: 'Backbone',
+        description: 'Core',
+        color: '#2979FF',
+        device_count: 0,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ data: [areaPayload.data] }))
+      .mockResolvedValueOnce(mockResponse(areaPayload))
+      .mockResolvedValueOnce(mockResponse(areaPayload))
+      .mockResolvedValueOnce(
+        mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchCanvasMapAreas('map/a')).resolves.toHaveLength(1);
+    await createCanvasMapArea('map/a', {
+      name: 'Backbone',
+      description: 'Core',
+      color: '#2979FF',
+    });
+    await updateCanvasMapArea('map/a', 'area 1', {
+      name: 'Backbone',
+      description: 'Core',
+      color: '#2979FF',
+    });
+    await deleteCanvasMapArea('map/a', 'area 1');
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas/maps/map%2Fa/areas',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/map%2Fa/areas',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'Backbone', description: 'Core', color: '#2979FF' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/canvas/maps/map%2Fa/areas/area%201',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ name: 'Backbone', description: 'Core', color: '#2979FF' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      '/api/v1/canvas/maps/map%2Fa/areas/area%201',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
   });
 });
 

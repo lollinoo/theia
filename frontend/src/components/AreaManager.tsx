@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   createArea,
+  createCanvasMapArea,
   deleteArea,
+  deleteCanvasMapArea,
   fetchAreas,
   fetchDevices,
   updateArea,
+  updateCanvasMapArea,
+  updateCanvasMapDeviceAreas,
   updateDevice,
 } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
@@ -131,25 +135,42 @@ function AreaForm({ initial, onSave, onCancel, saveLabel }: AreaFormProps) {
 // --- AreaManager main component ---
 
 interface AreaManagerProps {
-  onAreasChange?: () => void;
+  onAreasChange?: () => void | Promise<void>;
+  mapContext?: { mapId: string; mapName: string };
+  areas?: Area[];
+  devices?: Device[];
 }
 
-export function AreaManager({ onAreasChange }: AreaManagerProps) {
+export function AreaManager({
+  onAreasChange,
+  mapContext,
+  areas: providedAreas,
+  devices: providedDevices,
+}: AreaManagerProps) {
   const { resolvedTheme } = useTheme();
-  const [areas, setAreas] = useState<Area[]>([]);
-  const [allDevices, setAllDevices] = useState<Device[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
+  const [loadedDevices, setLoadedDevices] = useState<Device[]>([]);
+  const [loading, setLoading] = useState(
+    providedAreas === undefined || providedDevices === undefined,
+  );
   const [mode, setMode] = useState<'list' | 'create' | 'edit'>('list');
   const [editing, setEditing] = useState<Area | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const areas = providedAreas ?? loadedAreas;
+  const allDevices = providedDevices ?? loadedDevices;
+  const mapScoped = Boolean(mapContext);
 
   async function load() {
+    if (mapScoped) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const [areasData, devicesData] = await Promise.all([fetchAreas(), fetchDevices()]);
-      setAreas(areasData);
-      setAllDevices(devicesData);
+      setLoadedAreas(areasData);
+      setLoadedDevices(devicesData);
     } catch {
       // non-fatal
     } finally {
@@ -159,57 +180,92 @@ export function AreaManager({ onAreasChange }: AreaManagerProps) {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [mapScoped]);
+
+  async function refreshAreas() {
+    if (mapScoped) {
+      await onAreasChange?.();
+      return;
+    }
+    await load();
+    await onAreasChange?.();
+  }
 
   async function handleCreate(form: { name: string; description: string; color: string }) {
-    await createArea({
+    const payload = {
       name: form.name.trim(),
       description: form.description.trim(),
       color: form.color,
-    });
+    };
+    if (mapContext) {
+      await createCanvasMapArea(mapContext.mapId, payload);
+    } else {
+      await createArea(payload);
+    }
     setMode('list');
-    void load();
-    onAreasChange?.();
+    await refreshAreas();
   }
 
   async function handleUpdate(form: { name: string; description: string; color: string }) {
     if (!editing) return;
-    await updateArea(editing.id, {
+    const payload = {
       name: form.name.trim(),
       description: form.description.trim(),
       color: form.color,
-    });
+    };
+    if (mapContext) {
+      await updateCanvasMapArea(mapContext.mapId, editing.id, payload);
+    } else {
+      await updateArea(editing.id, payload);
+    }
     setMode('list');
     setEditing(null);
-    void load();
-    onAreasChange?.();
+    await refreshAreas();
   }
 
   async function handleDelete(id: string) {
     setDeleteLoading(true);
     try {
-      await deleteArea(id);
+      if (mapContext) {
+        await deleteCanvasMapArea(mapContext.mapId, id);
+      } else {
+        await deleteArea(id);
+      }
       setConfirmDeleteId(null);
-      void load();
-      onAreasChange?.();
+      await refreshAreas();
     } finally {
       setDeleteLoading(false);
     }
   }
 
   async function handleRemoveDevice(deviceId: string) {
+    if (!editing) return;
     const device = allDevices.find((d) => d.id === deviceId);
-    const newIds = (device?.area_ids ?? []).filter((id) => id !== editing!.id);
-    await updateDevice(deviceId, { area_ids: newIds });
-    void load();
+    const newIds = (device?.area_ids ?? []).filter((id) => id !== editing.id);
+    if (mapContext) {
+      await updateCanvasMapDeviceAreas(mapContext.mapId, {
+        device_ids: [deviceId],
+        area_ids: newIds,
+      });
+    } else {
+      await updateDevice(deviceId, { area_ids: newIds });
+    }
+    await refreshAreas();
   }
 
   async function handleAssignDevice(deviceId: string) {
     if (!editing) return;
     const device = allDevices.find((d) => d.id === deviceId);
     const newIds = [...(device?.area_ids ?? []), editing.id];
-    await updateDevice(deviceId, { area_ids: newIds });
-    void load();
+    if (mapContext) {
+      await updateCanvasMapDeviceAreas(mapContext.mapId, {
+        device_ids: [deviceId],
+        area_ids: newIds,
+      });
+    } else {
+      await updateDevice(deviceId, { area_ids: newIds });
+    }
+    await refreshAreas();
   }
 
   // --- Create mode ---

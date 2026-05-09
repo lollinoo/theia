@@ -5,7 +5,7 @@ import {
   fetchSettingsWithMetadata,
   updateSetting,
 } from '../api/client';
-import type { TopologyDiscoveryMode } from '../types/api';
+import type { Area, Device, TopologyDiscoveryMode } from '../types/api';
 import {
   TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS,
   formatTopologyDiscoveryMode,
@@ -191,11 +191,20 @@ function SavedIndicator({ visible }: SavedIndicatorProps) {
 }
 
 interface SettingsPanelProps {
-  onAreasChange?: () => void;
+  onAreasChange?: () => void | Promise<void>;
   onSettingsChange?: () => void;
+  mapContext?: { mapId: string; mapName: string };
+  areas?: Area[];
+  devices?: Device[];
 }
 
-export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanelProps) {
+export function SettingsPanel({
+  onAreasChange,
+  onSettingsChange,
+  mapContext,
+  areas,
+  devices,
+}: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
   const [grafanaUrl, setGrafanaUrl] = useState('');
@@ -769,7 +778,12 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
       </div>
 
       <div className="mt-6">
-        <AreaManager onAreasChange={onAreasChange} />
+        <AreaManager
+          onAreasChange={onAreasChange}
+          mapContext={mapContext}
+          areas={areas}
+          devices={devices}
+        />
       </div>
 
       <div className="mt-6">

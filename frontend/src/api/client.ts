@@ -299,6 +299,46 @@ export async function updateCanvasMapDeviceAreas(
   );
 }
 
+export async function fetchCanvasMapAreas(mapId: string): Promise<Area[]> {
+  return parseAreasResponse(
+    await requestJSON(`/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas`),
+  );
+}
+
+export async function createCanvasMapArea(
+  mapId: string,
+  payload: { name: string; description: string; color: string },
+): Promise<Area> {
+  return parseAreaResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas`,
+      'POST',
+      payload,
+    ),
+  );
+}
+
+export async function updateCanvasMapArea(
+  mapId: string,
+  areaId: string,
+  payload: { name: string; description: string; color: string },
+): Promise<Area> {
+  return parseAreaResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas/${encodeURIComponent(areaId)}`,
+      'PUT',
+      payload,
+    ),
+  );
+}
+
+export async function deleteCanvasMapArea(mapId: string, areaId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas/${encodeURIComponent(areaId)}`,
+    'DELETE',
+  );
+}
+
 export async function duplicateCanvasMap(
   id: string,
   payload: { name: string },

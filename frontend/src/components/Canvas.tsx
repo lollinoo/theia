@@ -9,8 +9,10 @@ import {
   ReactFlow,
   SelectionMode,
   applyEdgeChanges,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
+  useStore,
 } from '@xyflow/react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { removeDeviceFromCanvasMap } from '../api/client';
@@ -159,6 +161,7 @@ interface CanvasProps {
   selectedAreaId: string | null;
   mapId: string | null;
   mapName: string;
+  visible?: boolean;
   fitViewRevision?: number;
   maps?: CanvasMap[];
   areas?: Area[];
@@ -182,6 +185,7 @@ export default function Canvas({
   selectedAreaId,
   mapId,
   mapName,
+  visible = true,
   fitViewRevision,
   onDevicesChange,
   onLinksChange,
@@ -420,6 +424,7 @@ export default function Canvas({
     topologyAreas = [],
     loading,
     error,
+    renderedMapKey,
     loadTopology,
     runtimeSummary,
     grafanaUrlRef,
@@ -468,6 +473,9 @@ export default function Canvas({
   );
 
   const effectiveAreaId = selectedAreaId;
+  const selectedTopologyMapKey = mapId === null ? 'default:' : `map:${mapId}`;
+  const nodesInitialized = useNodesInitialized();
+  const flowViewportReady = useStore((state) => state.width > 0 && state.height > 0);
 
   // Area filtering: derive filtered devices/links and ghost devices
   const { filteredDevices, filteredLinks, ghostDevices } = useAreaFilteredTopology(
@@ -741,10 +749,20 @@ export default function Canvas({
 
   // fitView when effective area changes to re-center on filtered subset
   const prevAreaRef = useRef<string | null>(null);
+  const canFitVisibleTopology =
+    visible &&
+    flowViewportReady &&
+    nodesInitialized &&
+    displayNodes.length > 0 &&
+    renderedMapKey === selectedTopologyMapKey;
   useEffect(() => {
-    if (prevAreaRef.current !== effectiveAreaId && displayNodes.length > 0) {
-      prevAreaRef.current = effectiveAreaId;
-      window.requestAnimationFrame(() => {
+    if (canFitVisibleTopology && prevAreaRef.current !== effectiveAreaId) {
+      let canceled = false;
+      const frameId = window.requestAnimationFrame(() => {
+        if (canceled) {
+          return;
+        }
+        prevAreaRef.current = effectiveAreaId;
         reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
         recordCanvasDiagnosticEvent({
           level: 'debug',
@@ -757,8 +775,13 @@ export default function Canvas({
           },
         });
       });
+      return () => {
+        canceled = true;
+        window.cancelAnimationFrame(frameId);
+      };
     }
-  }, [effectiveAreaId, displayNodes.length, reactFlow]);
+    return undefined;
+  }, [canFitVisibleTopology, effectiveAreaId, displayNodes.length, reactFlow]);
 
   useEffect(() => {
     if (fitViewRevision === undefined) {
@@ -767,12 +790,16 @@ export default function Canvas({
     if (previousFitViewRevisionRef.current === fitViewRevision) {
       return;
     }
-    if (displayNodes.length === 0) {
+    if (!canFitVisibleTopology) {
       return;
     }
 
-    previousFitViewRevisionRef.current = fitViewRevision;
-    window.requestAnimationFrame(() => {
+    let canceled = false;
+    const frameId = window.requestAnimationFrame(() => {
+      if (canceled) {
+        return;
+      }
+      previousFitViewRevisionRef.current = fitViewRevision;
       reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
       recordCanvasDiagnosticEvent({
         level: 'debug',
@@ -786,7 +813,18 @@ export default function Canvas({
         },
       });
     });
-  }, [displayNodes.length, effectiveAreaId, fitViewRevision, mapId, reactFlow]);
+    return () => {
+      canceled = true;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    canFitVisibleTopology,
+    displayNodes.length,
+    effectiveAreaId,
+    fitViewRevision,
+    mapId,
+    reactFlow,
+  ]);
 
   useEffect(() => {
     setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, editMode } })));

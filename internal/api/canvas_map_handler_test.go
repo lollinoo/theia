@@ -705,6 +705,122 @@ func TestCanvasMapHandlerBulkUpdateMapDeviceAreasDoesNotMutateSourceMapOrGlobalD
 	}
 }
 
+func TestCanvasMapHandlerCreatesAndAssignsAreasWithinOneMap(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	device := seedCanvasMapTestDevice(t, fixture, "router-map-area-local", "10.76.0.1", nil)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Map Area Scope"})
+	mapID := uuid.MustParse(canvasMap.ID)
+	if err := fixture.mapRepo.ReplaceMembership(mapID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: device.ID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("replace map membership: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps/"+canvasMap.ID+"/areas", map[string]any{
+		"name":        "Local Backbone",
+		"description": "Only this saved map",
+		"color":       "#2979FF",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST map area: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	createdArea := decodeCanvasMapAreaData(t, rec)
+	if createdArea.ID == "" || createdArea.Name != "Local Backbone" || createdArea.DeviceCount != 0 {
+		t.Fatalf("unexpected created map area: %#v", createdArea)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodPut, "/api/v1/canvas/maps/"+canvasMap.ID+"/device-areas", map[string]any{
+		"device_ids": []string{device.ID.String()},
+		"area_ids":   []string{createdArea.ID},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT map device areas: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/areas", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map areas: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	areas := decodeCanvasMapAreasData(t, rec)
+	if len(areas) != 1 || areas[0].ID != createdArea.ID || areas[0].DeviceCount != 1 {
+		t.Fatalf("map areas = %#v, want created area with one assigned device", areas)
+	}
+
+	var globalAreaCount int
+	if err := fixture.db.QueryRow(`SELECT COUNT(*) FROM areas WHERE id = ?`, createdArea.ID).Scan(&globalAreaCount); err != nil {
+		t.Fatalf("query global areas: %v", err)
+	}
+	if globalAreaCount != 0 {
+		t.Fatalf("created map-local area was inserted into global areas table")
+	}
+	globalDevice, err := fixture.deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("get global device: %v", err)
+	}
+	if len(globalDevice.AreaIDs) != 0 {
+		t.Fatalf("global device area_ids = %#v, want unchanged empty assignment", globalDevice.AreaIDs)
+	}
+}
+
+func TestCanvasMapHandlerUpdatesAndDeletesDuplicatedMapAreasIndependently(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	sourceAreaID := uuid.New()
+	sourceDevice := seedCanvasMapTestDevice(t, fixture, "router-source-map-area", "10.77.0.1", nil)
+	sourceMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Source Area Map"})
+	sourceMapID := uuid.MustParse(sourceMap.ID)
+	if err := fixture.mapRepo.ReplaceMembership(sourceMapID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: sourceDevice.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{sourceAreaID}},
+		},
+		Areas: []domain.CanvasMapAreaMembership{
+			{AreaID: sourceAreaID, Name: "Shared Name", Description: "Source only", Color: "#00E676"},
+		},
+	}); err != nil {
+		t.Fatalf("replace source membership: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps/"+sourceMap.ID+"/duplicate", map[string]any{
+		"name": "Copied Area Map",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST duplicate map: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	copyMap := decodeCanvasMapData(t, rec)
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodPut, "/api/v1/canvas/maps/"+copyMap.ID+"/areas/"+sourceAreaID.String(), map[string]any{
+		"name":        "Copy Only",
+		"description": "Edited in copy",
+		"color":       "#FF6D00",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT copied map area: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	sourceAreas := mustListCanvasMapAreas(t, fixture, sourceMap.ID)
+	if len(sourceAreas) != 1 || sourceAreas[0].Name != "Shared Name" || sourceAreas[0].Color != "#00E676" {
+		t.Fatalf("source map areas changed after copy edit: %#v", sourceAreas)
+	}
+	copyAreas := mustListCanvasMapAreas(t, fixture, copyMap.ID)
+	if len(copyAreas) != 1 || copyAreas[0].Name != "Copy Only" || copyAreas[0].Color != "#FF6D00" {
+		t.Fatalf("copy map areas = %#v, want edited copy-local area", copyAreas)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodDelete, "/api/v1/canvas/maps/"+copyMap.ID+"/areas/"+sourceAreaID.String(), nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE copied map area: expected 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	copyAreas = mustListCanvasMapAreas(t, fixture, copyMap.ID)
+	if len(copyAreas) != 0 {
+		t.Fatalf("copy map areas after delete = %#v, want none", copyAreas)
+	}
+	sourceAreas = mustListCanvasMapAreas(t, fixture, sourceMap.ID)
+	if len(sourceAreas) != 1 || sourceAreas[0].Name != "Shared Name" {
+		t.Fatalf("source map areas changed after copy delete: %#v", sourceAreas)
+	}
+}
+
 func TestCanvasMapHandlerUnmaterializedMapDoesNotUseLiveFilterFallback(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	device := seedCanvasMapTestDevice(t, fixture, "router-no-fallback", "10.69.1.2", nil)
@@ -1392,6 +1508,33 @@ func decodeCanvasMapData(t *testing.T, rec *httptest.ResponseRecorder) testCanva
 	}
 	decodeCanvasMapTestResponse(t, rec, &resp)
 	return resp.Data
+}
+
+func decodeCanvasMapAreaData(t *testing.T, rec *httptest.ResponseRecorder) areaResponse {
+	t.Helper()
+	var resp struct {
+		Data areaResponse `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, rec, &resp)
+	return resp.Data
+}
+
+func decodeCanvasMapAreasData(t *testing.T, rec *httptest.ResponseRecorder) []areaResponse {
+	t.Helper()
+	var resp struct {
+		Data []areaResponse `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, rec, &resp)
+	return resp.Data
+}
+
+func mustListCanvasMapAreas(t *testing.T, fixture canvasMapIntegrationRouter, mapID string) []areaResponse {
+	t.Helper()
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+mapID+"/areas", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map areas: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	return decodeCanvasMapAreasData(t, rec)
 }
 
 func decodeCanvasMapTestResponse(t *testing.T, rec *httptest.ResponseRecorder, target any) {
