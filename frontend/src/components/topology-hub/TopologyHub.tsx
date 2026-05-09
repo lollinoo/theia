@@ -23,6 +23,7 @@ export interface TopologyHubProps {
   onCreateMapFromArea: (area: Area) => void;
   onDuplicateMap: (map: CanvasMap) => void;
   onDeleteMap: (map: CanvasMap) => void;
+  onSetPrimaryMap?: (map: CanvasMap) => void;
   onOpenSettings: () => void;
 }
 
@@ -69,6 +70,7 @@ export function TopologyHub({
   onCreateMapFromArea,
   onDuplicateMap,
   onDeleteMap,
+  onSetPrimaryMap,
   onOpenSettings,
 }: TopologyHubProps) {
   const model = buildTopologyHubModel({ devices, areas, links, snapshot, maps });
@@ -109,6 +111,7 @@ export function TopologyHub({
             onOpenMap={onOpenMap}
             onDuplicateMap={onDuplicateMap}
             onDeleteMap={onDeleteMap}
+            onSetPrimaryMap={onSetPrimaryMap}
           />
         )}
 

@@ -124,6 +124,12 @@ func NewRouter(
 				return
 			}
 			canvasMapHandler.HandleDuplicate(w, r)
+		case "primary":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleSetPrimary(w, r)
 		case "topology":
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")

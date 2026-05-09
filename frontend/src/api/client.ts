@@ -265,6 +265,12 @@ export async function deleteCanvasMap(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'DELETE');
 }
 
+export async function setCanvasMapPrimary(id: string): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}/primary`, 'POST'),
+  );
+}
+
 export async function removeDeviceFromCanvasMap(mapId: string, deviceId: string): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,

@@ -169,6 +169,57 @@ func (r *CanvasMapRepo) Update(id uuid.UUID, input domain.CanvasMapUpdate) (doma
 	return r.GetByID(id)
 }
 
+// SetPrimary marks one saved canvas map as the primary map and clears the previous primary flag.
+func (r *CanvasMapRepo) SetPrimary(id uuid.UUID) (domain.CanvasMap, error) {
+	if id == uuid.Nil {
+		return domain.CanvasMap{}, fmt.Errorf("canvas map id is required")
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("starting canvas map primary transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := ensureCanvasMapExists(tx, id); err != nil {
+		return domain.CanvasMap{}, err
+	}
+
+	now := time.Now().UTC()
+	if _, err := tx.Exec(
+		`UPDATE canvas_maps
+		 SET is_default = ?, updated_at = ?
+		 WHERE is_default = ?`,
+		false,
+		now,
+		true,
+	); err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("clearing previous primary canvas map: %w", err)
+	}
+
+	result, err := tx.Exec(
+		`UPDATE canvas_maps
+		 SET is_default = ?, updated_at = ?
+		 WHERE id = ?`,
+		true,
+		now,
+		id.String(),
+	)
+	if err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("setting primary canvas map: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return domain.CanvasMap{}, fmt.Errorf("canvas map not found: %s", id)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("committing canvas map primary transaction: %w", err)
+	}
+
+	return r.GetByID(id)
+}
+
 // Delete removes a saved canvas map unless it is the default map.
 func (r *CanvasMapRepo) Delete(id uuid.UUID) error {
 	result, err := r.db.Exec(`DELETE FROM canvas_maps WHERE id = ? AND is_default = ?`, id.String(), false)

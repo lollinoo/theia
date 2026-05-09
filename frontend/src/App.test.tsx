@@ -20,6 +20,7 @@ const createCanvasMapMock =
 const duplicateCanvasMapMock =
   vi.fn<(id: string, payload: { name: string }) => Promise<CanvasMap>>();
 const deleteCanvasMapMock = vi.fn<(id: string) => Promise<void>>();
+const setCanvasMapPrimaryMock = vi.fn<(id: string) => Promise<CanvasMap>>();
 const useWebSocketMock = vi.fn();
 const watermarkPropsMock = vi.hoisted(() => vi.fn());
 
@@ -32,6 +33,8 @@ vi.mock('./api/client', () => ({
     duplicateCanvasMapMock(...args),
   deleteCanvasMap: (...args: Parameters<typeof deleteCanvasMapMock>) =>
     deleteCanvasMapMock(...args),
+  setCanvasMapPrimary: (...args: Parameters<typeof setCanvasMapPrimaryMock>) =>
+    setCanvasMapPrimaryMock(...args),
 }));
 
 vi.mock('./hooks/useWebSocket', () => ({
@@ -231,6 +234,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     onSelectMap,
     onOpenMap,
     onDeleteMap,
+    onSetPrimaryMap,
     onCreateEmptyMap,
     onCreateMapFromArea,
   }: {
@@ -248,6 +252,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     onSelectMap: (map: CanvasMap) => void;
     onOpenMap: (map: CanvasMap) => void;
     onDeleteMap: (map: CanvasMap) => void;
+    onSetPrimaryMap: (map: CanvasMap) => void;
     onCreateEmptyMap: () => void;
     onCreateMapFromArea: (area: Area) => void;
   }) => {
@@ -286,6 +291,11 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
             <button type="button" onClick={() => onDeleteMap(map)}>
               {`Delete map ${map.name}`}
             </button>
+            {!map.is_default && (
+              <button type="button" onClick={() => onSetPrimaryMap(map)}>
+                {`Set primary map ${map.name}`}
+              </button>
+            )}
           </div>
         ))}
         {areas.map((area) => (
@@ -323,7 +333,7 @@ vi.mock('./components/Dashboard', () => ({
       <span>{`selected-area:${selectedAreaId ?? 'all'}`}</span>
       <span>{`status:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
       <button type="button" onClick={onOpenMap}>
-        Torna alla mappa
+        Open map
       </button>
     </div>
   ),
@@ -366,6 +376,7 @@ describe('App', () => {
     createCanvasMapMock.mockReset();
     duplicateCanvasMapMock.mockReset();
     deleteCanvasMapMock.mockReset();
+    setCanvasMapPrimaryMock.mockReset();
     useWebSocketMock.mockReset();
     watermarkPropsMock.mockClear();
     fetchAreasMock.mockResolvedValue([mockArea()]);
@@ -373,6 +384,7 @@ describe('App', () => {
     createCanvasMapMock.mockResolvedValue(mockMap());
     duplicateCanvasMapMock.mockResolvedValue(mockMap({ id: 'map-copy', name: 'Backbone Copy' }));
     deleteCanvasMapMock.mockResolvedValue(undefined);
+    setCanvasMapPrimaryMock.mockResolvedValue(mockMap({ is_default: true }));
     useWebSocketMock.mockReturnValue({
       snapshot: {
         devices: { 'dev-1': { status: 'down' } },
@@ -509,7 +521,7 @@ describe('App', () => {
     expect(screen.getByTestId('dashboard').parentElement?.className).toContain('h-full');
 
     act(() => {
-      screen.getByRole('button', { name: 'Torna alla mappa' }).click();
+      screen.getByRole('button', { name: 'Open map' }).click();
     });
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
@@ -758,6 +770,43 @@ describe('App', () => {
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-branch:Branch');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
+  });
+
+  it('sets a saved map as primary from the hub and selects it locally', async () => {
+    const defaultMap = mockMap({
+      id: 'default-map-id',
+      name: 'Default',
+      source_area_id: null,
+      filter: {},
+      is_default: true,
+    });
+    const branchMap = mockMap({ id: 'map-branch', name: 'Branch', is_default: false });
+    const promotedBranch = { ...branchMap, is_default: true };
+    fetchCanvasMapsMock.mockResolvedValue([defaultMap, branchMap]);
+    setCanvasMapPrimaryMock.mockResolvedValue(promotedBranch);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
+        'pill-map:default-map-id:Default',
+      ),
+    );
+
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('topology-hub')).toHaveTextContent(
+        'selected-map:default-map-id:Default',
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set primary map Branch' }));
+
+    await waitFor(() => expect(setCanvasMapPrimaryMock).toHaveBeenCalledWith('map-branch'));
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-branch:Branch');
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('selected-map:map-branch:Branch');
   });
 
   it('keeps map-local areas when selecting and opening the same hub map again', async () => {

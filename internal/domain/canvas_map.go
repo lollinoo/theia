@@ -91,6 +91,7 @@ type CanvasMapRepository interface {
 	GetDefault() (CanvasMap, error)
 	List() ([]CanvasMap, error)
 	Update(id uuid.UUID, input CanvasMapUpdate) (CanvasMap, error)
+	SetPrimary(id uuid.UUID) (CanvasMap, error)
 	Delete(id uuid.UUID) error
 	Duplicate(id uuid.UUID, name string) (CanvasMap, error)
 	GetMembership(id uuid.UUID) (CanvasMapMembership, error)

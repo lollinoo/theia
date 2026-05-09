@@ -471,6 +471,47 @@ func TestCanvasMapRepoDeleteRejectsDefaultMap(t *testing.T) {
 	}
 }
 
+func TestCanvasMapRepoSetPrimaryMovesDefaultFlag(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	repo := NewCanvasMapRepo(db)
+
+	oldDefault, err := repo.GetDefault()
+	if err != nil {
+		t.Fatalf("get default map: %v", err)
+	}
+	branch, err := repo.Create(domain.CanvasMapCreate{Name: "Branch"})
+	if err != nil {
+		t.Fatalf("create branch map: %v", err)
+	}
+
+	primary, err := repo.SetPrimary(branch.ID)
+	if err != nil {
+		t.Fatalf("set primary map: %v", err)
+	}
+	if primary.ID != branch.ID || !primary.IsDefault {
+		t.Fatalf("primary map = %#v, want branch map marked default", primary)
+	}
+
+	currentDefault, err := repo.GetDefault()
+	if err != nil {
+		t.Fatalf("get promoted default map: %v", err)
+	}
+	if currentDefault.ID != branch.ID {
+		t.Fatalf("default map id = %s, want %s", currentDefault.ID, branch.ID)
+	}
+
+	reloadedOldDefault, err := repo.GetByID(oldDefault.ID)
+	if err != nil {
+		t.Fatalf("reload old default map: %v", err)
+	}
+	if reloadedOldDefault.IsDefault {
+		t.Fatalf("old default still marked default: %#v", reloadedOldDefault)
+	}
+	if err := repo.Delete(oldDefault.ID); err != nil {
+		t.Fatalf("delete old default after primary move: %v", err)
+	}
+}
+
 func TestCanvasMapPositionRepoRejectsNilIdentifiers(t *testing.T) {
 	db := openCanvasMapRepoTestDB(t)
 	mapRepo := NewCanvasMapRepo(db)

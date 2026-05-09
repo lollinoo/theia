@@ -6,6 +6,7 @@ import {
   duplicateCanvasMap,
   fetchAreas,
   fetchCanvasMaps,
+  setCanvasMapPrimary,
 } from './api/client';
 import Canvas from './components/Canvas';
 import { Dashboard } from './components/Dashboard';
@@ -53,6 +54,22 @@ function upsertCanvasMap(maps: CanvasMap[], map: CanvasMap): CanvasMap[] {
 
 function fallbackCanvasMap(maps: CanvasMap[]): CanvasMap | null {
   return maps.find((map) => map.is_default) ?? maps[0] ?? null;
+}
+
+function setPrimaryCanvasMap(maps: CanvasMap[], primaryMap: CanvasMap): CanvasMap[] {
+  let found = false;
+  const nextMaps = maps.map((map) => {
+    if (map.id === primaryMap.id) {
+      found = true;
+      return { ...primaryMap, is_default: true };
+    }
+    return map.is_default ? { ...map, is_default: false } : map;
+  });
+
+  if (!found) {
+    return [...nextMaps, { ...primaryMap, is_default: true }];
+  }
+  return nextMaps;
 }
 
 function App() {
@@ -330,6 +347,25 @@ function App() {
     [handleOpenMap, loadCanvasMaps],
   );
 
+  const handleSetPrimaryMap = useCallback(
+    async (map: CanvasMap) => {
+      if (!enableSavedMaps) {
+        return;
+      }
+
+      setCanvasMapsError(null);
+
+      try {
+        const primaryMap = await setCanvasMapPrimary(map.id);
+        setCanvasMaps((maps) => setPrimaryCanvasMap(maps, primaryMap));
+        handleSelectMapContext(primaryMap);
+      } catch (error) {
+        setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to set primary map'));
+      }
+    },
+    [handleSelectMapContext],
+  );
+
   const handleDeleteMap = useCallback((map: CanvasMap) => {
     if (!enableSavedMaps || map.is_default) {
       return;
@@ -415,6 +451,7 @@ function App() {
             onCreateMapFromArea={handleCreateMapFromArea}
             onDuplicateMap={handleDuplicateMap}
             onDeleteMap={handleDeleteMap}
+            onSetPrimaryMap={handleSetPrimaryMap}
             onOpenSettings={() => {
               setActiveView('canvas');
             }}

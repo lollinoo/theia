@@ -30,6 +30,7 @@ import {
   restoreInstanceBackup,
   revealSNMPProfile,
   runTopologyDiscovery,
+  setCanvasMapPrimary,
   updateCanvasMap,
   updateCanvasMapArea,
   updateCanvasMapDeviceAreas,
@@ -806,6 +807,30 @@ describe('canvas map client', () => {
     expect(fetch).toHaveBeenCalledWith(
       '/api/v1/canvas/maps/map-1',
       expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('sets a canvas map as primary through the primary endpoint', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: true,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const map = await setCanvasMapPrimary('map-1');
+
+    expect(map.is_default).toBe(true);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map-1/primary',
+      expect.objectContaining({ method: 'POST' }),
     );
   });
 

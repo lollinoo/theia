@@ -198,7 +198,7 @@ export function Dashboard({
           className="flex items-center gap-1.5 rounded-md bg-surface-high px-2.5 py-1.5 text-xs text-on-bg-secondary hover:bg-elevated hover:text-on-bg transition-colors"
         >
           <MaterialIcon name="map" size={14} />
-          Torna alla mappa
+          Open map
         </button>
 
         <button

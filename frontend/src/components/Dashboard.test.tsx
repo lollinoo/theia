@@ -185,7 +185,7 @@ describe('Dashboard', () => {
     expect(screen.getByTestId('filter-select-area')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Search devices...')).toBeInTheDocument();
     expect(screen.getByText('Backup All')).toBeInTheDocument();
-    expect(screen.getByText('Torna alla mappa')).toBeInTheDocument();
+    expect(screen.getByText('Open map')).toBeInTheDocument();
     expect(screen.getByText('Vendor Settings')).toBeInTheDocument();
   });
 
@@ -194,7 +194,7 @@ describe('Dashboard', () => {
 
     render(<Dashboard devices={[mockDevice()]} areas={[]} snapshot={null} onOpenMap={onOpenMap} />);
 
-    const returnButton = screen.getByText('Torna alla mappa').closest('button');
+    const returnButton = screen.getByText('Open map').closest('button');
     expect(returnButton).not.toBeNull();
     fireEvent.click(returnButton as HTMLButtonElement);
 

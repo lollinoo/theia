@@ -237,6 +237,41 @@ describe('TopologyHub', () => {
     expect(screen.getByText('Saved maps')).toBeInTheDocument();
   });
 
+  it('allows a non-primary saved map to become primary', () => {
+    const defaultMap = mockMap();
+    const branchMap = mockMap({ id: 'map-branch', name: 'Branch', is_default: false });
+    const onSetPrimaryMap = vi.fn();
+
+    render(
+      <TopologyHub
+        devices={[mockDevice()]}
+        areas={[mockArea()]}
+        links={[mockLink()]}
+        snapshot={null}
+        maps={[defaultMap, branchMap]}
+        selectedMapId="default"
+        selectedMapName="Default"
+        mapsLoading={false}
+        mapsError={null}
+        savedMapsEnabled={true}
+        onOpenArea={vi.fn()}
+        onOpenMap={vi.fn()}
+        onSelectMap={vi.fn()}
+        onCreateEmptyMap={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+        onDuplicateMap={vi.fn()}
+        onDeleteMap={vi.fn()}
+        onSetPrimaryMap={onSetPrimaryMap}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Set Default as primary' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Set Branch as primary' }));
+
+    expect(onSetPrimaryMap).toHaveBeenCalledWith(branchMap);
+  });
+
   it('shows the saved maps empty state when saved maps are enabled with no maps', () => {
     render(
       <TopologyHub

@@ -12,6 +12,7 @@ export interface SavedMapsSectionProps {
   onOpenMap: (map: CanvasMap) => void;
   onDuplicateMap: (map: CanvasMap) => void;
   onDeleteMap: (map: CanvasMap) => void;
+  onSetPrimaryMap?: (map: CanvasMap) => void;
 }
 
 export function SavedMapsSection({
@@ -24,6 +25,7 @@ export function SavedMapsSection({
   onOpenMap,
   onDuplicateMap,
   onDeleteMap,
+  onSetPrimaryMap,
 }: SavedMapsSectionProps) {
   return (
     <section className="flex flex-col gap-3" aria-labelledby="saved-maps-heading">
@@ -73,6 +75,7 @@ export function SavedMapsSection({
               onOpen={onOpenMap}
               onDuplicate={onDuplicateMap}
               onDelete={onDeleteMap}
+              onSetPrimary={onSetPrimaryMap}
             />
           ))}
         </ul>

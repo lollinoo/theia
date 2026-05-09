@@ -331,6 +331,29 @@ func (h *CanvasMapHandler) HandleDuplicate(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(duplicate)})
 }
 
+func (h *CanvasMapHandler) HandleSetPrimary(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	updated, err := h.mapRepo.SetPrimary(canvasMap.ID)
+	if err != nil {
+		if isCanvasMapNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "canvas map not found")
+			return
+		}
+		h.writeMapRepoMutationError(w, err)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
+}
+
 func (h *CanvasMapHandler) HandleRemoveDevice(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return

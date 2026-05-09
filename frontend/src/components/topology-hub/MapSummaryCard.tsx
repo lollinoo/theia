@@ -9,6 +9,7 @@ export interface MapSummaryCardProps {
   onOpen: (map: CanvasMap) => void;
   onDuplicate: (map: CanvasMap) => void;
   onDelete: (map: CanvasMap) => void;
+  onSetPrimary?: (map: CanvasMap) => void;
 }
 
 export function MapSummaryCard({
@@ -18,6 +19,7 @@ export function MapSummaryCard({
   onOpen,
   onDuplicate,
   onDelete,
+  onSetPrimary,
 }: MapSummaryCardProps) {
   const selectMap = () => onSelect(map);
   const handleActionClick = (
@@ -74,6 +76,17 @@ export function MapSummaryCard({
           >
             <MaterialIcon name="content_copy" size={18} />
           </button>
+          {!map.is_default && onSetPrimary && (
+            <button
+              type="button"
+              aria-label={`Set ${map.name} as primary`}
+              title="Set as primary"
+              onClick={(event) => handleActionClick(event, onSetPrimary)}
+              className="rounded-full p-1.5 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+            >
+              <MaterialIcon name="check_circle" size={18} />
+            </button>
+          )}
           {!map.is_default && (
             <button
               type="button"

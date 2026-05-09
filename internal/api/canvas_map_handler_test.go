@@ -139,6 +139,46 @@ func TestCanvasMapHandlerCRUDRejectsDefaultDelete(t *testing.T) {
 	}
 }
 
+func TestCanvasMapHandlerSetPrimaryPromotesMap(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+
+	oldDefault, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("get default map: %v", err)
+	}
+	branch := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Branch"})
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps/"+branch.ID+"/primary", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST primary: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	promoted := decodeCanvasMapData(t, rec)
+	if promoted.ID != branch.ID || !promoted.IsDefault {
+		t.Fatalf("promoted map = %#v, want branch marked default", promoted)
+	}
+
+	currentDefault, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("get promoted default map: %v", err)
+	}
+	if currentDefault.ID.String() != branch.ID {
+		t.Fatalf("default map id = %s, want %s", currentDefault.ID, branch.ID)
+	}
+
+	reloadedOldDefault, err := fixture.mapRepo.GetByID(oldDefault.ID)
+	if err != nil {
+		t.Fatalf("reload old default map: %v", err)
+	}
+	if reloadedOldDefault.IsDefault {
+		t.Fatalf("old default still marked default: %#v", reloadedOldDefault)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodDelete, "/api/v1/canvas/maps/"+oldDefault.ID.String(), nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE old default: expected 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCanvasMapHandlerCreatesDuplicatesAndUsesMapPositions(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 
