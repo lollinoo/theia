@@ -298,7 +298,10 @@ function App() {
       setCanvasMapsError(null);
 
       try {
-        const sourceMapId = sourceArea && selectedMapId ? selectedMapId : null;
+        const sourceMapId =
+          sourceArea && enableSavedMaps
+            ? (selectedMapId ?? fallbackCanvasMap(canvasMaps)?.id ?? null)
+            : null;
         const payload: {
           name: string;
           source_area_id: string | null;
@@ -323,7 +326,7 @@ function App() {
         setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to create map'));
       }
     },
-    [handleOpenMap, loadCanvasMaps, selectedMapId],
+    [canvasMaps, handleOpenMap, loadCanvasMaps, selectedMapId],
   );
 
   const handleDuplicateMapSubmit = useCallback(

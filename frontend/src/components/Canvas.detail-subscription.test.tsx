@@ -83,6 +83,9 @@ vi.mock('@xyflow/react', async () => {
       setCenter: vi.fn(),
       screenToFlowPosition: ({ x, y }: { x: number; y: number }) => ({ x, y }),
     }),
+    useNodesInitialized: () => true,
+    useStore: <T,>(selector: (state: { width: number; height: number }) => T) =>
+      selector({ width: 1200, height: 800 }),
   };
 });
 

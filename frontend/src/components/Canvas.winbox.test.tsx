@@ -70,6 +70,9 @@ vi.mock('@xyflow/react', async () => {
       getNodes: () => [],
       setCenter: vi.fn(),
     }),
+    useNodesInitialized: () => true,
+    useStore: <T,>(selector: (state: { width: number; height: number }) => T) =>
+      selector({ width: 1200, height: 800 }),
   };
 });
 

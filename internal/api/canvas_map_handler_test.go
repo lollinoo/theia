@@ -632,6 +632,61 @@ func TestCanvasMapHandlerCreateMapFromSourceMapAreaCopiesScopedMembershipAndPosi
 	}
 }
 
+func TestCanvasMapHandlerCreateMapFromMapLocalAreaDoesNotRequireGlobalArea(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	sourceAreaID := uuid.New()
+	device := seedCanvasMapTestDevice(t, fixture, "router-local-source-area", "10.73.1.1", nil)
+	sourceMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Map Local Source"})
+	sourceMapID := uuid.MustParse(sourceMap.ID)
+	if err := fixture.mapRepo.ReplaceMembership(sourceMapID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: device.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{sourceAreaID}},
+		},
+		Areas: []domain.CanvasMapAreaMembership{
+			{
+				AreaID:      sourceAreaID,
+				Name:        "Local Only",
+				Description: "Not present in the global areas table",
+				Color:       "#00AEEF",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("replace source map-local membership: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps", map[string]any{
+		"name":           "Map Local Area Copy",
+		"source_area_id": sourceAreaID.String(),
+		"source_map_id":  sourceMap.ID,
+		"filter": map[string]any{
+			"area_id":                  sourceAreaID.String(),
+			"include_cross_area_links": true,
+			"include_ghost_devices":    true,
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST map-local area copy: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	created := decodeCanvasMapData(t, rec)
+	if created.SourceAreaID != nil {
+		t.Fatalf("created source_area_id = %#v, want nil for map-local source area", created.SourceAreaID)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+created.ID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map-local area copy topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	if len(topology.Devices) != 1 || topology.Devices[0].ID != device.ID.String() {
+		t.Fatalf("copied devices = %#v, want source map-local area device", topology.Devices)
+	}
+	if len(topology.Areas) != 1 || topology.Areas[0].ID != sourceAreaID.String() {
+		t.Fatalf("copied areas = %#v, want map-local area %s", topology.Areas, sourceAreaID)
+	}
+	assertCanvasTopologyDeviceAreaIDs(t, topology, device.ID.String(), []string{sourceAreaID.String()})
+}
+
 func TestCanvasMapHandlerDuplicateBackfillsMissingAreasAndKeepsMembershipIndependent(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	areaID := seedCanvasMapTestArea(t, fixture, "Default Area", "#00E676")

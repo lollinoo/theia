@@ -59,7 +59,9 @@ test('creates, opens, duplicates, and deletes a saved map', async ({ page }) => 
 
   await page.getByLabel(/Select topology map/).click();
   await page.getByRole('button', { name: 'Manage maps' }).click();
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: `Delete ${DUPLICATE_TEST_MAP_NAME}` }).click();
+  const deleteMapDialog = page.getByRole('dialog', { name: 'Delete map' });
+  await expect(deleteMapDialog).toContainText(DUPLICATE_TEST_MAP_NAME);
+  await deleteMapDialog.getByRole('button', { name: 'Delete map', exact: true }).click();
   await expect(page.getByText(DUPLICATE_TEST_MAP_NAME)).toHaveCount(0);
 });

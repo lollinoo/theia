@@ -141,11 +141,11 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sourceAreaID, ok := h.validateSourceAreaID(w, req.SourceAreaID)
+	sourceMapID, ok := h.validateSourceMapID(w, req.SourceMapID)
 	if !ok {
 		return
 	}
-	sourceMapID, ok := h.validateSourceMapID(w, req.SourceMapID)
+	sourceAreaID, ok := h.validateCreateSourceAreaID(w, req.SourceAreaID, sourceMapID)
 	if !ok {
 		return
 	}
@@ -153,11 +153,15 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	materializationFilter := canvasMapMaterializationFilter(req.Filter, sourceAreaID)
+	persistedSourceAreaID := sourceAreaID
+	if sourceMapID != nil {
+		persistedSourceAreaID = nil
+	}
 
 	canvasMap, err := h.mapRepo.Create(domain.CanvasMapCreate{
 		Name:         req.Name,
 		Description:  req.Description,
-		SourceAreaID: sourceAreaID,
+		SourceAreaID: persistedSourceAreaID,
 		Filter:       materializationFilter,
 	})
 	if err != nil {
@@ -857,6 +861,44 @@ func (h *CanvasMapHandler) validateSourceAreaID(w http.ResponseWriter, raw *stri
 		return nil, false
 	}
 	return &areaID, true
+}
+
+func (h *CanvasMapHandler) validateCreateSourceAreaID(
+	w http.ResponseWriter,
+	raw *string,
+	sourceMapID *uuid.UUID,
+) (*uuid.UUID, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	if sourceMapID == nil {
+		return h.validateSourceAreaID(w, raw)
+	}
+
+	trimmed := strings.TrimSpace(*raw)
+	if trimmed == "" {
+		writeError(w, http.StatusBadRequest, "invalid source_area_id")
+		return nil, false
+	}
+	areaID, err := uuid.Parse(trimmed)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid source_area_id")
+		return nil, false
+	}
+
+	membership, err := h.mapRepo.GetMembership(*sourceMapID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load source map membership", err)
+		return nil, false
+	}
+	for _, area := range membership.Areas {
+		if area.AreaID == areaID {
+			return &areaID, true
+		}
+	}
+
+	writeError(w, http.StatusBadRequest, "unknown source_area_id")
+	return nil, false
 }
 
 func (h *CanvasMapHandler) validateSourceMapID(w http.ResponseWriter, raw *string) (*uuid.UUID, bool) {
