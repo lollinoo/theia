@@ -14,6 +14,7 @@ import {
   setWinBoxProfile,
   testSNMPConnection,
   unassignCredentialProfile,
+  updateCanvasMapDeviceAreas,
   updateDevice,
   updateSetting,
 } from '../api/client';
@@ -92,9 +93,17 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
   });
 }
 
+function sameAreaIds(first: string[], second: string[]): boolean {
+  if (first.length !== second.length) return false;
+  const sortedFirst = [...first].sort();
+  const sortedSecond = [...second].sort();
+  return sortedFirst.every((value, index) => value === sortedSecond[index]);
+}
+
 interface DeviceConfigPanelProps {
   device: Device;
   readOnly?: boolean;
+  areas?: Area[];
   mapContext?: {
     mapId: string;
     mapName: string;
@@ -110,6 +119,7 @@ interface DeviceConfigPanelProps {
 export function DeviceConfigPanel({
   device,
   readOnly = false,
+  areas: providedAreas,
   mapContext,
   onDeviceUpdated,
   onDeviceDeleted,
@@ -140,7 +150,7 @@ export function DeviceConfigPanel({
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
   const [showAddSelect, setShowAddSelect] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
-  const [areas, setAreas] = useState<Area[]>([]);
+  const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
   const [savedPolling, setSavedPolling] = useState(false);
@@ -165,6 +175,7 @@ export function DeviceConfigPanel({
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
   const deviceConfigSyncKey = buildDeviceConfigSyncKey(device, Boolean(isVirtual));
+  const areas = providedAreas ?? loadedAreas;
 
   function updateForm(update: Partial<DeviceFormModel>) {
     setForm((current) => ({ ...current, ...update }));
@@ -251,11 +262,6 @@ export function DeviceConfigPanel({
           /* non-fatal */
         });
     }
-    fetchAreas()
-      .then(setAreas)
-      .catch(() => {
-        /* non-fatal */
-      });
     checkPrometheusHealth()
       .then((result) => {
         setPrometheusAvailable(result.enabled !== false && result.available);
@@ -264,6 +270,19 @@ export function DeviceConfigPanel({
         setPrometheusAvailable(false);
       });
   }, []);
+
+  useEffect(() => {
+    if (providedAreas) {
+      setLoadedAreas([]);
+      return;
+    }
+
+    fetchAreas()
+      .then(setLoadedAreas)
+      .catch(() => {
+        /* non-fatal */
+      });
+  }, [providedAreas]);
 
   useEffect(() => {
     let cancelled = false;
@@ -494,7 +513,22 @@ export function DeviceConfigPanel({
     setEditLoading(true);
     setEditError(null);
     try {
-      const updated = await updateDevice(device.id, buildUpdateDevicePayload(device, form));
+      const payload = buildUpdateDevicePayload(device, form);
+      const mapScopedAreaEdit = Boolean(mapContext);
+      const { area_ids: _areaIds, ...payloadWithoutAreaIds } = payload;
+      const updatedGlobal = await updateDevice(
+        device.id,
+        mapScopedAreaEdit ? payloadWithoutAreaIds : payload,
+      );
+      if (mapScopedAreaEdit && mapContext && !sameAreaIds(device.area_ids ?? [], form.areaIds)) {
+        await updateCanvasMapDeviceAreas(mapContext.mapId, {
+          device_ids: [device.id],
+          area_ids: form.areaIds,
+        });
+      }
+      const updated = mapScopedAreaEdit
+        ? { ...updatedGlobal, area_ids: [...form.areaIds] }
+        : updatedGlobal;
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated(updated);
     } catch (err) {

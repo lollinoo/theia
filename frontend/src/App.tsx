@@ -51,6 +51,10 @@ function upsertCanvasMap(maps: CanvasMap[], map: CanvasMap): CanvasMap[] {
   return maps.map((candidate, index) => (index === existingIndex ? map : candidate));
 }
 
+function fallbackCanvasMap(maps: CanvasMap[]): CanvasMap | null {
+  return maps.find((map) => map.is_default) ?? maps[0] ?? null;
+}
+
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>('canvas');
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
@@ -59,7 +63,7 @@ function App() {
   const [detailDeviceId, setDetailDeviceId] = useState<string | null>(null);
   const [canvasDevices, setCanvasDevices] = useState<Device[]>([]);
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
-  const [areas, setAreas] = useState<Area[]>([]);
+  const [, setAreas] = useState<Area[]>([]);
   const [canvasTopologyAreas, setCanvasTopologyAreas] = useState<Area[]>([]);
   const [canvasTopologyLoading, setCanvasTopologyLoading] = useState(true);
   const [canvasMaps, setCanvasMaps] = useState<CanvasMap[]>([]);
@@ -128,6 +132,10 @@ function App() {
     }
   }, []);
 
+  useEffect(() => {
+    void loadCanvasMaps();
+  }, [loadCanvasMaps]);
+
   // Re-fetch areas/maps when switching to hub view (pick up changes from settings)
   useEffect(() => {
     if (activeView === 'hub') {
@@ -165,23 +173,12 @@ function App() {
     [requestCanvasFitView],
   );
 
-  const handleOpenGlobal = useCallback(() => {
-    setSelectedMapId(null);
-    setSelectedMapName('Default');
+  const handleSelectMapContext = useCallback((map: CanvasMap) => {
+    setSelectedMapId(map.id);
+    setSelectedMapName(map.name);
     setSelectedAreaId(null);
-    setCanvasTopologyAreas(areas);
-    openCanvasView();
-  }, [areas, openCanvasView]);
-
-  const handleSelectMapContext = useCallback(
-    (map: CanvasMap) => {
-      setSelectedMapId(map.is_default ? null : map.id);
-      setSelectedMapName(map.name);
-      setSelectedAreaId(null);
-      setCanvasTopologyAreas(map.is_default ? areas : []);
-    },
-    [areas],
-  );
+    setCanvasTopologyAreas([]);
+  }, []);
 
   const handleOpenMap = useCallback(
     (map: CanvasMap) => {
@@ -190,6 +187,27 @@ function App() {
     },
     [handleSelectMapContext, openCanvasView],
   );
+
+  const handleNavigationMapSelect = useCallback(
+    (map: CanvasMap) => {
+      handleSelectMapContext(map);
+      if (activeView === 'hub') {
+        openCanvasView();
+      }
+    },
+    [activeView, handleSelectMapContext, openCanvasView],
+  );
+
+  useEffect(() => {
+    if (!enableSavedMaps || selectedMapId !== null || canvasMaps.length === 0) {
+      return;
+    }
+
+    const defaultMap = fallbackCanvasMap(canvasMaps);
+    if (defaultMap) {
+      handleSelectMapContext(defaultMap);
+    }
+  }, [canvasMaps, handleSelectMapContext, selectedMapId]);
 
   const handleAreaFilterSelect = useCallback((areaId: string | null) => {
     setSelectedAreaId(areaId);
@@ -325,12 +343,18 @@ function App() {
       try {
         await deleteCanvasMap(map.id);
         setDeleteMapSource(null);
-        setCanvasMaps((maps) => maps.filter((candidate) => candidate.id !== map.id));
+        const remainingMaps = canvasMaps.filter((candidate) => candidate.id !== map.id);
+        setCanvasMaps(remainingMaps);
         if (selectedMapId === map.id) {
-          setSelectedMapId(null);
-          setSelectedMapName('Default');
-          setSelectedAreaId(null);
-          setCanvasTopologyAreas(areas);
+          const fallbackMap = fallbackCanvasMap(remainingMaps);
+          if (fallbackMap) {
+            handleSelectMapContext(fallbackMap);
+          } else {
+            setSelectedMapId(null);
+            setSelectedMapName('Default');
+            setSelectedAreaId(null);
+            setCanvasTopologyAreas([]);
+          }
         }
       } catch (error) {
         setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to delete map'));
@@ -338,7 +362,7 @@ function App() {
         setDeleteMapLoading(false);
       }
     },
-    [areas, selectedMapId],
+    [canvasMaps, handleSelectMapContext, selectedMapId],
   );
 
   const mapsForHub = enableSavedMaps ? canvasMaps : [];
@@ -358,7 +382,7 @@ function App() {
           areas={navigationAreas}
           onViewChange={handleViewChange}
           onAreaSelect={handleNavigationAreaSelect}
-          onMapSelect={handleSelectMapContext}
+          onMapSelect={handleNavigationMapSelect}
           onManageMaps={() => {
             setActiveView('hub');
           }}
@@ -373,9 +397,11 @@ function App() {
             maps={mapsForHub}
             mapsLoading={mapsLoadingForHub}
             mapsError={mapsErrorForHub}
+            selectedMapId={selectedMapId}
+            selectedMapName={selectedMapName}
             savedMapsEnabled={enableSavedMaps}
-            onOpenGlobal={handleOpenGlobal}
             onOpenArea={(areaId) => handleOpenArea(areaId)}
+            onSelectMap={handleSelectMapContext}
             onOpenMap={handleOpenMap}
             onCreateEmptyMap={handleCreateEmptyMap}
             onCreateMapFromArea={handleCreateMapFromArea}

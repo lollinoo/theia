@@ -191,6 +191,7 @@ export function CanvasPanels({
                 device={device}
                 readOnly={!editMode}
                 isVirtual={device.device_type === 'virtual'}
+                areas={topologyAreas}
                 mapContext={mapId && onRemoveDeviceFromMap ? { mapId, mapName } : undefined}
                 onRemoveFromMap={onRemoveDeviceFromMap}
                 onDeviceUpdated={(updated) => {

@@ -38,6 +38,7 @@ vi.mock('../api/client', () => ({
   setWinBoxProfile: vi.fn().mockResolvedValue(undefined),
   clearWinBoxProfile: vi.fn().mockResolvedValue(undefined),
   fetchAreas: vi.fn().mockResolvedValue([]),
+  updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({}),
   fetchSettings: vi.fn().mockResolvedValue({}),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   updateSetting: vi.fn().mockResolvedValue(undefined),
@@ -773,6 +774,52 @@ describe('DeviceConfigPanel', () => {
     await waitFor(() => {
       expect(screen.getByText('Unassigned - select area...')).toBeInTheDocument();
     });
+  });
+
+  it('saves saved-map area assignments through map membership without mutating global areas', async () => {
+    const { fetchAreas, updateCanvasMapDeviceAreas, updateDevice } = await import('../api/client');
+    const onDeviceUpdated = vi.fn();
+    const mapArea = {
+      id: 'map-area-1',
+      name: 'Map Local Area',
+      description: '',
+      color: '#2979FF',
+      device_count: 0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockDevice());
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        areas={[mapArea]}
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        onDeviceUpdated={onDeviceUpdated}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(fetchAreas).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByDisplayValue('Unassigned - select area...'), {
+      target: { value: 'map-area-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() =>
+      expect(updateCanvasMapDeviceAreas).toHaveBeenCalledWith('map-1', {
+        device_ids: ['dev-1'],
+        area_ids: ['map-area-1'],
+      }),
+    );
+    expect(updateDevice).toHaveBeenCalledWith(
+      'dev-1',
+      expect.not.objectContaining({ area_ids: expect.anything() }),
+    );
+    expect(onDeviceUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'dev-1', area_ids: ['map-area-1'] }),
+    );
   });
 
   it('renders areas section between IP and Vendor fields', () => {

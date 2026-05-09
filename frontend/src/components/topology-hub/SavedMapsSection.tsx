@@ -4,9 +4,11 @@ import { MapSummaryCard } from './MapSummaryCard';
 
 export interface SavedMapsSectionProps {
   maps: CanvasMap[];
+  selectedMapId: string | null;
   loading: boolean;
   error: string | null;
   onCreateEmptyMap: () => void;
+  onSelectMap: (map: CanvasMap) => void;
   onOpenMap: (map: CanvasMap) => void;
   onDuplicateMap: (map: CanvasMap) => void;
   onDeleteMap: (map: CanvasMap) => void;
@@ -14,9 +16,11 @@ export interface SavedMapsSectionProps {
 
 export function SavedMapsSection({
   maps,
+  selectedMapId,
   loading,
   error,
   onCreateEmptyMap,
+  onSelectMap,
   onOpenMap,
   onDuplicateMap,
   onDeleteMap,
@@ -54,17 +58,24 @@ export function SavedMapsSection({
           No saved maps
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <ul
+          aria-label="Saved maps list"
+          className="flex flex-col divide-y divide-outline-subtle rounded-lg border border-outline-subtle bg-surface"
+        >
           {maps.map((map) => (
             <MapSummaryCard
               key={map.id}
               map={map}
+              selected={
+                map.id === selectedMapId || (selectedMapId === null && map.is_default === true)
+              }
+              onSelect={onSelectMap}
               onOpen={onOpenMap}
               onDuplicate={onDuplicateMap}
               onDelete={onDeleteMap}
             />
           ))}
-        </div>
+        </ul>
       )}
     </section>
   );

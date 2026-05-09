@@ -112,12 +112,14 @@ function mockDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRun
 }
 
 describe('TopologyHub', () => {
-  it('renders runtime-aware hub content without legacy OSPF text', () => {
+  it('renders map-first hub content without legacy global navigation', () => {
     const area = mockArea();
-    const onOpenGlobal = vi.fn();
     const onOpenArea = vi.fn();
+    const onOpenMap = vi.fn();
+    const onSelectMap = vi.fn();
     const onCreateEmptyMap = vi.fn();
     const onCreateMapFromArea = vi.fn();
+    const selectedMap = mockMap({ id: 'map-branch', name: 'Branch', is_default: false });
     const snapshot: SnapshotPayload = {
       devices: {
         'device-1': mockDeviceRuntime({
@@ -138,13 +140,15 @@ describe('TopologyHub', () => {
         areas={[area]}
         links={[mockLink()]}
         snapshot={snapshot}
-        maps={[mockMap()]}
+        maps={[mockMap(), selectedMap]}
+        selectedMapId="map-branch"
+        selectedMapName="Branch"
         mapsLoading={false}
         mapsError={null}
         savedMapsEnabled={true}
-        onOpenGlobal={onOpenGlobal}
         onOpenArea={onOpenArea}
-        onOpenMap={vi.fn()}
+        onOpenMap={onOpenMap}
+        onSelectMap={onSelectMap}
         onCreateEmptyMap={onCreateEmptyMap}
         onCreateMapFromArea={onCreateMapFromArea}
         onDuplicateMap={vi.fn()}
@@ -155,14 +159,18 @@ describe('TopologyHub', () => {
 
     expect(screen.getByRole('heading', { name: 'Topology Hub' })).toBeInTheDocument();
     expect(container).not.toHaveTextContent('OSPF');
+    expect(screen.queryByRole('button', { name: 'Open global map' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Branch', level: 2 })).toBeInTheDocument();
     expect(screen.getByText('Needs attention')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open global map' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open selected map' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select map Default' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open area Backbone' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create empty map' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create map from area Backbone' }));
 
-    expect(onOpenGlobal).toHaveBeenCalledOnce();
+    expect(onOpenMap).toHaveBeenCalledWith(selectedMap);
+    expect(onSelectMap).toHaveBeenCalledWith(mockMap());
     expect(onOpenArea).toHaveBeenCalledWith('area-1');
     expect(onCreateEmptyMap).toHaveBeenCalledOnce();
     expect(onCreateMapFromArea).toHaveBeenCalledWith(area);
@@ -176,12 +184,14 @@ describe('TopologyHub', () => {
         links={[mockLink()]}
         snapshot={null}
         maps={[mockMap()]}
+        selectedMapId="default"
+        selectedMapName="Default"
         mapsLoading={false}
         mapsError="Map service unavailable"
         savedMapsEnabled={false}
-        onOpenGlobal={vi.fn()}
         onOpenArea={vi.fn()}
         onOpenMap={vi.fn()}
+        onSelectMap={vi.fn()}
         onCreateEmptyMap={vi.fn()}
         onCreateMapFromArea={vi.fn()}
         onDuplicateMap={vi.fn()}
@@ -204,12 +214,14 @@ describe('TopologyHub', () => {
         links={[mockLink()]}
         snapshot={null}
         maps={[mockMap()]}
+        selectedMapId="default"
+        selectedMapName="Default"
         mapsLoading={false}
         mapsError={null}
         savedMapsEnabled={true}
-        onOpenGlobal={vi.fn()}
         onOpenArea={vi.fn()}
         onOpenMap={vi.fn()}
+        onSelectMap={vi.fn()}
         onCreateEmptyMap={vi.fn()}
         onCreateMapFromArea={vi.fn()}
         onDuplicateMap={vi.fn()}
@@ -233,12 +245,14 @@ describe('TopologyHub', () => {
         links={[mockLink()]}
         snapshot={null}
         maps={[]}
+        selectedMapId={null}
+        selectedMapName="Default"
         mapsLoading={false}
         mapsError={null}
         savedMapsEnabled={true}
-        onOpenGlobal={vi.fn()}
         onOpenArea={vi.fn()}
         onOpenMap={vi.fn()}
+        onSelectMap={vi.fn()}
         onCreateEmptyMap={vi.fn()}
         onCreateMapFromArea={vi.fn()}
         onDuplicateMap={vi.fn()}

@@ -582,6 +582,80 @@ describe('Canvas drag state ownership', () => {
     }
   });
 
+  it('keeps a pending external fit view revision until graph nodes are available', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const populatedNodes = [...testState.canonicalNodes];
+      testState.canonicalNodes = [];
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      expect(frameCallbacks).toHaveLength(0);
+      expect(testState.fitView).not.toHaveBeenCalled();
+
+      testState.canonicalNodes = populatedNodes;
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
   it('passes saved map removal context to canvas panels', async () => {
     render(
       <Canvas

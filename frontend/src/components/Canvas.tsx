@@ -767,11 +767,11 @@ export default function Canvas({
     if (previousFitViewRevisionRef.current === fitViewRevision) {
       return;
     }
-    previousFitViewRevisionRef.current = fitViewRevision;
     if (displayNodes.length === 0) {
       return;
     }
 
+    previousFitViewRevisionRef.current = fitViewRevision;
     window.requestAnimationFrame(() => {
       reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
       recordCanvasDiagnosticEvent({

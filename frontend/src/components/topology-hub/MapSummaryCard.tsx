@@ -1,19 +1,49 @@
+import type { MouseEvent } from 'react';
 import type { CanvasMap } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 
 export interface MapSummaryCardProps {
   map: CanvasMap;
+  selected: boolean;
+  onSelect: (map: CanvasMap) => void;
   onOpen: (map: CanvasMap) => void;
   onDuplicate: (map: CanvasMap) => void;
   onDelete: (map: CanvasMap) => void;
 }
 
-export function MapSummaryCard({ map, onOpen, onDuplicate, onDelete }: MapSummaryCardProps) {
+export function MapSummaryCard({
+  map,
+  selected,
+  onSelect,
+  onOpen,
+  onDuplicate,
+  onDelete,
+}: MapSummaryCardProps) {
+  const selectMap = () => onSelect(map);
+  const handleActionClick = (
+    event: MouseEvent<HTMLButtonElement>,
+    action: (map: CanvasMap) => void,
+  ) => {
+    event.stopPropagation();
+    action(map);
+  };
+
   return (
-    <article className="rounded-lg border border-outline bg-surface p-4 shadow-panel transition-colors">
-      <div className="flex items-start justify-between gap-3">
+    <li
+      aria-label={`Map ${map.name}`}
+      className={`relative border-l-2 px-3 py-3 transition-colors first:rounded-t-lg last:rounded-b-lg hover:bg-surface-container ${
+        selected ? 'border-l-primary bg-surface-container' : 'border-l-transparent'
+      }`}
+    >
+      <button
+        type="button"
+        aria-label={`Select map ${map.name}`}
+        onClick={selectMap}
+        className="absolute inset-0 z-10 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      />
+      <div className="pointer-events-none relative z-20 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <h3 className="truncate text-sm font-semibold text-on-bg">{map.name}</h3>
             {map.is_default && (
               <span className="rounded-full border border-outline-subtle px-2 py-0.5 text-[11px] font-medium text-on-bg-secondary">
@@ -25,12 +55,12 @@ export function MapSummaryCard({ map, onOpen, onDuplicate, onDelete }: MapSummar
             <p className="mt-1 line-clamp-2 text-xs text-on-bg-secondary">{map.description}</p>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="pointer-events-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
             aria-label={`Open map ${map.name}`}
             title="Open"
-            onClick={() => onOpen(map)}
+            onClick={(event) => handleActionClick(event, onOpen)}
             className="rounded-full p-1.5 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
           >
             <MaterialIcon name="open_in_full" size={18} />
@@ -39,7 +69,7 @@ export function MapSummaryCard({ map, onOpen, onDuplicate, onDelete }: MapSummar
             type="button"
             aria-label={`Duplicate ${map.name}`}
             title="Duplicate"
-            onClick={() => onDuplicate(map)}
+            onClick={(event) => handleActionClick(event, onDuplicate)}
             className="rounded-full p-1.5 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
           >
             <MaterialIcon name="content_copy" size={18} />
@@ -49,7 +79,7 @@ export function MapSummaryCard({ map, onOpen, onDuplicate, onDelete }: MapSummar
               type="button"
               aria-label={`Delete ${map.name}`}
               title="Delete"
-              onClick={() => onDelete(map)}
+              onClick={(event) => handleActionClick(event, onDelete)}
               className="rounded-full p-1.5 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-critical focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             >
               <MaterialIcon name="delete" size={18} />
@@ -58,7 +88,7 @@ export function MapSummaryCard({ map, onOpen, onDuplicate, onDelete }: MapSummar
         </div>
       </div>
 
-      <dl className="mt-4 grid grid-cols-3 gap-2 text-xs">
+      <dl className="pointer-events-none relative z-20 mt-4 grid grid-cols-3 gap-2 text-xs">
         <div>
           <dt className="text-on-bg-secondary">Devices</dt>
           <dd className="font-mono text-sm text-on-bg">{map.device_count}</dd>
@@ -72,7 +102,7 @@ export function MapSummaryCard({ map, onOpen, onDuplicate, onDelete }: MapSummar
           <dd className="font-mono text-sm text-on-bg">{map.position_count}</dd>
         </div>
       </dl>
-    </article>
+    </li>
   );
 }
 

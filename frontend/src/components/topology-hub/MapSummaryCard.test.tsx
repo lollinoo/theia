@@ -23,7 +23,14 @@ function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
 describe('MapSummaryCard', () => {
   it('renders map identity and counts', () => {
     render(
-      <MapSummaryCard map={mockMap()} onOpen={vi.fn()} onDuplicate={vi.fn()} onDelete={vi.fn()} />,
+      <MapSummaryCard
+        map={mockMap()}
+        selected={false}
+        onSelect={vi.fn()}
+        onOpen={vi.fn()}
+        onDuplicate={vi.fn()}
+        onDelete={vi.fn()}
+      />,
     );
 
     expect(screen.getByText('Backbone')).toBeInTheDocument();
@@ -32,29 +39,48 @@ describe('MapSummaryCard', () => {
     expect(screen.getByText('9')).toBeInTheDocument();
   });
 
-  it('calls open duplicate and delete callbacks with the map', () => {
+  it('selects from the full row body and keeps action buttons separate', () => {
     const map = mockMap();
+    const onSelect = vi.fn();
     const onOpen = vi.fn();
     const onDuplicate = vi.fn();
     const onDelete = vi.fn();
 
     render(
-      <MapSummaryCard map={map} onOpen={onOpen} onDuplicate={onDuplicate} onDelete={onDelete} />,
+      <MapSummaryCard
+        map={map}
+        selected={true}
+        onSelect={onSelect}
+        onOpen={onOpen}
+        onDuplicate={onDuplicate}
+        onDelete={onDelete}
+      />,
     );
+
+    const selectButton = screen.getByRole('button', { name: 'Select map Backbone' });
+    expect(selectButton.className).toContain('absolute');
+    expect(selectButton.className).toContain('inset-0');
+
+    fireEvent.click(selectButton);
+    expect(onSelect).toHaveBeenCalledWith(map);
 
     fireEvent.click(screen.getByRole('button', { name: 'Open map Backbone' }));
     fireEvent.click(screen.getByRole('button', { name: 'Duplicate Backbone' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete Backbone' }));
 
+    expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onOpen).toHaveBeenCalledWith(map);
     expect(onDuplicate).toHaveBeenCalledWith(map);
     expect(onDelete).toHaveBeenCalledWith(map);
+    expect(screen.getByRole('listitem').className).toContain('border-l-primary');
   });
 
   it('does not offer delete for default maps', () => {
     render(
       <MapSummaryCard
         map={mockMap({ id: 'default', name: 'Default', is_default: true })}
+        selected={false}
+        onSelect={vi.fn()}
         onOpen={vi.fn()}
         onDuplicate={vi.fn()}
         onDelete={vi.fn()}

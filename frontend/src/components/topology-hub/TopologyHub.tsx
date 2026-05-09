@@ -13,9 +13,11 @@ export interface TopologyHubProps {
   maps: CanvasMap[];
   mapsLoading: boolean;
   mapsError: string | null;
+  selectedMapId: string | null;
+  selectedMapName: string;
   savedMapsEnabled: boolean;
-  onOpenGlobal: () => void;
   onOpenArea: (areaId: string) => void;
+  onSelectMap: (map: CanvasMap) => void;
   onOpenMap: (map: CanvasMap) => void;
   onCreateEmptyMap: () => void;
   onCreateMapFromArea: (area: Area) => void;
@@ -57,9 +59,11 @@ export function TopologyHub({
   maps,
   mapsLoading,
   mapsError,
+  selectedMapId,
+  selectedMapName,
   savedMapsEnabled,
-  onOpenGlobal,
   onOpenArea,
+  onSelectMap,
   onOpenMap,
   onCreateEmptyMap,
   onCreateMapFromArea,
@@ -68,6 +72,13 @@ export function TopologyHub({
   onOpenSettings,
 }: TopologyHubProps) {
   const model = buildTopologyHubModel({ devices, areas, links, snapshot, maps });
+  const selectedMap =
+    maps.find((map) => map.id === selectedMapId) ??
+    maps.find((map) => selectedMapId === null && map.is_default) ??
+    maps.find((map) => map.is_default) ??
+    maps[0] ??
+    null;
+  const selectedMapDisplayName = selectedMap?.name ?? selectedMapName;
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-6 pb-12 pt-20 sm:px-8">
@@ -78,75 +89,101 @@ export function TopologyHub({
           </h1>
           <p className="mt-1 text-sm text-on-bg-secondary">Network aggregate</p>
         </div>
-        <button
-          type="button"
-          aria-label="Open global map"
-          onClick={onOpenGlobal}
-          className="inline-flex items-center gap-2 rounded-lg border border-outline bg-surface px-3 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        >
-          <MaterialIcon name="public" size={18} />
-          Global
-        </button>
       </header>
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="Topology summary">
-        <StatBlock label="Health" value={`${model.aggregate.healthPercentage}%`} />
-        <StatBlock label="Devices" value={model.aggregate.totalDevices} />
-        <StatBlock label="Links" value={model.aggregate.activeLinks} />
-        <StatBlock
-          label="Attention"
-          value={model.aggregate.degradedDevices}
-          tone={model.aggregate.degradedDevices > 0 ? 'critical' : 'normal'}
-        />
-        <StatBlock label="Unassigned" value={model.unassignedDevices.length} />
-      </section>
+      <div
+        className={
+          savedMapsEnabled
+            ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(18rem,24rem)_1fr]'
+            : 'grid grid-cols-1'
+        }
+      >
+        {savedMapsEnabled && (
+          <SavedMapsSection
+            maps={model.maps}
+            selectedMapId={selectedMap?.id ?? selectedMapId}
+            loading={mapsLoading}
+            error={mapsError}
+            onCreateEmptyMap={onCreateEmptyMap}
+            onSelectMap={onSelectMap}
+            onOpenMap={onOpenMap}
+            onDuplicateMap={onDuplicateMap}
+            onDeleteMap={onDeleteMap}
+          />
+        )}
 
-      <section className="flex flex-col gap-3" aria-labelledby="areas-heading">
-        <div className="flex items-center justify-between gap-3">
-          <h2 id="areas-heading" className="text-base font-semibold text-on-bg">
-            Areas
-          </h2>
-          <span className="font-mono text-xs text-on-bg-secondary">{model.areas.length}</span>
-        </div>
-
-        {model.areas.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {model.areas.map((areaModel) => (
-              <AreaSummaryCard
-                key={areaModel.area.id}
-                areaModel={areaModel}
-                savedMapsEnabled={savedMapsEnabled}
-                onOpenArea={onOpenArea}
-                onCreateMapFromArea={onCreateMapFromArea}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-outline bg-surface p-4">
-            <p className="text-sm font-medium text-on-bg">No areas</p>
+        <section className="flex min-w-0 flex-col gap-6" aria-labelledby="selected-map-heading">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-on-bg-secondary">Selected map</p>
+              <h2 id="selected-map-heading" className="truncate text-xl font-semibold text-on-bg">
+                {selectedMapDisplayName}
+              </h2>
+            </div>
             <button
               type="button"
-              onClick={onOpenSettings}
-              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-outline px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              aria-label="Open selected map"
+              disabled={!selectedMap}
+              onClick={() => {
+                if (selectedMap) {
+                  onOpenMap(selectedMap);
+                }
+              }}
+              className="inline-flex items-center gap-2 rounded-lg border border-outline bg-surface px-3 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-50"
             >
-              <MaterialIcon name="settings" size={16} />
-              Settings
+              <MaterialIcon name="open_in_full" size={18} />
+              Open selected map
             </button>
           </div>
-        )}
-      </section>
 
-      {savedMapsEnabled && (
-        <SavedMapsSection
-          maps={model.maps}
-          loading={mapsLoading}
-          error={mapsError}
-          onCreateEmptyMap={onCreateEmptyMap}
-          onOpenMap={onOpenMap}
-          onDuplicateMap={onDuplicateMap}
-          onDeleteMap={onDeleteMap}
-        />
-      )}
+          <section className="grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="Topology summary">
+            <StatBlock label="Health" value={`${model.aggregate.healthPercentage}%`} />
+            <StatBlock label="Devices" value={model.aggregate.totalDevices} />
+            <StatBlock label="Links" value={model.aggregate.activeLinks} />
+            <StatBlock
+              label="Attention"
+              value={model.aggregate.degradedDevices}
+              tone={model.aggregate.degradedDevices > 0 ? 'critical' : 'normal'}
+            />
+            <StatBlock label="Unassigned" value={model.unassignedDevices.length} />
+          </section>
+
+          <section className="flex flex-col gap-3" aria-labelledby="areas-heading">
+            <div className="flex items-center justify-between gap-3">
+              <h3 id="areas-heading" className="text-base font-semibold text-on-bg">
+                Map-local areas
+              </h3>
+              <span className="font-mono text-xs text-on-bg-secondary">{model.areas.length}</span>
+            </div>
+
+            {model.areas.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {model.areas.map((areaModel) => (
+                  <AreaSummaryCard
+                    key={areaModel.area.id}
+                    areaModel={areaModel}
+                    savedMapsEnabled={savedMapsEnabled}
+                    onOpenArea={onOpenArea}
+                    onCreateMapFromArea={onCreateMapFromArea}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-outline bg-surface p-4">
+                <p className="text-sm font-medium text-on-bg">No areas</p>
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-outline px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                >
+                  <MaterialIcon name="settings" size={16} />
+                  Settings
+                </button>
+              </div>
+            )}
+          </section>
+        </section>
+      </div>
     </div>
   );
 }

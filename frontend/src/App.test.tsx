@@ -120,6 +120,7 @@ vi.mock('./components/Canvas', () => ({
     mapId,
     mapName,
     selectedAreaId,
+    fitViewRevision,
     onDevicesChange,
     onLinksChange,
     onTopologyAreasChange,
@@ -128,6 +129,7 @@ vi.mock('./components/Canvas', () => ({
     mapId: string | null;
     mapName: string;
     selectedAreaId: string | null;
+    fitViewRevision?: number;
     onDevicesChange: (devices: Device[]) => void;
     onLinksChange: (links: Link[]) => void;
     onTopologyAreasChange: (areas: Area[]) => void;
@@ -170,23 +172,38 @@ vi.mock('./components/Canvas', () => ({
           target_if_oper_status: 'up',
         },
       ]);
-      onTopologyAreasChange([
-        {
-          id: 'map-area-1',
-          name: 'Map Local Area',
-          description: 'Map scoped area',
-          color: '#2979FF',
-          device_count: 1,
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:00:00Z',
-        },
-      ]);
+      onTopologyAreasChange(
+        mapId?.startsWith('default-map')
+          ? [
+              {
+                id: 'area-1',
+                name: 'Backbone',
+                description: 'Default map area',
+                color: '#00E676',
+                device_count: 1,
+                created_at: '2026-01-01T00:00:00Z',
+                updated_at: '2026-01-01T00:00:00Z',
+              },
+            ]
+          : [
+              {
+                id: 'map-area-1',
+                name: 'Map Local Area',
+                description: 'Map scoped area',
+                color: '#2979FF',
+                device_count: 1,
+                created_at: '2026-01-01T00:00:00Z',
+                updated_at: '2026-01-01T00:00:00Z',
+              },
+            ],
+      );
     }, [mapId, mapName, onDevicesChange, onLinksChange, onTopologyAreasChange]);
 
     return (
       <div data-testid="canvas">
         <span>{`map:${mapId ?? 'default'}:${mapName}`}</span>
         <span>{`area:${selectedAreaId ?? 'all'}`}</span>
+        <span>{`fit:${fitViewRevision ?? 0}`}</span>
         <button type="button" onClick={() => onInteractionActiveChange(true)}>
           Start interaction
         </button>
@@ -205,11 +222,14 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     links,
     snapshot,
     maps,
+    selectedMapId,
+    selectedMapName,
     mapsLoading,
     mapsError,
     savedMapsEnabled,
-    onOpenGlobal,
     onOpenArea,
+    onSelectMap,
+    onOpenMap,
     onDeleteMap,
     onCreateEmptyMap,
     onCreateMapFromArea,
@@ -219,47 +239,68 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     links: Link[];
     snapshot: SnapshotPayload | null;
     maps: CanvasMap[];
+    selectedMapId: string | null;
+    selectedMapName: string;
     mapsLoading: boolean;
     mapsError: string | null;
     savedMapsEnabled: boolean;
-    onOpenGlobal: () => void;
     onOpenArea: (areaId: string) => void;
+    onSelectMap: (map: CanvasMap) => void;
+    onOpenMap: (map: CanvasMap) => void;
     onDeleteMap: (map: CanvasMap) => void;
     onCreateEmptyMap: () => void;
     onCreateMapFromArea: (area: Area) => void;
-  }) => (
-    <div data-testid="topology-hub">
-      <span>{`devices:${devices.length}`}</span>
-      <span>{`hub-areas:${areas.map((area) => area.name).join('|')}`}</span>
-      <span>{`links:${links.length}`}</span>
-      <span>{`snapshot:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
-      <span>{`maps:${maps.length}`}</span>
-      <span>{`loading:${String(mapsLoading)}`}</span>
-      <span>{`error:${mapsError ?? 'none'}`}</span>
-      <span>{`savedMapsEnabled:${String(savedMapsEnabled)}`}</span>
-      <button type="button" onClick={onOpenGlobal}>
-        Open global map
-      </button>
-      <button type="button" onClick={onCreateEmptyMap}>
-        Create empty map
-      </button>
-      {maps.map((map) => (
-        <button key={map.id} type="button" onClick={() => onDeleteMap(map)}>
-          {`Delete map ${map.name}`}
+  }) => {
+    const selectedMap =
+      maps.find((map) => map.id === selectedMapId) ??
+      maps.find((map) => map.is_default && selectedMapId === null) ??
+      maps[0];
+
+    return (
+      <div data-testid="topology-hub">
+        <span>{`devices:${devices.length}`}</span>
+        <span>{`hub-areas:${areas.map((area) => area.name).join('|')}`}</span>
+        <span>{`links:${links.length}`}</span>
+        <span>{`snapshot:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
+        <span>{`maps:${maps.length}`}</span>
+        <span>{`selected-map:${selectedMapId ?? 'none'}:${selectedMapName}`}</span>
+        <span>{`loading:${String(mapsLoading)}`}</span>
+        <span>{`error:${mapsError ?? 'none'}`}</span>
+        <span>{`savedMapsEnabled:${String(savedMapsEnabled)}`}</span>
+        <button
+          type="button"
+          onClick={() => {
+            if (selectedMap) onOpenMap(selectedMap);
+          }}
+        >
+          Open selected map
         </button>
-      ))}
-      {areas.map((area) => (
-        <div key={area.id}>
-          <button type="button" onClick={() => onOpenArea(area.id)}>
-            {`Open area ${area.name}`}
-          </button>
-          <button type="button" onClick={() => onCreateMapFromArea(area)}>
-            {`Create map from area ${area.name}`}
-          </button>
-        </div>
-      ))}
-    </div>
-  ),
+        <button type="button" onClick={onCreateEmptyMap}>
+          Create empty map
+        </button>
+        {maps.map((map) => (
+          <div key={map.id}>
+            <button type="button" onClick={() => onSelectMap(map)}>
+              {`Select hub map ${map.name}`}
+            </button>
+            <button type="button" onClick={() => onDeleteMap(map)}>
+              {`Delete map ${map.name}`}
+            </button>
+          </div>
+        ))}
+        {areas.map((area) => (
+          <div key={area.id}>
+            <button type="button" onClick={() => onOpenArea(area.id)}>
+              {`Open area ${area.name}`}
+            </button>
+            <button type="button" onClick={() => onCreateMapFromArea(area)}>
+              {`Create map from area ${area.name}`}
+            </button>
+          </div>
+        ))}
+      </div>
+    );
+  },
 }));
 
 vi.mock('./components/Dashboard', () => ({
@@ -343,6 +384,26 @@ describe('App', () => {
     });
   });
 
+  it('uses the loaded default saved map id instead of the legacy global map context', async () => {
+    const defaultMap = mockMap({
+      id: 'default-map-id',
+      name: 'Default',
+      source_area_id: null,
+      filter: {},
+      is_default: true,
+    });
+    fetchCanvasMapsMock.mockResolvedValue([defaultMap]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
+        'pill-map:default-map-id:Default',
+      ),
+    );
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:default-map-id:Default');
+  });
+
   it('wires canvas devices links and snapshot into TopologyHub and Dashboard', async () => {
     render(<App />);
 
@@ -351,7 +412,7 @@ describe('App', () => {
     act(() => {
       screen.getByRole('button', { name: 'Hub' }).click();
     });
-    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     expect(await screen.findByTestId('topology-hub')).toHaveTextContent('devices:1');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('links:1');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('snapshot:down');
@@ -397,6 +458,25 @@ describe('App', () => {
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-1:Backbone');
     expect(screen.getByTestId('dashboard').parentElement?.className).toContain('h-full');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('hidden');
+  });
+
+  it('opens the canvas and requests fit view when selecting a map from the hub navigation pill', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
+    });
+
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
+    expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('hidden');
   });
 
   it('opens the selected map-local area in Canvas from the navigation pill', async () => {
@@ -566,7 +646,7 @@ describe('App', () => {
       position_count: 0,
     });
     createCanvasMapMock.mockResolvedValue(createdMap);
-    fetchCanvasMapsMock.mockResolvedValueOnce([]).mockResolvedValue([createdMap]);
+    fetchCanvasMapsMock.mockResolvedValue([]);
 
     render(<App />);
 
@@ -574,7 +654,7 @@ describe('App', () => {
     act(() => {
       screen.getByRole('button', { name: 'Hub' }).click();
     });
-    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
 
     act(() => {
       screen.getByRole('button', { name: 'Create empty map' }).click();
@@ -606,7 +686,8 @@ describe('App', () => {
     act(() => {
       screen.getByRole('button', { name: 'Hub' }).click();
     });
-    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
+    const fetchCountBeforeDelete = fetchCanvasMapsMock.mock.calls.length;
 
     screen.getByRole('button', { name: 'Delete map Branch' }).click();
 
@@ -617,29 +698,51 @@ describe('App', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete map' }));
 
     await waitFor(() => expect(deleteCanvasMapMock).toHaveBeenCalledWith('map-delete'));
-    expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1);
+    expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(fetchCountBeforeDelete);
     expect(screen.queryByRole('dialog', { name: 'Delete map' })).not.toBeInTheDocument();
   });
 
-  it('opening the global map from the hub keeps global areas available in the navigation pill', async () => {
+  it('opens the selected hub map instead of forcing the default map', async () => {
+    const defaultMap = mockMap({
+      id: 'default-map-id',
+      name: 'Default',
+      source_area_id: null,
+      filter: {},
+      is_default: true,
+    });
+    const branchMap = mockMap({ id: 'map-branch', name: 'Branch', is_default: false });
+    fetchCanvasMapsMock.mockResolvedValue([defaultMap, branchMap]);
+
     render(<App />);
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     await waitFor(() =>
-      expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
+        'pill-map:default-map-id:Default',
+      ),
     );
 
     act(() => {
       screen.getByRole('button', { name: 'Hub' }).click();
     });
-    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('topology-hub')).toHaveTextContent(
+        'selected-map:default-map-id:Default',
+      ),
+    );
 
     act(() => {
-      screen.getByRole('button', { name: 'Open global map' }).click();
+      screen.getByRole('button', { name: 'Select hub map Branch' }).click();
+    });
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent('selected-map:map-branch:Branch');
+    expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
+
+    act(() => {
+      screen.getByRole('button', { name: 'Open selected map' }).click();
     });
 
-    expect(screen.getByTestId('canvas')).toHaveTextContent('map:default:Default');
-    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Backbone');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-branch:Branch');
+    expect(screen.getByTestId('canvas').parentElement?.className).toContain('relative h-full');
   });
 
   it('creates a map from the active map-local area with the source map context', async () => {
@@ -687,7 +790,7 @@ describe('App', () => {
     expect(await screen.findByText('map:map-from-area:Map Local Area Copy')).toBeInTheDocument();
   });
 
-  it('creates a map from a global area without using the default saved map as source context', async () => {
+  it('creates a map from a default-map area with the default saved map as source context', async () => {
     const defaultMap = mockMap({
       id: 'default-map',
       name: 'Default',
@@ -707,14 +810,9 @@ describe('App', () => {
     render(<App />);
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
-    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1));
-
-    act(() => {
-      screen.getByRole('button', { name: 'Open global map' }).click();
-    });
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:default-map'),
+    );
     act(() => {
       screen.getByRole('button', { name: 'Hub' }).click();
     });
@@ -730,6 +828,7 @@ describe('App', () => {
       expect(createCanvasMapMock).toHaveBeenCalledWith({
         name: 'Backbone Copy',
         source_area_id: 'area-1',
+        source_map_id: 'default-map',
         filter: {
           area_id: 'area-1',
           include_cross_area_links: true,
