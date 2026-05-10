@@ -321,6 +321,23 @@ describe('BulkEditPanel — bulk save behavior', () => {
     ]);
   });
 
+  it('renders separate map removal and permanent delete actions for saved-map bulk edits', () => {
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+        ]}
+        mapContext={{ mapId: 'map-copy', mapName: 'Copy' }}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Remove 2 devices from this map' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Delete 2 devices everywhere' })).toBeVisible();
+  });
+
   it('removes selected devices only from the current saved map during map-scoped bulk delete', async () => {
     const removeFromMapMock = vi.mocked(removeDeviceFromCanvasMap);
     const deleteDeviceMock = vi.mocked(deleteDevice);
@@ -338,8 +355,8 @@ describe('BulkEditPanel — bulk save behavior', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('Remove 2 Devices'));
-    fireEvent.click(screen.getByText('Confirm Remove All'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 2 devices from this map' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm remove from map' }));
 
     await waitFor(() => {
       expect(removeFromMapMock).toHaveBeenCalledTimes(2);
@@ -348,6 +365,36 @@ describe('BulkEditPanel — bulk save behavior', () => {
     expect(removeFromMapMock).toHaveBeenNthCalledWith(1, 'map-copy', 'dev-1');
     expect(removeFromMapMock).toHaveBeenNthCalledWith(2, 'map-copy', 'dev-2');
     expect(deleteDeviceMock).not.toHaveBeenCalled();
+    expect(onDevicesDeleted).toHaveBeenCalled();
+  });
+
+  it('can permanently delete selected devices from a saved-map bulk edit', async () => {
+    const removeFromMapMock = vi.mocked(removeDeviceFromCanvasMap);
+    const deleteDeviceMock = vi.mocked(deleteDevice);
+    const onDevicesDeleted = vi.fn();
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+        ]}
+        mapContext={{ mapId: 'map-copy', mapName: 'Copy' }}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={onDevicesDeleted}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 2 devices everywhere' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete everywhere' }));
+
+    await waitFor(() => {
+      expect(deleteDeviceMock).toHaveBeenCalledTimes(2);
+    });
+
+    expect(deleteDeviceMock).toHaveBeenNthCalledWith(1, 'dev-1');
+    expect(deleteDeviceMock).toHaveBeenNthCalledWith(2, 'dev-2');
+    expect(removeFromMapMock).not.toHaveBeenCalled();
     expect(onDevicesDeleted).toHaveBeenCalled();
   });
 });

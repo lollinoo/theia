@@ -29,7 +29,7 @@ export function CanvasOverlays({
         data-testid="canvas-overlay-stack"
         className="absolute top-20 bottom-auto left-1/2 z-50 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-none sm:top-auto sm:bottom-16"
       >
-        {selectedNodeCount > 1 && (
+        {selectedNodeCount > 1 && editMode && (
           <button
             type="button"
             onClick={onBulkEditClick}
@@ -41,6 +41,14 @@ export function CanvasOverlays({
             <span className="text-sm text-on-bg-secondary">nodes selected</span>
             {editMode && <span className="text-xs text-primary font-medium">Edit</span>}
           </button>
+        )}
+        {selectedNodeCount > 1 && !editMode && (
+          <div className="flex items-center gap-2.5 rounded-full border border-outline-subtle bg-surface-container-high/95 px-4 py-2 shadow-floating backdrop-blur-sm">
+            <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-surface-high px-1.5 text-[11px] font-bold text-on-bg-secondary">
+              {selectedNodeCount}
+            </span>
+            <span className="text-sm text-on-bg-secondary">nodes selected</span>
+          </div>
         )}
         {prometheusDiagnosticsVisible && (
           <div className="pointer-events-none flex items-center gap-2.5 rounded-full border border-warning/30 bg-surface-container-high/95 px-4 py-2.5 shadow-floating backdrop-blur-sm">

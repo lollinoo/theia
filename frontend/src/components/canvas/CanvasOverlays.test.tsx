@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CanvasOverlays } from './CanvasOverlays';
@@ -79,5 +79,26 @@ describe('CanvasOverlays', () => {
 
     fireEvent.click(getByTitle('Dismiss'));
     expect(dismissTopologyRecoveryNotice).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not expose bulk edit when nodes are selected outside edit mode', () => {
+    const onBulkEditClick = vi.fn();
+    render(
+      <CanvasOverlays
+        editMode={false}
+        reconnecting={false}
+        topologyRecoveryNotice={null}
+        dismissTopologyRecoveryNotice={vi.fn()}
+        retryTopologyRefresh={vi.fn()}
+        selectedNodeCount={2}
+        prometheusDiagnosticsVisible={false}
+        onBulkEditClick={onBulkEditClick}
+      />,
+    );
+
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('nodes selected')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /nodes selected/i })).not.toBeInTheDocument();
+    expect(onBulkEditClick).not.toHaveBeenCalled();
   });
 });

@@ -1124,6 +1124,7 @@ export default function Canvas({
         selectedNodeCount={selectedNodeCount}
         prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
         onBulkEditClick={() => {
+          if (!editMode) return;
           const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
           if (selectedNodes.length > 1) {
             setPanelContent({
