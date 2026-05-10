@@ -290,6 +290,11 @@ interface VirtualStatusTone {
   textStyle: CSSProperties;
 }
 
+interface PhysicalStatusTone {
+  bodyClassName: string;
+  bodyStyle: CSSCustomProperties;
+}
+
 const virtualAreaToneSurface: RgbColor = { red: 17, green: 26, blue: 38 };
 const whiteRgb: RgbColor = { red: 255, green: 255, blue: 255 };
 const minimumVirtualAreaToneContrast = 4.5;
@@ -440,6 +445,42 @@ function virtualPrimaryStatusTone(status: DeviceVisualStatus): VirtualStatusTone
   }
 }
 
+function physicalPrimaryStatusTone(status: DeviceVisualStatus): PhysicalStatusTone | null {
+  switch (status) {
+    case 'down':
+      return {
+        bodyClassName: 'topology-node-status-pulse',
+        bodyStyle: {
+          '--theia-node-status-bg': 'var(--nt-node-down-card-bg)',
+          '--theia-node-status-pulse-bg': 'var(--nt-node-down-card-pulse-bg)',
+          backgroundColor: 'var(--nt-node-down-card-bg)',
+        },
+      };
+    case 'probing':
+      return {
+        bodyClassName: 'topology-node-status-pulse',
+        bodyStyle: {
+          '--theia-node-status-bg': 'var(--nt-node-probing-card-bg)',
+          '--theia-node-status-pulse-bg': 'var(--nt-node-probing-card-pulse-bg)',
+          backgroundColor: 'var(--nt-node-probing-card-bg)',
+        },
+      };
+    default:
+      return null;
+  }
+}
+
+function physicalStatusAccent(status: DeviceVisualStatus): string | undefined {
+  switch (status) {
+    case 'down':
+      return 'var(--nt-node-down-border)';
+    case 'probing':
+      return 'var(--nt-node-probing-border)';
+    default:
+      return undefined;
+  }
+}
+
 function PollingDisabledNotice({ className = '' }: { className?: string }) {
   return (
     <div
@@ -469,7 +510,9 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       : resolveDeviceOperationalStatusState(runtimeDevice, monitoringState);
   const telemetryFallback =
     monitoringState === 'monitorable' && !isVirtual && !metrics
-      ? { tone: 'muted' as const, text: 'Unmonitored' }
+      ? headerState.dotStatus === 'probing'
+        ? { tone: 'critical' as const, text: 'Awaiting first poll' }
+        : { tone: 'muted' as const, text: 'Unmonitored' }
       : null;
   const freshness =
     monitoringState === 'monitorable' && metrics
@@ -495,10 +538,6 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     addressState,
     hasFreshnessMeta: freshness !== null,
   });
-  const operationalReadouts =
-    renderModel.variant === 'physical' && metrics
-      ? resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState)
-      : null;
   const selfLinks = data.selfLinks ?? [];
   const primarySelfLink = selfLinks[0];
   const statusStyles = resolveDeviceNodeStatusStyles({
@@ -513,6 +552,16 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const virtualStatusTone = isVirtualMonitorable
     ? virtualPrimaryStatusTone(headerState.dotStatus)
     : null;
+  const physicalStatusTone =
+    renderModel.variant === 'physical' ? physicalPrimaryStatusTone(headerState.dotStatus) : null;
+  const physicalAccentBackground =
+    hasArea && areaAccent ? areaAccent : physicalStatusAccent(headerState.dotStatus);
+  const showPendingPhysicalReadouts =
+    renderModel.variant === 'physical' && !metrics && headerState.dotStatus === 'probing';
+  const physicalReadouts =
+    renderModel.variant === 'physical' && (metrics || showPendingPhysicalReadouts)
+      ? resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState)
+      : null;
   const cardShapeClass = !isVirtual
     ? 'min-h-[140px] rounded-[20px]'
     : isVirtualMonitorable
@@ -641,17 +690,26 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       />
 
       <div
-        className={isVirtual ? 'overflow-hidden rounded-[23px]' : 'overflow-hidden rounded-[19px]'}
+        className={
+          isVirtual
+            ? 'overflow-hidden rounded-[23px]'
+            : 'flex min-h-[inherit] flex-col overflow-hidden rounded-[19px]'
+        }
       >
         {renderModel.variant === 'physical' ? (
           <div
+            data-testid="physical-node-area-accent"
             className="h-1.5 w-full"
-            style={hasArea && areaAccent ? { background: areaAccent } : undefined}
+            style={physicalAccentBackground ? { background: physicalAccentBackground } : undefined}
           />
         ) : null}
 
         {renderModel.variant === 'physical' ? (
-          <div className="px-4 pb-3.5 pt-3">
+          <div
+            data-testid="physical-node-body"
+            className={`flex-1 px-4 pb-3.5 pt-3 ${physicalStatusTone?.bodyClassName ?? ''}`}
+            style={physicalStatusTone?.bodyStyle ?? virtualAreaTintStyle(firstColor)}
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div
@@ -705,7 +763,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               ) : null}
             </div>
 
-            {operationalReadouts ? (
+            {physicalReadouts ? (
               <div
                 className="mt-2 grid h-[40px] grid-cols-3 overflow-hidden rounded-xl border border-outline-subtle bg-surface-container/55"
                 data-testid="physical-runtime-readouts"
@@ -719,10 +777,10 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     CPU
                   </span>
                   <span
-                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.cpuPercent)}`}
+                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(physicalReadouts.cpuPercent)}`}
                     style={readableFontStyle(12)}
                   >
-                    {formatRuntimePercent(operationalReadouts.cpuPercent)}
+                    {formatRuntimePercent(physicalReadouts.cpuPercent)}
                   </span>
                 </div>
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
@@ -733,10 +791,10 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     MEM
                   </span>
                   <span
-                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.memPercent)}`}
+                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(physicalReadouts.memPercent)}`}
                     style={readableFontStyle(12)}
                   >
-                    {formatRuntimePercent(operationalReadouts.memPercent)}
+                    {formatRuntimePercent(physicalReadouts.memPercent)}
                   </span>
                 </div>
                 <div className="flex min-w-0 flex-col justify-center px-2.5">
@@ -750,7 +808,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     className="mt-1 truncate font-mono text-[12px] font-semibold leading-none text-on-bg"
                     style={readableFontStyle(12)}
                   >
-                    {formatRuntimeUptime(operationalReadouts.uptimeSecs)}
+                    {formatRuntimeUptime(physicalReadouts.uptimeSecs)}
                   </span>
                 </div>
               </div>

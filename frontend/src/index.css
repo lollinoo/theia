@@ -303,6 +303,16 @@
     }
   }
 
+  @keyframes topology-node-status-pulse {
+    0%, 100% {
+      background-color: var(--theia-node-status-bg);
+    }
+
+    38%, 62% {
+      background-color: var(--theia-node-status-pulse-bg);
+    }
+  }
+
   @keyframes topology-virtual-node-status-pulse {
     0%, 100% {
       background-color: var(--theia-virtual-node-status-bg);
@@ -370,12 +380,18 @@
     will-change: background-color;
   }
 
+  .topology-node-status-pulse {
+    animation: topology-node-status-pulse 1.05s ease-in-out infinite;
+    will-change: background-color;
+  }
+
   .topology-virtual-node-status-pulse {
     animation: topology-virtual-node-status-pulse 1.05s ease-in-out infinite;
     will-change: background-color;
   }
 
   .topology-interacting .topology-node-down-pulse,
+  .topology-interacting .topology-node-status-pulse,
   .topology-interacting .topology-virtual-node-status-pulse {
     animation: none;
     will-change: auto;
@@ -384,6 +400,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .topology-node-down-pulse,
+  .topology-node-status-pulse,
   .topology-virtual-node-status-pulse {
     animation: none;
   }

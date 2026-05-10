@@ -201,6 +201,11 @@ function badgeStyleForStatus(status: DeviceVisualStatus): CSSProperties | undefi
         borderColor: 'var(--nt-node-down-badge-border)',
         backgroundColor: 'var(--nt-node-down-badge-bg)',
       };
+    case 'probing':
+      return {
+        borderColor: 'var(--nt-node-probing-border)',
+        backgroundColor: 'var(--nt-node-probing-badge-bg)',
+      };
     default:
       return undefined;
   }
@@ -262,9 +267,17 @@ function frameToneForStatus(status: DeviceVisualStatus): DeviceFrameTone {
     case 'degraded':
     case 'probing':
       return {
-        borderColor: 'var(--color-status-warning)',
-        shadowLayers: ['0 0 0 1px var(--color-status-warning)'],
-        focusRingSize: 4,
+        borderColor:
+          status === 'probing' ? 'var(--nt-node-probing-border)' : 'var(--color-status-warning)',
+        shadowLayers:
+          status === 'probing'
+            ? [
+                '0 0 0 1px var(--nt-node-probing-border)',
+                '0 0 0 6px var(--nt-node-probing-ring)',
+                '0 0 28px var(--nt-node-probing-glow)',
+              ]
+            : ['0 0 0 1px var(--color-status-warning)'],
+        focusRingSize: status === 'probing' ? 8 : 4,
       };
     default:
       return {

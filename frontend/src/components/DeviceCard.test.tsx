@@ -410,6 +410,100 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/1 area/i)).toBeNull();
   });
 
+  it('tints physical node body from the area color while preserving the area bar', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: ['area-1'] }),
+      areaColors: ['#2563eb'],
+      metrics: mockMetrics(),
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const areaAccent = screen.getByTestId('physical-node-area-accent');
+
+    expect(body.style.backgroundColor).toBe('rgba(37, 99, 235, 0.1)');
+    expect(body.style.background).not.toContain('linear-gradient');
+    expect(body).not.toHaveClass('topology-node-status-pulse');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+  });
+
+  it('uses down as the primary tone for physical node body while preserving the area bar', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: ['area-1'], status: 'down' }),
+      areaColors: ['#2563eb'],
+      metrics: mockMetrics({
+        health: 'critical',
+        operational_status: 'down',
+        primary_health: 'unreachable',
+      }),
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const areaAccent = screen.getByTestId('physical-node-area-accent');
+    const statusBadge = screen.getByTestId('physical-node-status-badge');
+
+    expect(screen.getByText('Down')).toBeInTheDocument();
+    expect(body).toHaveClass('topology-node-status-pulse');
+    expect(body.getAttribute('style')).toContain(
+      '--theia-node-status-bg: var(--nt-node-down-card-bg)',
+    );
+    expect(body.getAttribute('style')).toContain(
+      '--theia-node-status-pulse-bg: var(--nt-node-down-card-pulse-bg)',
+    );
+    expect(body.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+    expect(statusBadge.style.borderColor).toBe('var(--nt-node-down-badge-border)');
+    expect(statusBadge.style.backgroundColor).toBe('var(--nt-node-down-badge-bg)');
+  });
+
+  it('uses probing as the primary tone for physical node body', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: ['area-1'], status: 'probing' }),
+      areaColors: ['#2563eb'],
+      metrics: mockMetrics({
+        health: 'warning',
+        operational_status: 'probing',
+      }),
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const statusBadge = screen.getByTestId('physical-node-status-badge');
+
+    expect(screen.getByText('Probing')).toBeInTheDocument();
+    expect(body).toHaveClass('topology-node-status-pulse');
+    expect(body.getAttribute('style')).toContain(
+      '--theia-node-status-bg: var(--nt-node-probing-card-bg)',
+    );
+    expect(body.getAttribute('style')).toContain(
+      '--theia-node-status-pulse-bg: var(--nt-node-probing-card-pulse-bg)',
+    );
+    expect(body.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(statusBadge.style.borderColor).toBe('var(--nt-node-probing-border)');
+    expect(statusBadge.style.backgroundColor).toBe('var(--nt-node-probing-badge-bg)');
+  });
+
+  it('renders newly added probing physical nodes as awaiting first poll before metrics arrive', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: [], status: 'probing', ip: '1.1.1.2' }),
+      areaColors: [],
+      metrics: null,
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const areaAccent = screen.getByTestId('physical-node-area-accent');
+
+    expect(screen.getByText('Probing')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting first poll')).toBeInTheDocument();
+    expect(screen.queryByText('Unmonitored')).toBeNull();
+    expect(screen.getByText('CPU')).toBeInTheDocument();
+    expect(screen.getByText('MEM')).toBeInTheDocument();
+    expect(screen.getByText('Uptime')).toBeInTheDocument();
+    expect(body).toHaveClass('flex-1', 'topology-node-status-pulse');
+    expect(body.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
+    expect(areaAccent.style.background).toBe('var(--nt-node-probing-border)');
+  });
+
   it('uses selected token shadow when highlighted', () => {
     const { container } = renderDeviceCard({ highlighted: true });
     expect(container.innerHTML).toContain('var(--color-node-selected)');
