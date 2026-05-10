@@ -349,6 +349,53 @@ describe('virtual mode', () => {
     expect(screen.queryByText(/already exists/i)).not.toBeInTheDocument();
   });
 
+  it('keeps the panel open when the existing physical device is already in the selected saved map', async () => {
+    const onDeviceAdded = vi.fn();
+    (createDevice as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ValidationError('a device with IP/host "10.0.0.1" already exists'),
+    );
+    (fetchDevices as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: 'existing-dev',
+        hostname: 'existing-router',
+        ip: '10.0.0.1',
+        device_type: 'router',
+        poll_class: 'standard',
+        poll_interval_override: null,
+        polling_enabled: true,
+        status: 'up',
+        sys_name: 'existing-router',
+        sys_descr: '',
+        hardware_model: '',
+        vendor: 'mikrotik',
+        managed: true,
+        interfaces: [],
+        backup_supported: true,
+        metrics_source: 'snmp',
+        prometheus_label_name: 'instance',
+        prometheus_label_value: '',
+        area_ids: [],
+      },
+    ]);
+    (addDeviceToCanvasMap as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ValidationError('device already exists in this map'),
+    );
+
+    render(<AddDevicePanel mapContext={{ mapId: 'map-1' }} onDeviceAdded={onDeviceAdded} />);
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    expect(await screen.findByText('device already exists in this map')).toBeInTheDocument();
+    expect(addDeviceToCanvasMap).toHaveBeenCalledWith('map-1', 'existing-dev', {
+      include_connected_links: true,
+    });
+    expect(onDeviceAdded).not.toHaveBeenCalled();
+    expect(screen.getByText('Add Device')).toBeInTheDocument();
+  });
+
   it('assigns selected credentials after creating a physical device', async () => {
     const { fetchCredentialProfiles } = await import('../api/client');
     (fetchCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([

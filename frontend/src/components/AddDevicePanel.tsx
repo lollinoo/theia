@@ -42,6 +42,7 @@ interface AddDevicePanelProps {
 }
 
 type MetricsMode = 'snmp' | 'prometheus' | 'prometheus_snmp_fallback';
+type DuplicateDeviceAddResult = 'not-handled' | 'added' | 'error';
 
 function normalizeDeviceLookupValue(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase();
@@ -202,16 +203,16 @@ export function AddDevicePanel({
   async function addExistingDeviceToCurrentMapOnDuplicate(
     err: unknown,
     payload: ReturnType<typeof buildCreatePayloadForCurrentScope>,
-  ): Promise<boolean> {
+  ): Promise<DuplicateDeviceAddResult> {
     if (!mapContext || !isDuplicateDeviceValidationError(err)) {
-      return false;
+      return 'not-handled';
     }
 
     const lookupValues = new Set(
       [payload.ip, payload.hostname].map(normalizeDeviceLookupValue).filter(Boolean),
     );
     if (lookupValues.size === 0) {
-      return false;
+      return 'not-handled';
     }
 
     const existingDevice = (await fetchDevices()).find(
@@ -220,11 +221,28 @@ export function AddDevicePanel({
         lookupValues.has(normalizeDeviceLookupValue(device.hostname)),
     );
     if (!existingDevice) {
-      return false;
+      return 'not-handled';
     }
 
-    await addDeviceToCurrentMap(existingDevice.id);
-    return true;
+    try {
+      await addDeviceToCurrentMap(existingDevice.id);
+      return 'added';
+    } catch (mapErr) {
+      if (mapErr instanceof ServerError) {
+        setError(
+          mapErr.correlationId
+            ? `Something went wrong (ref: ${mapErr.correlationId})`
+            : 'Something went wrong',
+        );
+      } else if (mapErr instanceof ValidationError) {
+        setError(mapErr.message);
+      } else {
+        setError(
+          mapErr instanceof Error ? mapErr.message : 'Failed to add existing device to map.',
+        );
+      }
+      return 'error';
+    }
   }
 
   async function applyProfile(profileId: string) {
@@ -297,10 +315,12 @@ export function AddDevicePanel({
         await addDeviceToCurrentMap(created.id);
         onDeviceAdded();
       } catch (err) {
-        if (await addExistingDeviceToCurrentMapOnDuplicate(err, payload)) {
+        const duplicateAddResult = await addExistingDeviceToCurrentMapOnDuplicate(err, payload);
+        if (duplicateAddResult === 'added') {
           onDeviceAdded();
           return;
         }
+        if (duplicateAddResult === 'error') return;
         if (err instanceof ServerError) {
           setError(
             err.correlationId
@@ -357,10 +377,12 @@ export function AddDevicePanel({
       await addDeviceToCurrentMap(created.id);
       onDeviceAdded();
     } catch (err) {
-      if (await addExistingDeviceToCurrentMapOnDuplicate(err, payload)) {
+      const duplicateAddResult = await addExistingDeviceToCurrentMapOnDuplicate(err, payload);
+      if (duplicateAddResult === 'added') {
         onDeviceAdded();
         return;
       }
+      if (duplicateAddResult === 'error') return;
       if (err instanceof ServerError) {
         setError(
           err.correlationId

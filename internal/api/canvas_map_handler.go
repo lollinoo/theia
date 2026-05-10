@@ -446,6 +446,12 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
 		return
 	}
+	for _, member := range membership.Devices {
+		if member.DeviceID == deviceID {
+			writeError(w, http.StatusConflict, "device already exists in this map")
+			return
+		}
+	}
 
 	linkIDs := []uuid.UUID{}
 	if includeConnectedLinks {
