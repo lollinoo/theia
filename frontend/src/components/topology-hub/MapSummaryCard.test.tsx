@@ -28,6 +28,7 @@ describe('MapSummaryCard', () => {
         selected={false}
         onSelect={vi.fn()}
         onOpen={vi.fn()}
+        onRename={vi.fn()}
         onDuplicate={vi.fn()}
         onDelete={vi.fn()}
       />,
@@ -43,6 +44,7 @@ describe('MapSummaryCard', () => {
     const map = mockMap();
     const onSelect = vi.fn();
     const onOpen = vi.fn();
+    const onRename = vi.fn();
     const onDuplicate = vi.fn();
     const onDelete = vi.fn();
 
@@ -52,6 +54,7 @@ describe('MapSummaryCard', () => {
         selected={true}
         onSelect={onSelect}
         onOpen={onOpen}
+        onRename={onRename}
         onDuplicate={onDuplicate}
         onDelete={onDelete}
       />,
@@ -65,11 +68,13 @@ describe('MapSummaryCard', () => {
     expect(onSelect).toHaveBeenCalledWith(map);
 
     fireEvent.click(screen.getByRole('button', { name: 'Open map Backbone' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename Backbone' }));
     fireEvent.click(screen.getByRole('button', { name: 'Duplicate Backbone' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete Backbone' }));
 
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onOpen).toHaveBeenCalledWith(map);
+    expect(onRename).toHaveBeenCalledWith(map);
     expect(onDuplicate).toHaveBeenCalledWith(map);
     expect(onDelete).toHaveBeenCalledWith(map);
     expect(screen.getByRole('listitem').className).toContain('border-l-primary');
@@ -82,12 +87,14 @@ describe('MapSummaryCard', () => {
         selected={false}
         onSelect={vi.fn()}
         onOpen={vi.fn()}
+        onRename={vi.fn()}
         onDuplicate={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
 
     expect(screen.getByRole('button', { name: 'Open map Default' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rename Default' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Duplicate Default' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete Default' })).not.toBeInTheDocument();
   });

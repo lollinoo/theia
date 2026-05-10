@@ -7,6 +7,7 @@ export interface MapSummaryCardProps {
   selected: boolean;
   onSelect: (map: CanvasMap) => void;
   onOpen: (map: CanvasMap) => void;
+  onRename?: (map: CanvasMap) => void;
   onDuplicate: (map: CanvasMap) => void;
   onDelete: (map: CanvasMap) => void;
   onSetPrimary?: (map: CanvasMap) => void;
@@ -17,6 +18,7 @@ export function MapSummaryCard({
   selected,
   onSelect,
   onOpen,
+  onRename,
   onDuplicate,
   onDelete,
   onSetPrimary,
@@ -67,6 +69,17 @@ export function MapSummaryCard({
           >
             <MaterialIcon name="open_in_full" size={18} />
           </button>
+          {onRename && (
+            <button
+              type="button"
+              aria-label={`Rename ${map.name}`}
+              title="Rename"
+              onClick={(event) => handleActionClick(event, onRename)}
+              className="rounded-full p-1.5 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+            >
+              <MaterialIcon name="edit" size={18} />
+            </button>
+          )}
           <button
             type="button"
             aria-label={`Duplicate ${map.name}`}

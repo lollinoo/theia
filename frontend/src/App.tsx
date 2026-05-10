@@ -7,6 +7,7 @@ import {
   fetchAreas,
   fetchCanvasMaps,
   setCanvasMapPrimary,
+  updateCanvasMap,
 } from './api/client';
 import Canvas from './components/Canvas';
 import { Dashboard } from './components/Dashboard';
@@ -21,6 +22,10 @@ import {
   DuplicateMapDialog,
   type DuplicateMapDialogSubmit,
 } from './components/topology-hub/DuplicateMapDialog';
+import {
+  RenameMapDialog,
+  type RenameMapDialogSubmit,
+} from './components/topology-hub/RenameMapDialog';
 import TopologyHub from './components/topology-hub/TopologyHub';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -101,6 +106,8 @@ function App() {
   const [canvasMapsError, setCanvasMapsError] = useState<string | null>(null);
   const [createMapDialogOpen, setCreateMapDialogOpen] = useState(false);
   const [createMapSourceArea, setCreateMapSourceArea] = useState<Area | null>(null);
+  const [renameMapSource, setRenameMapSource] = useState<CanvasMap | null>(null);
+  const [renameMapLoading, setRenameMapLoading] = useState(false);
   const [duplicateMapSource, setDuplicateMapSource] = useState<CanvasMap | null>(null);
   const [deleteMapSource, setDeleteMapSource] = useState<CanvasMap | null>(null);
   const [deleteMapLoading, setDeleteMapLoading] = useState(false);
@@ -305,6 +312,15 @@ function App() {
     setDuplicateMapSource(map);
   }, []);
 
+  const handleRenameMap = useCallback((map: CanvasMap) => {
+    if (!enableSavedMaps) {
+      return;
+    }
+
+    setCanvasMapsError(null);
+    setRenameMapSource(map);
+  }, []);
+
   const handleCreateMap = useCallback(
     async ({ name, sourceArea }: CreateMapDialogSubmit) => {
       if (!enableSavedMaps) {
@@ -364,6 +380,31 @@ function App() {
       }
     },
     [handleOpenMap, loadCanvasMaps],
+  );
+
+  const handleRenameMapSubmit = useCallback(
+    async ({ name, map }: RenameMapDialogSubmit) => {
+      if (!enableSavedMaps) {
+        return;
+      }
+
+      setCanvasMapsError(null);
+      setRenameMapLoading(true);
+
+      try {
+        const renamedMap = await updateCanvasMap(map.id, { name });
+        setRenameMapSource(null);
+        setCanvasMaps((maps) => upsertCanvasMap(maps, renamedMap));
+        if (selectedMapId === map.id || (selectedMapId === null && map.is_default)) {
+          handleSelectMapContext(renamedMap);
+        }
+      } catch (error) {
+        setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to rename map'));
+      } finally {
+        setRenameMapLoading(false);
+      }
+    },
+    [handleSelectMapContext, selectedMapId],
   );
 
   const handleSetPrimaryMap = useCallback(
@@ -471,6 +512,7 @@ function App() {
             onOpenMap={handleOpenMap}
             onCreateEmptyMap={handleCreateEmptyMap}
             onCreateMapFromArea={handleCreateMapFromArea}
+            onRenameMap={handleRenameMap}
             onDuplicateMap={handleDuplicateMap}
             onDeleteMap={handleDeleteMap}
             onSetPrimaryMap={handleSetPrimaryMap}
@@ -540,6 +582,17 @@ function App() {
               sourceMap={duplicateMapSource}
               onDuplicate={handleDuplicateMapSubmit}
               onClose={() => setDuplicateMapSource(null)}
+            />
+            <RenameMapDialog
+              open={renameMapSource !== null}
+              map={renameMapSource}
+              renaming={renameMapLoading}
+              onRename={handleRenameMapSubmit}
+              onClose={() => {
+                if (!renameMapLoading) {
+                  setRenameMapSource(null);
+                }
+              }}
             />
             <DeleteMapDialog
               open={deleteMapSource !== null}

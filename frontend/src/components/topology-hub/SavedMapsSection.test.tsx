@@ -28,6 +28,7 @@ describe('SavedMapsSection', () => {
       onCreateEmptyMap: vi.fn(),
       onSelectMap: vi.fn(),
       onOpenMap: vi.fn(),
+      onRenameMap: vi.fn(),
       onDuplicateMap: vi.fn(),
       onDeleteMap: vi.fn(),
     };
@@ -48,6 +49,7 @@ describe('SavedMapsSection', () => {
     const onCreateEmptyMap = vi.fn();
     const onSelectMap = vi.fn();
     const onOpenMap = vi.fn();
+    const onRenameMap = vi.fn();
     const onDuplicateMap = vi.fn();
     const onDeleteMap = vi.fn();
 
@@ -60,6 +62,7 @@ describe('SavedMapsSection', () => {
         onCreateEmptyMap={onCreateEmptyMap}
         onSelectMap={onSelectMap}
         onOpenMap={onOpenMap}
+        onRenameMap={onRenameMap}
         onDuplicateMap={onDuplicateMap}
         onDeleteMap={onDeleteMap}
       />,
@@ -76,12 +79,14 @@ describe('SavedMapsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create empty map' }));
     fireEvent.click(screen.getByRole('button', { name: 'Select map Default' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open map Branch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename Branch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Duplicate Branch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete Branch' }));
 
     expect(onCreateEmptyMap).toHaveBeenCalledOnce();
     expect(onSelectMap).toHaveBeenCalledWith(defaultMap);
     expect(onOpenMap).toHaveBeenCalledWith(savedMap);
+    expect(onRenameMap).toHaveBeenCalledWith(savedMap);
     expect(onDuplicateMap).toHaveBeenCalledWith(savedMap);
     expect(onDeleteMap).toHaveBeenCalledWith(savedMap);
     expect(screen.queryByRole('button', { name: 'Delete Default' })).not.toBeInTheDocument();
@@ -100,6 +105,7 @@ describe('SavedMapsSection', () => {
         onCreateEmptyMap={vi.fn()}
         onSelectMap={vi.fn()}
         onOpenMap={vi.fn()}
+        onRenameMap={vi.fn()}
         onDuplicateMap={vi.fn()}
         onDeleteMap={vi.fn()}
       />,

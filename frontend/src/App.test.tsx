@@ -19,6 +19,7 @@ const createCanvasMapMock =
   >();
 const duplicateCanvasMapMock =
   vi.fn<(id: string, payload: { name: string }) => Promise<CanvasMap>>();
+const updateCanvasMapMock = vi.fn<(id: string, payload: { name: string }) => Promise<CanvasMap>>();
 const deleteCanvasMapMock = vi.fn<(id: string) => Promise<void>>();
 const setCanvasMapPrimaryMock = vi.fn<(id: string) => Promise<CanvasMap>>();
 const useWebSocketMock = vi.fn();
@@ -31,6 +32,8 @@ vi.mock('./api/client', () => ({
     createCanvasMapMock(...args),
   duplicateCanvasMap: (...args: Parameters<typeof duplicateCanvasMapMock>) =>
     duplicateCanvasMapMock(...args),
+  updateCanvasMap: (...args: Parameters<typeof updateCanvasMapMock>) =>
+    updateCanvasMapMock(...args),
   deleteCanvasMap: (...args: Parameters<typeof deleteCanvasMapMock>) =>
     deleteCanvasMapMock(...args),
   setCanvasMapPrimary: (...args: Parameters<typeof setCanvasMapPrimaryMock>) =>
@@ -233,6 +236,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     onOpenArea,
     onSelectMap,
     onOpenMap,
+    onRenameMap,
     onDeleteMap,
     onSetPrimaryMap,
     onCreateEmptyMap,
@@ -251,6 +255,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
     onOpenArea: (areaId: string) => void;
     onSelectMap: (map: CanvasMap) => void;
     onOpenMap: (map: CanvasMap) => void;
+    onRenameMap?: (map: CanvasMap) => void;
     onDeleteMap: (map: CanvasMap) => void;
     onSetPrimaryMap: (map: CanvasMap) => void;
     onCreateEmptyMap: () => void;
@@ -291,6 +296,11 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
             <button type="button" onClick={() => onDeleteMap(map)}>
               {`Delete map ${map.name}`}
             </button>
+            {onRenameMap && (
+              <button type="button" onClick={() => onRenameMap(map)}>
+                {`Rename map ${map.name}`}
+              </button>
+            )}
             {!map.is_default && (
               <button type="button" onClick={() => onSetPrimaryMap(map)}>
                 {`Set primary map ${map.name}`}
@@ -375,6 +385,7 @@ describe('App', () => {
     fetchCanvasMapsMock.mockReset();
     createCanvasMapMock.mockReset();
     duplicateCanvasMapMock.mockReset();
+    updateCanvasMapMock.mockReset();
     deleteCanvasMapMock.mockReset();
     setCanvasMapPrimaryMock.mockReset();
     useWebSocketMock.mockReset();
@@ -383,6 +394,7 @@ describe('App', () => {
     fetchCanvasMapsMock.mockResolvedValue([]);
     createCanvasMapMock.mockResolvedValue(mockMap());
     duplicateCanvasMapMock.mockResolvedValue(mockMap({ id: 'map-copy', name: 'Backbone Copy' }));
+    updateCanvasMapMock.mockResolvedValue(mockMap({ id: 'map-1', name: 'Backbone Renamed' }));
     deleteCanvasMapMock.mockResolvedValue(undefined);
     setCanvasMapPrimaryMock.mockResolvedValue(mockMap({ is_default: true }));
     useWebSocketMock.mockReturnValue({
@@ -778,6 +790,45 @@ describe('App', () => {
     await waitFor(() => expect(deleteCanvasMapMock).toHaveBeenCalledWith('map-delete'));
     expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(fetchCountBeforeDelete);
     expect(screen.queryByRole('dialog', { name: 'Delete map' })).not.toBeInTheDocument();
+  });
+
+  it('renames the selected saved map from a dedicated dialog and updates local selection', async () => {
+    const branchMap = mockMap({ id: 'map-rename', name: 'Branch' });
+    const renamedMap = { ...branchMap, name: 'Branch Renamed' };
+    fetchCanvasMapsMock.mockResolvedValue([branchMap]);
+    updateCanvasMapMock.mockResolvedValue(renamedMap);
+
+    render(<App />);
+
+    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    act(() => {
+      screen.getByRole('button', { name: 'Hub' }).click();
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('topology-hub')).toHaveTextContent(
+        'selected-map:map-rename:Branch',
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename map Branch' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Rename map' });
+    expect(within(dialog).getByLabelText('Map name')).toHaveValue('Branch');
+
+    fireEvent.change(within(dialog).getByLabelText('Map name'), {
+      target: { value: ' Branch Renamed ' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rename map' }));
+
+    await waitFor(() =>
+      expect(updateCanvasMapMock).toHaveBeenCalledWith('map-rename', { name: 'Branch Renamed' }),
+    );
+    expect(screen.queryByRole('dialog', { name: 'Rename map' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
+      'pill-map:map-rename:Branch Renamed',
+    );
+    expect(screen.getByTestId('topology-hub')).toHaveTextContent(
+      'selected-map:map-rename:Branch Renamed',
+    );
   });
 
   it('opens the selected hub map instead of forcing the default map', async () => {

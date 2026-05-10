@@ -10,6 +10,7 @@ export interface SavedMapsSectionProps {
   onCreateEmptyMap: () => void;
   onSelectMap: (map: CanvasMap) => void;
   onOpenMap: (map: CanvasMap) => void;
+  onRenameMap?: (map: CanvasMap) => void;
   onDuplicateMap: (map: CanvasMap) => void;
   onDeleteMap: (map: CanvasMap) => void;
   onSetPrimaryMap?: (map: CanvasMap) => void;
@@ -23,6 +24,7 @@ export function SavedMapsSection({
   onCreateEmptyMap,
   onSelectMap,
   onOpenMap,
+  onRenameMap,
   onDuplicateMap,
   onDeleteMap,
   onSetPrimaryMap,
@@ -80,6 +82,7 @@ export function SavedMapsSection({
               }
               onSelect={onSelectMap}
               onOpen={onOpenMap}
+              onRename={onRenameMap}
               onDuplicate={onDuplicateMap}
               onDelete={onDeleteMap}
               onSetPrimary={onSetPrimaryMap}
