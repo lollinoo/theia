@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -185,6 +186,10 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	if err := h.isolateCanvasMapVirtualDevices(r.Context(), canvasMap.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to isolate canvas map virtual devices", err)
+		return
+	}
 	canvasMap, err = h.mapRepo.GetByID(canvasMap.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load materialized canvas map", err)
@@ -328,6 +333,15 @@ func (h *CanvasMapHandler) HandleDuplicate(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		h.writeMapRepoMutationError(w, err)
+		return
+	}
+	if err := h.isolateCanvasMapVirtualDevices(r.Context(), duplicate.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to isolate duplicated virtual devices", err)
+		return
+	}
+	duplicate, err = h.mapRepo.GetByID(duplicate.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load duplicated canvas map", err)
 		return
 	}
 
@@ -772,6 +786,15 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 	if !ok {
 		return canvasTopologyResponse{}, false
 	}
+	if err := h.isolateCanvasMapVirtualDevices(r.Context(), canvasMap.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to isolate canvas map virtual devices", err)
+		return canvasTopologyResponse{}, false
+	}
+	canvasMap, err := h.mapRepo.GetByID(canvasMap.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map", err)
+		return canvasTopologyResponse{}, false
+	}
 
 	positions, err := h.mapPositionRepo.GetAllForMap(canvasMap.ID)
 	if err != nil {
@@ -1054,6 +1077,252 @@ func (h *CanvasMapHandler) copyDefaultCanvasMapPositionsForMaterializedMembershi
 		return false
 	}
 	return true
+}
+
+func (h *CanvasMapHandler) isolateCanvasMapVirtualDevices(ctx context.Context, mapID uuid.UUID) error {
+	membership, err := h.mapRepo.GetMembership(mapID)
+	if err != nil {
+		return fmt.Errorf("loading canvas map membership: %w", err)
+	}
+	if len(membership.Devices) == 0 {
+		return nil
+	}
+	if h.deviceService == nil || h.linkRepo == nil {
+		return fmt.Errorf("canvas map virtual device isolation dependencies unavailable")
+	}
+
+	devices, err := h.deviceService.GetDevicesByIDs(ctx, canvasMapMembershipDeviceIDs(membership.Devices))
+	if err != nil {
+		return fmt.Errorf("loading canvas map devices: %w", err)
+	}
+	deviceByID := make(map[uuid.UUID]domain.Device, len(devices))
+	for _, device := range devices {
+		deviceByID[device.ID] = device
+	}
+	virtualMemberIDs := make(map[uuid.UUID]struct{})
+	for _, member := range membership.Devices {
+		device, ok := deviceByID[member.DeviceID]
+		if !ok {
+			return fmt.Errorf("canvas map member device %s not found", member.DeviceID)
+		}
+		if device.DeviceType == domain.DeviceTypeVirtual {
+			virtualMemberIDs[member.DeviceID] = struct{}{}
+		}
+	}
+	if len(virtualMemberIDs) == 0 {
+		return nil
+	}
+	sharedVirtualIDs, err := h.sharedCanvasMapDeviceIDs(mapID, virtualMemberIDs)
+	if err != nil {
+		return err
+	}
+	if len(sharedVirtualIDs) == 0 {
+		return nil
+	}
+
+	clonedDeviceIDs := make(map[uuid.UUID]uuid.UUID)
+	nextMembership := domain.CanvasMapMembership{
+		Devices: make([]domain.CanvasMapDeviceMembership, 0, len(membership.Devices)),
+		Areas:   append([]domain.CanvasMapAreaMembership(nil), membership.Areas...),
+	}
+	for _, member := range membership.Devices {
+		device, ok := deviceByID[member.DeviceID]
+		if !ok {
+			return fmt.Errorf("canvas map member device %s not found", member.DeviceID)
+		}
+
+		nextMember := domain.CanvasMapDeviceMembership{
+			DeviceID: member.DeviceID,
+			Role:     member.Role,
+			AreaIDs:  append([]uuid.UUID(nil), member.AreaIDs...),
+		}
+		if _, shared := sharedVirtualIDs[member.DeviceID]; shared && device.DeviceType == domain.DeviceTypeVirtual {
+			clone, err := h.cloneCanvasMapVirtualDevice(ctx, device)
+			if err != nil {
+				return err
+			}
+			clonedDeviceIDs[member.DeviceID] = clone.ID
+			nextMember.DeviceID = clone.ID
+		}
+		nextMembership.Devices = append(nextMembership.Devices, nextMember)
+	}
+	if len(clonedDeviceIDs) == 0 {
+		return nil
+	}
+
+	links, err := loadCanvasMapLinksByIDs(h.linkRepo, membership.LinkIDs)
+	if err != nil {
+		return fmt.Errorf("loading canvas map links: %w", err)
+	}
+	nextMembership.LinkIDs = make([]uuid.UUID, 0, len(links))
+	for _, link := range links {
+		nextLinkID, err := h.cloneCanvasMapLinkForVirtualDevices(link, clonedDeviceIDs)
+		if err != nil {
+			return err
+		}
+		nextMembership.LinkIDs = append(nextMembership.LinkIDs, nextLinkID)
+	}
+
+	positions, err := h.mapPositionRepo.GetAllForMap(mapID)
+	if err != nil {
+		return fmt.Errorf("loading canvas map positions: %w", err)
+	}
+	nextPositions := remapCanvasMapPositionsForDeviceClones(
+		positions,
+		clonedDeviceIDs,
+		nextMembership.Devices,
+	)
+
+	if err := h.mapRepo.ReplaceMembership(mapID, nextMembership); err != nil {
+		return fmt.Errorf("replacing canvas map membership with cloned virtual devices: %w", err)
+	}
+	if len(nextPositions) > 0 {
+		if err := h.mapPositionRepo.SaveAllForMap(mapID, nextPositions); err != nil {
+			return fmt.Errorf("saving cloned virtual device positions: %w", err)
+		}
+	}
+	return nil
+}
+
+func (h *CanvasMapHandler) sharedCanvasMapDeviceIDs(
+	mapID uuid.UUID,
+	deviceIDs map[uuid.UUID]struct{},
+) (map[uuid.UUID]struct{}, error) {
+	canvasMaps, err := h.mapRepo.List()
+	if err != nil {
+		return nil, fmt.Errorf("listing canvas maps for virtual isolation: %w", err)
+	}
+	shared := make(map[uuid.UUID]struct{})
+	for _, canvasMap := range canvasMaps {
+		if canvasMap.ID == mapID {
+			continue
+		}
+		membership, err := h.mapRepo.GetMembership(canvasMap.ID)
+		if err != nil {
+			return nil, fmt.Errorf("loading canvas map %s membership for virtual isolation: %w", canvasMap.ID, err)
+		}
+		for _, member := range membership.Devices {
+			if _, ok := deviceIDs[member.DeviceID]; ok {
+				shared[member.DeviceID] = struct{}{}
+			}
+		}
+	}
+	return shared, nil
+}
+
+func (h *CanvasMapHandler) cloneCanvasMapVirtualDevice(ctx context.Context, device domain.Device) (*domain.Device, error) {
+	notes := cloneOptionalString(device.Notes)
+	clone, err := h.deviceService.AddDevice(
+		ctx,
+		device.IP,
+		device.Hostname,
+		domain.DeviceTypeVirtual,
+		domain.SNMPCredentials{},
+		cloneStringMap(device.Tags),
+		device.Vendor,
+		domain.MetricsSourceNone,
+		device.PrometheusLabelName,
+		device.PrometheusLabelValue,
+		device.TopologyDiscoveryMode,
+		nil,
+		notes,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cloning virtual device %s: %w", device.ID, err)
+	}
+
+	var sourceOverride *int
+	if device.PollIntervalOverride != nil {
+		value := *device.PollIntervalOverride
+		sourceOverride = &value
+	}
+	update := service.DeviceUpdate{PollIntervalOverride: &sourceOverride}
+	if device.PollingEnabled != nil {
+		value := *device.PollingEnabled
+		update.PollingEnabled = &value
+	}
+	if err := h.deviceService.UpdateDevice(ctx, clone.ID, update); err != nil {
+		return nil, fmt.Errorf("updating cloned virtual device %s: %w", clone.ID, err)
+	}
+
+	reloaded, err := h.deviceService.GetDevice(ctx, clone.ID)
+	if err != nil {
+		return nil, fmt.Errorf("loading cloned virtual device %s: %w", clone.ID, err)
+	}
+	return reloaded, nil
+}
+
+func (h *CanvasMapHandler) cloneCanvasMapLinkForVirtualDevices(
+	link domain.Link,
+	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
+) (uuid.UUID, error) {
+	sourceID := link.SourceDeviceID
+	targetID := link.TargetDeviceID
+	cloned := false
+	if cloneID, ok := clonedDeviceIDs[sourceID]; ok {
+		sourceID = cloneID
+		cloned = true
+	}
+	if cloneID, ok := clonedDeviceIDs[targetID]; ok {
+		targetID = cloneID
+		cloned = true
+	}
+	if !cloned {
+		return link.ID, nil
+	}
+
+	nextLink := &domain.Link{
+		SourceDeviceID:    sourceID,
+		SourceIfName:      link.SourceIfName,
+		TargetDeviceID:    targetID,
+		TargetIfName:      link.TargetIfName,
+		DiscoveryProtocol: link.DiscoveryProtocol,
+	}
+	if err := h.linkRepo.Create(nextLink); err != nil {
+		return uuid.Nil, fmt.Errorf("cloning canvas map link %s: %w", link.ID, err)
+	}
+	return nextLink.ID, nil
+}
+
+func remapCanvasMapPositionsForDeviceClones(
+	positions []domain.DevicePosition,
+	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
+	members []domain.CanvasMapDeviceMembership,
+) []domain.DevicePosition {
+	memberIDs := make(map[uuid.UUID]struct{}, len(members))
+	for _, member := range members {
+		memberIDs[member.DeviceID] = struct{}{}
+	}
+
+	nextPositions := make([]domain.DevicePosition, 0, len(positions))
+	for _, position := range positions {
+		if cloneID, ok := clonedDeviceIDs[position.DeviceID]; ok {
+			position.DeviceID = cloneID
+		}
+		if _, ok := memberIDs[position.DeviceID]; ok {
+			nextPositions = append(nextPositions, position)
+		}
+	}
+	return nextPositions
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (h *CanvasMapHandler) requireMapRepos(w http.ResponseWriter) bool {

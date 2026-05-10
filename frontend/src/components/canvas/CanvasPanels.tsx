@@ -119,6 +119,8 @@ export function CanvasPanels({
       {panelContent?.type === 'settings' && <SettingsPanel onSettingsChange={onSettingsChange} />}
       {panelContent?.type === 'addDevice' && (
         <AddDevicePanel
+          areas={topologyAreas}
+          mapContext={mapId ? { mapId } : undefined}
           onDeviceAdded={() => {
             const { width, height } = viewportSize();
             const center = reactFlow.screenToFlowPosition({
@@ -224,7 +226,10 @@ export function CanvasPanels({
                         : n,
                     ),
                   );
-                  setPanelContent({ type: 'deviceConfig', data: { deviceId: updated.id } });
+                  setPanelContent({
+                    type: 'deviceConfig',
+                    data: { deviceId: updated.id },
+                  });
                 }}
                 onDeviceDeleted={() => {
                   setPanelContent(null);
@@ -265,7 +270,10 @@ export function CanvasPanels({
                     });
                   });
                   // Re-open bulk panel with fresh device data
-                  setPanelContent({ type: 'bulkEdit', data: { deviceIds: data.deviceIds } });
+                  setPanelContent({
+                    type: 'bulkEdit',
+                    data: { deviceIds: data.deviceIds },
+                  });
                 }}
                 onDevicesDeleted={() => {
                   setPanelContent(null);

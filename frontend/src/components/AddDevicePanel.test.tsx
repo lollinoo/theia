@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assignCredentialProfile, createDevice, setWinBoxProfile } from '../api/client';
+import {
+  addDeviceToCanvasMap,
+  assignCredentialProfile,
+  createDevice,
+  setWinBoxProfile,
+  updateCanvasMapDeviceAreas,
+} from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import { AddDevicePanel } from './AddDevicePanel';
 
@@ -11,6 +17,32 @@ vi.mock('../api/client', () => ({
   fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
   assignCredentialProfile: vi.fn().mockResolvedValue(undefined),
   setWinBoxProfile: vi.fn().mockResolvedValue(undefined),
+  addDeviceToCanvasMap: vi.fn().mockResolvedValue({
+    id: 'map-1',
+    name: 'Backbone',
+    description: '',
+    source_area_id: null,
+    filter: {},
+    is_default: false,
+    device_count: 1,
+    link_count: 0,
+    position_count: 0,
+    created_at: '',
+    updated_at: '',
+  }),
+  updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({
+    id: 'map-1',
+    name: 'Backbone',
+    description: '',
+    source_area_id: null,
+    filter: {},
+    is_default: false,
+    device_count: 1,
+    link_count: 0,
+    position_count: 0,
+    created_at: '',
+    updated_at: '',
+  }),
   fetchAreas: vi.fn().mockResolvedValue([]),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   createDevice: vi.fn().mockResolvedValue({
@@ -181,6 +213,22 @@ describe('virtual mode', () => {
     });
   });
 
+  it('adds a newly created virtual node to the selected saved map', async () => {
+    render(<AddDevicePanel mapContext={{ mapId: 'map-1' }} onDeviceAdded={vi.fn()} />);
+
+    fireEvent.click(screen.getByText('Virtual Node'));
+    fireEvent.change(screen.getByPlaceholderText('e.g. ISP Gateway'), {
+      target: { value: 'Internet Edge' },
+    });
+    fireEvent.click(screen.getByText('Add Virtual Node'));
+
+    await waitFor(() => {
+      expect(addDeviceToCanvasMap).toHaveBeenCalledWith('map-1', 'new-dev', {
+        include_connected_links: true,
+      });
+    });
+  });
+
   it('submits physical device with topology discovery mode override', async () => {
     render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
 
@@ -199,6 +247,49 @@ describe('virtual mode', () => {
         }),
       );
     });
+  });
+
+  it('adds a newly created physical device to the selected saved map', async () => {
+    const onDeviceAdded = vi.fn();
+    render(
+      <AddDevicePanel
+        areas={[
+          {
+            id: 'map-area-1',
+            name: 'Map Area',
+            description: '',
+            color: '#00E676',
+            device_count: 0,
+            created_at: '',
+            updated_at: '',
+          },
+        ]}
+        mapContext={{ mapId: 'map-1' }}
+        onDeviceAdded={onDeviceAdded}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.change(screen.getByDisplayValue('Unassigned - select area...'), {
+      target: { value: 'map-area-1' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(addDeviceToCanvasMap).toHaveBeenCalledWith('map-1', 'new-dev', {
+        include_connected_links: true,
+      });
+    });
+    expect(updateCanvasMapDeviceAreas).toHaveBeenCalledWith('map-1', {
+      device_ids: ['new-dev'],
+      area_ids: ['map-area-1'],
+    });
+    expect(createDevice).toHaveBeenCalledWith(
+      expect.not.objectContaining({ area_ids: ['map-area-1'] }),
+    );
+    expect(onDeviceAdded).toHaveBeenCalled();
   });
 
   it('assigns selected credentials after creating a physical device', async () => {

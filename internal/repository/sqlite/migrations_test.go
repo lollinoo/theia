@@ -969,11 +969,12 @@ func TestMigrateDevicePollClass_Idempotent(t *testing.T) {
 	// Insert a router (will be backfilled to 'core') and an AP (stays 'standard').
 	devices := []struct {
 		id         string
+		ip         string
 		deviceType string
 		wantClass  string
 	}{
-		{"00000000-0000-0000-0000-000000000201", "router", "core"},
-		{"00000000-0000-0000-0000-000000000202", "ap", "standard"},
+		{"00000000-0000-0000-0000-000000000201", "10.0.98.1", "router", "core"},
+		{"00000000-0000-0000-0000-000000000202", "10.0.98.2", "ap", "standard"},
 	}
 
 	for _, d := range devices {
@@ -986,7 +987,7 @@ func TestMigrateDevicePollClass_Idempotent(t *testing.T) {
 				poll_class
 			) VALUES (?, ?, ?, '{}', ?, 'unknown', '', '', '', '', '', 'default', 0, '{}',
 				datetime('now'), datetime('now'), 'prometheus', 'instance', '', 'standard')`,
-			d.id, "host-idem-"+d.deviceType, "10.0.98.1", d.deviceType,
+			d.id, "host-idem-"+d.deviceType, d.ip, d.deviceType,
 		)
 		if err != nil {
 			t.Fatalf("inserting device %s: %v", d.id, err)

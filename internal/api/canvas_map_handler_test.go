@@ -743,6 +743,131 @@ func TestCanvasMapHandlerDuplicateBackfillsMissingAreasAndKeepsMembershipIndepen
 	}
 }
 
+func TestCanvasMapHandlerDuplicateClonesVirtualDevicesAndLinks(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaID := seedCanvasMapTestArea(t, fixture, "Virtual Area", "#7C4DFF")
+	physical := seedCanvasMapTestDevice(t, fixture, "router-virtual-parent", "10.78.0.1", []uuid.UUID{areaID})
+	virtualWithIP := seedCanvasMapTestVirtualDevice(t, fixture, "internet-edge", "10.78.0.254", "Internet Edge", []uuid.UUID{areaID})
+	virtualNoIP := seedCanvasMapTestVirtualDevice(t, fixture, "annotation", "", "Annotation", []uuid.UUID{areaID})
+	link := seedCanvasMapTestLink(t, fixture, physical.ID, virtualWithIP.ID)
+	sourceMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Virtual Source"})
+	if err := fixture.mapRepo.ReplaceMembership(uuid.MustParse(sourceMap.ID), domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: physical.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+			{DeviceID: virtualWithIP.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+			{DeviceID: virtualNoIP.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+		},
+		LinkIDs: []uuid.UUID{link.ID},
+		Areas: []domain.CanvasMapAreaMembership{
+			{AreaID: areaID, Name: "Virtual Area", Description: "Virtual Area test area", Color: "#7C4DFF"},
+		},
+	}); err != nil {
+		t.Fatalf("replace source membership: %v", err)
+	}
+	if err := fixture.mapPositionRepo.SaveAllForMap(uuid.MustParse(sourceMap.ID), []domain.DevicePosition{
+		{DeviceID: physical.ID, X: 100, Y: 200, Pinned: true},
+		{DeviceID: virtualWithIP.ID, X: 400, Y: 200, Pinned: true},
+		{DeviceID: virtualNoIP.ID, X: 400, Y: 360, Pinned: true},
+	}); err != nil {
+		t.Fatalf("save source positions: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/canvas/maps/"+sourceMap.ID+"/duplicate", map[string]any{
+		"name": "Virtual Copy",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST duplicate virtual map: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	copyMap := decodeCanvasMapData(t, rec)
+
+	copyTopology := mustLoadCanvasMapTopologyForTest(t, fixture, copyMap.ID)
+	copyVirtualWithIP := findCanvasTopologyDeviceByIP(t, copyTopology, "10.78.0.254")
+	copyVirtualNoIP := findCanvasTopologyDeviceByHostname(t, copyTopology, "annotation")
+	if copyVirtualWithIP.ID == virtualWithIP.ID.String() {
+		t.Fatalf("duplicated virtual-with-IP reused source device id %s", virtualWithIP.ID)
+	}
+	if copyVirtualNoIP.ID == virtualNoIP.ID.String() {
+		t.Fatalf("duplicated virtual-no-IP reused source device id %s", virtualNoIP.ID)
+	}
+	if _, ok := copyTopology.Positions[copyVirtualWithIP.ID]; !ok {
+		t.Fatalf("copy topology missing cloned virtual position: %#v", copyTopology.Positions)
+	}
+	if len(copyTopology.Links) != 1 || copyTopology.Links[0].TargetDeviceID != copyVirtualWithIP.ID {
+		t.Fatalf("copy link = %#v, want link retargeted to cloned virtual %s", copyTopology.Links, copyVirtualWithIP.ID)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodPut, "/api/v1/devices/"+copyVirtualWithIP.ID, map[string]any{
+		"hostname": "renamed-copy-virtual",
+		"ip":       "10.78.0.254",
+		"tags": map[string]any{
+			"display_name":    "Renamed Copy Virtual",
+			"virtual_subtype": "internet",
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT cloned virtual device: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	sourceTopology := mustLoadCanvasMapTopologyForTest(t, fixture, sourceMap.ID)
+	sourceVirtual := findCanvasTopologyDeviceByID(t, sourceTopology, virtualWithIP.ID.String())
+	if sourceVirtual.Attributes["hostname"] != "internet-edge" {
+		t.Fatalf("source virtual hostname changed after copy edit: %#v", sourceVirtual.Attributes)
+	}
+}
+
+func TestCanvasMapHandlerTopologyRepairsExistingSharedVirtualDevices(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaID := seedCanvasMapTestArea(t, fixture, "Repair Virtual Area", "#7C4DFF")
+	physical := seedCanvasMapTestDevice(t, fixture, "router-repair-parent", "10.79.0.1", []uuid.UUID{areaID})
+	virtual := seedCanvasMapTestVirtualDevice(t, fixture, "shared-internet", "10.79.0.254", "Shared Internet", []uuid.UUID{areaID})
+	link := seedCanvasMapTestLink(t, fixture, physical.ID, virtual.ID)
+	sourceMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Repair Source"})
+	copyMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Repair Copy"})
+	sharedMembership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: physical.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+			{DeviceID: virtual.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+		},
+		LinkIDs: []uuid.UUID{link.ID},
+		Areas: []domain.CanvasMapAreaMembership{
+			{AreaID: areaID, Name: "Repair Virtual Area", Description: "Repair Virtual Area test area", Color: "#7C4DFF"},
+		},
+	}
+	for _, mapID := range []string{sourceMap.ID, copyMap.ID} {
+		parsedMapID := uuid.MustParse(mapID)
+		if err := fixture.mapRepo.ReplaceMembership(parsedMapID, sharedMembership); err != nil {
+			t.Fatalf("replace shared membership for %s: %v", mapID, err)
+		}
+		if err := fixture.mapPositionRepo.SaveAllForMap(parsedMapID, []domain.DevicePosition{
+			{DeviceID: physical.ID, X: 100, Y: 200, Pinned: true},
+			{DeviceID: virtual.ID, X: 400, Y: 200, Pinned: true},
+		}); err != nil {
+			t.Fatalf("save shared positions for %s: %v", mapID, err)
+		}
+	}
+
+	repairedTopology := mustLoadCanvasMapTopologyForTest(t, fixture, copyMap.ID)
+	repairedVirtual := findCanvasTopologyDeviceByIP(t, repairedTopology, "10.79.0.254")
+	if repairedVirtual.ID == virtual.ID.String() {
+		t.Fatalf("repaired map still reused shared virtual device id %s", virtual.ID)
+	}
+	if len(repairedTopology.Links) != 1 || repairedTopology.Links[0].TargetDeviceID != repairedVirtual.ID {
+		t.Fatalf("repaired link = %#v, want retargeted to cloned virtual %s", repairedTopology.Links, repairedVirtual.ID)
+	}
+	if _, ok := repairedTopology.Positions[repairedVirtual.ID]; !ok {
+		t.Fatalf("repaired topology missing cloned virtual position: %#v", repairedTopology.Positions)
+	}
+
+	loadedAgain := mustLoadCanvasMapTopologyForTest(t, fixture, copyMap.ID)
+	loadedAgainVirtual := findCanvasTopologyDeviceByIP(t, loadedAgain, "10.79.0.254")
+	if loadedAgainVirtual.ID != repairedVirtual.ID {
+		t.Fatalf("repaired map cloned virtual more than once: first %s, second %s", repairedVirtual.ID, loadedAgainVirtual.ID)
+	}
+
+	sourceTopology := mustLoadCanvasMapTopologyForTest(t, fixture, sourceMap.ID)
+	findCanvasTopologyDeviceByID(t, sourceTopology, virtual.ID.String())
+}
+
 func TestCanvasMapHandlerBulkUpdateMapDeviceAreasDoesNotMutateSourceMapOrGlobalDevice(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	areaA := seedCanvasMapTestArea(t, fixture, "Original Area", "#2979FF")
@@ -1477,6 +1602,26 @@ func seedCanvasMapTestDevice(t *testing.T, fixture canvasMapIntegrationRouter, h
 	return *device
 }
 
+func seedCanvasMapTestVirtualDevice(t *testing.T, fixture canvasMapIntegrationRouter, hostname string, ip string, displayName string, areaIDs []uuid.UUID) domain.Device {
+	t.Helper()
+	device := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      hostname,
+		IP:            ip,
+		DeviceType:    domain.DeviceTypeVirtual,
+		Status:        domain.DeviceStatusUnknown,
+		Vendor:        "default",
+		Managed:       true,
+		Tags:          map[string]string{"display_name": displayName, "virtual_subtype": "internet"},
+		AreaIDs:       areaIDs,
+		MetricsSource: domain.MetricsSourceNone,
+	}
+	if err := fixture.deviceRepo.Create(device); err != nil {
+		t.Fatalf("seed virtual device %s: %v", hostname, err)
+	}
+	return *device
+}
+
 func seedCanvasMapTestArea(t *testing.T, fixture canvasMapIntegrationRouter, name string, color string) uuid.UUID {
 	t.Helper()
 	area := &domain.Area{
@@ -1514,6 +1659,50 @@ func findCanvasMapTestResponse(maps []testCanvasMapResponse, id string) (testCan
 		}
 	}
 	return testCanvasMapResponse{}, false
+}
+
+func mustLoadCanvasMapTopologyForTest(t *testing.T, fixture canvasMapIntegrationRouter, mapID string) canvasTopologyResponse {
+	t.Helper()
+	rec := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+mapID+"/topology", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET map topology: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, rec, &topology)
+	return topology
+}
+
+func findCanvasTopologyDeviceByID(t *testing.T, topology canvasTopologyResponse, id string) jsonAPIResource {
+	t.Helper()
+	for _, device := range topology.Devices {
+		if device.ID == id {
+			return device
+		}
+	}
+	t.Fatalf("device %s not found in topology: %#v", id, topology.Devices)
+	return jsonAPIResource{}
+}
+
+func findCanvasTopologyDeviceByIP(t *testing.T, topology canvasTopologyResponse, ip string) jsonAPIResource {
+	t.Helper()
+	for _, device := range topology.Devices {
+		if device.Attributes["ip"] == ip {
+			return device
+		}
+	}
+	t.Fatalf("device with ip %s not found in topology: %#v", ip, topology.Devices)
+	return jsonAPIResource{}
+}
+
+func findCanvasTopologyDeviceByHostname(t *testing.T, topology canvasTopologyResponse, hostname string) jsonAPIResource {
+	t.Helper()
+	for _, device := range topology.Devices {
+		if device.Attributes["hostname"] == hostname {
+			return device
+		}
+	}
+	t.Fatalf("device with hostname %s not found in topology: %#v", hostname, topology.Devices)
+	return jsonAPIResource{}
 }
 
 func canvasTopologyTestDeviceIDs(devices []jsonAPIResource) map[string]bool {

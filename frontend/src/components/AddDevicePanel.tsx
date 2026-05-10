@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  addDeviceToCanvasMap,
   assignCredentialProfile,
   checkPrometheusHealth,
   createDevice,
@@ -8,6 +9,7 @@ import {
   fetchSNMPProfiles,
   revealSNMPProfile,
   setWinBoxProfile,
+  updateCanvasMapDeviceAreas,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type { Area, CredentialProfile, SNMPProfile, TopologyDiscoveryMode } from '../types/api';
@@ -32,11 +34,19 @@ import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
 
 interface AddDevicePanelProps {
   onDeviceAdded: () => void;
+  areas?: Area[];
+  mapContext?: {
+    mapId: string;
+  };
 }
 
 type MetricsMode = 'snmp' | 'prometheus' | 'prometheus_snmp_fallback';
 
-export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
+export function AddDevicePanel({
+  onDeviceAdded,
+  areas: providedAreas,
+  mapContext,
+}: AddDevicePanelProps) {
   const [form, setForm] = useState(createAddDeviceFormModel);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +62,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [winboxCredentialProfileId, setWinboxCredentialProfileId] = useState('');
 
   // areas
-  const [areas, setAreas] = useState<Area[]>([]);
+  const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
 
   // Field-level validation errors
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -65,21 +75,31 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const usesPrometheus =
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
+  const areas = providedAreas ?? loadedAreas;
 
   function updateForm(update: Partial<DeviceFormModel>) {
     setForm((current) => ({ ...current, ...update }));
   }
 
   function updateSnmp(update: Partial<DeviceFormModel['snmp']>) {
-    setForm((current) => ({ ...current, snmp: { ...current.snmp, ...update } }));
+    setForm((current) => ({
+      ...current,
+      snmp: { ...current.snmp, ...update },
+    }));
   }
 
   function updatePrometheus(update: Partial<DeviceFormModel['prometheus']>) {
-    setForm((current) => ({ ...current, prometheus: { ...current.prometheus, ...update } }));
+    setForm((current) => ({
+      ...current,
+      prometheus: { ...current.prometheus, ...update },
+    }));
   }
 
   function updateVirtual(update: Partial<DeviceFormModel['virtual']>) {
-    setForm((current) => ({ ...current, virtual: { ...current.virtual, ...update } }));
+    setForm((current) => ({
+      ...current,
+      virtual: { ...current.virtual, ...update },
+    }));
   }
 
   function setFieldError(field: string, err: string | null) {
@@ -119,11 +139,6 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       .catch(() => {
         /* non-fatal */
       });
-    fetchAreas()
-      .then(setAreas)
-      .catch(() => {
-        /* non-fatal */
-      });
     checkPrometheusHealth()
       .then((result) => {
         const nextAvailable = result.enabled !== false && result.available;
@@ -140,6 +155,40 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         setForm((current) => ({ ...current, metricsMode: 'snmp' }));
       });
   }, []);
+
+  useEffect(() => {
+    if (!providedAreas) {
+      fetchAreas()
+        .then(setLoadedAreas)
+        .catch(() => {
+          /* non-fatal */
+        });
+    }
+  }, [providedAreas]);
+
+  function buildCreatePayloadForCurrentScope() {
+    const payload = buildCreateDevicePayload(form);
+    if (!mapContext) {
+      return payload;
+    }
+    const { area_ids: _areaIds, ...payloadWithoutAreaIds } = payload;
+    return payloadWithoutAreaIds;
+  }
+
+  async function addDeviceToCurrentMap(deviceId: string) {
+    if (!mapContext) {
+      return;
+    }
+    await addDeviceToCanvasMap(mapContext.mapId, deviceId, {
+      include_connected_links: true,
+    });
+    if (form.areaIds.length > 0) {
+      await updateCanvasMapDeviceAreas(mapContext.mapId, {
+        device_ids: [deviceId],
+        area_ids: form.areaIds,
+      });
+    }
+  }
 
   async function applyProfile(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId);
@@ -206,7 +255,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       setLoading(true);
       setError(null);
       try {
-        await createDevice(buildCreateDevicePayload(form));
+        const created = await createDevice(buildCreatePayloadForCurrentScope());
+        await addDeviceToCurrentMap(created.id);
         onDeviceAdded();
       } catch (err) {
         if (err instanceof ServerError) {
@@ -259,8 +309,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
     setLoading(true);
     setError(null);
     try {
-      const created = await createDevice(buildCreateDevicePayload(form));
+      const created = await createDevice(buildCreatePayloadForCurrentScope());
       await assignSelectedCredentials(created.id);
+      await addDeviceToCurrentMap(created.id);
       onDeviceAdded();
     } catch (err) {
       if (err instanceof ServerError) {
@@ -453,7 +504,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                 Prometheus{!prometheusAvailable ? ' (unavailable)' : ''}
               </option>
               <option value="prometheus_snmp_fallback" disabled={!prometheusAvailable}>
-                Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
+                Prometheus + SNMP Fallback
+                {!prometheusAvailable ? ' (unavailable)' : ''}
               </option>
             </select>
             {form.metricsMode === 'prometheus' && (
@@ -477,7 +529,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               id="topology-discovery-mode"
               value={form.topologyDiscoveryMode}
               onChange={(e) =>
-                updateForm({ topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode })
+                updateForm({
+                  topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode,
+                })
               }
               className={selectClass}
             >
@@ -579,7 +633,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                 <select
                   value={form.snmp.version}
                   onChange={(e) =>
-                    updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })
+                    updateSnmp({
+                      version: e.target.value as DeviceFormModel['snmp']['version'],
+                    })
                   }
                   className={selectClass}
                 >
@@ -823,7 +879,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                     <button
                       type="button"
                       onClick={() =>
-                        updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })
+                        updateForm({
+                          areaIds: form.areaIds.filter((areaId) => areaId !== id),
+                        })
                       }
                       className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
                     >

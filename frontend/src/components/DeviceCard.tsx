@@ -11,6 +11,7 @@ import {
 } from '../types/metrics';
 import { formatPollingEvery } from '../utils/freshness';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
+import { MaterialIcon } from './MaterialIcon';
 import { StatusDot } from './StatusDot';
 import {
   isCanvasRenderMetricsEnabled,
@@ -26,7 +27,6 @@ import {
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
-import { VendorIcon } from './icons/VendorIcon';
 
 export interface DeviceNodeData {
   kind?: 'device' | 'ghost-device';
@@ -333,7 +333,6 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     renderModel.variant === 'physical' && metrics
       ? resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState)
       : null;
-  const isVirtualUnmonitored = renderModel.variant === 'virtual-unmonitored';
   const selfLinks = data.selfLinks ?? [];
   const primarySelfLink = selfLinks[0];
   const statusStyles = resolveDeviceNodeStatusStyles({
@@ -344,6 +343,14 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const runtimeBadges = metrics?.runtime_flags.map(runtimeBadgeLabel) ?? [];
   const renderKind = data.kind === 'ghost-device' || data.isGhost ? 'ghost-device' : 'device';
   const renderVariant = renderKind === 'device' ? renderModel.variant : undefined;
+  const isVirtualMonitorable = renderModel.variant === 'virtual-monitorable';
+  const cardShapeClass = !isVirtual
+    ? 'min-h-[140px] rounded-[20px]'
+    : isVirtualMonitorable
+      ? 'min-h-[140px] min-w-[320px] max-w-[430px] rounded-full'
+      : 'min-h-[104px] min-w-[250px] max-w-[340px] rounded-full';
+  const virtualCapsuleHeightClass = isVirtualMonitorable ? 'min-h-[138px]' : 'min-h-[102px]';
+  const virtualCapsulePaddingClass = isVirtualMonitorable ? 'py-4 pl-5 pr-6' : 'py-3 pl-5 pr-4';
 
   useLayoutEffect(() => {
     if (renderStartedAt === null) {
@@ -394,7 +401,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   return (
     <div
       data-testid="device-node-card"
-      className={`topology-node-card topology-render-contained group relative w-full rounded-[20px] border border-outline bg-surface transition-[border-color] duration-150 hover:border-outline-strong ${isVirtual ? 'min-h-[160px] min-w-[200px] max-h-[235px] max-w-[285px]' : 'min-h-[140px]'} ${statusStyles.frameClass ?? ''}`}
+      className={`topology-node-card topology-render-contained group relative w-full border border-outline bg-surface transition-[border-color] duration-150 hover:border-outline-strong ${cardShapeClass} ${statusStyles.frameClass ?? ''}`}
       style={statusStyles.frameStyle}
       onContextMenu={(event) => {
         if (!data.onContextMenu) return;
@@ -462,11 +469,15 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         className={`${universalHandleClassName} !-left-1 !top-1/2 !-translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
       />
 
-      <div className="overflow-hidden rounded-[19px]">
-        <div
-          className="h-1.5 w-full"
-          style={hasArea && areaAccent ? { background: areaAccent } : undefined}
-        />
+      <div
+        className={isVirtual ? 'overflow-hidden rounded-full' : 'overflow-hidden rounded-[19px]'}
+      >
+        {renderModel.variant === 'physical' ? (
+          <div
+            className="h-1.5 w-full"
+            style={hasArea && areaAccent ? { background: areaAccent } : undefined}
+          />
+        ) : null}
 
         {renderModel.variant === 'physical' ? (
           <div className="px-4 pb-3.5 pt-3">
@@ -576,51 +587,67 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           </div>
         ) : (
           <div
-            className={`px-3.5 text-center ${isVirtualUnmonitored ? 'pb-4 pt-3.5' : 'pb-3 pt-2.5'}`}
+            data-testid="virtual-node-capsule"
+            className={`relative flex ${virtualCapsuleHeightClass} items-center gap-4 rounded-full ${virtualCapsulePaddingClass}`}
           >
-            <div className="flex flex-col items-center">
-              {renderModel.showVirtualStatusBadge ? (
-                <div className="mb-1.5 flex w-full justify-end">
+            {hasArea && areaAccent ? (
+              <div
+                data-testid="virtual-node-area-accent"
+                className="absolute inset-y-0 left-0 w-1.5 rounded-l-full"
+                style={{ background: areaAccent }}
+              />
+            ) : null}
+
+            <div
+              data-testid="virtual-node-icon-shell"
+              className="relative z-10 flex h-[62px] w-[62px] shrink-0 items-center justify-center rounded-full border border-primary/25 bg-primary/10 text-primary"
+            >
+              <MaterialIcon name="hub" size={28} />
+            </div>
+
+            <div className="relative z-10 min-w-0 flex-1 text-left">
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
                   <div
-                    className={`inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
+                    className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
+                    style={readableFontStyle(10)}
+                  >
+                    {deviceTypeLabel(data.device, isVirtual, data.subtype)}
+                  </div>
+                  <div
+                    className="mt-1 truncate text-[17px] font-semibold leading-tight text-on-bg"
+                    style={readableFontStyle(17)}
+                  >
+                    {label}
+                  </div>
+                </div>
+
+                {renderModel.showVirtualStatusBadge ? (
+                  <div
+                    data-testid="virtual-node-status-badge"
+                    className={`mr-1 inline-flex max-w-[88px] shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${statusStyles.badgeClass}`}
                     style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
                   >
                     <StatusDot status={headerState.dotStatus} />
                     <span className="truncate">{headerState.label}</span>
                   </div>
-                </div>
-              ) : null}
-
-              <div className="flex h-[56px] w-[56px] items-center justify-center rounded-[22px] border border-outline bg-surface-container-high text-on-bg">
-                <VendorIcon vendor={data.device.vendor} size={20} />
-              </div>
-
-              <div
-                className="mt-2.5 max-w-full truncate text-[10px] uppercase tracking-[0.14em] text-on-bg-secondary"
-                style={readableFontStyle(10)}
-              >
-                {deviceTypeLabel(data.device, isVirtual, data.subtype)}
-              </div>
-              <div
-                className="mt-1.5 w-full max-w-full text-[17px] font-semibold leading-tight tracking-tight text-on-bg"
-                style={readableFontStyle(17)}
-              >
-                <span className="block w-full truncate">{label}</span>
-              </div>
-
-              <div className="mt-3 flex w-full flex-col items-center gap-1.5">
-                {renderModel.showVirtualAddressChip ? (
-                  <span
-                    className="inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-3 py-1 font-mono text-[11px] text-on-bg"
-                    style={readableFontStyle(11)}
-                  >
-                    {addressLabel} {data.device.ip}
-                  </span>
                 ) : null}
               </div>
 
+              {renderModel.showVirtualAddressChip ? (
+                <span
+                  className="mt-2 inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-2.5 py-1 font-mono text-[11px] text-on-bg"
+                  style={readableFontStyle(11)}
+                >
+                  {addressLabel} {data.device.ip}
+                </span>
+              ) : null}
+
               {renderModel.showFreshnessMeta ? (
-                <div className="mt-3 flex w-full items-center justify-between gap-2 text-[10px]">
+                <div
+                  data-testid="virtual-node-runtime-meta"
+                  className="mt-2 flex w-full items-center justify-between gap-2 overflow-hidden pr-1 text-[10px]"
+                >
                   <div
                     className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}
                     style={readableFontStyle(10)}
@@ -628,7 +655,8 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     {freshness!.text}
                   </div>
                   <div
-                    className="min-w-0 truncate text-on-bg-secondary"
+                    data-testid="virtual-node-polling-meta"
+                    className="min-w-0 shrink-0 truncate text-right text-on-bg-secondary"
                     style={readableFontStyle(10)}
                   >
                     {pollingEvery}
@@ -636,10 +664,10 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
               ) : null}
 
-              {isPollingDisabled ? <PollingDisabledNotice className="mt-3 w-full" /> : null}
+              {isPollingDisabled ? <PollingDisabledNotice className="mt-2 w-full" /> : null}
 
               {runtimeBadges.length > 0 ? (
-                <div className="mt-2 flex w-full flex-wrap justify-center gap-1.5">
+                <div className="mt-2 flex w-full flex-wrap gap-1.5">
                   {runtimeBadges.map((badge) => (
                     <span
                       key={badge}

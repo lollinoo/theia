@@ -471,8 +471,8 @@ describe('DeviceCard', () => {
     expect(downCard.container.innerHTML).toContain('topology-node-down-pulse');
   });
 
-  it('renders unmonitored virtual nodes with neutral semantics instead of failure UI', () => {
-    renderDeviceCard({
+  it('renders unmonitored virtual nodes as neutral capsule endpoints', () => {
+    const { container } = renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
         ip: '',
@@ -482,6 +482,7 @@ describe('DeviceCard', () => {
       }),
       isVirtual: true,
       subtype: 'cloud',
+      areaColors: ['#2563eb'],
       metrics: mockMetrics({
         health: 'critical',
         last_polled_at: '2026-04-13T11:59:20Z',
@@ -489,6 +490,23 @@ describe('DeviceCard', () => {
       }),
     });
 
+    const card = screen.getByTestId('device-node-card');
+    const capsule = screen.getByTestId('virtual-node-capsule');
+
+    expect(card).toHaveClass('rounded-full');
+    expect(card.className).toContain('min-w-[250px]');
+    expect(card.className).toContain('min-h-[104px]');
+    expect(card.className).toContain('max-w-[340px]');
+    expect(capsule).toHaveClass('rounded-full');
+    expect(screen.getByTestId('virtual-node-area-accent')).toHaveClass(
+      'inset-y-0',
+      'left-0',
+      'w-1.5',
+      'rounded-l-full',
+    );
+    expect(screen.getByTestId('virtual-node-area-accent').className).not.toContain('inset-y-3');
+    expect(screen.getByTestId('virtual-node-area-accent').className).not.toContain('w-[22px]');
+    expect(container.querySelector('[data-testid="virtual-node-icon-shell"]')).toBeInTheDocument();
     expect(screen.getByText('AWS Cloud')).toBeInTheDocument();
     expect(screen.getByText('Cloud')).toBeInTheDocument();
     expect(screen.queryByText('Unmonitored')).toBeNull();
@@ -502,7 +520,7 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
-  it('renders monitorable virtual nodes with top-right status badge, IP chip, and footer meta', () => {
+  it('renders monitorable virtual nodes as capsule endpoints with status and IP', () => {
     renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
@@ -519,6 +537,8 @@ describe('DeviceCard', () => {
       }),
     });
 
+    expect(screen.getByTestId('virtual-node-capsule')).toHaveClass('rounded-full');
+    expect(screen.getByTestId('virtual-node-status-badge')).toBeInTheDocument();
     expect(screen.queryByText('Virtual node')).toBeNull();
     expect(screen.queryByText('Status')).toBeNull();
     expect(screen.getAllByText('Up')).toHaveLength(1);
@@ -529,6 +549,31 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('MEM')).toBeNull();
     expect(screen.queryByText('UP')).toBeNull();
     expect(screen.queryByText('TEMP')).toBeNull();
+  });
+
+  it('keeps monitorable virtual status and runtime meta inside the capsule padding', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '10.16.2.1',
+        status: 'down',
+        sys_name: '',
+        tags: { display_name: 'Gateway Community', virtual_subtype: 'generic' },
+      }),
+      isVirtual: true,
+      metrics: mockMetrics({
+        health: 'critical',
+        primary_health: 'snmp_degraded',
+        snmp_reachable: 'false',
+        expected_poll_interval_seconds: 60,
+      }),
+    });
+
+    expect(screen.getByTestId('virtual-node-capsule')).toHaveClass('pr-6', 'py-4');
+    expect(screen.getByTestId('virtual-node-status-badge')).toHaveClass('mr-1');
+    expect(screen.getByTestId('virtual-node-runtime-meta')).toHaveClass('overflow-hidden', 'pr-1');
+    expect(screen.getByTestId('virtual-node-polling-meta')).toHaveClass('shrink-0', 'text-right');
+    expect(screen.getByText('Polling every 1m')).toBeInTheDocument();
   });
 
   it('renders monitorable virtual nodes as up even when health is absent', () => {
@@ -553,7 +598,7 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('Unknown')).toBeNull();
   });
 
-  it('enforces a 200x160 minimum size and 285x235 maximum size for virtual nodes', () => {
+  it('keeps no-IP virtual nodes compact and gives IP virtual nodes more room', () => {
     const unmonitored = renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
@@ -563,10 +608,10 @@ describe('DeviceCard', () => {
     });
 
     const unmonitoredCard = unmonitored.container.querySelector('.group');
-    expect(unmonitoredCard?.className).toContain('min-w-[200px]');
-    expect(unmonitoredCard?.className).toContain('min-h-[160px]');
-    expect(unmonitoredCard?.className).toContain('max-w-[285px]');
-    expect(unmonitoredCard?.className).toContain('max-h-[235px]');
+    expect(unmonitoredCard?.className).toContain('min-w-[250px]');
+    expect(unmonitoredCard?.className).toContain('min-h-[104px]');
+    expect(unmonitoredCard?.className).toContain('max-w-[340px]');
+    expect(unmonitoredCard?.className).not.toContain('max-h-[235px]');
 
     unmonitored.unmount();
 
@@ -579,10 +624,10 @@ describe('DeviceCard', () => {
     });
 
     const monitorableCard = monitorable.container.querySelector('.group');
-    expect(monitorableCard?.className).toContain('min-w-[200px]');
-    expect(monitorableCard?.className).toContain('min-h-[160px]');
-    expect(monitorableCard?.className).toContain('max-w-[285px]');
-    expect(monitorableCard?.className).toContain('max-h-[235px]');
+    expect(monitorableCard?.className).toContain('min-w-[320px]');
+    expect(monitorableCard?.className).toContain('min-h-[140px]');
+    expect(monitorableCard?.className).toContain('max-w-[430px]');
+    expect(monitorableCard?.className).not.toContain('max-h-[235px]');
   });
 
   it('truncates long virtual node text inside the size-capped card', () => {

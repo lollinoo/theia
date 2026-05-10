@@ -120,7 +120,7 @@ func seedReplayDevices(repo *sqliterepo.DeviceRepo, fixture ReplayFixture) error
 		device := &domain.Device{
 			ID:       id,
 			Hostname: rawID,
-			IP:       fmt.Sprintf("10.%d.%d.%d", len(rawID)%250, len(rawID)%100, len(rawID)%200),
+			IP:       replayDeviceIP(id),
 			SNMPCredentials: domain.SNMPCredentials{
 				Version: domain.SNMPVersionV2c,
 				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
@@ -136,6 +136,10 @@ func seedReplayDevices(repo *sqliterepo.DeviceRepo, fixture ReplayFixture) error
 	}
 
 	return nil
+}
+
+func replayDeviceIP(id uuid.UUID) string {
+	return fmt.Sprintf("10.%d.%d.%d", int(id[13]), int(id[14]), int(id[15]))
 }
 
 func toObservations(fixture ReplayFixture) ([]topology.Observation, int, int, error) {
