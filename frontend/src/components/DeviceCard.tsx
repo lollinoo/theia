@@ -20,6 +20,7 @@ import {
 import { resolveDeviceCardRenderModel } from './deviceCardVariant';
 import {
   type DeviceMonitoringState,
+  type DeviceVisualStatus,
   resolveDeviceAddressState,
   resolveDeviceNodeStatusStyles,
   resolveDeviceOperationalReadouts,
@@ -274,6 +275,171 @@ function ghostFrameStyle(color?: string): CSSProperties | undefined {
   };
 }
 
+interface RgbColor {
+  red: number;
+  green: number;
+  blue: number;
+}
+
+type CSSCustomProperties = CSSProperties & Record<`--${string}`, string>;
+
+interface VirtualStatusTone {
+  capsuleClassName: string;
+  capsuleStyle: CSSCustomProperties;
+  markerStyle: CSSProperties;
+  textStyle: CSSProperties;
+}
+
+const virtualAreaToneSurface: RgbColor = { red: 17, green: 26, blue: 38 };
+const whiteRgb: RgbColor = { red: 255, green: 255, blue: 255 };
+const minimumVirtualAreaToneContrast = 4.5;
+
+function hexToRgb(color: string): RgbColor | null {
+  const normalized = color.trim().replace(/^#/, '');
+  const hex =
+    normalized.length === 3
+      ? normalized
+          .split('')
+          .map((character) => `${character}${character}`)
+          .join('')
+      : normalized;
+
+  if (!/^[0-9a-fA-F]{6}$/.test(hex)) {
+    return null;
+  }
+
+  return {
+    red: Number.parseInt(hex.slice(0, 2), 16),
+    green: Number.parseInt(hex.slice(2, 4), 16),
+    blue: Number.parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function rgbToCss({ red, green, blue }: RgbColor): string {
+  return `rgb(${red}, ${green}, ${blue})`;
+}
+
+function rgbToRgba({ red, green, blue }: RgbColor, alpha: number): string {
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function hexToRgba(color: string, alpha: number): string | null {
+  const rgb = hexToRgb(color);
+  return rgb ? rgbToRgba(rgb, alpha) : null;
+}
+
+function relativeLuminance({ red, green, blue }: RgbColor): number {
+  const channelLuminance = (value: number) => {
+    const channel = value / 255;
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  };
+
+  return (
+    0.2126 * channelLuminance(red) +
+    0.7152 * channelLuminance(green) +
+    0.0722 * channelLuminance(blue)
+  );
+}
+
+function contrastRatio(foreground: RgbColor, background: RgbColor): number {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function mixRgb(start: RgbColor, end: RgbColor, amount: number): RgbColor {
+  return {
+    red: Math.round(start.red + (end.red - start.red) * amount),
+    green: Math.round(start.green + (end.green - start.green) * amount),
+    blue: Math.round(start.blue + (end.blue - start.blue) * amount),
+  };
+}
+
+function readableVirtualAreaTone(color: string): string | null {
+  const rgb = hexToRgb(color);
+  if (!rgb) return null;
+
+  for (let mixAmount = 0; mixAmount <= 0.8; mixAmount += 0.08) {
+    const candidate = mixRgb(rgb, whiteRgb, mixAmount);
+    if (contrastRatio(candidate, virtualAreaToneSurface) >= minimumVirtualAreaToneContrast) {
+      return rgbToCss(candidate);
+    }
+  }
+
+  return rgbToCss(mixRgb(rgb, whiteRgb, 0.8));
+}
+
+function virtualAreaTintStyle(color?: string): CSSProperties | undefined {
+  if (!color) return undefined;
+
+  const tintColor = hexToRgba(color, 0.1);
+  if (!tintColor) return undefined;
+
+  return {
+    backgroundColor: tintColor,
+  };
+}
+
+function virtualAreaMarkerStyle(color?: string): CSSProperties | undefined {
+  if (!color) return undefined;
+
+  const rgb = hexToRgb(color);
+  const readableColor = readableVirtualAreaTone(color);
+  if (!rgb || !readableColor) return undefined;
+
+  return {
+    backgroundColor: rgbToRgba(rgb, 0.14),
+    borderColor: rgbToRgba(rgb, 0.32),
+    color: readableColor,
+  };
+}
+
+function virtualAreaTextStyle(color?: string): CSSProperties | undefined {
+  const readableColor = color ? readableVirtualAreaTone(color) : null;
+  return readableColor ? { color: readableColor } : undefined;
+}
+
+function virtualPrimaryStatusTone(status: DeviceVisualStatus): VirtualStatusTone | null {
+  switch (status) {
+    case 'down':
+      return {
+        capsuleClassName: 'topology-virtual-node-status-pulse',
+        capsuleStyle: {
+          '--theia-virtual-node-status-bg': 'var(--nt-node-down-card-bg)',
+          '--theia-virtual-node-status-pulse-bg': 'var(--nt-node-down-card-pulse-bg)',
+          backgroundColor: 'var(--nt-node-down-card-bg)',
+        },
+        markerStyle: {
+          backgroundColor: 'var(--nt-node-down-badge-bg)',
+          borderColor: 'var(--nt-node-down-border)',
+          boxShadow: '0 0 0 1px var(--nt-node-down-ring), 0 0 18px var(--nt-node-down-glow)',
+          color: 'var(--nt-status-down)',
+        },
+        textStyle: { color: 'var(--nt-status-down)' },
+      };
+    case 'probing':
+      return {
+        capsuleClassName: 'topology-virtual-node-status-pulse',
+        capsuleStyle: {
+          '--theia-virtual-node-status-bg': 'var(--nt-node-probing-card-bg)',
+          '--theia-virtual-node-status-pulse-bg': 'var(--nt-node-probing-card-pulse-bg)',
+          backgroundColor: 'var(--nt-node-probing-card-bg)',
+        },
+        markerStyle: {
+          backgroundColor: 'var(--nt-node-probing-badge-bg)',
+          borderColor: 'var(--nt-node-probing-border)',
+          boxShadow: '0 0 0 1px var(--nt-node-probing-ring), 0 0 18px var(--nt-node-probing-glow)',
+          color: 'var(--nt-status-probing)',
+        },
+        textStyle: { color: 'var(--nt-status-probing)' },
+      };
+    default:
+      return null;
+  }
+}
+
 function PollingDisabledNotice({ className = '' }: { className?: string }) {
   return (
     <div
@@ -344,13 +510,18 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const renderKind = data.kind === 'ghost-device' || data.isGhost ? 'ghost-device' : 'device';
   const renderVariant = renderKind === 'device' ? renderModel.variant : undefined;
   const isVirtualMonitorable = renderModel.variant === 'virtual-monitorable';
+  const virtualStatusTone = isVirtualMonitorable
+    ? virtualPrimaryStatusTone(headerState.dotStatus)
+    : null;
   const cardShapeClass = !isVirtual
     ? 'min-h-[140px] rounded-[20px]'
     : isVirtualMonitorable
-      ? 'min-h-[140px] min-w-[320px] max-w-[430px] rounded-full'
-      : 'min-h-[104px] min-w-[250px] max-w-[340px] rounded-full';
-  const virtualCapsuleHeightClass = isVirtualMonitorable ? 'min-h-[138px]' : 'min-h-[102px]';
-  const virtualCapsulePaddingClass = isVirtualMonitorable ? 'py-4 pl-5 pr-6' : 'py-3 pl-5 pr-4';
+      ? 'min-h-[118px] min-w-[292px] max-w-[390px] rounded-[24px]'
+      : 'min-h-[92px] min-w-[232px] max-w-[310px] rounded-[24px]';
+  const virtualCapsuleHeightClass = isVirtualMonitorable ? 'min-h-[116px]' : 'min-h-[90px]';
+  const virtualCapsulePaddingClass = isVirtualMonitorable
+    ? 'py-3 pl-3.5 pr-4'
+    : 'py-2.5 pl-3.5 pr-3.5';
 
   useLayoutEffect(() => {
     if (renderStartedAt === null) {
@@ -470,7 +641,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       />
 
       <div
-        className={isVirtual ? 'overflow-hidden rounded-full' : 'overflow-hidden rounded-[19px]'}
+        className={isVirtual ? 'overflow-hidden rounded-[23px]' : 'overflow-hidden rounded-[19px]'}
       >
         {renderModel.variant === 'physical' ? (
           <div
@@ -588,29 +759,35 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         ) : (
           <div
             data-testid="virtual-node-capsule"
-            className={`relative flex ${virtualCapsuleHeightClass} items-center gap-4 rounded-full ${virtualCapsulePaddingClass}`}
+            className={`relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass} ${virtualStatusTone?.capsuleClassName ?? ''}`}
+            style={virtualStatusTone?.capsuleStyle ?? virtualAreaTintStyle(firstColor)}
           >
             {hasArea && areaAccent ? (
               <div
                 data-testid="virtual-node-area-accent"
-                className="absolute inset-y-0 left-0 w-1.5 rounded-l-full"
+                className="absolute inset-y-0 left-0 w-1 rounded-l-[23px]"
                 style={{ background: areaAccent }}
               />
             ) : null}
 
             <div
               data-testid="virtual-node-icon-shell"
-              className="relative z-10 flex h-[62px] w-[62px] shrink-0 items-center justify-center rounded-full border border-primary/25 bg-primary/10 text-primary"
+              className="relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10 text-primary"
+              style={virtualStatusTone?.markerStyle ?? virtualAreaMarkerStyle(firstColor)}
             >
-              <MaterialIcon name="hub" size={28} />
+              <MaterialIcon name="hub" size={24} />
             </div>
 
             <div className="relative z-10 min-w-0 flex-1 text-left">
               <div className="flex min-w-0 items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div
+                    data-testid="virtual-node-type-label"
                     className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
-                    style={readableFontStyle(10)}
+                    style={{
+                      ...readableFontStyle(10),
+                      ...(virtualStatusTone?.textStyle ?? virtualAreaTextStyle(firstColor)),
+                    }}
                   >
                     {deviceTypeLabel(data.device, isVirtual, data.subtype)}
                   </div>
@@ -625,7 +802,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 {renderModel.showVirtualStatusBadge ? (
                   <div
                     data-testid="virtual-node-status-badge"
-                    className={`mr-1 inline-flex max-w-[88px] shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${statusStyles.badgeClass}`}
+                    className={`inline-flex max-w-[82px] shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
                     style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
                   >
                     <StatusDot status={headerState.dotStatus} />
@@ -636,7 +813,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
               {renderModel.showVirtualAddressChip ? (
                 <span
-                  className="mt-2 inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-2.5 py-1 font-mono text-[11px] text-on-bg"
+                  className="mt-1.5 inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-2.5 py-0.5 font-mono text-[11px] text-on-bg"
                   style={readableFontStyle(11)}
                 >
                   {addressLabel} {data.device.ip}
@@ -646,7 +823,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               {renderModel.showFreshnessMeta ? (
                 <div
                   data-testid="virtual-node-runtime-meta"
-                  className="mt-2 flex w-full items-center justify-between gap-2 overflow-hidden pr-1 text-[10px]"
+                  className="mt-1.5 flex w-full items-center justify-between gap-2 overflow-hidden text-[10px]"
                 >
                   <div
                     className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}
