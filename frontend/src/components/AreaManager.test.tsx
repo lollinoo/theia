@@ -241,6 +241,19 @@ describe('AreaManager', () => {
     expect(onAreasChange).toHaveBeenCalled();
   });
 
+  it('does not render preset color swatches in the area form', async () => {
+    render(
+      <AreaManager mapContext={{ mapId: 'map-1', mapName: 'Backbone' }} areas={[]} devices={[]} />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /new/i }));
+
+    expect(screen.getByLabelText('Custom color')).toBeInTheDocument();
+    expect(screen.queryByTitle('#00E676')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('#2979FF')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('#FF1744')).not.toBeInTheDocument();
+  });
+
   it('updates map-local area colors from the color picker', async () => {
     const onAreasChange = vi.fn();
 

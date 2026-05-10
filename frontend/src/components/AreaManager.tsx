@@ -15,17 +15,7 @@ import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area, Device } from '../types/api';
 import { MaterialIcon } from './MaterialIcon';
 
-// Per D-01: curated palette of 7 swatches
-const AREA_COLORS = [
-  '#00E676', // green (default per D-03)
-  '#2979FF', // blue
-  '#E040FB', // purple
-  '#FFEA00', // amber
-  '#FF6D00', // orange
-  '#00BCD4', // cyan
-  '#FF1744', // red
-] as const;
-const defaultAreaColor = AREA_COLORS[0];
+const defaultAreaColor = '#00E676';
 
 const inputClass =
   'w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
@@ -104,22 +94,8 @@ function AreaForm({ initial, onSave, onCancel, saveLabel }: AreaFormProps) {
 
       <div className="space-y-1">
         <label className={labelClass}>Color</label>
-        <div className="flex flex-wrap items-center gap-2">
-          {AREA_COLORS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setForm((f) => ({ ...f, color: c }))}
-              className={`h-6 w-6 rounded-full border-2 transition-all ${
-                selectedColor === c
-                  ? 'border-primary scale-110'
-                  : 'border-transparent hover:scale-105'
-              }`}
-              style={{ backgroundColor: c }}
-              title={c}
-            />
-          ))}
-          <label className="ml-1 flex items-center gap-2 rounded-lg border border-outline-subtle bg-elevated px-2 py-1">
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 rounded-lg border border-outline-subtle bg-elevated px-2 py-1">
             <span className="sr-only">Custom color</span>
             <input
               type="color"
