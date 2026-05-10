@@ -20,6 +20,8 @@ const defaultAreaColor = '#00E676';
 const inputClass =
   'w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
 const labelClass = 'text-xs font-medium uppercase tracking-widest text-on-bg-secondary';
+const areaActionButtonClass =
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent text-on-bg-secondary transition-colors hover:border-outline-subtle hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
 
 function normalizeAreaColor(color: string): string {
   const trimmed = color.trim();
@@ -523,7 +525,7 @@ export function AreaManager({
                     <button
                       type="button"
                       onClick={() => onOpenArea(area.id)}
-                      className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
+                      className={areaActionButtonClass}
                       title="Open area"
                       aria-label={`Open area ${area.name}`}
                     >
@@ -534,7 +536,7 @@ export function AreaManager({
                     <button
                       type="button"
                       onClick={() => onCreateMapFromArea(area)}
-                      className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
+                      className={areaActionButtonClass}
                       title="Create map from area"
                       aria-label={`Create map from area ${area.name}`}
                     >
@@ -547,44 +549,20 @@ export function AreaManager({
                       setEditing(area);
                       setMode('edit');
                     }}
-                    className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
+                    className={areaActionButtonClass}
                     title="Edit area"
-                    aria-label="edit area"
+                    aria-label={`Edit area ${area.name}`}
                   >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                      />
-                    </svg>
+                    <MaterialIcon name="edit" size={16} />
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmDeleteId(area.id)}
-                    className="p-1 text-on-bg-secondary hover:text-status-down rounded"
+                    className={`${areaActionButtonClass} hover:text-status-down`}
                     title="Delete area"
-                    aria-label="delete area"
+                    aria-label={`Delete area ${area.name}`}
                   >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                      />
-                    </svg>
+                    <MaterialIcon name="delete" size={16} />
                   </button>
                 </div>
               </div>

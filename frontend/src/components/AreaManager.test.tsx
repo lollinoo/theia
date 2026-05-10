@@ -290,6 +290,42 @@ describe('AreaManager', () => {
     expect(onAreasChange).toHaveBeenCalled();
   });
 
+  it('uses uniform icon button sizing for every area row action', () => {
+    render(
+      <AreaManager
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        areas={[
+          {
+            id: 'map-area-1',
+            name: 'Backbone',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '',
+            updated_at: '',
+          },
+        ]}
+        devices={[]}
+        onOpenArea={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+      />,
+    );
+
+    const actionButtons = [
+      screen.getByRole('button', { name: 'Open area Backbone' }),
+      screen.getByRole('button', { name: 'Create map from area Backbone' }),
+      screen.getByRole('button', { name: /edit area/i }),
+      screen.getByRole('button', { name: /delete area/i }),
+    ];
+
+    for (const button of actionButtons) {
+      expect(button.className).toContain('h-8');
+      expect(button.className).toContain('w-8');
+      expect(button.className).toContain('items-center');
+      expect(button.className).toContain('justify-center');
+    }
+  });
+
   it('updates map-local device area assignments without mutating global devices', async () => {
     const onAreasChange = vi.fn();
 

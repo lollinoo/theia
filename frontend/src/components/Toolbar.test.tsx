@@ -86,7 +86,8 @@ describe('Toolbar (COMP-04)', () => {
   it('keeps desktop tools mounted by default while mobile tools are collapsed', () => {
     const { container } = render(<Toolbar {...defaultProps} />);
 
-    expect(container.firstElementChild?.className).toContain('top-20');
+    expect(container.firstElementChild?.className).toContain('top-32');
+    expect(container.firstElementChild?.className).toContain('sm:top-20');
     expect(container.firstElementChild?.className).not.toContain('top-16');
     const mobileToggle = screen.getByRole('button', { name: 'Show canvas tools' });
 

@@ -98,11 +98,11 @@ export function MapSelector({
   const rootClassName =
     placement === 'floating'
       ? 'absolute right-20 top-20 z-10'
-      : 'relative min-w-[8rem] flex-1 sm:flex-none';
+      : 'relative min-w-0 flex-1 sm:min-w-[8rem] sm:flex-none';
   const triggerClassName =
     placement === 'floating'
       ? 'topology-glass topology-floating-shadow flex h-11 max-w-[min(15rem,calc(100vw-6rem))] items-center gap-2 rounded-[16px] px-3 text-sm font-medium text-on-bg transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg'
-      : 'flex h-10 max-w-[min(14rem,42vw)] items-center gap-2 rounded-full border border-outline-subtle bg-surface-container-high px-3 text-sm font-medium text-on-bg shadow-pill outline-none transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
+      : 'flex h-10 w-full max-w-full items-center gap-2 rounded-full border border-outline-subtle bg-surface-container-high px-3 text-sm font-medium text-on-bg shadow-pill outline-none transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:max-w-[min(14rem,42vw)]';
   const menuClassName =
     placement === 'floating'
       ? 'topology-glass topology-floating-shadow absolute right-0 mt-2 w-[min(16rem,calc(100vw-6rem))] overflow-hidden rounded-[16px] p-1.5'

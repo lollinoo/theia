@@ -87,7 +87,7 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
     expect(rootDiv.className).toContain('dark:backdrop-blur');
   });
 
-  it('keeps area filters horizontally constrained instead of replacing them with a new navigation layout', () => {
+  it('keeps desktop area filters scrollable with a More menu shortcut', () => {
     const { container } = render(
       <NavigationPill
         {...defaultProps}
@@ -101,12 +101,40 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
             created_at: '2026-01-01T00:00:00Z',
             updated_at: '2026-01-01T00:00:00Z',
           },
+          {
+            id: 'area-2',
+            name: 'Distribution',
+            description: '',
+            color: '#FF5722',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 'area-3',
+            name: 'Access',
+            description: '',
+            color: '#2979FF',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 'area-4',
+            name: 'Wireless',
+            description: '',
+            color: '#FFD600',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
         ]}
       />,
     );
 
     expect(container.innerHTML).toContain('overflow-x-auto');
-    expect(container.innerHTML).toContain('max-w-[56vw]');
+    expect(container.innerHTML).toContain('topology-scrollbar-none');
+    expect(screen.getByRole('button', { name: 'More 1 area' })).toBeInTheDocument();
   });
 
   it('keeps map and area controls available while viewing Devices', () => {

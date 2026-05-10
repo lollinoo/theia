@@ -216,6 +216,67 @@ describe('TopologyHub', () => {
     expect(onCreateMapFromArea).toHaveBeenCalledWith(area);
   });
 
+  it('reserves mobile top space for a wrapped navigation pill', () => {
+    const { container } = render(
+      <TopologyHub
+        devices={[mockDevice()]}
+        areas={[mockArea()]}
+        links={[mockLink()]}
+        snapshot={null}
+        maps={[mockMap()]}
+        selectedMapId="default"
+        selectedMapName="Default"
+        mapsLoading={false}
+        mapsError={null}
+        savedMapsEnabled={true}
+        onOpenArea={vi.fn()}
+        onOpenMap={vi.fn()}
+        onSelectMap={vi.fn()}
+        onCreateEmptyMap={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+        onDuplicateMap={vi.fn()}
+        onDeleteMap={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    const classNames = container.firstElementChild?.className.split(/\s+/) ?? [];
+
+    expect(classNames).toContain('pt-32');
+    expect(classNames).toContain('sm:pt-20');
+    expect(classNames).not.toContain('pt-20');
+  });
+
+  it('describes the map-first topology hub scope in the subtitle', () => {
+    render(
+      <TopologyHub
+        devices={[mockDevice()]}
+        areas={[mockArea()]}
+        links={[mockLink()]}
+        snapshot={null}
+        maps={[mockMap()]}
+        selectedMapId="default"
+        selectedMapName="Default"
+        mapsLoading={false}
+        mapsError={null}
+        savedMapsEnabled={true}
+        onOpenArea={vi.fn()}
+        onOpenMap={vi.fn()}
+        onSelectMap={vi.fn()}
+        onCreateEmptyMap={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+        onDuplicateMap={vi.fn()}
+        onDeleteMap={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText('Saved maps, map-local areas, and topology health'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Network aggregate')).toBeNull();
+  });
+
   it('hides saved map management controls when saved maps are disabled', () => {
     render(
       <TopologyHub

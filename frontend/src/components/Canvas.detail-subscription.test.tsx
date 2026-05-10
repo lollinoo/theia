@@ -236,7 +236,7 @@ describe('Canvas detail subscription', () => {
 
     const minimapProps = xyflowMocks.MiniMap.mock.calls[0]?.[0];
     expect(minimapProps.className).toContain('!m-0');
-    expect(minimapProps.className).toContain('!bottom-0');
+    expect(minimapProps.className).toContain('!bottom-4');
     expect(minimapProps.className).toContain('!right-4');
     expect(minimapProps.className).not.toContain('!right-0');
     expect(minimapProps.className).not.toContain('!bottom-5');

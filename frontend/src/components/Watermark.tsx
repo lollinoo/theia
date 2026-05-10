@@ -8,7 +8,7 @@ interface WatermarkProps {
   hidden?: boolean;
 }
 
-/** Fixed-position atmospheric watermark with contextual text. Only visible on canvas view. */
+/** Canvas-relative atmospheric watermark with contextual text. Only visible on canvas view. */
 export function Watermark({ activeView, selectedAreaId, areas, hidden = false }: WatermarkProps) {
   if (hidden || activeView !== 'canvas') return null;
 
@@ -18,7 +18,7 @@ export function Watermark({ activeView, selectedAreaId, areas, hidden = false }:
 
   return (
     <div
-      className="absolute bottom-[170px] right-4 z-10 pointer-events-none select-none"
+      className="absolute bottom-[184px] right-4 z-10 pointer-events-none select-none"
       aria-hidden="true"
     >
       <span

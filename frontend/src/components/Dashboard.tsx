@@ -221,7 +221,7 @@ export function Dashboard({
     : '';
 
   return (
-    <div className="h-full pt-[86px] flex flex-col transition-colors duration-200">
+    <div className="flex h-full flex-col pt-32 transition-colors duration-200 sm:pt-[86px]">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-surface/50 transition-colors duration-200">
         <div className="inline-flex rounded-md bg-surface-high p-0.5 text-xs">

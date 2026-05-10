@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Area, CanvasMap } from '../types/api';
 import NavigationPill from './NavigationPill';
@@ -89,7 +89,7 @@ describe('NavigationPill', () => {
     expect(desktopAreaSelector.className).toContain('sm:flex');
   });
 
-  it('hides the native area scrollbar and exposes overflow controls', async () => {
+  it('keeps the area strip scrollable and exposes a More menu shortcut', async () => {
     const scrollWidthDescriptor = Object.getOwnPropertyDescriptor(
       HTMLElement.prototype,
       'scrollWidth',
@@ -100,6 +100,7 @@ describe('NavigationPill', () => {
     );
     const scrollByDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollBy');
     const scrollBy = vi.fn();
+    const onAreaSelect = vi.fn();
 
     Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
       configurable: true,
@@ -124,24 +125,42 @@ describe('NavigationPill', () => {
         <NavigationPill
           {...defaultProps}
           activeView="canvas"
+          onAreaSelect={onAreaSelect}
           areas={[
             mockArea({ id: 'area-1', name: 'Backbone' }),
             mockArea({ id: 'area-2', name: 'Distribution' }),
             mockArea({ id: 'area-3', name: 'Access' }),
             mockArea({ id: 'area-4', name: 'Datacenter' }),
+            mockArea({ id: 'area-5', name: 'Wireless' }),
           ]}
         />,
       );
 
+      const desktopAreaSelector = screen.getByTestId('desktop-area-selector');
       const scroller = screen.getByTestId('desktop-area-selector-scroll');
+
+      expect(scroller.className).toContain('topology-scrollbar-none');
+      expect(scroller.className).toContain('overflow-x-auto');
+      expect(within(scroller).getByRole('button', { name: 'Backbone' })).toBeDefined();
+      expect(within(scroller).getByRole('button', { name: 'Distribution' })).toBeDefined();
+      expect(within(scroller).getByRole('button', { name: 'Access' })).toBeDefined();
+      expect(within(scroller).queryByRole('button', { name: 'Datacenter' })).toBeNull();
+      expect(within(scroller).queryByRole('button', { name: 'Wireless' })).toBeNull();
+      expect(within(scroller).getByRole('button', { name: 'More 2 areas' })).toBeDefined();
+
       await waitFor(() => {
         expect(screen.getByLabelText('Scroll areas right')).toBeInTheDocument();
       });
-
-      expect(scroller.className).toContain('topology-scrollbar-none');
       fireEvent.click(screen.getByLabelText('Scroll areas right'));
       expect(scrollBy).toHaveBeenCalledWith({ left: 208, behavior: 'smooth' });
-      expect(screen.getByLabelText('Scroll areas left')).toBeDisabled();
+
+      fireEvent.click(within(scroller).getByRole('button', { name: 'More 2 areas' }));
+      fireEvent.click(
+        within(screen.getByRole('listbox', { name: 'More map areas' })).getByRole('option', {
+          name: 'Datacenter',
+        }),
+      );
+      expect(onAreaSelect).toHaveBeenCalledWith('area-4');
     } finally {
       if (scrollWidthDescriptor) {
         Object.defineProperty(HTMLElement.prototype, 'scrollWidth', scrollWidthDescriptor);
@@ -201,6 +220,8 @@ describe('NavigationPill', () => {
 
     const areaSelect = screen.getByLabelText('Area selector') as HTMLSelectElement;
     expect(areaSelect.className).toContain('sm:hidden');
+    expect(areaSelect.className).toContain('min-w-0');
+    expect(areaSelect.className).not.toContain('min-w-[7rem]');
     expect(screen.getByRole('option', { name: 'All areas' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Backbone' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Distribution' })).toBeInTheDocument();
@@ -211,6 +232,30 @@ describe('NavigationPill', () => {
 
     fireEvent.change(areaSelect, { target: { value: '__all__' } });
     expect(onAreaSelect).toHaveBeenCalledWith(null);
+  });
+
+  it('wraps map and area controls onto their own mobile row', () => {
+    const { container } = render(
+      <NavigationPill
+        {...defaultProps}
+        activeView="canvas"
+        selectedMapName="Very Long Map Name That Must Not Overlap Areas"
+      />,
+    );
+
+    const root = container.firstElementChild;
+    const mobileControls = screen.getByTestId('mobile-map-area-controls');
+
+    expect(root?.className).toContain('flex-wrap');
+    expect(root?.className).toContain('justify-center');
+    expect(root?.className).toContain('sm:flex-nowrap');
+    expect(root?.className).toContain('sm:justify-start');
+    expect(mobileControls.className).toContain('order-last');
+    expect(mobileControls.className).toContain('w-full');
+    expect(mobileControls.className).toContain('min-w-0');
+    expect(mobileControls.className).toContain('justify-center');
+    expect(mobileControls.className).toContain('sm:w-auto');
+    expect(mobileControls.className).toContain('sm:justify-start');
   });
 
   it('on Devices view pill keeps map and area context controls available', () => {

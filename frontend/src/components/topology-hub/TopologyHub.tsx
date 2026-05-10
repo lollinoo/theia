@@ -98,13 +98,15 @@ export function TopologyHub({
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-6 pb-12 pt-20 sm:px-8">
+    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-6 pb-12 pt-32 sm:px-8 sm:pt-20">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-sans text-3xl font-semibold tracking-tight text-on-bg">
             Topology Hub
           </h1>
-          <p className="mt-1 text-sm text-on-bg-secondary">Network aggregate</p>
+          <p className="mt-1 text-sm text-on-bg-secondary">
+            Saved maps, map-local areas, and topology health
+          </p>
         </div>
       </header>
 

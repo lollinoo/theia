@@ -322,7 +322,8 @@ describe('Dashboard', () => {
   it('adds enough top padding so the fixed navigation pill does not cover controls', () => {
     const { container } = render(<Dashboard devices={[mockDevice()]} areas={[]} snapshot={null} />);
 
-    expect(container.firstElementChild?.className).toContain('pt-[86px]');
+    expect(container.firstElementChild?.className).toContain('pt-32');
+    expect(container.firstElementChild?.className).toContain('sm:pt-[86px]');
     expect(container.firstElementChild?.className).not.toContain('pt-10');
     expect(container.firstElementChild?.className).not.toContain('pt-24');
   });
