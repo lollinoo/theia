@@ -2,13 +2,11 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import type { Area, CanvasMap, CanvasTopologyResponse, Device, Link } from './types/api';
+import type { Area, CanvasMap, Device, Link } from './types/api';
 import type { SnapshotPayload } from './types/metrics';
 
 const fetchAreasMock = vi.fn<() => Promise<Area[]>>();
 const fetchCanvasMapsMock = vi.fn<() => Promise<CanvasMap[]>>();
-const fetchCanvasMapTopologyMock =
-  vi.fn<(mapId: string) => Promise<{ status: 'ok'; topology: CanvasTopologyResponse }>>();
 const createCanvasMapMock =
   vi.fn<
     (payload: {
@@ -30,8 +28,6 @@ const watermarkPropsMock = vi.hoisted(() => vi.fn());
 vi.mock('./api/client', () => ({
   fetchAreas: () => fetchAreasMock(),
   fetchCanvasMaps: () => fetchCanvasMapsMock(),
-  fetchCanvasMapTopology: (...args: Parameters<typeof fetchCanvasMapTopologyMock>) =>
-    fetchCanvasMapTopologyMock(...args),
   createCanvasMap: (...args: Parameters<typeof createCanvasMapMock>) =>
     createCanvasMapMock(...args),
   duplicateCanvasMap: (...args: Parameters<typeof duplicateCanvasMapMock>) =>
@@ -131,6 +127,7 @@ vi.mock('./components/Canvas', () => ({
     mapName,
     selectedAreaId,
     fitViewRevision,
+    topologyRefreshRevision,
     onDevicesChange,
     onLinksChange,
     onTopologyAreasChange,
@@ -140,6 +137,7 @@ vi.mock('./components/Canvas', () => ({
     mapName: string;
     selectedAreaId: string | null;
     fitViewRevision?: number;
+    topologyRefreshRevision?: number;
     onDevicesChange: (devices: Device[]) => void;
     onLinksChange: (links: Link[]) => void;
     onTopologyAreasChange: (areas: Area[]) => void;
@@ -209,11 +207,30 @@ vi.mock('./components/Canvas', () => ({
       );
     }, [mapId, mapName, onDevicesChange, onLinksChange, onTopologyAreasChange]);
 
+    useEffect(() => {
+      if ((topologyRefreshRevision ?? 0) === 0) {
+        return;
+      }
+
+      onTopologyAreasChange([
+        {
+          id: 'area-hub',
+          name: 'Hub Area',
+          description: 'Refreshed map area',
+          color: '#123ABC',
+          device_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        },
+      ]);
+    }, [onTopologyAreasChange, topologyRefreshRevision]);
+
     return (
       <div data-testid="canvas">
         <span>{`map:${mapId ?? 'default'}:${mapName}`}</span>
         <span>{`area:${selectedAreaId ?? 'all'}`}</span>
         <span>{`fit:${fitViewRevision ?? 0}`}</span>
+        <span>{`refresh:${topologyRefreshRevision ?? 0}`}</span>
         <button type="button" onClick={() => onInteractionActiveChange(true)}>
           Start interaction
         </button>
@@ -395,32 +412,10 @@ function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
   };
 }
 
-function mockCanvasTopologyResponse(
-  overrides: Partial<CanvasTopologyResponse> = {},
-): CanvasTopologyResponse {
-  return {
-    schema_version: 1,
-    topology_version: 'topology-2',
-    generated_at: '2026-01-01T00:00:00Z',
-    devices: [],
-    links: [],
-    positions: {},
-    areas: [],
-    capabilities: {
-      supports_topology_delta: true,
-      supports_position_revision: true,
-      supports_area_filtering: true,
-    },
-    settings: { layout: { version: 1 } },
-    ...overrides,
-  };
-}
-
 describe('App', () => {
   beforeEach(() => {
     fetchAreasMock.mockReset();
     fetchCanvasMapsMock.mockReset();
-    fetchCanvasMapTopologyMock.mockReset();
     createCanvasMapMock.mockReset();
     duplicateCanvasMapMock.mockReset();
     updateCanvasMapMock.mockReset();
@@ -430,10 +425,6 @@ describe('App', () => {
     watermarkPropsMock.mockClear();
     fetchAreasMock.mockResolvedValue([mockArea()]);
     fetchCanvasMapsMock.mockResolvedValue([]);
-    fetchCanvasMapTopologyMock.mockResolvedValue({
-      status: 'ok',
-      topology: mockCanvasTopologyResponse(),
-    });
     createCanvasMapMock.mockResolvedValue(mockMap());
     duplicateCanvasMapMock.mockResolvedValue(mockMap({ id: 'map-copy', name: 'Backbone Copy' }));
     updateCanvasMapMock.mockResolvedValue(mockMap({ id: 'map-1', name: 'Backbone Renamed' }));
@@ -565,12 +556,6 @@ describe('App', () => {
       is_default: true,
     });
     fetchCanvasMapsMock.mockResolvedValue([defaultMap]);
-    fetchCanvasMapTopologyMock.mockResolvedValue({
-      status: 'ok',
-      topology: mockCanvasTopologyResponse({
-        areas: [mockArea({ id: 'area-hub', name: 'Hub Area' })],
-      }),
-    });
 
     render(<App />);
 
@@ -586,10 +571,10 @@ describe('App', () => {
     );
     screen.getByRole('button', { name: 'Refresh map areas' }).click();
 
-    await waitFor(() => {
-      expect(fetchCanvasMapTopologyMock).toHaveBeenCalledWith('default-map-id');
-    });
-    expect(screen.getByTestId('topology-hub')).toHaveTextContent('hub-areas:Hub Area');
+    await waitFor(() => expect(screen.getByTestId('canvas')).toHaveTextContent('refresh:1'));
+    await waitFor(() =>
+      expect(screen.getByTestId('topology-hub')).toHaveTextContent('hub-areas:Hub Area'),
+    );
   });
 
   it('keeps Devices active when selecting a map from the navigation pill', async () => {

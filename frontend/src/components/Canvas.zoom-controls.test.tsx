@@ -16,6 +16,7 @@ const xyflowMocks = vi.hoisted(() => ({
   fitView: vi.fn(),
   zoomIn: vi.fn(),
   zoomOut: vi.fn(),
+  loadTopology: vi.fn(),
 }));
 
 vi.mock('@xyflow/react', () => ({
@@ -63,7 +64,7 @@ vi.mock('./canvas/useCanvasData', () => ({
     topologyLinks: [],
     loading: false,
     error: null,
-    loadTopology: vi.fn().mockResolvedValue(undefined),
+    loadTopology: xyflowMocks.loadTopology,
     runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
     grafanaUrlRef: { current: '' },
     deviceGrafanaUrlsRef: { current: new Map<string, string>() },
@@ -95,6 +96,8 @@ vi.mock('../contexts/ThemeContext', () => ({
 describe('Canvas zoom controls', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    xyflowMocks.loadTopology.mockReset();
+    xyflowMocks.loadTopology.mockResolvedValue(undefined);
   });
 
   it('fits the topology with a tight viewport padding from the bottom-left control', () => {
@@ -142,5 +145,35 @@ describe('Canvas zoom controls', () => {
     });
 
     expect(screen.getByLabelText('Canvas Diagnostics')).toBeInTheDocument();
+  });
+
+  it('refreshes topology when the external topology revision changes', () => {
+    const { rerender } = render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        topologyRefreshRevision={0}
+      />,
+    );
+
+    expect(xyflowMocks.loadTopology).not.toHaveBeenCalled();
+
+    rerender(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        topologyRefreshRevision={1}
+      />,
+    );
+
+    expect(xyflowMocks.loadTopology).toHaveBeenCalledWith(true);
   });
 });

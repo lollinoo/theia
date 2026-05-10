@@ -5,7 +5,6 @@ import {
   deleteCanvasMap,
   duplicateCanvasMap,
   fetchAreas,
-  fetchCanvasMapTopology,
   fetchCanvasMaps,
   setCanvasMapPrimary,
   updateCanvasMap,
@@ -113,6 +112,7 @@ function App() {
   const [deleteMapSource, setDeleteMapSource] = useState<CanvasMap | null>(null);
   const [deleteMapLoading, setDeleteMapLoading] = useState(false);
   const [fitViewRevision, setFitViewRevision] = useState(0);
+  const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
 
@@ -278,19 +278,10 @@ function App() {
     [openCanvasView],
   );
 
-  const handleAreasChange = useCallback(async () => {
+  const handleAreasChange = useCallback(() => {
     if (enableSavedMaps && selectedMapId) {
-      try {
-        const result = await fetchCanvasMapTopology(selectedMapId);
-        if (result.status === 'ok') {
-          setCanvasDevices(result.topology.devices);
-          setCanvasLinks(result.topology.links);
-          setCanvasTopologyAreas(result.topology.areas);
-          return;
-        }
-      } catch {
-        // Fall back to the legacy global area refresh below.
-      }
+      setTopologyRefreshRevision((revision) => revision + 1);
+      return;
     }
 
     fetchAreas()
@@ -557,6 +548,7 @@ function App() {
               mapName={selectedMapName}
               visible={activeView === 'canvas'}
               fitViewRevision={fitViewRevision}
+              topologyRefreshRevision={topologyRefreshRevision}
               onDevicesChange={handleCanvasDevicesChange}
               onLinksChange={handleCanvasLinksChange}
               onAreaSelect={handleAreaFilterSelect}

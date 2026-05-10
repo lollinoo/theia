@@ -25,10 +25,19 @@ const AREA_COLORS = [
   '#00BCD4', // cyan
   '#FF1744', // red
 ] as const;
+const defaultAreaColor = AREA_COLORS[0];
 
 const inputClass =
   'w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
 const labelClass = 'text-xs font-medium uppercase tracking-widest text-on-bg-secondary';
+
+function normalizeAreaColor(color: string): string {
+  const trimmed = color.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  return defaultAreaColor;
+}
 
 // --- AreaForm child component ---
 
@@ -40,16 +49,20 @@ interface AreaFormProps {
 }
 
 function AreaForm({ initial, onSave, onCancel, saveLabel }: AreaFormProps) {
-  const [form, setForm] = useState(initial);
+  const [form, setForm] = useState(() => ({
+    ...initial,
+    color: normalizeAreaColor(initial.color),
+  }));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectedColor = normalizeAreaColor(form.color);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      await onSave(form);
+      await onSave({ ...form, color: selectedColor });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save area.');
     } finally {
@@ -91,19 +104,37 @@ function AreaForm({ initial, onSave, onCancel, saveLabel }: AreaFormProps) {
 
       <div className="space-y-1">
         <label className={labelClass}>Color</label>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {AREA_COLORS.map((c) => (
             <button
               key={c}
               type="button"
               onClick={() => setForm((f) => ({ ...f, color: c }))}
               className={`h-6 w-6 rounded-full border-2 transition-all ${
-                form.color === c ? 'border-primary scale-110' : 'border-transparent hover:scale-105'
+                selectedColor === c
+                  ? 'border-primary scale-110'
+                  : 'border-transparent hover:scale-105'
               }`}
               style={{ backgroundColor: c }}
               title={c}
             />
           ))}
+          <label className="ml-1 flex items-center gap-2 rounded-lg border border-outline-subtle bg-elevated px-2 py-1">
+            <span className="sr-only">Custom color</span>
+            <input
+              type="color"
+              aria-label="Custom color"
+              value={selectedColor}
+              onChange={(e) =>
+                setForm((current) => ({
+                  ...current,
+                  color: normalizeAreaColor(e.target.value),
+                }))
+              }
+              className="h-6 w-8 cursor-pointer border-0 bg-transparent p-0"
+            />
+            <span className="font-mono text-xs text-on-bg-secondary">{selectedColor}</span>
+          </label>
         </div>
       </div>
 
@@ -219,7 +250,7 @@ export function AreaManager({
     const payload = {
       name: form.name.trim(),
       description: form.description.trim(),
-      color: form.color,
+      color: normalizeAreaColor(form.color),
     };
     if (mapContext) {
       await createCanvasMapArea(mapContext.mapId, payload);
@@ -235,7 +266,7 @@ export function AreaManager({
     const payload = {
       name: form.name.trim(),
       description: form.description.trim(),
-      color: form.color,
+      color: normalizeAreaColor(form.color),
     };
     if (mapContext) {
       await updateCanvasMapArea(mapContext.mapId, editing.id, payload);
@@ -351,7 +382,11 @@ export function AreaManager({
           <p className={labelClass}>Edit Area</p>
         </div>
         <AreaForm
-          initial={{ name: editing.name, description: editing.description, color: editing.color }}
+          initial={{
+            name: editing.name,
+            description: editing.description,
+            color: normalizeAreaColor(editing.color),
+          }}
           onSave={handleUpdate}
           onCancel={() => {
             setMode('list');

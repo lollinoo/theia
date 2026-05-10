@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AreaManager } from './AreaManager';
@@ -211,6 +211,69 @@ describe('AreaManager', () => {
       });
     });
     expect(mockCreateArea).not.toHaveBeenCalled();
+    expect(onAreasChange).toHaveBeenCalled();
+  });
+
+  it('creates map-local areas with a custom color from the color picker', async () => {
+    const onAreasChange = vi.fn();
+
+    render(
+      <AreaManager
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        areas={[]}
+        devices={[]}
+        onAreasChange={onAreasChange}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /new/i }));
+    fireEvent.change(screen.getByLabelText('Custom color'), { target: { value: '#123abc' } });
+    await userEvent.type(screen.getByPlaceholderText(/backbone/i), 'CustomArea');
+    await userEvent.click(screen.getByText(/create area/i));
+
+    await waitFor(() => {
+      expect(mockCreateCanvasMapArea).toHaveBeenCalledWith('map-1', {
+        name: 'CustomArea',
+        description: '',
+        color: '#123ABC',
+      });
+    });
+    expect(onAreasChange).toHaveBeenCalled();
+  });
+
+  it('updates map-local area colors from the color picker', async () => {
+    const onAreasChange = vi.fn();
+
+    render(
+      <AreaManager
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        areas={[
+          {
+            id: 'map-area-1',
+            name: 'Backbone',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '',
+            updated_at: '',
+          },
+        ]}
+        devices={[]}
+        onAreasChange={onAreasChange}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /edit area/i }));
+    fireEvent.change(screen.getByLabelText('Custom color'), { target: { value: '#abcdef' } });
+    await userEvent.click(screen.getByText(/save changes/i));
+
+    await waitFor(() => {
+      expect(mockUpdateCanvasMapArea).toHaveBeenCalledWith('map-1', 'map-area-1', {
+        name: 'Backbone',
+        description: '',
+        color: '#ABCDEF',
+      });
+    });
     expect(onAreasChange).toHaveBeenCalled();
   });
 

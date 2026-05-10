@@ -159,6 +159,7 @@ interface CanvasProps {
   mapName: string;
   visible?: boolean;
   fitViewRevision?: number;
+  topologyRefreshRevision?: number;
   maps?: CanvasMap[];
   areas?: Area[];
   onDevicesChange?: (devices: Device[]) => void;
@@ -182,6 +183,7 @@ export default function Canvas({
   mapName,
   visible = true,
   fitViewRevision,
+  topologyRefreshRevision,
   onDevicesChange,
   onLinksChange,
   onAreaSelect,
@@ -239,6 +241,7 @@ export default function Canvas({
   const selectedMapKey = mapId ?? '__default__';
   const previousMapKeyRef = useRef<string | null>(null);
   const previousFitViewRevisionRef = useRef(fitViewRevision);
+  const previousTopologyRefreshRevisionRef = useRef(topologyRefreshRevision);
 
   useEffect(() => {
     onDetailDeviceChange?.(getCanvasDetailDeviceId(panelContent));
@@ -456,6 +459,18 @@ export default function Canvas({
   }, [loading, onTopologyLoadingChange]);
 
   useEffect(() => () => onTopologyLoadingChange?.(false), [onTopologyLoadingChange]);
+
+  useEffect(() => {
+    if (topologyRefreshRevision === undefined) {
+      return;
+    }
+    if (previousTopologyRefreshRevisionRef.current === topologyRefreshRevision) {
+      return;
+    }
+
+    previousTopologyRefreshRevisionRef.current = topologyRefreshRevision;
+    void loadTopology(true);
+  }, [loadTopology, topologyRefreshRevision]);
 
   const handleRemoveDeviceFromMap = useCallback(
     async (deviceId: string) => {
