@@ -84,7 +84,7 @@ const TopologyMiniMap = memo(function TopologyMiniMap() {
     <MiniMap<DeviceNode>
       pannable
       zoomable
-      className="!m-0 !right-4 !bottom-4"
+      className="!m-0 !right-4 !bottom-[calc(6rem+env(safe-area-inset-bottom))] sm:!bottom-4"
       nodeColor={topologyMinimapNodeColor}
       style={minimapStyle}
       maskColor={minimapMaskColor}

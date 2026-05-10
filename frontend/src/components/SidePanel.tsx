@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { MaterialIcon } from './MaterialIcon';
 
 interface SidePanelProps {
@@ -21,7 +22,7 @@ export function SidePanel({ open, onClose, title, children, testId }: SidePanelP
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [open, onClose]);
 
-  return (
+  const panel = (
     <div
       data-testid={testId}
       className={`fixed right-0 top-0 z-40 flex h-full w-[min(420px,100vw)] transform flex-col border-l border-outline bg-surface-container-high transition-transform duration-200 ease-in-out shadow-panel ${
@@ -47,4 +48,6 @@ export function SidePanel({ open, onClose, title, children, testId }: SidePanelP
       <div className="flex-1 overflow-y-auto p-5 transition-colors duration-200">{children}</div>
     </div>
   );
+
+  return createPortal(panel, document.body);
 }

@@ -18,7 +18,7 @@ export function Watermark({ activeView, selectedAreaId, areas, hidden = false }:
 
   return (
     <div
-      className="absolute bottom-[184px] right-4 z-10 pointer-events-none select-none"
+      className="absolute bottom-[calc(15.5rem+env(safe-area-inset-bottom))] right-4 z-10 pointer-events-none select-none sm:bottom-[184px]"
       aria-hidden="true"
     >
       <span
