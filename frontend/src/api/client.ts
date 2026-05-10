@@ -560,6 +560,7 @@ export interface CreateDevicePayload {
   prometheus_label_value?: string;
   topology_discovery_mode?: TopologyDiscoveryMode;
   area_ids?: string[];
+  skip_primary_map_membership?: boolean;
 }
 
 export async function createDevice(payload: CreateDevicePayload): Promise<Device> {

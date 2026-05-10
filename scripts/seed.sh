@@ -6,6 +6,8 @@
 set -euo pipefail
 
 API_BASE="${1:-http://localhost:8080}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/seed-primary-map.sh"
 
 echo "=== Seeding Theia with SNMP simulator devices ==="
 echo ""
@@ -26,51 +28,58 @@ done
 
 echo ""
 
-# Add Router (172.28.10.10)
-echo "Adding Router (gw-core-01 @ 172.28.10.10)..."
-curl -sf -X POST "$API_BASE/api/v1/devices" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ip": "172.28.10.10",
-    "hostname": "gw-core-01",
-    "snmp": {
-      "version": "2c",
-      "community": "public"
-    },
-    "tags": {"vendor": "mikrotik", "role": "gateway", "site": "hq"}
-  }' | python3 -m json.tool 2>/dev/null || echo "(response above)"
+create_seed_device() {
+  local ip="$1"
+  local label="$2"
+  local payload="$3"
+  local existing_id
+  existing_id="$(device_id_by_ip "$ip" || true)"
 
-echo ""
+  if [ -n "$existing_id" ]; then
+    echo "Skipping ${label} - already present; ensuring primary map membership"
+    add_device_to_primary_map "$existing_id"
+    echo ""
+    return
+  fi
 
-# Add Cisco Switch (172.28.10.11)
-echo "Adding Cisco Switch (sw-dist-01 @ 172.28.10.11)..."
-curl -sf -X POST "$API_BASE/api/v1/devices" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ip": "172.28.10.11",
-    "hostname": "sw-dist-01",
-    "snmp": {
-      "version": "2c",
-      "community": "public"
-    },
-    "tags": {"vendor": "cisco", "role": "distribution", "site": "hq"}
-  }' | python3 -m json.tool 2>/dev/null || echo "(response above)"
+  echo "Adding ${label}..."
+  response="$(curl -sf -X POST "$API_BASE/api/v1/devices" \
+    -H "Content-Type: application/json" \
+    -d "$payload")"
+  echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+  add_device_to_primary_map "$(echo "$response" | created_device_id_from_response)"
+  echo ""
+}
 
-echo ""
+create_seed_device "172.28.10.10" "Router (gw-core-01 @ 172.28.10.10)" '{
+  "ip": "172.28.10.10",
+  "hostname": "gw-core-01",
+  "snmp": {
+    "version": "2c",
+    "community": "public"
+  },
+  "tags": {"vendor": "mikrotik", "role": "gateway", "site": "hq"}
+}'
 
-# Add Ubiquiti AP (172.28.10.12)
-echo "Adding Ubiquiti AP (ap-office-01 @ 172.28.10.12)..."
-curl -sf -X POST "$API_BASE/api/v1/devices" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ip": "172.28.10.12",
-    "hostname": "ap-office-01",
-    "snmp": {
-      "version": "2c",
-      "community": "public"
-    },
-    "tags": {"vendor": "ubiquiti", "role": "access-point", "site": "hq"}
-  }' | python3 -m json.tool 2>/dev/null || echo "(response above)"
+create_seed_device "172.28.10.11" "Cisco Switch (sw-dist-01 @ 172.28.10.11)" '{
+  "ip": "172.28.10.11",
+  "hostname": "sw-dist-01",
+  "snmp": {
+    "version": "2c",
+    "community": "public"
+  },
+  "tags": {"vendor": "cisco", "role": "distribution", "site": "hq"}
+}'
+
+create_seed_device "172.28.10.12" "Ubiquiti AP (ap-office-01 @ 172.28.10.12)" '{
+  "ip": "172.28.10.12",
+  "hostname": "ap-office-01",
+  "snmp": {
+    "version": "2c",
+    "community": "public"
+  },
+  "tags": {"vendor": "ubiquiti", "role": "access-point", "site": "hq"}
+}'
 
 echo ""
 echo "=== Seed complete ==="

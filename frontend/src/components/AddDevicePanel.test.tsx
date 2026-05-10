@@ -223,6 +223,9 @@ describe('virtual mode', () => {
     fireEvent.click(screen.getByText('Add Virtual Node'));
 
     await waitFor(() => {
+      expect(createDevice).toHaveBeenCalledWith(
+        expect.objectContaining({ skip_primary_map_membership: true }),
+      );
       expect(addDeviceToCanvasMap).toHaveBeenCalledWith('map-1', 'new-dev', {
         include_connected_links: true,
       });
@@ -286,6 +289,9 @@ describe('virtual mode', () => {
       device_ids: ['new-dev'],
       area_ids: ['map-area-1'],
     });
+    expect(createDevice).toHaveBeenCalledWith(
+      expect.objectContaining({ skip_primary_map_membership: true }),
+    );
     expect(createDevice).toHaveBeenCalledWith(
       expect.not.objectContaining({ area_ids: ['map-area-1'] }),
     );

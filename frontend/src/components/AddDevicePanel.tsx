@@ -172,7 +172,7 @@ export function AddDevicePanel({
       return payload;
     }
     const { area_ids: _areaIds, ...payloadWithoutAreaIds } = payload;
-    return payloadWithoutAreaIds;
+    return { ...payloadWithoutAreaIds, skip_primary_map_membership: true };
   }
 
   async function addDeviceToCurrentMap(deviceId: string) {

@@ -2,6 +2,8 @@
 set -euo pipefail
 
 API_BASE="${1:-http://localhost:8080}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/seed-primary-map.sh"
 
 echo "=== Seeding Theia with WISP radio access nodes ==="
 
@@ -16,21 +18,6 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-device_exists() {
-  local ip="$1"
-  python3 - "$API_BASE" "$ip" <<'PY'
-import json, sys, urllib.request
-api_base, target_ip = sys.argv[1], sys.argv[2]
-with urllib.request.urlopen(f"{api_base}/api/v1/devices", timeout=10) as response:
-    payload = json.load(response)
-for item in payload.get("data", []):
-    attributes = item.get("attributes", {})
-    if attributes.get("ip") == target_ip:
-        raise SystemExit(0)
-raise SystemExit(1)
-PY
-}
-
 create_device() {
   local ip="$1"
   local hostname="$2"
@@ -38,14 +25,17 @@ create_device() {
   local site="$4"
   local rf_domain="$5"
   local segment="$6"
+  local existing_id
+  existing_id="$(device_id_by_ip "$ip" || true)"
 
-  if device_exists "$ip"; then
-    echo "Skipping ${hostname} (${ip}) - already present"
+  if [ -n "$existing_id" ]; then
+    echo "Skipping ${hostname} (${ip}) - already present; ensuring primary map membership"
+    add_device_to_primary_map "$existing_id"
     return
   fi
 
   echo "Adding ${hostname} (${ip})..."
-  curl -sf -X POST "$API_BASE/api/v1/devices" \
+  response="$(curl -sf -X POST "$API_BASE/api/v1/devices" \
     -H "Content-Type: application/json" \
     -d "{
       \"ip\": \"${ip}\",
@@ -64,7 +54,9 @@ create_device() {
         \"rf_domain\": \"${rf_domain}\",
         \"segment\": \"${segment}\"
       }
-    }" | python3 -m json.tool 2>/dev/null || echo "(response above)"
+    }")"
+  echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+  add_device_to_primary_map "$(echo "$response" | created_device_id_from_response)"
   echo ""
   sleep 0.5
 }

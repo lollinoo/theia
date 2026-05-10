@@ -38,7 +38,12 @@ func NewRouter(
 ) http.Handler {
 	mux := http.NewServeMux()
 
-	deviceHandler := NewDeviceHandler(deviceService, credentialProfileRepo, vendorRegistry)
+	deviceHandler := NewDeviceHandler(
+		deviceService,
+		credentialProfileRepo,
+		vendorRegistry,
+		WithPrimaryCanvasMapMembership(canvasMapRepo, areaRepo),
+	)
 	linkHandler := NewLinkHandler(linkRepo, deviceService)
 	positionHandler := NewPositionHandler(positionRepo, canvasMapRepo, canvasMapPositionRepo)
 	canvasTopologyHandler := NewCanvasTopologyHandler(

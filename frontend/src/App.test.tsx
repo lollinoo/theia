@@ -461,6 +461,62 @@ describe('App', () => {
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:default-map-id:Default');
   });
 
+  it('does not mount the legacy global canvas before saved maps resolve', async () => {
+    let resolveMaps: (maps: CanvasMap[]) => void = () => {};
+    fetchCanvasMapsMock.mockReturnValue(
+      new Promise<CanvasMap[]>((resolve) => {
+        resolveMaps = resolve;
+      }),
+    );
+
+    render(<App />);
+
+    expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:default:Default');
+    expect(screen.queryByTestId('canvas')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveMaps([
+        mockMap({
+          id: 'primary-map-id',
+          name: 'Primary Ops',
+          source_area_id: null,
+          filter: {},
+          is_default: true,
+        }),
+      ]);
+    });
+
+    expect(await screen.findByTestId('canvas')).toHaveTextContent('map:primary-map-id:Primary Ops');
+  });
+
+  it('uses the promoted primary saved map on refresh instead of the old Default map', async () => {
+    fetchCanvasMapsMock.mockResolvedValue([
+      mockMap({
+        id: 'old-default-map',
+        name: 'Default',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+      }),
+      mockMap({
+        id: 'primary-ops-map',
+        name: 'Primary Ops',
+        source_area_id: null,
+        filter: {},
+        is_default: true,
+      }),
+    ]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
+        'pill-map:primary-ops-map:Primary Ops',
+      ),
+    );
+    expect(screen.getByTestId('canvas')).toHaveTextContent('map:primary-ops-map:Primary Ops');
+  });
+
   it('wires canvas devices links and snapshot into TopologyHub and Dashboard', async () => {
     render(<App />);
 

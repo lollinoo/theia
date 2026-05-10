@@ -75,6 +75,7 @@ func newCanvasMapIntegrationRouter(t *testing.T) canvasMapIntegrationRouter {
 		return &snmp.DiscoveryResult{}, nil
 	}
 	deviceService := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	t.Cleanup(deviceService.WaitForProbes)
 	runtimeSnapshotFunc := func() (*ws.SnapshotPayload, uint64) {
 		return ws.EmptySnapshot(), 42
 	}
@@ -1235,6 +1236,97 @@ func TestCanvasMapHandlerAddDeviceToMapAddsLocalMembershipWithoutTouchingOtherMa
 	}
 	if _, err := fixture.deviceRepo.GetByID(deviceB.ID); err != nil {
 		t.Fatalf("global device missing after map add: %v", err)
+	}
+}
+
+func TestCanvasMapHandlerCreateDeviceAddsToPrimaryMap(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	defaultMap, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("get default map: %v", err)
+	}
+	primaryMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Primary Ops"})
+	rec := canvasMapRequest(
+		t,
+		fixture.router,
+		http.MethodPost,
+		"/api/v1/canvas/maps/"+primaryMap.ID+"/primary",
+		nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set primary map: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = canvasMapRequest(
+		t,
+		fixture.router,
+		http.MethodPost,
+		"/api/v1/devices",
+		map[string]any{
+			"ip":       "10.80.0.1",
+			"hostname": "seeded-router",
+			"snmp": map[string]any{
+				"version":   "2c",
+				"community": "public",
+			},
+		},
+	)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create device: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	primaryMembership, err := fixture.mapRepo.GetMembership(uuid.MustParse(primaryMap.ID))
+	if err != nil {
+		t.Fatalf("get primary membership: %v", err)
+	}
+	if len(primaryMembership.Devices) != 1 {
+		t.Fatalf("primary membership devices = %#v, want one created device", primaryMembership.Devices)
+	}
+
+	defaultMembership, err := fixture.mapRepo.GetMembership(defaultMap.ID)
+	if err != nil {
+		t.Fatalf("get old default membership: %v", err)
+	}
+	if len(defaultMembership.Devices) != 0 {
+		t.Fatalf("old default membership devices = %#v, want unchanged empty membership", defaultMembership.Devices)
+	}
+
+	topology := mustLoadCanvasMapTopologyForTest(t, fixture, primaryMap.ID)
+	findCanvasTopologyDeviceByHostname(t, topology, "seeded-router")
+}
+
+func TestCanvasMapHandlerCreateDeviceCanSkipPrimaryMapMembership(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	primaryMap, err := fixture.mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("get default map: %v", err)
+	}
+
+	rec := canvasMapRequest(
+		t,
+		fixture.router,
+		http.MethodPost,
+		"/api/v1/devices",
+		map[string]any{
+			"ip":                          "10.80.0.2",
+			"hostname":                    "panel-router",
+			"skip_primary_map_membership": true,
+			"snmp": map[string]any{
+				"version":   "2c",
+				"community": "public",
+			},
+		},
+	)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create device: expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	membership, err := fixture.mapRepo.GetMembership(primaryMap.ID)
+	if err != nil {
+		t.Fatalf("get primary membership: %v", err)
+	}
+	if len(membership.Devices) != 0 {
+		t.Fatalf("primary membership devices = %#v, want skipped membership", membership.Devices)
 	}
 }
 

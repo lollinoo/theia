@@ -479,6 +479,8 @@ function App() {
   const mapsLoadingForHub = enableSavedMaps ? canvasMapsLoading : false;
   const mapsErrorForHub = enableSavedMaps ? canvasMapsError : null;
   const navigationAreas = canvasTopologyAreas;
+  const savedMapContextResolved =
+    !enableSavedMaps || selectedMapId !== null || (canvasMapsLoaded && canvasMaps.length === 0);
 
   return (
     <ThemeProvider>
@@ -537,27 +539,33 @@ function App() {
             selectedAreaId={selectedAreaId}
             areas={navigationAreas}
           />
-          <ReactFlowProvider>
-            <Canvas
-              snapshot={snapshot}
-              alerts={alerts}
-              reconnecting={reconnecting}
-              prometheusStatus={prometheusStatus}
-              selectedAreaId={selectedAreaId}
-              mapId={selectedMapId}
-              mapName={selectedMapName}
-              visible={activeView === 'canvas'}
-              fitViewRevision={fitViewRevision}
-              topologyRefreshRevision={topologyRefreshRevision}
-              onDevicesChange={handleCanvasDevicesChange}
-              onLinksChange={handleCanvasLinksChange}
-              onAreaSelect={handleAreaFilterSelect}
-              onTopologyAreasChange={setCanvasTopologyAreas}
-              onTopologyLoadingChange={setCanvasTopologyLoading}
-              onDetailDeviceChange={setDetailDeviceId}
-              onInteractionActiveChange={setCanvasInteractionActive}
-            />
-          </ReactFlowProvider>
+          {savedMapContextResolved ? (
+            <ReactFlowProvider>
+              <Canvas
+                snapshot={snapshot}
+                alerts={alerts}
+                reconnecting={reconnecting}
+                prometheusStatus={prometheusStatus}
+                selectedAreaId={selectedAreaId}
+                mapId={selectedMapId}
+                mapName={selectedMapName}
+                visible={activeView === 'canvas'}
+                fitViewRevision={fitViewRevision}
+                topologyRefreshRevision={topologyRefreshRevision}
+                onDevicesChange={handleCanvasDevicesChange}
+                onLinksChange={handleCanvasLinksChange}
+                onAreaSelect={handleAreaFilterSelect}
+                onTopologyAreasChange={setCanvasTopologyAreas}
+                onTopologyLoadingChange={setCanvasTopologyLoading}
+                onDetailDeviceChange={setDetailDeviceId}
+                onInteractionActiveChange={setCanvasInteractionActive}
+              />
+            </ReactFlowProvider>
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-sm text-on-bg-secondary">
+              {canvasMapsError ?? 'Loading maps'}
+            </div>
+          )}
         </div>
         <div
           {...viewLayerStateProps(activeView === 'dashboard')}
