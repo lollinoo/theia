@@ -243,6 +243,57 @@ func TestCanvasMapRepoAddDeviceMembershipIsIdempotentAndPreservesOtherMaps(t *te
 	assertCanvasMapMembershipEqual(t, secondMembership, initial)
 }
 
+func TestCanvasMapRepoListMemberDeviceIDsReturnsDistinctSavedMapMembers(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	repo := NewCanvasMapRepo(db)
+
+	firstMap, err := repo.Create(domain.CanvasMapCreate{Name: "First Members"})
+	if err != nil {
+		t.Fatalf("create first map: %v", err)
+	}
+	secondMap, err := repo.Create(domain.CanvasMapCreate{Name: "Second Members"})
+	if err != nil {
+		t.Fatalf("create second map: %v", err)
+	}
+	memberA := uuid.MustParse("00000000-0000-0000-0000-000000000241")
+	memberB := uuid.MustParse("00000000-0000-0000-0000-000000000242")
+	orphan := uuid.MustParse("00000000-0000-0000-0000-000000000243")
+	insertCanvasMapRepoTestDevice(t, db, memberA)
+	insertCanvasMapRepoTestDevice(t, db, memberB)
+	insertCanvasMapRepoTestDevice(t, db, orphan)
+
+	if err := repo.ReplaceMembership(firstMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: memberA, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: memberB, Role: domain.CanvasMapDeviceRoleGhost},
+		},
+	}); err != nil {
+		t.Fatalf("replace first membership: %v", err)
+	}
+	if err := repo.ReplaceMembership(secondMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: memberA, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("replace second membership: %v", err)
+	}
+
+	deviceIDs, err := repo.ListMemberDeviceIDs()
+	if err != nil {
+		t.Fatalf("ListMemberDeviceIDs: %v", err)
+	}
+	if len(deviceIDs) != 2 {
+		t.Fatalf("len(deviceIDs) = %d, want 2; ids = %#v", len(deviceIDs), deviceIDs)
+	}
+	got := map[uuid.UUID]bool{}
+	for _, id := range deviceIDs {
+		got[id] = true
+	}
+	if !got[memberA] || !got[memberB] || got[orphan] {
+		t.Fatalf("deviceIDs = %#v, want distinct members %s and %s only", deviceIDs, memberA, memberB)
+	}
+}
+
 func TestCanvasMapRepoUpdateDeviceAreaMembershipsIsMapLocal(t *testing.T) {
 	db := openCanvasMapRepoTestDB(t)
 	repo := NewCanvasMapRepo(db)

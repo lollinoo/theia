@@ -319,6 +319,28 @@ func (m *deviceMutationService) GetAllDevices(ctx context.Context) ([]domain.Dev
 	return devices, nil
 }
 
+type orphanDeviceRepository interface {
+	GetOrphans() ([]domain.Device, error)
+}
+
+func (m *deviceMutationService) GetOrphanDevices(ctx context.Context) ([]domain.Device, error) {
+	_ = ctx
+	orphanRepo, ok := m.deviceRepo.(orphanDeviceRepository)
+	if !ok {
+		return nil, fmt.Errorf("device repository does not support orphan device listing")
+	}
+	devices, err := orphanRepo.GetOrphans()
+	if err != nil {
+		return nil, err
+	}
+	for i := range devices {
+		domain.NormalizeDevicePollingEnabled(&devices[i])
+		domain.NormalizeVirtualDevice(&devices[i])
+		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
+	}
+	return devices, nil
+}
+
 func (m *deviceMutationService) GetDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
 	_ = ctx
 	if len(ids) == 0 {

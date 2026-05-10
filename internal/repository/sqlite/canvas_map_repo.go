@@ -496,6 +496,36 @@ func (r *CanvasMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership,
 	return membership, nil
 }
 
+// ListMemberDeviceIDs returns distinct device IDs that belong to at least one saved map.
+func (r *CanvasMapRepo) ListMemberDeviceIDs() ([]uuid.UUID, error) {
+	rows, err := r.db.Query(
+		`SELECT DISTINCT device_id
+		 FROM canvas_map_devices
+		 ORDER BY device_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying saved map member device ids: %w", err)
+	}
+	defer rows.Close()
+
+	deviceIDs := []uuid.UUID{}
+	for rows.Next() {
+		var rawID string
+		if err := rows.Scan(&rawID); err != nil {
+			return nil, fmt.Errorf("scanning saved map member device id: %w", err)
+		}
+		deviceID, err := uuid.Parse(rawID)
+		if err != nil {
+			return nil, fmt.Errorf("parsing saved map member device id %q: %w", rawID, err)
+		}
+		deviceIDs = append(deviceIDs, deviceID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating saved map member device ids: %w", err)
+	}
+	return deviceIDs, nil
+}
+
 // ReplaceMembership atomically replaces a map's materialized device, link, and area membership.
 func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.CanvasMapMembership) error {
 	if id == uuid.Nil {

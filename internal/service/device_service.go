@@ -489,6 +489,11 @@ func (s *DeviceService) GetAllDevices(ctx context.Context) ([]domain.Device, err
 	return s.mutation.GetAllDevices(ctx)
 }
 
+// GetOrphanDevices retrieves global devices that are not in any saved map.
+func (s *DeviceService) GetOrphanDevices(ctx context.Context) ([]domain.Device, error) {
+	return s.mutation.GetOrphanDevices(ctx)
+}
+
 // GetDevicesByIDs retrieves selected devices with their interfaces.
 func (s *DeviceService) GetDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
 	return s.mutation.GetDevicesByIDs(ctx, ids)

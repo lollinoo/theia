@@ -23,6 +23,7 @@ import {
   fetchDevices,
   fetchInstanceBackups,
   fetchLinks,
+  fetchOrphanDevices,
   fetchSettings,
   fetchSettingsWithMetadata,
   removeDeviceFromCanvasMap,
@@ -195,6 +196,38 @@ describe('fetchDevices', () => {
     const result = await fetchDevices();
 
     expect(result[0].notes).toBe('Installed in rack 7');
+  });
+});
+
+describe('fetchOrphanDevices', () => {
+  it('fetches and parses orphan device list response', async () => {
+    const payload = { data: [deviceResource('uuid-orphan', 'orphan-01', '10.0.0.32')] };
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(payload));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchOrphanDevices();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/devices/orphans');
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('uuid-orphan');
+    expect(result[0].hostname).toBe('orphan-01');
+  });
+
+  it('wraps HTTP errors with orphan device context', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'Internal Server Error' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
+        ),
+    );
+
+    await expect(fetchOrphanDevices()).rejects.toThrow('Failed to fetch orphan devices');
   });
 });
 

@@ -1,12 +1,31 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
 import { Dashboard } from './Dashboard';
 import type { RuntimeDeviceRow } from './dashboard/runtimeDeviceRows';
 
+const apiMocks = vi.hoisted(() => ({
+  deleteDevice: vi.fn(),
+  fetchDeviceCredentialProfiles: vi.fn(),
+  fetchOrphanDevices: vi.fn(),
+}));
+
+vi.mock('../api/client', () => ({
+  deleteDevice: (...args: unknown[]) => apiMocks.deleteDevice(...args),
+  fetchDeviceCredentialProfiles: (...args: unknown[]) =>
+    apiMocks.fetchDeviceCredentialProfiles(...args),
+  fetchOrphanDevices: (...args: unknown[]) => apiMocks.fetchOrphanDevices(...args),
+}));
+
 // Mock sub-components that have their own complex dependencies
 vi.mock('./dashboard/DeviceTable', () => ({
-  DeviceTable: ({ rows }: { rows: RuntimeDeviceRow[] }) => (
+  DeviceTable: ({
+    rows,
+    onDeletePermanently,
+  }: {
+    rows: RuntimeDeviceRow[];
+    onDeletePermanently?: (device: Device) => void;
+  }) => (
     <table data-testid="device-table">
       <tbody>
         {rows.map((row) => (
@@ -14,6 +33,17 @@ vi.mock('./dashboard/DeviceTable', () => ({
             <td>{row.hostname}</td>
             <td>{row.ip}</td>
             <td>{row.statusState.label}</td>
+            {onDeletePermanently && (
+              <td>
+                <button
+                  type="button"
+                  aria-label={`Delete permanently ${row.hostname}`}
+                  onClick={() => onDeletePermanently(row.device)}
+                >
+                  Delete permanently
+                </button>
+              </td>
+            )}
           </tr>
         ))}
       </tbody>
@@ -74,7 +104,9 @@ vi.mock('./dashboard/BackupHistoryTable', () => ({
 }));
 
 vi.mock('./dashboard/BulkBackupPanel', () => ({
-  BulkBackupPanel: () => <div data-testid="bulk-backup" />,
+  BulkBackupPanel: ({ devices }: { devices: Device[] }) => (
+    <div data-testid="bulk-backup" data-device-ids={devices.map((device) => device.id).join(',')} />
+  ),
 }));
 
 vi.mock('./dashboard/ConfigViewer', () => ({
@@ -113,6 +145,15 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 }
 
 describe('Dashboard', () => {
+  beforeEach(() => {
+    apiMocks.deleteDevice.mockReset();
+    apiMocks.deleteDevice.mockResolvedValue(undefined);
+    apiMocks.fetchDeviceCredentialProfiles.mockReset();
+    apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([]);
+    apiMocks.fetchOrphanDevices.mockReset();
+    apiMocks.fetchOrphanDevices.mockResolvedValue([]);
+  });
+
   it('renders device information when devices provided', () => {
     const devices = [
       mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
@@ -187,6 +228,57 @@ describe('Dashboard', () => {
     expect(screen.getByText('Backup All')).toBeInTheDocument();
     expect(screen.getByText('Open map')).toBeInTheDocument();
     expect(screen.getByText('Vendor Settings')).toBeInTheDocument();
+  });
+
+  it('loads unassigned devices and deletes one permanently after confirmation', async () => {
+    const mapped = mockDevice({ id: 'mapped-1', hostname: 'mapped-router' });
+    const orphan = mockDevice({
+      id: 'orphan-1',
+      hostname: 'orphan-01',
+      ip: '10.0.0.32',
+      status: 'unknown',
+    });
+    apiMocks.fetchOrphanDevices.mockResolvedValue([orphan]);
+
+    render(<Dashboard devices={[mapped]} areas={[]} snapshot={null} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show unassigned devices' }));
+
+    expect(await screen.findByText('orphan-01')).toBeInTheDocument();
+    expect(screen.queryByText('mapped-router')).toBeNull();
+    expect(apiMocks.fetchOrphanDevices).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently orphan-01' }));
+
+    expect(screen.getByRole('dialog', { name: 'Delete device permanently' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/This permanently deletes orphan-01 from the global inventory/i),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }));
+
+    await waitFor(() => expect(apiMocks.deleteDevice).toHaveBeenCalledWith('orphan-1'));
+    await waitFor(() => expect(screen.queryByText('orphan-01')).toBeNull());
+  });
+
+  it('uses unassigned devices for the bulk backup panel while scoped to unassigned', async () => {
+    const mapped = mockDevice({ id: 'mapped-1', hostname: 'mapped-router' });
+    const orphan = mockDevice({
+      id: 'orphan-1',
+      hostname: 'orphan-01',
+      ip: '10.0.0.32',
+      status: 'unknown',
+    });
+    apiMocks.fetchOrphanDevices.mockResolvedValue([orphan]);
+
+    render(<Dashboard devices={[mapped]} areas={[]} snapshot={null} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show unassigned devices' }));
+    expect(await screen.findByText('orphan-01')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Backup All'));
+
+    expect(screen.getByTestId('bulk-backup')).toHaveAttribute('data-device-ids', 'orphan-1');
   });
 
   it('calls onOpenMap from the Devices return-to-map action', () => {

@@ -409,6 +409,15 @@ export async function fetchDevices(): Promise<Device[]> {
   }
 }
 
+export async function fetchOrphanDevices(): Promise<Device[]> {
+  try {
+    return parseDevicesResponse(await requestJSON('/api/v1/devices/orphans'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    throw new Error(`Failed to fetch orphan devices: ${message}`);
+  }
+}
+
 export async function fetchLinks(): Promise<Link[]> {
   try {
     return parseLinksResponse(await requestJSON('/api/v1/links'));

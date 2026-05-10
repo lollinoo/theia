@@ -22,8 +22,9 @@ import (
 // --- Mock repositories for DeviceHandler tests ---
 
 type mockDeviceRepo struct {
-	mu      sync.Mutex
-	devices map[uuid.UUID]*domain.Device
+	mu              sync.Mutex
+	devices         map[uuid.UUID]*domain.Device
+	orphanDeviceIDs []uuid.UUID
 }
 
 func newMockDeviceRepo() *mockDeviceRepo {
@@ -77,6 +78,18 @@ func (r *mockDeviceRepo) GetAll() ([]domain.Device, error) {
 	var result []domain.Device
 	for _, d := range r.devices {
 		result = append(result, *d)
+	}
+	return result, nil
+}
+
+func (r *mockDeviceRepo) GetOrphans() ([]domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result []domain.Device
+	for _, id := range r.orphanDeviceIDs {
+		if device, ok := r.devices[id]; ok {
+			result = append(result, *device)
+		}
 	}
 	return result, nil
 }
@@ -728,6 +741,55 @@ func TestDeviceHandlerList_IncludesPollingEnabled(t *testing.T) {
 	}
 	if got := resp.Data[0].Attributes["polling_enabled"]; got != false {
 		t.Fatalf("polling_enabled = %#v, want false", got)
+	}
+}
+
+func TestDeviceHandlerListOrphans_ReturnsJSONAPIDevices(t *testing.T) {
+	handler, deviceRepo, _ := newTestDeviceHandler(t)
+	mapped := seedDevice(t, deviceRepo)
+	orphan := &domain.Device{
+		ID:       uuid.New(),
+		IP:       "10.0.0.32",
+		Hostname: "orphan-router",
+		Managed:  true,
+		Status:   domain.DeviceStatusUnknown,
+		Tags:     map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(orphan); err != nil {
+		t.Fatalf("Create orphan failed: %v", err)
+	}
+	deviceRepo.orphanDeviceIDs = []uuid.UUID{orphan.ID}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/orphans", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleListOrphans(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp jsonAPIList
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 orphan device, got %d", len(resp.Data))
+	}
+	if resp.Data[0].ID != orphan.ID.String() {
+		t.Fatalf("expected orphan device %s, got %s", orphan.ID, resp.Data[0].ID)
+	}
+	if resp.Data[0].ID == mapped.ID.String() {
+		t.Fatalf("mapped device %s should not be returned as orphan", mapped.ID)
+	}
+	if resp.Data[0].Type != "device" {
+		t.Fatalf("expected JSON:API type device, got %q", resp.Data[0].Type)
+	}
+	if got := resp.Data[0].Attributes["hostname"]; got != orphan.Hostname {
+		t.Fatalf("hostname = %#v, want %q", got, orphan.Hostname)
 	}
 }
 

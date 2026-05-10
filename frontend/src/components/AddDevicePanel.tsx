@@ -6,6 +6,7 @@ import {
   createDevice,
   fetchAreas,
   fetchCredentialProfiles,
+  fetchDevices,
   fetchSNMPProfiles,
   revealSNMPProfile,
   setWinBoxProfile,
@@ -41,6 +42,14 @@ interface AddDevicePanelProps {
 }
 
 type MetricsMode = 'snmp' | 'prometheus' | 'prometheus_snmp_fallback';
+
+function normalizeDeviceLookupValue(value: string | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function isDuplicateDeviceValidationError(err: unknown): err is ValidationError {
+  return err instanceof ValidationError && /device.*already exists/i.test(err.message);
+}
 
 export function AddDevicePanel({
   onDeviceAdded,
@@ -190,6 +199,34 @@ export function AddDevicePanel({
     }
   }
 
+  async function addExistingDeviceToCurrentMapOnDuplicate(
+    err: unknown,
+    payload: ReturnType<typeof buildCreatePayloadForCurrentScope>,
+  ): Promise<boolean> {
+    if (!mapContext || !isDuplicateDeviceValidationError(err)) {
+      return false;
+    }
+
+    const lookupValues = new Set(
+      [payload.ip, payload.hostname].map(normalizeDeviceLookupValue).filter(Boolean),
+    );
+    if (lookupValues.size === 0) {
+      return false;
+    }
+
+    const existingDevice = (await fetchDevices()).find(
+      (device) =>
+        lookupValues.has(normalizeDeviceLookupValue(device.ip)) ||
+        lookupValues.has(normalizeDeviceLookupValue(device.hostname)),
+    );
+    if (!existingDevice) {
+      return false;
+    }
+
+    await addDeviceToCurrentMap(existingDevice.id);
+    return true;
+  }
+
   async function applyProfile(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) return;
@@ -254,11 +291,16 @@ export function AddDevicePanel({
       }
       setLoading(true);
       setError(null);
+      const payload = buildCreatePayloadForCurrentScope();
       try {
-        const created = await createDevice(buildCreatePayloadForCurrentScope());
+        const created = await createDevice(payload);
         await addDeviceToCurrentMap(created.id);
         onDeviceAdded();
       } catch (err) {
+        if (await addExistingDeviceToCurrentMapOnDuplicate(err, payload)) {
+          onDeviceAdded();
+          return;
+        }
         if (err instanceof ServerError) {
           setError(
             err.correlationId
@@ -308,12 +350,17 @@ export function AddDevicePanel({
 
     setLoading(true);
     setError(null);
+    const payload = buildCreatePayloadForCurrentScope();
     try {
-      const created = await createDevice(buildCreatePayloadForCurrentScope());
+      const created = await createDevice(payload);
       await assignSelectedCredentials(created.id);
       await addDeviceToCurrentMap(created.id);
       onDeviceAdded();
     } catch (err) {
+      if (await addExistingDeviceToCurrentMapOnDuplicate(err, payload)) {
+        onDeviceAdded();
+        return;
+      }
       if (err instanceof ServerError) {
         setError(
           err.correlationId

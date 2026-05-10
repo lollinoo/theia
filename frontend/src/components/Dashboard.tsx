@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { fetchDeviceCredentialProfiles } from '../api/client';
+import { deleteDevice, fetchDeviceCredentialProfiles, fetchOrphanDevices } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area, Device } from '../types/api';
 import type { SnapshotPayload } from '../types/metrics';
@@ -23,6 +23,8 @@ type PanelType =
   | { kind: 'vendor-settings' }
   | { kind: 'bulk-backup' };
 
+type DeviceInventoryScope = 'all' | 'unassigned';
+
 interface DashboardProps {
   devices: Device[];
   areas: Area[];
@@ -44,6 +46,13 @@ export function Dashboard({
 }: DashboardProps) {
   const { resolvedTheme } = useTheme();
   const [panel, setPanel] = useState<PanelType | null>(null);
+  const [inventoryScope, setInventoryScope] = useState<DeviceInventoryScope>('all');
+  const [orphanDevices, setOrphanDevices] = useState<Device[]>([]);
+  const [orphanLoading, setOrphanLoading] = useState(false);
+  const [orphanError, setOrphanError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Device | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Current credential profile ID for the open ssh-credentials panel.
   // Fetched via fetchDeviceCredentialProfiles when the panel opens (Option A: live source of truth
@@ -55,6 +64,39 @@ export function Dashboard({
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [areaFilter, setAreaFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    if (inventoryScope !== 'unassigned') {
+      return;
+    }
+
+    let cancelled = false;
+    setOrphanLoading(true);
+    setOrphanError(null);
+    void fetchOrphanDevices()
+      .then((devicesData) => {
+        if (!cancelled) {
+          setOrphanDevices(devicesData);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          const message =
+            error instanceof Error ? error.message : 'Failed to load unassigned devices';
+          setOrphanError(message);
+          setOrphanDevices([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setOrphanLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [inventoryScope]);
 
   useEffect(() => {
     if (selectedAreaId === undefined) {
@@ -83,7 +125,14 @@ export function Dashboard({
     return map;
   }, [areas]);
 
-  const rows = useMemo(() => buildRuntimeDeviceRows({ devices, snapshot }), [devices, snapshot]);
+  const activeDevices = inventoryScope === 'unassigned' ? orphanDevices : devices;
+  const activeSnapshot = inventoryScope === 'unassigned' ? null : snapshot;
+  const activeLoading = inventoryScope === 'unassigned' ? orphanLoading : loading;
+
+  const rows = useMemo(
+    () => buildRuntimeDeviceRows({ devices: activeDevices, snapshot: activeSnapshot }),
+    [activeDevices, activeSnapshot],
+  );
 
   const rowsWithAreaSortNames = useMemo(
     () =>
@@ -97,7 +146,7 @@ export function Dashboard({
   const filteredRows = rowsWithAreaSortNames.filter((row) => {
     if (statusFilter !== 'all' && row.statusState.dotStatus !== statusFilter) return false;
     if (typeFilter !== 'all' && row.deviceType !== typeFilter) return false;
-    if (areaFilter !== 'all') {
+    if (inventoryScope === 'all' && areaFilter !== 'all') {
       if (areaFilter === 'unassigned') {
         if (row.areaIds.length) return false;
       } else {
@@ -111,7 +160,7 @@ export function Dashboard({
     return true;
   });
 
-  const types = [...new Set(devices.map((d) => d.device_type))].sort();
+  const types = [...new Set(activeDevices.map((d) => d.device_type))].sort();
 
   const statusOptions: FilterOption[] = [
     { value: 'all', label: 'All' },
@@ -137,6 +186,26 @@ export function Dashboard({
     { value: 'unassigned', label: 'Unassigned' },
   ];
 
+  async function handleConfirmPermanentDelete() {
+    if (!deleteTarget) {
+      return;
+    }
+
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      await deleteDevice(deleteTarget.id);
+      const deletedID = deleteTarget.id;
+      setOrphanDevices((current) => current.filter((device) => device.id !== deletedID));
+      setDeleteTarget(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete device';
+      setDeleteError(message);
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
   const panelTitle = panel
     ? panel.kind === 'ssh-credentials'
       ? 'SSH Credentials'
@@ -155,6 +224,34 @@ export function Dashboard({
     <div className="h-full pt-[86px] flex flex-col transition-colors duration-200">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-surface/50 transition-colors duration-200">
+        <div className="inline-flex rounded-md bg-surface-high p-0.5 text-xs">
+          <button
+            type="button"
+            aria-label="Show all devices"
+            aria-pressed={inventoryScope === 'all'}
+            onClick={() => setInventoryScope('all')}
+            className={`rounded px-2.5 py-1.5 transition-colors ${
+              inventoryScope === 'all'
+                ? 'bg-primary text-on-primary'
+                : 'text-on-bg-secondary hover:text-on-bg'
+            }`}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            aria-label="Show unassigned devices"
+            aria-pressed={inventoryScope === 'unassigned'}
+            onClick={() => setInventoryScope('unassigned')}
+            className={`rounded px-2.5 py-1.5 transition-colors ${
+              inventoryScope === 'unassigned'
+                ? 'bg-primary text-on-primary'
+                : 'text-on-bg-secondary hover:text-on-bg'
+            }`}
+          >
+            Unassigned
+          </button>
+        </div>
         <FilterSelect
           value={statusFilter}
           onChange={setStatusFilter}
@@ -219,16 +316,21 @@ export function Dashboard({
         </button>
 
         <span className="font-mono text-xs text-on-bg-secondary bg-surface-high rounded-full px-2.5 py-1">
-          {filteredRows.length} / {devices.length}
+          {filteredRows.length} / {activeDevices.length}
         </span>
+        {orphanError && inventoryScope === 'unassigned' && (
+          <span className="text-xs text-status-down">{orphanError}</span>
+        )}
       </div>
 
       {/* Table */}
       <div className="flex-1 overflow-auto px-4 py-2">
-        {devices.length === 0 ? (
-          loading ? (
+        {activeDevices.length === 0 ? (
+          activeLoading ? (
             /* D-16: Skeleton loading rows */
             <SkeletonTable />
+          ) : inventoryScope === 'unassigned' ? (
+            <EmptyUnassignedState />
           ) : (
             <EmptyMapState />
           )
@@ -279,6 +381,14 @@ export function Dashboard({
               onBackup={(device) => setPanel({ kind: 'backup', device })}
               onBackupHistory={(device) => setPanel({ kind: 'backup-history', device })}
               onViewConfig={(device) => setPanel({ kind: 'config-viewer', device })}
+              onDeletePermanently={
+                inventoryScope === 'unassigned'
+                  ? (device) => {
+                      setDeleteError(null);
+                      setDeleteTarget(device);
+                    }
+                  : undefined
+              }
             />
           </div>
         )}
@@ -304,9 +414,24 @@ export function Dashboard({
           />
         )}
         {panel?.kind === 'config-viewer' && <ConfigViewer deviceId={panel.device.id} />}
-        {panel?.kind === 'bulk-backup' && <BulkBackupPanel devices={devices} />}
+        {panel?.kind === 'bulk-backup' && <BulkBackupPanel devices={activeDevices} />}
         {panel?.kind === 'vendor-settings' && <VendorSettingsPanel />}
       </SidePanel>
+
+      <DeleteOrphanDeviceDialog
+        device={deleteTarget}
+        deleting={deleteLoading}
+        error={deleteError}
+        onClose={() => {
+          if (!deleteLoading) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+        onDelete={() => {
+          void handleConfirmPermanentDelete();
+        }}
+      />
     </div>
   );
 }
@@ -375,6 +500,89 @@ function EmptyMapState() {
     <div className="flex h-40 flex-col items-center justify-center gap-2">
       <p className="text-sm text-on-bg-secondary">No devices in this map</p>
       <p className="text-xs text-on-bg-muted">Add devices from the topology canvas.</p>
+    </div>
+  );
+}
+
+function EmptyUnassignedState() {
+  return (
+    <div className="flex h-40 flex-col items-center justify-center gap-2">
+      <p className="text-sm text-on-bg-secondary">No unassigned devices</p>
+      <p className="text-xs text-on-bg-muted">Every device is present in at least one saved map.</p>
+    </div>
+  );
+}
+
+function DeleteOrphanDeviceDialog({
+  device,
+  deleting,
+  error,
+  onClose,
+  onDelete,
+}: {
+  device: Device | null;
+  deleting: boolean;
+  error: string | null;
+  onClose: () => void;
+  onDelete: () => void;
+}) {
+  if (!device) {
+    return null;
+  }
+
+  const deviceLabel = device.hostname || device.ip || device.id;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-orphan-device-title"
+        className="w-full max-w-md rounded-lg border border-outline bg-surface p-5 shadow-panel"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 id="delete-orphan-device-title" className="text-base font-semibold text-on-bg">
+              Delete device permanently
+            </h2>
+            <p className="mt-1 text-sm text-on-bg-secondary">{deviceLabel}</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close delete device dialog"
+            onClick={onClose}
+            disabled={deleting}
+            className="rounded-full p-1.5 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-50"
+          >
+            <MaterialIcon name="close" size={18} />
+          </button>
+        </div>
+
+        <p className="mt-5 text-sm text-on-bg-secondary">
+          This permanently deletes {deviceLabel} from the global inventory and cannot be undone. The
+          device is not present in any saved map.
+        </p>
+        {error && <p className="mt-3 text-sm text-status-down">{error}</p>}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={deleting}
+            className="rounded-lg border border-outline px-3 py-2 text-sm font-medium text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={deleting}
+            className="rounded-lg bg-status-down px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-status-down/90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          >
+            {deleting ? 'Deleting...' : 'Delete permanently'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

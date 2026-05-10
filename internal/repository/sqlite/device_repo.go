@@ -389,6 +389,64 @@ func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 	return devices, nil
 }
 
+// GetOrphans retrieves devices that do not belong to any saved canvas map.
+func (r *DeviceRepo) GetOrphans() ([]domain.Device, error) {
+	rows, err := r.db.Query(
+		`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
+			sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
+			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
+			poll_class, poll_interval_override, polling_enabled, notes,
+			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
+		FROM devices d
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM canvas_map_devices cmd
+			WHERE cmd.device_id = d.id
+		)
+		ORDER BY hostname`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying orphan devices: %w", err)
+	}
+	defer rows.Close()
+
+	var devices []domain.Device
+	for rows.Next() {
+		device, err := r.scanDeviceRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		devices = append(devices, *device)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return devices, nil
+	}
+
+	loadedIDs := make([]uuid.UUID, 0, len(devices))
+	for _, device := range devices {
+		loadedIDs = append(loadedIDs, device.ID)
+	}
+
+	interfacesByDevice, err := r.loadInterfacesForDeviceIDs(loadedIDs)
+	if err != nil {
+		return nil, fmt.Errorf("loading interfaces for orphan devices: %w", err)
+	}
+	areaIDsByDevice, err := r.loadAreaIDsForDeviceIDs(loadedIDs)
+	if err != nil {
+		return nil, fmt.Errorf("loading area IDs for orphan devices: %w", err)
+	}
+
+	for i := range devices {
+		devices[i].Interfaces = interfacesByDevice[devices[i].ID]
+		devices[i].AreaIDs = areaIDsByDevice[devices[i].ID]
+	}
+
+	return devices, nil
+}
+
 // GetByIDs retrieves the requested devices with their interfaces and area IDs.
 func (r *DeviceRepo) GetByIDs(ids []uuid.UUID) ([]domain.Device, error) {
 	if len(ids) == 0 {

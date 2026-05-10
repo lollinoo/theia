@@ -271,6 +271,22 @@ func (h *DeviceHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(jsonAPIList{Data: resources})
 }
 
+// HandleListOrphans handles GET /api/v1/devices/orphans.
+func (h *DeviceHandler) HandleListOrphans(w http.ResponseWriter, r *http.Request) {
+	devices, err := h.svc.GetOrphanDevices(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list orphan devices", err)
+		return
+	}
+
+	resources := make([]jsonAPIResource, 0, len(devices))
+	for i := range devices {
+		resources = append(resources, h.deviceToResource(&devices[i]))
+	}
+
+	json.NewEncoder(w).Encode(jsonAPIList{Data: resources})
+}
+
 func (h *DeviceHandler) addDeviceToPrimaryCanvasMap(device *domain.Device) error {
 	if h.canvasMapRepo == nil || device == nil {
 		return nil

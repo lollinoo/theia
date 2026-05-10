@@ -451,7 +451,8 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	go hub.Run()
 
 	stateStore := state.NewStore()
-	sched := scheduler.NewScheduler(deviceLinkCache, settingsRepo)
+	pollingDeviceSource := scheduler.NewSavedMapDeviceSource(deviceLinkCache, canvasMapRepo)
+	sched := scheduler.NewScheduler(pollingDeviceSource, settingsRepo)
 	wirePollRescheduler(deviceService, sched)
 	snmpClientFactory := newCollectorSNMPClientFunc(settingsRepo)
 	essentialCollector := collector.NewEssentialCollector(vendorRegistry, snmpClientFactory)

@@ -4,6 +4,7 @@ import {
   addDeviceToCanvasMap,
   assignCredentialProfile,
   createDevice,
+  fetchDevices,
   setWinBoxProfile,
   updateCanvasMapDeviceAreas,
 } from '../api/client';
@@ -43,6 +44,7 @@ vi.mock('../api/client', () => ({
     created_at: '',
     updated_at: '',
   }),
+  fetchDevices: vi.fn().mockResolvedValue([]),
   fetchAreas: vi.fn().mockResolvedValue([]),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   createDevice: vi.fn().mockResolvedValue({
@@ -71,6 +73,7 @@ vi.mock('../api/client', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (fetchDevices as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 
 describe('AddDevicePanel', () => {
@@ -296,6 +299,54 @@ describe('virtual mode', () => {
       expect.not.objectContaining({ area_ids: ['map-area-1'] }),
     );
     expect(onDeviceAdded).toHaveBeenCalled();
+  });
+
+  it('adds an existing physical device to the selected saved map when create reports duplicate address', async () => {
+    const onDeviceAdded = vi.fn();
+    (createDevice as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new ValidationError('a device with IP/host "10.0.0.1" already exists'),
+    );
+    (fetchDevices as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: 'existing-dev',
+        hostname: 'existing-router',
+        ip: '10.0.0.1',
+        device_type: 'router',
+        poll_class: 'standard',
+        poll_interval_override: null,
+        polling_enabled: true,
+        status: 'up',
+        sys_name: 'existing-router',
+        sys_descr: '',
+        hardware_model: '',
+        vendor: 'mikrotik',
+        managed: true,
+        interfaces: [],
+        backup_supported: true,
+        metrics_source: 'snmp',
+        prometheus_label_name: 'instance',
+        prometheus_label_value: '',
+        area_ids: [],
+      },
+    ]);
+
+    render(<AddDevicePanel mapContext={{ mapId: 'map-1' }} onDeviceAdded={onDeviceAdded} />);
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(addDeviceToCanvasMap).toHaveBeenCalledWith('map-1', 'existing-dev', {
+        include_connected_links: true,
+      });
+    });
+
+    expect(fetchDevices).toHaveBeenCalled();
+    expect(assignCredentialProfile).not.toHaveBeenCalled();
+    expect(onDeviceAdded).toHaveBeenCalled();
+    expect(screen.queryByText(/already exists/i)).not.toBeInTheDocument();
   });
 
   it('assigns selected credentials after creating a physical device', async () => {

@@ -1,5 +1,11 @@
-import { useEffect, useState } from 'react';
-import { deleteDevice, fetchAreas, updateCanvasMapDeviceAreas, updateDevice } from '../api/client';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  deleteDevice,
+  fetchAreas,
+  removeDeviceFromCanvasMap,
+  updateCanvasMapDeviceAreas,
+  updateDevice,
+} from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type { Area, Device } from '../types/api';
 import {
@@ -24,8 +30,12 @@ export function BulkEditPanel({
   onDevicesDeleted,
 }: BulkEditPanelProps) {
   const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
+  const selectionKey = useMemo(() => devices.map((device) => device.id).join('|'), [devices]);
+  const selectionKeyRef = useRef(selectionKey);
+  const [baselineModel, setBaselineModel] = useState<BulkEditModel>(() =>
+    createBulkEditModel(devices),
+  );
   const [model, setModel] = useState<BulkEditModel>(() => createBulkEditModel(devices));
-  const initialModel = createBulkEditModel(devices);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -47,12 +57,26 @@ export function BulkEditPanel({
       });
   }, [providedAreas]);
 
-  useEffect(() => {
-    setModel(createBulkEditModel(devices));
-  }, [devices]);
-
   const areas = providedAreas ?? loadedAreas;
   const hasChanges = model.areaIds.dirty || model.metricsSource.dirty || model.vendor.dirty;
+
+  useEffect(() => {
+    const nextModel = createBulkEditModel(devices);
+    if (selectionKeyRef.current !== selectionKey) {
+      selectionKeyRef.current = selectionKey;
+      setBaselineModel(nextModel);
+      setModel(nextModel);
+      setSaveError(null);
+      setSaved(false);
+      setConfirmDelete(false);
+      setDeleteProgress(0);
+      return;
+    }
+    if (!hasChanges) {
+      setBaselineModel(nextModel);
+      setModel(nextModel);
+    }
+  }, [devices, hasChanges, selectionKey]);
 
   async function handleSave() {
     if (!hasChanges) return;
@@ -121,7 +145,9 @@ export function BulkEditPanel({
       if (updatedDevices.length > 0) {
         onDevicesUpdated(updatedDevices);
         setSaved(true);
-        setModel(createBulkEditModel(updatedDevices));
+        const nextModel = createBulkEditModel(updatedDevices);
+        setBaselineModel(nextModel);
+        setModel(nextModel);
         setTimeout(() => setSaved(false), 2000);
       }
     } catch (err) {
@@ -148,10 +174,12 @@ export function BulkEditPanel({
     let completed = 0;
     const results = await Promise.allSettled(
       devices.map((d) =>
-        deleteDevice(d.id).then(() => {
-          completed++;
-          setDeleteProgress(completed);
-        }),
+        (mapContext ? removeDeviceFromCanvasMap(mapContext.mapId, d.id) : deleteDevice(d.id)).then(
+          () => {
+            completed++;
+            setDeleteProgress(completed);
+          },
+        ),
       ),
     );
 
@@ -317,7 +345,7 @@ export function BulkEditPanel({
             if (e.target.value === '') {
               setModel((current) => ({
                 ...current,
-                metricsSource: initialModel.metricsSource,
+                metricsSource: baselineModel.metricsSource,
               }));
               return;
             }
@@ -366,12 +394,14 @@ export function BulkEditPanel({
             onClick={() => setConfirmDelete(true)}
             className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20"
           >
-            Delete {devices.length} Devices
+            {mapContext ? 'Remove' : 'Delete'} {devices.length} Devices
           </button>
         ) : (
           <div className="space-y-2 rounded-lg border border-status-down/30 bg-status-down/10 p-3">
             <p className="text-sm text-status-down">
-              Delete {devices.length} devices? This cannot be undone.
+              {mapContext
+                ? `Remove ${devices.length} devices from ${mapContext.mapName}?`
+                : `Delete ${devices.length} devices? This cannot be undone.`}
             </p>
             {deleteLoading && (
               <div className="w-full rounded-full bg-status-down/20 h-1.5">
@@ -399,8 +429,10 @@ export function BulkEditPanel({
                 className="flex-1 rounded-lg bg-status-down px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {deleteLoading
-                  ? `Deleting ${deleteProgress}/${devices.length}...`
-                  : 'Confirm Delete All'}
+                  ? `${mapContext ? 'Removing' : 'Deleting'} ${deleteProgress}/${devices.length}...`
+                  : mapContext
+                    ? 'Confirm Remove All'
+                    : 'Confirm Delete All'}
               </button>
             </div>
           </div>

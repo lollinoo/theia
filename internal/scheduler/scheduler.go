@@ -203,6 +203,9 @@ func (s *Scheduler) ReduePerformanceTask(device domain.Device, changedAt time.Ti
 	if !shouldScheduleRecurringDevice(device) || device.DeviceType == domain.DeviceTypeVirtual {
 		return
 	}
+	if !s.sourceIncludesDevice(device.ID) {
+		return
+	}
 
 	if changedAt.IsZero() {
 		changedAt = s.now()
@@ -226,12 +229,13 @@ func (s *Scheduler) ReconcileDeviceTasks(device domain.Device, changedAt time.Ti
 	} else {
 		changedAt = changedAt.UTC()
 	}
+	sourceIncludesDevice := s.sourceIncludesDevice(device.ID)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.removeDeviceTasksLocked(device.ID)
-	if shouldScheduleRecurringDevice(device) {
+	if sourceIncludesDevice && shouldScheduleRecurringDevice(device) {
 		s.scheduleRecurringDeviceLocked(device, changedAt, nil)
 	}
 	s.recordMetricsLocked(changedAt)
@@ -242,6 +246,9 @@ func (s *Scheduler) ScheduleBootstrap(device domain.Device, dueAt time.Time) boo
 		return false
 	}
 	if !shouldScheduleBootstrapTask(device) {
+		return false
+	}
+	if !s.sourceIncludesDevice(device.ID) {
 		return false
 	}
 
@@ -262,6 +269,19 @@ func (s *Scheduler) ScheduleBootstrap(device domain.Device, dueAt time.Time) boo
 		observability.Default().IncSchedulerBackpressure(domain.VolatilityClassStatic, "bootstrap_queue_full")
 		return false
 	}
+}
+
+func (s *Scheduler) sourceIncludesDevice(deviceID uuid.UUID) bool {
+	gate, ok := s.source.(deviceMembershipGate)
+	if !ok {
+		return true
+	}
+	included, err := gate.IncludesDevice(deviceID)
+	if err != nil {
+		log.Printf("scheduler: failed to check saved map membership for device %s: %v", deviceID, err)
+		return false
+	}
+	return included
 }
 
 func (s *Scheduler) run(ctx context.Context) {
@@ -631,6 +651,9 @@ func (s *Scheduler) popReadyEligible() *heapItem {
 func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskRequest) {
 	device := request.device
 	if !shouldScheduleRecurringDevice(device) {
+		return
+	}
+	if !s.sourceIncludesDevice(device.ID) {
 		return
 	}
 	if device.DeviceType == domain.DeviceTypeVirtual {

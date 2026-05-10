@@ -23,6 +23,7 @@ interface DeviceTableProps {
   onBackup: (device: Device) => void;
   onBackupHistory: (device: Device) => void;
   onViewConfig: (device: Device) => void;
+  onDeletePermanently?: (device: Device) => void;
 }
 
 export function DeviceTable({
@@ -33,6 +34,7 @@ export function DeviceTable({
   onBackup,
   onBackupHistory,
   onViewConfig,
+  onDeletePermanently,
 }: DeviceTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('hostname');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
@@ -134,6 +136,9 @@ export function DeviceTable({
               onBackup={() => onBackup(row.device)}
               onBackupHistory={() => onBackupHistory(row.device)}
               onViewConfig={() => onViewConfig(row.device)}
+              onDeletePermanently={
+                onDeletePermanently ? () => onDeletePermanently(row.device) : undefined
+              }
             />
           ))}
         </tbody>

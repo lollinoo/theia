@@ -218,7 +218,15 @@ func NewRouter(
 		deviceHandler.HandleBatchAdd(w, r)
 	})
 
-	// Device by ID routes (must be registered after /devices/batch to avoid conflicts)
+	mux.HandleFunc("/api/v1/devices/orphans", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		deviceHandler.HandleListOrphans(w, r)
+	})
+
+	// Device by ID routes (must be registered after /devices/batch and /devices/orphans to avoid conflicts)
 	mux.HandleFunc("/api/v1/devices/", func(w http.ResponseWriter, r *http.Request) {
 		// Check if this is an interfaces request
 		if strings.HasSuffix(r.URL.Path, "/interfaces") && r.Method == http.MethodGet {
