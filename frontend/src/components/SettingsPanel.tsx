@@ -5,7 +5,7 @@ import {
   fetchSettingsWithMetadata,
   updateSetting,
 } from '../api/client';
-import type { Area, Device, TopologyDiscoveryMode } from '../types/api';
+import type { TopologyDiscoveryMode } from '../types/api';
 import {
   TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS,
   formatTopologyDiscoveryMode,
@@ -15,7 +15,6 @@ import {
   validateRetentionCount,
   validateURL,
 } from '../utils/validation';
-import { AreaManager } from './AreaManager';
 import { CredentialProfileManager } from './CredentialProfileManager';
 import { InstanceBackupManager } from './InstanceBackupManager';
 import { SNMPProfileManager } from './SNMPProfileManager';
@@ -191,20 +190,10 @@ function SavedIndicator({ visible }: SavedIndicatorProps) {
 }
 
 interface SettingsPanelProps {
-  onAreasChange?: () => void | Promise<void>;
   onSettingsChange?: () => void;
-  mapContext?: { mapId: string; mapName: string };
-  areas?: Area[];
-  devices?: Device[];
 }
 
-export function SettingsPanel({
-  onAreasChange,
-  onSettingsChange,
-  mapContext,
-  areas,
-  devices,
-}: SettingsPanelProps) {
+export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
   const [grafanaUrl, setGrafanaUrl] = useState('');
@@ -775,15 +764,6 @@ export function SettingsPanel({
           TCP port the WinBox bridge listens on. Default is <span className="font-mono">1337</span>.
           Must match <span className="font-mono">ListenPort</span> in the bridge&apos;s config.json.
         </p>
-      </div>
-
-      <div className="mt-6">
-        <AreaManager
-          onAreasChange={onAreasChange}
-          mapContext={mapContext}
-          areas={areas}
-          devices={devices}
-        />
       </div>
 
       <div className="mt-6">

@@ -1,8 +1,38 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
 import type { DeviceRuntimeDTO, SnapshotPayload } from '../../types/metrics';
 import { TopologyHub } from './TopologyHub';
+
+const createCanvasMapAreaMock = vi.fn();
+const updateCanvasMapAreaMock = vi.fn();
+const deleteCanvasMapAreaMock = vi.fn();
+const updateCanvasMapDeviceAreasMock = vi.fn();
+const createAreaMock = vi.fn();
+const updateAreaMock = vi.fn();
+const deleteAreaMock = vi.fn();
+const fetchAreasMock = vi.fn();
+const fetchDevicesMock = vi.fn();
+const updateDeviceMock = vi.fn();
+
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => ({ theme: 'dark' as const, resolvedTheme: 'dark' as const, setTheme: vi.fn() }),
+  adaptAreaColor: (hex: string) => hex,
+}));
+
+vi.mock('../../api/client', () => ({
+  createArea: (...args: unknown[]) => createAreaMock(...args),
+  createCanvasMapArea: (...args: unknown[]) => createCanvasMapAreaMock(...args),
+  deleteArea: (...args: unknown[]) => deleteAreaMock(...args),
+  updateCanvasMapArea: (...args: unknown[]) => updateCanvasMapAreaMock(...args),
+  deleteCanvasMapArea: (...args: unknown[]) => deleteCanvasMapAreaMock(...args),
+  fetchAreas: (...args: unknown[]) => fetchAreasMock(...args),
+  fetchDevices: (...args: unknown[]) => fetchDevicesMock(...args),
+  updateArea: (...args: unknown[]) => updateAreaMock(...args),
+  updateCanvasMapDeviceAreas: (...args: unknown[]) => updateCanvasMapDeviceAreasMock(...args),
+  updateDevice: (...args: unknown[]) => updateDeviceMock(...args),
+}));
 
 function mockArea(overrides: Partial<Area> = {}): Area {
   return {
@@ -112,6 +142,16 @@ function mockDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRun
 }
 
 describe('TopologyHub', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createCanvasMapAreaMock.mockResolvedValue(mockArea({ id: 'area-new', name: 'Hub Area' }));
+    updateCanvasMapAreaMock.mockResolvedValue(mockArea());
+    deleteCanvasMapAreaMock.mockResolvedValue(undefined);
+    updateCanvasMapDeviceAreasMock.mockResolvedValue(mockMap());
+    fetchAreasMock.mockResolvedValue([]);
+    fetchDevicesMock.mockResolvedValue([]);
+  });
+
   it('renders map-first hub content without legacy global navigation', () => {
     const area = mockArea();
     const onOpenArea = vi.fn();
@@ -298,5 +338,47 @@ describe('TopologyHub', () => {
 
     expect(screen.getByText('Saved maps')).toBeInTheDocument();
     expect(screen.getByText('No saved maps')).toBeInTheDocument();
+  });
+
+  it('creates map-local areas from the Topology Hub section for the selected map', async () => {
+    const onAreasChange = vi.fn();
+    const selectedMap = mockMap({ id: 'map-branch', name: 'Branch', is_default: false });
+
+    render(
+      <TopologyHub
+        devices={[]}
+        areas={[]}
+        links={[]}
+        snapshot={null}
+        maps={[mockMap(), selectedMap]}
+        selectedMapId="map-branch"
+        selectedMapName="Branch"
+        mapsLoading={false}
+        mapsError={null}
+        savedMapsEnabled={true}
+        onOpenArea={vi.fn()}
+        onOpenMap={vi.fn()}
+        onSelectMap={vi.fn()}
+        onCreateEmptyMap={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+        onDuplicateMap={vi.fn()}
+        onDeleteMap={vi.fn()}
+        onAreasChange={onAreasChange}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'New area' }));
+    await userEvent.type(screen.getByPlaceholderText(/backbone/i), 'Hub Area');
+    await userEvent.click(screen.getByRole('button', { name: 'Create Area' }));
+
+    await waitFor(() => {
+      expect(createCanvasMapAreaMock).toHaveBeenCalledWith('map-branch', {
+        name: 'Hub Area',
+        description: '',
+        color: '#00E676',
+      });
+    });
+    expect(onAreasChange).toHaveBeenCalled();
   });
 });

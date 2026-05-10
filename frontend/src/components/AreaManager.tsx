@@ -13,6 +13,7 @@ import {
 } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area, Device } from '../types/api';
+import { MaterialIcon } from './MaterialIcon';
 
 // Per D-01: curated palette of 7 swatches
 const AREA_COLORS = [
@@ -139,6 +140,18 @@ interface AreaManagerProps {
   mapContext?: { mapId: string; mapName: string };
   areas?: Area[];
   devices?: Device[];
+  title?: string;
+  titleId?: string;
+  areaMetrics?: Record<
+    string,
+    {
+      healthLabel: string;
+      activeLinkCount: number;
+      degradedDeviceCount: number;
+    }
+  >;
+  onOpenArea?: (areaId: string) => void;
+  onCreateMapFromArea?: (area: Area) => void;
 }
 
 export function AreaManager({
@@ -146,6 +159,11 @@ export function AreaManager({
   mapContext,
   areas: providedAreas,
   devices: providedDevices,
+  title = 'Areas',
+  titleId,
+  areaMetrics,
+  onOpenArea,
+  onCreateMapFromArea,
 }: AreaManagerProps) {
   const { resolvedTheme } = useTheme();
   const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
@@ -181,6 +199,12 @@ export function AreaManager({
   useEffect(() => {
     void load();
   }, [mapScoped]);
+
+  useEffect(() => {
+    setMode('list');
+    setEditing(null);
+    setConfirmDeleteId(null);
+  }, [mapContext?.mapId]);
 
   async function refreshAreas() {
     if (mapScoped) {
@@ -400,7 +424,13 @@ export function AreaManager({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className={labelClass}>Areas</p>
+        {titleId ? (
+          <h3 id={titleId} className="text-base font-semibold text-on-bg">
+            {title}
+          </h3>
+        ) : (
+          <p className={labelClass}>{title}</p>
+        )}
         <button
           type="button"
           onClick={() => setMode('create')}
@@ -409,7 +439,7 @@ export function AreaManager({
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          New
+          New area
         </button>
       </div>
 
@@ -420,107 +450,164 @@ export function AreaManager({
       )}
 
       {!loading &&
-        areas.map((area) => (
-          <div
-            key={area.id}
-            className="rounded-lg border border-outline-subtle bg-elevated p-3 space-y-1"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="inline-block h-3 w-3 rounded-full shrink-0"
-                    style={{ backgroundColor: adaptAreaColor(area.color, resolvedTheme) }}
-                  />
-                  <p className="text-sm font-medium text-on-bg truncate">{area.name}</p>
-                </div>
-                {area.description && (
-                  <p className="text-xs text-on-bg-secondary truncate mt-0.5 ml-5">
-                    {area.description}
-                  </p>
-                )}
-                <p className="text-xs text-on-bg-secondary/60 mt-1 ml-5">
-                  {area.device_count} {area.device_count === 1 ? 'device' : 'devices'}
-                </p>
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditing(area);
-                    setMode('edit');
-                  }}
-                  className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
-                  title="Edit area"
-                  aria-label="edit area"
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                    />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeleteId(area.id)}
-                  className="p-1 text-on-bg-secondary hover:text-status-down rounded"
-                  title="Delete area"
-                  aria-label="delete area"
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
+        areas.map((area) => {
+          const metrics = areaMetrics?.[area.id];
 
-            {confirmDeleteId === area.id && (
-              <div className="mt-2 rounded-lg border border-status-down/30 bg-status-down/10 p-2 space-y-2">
-                <p className="text-xs text-status-down">
-                  Delete this area? {area.device_count}{' '}
-                  {area.device_count === 1 ? 'device' : 'devices'} will be unassigned.
-                </p>
-                <div className="flex gap-2">
+          return (
+            <div
+              key={area.id}
+              className="rounded-lg border border-outline-subtle bg-elevated p-3 space-y-3"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="inline-block h-3 w-3 rounded-full shrink-0"
+                      style={{ backgroundColor: adaptAreaColor(area.color, resolvedTheme) }}
+                    />
+                    <p className="text-sm font-medium text-on-bg truncate">{area.name}</p>
+                  </div>
+                  {area.description && (
+                    <p className="text-xs text-on-bg-secondary truncate mt-0.5 ml-5">
+                      {area.description}
+                    </p>
+                  )}
+                  <dl className="mt-3 ml-5 grid grid-cols-3 gap-2 text-xs">
+                    {metrics && (
+                      <div>
+                        <dt className="text-on-bg-secondary">Health</dt>
+                        <dd
+                          className={
+                            metrics.degradedDeviceCount > 0
+                              ? 'font-medium text-critical'
+                              : 'font-medium text-status-up'
+                          }
+                        >
+                          {metrics.healthLabel}
+                        </dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt className="text-on-bg-secondary">Devices</dt>
+                      <dd className="font-mono text-sm text-on-bg">
+                        {area.device_count}{' '}
+                        <span className="font-sans text-xs text-on-bg-secondary">
+                          {area.device_count === 1 ? 'device' : 'devices'}
+                        </span>
+                      </dd>
+                    </div>
+                    {metrics && (
+                      <div>
+                        <dt className="text-on-bg-secondary">Links</dt>
+                        <dd className="font-mono text-sm text-on-bg">{metrics.activeLinkCount}</dd>
+                      </div>
+                    )}
+                  </dl>
+                  <p className="sr-only">
+                    {area.device_count} {area.device_count === 1 ? 'device' : 'devices'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {onOpenArea && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenArea(area.id)}
+                      className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
+                      title="Open area"
+                      aria-label={`Open area ${area.name}`}
+                    >
+                      <MaterialIcon name="hub" size={16} />
+                    </button>
+                  )}
+                  {onCreateMapFromArea && (
+                    <button
+                      type="button"
+                      onClick={() => onCreateMapFromArea(area)}
+                      className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
+                      title="Create map from area"
+                      aria-label={`Create map from area ${area.name}`}
+                    >
+                      <MaterialIcon name="add_location_alt" size={16} />
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => setConfirmDeleteId(null)}
-                    className="flex-1 rounded border border-outline-subtle bg-elevated px-2 py-1 text-xs text-on-bg hover:bg-surface-high"
+                    onClick={() => {
+                      setEditing(area);
+                      setMode('edit');
+                    }}
+                    className="p-1 text-on-bg-secondary hover:text-on-bg rounded"
+                    title="Edit area"
+                    aria-label="edit area"
                   >
-                    Cancel
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                      />
+                    </svg>
                   </button>
                   <button
                     type="button"
-                    disabled={deleteLoading}
-                    onClick={() => {
-                      void handleDelete(area.id);
-                    }}
-                    className="flex-1 rounded bg-status-down px-2 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                    onClick={() => setConfirmDeleteId(area.id)}
+                    className="p-1 text-on-bg-secondary hover:text-status-down rounded"
+                    title="Delete area"
+                    aria-label="delete area"
                   >
-                    {deleteLoading ? 'Deleting...' : 'Delete'}
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
                   </button>
                 </div>
               </div>
-            )}
-          </div>
-        ))}
+
+              {confirmDeleteId === area.id && (
+                <div className="mt-2 rounded-lg border border-status-down/30 bg-status-down/10 p-2 space-y-2">
+                  <p className="text-xs text-status-down">
+                    Delete this area? {area.device_count}{' '}
+                    {area.device_count === 1 ? 'device' : 'devices'} will be unassigned.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="flex-1 rounded border border-outline-subtle bg-elevated px-2 py-1 text-xs text-on-bg hover:bg-surface-high"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deleteLoading}
+                      onClick={() => {
+                        void handleDelete(area.id);
+                      }}
+                      className="flex-1 rounded bg-status-down px-2 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      {deleteLoading ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
     </div>
   );
 }

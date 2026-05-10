@@ -1,5 +1,6 @@
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
+import { AreaManager } from '../AreaManager';
 import { MaterialIcon } from '../MaterialIcon';
 import { AreaSummaryCard } from './AreaSummaryCard';
 import { SavedMapsSection } from './SavedMapsSection';
@@ -21,6 +22,7 @@ export interface TopologyHubProps {
   onOpenMap: (map: CanvasMap) => void;
   onCreateEmptyMap: () => void;
   onCreateMapFromArea: (area: Area) => void;
+  onAreasChange?: () => void | Promise<void>;
   onRenameMap?: (map: CanvasMap) => void;
   onDuplicateMap: (map: CanvasMap) => void;
   onDeleteMap: (map: CanvasMap) => void;
@@ -69,6 +71,7 @@ export function TopologyHub({
   onOpenMap,
   onCreateEmptyMap,
   onCreateMapFromArea,
+  onAreasChange,
   onRenameMap,
   onDuplicateMap,
   onDeleteMap,
@@ -83,6 +86,16 @@ export function TopologyHub({
     maps[0] ??
     null;
   const selectedMapDisplayName = selectedMap?.name ?? selectedMapName;
+  const areaMetrics = Object.fromEntries(
+    model.areas.map((areaModel) => [
+      areaModel.area.id,
+      {
+        healthLabel: areaModel.healthLabel,
+        activeLinkCount: areaModel.activeLinkCount,
+        degradedDeviceCount: areaModel.degradedDeviceCount,
+      },
+    ]),
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-6 pb-12 pt-20 sm:px-8">
@@ -155,28 +168,46 @@ export function TopologyHub({
           </section>
 
           <section className="flex flex-col gap-3" aria-labelledby="areas-heading">
-            <div className="flex items-center justify-between gap-3">
-              <h3 id="areas-heading" className="text-base font-semibold text-on-bg">
-                Map-local areas
-              </h3>
-              <span className="font-mono text-xs text-on-bg-secondary">{model.areas.length}</span>
-            </div>
-
-            {model.areas.length > 0 ? (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {model.areas.map((areaModel) => (
-                  <AreaSummaryCard
-                    key={areaModel.area.id}
-                    areaModel={areaModel}
-                    savedMapsEnabled={savedMapsEnabled}
-                    onOpenArea={onOpenArea}
-                    onCreateMapFromArea={onCreateMapFromArea}
-                  />
-                ))}
-              </div>
+            {savedMapsEnabled && selectedMap ? (
+              <AreaManager
+                title="Map-local areas"
+                titleId="areas-heading"
+                mapContext={{ mapId: selectedMap.id, mapName: selectedMap.name }}
+                areas={areas}
+                devices={devices}
+                areaMetrics={areaMetrics}
+                onAreasChange={onAreasChange}
+                onOpenArea={onOpenArea}
+                onCreateMapFromArea={onCreateMapFromArea}
+              />
+            ) : model.areas.length > 0 ? (
+              <>
+                <div className="flex items-center justify-between gap-3">
+                  <h3 id="areas-heading" className="text-base font-semibold text-on-bg">
+                    Map-local areas
+                  </h3>
+                  <span className="font-mono text-xs text-on-bg-secondary">
+                    {model.areas.length}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {model.areas.map((areaModel) => (
+                    <AreaSummaryCard
+                      key={areaModel.area.id}
+                      areaModel={areaModel}
+                      savedMapsEnabled={savedMapsEnabled}
+                      onOpenArea={onOpenArea}
+                      onCreateMapFromArea={onCreateMapFromArea}
+                    />
+                  ))}
+                </div>
+              </>
             ) : (
               <div className="rounded-lg border border-dashed border-outline bg-surface p-4">
-                <p className="text-sm font-medium text-on-bg">No areas</p>
+                <h3 id="areas-heading" className="text-base font-semibold text-on-bg">
+                  Map-local areas
+                </h3>
+                <p className="mt-2 text-sm font-medium text-on-bg">No areas</p>
                 <button
                   type="button"
                   onClick={onOpenSettings}

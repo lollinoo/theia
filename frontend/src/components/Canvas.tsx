@@ -168,7 +168,6 @@ interface CanvasProps {
   onManageMaps?: () => void;
   onTopologyAreasChange?: (areas: Area[]) => void;
   onTopologyLoadingChange?: (loading: boolean) => void;
-  onAreasChange?: () => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
   onInteractionActiveChange?: (active: boolean) => void;
 }
@@ -188,7 +187,6 @@ export default function Canvas({
   onAreaSelect,
   onTopologyAreasChange,
   onTopologyLoadingChange,
-  onAreasChange,
   onDetailDeviceChange,
   onInteractionActiveChange,
 }: CanvasProps) {
@@ -1094,7 +1092,6 @@ export default function Canvas({
           mapName={mapName}
           editMode={editMode}
           onRemoveDeviceFromMap={handleRemoveDeviceFromMap}
-          onAreasChange={onAreasChange}
           onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {
             setDeviceWinboxAvailability(deviceId, hasWinboxProfile);
