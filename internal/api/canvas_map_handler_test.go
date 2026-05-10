@@ -1264,6 +1264,32 @@ func TestCanvasMapHandlerAddDeviceToMapRejectsExistingMember(t *testing.T) {
 	}
 }
 
+func TestCanvasMapHandlerAddDeviceToMapRejectsAddressAlreadyInMap(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	virtual := seedCanvasMapTestVirtualDevice(t, fixture, "virtual-map-address", "10.72.2.1", "Virtual Address", nil)
+	physical := seedCanvasMapTestDevice(t, fixture, "router-map-address", "10.72.2.1", nil)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Address Conflict Map"})
+	if err := fixture.mapRepo.ReplaceMembership(uuid.MustParse(canvasMap.ID), domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{{DeviceID: virtual.ID, Role: domain.CanvasMapDeviceRoleBase}},
+	}); err != nil {
+		t.Fatalf("replace membership: %v", err)
+	}
+
+	rec := canvasMapRequest(
+		t,
+		fixture.router,
+		http.MethodPost,
+		"/api/v1/canvas/maps/"+canvasMap.ID+"/devices/"+physical.ID.String(),
+		map[string]any{"include_connected_links": true},
+	)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("POST same-address map device: expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `a device with IP/host \"10.72.2.1\" already exists in this map`) {
+		t.Fatalf("POST same-address map device body = %s, want map address duplicate error", rec.Body.String())
+	}
+}
+
 func TestCanvasMapHandlerCreateDeviceAddsToPrimaryMap(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	defaultMap, err := fixture.mapRepo.GetDefault()

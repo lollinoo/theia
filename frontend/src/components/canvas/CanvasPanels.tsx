@@ -120,6 +120,7 @@ export function CanvasPanels({
       {panelContent?.type === 'addDevice' && (
         <AddDevicePanel
           areas={topologyAreas}
+          devices={devices}
           mapContext={mapId ? { mapId } : undefined}
           onDeviceAdded={() => {
             const { width, height } = viewportSize();

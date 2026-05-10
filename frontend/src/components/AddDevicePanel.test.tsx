@@ -9,6 +9,7 @@ import {
   updateCanvasMapDeviceAreas,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
+import type { Device } from '../types/api';
 import { AddDevicePanel } from './AddDevicePanel';
 
 // Mock API calls that fire in useEffect
@@ -75,6 +76,31 @@ beforeEach(() => {
   vi.clearAllMocks();
   (fetchDevices as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
+
+function mapDevice(overrides: Partial<Device>): Device {
+  return {
+    id: 'map-device',
+    hostname: 'map-device',
+    ip: '10.0.0.1',
+    device_type: 'router',
+    poll_class: 'standard',
+    poll_interval_override: null,
+    polling_enabled: true,
+    status: 'up',
+    sys_name: '',
+    sys_descr: '',
+    hardware_model: '',
+    vendor: 'default',
+    managed: true,
+    interfaces: [],
+    area_ids: [],
+    backup_supported: false,
+    metrics_source: 'snmp',
+    prometheus_label_name: 'instance',
+    prometheus_label_value: '',
+    ...overrides,
+  };
+}
 
 describe('AddDevicePanel', () => {
   it('renders form fields', () => {
@@ -394,6 +420,70 @@ describe('virtual mode', () => {
     });
     expect(onDeviceAdded).not.toHaveBeenCalled();
     expect(screen.getByText('Add Device')).toBeInTheDocument();
+  });
+
+  it('blocks a physical device when the selected saved map already has a virtual node with the same IP', async () => {
+    const onDeviceAdded = vi.fn();
+    render(
+      <AddDevicePanel
+        devices={[
+          mapDevice({
+            id: 'virtual-dev',
+            hostname: 'virtual-edge',
+            ip: '10.0.0.1',
+            device_type: 'virtual',
+          }),
+        ]}
+        mapContext={{ mapId: 'map-1' }}
+        onDeviceAdded={onDeviceAdded}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    expect(
+      await screen.findByText('a device with IP/host "10.0.0.1" already exists in this map'),
+    ).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
+    expect(addDeviceToCanvasMap).not.toHaveBeenCalled();
+    expect(onDeviceAdded).not.toHaveBeenCalled();
+  });
+
+  it('blocks a virtual node with IP when the selected saved map already has a physical device with the same IP', async () => {
+    const onDeviceAdded = vi.fn();
+    render(
+      <AddDevicePanel
+        devices={[
+          mapDevice({
+            id: 'physical-dev',
+            hostname: 'physical-edge',
+            ip: '10.0.0.1',
+            device_type: 'router',
+          }),
+        ]}
+        mapContext={{ mapId: 'map-1' }}
+        onDeviceAdded={onDeviceAdded}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Virtual Node'));
+    fireEvent.change(screen.getByPlaceholderText('e.g. ISP Gateway'), {
+      target: { value: 'Internet Edge' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('e.g. 203.0.113.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByText('Add Virtual Node'));
+
+    expect(
+      await screen.findByText('a device with IP/host "10.0.0.1" already exists in this map'),
+    ).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
+    expect(addDeviceToCanvasMap).not.toHaveBeenCalled();
+    expect(onDeviceAdded).not.toHaveBeenCalled();
   });
 
   it('assigns selected credentials after creating a physical device', async () => {

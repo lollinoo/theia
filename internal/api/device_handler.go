@@ -895,7 +895,8 @@ func isDeviceIPConflict(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "idx_devices_ip") ||
 		(strings.Contains(message, "duplicate key value violates unique constraint") && strings.Contains(message, "devices")) ||
-		strings.Contains(message, "unique constraint failed: devices.ip")
+		strings.Contains(message, "unique constraint failed: devices.ip") ||
+		strings.Contains(message, "device ip conflict")
 }
 
 func duplicateDeviceAddressMessage(address string) string {

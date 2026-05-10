@@ -452,6 +452,22 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
+	if address := normalizeCanvasMapDeviceAddress(device.IP); address != "" {
+		memberDevices, err := h.deviceService.GetDevicesByIDs(r.Context(), canvasMapMembershipDeviceIDs(membership.Devices))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list canvas map devices", err)
+			return
+		}
+		for _, memberDevice := range memberDevices {
+			if memberDevice.ID == deviceID {
+				continue
+			}
+			if normalizeCanvasMapDeviceAddress(memberDevice.IP) == address {
+				writeError(w, http.StatusConflict, duplicateCanvasMapDeviceAddressMessage(device.IP))
+				return
+			}
+		}
+	}
 
 	linkIDs := []uuid.UUID{}
 	if includeConnectedLinks {
@@ -1903,6 +1919,18 @@ func isCanvasMapNotFoundError(err error) bool {
 
 func isAreaNotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "area not found")
+}
+
+func normalizeCanvasMapDeviceAddress(address string) string {
+	return strings.ToLower(strings.TrimSpace(address))
+}
+
+func duplicateCanvasMapDeviceAddressMessage(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "a device with that address already exists in this map"
+	}
+	return fmt.Sprintf("a device with IP/host %q already exists in this map", address)
 }
 
 func isCanvasMapConflictError(err error) bool {

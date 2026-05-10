@@ -112,6 +112,9 @@ func (m *deviceMutationService) AddDevice(
 		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
 	}
 	domain.NormalizeVirtualDevice(device)
+	if err := m.ensureNoPhysicalVirtualIPConflict(*device, uuid.Nil); err != nil {
+		return nil, err
+	}
 
 	if err := m.deviceRepo.Create(device); err != nil {
 		return nil, fmt.Errorf("creating device: %w", err)
@@ -219,6 +222,9 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	}
 	domain.NormalizeDevicePollingEnabled(device)
 	domain.NormalizeVirtualDevice(device)
+	if err := m.ensureNoPhysicalVirtualIPConflict(*device, device.ID); err != nil {
+		return err
+	}
 
 	if err := m.deviceRepo.Update(device); err != nil {
 		return err
@@ -246,6 +252,32 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 		return nil
 	}
 	return m.parent.ReprobeDevice(ctx, id)
+}
+
+func (m *deviceMutationService) ensureNoPhysicalVirtualIPConflict(candidate domain.Device, excludeID uuid.UUID) error {
+	address := strings.TrimSpace(candidate.IP)
+	if address == "" {
+		return nil
+	}
+
+	devices, err := m.deviceRepo.GetAll()
+	if err != nil {
+		return fmt.Errorf("checking device IP conflict: %w", err)
+	}
+
+	candidateVirtual := candidate.DeviceType == domain.DeviceTypeVirtual
+	for _, device := range devices {
+		if excludeID != uuid.Nil && device.ID == excludeID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(device.IP), address) {
+			continue
+		}
+		if (device.DeviceType == domain.DeviceTypeVirtual) != candidateVirtual {
+			return fmt.Errorf("device IP conflict: %s is already used by a %s device", address, device.DeviceType)
+		}
+	}
+	return nil
 }
 
 func initialPollIntervalOverride(settingsRepo domain.SettingsRepository, deviceType domain.DeviceType) *int {

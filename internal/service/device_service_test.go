@@ -2954,6 +2954,60 @@ func TestAddDevice_VirtualWithIP(t *testing.T) {
 	}
 }
 
+func TestAddDevice_RejectsVirtualIPWhenPhysicalDeviceUsesAddress(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	physical := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "edge-physical",
+		IP:         "10.0.0.99",
+		DeviceType: domain.DeviceTypeRouter,
+		Managed:    true,
+	}
+	if err := deviceRepo.Create(physical); err != nil {
+		t.Fatalf("seed physical device: %v", err)
+	}
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	_, err := svc.AddDevice(context.Background(), "10.0.0.99", "virtual-edge",
+		domain.DeviceTypeVirtual,
+		domain.SNMPCredentials{}, nil, "", "", "", "", "", nil)
+	if err == nil {
+		t.Fatal("expected virtual device with physical IP conflict to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "device ip conflict") {
+		t.Fatalf("expected device IP conflict error, got %v", err)
+	}
+}
+
+func TestAddDevice_RejectsPhysicalIPWhenVirtualDeviceUsesAddress(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	virtual := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "virtual-edge",
+		IP:         "10.0.0.99",
+		DeviceType: domain.DeviceTypeVirtual,
+		Managed:    true,
+	}
+	if err := deviceRepo.Create(virtual); err != nil {
+		t.Fatalf("seed virtual device: %v", err)
+	}
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	_, err := svc.AddDevice(context.Background(), "10.0.0.99", "physical-edge",
+		domain.DeviceTypeRouter,
+		domain.SNMPCredentials{}, nil, "", "", "", "", "", nil)
+	if err == nil {
+		t.Fatal("expected physical device with virtual IP conflict to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "device ip conflict") {
+		t.Fatalf("expected device IP conflict error, got %v", err)
+	}
+}
+
 func TestGetAllDevices_NormalizesLegacyVirtualWithIPMetricsSource(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
 

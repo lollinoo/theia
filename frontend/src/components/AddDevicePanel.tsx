@@ -13,7 +13,13 @@ import {
   updateCanvasMapDeviceAreas,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
-import type { Area, CredentialProfile, SNMPProfile, TopologyDiscoveryMode } from '../types/api';
+import type {
+  Area,
+  CredentialProfile,
+  Device,
+  SNMPProfile,
+  TopologyDiscoveryMode,
+} from '../types/api';
 import {
   TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyDiscoveryMode,
@@ -36,6 +42,7 @@ import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
 interface AddDevicePanelProps {
   onDeviceAdded: () => void;
   areas?: Area[];
+  devices?: Device[];
   mapContext?: {
     mapId: string;
   };
@@ -48,6 +55,13 @@ function normalizeDeviceLookupValue(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase();
 }
 
+function duplicateMapDeviceAddressMessage(address: string): string {
+  const trimmed = address.trim();
+  return trimmed
+    ? `a device with IP/host "${trimmed}" already exists in this map`
+    : 'a device with that address already exists in this map';
+}
+
 function isDuplicateDeviceValidationError(err: unknown): err is ValidationError {
   return err instanceof ValidationError && /device.*already exists/i.test(err.message);
 }
@@ -55,6 +69,7 @@ function isDuplicateDeviceValidationError(err: unknown): err is ValidationError 
 export function AddDevicePanel({
   onDeviceAdded,
   areas: providedAreas,
+  devices = [],
   mapContext,
 }: AddDevicePanelProps) {
   const [form, setForm] = useState(createAddDeviceFormModel);
@@ -185,6 +200,20 @@ export function AddDevicePanel({
     return { ...payloadWithoutAreaIds, skip_primary_map_membership: true };
   }
 
+  function currentMapAddressConflictMessage(
+    payload: ReturnType<typeof buildCreatePayloadForCurrentScope>,
+  ) {
+    if (!mapContext) {
+      return null;
+    }
+    const address = normalizeDeviceLookupValue(payload.ip);
+    if (!address) {
+      return null;
+    }
+    const hasConflict = devices.some((device) => normalizeDeviceLookupValue(device.ip) === address);
+    return hasConflict ? duplicateMapDeviceAddressMessage(payload.ip ?? '') : null;
+  }
+
   async function addDeviceToCurrentMap(deviceId: string) {
     if (!mapContext) {
       return;
@@ -221,6 +250,10 @@ export function AddDevicePanel({
         lookupValues.has(normalizeDeviceLookupValue(device.hostname)),
     );
     if (!existingDevice) {
+      return 'not-handled';
+    }
+    const requestedVirtual = form.mode === 'virtual';
+    if ((existingDevice.device_type === 'virtual') !== requestedVirtual) {
       return 'not-handled';
     }
 
@@ -307,9 +340,14 @@ export function AddDevicePanel({
         setFieldErrors(errors);
         return;
       }
-      setLoading(true);
       setError(null);
       const payload = buildCreatePayloadForCurrentScope();
+      const mapAddressConflict = currentMapAddressConflictMessage(payload);
+      if (mapAddressConflict) {
+        setError(mapAddressConflict);
+        return;
+      }
+      setLoading(true);
       try {
         const created = await createDevice(payload);
         await addDeviceToCurrentMap(created.id);
@@ -368,9 +406,14 @@ export function AddDevicePanel({
       return;
     }
 
-    setLoading(true);
     setError(null);
     const payload = buildCreatePayloadForCurrentScope();
+    const mapAddressConflict = currentMapAddressConflictMessage(payload);
+    if (mapAddressConflict) {
+      setError(mapAddressConflict);
+      return;
+    }
+    setLoading(true);
     try {
       const created = await createDevice(payload);
       await assignSelectedCredentials(created.id);
