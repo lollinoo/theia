@@ -1,5 +1,15 @@
 import type { Device, SNMPProfile } from '../../types/api';
 
+export const defaultVirtualNodeColor = '#00E676';
+
+export function normalizeVirtualNodeColor(color: string): string {
+  const trimmed = color.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  return defaultVirtualNodeColor;
+}
+
 export interface DeviceFormModel {
   mode: 'physical' | 'virtual';
   hostname: string;
@@ -26,6 +36,7 @@ export interface DeviceFormModel {
   };
   virtual: {
     subtype: string;
+    visualColor: string | null;
   };
 }
 
@@ -56,6 +67,7 @@ export function createAddDeviceFormModel(): DeviceFormModel {
     },
     virtual: {
       subtype: 'internet',
+      visualColor: null,
     },
   };
 }
@@ -86,6 +98,7 @@ export function createDeviceConfigFormModel(device: Device, isVirtual: boolean):
     },
     virtual: {
       subtype: device.tags?.virtual_subtype || 'internet',
+      visualColor: isVirtual ? (device.map_visual_color ?? null) : null,
     },
   };
 }
@@ -100,7 +113,7 @@ export function resetDeviceFormMode(
       mode: 'virtual',
       displayName: form.displayName,
       areaIds: form.areaIds,
-      virtual: { subtype: form.virtual.subtype },
+      virtual: { subtype: form.virtual.subtype, visualColor: form.virtual.visualColor },
     };
   }
 

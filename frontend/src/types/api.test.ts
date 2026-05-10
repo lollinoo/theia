@@ -110,6 +110,15 @@ describe('parseDevicesResponse', () => {
     expect(devices[0].polling_enabled).toBe(true);
   });
 
+  it('preserves map-local visual color from canvas topology device attributes', () => {
+    const resource = deviceResource('virtual-1', 'virtual');
+    (resource.attributes as Record<string, unknown>).map_visual_color = '#123ABC';
+
+    const devices = parseDevicesResponse({ data: [resource] });
+
+    expect(devices[0].map_visual_color).toBe('#123ABC');
+  });
+
   it('preserves explicit polling_enabled false', () => {
     const devices = parseDevicesResponse({
       data: [
@@ -279,6 +288,7 @@ describe('parseCanvasTopologyResponse', () => {
     expect(topology.runtime_snapshot?.devices['router-1'].operational_status).toBe('down');
     expect(topology.map?.id).toBe('map-1');
     expect(topology.devices[0].hostname).toBe('router-1.example.test');
+    expect(topology.devices[0].map_visual_color).toBeNull();
     expect(topology.links[0]).toMatchObject({
       id: 'link-1',
       source_if_speed: 1000000000,

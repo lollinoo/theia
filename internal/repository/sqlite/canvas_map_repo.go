@@ -288,8 +288,8 @@ func (r *CanvasMapRepo) Duplicate(id uuid.UUID, name string) (domain.CanvasMap, 
 	}
 
 	if _, err := tx.Exec(
-		`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
-		 SELECT ?, device_id, role, added_at
+		`INSERT INTO canvas_map_devices (map_id, device_id, role, visual_color, added_at)
+		 SELECT ?, device_id, role, visual_color, added_at
 		 FROM canvas_map_devices
 		 WHERE map_id = ?`,
 		copyID.String(),
@@ -371,7 +371,7 @@ func (r *CanvasMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership,
 	}
 
 	deviceRows, err := r.db.Query(
-		`SELECT device_id, role
+		`SELECT device_id, role, visual_color
 		 FROM canvas_map_devices
 		 WHERE map_id = ?
 		 ORDER BY device_id`,
@@ -384,7 +384,8 @@ func (r *CanvasMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership,
 
 	for deviceRows.Next() {
 		var deviceIDRaw, roleRaw string
-		if err := deviceRows.Scan(&deviceIDRaw, &roleRaw); err != nil {
+		var visualColorRaw sql.NullString
+		if err := deviceRows.Scan(&deviceIDRaw, &roleRaw, &visualColorRaw); err != nil {
 			return domain.CanvasMapMembership{}, fmt.Errorf("scanning canvas map device membership: %w", err)
 		}
 		deviceID, err := uuid.Parse(deviceIDRaw)
@@ -395,7 +396,11 @@ func (r *CanvasMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership,
 		if !role.IsValid() {
 			return domain.CanvasMapMembership{}, fmt.Errorf("invalid canvas map device role %q", roleRaw)
 		}
-		membership.Devices = append(membership.Devices, domain.CanvasMapDeviceMembership{DeviceID: deviceID, Role: role})
+		device := domain.CanvasMapDeviceMembership{DeviceID: deviceID, Role: role}
+		if visualColorRaw.Valid {
+			device.VisualColor = &visualColorRaw.String
+		}
+		membership.Devices = append(membership.Devices, device)
 	}
 	if err := deviceRows.Err(); err != nil {
 		return domain.CanvasMapMembership{}, fmt.Errorf("iterating canvas map device membership: %w", err)
@@ -557,11 +562,12 @@ func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.Canvas
 	now := time.Now().UTC()
 	for _, device := range membership.Devices {
 		if _, err := tx.Exec(
-			`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
-			 VALUES (?, ?, ?, ?)`,
+			`INSERT INTO canvas_map_devices (map_id, device_id, role, visual_color, added_at)
+			 VALUES (?, ?, ?, ?, ?)`,
 			id.String(),
 			device.DeviceID.String(),
 			string(device.Role),
+			nullableStringValue(device.VisualColor),
 			now,
 		); err != nil {
 			return fmt.Errorf("inserting canvas map device membership %s: %w", device.DeviceID, err)
@@ -657,12 +663,15 @@ func (r *CanvasMapRepo) AddDeviceMembership(
 
 	now := time.Now().UTC()
 	if _, err := tx.Exec(
-		`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
-		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(map_id, device_id) DO UPDATE SET role = excluded.role`,
+		`INSERT INTO canvas_map_devices (map_id, device_id, role, visual_color, added_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(map_id, device_id) DO UPDATE SET
+			role = excluded.role,
+			visual_color = COALESCE(excluded.visual_color, canvas_map_devices.visual_color)`,
 		id.String(),
 		device.DeviceID.String(),
 		string(device.Role),
+		nullableStringValue(device.VisualColor),
 		now,
 	); err != nil {
 		return fmt.Errorf("adding canvas map device membership %s: %w", device.DeviceID, err)
@@ -822,6 +831,59 @@ func (r *CanvasMapRepo) UpdateDeviceAreaMemberships(
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing canvas map device area update: %w", err)
+	}
+	return nil
+}
+
+// UpdateDeviceVisualColor replaces one map-local device visual color override.
+func (r *CanvasMapRepo) UpdateDeviceVisualColor(
+	id uuid.UUID,
+	deviceID uuid.UUID,
+	visualColor *string,
+) error {
+	if id == uuid.Nil {
+		return fmt.Errorf("canvas map id is required")
+	}
+	if deviceID == uuid.Nil {
+		return fmt.Errorf("device id is required")
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting canvas map device visual color update transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := ensureCanvasMapExists(tx, id); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	result, err := tx.Exec(
+		`UPDATE canvas_map_devices
+		 SET visual_color = ?
+		 WHERE map_id = ? AND device_id = ?`,
+		nullableStringValue(visualColor),
+		id.String(),
+		deviceID.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("updating canvas map device visual color %s: %w", deviceID, err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("canvas map device %s is not a member of map %s", deviceID, id)
+	}
+	if _, err := tx.Exec(
+		`UPDATE canvas_maps SET updated_at = ? WHERE id = ?`,
+		now,
+		id.String(),
+	); err != nil {
+		return fmt.Errorf("touching canvas map after device visual color update %s: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing canvas map device visual color update: %w", err)
 	}
 	return nil
 }

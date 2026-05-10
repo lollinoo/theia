@@ -926,6 +926,78 @@ func TestCanvasMapHandlerBulkUpdateMapDeviceAreasDoesNotMutateSourceMapOrGlobalD
 	}
 }
 
+func TestCanvasMapHandlerPatchMapDeviceVisualColorIsMapLocal(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	areaID := seedCanvasMapTestArea(t, fixture, "Visual Area", "#2979FF")
+	virtual := seedCanvasMapTestVirtualDevice(t, fixture, "virtual-map-color", "10.75.1.1", "Virtual Color", []uuid.UUID{areaID})
+	firstMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "First Visual Map"})
+	secondMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Second Visual Map"})
+
+	initial := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: virtual.ID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+		},
+		Areas: []domain.CanvasMapAreaMembership{
+			{AreaID: areaID, Name: "Visual Area", Description: "Visual Area test area", Color: "#2979FF"},
+		},
+	}
+	if err := fixture.mapRepo.ReplaceMembership(uuid.MustParse(firstMap.ID), initial); err != nil {
+		t.Fatalf("replace first membership: %v", err)
+	}
+	if err := fixture.mapRepo.ReplaceMembership(uuid.MustParse(secondMap.ID), initial); err != nil {
+		t.Fatalf("replace second membership: %v", err)
+	}
+
+	rec := canvasMapRequest(t, fixture.router, http.MethodPatch, "/api/v1/canvas/maps/"+firstMap.ID+"/devices/"+virtual.ID.String(), map[string]any{
+		"visual_color": "#123abc",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH map device visual color: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	firstMembership, err := fixture.mapRepo.GetMembership(uuid.MustParse(firstMap.ID))
+	if err != nil {
+		t.Fatalf("get first membership after visual color patch: %v", err)
+	}
+	if len(firstMembership.Devices) != 1 ||
+		firstMembership.Devices[0].VisualColor == nil ||
+		*firstMembership.Devices[0].VisualColor != "#123ABC" {
+		t.Fatalf("first membership visual_color = %#v, want #123ABC", firstMembership.Devices)
+	}
+
+	firstTopology := mustLoadCanvasMapTopologyForTest(t, fixture, firstMap.ID)
+	firstDevice := findCanvasTopologyDeviceByHostname(t, firstTopology, "virtual-map-color")
+	if got := firstDevice.Attributes["map_visual_color"]; got != "#123ABC" {
+		t.Fatalf("first map device map_visual_color = %#v, want #123ABC", got)
+	}
+
+	secondTopology := mustLoadCanvasMapTopologyForTest(t, fixture, secondMap.ID)
+	secondDevice := findCanvasTopologyDeviceByHostname(t, secondTopology, "virtual-map-color")
+	if got, ok := secondDevice.Attributes["map_visual_color"]; ok && got != nil {
+		t.Fatalf("second map device map_visual_color = %#v, want nil/omitted", got)
+	}
+
+	globalDevice, err := fixture.deviceRepo.GetByID(virtual.ID)
+	if err != nil {
+		t.Fatalf("get global virtual device: %v", err)
+	}
+	if _, ok := globalDevice.Tags["visual_color"]; ok {
+		t.Fatalf("global device tags unexpectedly contain visual_color: %#v", globalDevice.Tags)
+	}
+
+	rec = canvasMapRequest(t, fixture.router, http.MethodPatch, "/api/v1/canvas/maps/"+firstMap.ID+"/devices/"+firstDevice.ID, map[string]any{
+		"visual_color": nil,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH clear map device visual color: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	firstTopology = mustLoadCanvasMapTopologyForTest(t, fixture, firstMap.ID)
+	firstDevice = findCanvasTopologyDeviceByHostname(t, firstTopology, "virtual-map-color")
+	if got, ok := firstDevice.Attributes["map_visual_color"]; ok && got != nil {
+		t.Fatalf("cleared first map device map_visual_color = %#v, want nil/omitted", got)
+	}
+}
+
 func TestCanvasMapHandlerCreatesAndAssignsAreasWithinOneMap(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	device := seedCanvasMapTestDevice(t, fixture, "router-map-area-local", "10.76.0.1", nil)

@@ -516,13 +516,9 @@ export default function Canvas({
     return map;
   }, [topologyAreas, resolvedTheme]);
 
-  // Inject areaColors into node data based on device.area_ids
+  // Inject map-local visual colors and area colors into node data.
   const nodesWithAreaColor = useMemo(() => {
     const previousCache = areaColorNodeCacheRef.current;
-    if (areaColorMap.size === 0) {
-      previousCache.clear();
-      return nodes;
-    }
 
     const nextCache = new Map<
       string,
@@ -533,7 +529,11 @@ export default function Canvas({
         .map((id) => areaColorMap.get(id))
         .filter((c): c is string => !!c);
       const newColors = colors.length > 0 ? colors : undefined;
-      const colorSignature = (newColors ?? []).join('\u0000');
+      const visualColor =
+        n.data.device.device_type === 'virtual'
+          ? (n.data.device.map_visual_color ?? undefined)
+          : undefined;
+      const colorSignature = `${visualColor ?? ''}\u0001${(newColors ?? []).join('\u0000')}`;
       const cached = previousCache.get(n.id);
       if (cached?.source === n && cached.colorSignature === colorSignature) {
         nextCache.set(n.id, cached);
@@ -541,10 +541,12 @@ export default function Canvas({
       }
 
       const prev = n.data.areaColors;
+      const colorsEqual =
+        prev?.length === newColors?.length && (prev ?? []).every((c, i) => c === newColors?.[i]);
       const node =
-        prev?.length === newColors?.length && (prev ?? []).every((c, i) => c === newColors?.[i])
+        colorsEqual && n.data.visualColor === visualColor
           ? n
-          : { ...n, data: { ...n.data, areaColors: newColors } };
+          : { ...n, data: { ...n.data, areaColors: newColors, visualColor } };
       nextCache.set(n.id, { source: n, colorSignature, node });
       return node;
     });

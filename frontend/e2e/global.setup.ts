@@ -197,7 +197,7 @@ async function seedDeviceIntoPrimaryMap(map: SeedCanvasMap, device: SeedDevice):
     },
   );
 
-  if (!response.ok) {
+  if (!response.ok && response.status !== 409) {
     throw new Error(`Failed to add router-a to primary map: ${response.status}`);
   }
 }

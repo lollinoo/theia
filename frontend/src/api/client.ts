@@ -305,6 +305,20 @@ export async function updateCanvasMapDeviceAreas(
   );
 }
 
+export async function updateCanvasMapDeviceVisualColor(
+  mapId: string,
+  deviceId: string,
+  payload: { visual_color: string | null },
+): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
+      'PATCH',
+      payload,
+    ),
+  );
+}
+
 export async function fetchCanvasMapAreas(mapId: string): Promise<Area[]> {
   return parseAreasResponse(
     await requestJSON(`/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas`),

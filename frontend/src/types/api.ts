@@ -68,6 +68,7 @@ export interface Device {
   topology_bootstrap_state?: TopologyBootstrapState;
   last_topology_discovery_at?: string | null;
   last_topology_discovery_result?: string;
+  map_visual_color?: string | null;
 }
 
 export interface Link {
@@ -330,6 +331,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       topology_bootstrap_state: parseTopologyBootstrapState(attributes.topology_bootstrap_state),
       last_topology_discovery_at: readNullableString(attributes, 'last_topology_discovery_at'),
       last_topology_discovery_result: readString(attributes, 'last_topology_discovery_result'),
+      map_visual_color: readNullableString(attributes, 'map_visual_color'),
     };
   });
 }

@@ -99,6 +99,10 @@ type canvasMapUpdateDeviceAreasRequest struct {
 	AreaIDs   []string `json:"area_ids"`
 }
 
+type canvasMapPatchDeviceRequest struct {
+	VisualColor nullableCanvasMapString `json:"visual_color"`
+}
+
 type canvasMapAreaRepository interface {
 	ListAreas(uuid.UUID) ([]domain.AreaWithCount, error)
 	CreateArea(uuid.UUID, domain.CanvasMapAreaMembership) (domain.AreaWithCount, error)
@@ -513,6 +517,73 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
 
+func (h *CanvasMapHandler) HandlePatchDevice(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMapRepos(w) {
+		return
+	}
+	if h.deviceService == nil {
+		writeError(w, http.StatusInternalServerError, "device service unavailable")
+		return
+	}
+
+	canvasMap, ok := h.loadMapFromRequest(w, r)
+	if !ok {
+		return
+	}
+	_, action, ok := parseCanvasMapRoute(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusNotFound, "canvas map not found")
+		return
+	}
+	deviceID, ok := parseCanvasMapDeviceAction(action)
+	if !ok {
+		writeError(w, http.StatusNotFound, "canvas map device not found")
+		return
+	}
+
+	var req canvasMapPatchDeviceRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if !req.VisualColor.Present {
+		writeError(w, http.StatusBadRequest, "visual_color is required")
+		return
+	}
+	visualColor, ok := normalizeCanvasMapVisualColor(w, req.VisualColor.Value)
+	if !ok {
+		return
+	}
+
+	device, err := h.deviceService.GetDevice(r.Context(), deviceID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "canvas map device not found")
+		return
+	}
+	if device.DeviceType != domain.DeviceTypeVirtual {
+		writeError(w, http.StatusBadRequest, "visual_color is only supported for virtual devices")
+		return
+	}
+
+	updater, ok := h.mapRepo.(interface {
+		UpdateDeviceVisualColor(uuid.UUID, uuid.UUID, *string) error
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "canvas map device visual color unavailable")
+		return
+	}
+	if err := updater.UpdateDeviceVisualColor(canvasMap.ID, deviceID, visualColor); err != nil {
+		h.writeMapRepoMutationError(w, err)
+		return
+	}
+
+	updated, err := h.mapRepo.GetByID(canvasMap.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load updated canvas map", err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
+}
+
 func (h *CanvasMapHandler) HandleListAreas(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -825,6 +896,7 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 	}
 	var projection canvasTopologyProjection
 	var areaMembership []domain.AreaWithCount
+	var deviceMembership []domain.CanvasMapDeviceMembership
 	if canvasMap.MembershipMaterialized {
 		membership, err := h.mapRepo.GetMembership(canvasMap.ID)
 		if err != nil {
@@ -841,6 +913,7 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 			writeError(w, http.StatusInternalServerError, "failed to list canvas map links", err)
 			return canvasTopologyResponse{}, false
 		}
+		deviceMembership = membership.Devices
 		projection = projectCanvasTopologyForMembership(devices, links, membership)
 		areaMembership = canvasMapAreaMembershipToAreas(membership.Areas, projection.Devices)
 	} else {
@@ -852,6 +925,7 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 	projectedPositions := filterPositionsForDevices(positions, displayDevices)
 
 	response := h.canvasTopology.buildResponse(displayDevices, projection.Links, projectedPositions, areaMembership)
+	applyCanvasMapDeviceVisualColors(response.Devices, deviceMembership)
 	mapResponse := mapToResponse(canvasMap)
 	mapResponse.DeviceCount = len(projection.Devices)
 	mapResponse.LinkCount = len(projection.Links)
@@ -1154,9 +1228,10 @@ func (h *CanvasMapHandler) isolateCanvasMapVirtualDevices(ctx context.Context, m
 		}
 
 		nextMember := domain.CanvasMapDeviceMembership{
-			DeviceID: member.DeviceID,
-			Role:     member.Role,
-			AreaIDs:  append([]uuid.UUID(nil), member.AreaIDs...),
+			DeviceID:    member.DeviceID,
+			Role:        member.Role,
+			AreaIDs:     append([]uuid.UUID(nil), member.AreaIDs...),
+			VisualColor: cloneOptionalString(member.VisualColor),
 		}
 		if _, shared := sharedVirtualIDs[member.DeviceID]; shared && device.DeviceType == domain.DeviceTypeVirtual {
 			clone, err := h.cloneCanvasMapVirtualDevice(ctx, device)
@@ -1842,6 +1917,67 @@ func canvasMapAreaMembershipFromRequest(
 		Description: strings.TrimSpace(req.Description),
 		Color:       color,
 	}, true
+}
+
+func normalizeCanvasMapVisualColor(w http.ResponseWriter, raw *string) (*string, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	color := strings.TrimSpace(*raw)
+	if color == "" {
+		return nil, true
+	}
+	if !isHexRGBColor(color) {
+		writeError(w, http.StatusBadRequest, "invalid visual_color format (must be #RRGGBB)")
+		return nil, false
+	}
+	normalized := strings.ToUpper(color)
+	return &normalized, true
+}
+
+func isHexRGBColor(color string) bool {
+	if len(color) != 7 || color[0] != '#' {
+		return false
+	}
+	for _, r := range color[1:] {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func applyCanvasMapDeviceVisualColors(
+	devices []jsonAPIResource,
+	membership []domain.CanvasMapDeviceMembership,
+) {
+	if len(devices) == 0 || len(membership) == 0 {
+		return
+	}
+	visualColors := make(map[string]string, len(membership))
+	for _, member := range membership {
+		if member.VisualColor == nil {
+			continue
+		}
+		visualColors[member.DeviceID.String()] = *member.VisualColor
+	}
+	if len(visualColors) == 0 {
+		return
+	}
+	for i := range devices {
+		color, ok := visualColors[devices[i].ID]
+		if !ok {
+			continue
+		}
+		if devices[i].Attributes == nil {
+			devices[i].Attributes = map[string]interface{}{}
+		}
+		devices[i].Attributes["map_visual_color"] = color
+	}
 }
 
 func filterPositionsForDevices(positions []domain.DevicePosition, devices []domain.Device) []domain.DevicePosition {

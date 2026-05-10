@@ -412,6 +412,7 @@ func stableCanvasTopologyDeviceAttributes(attributes map[string]interface{}) map
 		"topology_discovery_mode",
 		"effective_topology_discovery_mode",
 		"area_ids",
+		"map_visual_color",
 		"backup_supported",
 	}
 

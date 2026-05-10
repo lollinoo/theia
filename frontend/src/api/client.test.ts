@@ -35,6 +35,7 @@ import {
   updateCanvasMap,
   updateCanvasMapArea,
   updateCanvasMapDeviceAreas,
+  updateCanvasMapDeviceVisualColor,
   updateDevice,
 } from './client';
 import { ServerError } from './errors';
@@ -949,6 +950,40 @@ describe('canvas map client', () => {
       expect.objectContaining({
         method: 'PUT',
         body: JSON.stringify({ device_ids: ['device 1', 'device 2'], area_ids: ['area 1'] }),
+      }),
+    );
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
+  });
+
+  it('updates canvas map device visual color through the map device endpoint', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        device_count: 1,
+        link_count: 0,
+        position_count: 0,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const map = await updateCanvasMapDeviceVisualColor('map/a', 'device 1', {
+      visual_color: '#123ABC',
+    });
+
+    expect(map.id).toBe('map-1');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/devices/device%201',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ visual_color: '#123ABC' }),
       }),
     );
     expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());

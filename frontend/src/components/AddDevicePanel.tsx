@@ -11,6 +11,7 @@ import {
   revealSNMPProfile,
   setWinBoxProfile,
   updateCanvasMapDeviceAreas,
+  updateCanvasMapDeviceVisualColor,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type {
@@ -35,6 +36,8 @@ import {
   type DeviceFormModel,
   applySNMPProfile,
   createAddDeviceFormModel,
+  defaultVirtualNodeColor,
+  normalizeVirtualNodeColor,
   resetDeviceFormMode,
 } from './forms/deviceFormModels';
 import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
@@ -225,6 +228,11 @@ export function AddDevicePanel({
       await updateCanvasMapDeviceAreas(mapContext.mapId, {
         device_ids: [deviceId],
         area_ids: form.areaIds,
+      });
+    }
+    if (form.mode === 'virtual' && form.virtual.visualColor) {
+      await updateCanvasMapDeviceVisualColor(mapContext.mapId, deviceId, {
+        visual_color: normalizeVirtualNodeColor(form.virtual.visualColor),
       });
     }
   }
@@ -548,6 +556,36 @@ export function AddDevicePanel({
               ))}
             </div>
           </div>
+
+          {mapContext && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="virtual-node-color"
+                className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
+              >
+                Virtual node color
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="virtual-node-color"
+                  aria-label="Virtual node color"
+                  type="color"
+                  value={form.virtual.visualColor ?? defaultVirtualNodeColor}
+                  onChange={(e) =>
+                    updateVirtual({ visualColor: normalizeVirtualNodeColor(e.target.value) })
+                  }
+                  className="h-10 w-12 shrink-0 cursor-pointer rounded-lg border border-outline-subtle bg-elevated p-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => updateVirtual({ visualColor: null })}
+                  className="rounded-lg bg-surface-high px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
+                >
+                  Use area/default color
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* IP Address (optional) */}
           <div className="space-y-1.5">

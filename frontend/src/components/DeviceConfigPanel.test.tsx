@@ -39,6 +39,7 @@ vi.mock('../api/client', () => ({
   clearWinBoxProfile: vi.fn().mockResolvedValue(undefined),
   fetchAreas: vi.fn().mockResolvedValue([]),
   updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({}),
+  updateCanvasMapDeviceVisualColor: vi.fn().mockResolvedValue({}),
   fetchSettings: vi.fn().mockResolvedValue({}),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   updateSetting: vi.fn().mockResolvedValue(undefined),
@@ -820,6 +821,38 @@ describe('DeviceConfigPanel', () => {
     expect(onDeviceUpdated).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'dev-1', area_ids: ['map-area-1'] }),
     );
+  });
+
+  it('saves and clears virtual node visual color through map membership only', async () => {
+    const { updateCanvasMapDeviceVisualColor, updateDevice } = await import('../api/client');
+    const virtualDevice = mockDevice({
+      device_type: 'virtual',
+      ip: '',
+      metrics_source: 'none',
+      tags: { display_name: 'Virtual cloud', virtual_subtype: 'cloud' },
+      map_visual_color: '#123ABC',
+    });
+
+    render(
+      <DeviceConfigPanel
+        device={virtualDevice}
+        isVirtual
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Virtual node color')).toHaveValue('#123abc');
+    fireEvent.click(screen.getByRole('button', { name: 'Use area/default color' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(updateCanvasMapDeviceVisualColor).toHaveBeenCalledWith('map-1', 'dev-1', {
+        visual_color: null,
+      });
+    });
+    expect(updateDevice).not.toHaveBeenCalled();
   });
 
   it('renders areas section between IP and Vendor fields', () => {

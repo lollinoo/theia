@@ -187,6 +187,8 @@ func NewRouter(
 				switch r.Method {
 				case http.MethodDelete:
 					canvasMapHandler.HandleRemoveDevice(w, r)
+				case http.MethodPatch:
+					canvasMapHandler.HandlePatchDevice(w, r)
 				case http.MethodPost:
 					canvasMapHandler.HandleAddDevice(w, r)
 				default:

@@ -37,6 +37,7 @@ export interface DeviceNodeData {
   highlighted?: boolean;
   editMode?: boolean;
   areaColors?: string[];
+  visualColor?: string;
   onContextMenu?: (event: React.MouseEvent, deviceId: string) => void;
   isGhost?: boolean;
   onGhostClick?: (deviceId: string) => void;
@@ -528,6 +529,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const colors = data.areaColors ?? [];
   const hasArea = colors.length > 0;
   const firstColor = colors[0];
+  const virtualToneColor = isVirtual ? (data.visualColor ?? firstColor) : firstColor;
   const areaAccent =
     colors.length >= 2 ? `linear-gradient(90deg, ${colors.join(', ')})` : firstColor;
   const addressLabel = isMacAddress(data.device.ip) ? 'MAC' : 'IP';
@@ -818,7 +820,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           <div
             data-testid="virtual-node-capsule"
             className={`relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass} ${virtualStatusTone?.capsuleClassName ?? ''}`}
-            style={virtualStatusTone?.capsuleStyle ?? virtualAreaTintStyle(firstColor)}
+            style={virtualStatusTone?.capsuleStyle ?? virtualAreaTintStyle(virtualToneColor)}
           >
             {hasArea && areaAccent ? (
               <div
@@ -831,7 +833,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
             <div
               data-testid="virtual-node-icon-shell"
               className="relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10 text-primary"
-              style={virtualStatusTone?.markerStyle ?? virtualAreaMarkerStyle(firstColor)}
+              style={virtualStatusTone?.markerStyle ?? virtualAreaMarkerStyle(virtualToneColor)}
             >
               <MaterialIcon name="hub" size={24} />
             </div>
@@ -844,7 +846,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
                     style={{
                       ...readableFontStyle(10),
-                      ...(virtualStatusTone?.textStyle ?? virtualAreaTextStyle(firstColor)),
+                      ...(virtualStatusTone?.textStyle ?? virtualAreaTextStyle(virtualToneColor)),
                     }}
                   >
                     {deviceTypeLabel(data.device, isVirtual, data.subtype)}
@@ -940,6 +942,7 @@ export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
     highlighted: data.highlighted,
     alertStatus: runtime.alertStatus,
     areaColors: data.areaColors ?? [],
+    visualColor: data.visualColor,
     kind: data.kind,
     isGhost: data.isGhost,
     isVirtual: data.isVirtual,
@@ -990,6 +993,7 @@ function sameDeviceRenderSignature(
     previous.highlighted === next.highlighted &&
     previous.alertStatus === next.alertStatus &&
     sameStringArray(previous.areaColors, next.areaColors) &&
+    previous.visualColor === next.visualColor &&
     previous.kind === next.kind &&
     previous.isGhost === next.isGhost &&
     previous.isVirtual === next.isVirtual &&

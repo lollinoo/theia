@@ -360,6 +360,76 @@ func TestCanvasMapRepoUpdateDeviceAreaMembershipsIsMapLocal(t *testing.T) {
 	}
 }
 
+func TestCanvasMapRepoUpdateDeviceVisualColorPersistsAndClearsMapLocalOverride(t *testing.T) {
+	db := openCanvasMapRepoTestDB(t)
+	repo := NewCanvasMapRepo(db)
+
+	firstMap, err := repo.Create(domain.CanvasMapCreate{Name: "First Visual Scope"})
+	if err != nil {
+		t.Fatalf("create first map: %v", err)
+	}
+	secondMap, err := repo.Create(domain.CanvasMapCreate{Name: "Second Visual Scope"})
+	if err != nil {
+		t.Fatalf("create second map: %v", err)
+	}
+
+	deviceID := uuid.MustParse("00000000-0000-0000-0000-000000000731")
+	insertCanvasMapRepoTestDevice(t, db, deviceID)
+	initial := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}
+	if err := repo.ReplaceMembership(firstMap.ID, initial); err != nil {
+		t.Fatalf("replace first membership: %v", err)
+	}
+	if err := repo.ReplaceMembership(secondMap.ID, initial); err != nil {
+		t.Fatalf("replace second membership: %v", err)
+	}
+
+	color := "#123ABC"
+	if err := repo.UpdateDeviceVisualColor(firstMap.ID, deviceID, &color); err != nil {
+		t.Fatalf("update first map visual color: %v", err)
+	}
+
+	firstMembership, err := repo.GetMembership(firstMap.ID)
+	if err != nil {
+		t.Fatalf("get first membership: %v", err)
+	}
+	if len(firstMembership.Devices) != 1 ||
+		firstMembership.Devices[0].VisualColor == nil ||
+		*firstMembership.Devices[0].VisualColor != color {
+		t.Fatalf("first map visual color = %#v, want %s", firstMembership.Devices, color)
+	}
+
+	secondMembership, err := repo.GetMembership(secondMap.ID)
+	if err != nil {
+		t.Fatalf("get second membership: %v", err)
+	}
+	if len(secondMembership.Devices) != 1 || secondMembership.Devices[0].VisualColor != nil {
+		t.Fatalf("second map visual color = %#v, want nil", secondMembership.Devices)
+	}
+
+	var tagsJSON string
+	if err := db.QueryRow(`SELECT tags_json FROM devices WHERE id = ?`, deviceID.String()).Scan(&tagsJSON); err != nil {
+		t.Fatalf("query global device tags: %v", err)
+	}
+	if tagsJSON != "{}" {
+		t.Fatalf("global device tags_json = %s, want unchanged empty object", tagsJSON)
+	}
+
+	if err := repo.UpdateDeviceVisualColor(firstMap.ID, deviceID, nil); err != nil {
+		t.Fatalf("clear first map visual color: %v", err)
+	}
+	firstMembership, err = repo.GetMembership(firstMap.ID)
+	if err != nil {
+		t.Fatalf("get cleared first membership: %v", err)
+	}
+	if len(firstMembership.Devices) != 1 || firstMembership.Devices[0].VisualColor != nil {
+		t.Fatalf("cleared first map visual color = %#v, want nil", firstMembership.Devices)
+	}
+}
+
 func TestCanvasMapRepoDuplicateCopiesMembershipAndPositions(t *testing.T) {
 	db := openCanvasMapRepoTestDB(t)
 	mapRepo := NewCanvasMapRepo(db)
@@ -376,10 +446,11 @@ func TestCanvasMapRepoDuplicateCopiesMembershipAndPositions(t *testing.T) {
 
 	linkID := uuid.MustParse("00000000-0000-0000-0000-000000000613")
 	insertCanvasMapRepoTestLink(t, db, linkID, deviceID, ghostDeviceID)
+	visualColor := "#7C4DFF"
 
 	membership := domain.CanvasMapMembership{
 		Devices: []domain.CanvasMapDeviceMembership{
-			{DeviceID: deviceID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: deviceID, Role: domain.CanvasMapDeviceRoleBase, VisualColor: &visualColor},
 			{DeviceID: ghostDeviceID, Role: domain.CanvasMapDeviceRoleGhost},
 		},
 		LinkIDs: []uuid.UUID{linkID},
@@ -416,6 +487,18 @@ func TestCanvasMapRepoDuplicateCopiesMembershipAndPositions(t *testing.T) {
 	}
 	if len(positions) != 1 || positions[0].DeviceID != deviceID || positions[0].X != 10 || positions[0].Y != 20 || !positions[0].Pinned {
 		t.Fatalf("unexpected copied positions: %#v", positions)
+	}
+
+	copyVisualColor := "#00AEEF"
+	if err := mapRepo.UpdateDeviceVisualColor(copy.ID, deviceID, &copyVisualColor); err != nil {
+		t.Fatalf("update copy visual color: %v", err)
+	}
+	sourceMembership, err := mapRepo.GetMembership(source.ID)
+	if err != nil {
+		t.Fatalf("get source membership after copy edit: %v", err)
+	}
+	if sourceMembership.Devices[0].VisualColor == nil || *sourceMembership.Devices[0].VisualColor != visualColor {
+		t.Fatalf("source visual color = %#v, want %s", sourceMembership.Devices[0].VisualColor, visualColor)
 	}
 }
 
@@ -769,6 +852,7 @@ func assertCanvasMapMembershipEqual(t *testing.T, got, want domain.CanvasMapMemb
 	for i := range got.Devices {
 		if got.Devices[i].DeviceID != want.Devices[i].DeviceID ||
 			got.Devices[i].Role != want.Devices[i].Role ||
+			!optionalStringEqual(got.Devices[i].VisualColor, want.Devices[i].VisualColor) ||
 			!uuidSlicesEqual(got.Devices[i].AreaIDs, want.Devices[i].AreaIDs) {
 			t.Fatalf("device membership[%d] = %#v, want %#v", i, got.Devices[i], want.Devices[i])
 		}
@@ -791,6 +875,13 @@ func assertCanvasMapMembershipEqual(t *testing.T, got, want domain.CanvasMapMemb
 			t.Fatalf("area membership[%d] = %#v, want %#v", i, got.Areas[i], want.Areas[i])
 		}
 	}
+}
+
+func optionalStringEqual(got, want *string) bool {
+	if got == nil || want == nil {
+		return got == want
+	}
+	return *got == *want
 }
 
 func uuidSlicesEqual(got, want []uuid.UUID) bool {

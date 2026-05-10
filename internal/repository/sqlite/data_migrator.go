@@ -166,6 +166,7 @@ var primaryDataCopySpecs = []tableCopySpec{
 			{name: "map_id", kind: columnKindText},
 			{name: "device_id", kind: columnKindText},
 			{name: "role", kind: columnKindText},
+			{name: "visual_color", kind: columnKindText},
 			{name: "added_at", kind: columnKindTime},
 		},
 		keyColumns: []string{"map_id", "device_id"},

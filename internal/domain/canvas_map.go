@@ -36,9 +36,10 @@ func (role CanvasMapDeviceRole) IsValid() bool {
 }
 
 type CanvasMapDeviceMembership struct {
-	DeviceID uuid.UUID
-	Role     CanvasMapDeviceRole
-	AreaIDs  []uuid.UUID
+	DeviceID    uuid.UUID
+	Role        CanvasMapDeviceRole
+	AreaIDs     []uuid.UUID
+	VisualColor *string
 }
 
 type CanvasMapAreaMembership struct {
@@ -96,6 +97,7 @@ type CanvasMapRepository interface {
 	Duplicate(id uuid.UUID, name string) (CanvasMap, error)
 	GetMembership(id uuid.UUID) (CanvasMapMembership, error)
 	ReplaceMembership(id uuid.UUID, membership CanvasMapMembership) error
+	UpdateDeviceVisualColor(id uuid.UUID, deviceID uuid.UUID, visualColor *string) error
 	RemoveDevice(id uuid.UUID, deviceID uuid.UUID) error
 	RemoveLink(id uuid.UUID, linkID uuid.UUID) error
 }

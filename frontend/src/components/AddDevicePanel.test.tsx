@@ -7,6 +7,7 @@ import {
   fetchDevices,
   setWinBoxProfile,
   updateCanvasMapDeviceAreas,
+  updateCanvasMapDeviceVisualColor,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type { Device } from '../types/api';
@@ -33,6 +34,19 @@ vi.mock('../api/client', () => ({
     updated_at: '',
   }),
   updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({
+    id: 'map-1',
+    name: 'Backbone',
+    description: '',
+    source_area_id: null,
+    filter: {},
+    is_default: false,
+    device_count: 1,
+    link_count: 0,
+    position_count: 0,
+    created_at: '',
+    updated_at: '',
+  }),
+  updateCanvasMapDeviceVisualColor: vi.fn().mockResolvedValue({
     id: 'map-1',
     name: 'Backbone',
     description: '',
@@ -257,6 +271,28 @@ describe('virtual mode', () => {
       );
       expect(addDeviceToCanvasMap).toHaveBeenCalledWith('map-1', 'new-dev', {
         include_connected_links: true,
+      });
+    });
+  });
+
+  it('applies selected visual color after adding a virtual node to the selected saved map', async () => {
+    render(<AddDevicePanel mapContext={{ mapId: 'map-1' }} onDeviceAdded={vi.fn()} />);
+
+    fireEvent.click(screen.getByText('Virtual Node'));
+    fireEvent.change(screen.getByPlaceholderText('e.g. ISP Gateway'), {
+      target: { value: 'Internet Edge' },
+    });
+    fireEvent.change(screen.getByLabelText('Virtual node color'), {
+      target: { value: '#123abc' },
+    });
+    fireEvent.click(screen.getByText('Add Virtual Node'));
+
+    await waitFor(() => {
+      expect(addDeviceToCanvasMap).toHaveBeenCalledWith('map-1', 'new-dev', {
+        include_connected_links: true,
+      });
+      expect(updateCanvasMapDeviceVisualColor).toHaveBeenCalledWith('map-1', 'new-dev', {
+        visual_color: '#123ABC',
       });
     });
   });

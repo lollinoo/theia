@@ -624,6 +624,30 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
+  it('uses custom virtual visual color before the area color while preserving the area bar', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        sys_name: '',
+        tags: { display_name: 'Custom Cloud', virtual_subtype: 'cloud' },
+      }),
+      isVirtual: true,
+      subtype: 'cloud',
+      areaColors: ['#2563eb'],
+      visualColor: '#ff3366',
+    });
+
+    const capsule = screen.getByTestId('virtual-node-capsule');
+    const iconShell = screen.getByTestId('virtual-node-icon-shell');
+    const areaAccent = screen.getByTestId('virtual-node-area-accent');
+
+    expect(capsule.style.backgroundColor).toBe('rgba(255, 51, 102, 0.1)');
+    expect(iconShell.style.borderColor).toBe('rgba(255, 51, 102, 0.32)');
+    expect(iconShell.style.backgroundColor).toBe('rgba(255, 51, 102, 0.14)');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+  });
+
   it('renders monitorable virtual nodes as capsule endpoints with status and IP', () => {
     renderDeviceCard({
       device: mockDevice({
@@ -740,6 +764,34 @@ describe('DeviceCard', () => {
     expect(iconShell.style.borderColor).toBe('var(--nt-node-probing-border)');
     expect(iconShell.style.backgroundColor).toBe('var(--nt-node-probing-badge-bg)');
     expect(typeLabel.style.color).toBe('var(--nt-status-probing)');
+  });
+
+  it('keeps down status primary over custom virtual visual color', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '10.16.2.3',
+        status: 'down',
+        sys_name: '',
+        tags: { display_name: 'Gateway Down', virtual_subtype: 'generic' },
+      }),
+      isVirtual: true,
+      areaColors: ['#2563eb'],
+      visualColor: '#ff3366',
+      metrics: mockMetrics({
+        health: 'critical',
+        operational_status: 'down',
+        primary_health: 'unreachable',
+      }),
+    });
+
+    const capsule = screen.getByTestId('virtual-node-capsule');
+    const iconShell = screen.getByTestId('virtual-node-icon-shell');
+
+    expect(screen.getByText('Down')).toBeInTheDocument();
+    expect(capsule.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(255, 51, 102, 0.1)');
+    expect(iconShell.style.color).toBe('var(--nt-status-down)');
   });
 
   it('renders monitorable virtual nodes as up even when health is absent', () => {
