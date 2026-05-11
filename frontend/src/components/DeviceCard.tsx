@@ -377,14 +377,21 @@ function readableVirtualAreaTone(color: string): string | null {
   return rgbToCss(mixRgb(rgb, whiteRgb, 0.8));
 }
 
-function virtualAreaTintStyle(color?: string): CSSProperties | undefined {
-  if (!color) return undefined;
+function areaTintStyle(colors: string[] | undefined): CSSProperties | undefined {
+  const tintColors = (colors ?? [])
+    .map((color) => hexToRgba(color, 0.1))
+    .filter((color): color is string => !!color);
 
-  const tintColor = hexToRgba(color, 0.1);
-  if (!tintColor) return undefined;
+  if (tintColors.length === 0) return undefined;
+
+  if (tintColors.length === 1) {
+    return {
+      backgroundColor: tintColors[0],
+    };
+  }
 
   return {
-    backgroundColor: tintColor,
+    background: `linear-gradient(135deg, ${tintColors.join(', ')})`,
   };
 }
 
@@ -710,7 +717,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           <div
             data-testid="physical-node-body"
             className={`flex-1 px-4 pb-3.5 pt-3 ${physicalStatusTone?.bodyClassName ?? ''}`}
-            style={physicalStatusTone?.bodyStyle ?? virtualAreaTintStyle(firstColor)}
+            style={physicalStatusTone?.bodyStyle ?? areaTintStyle(colors)}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
@@ -820,7 +827,10 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           <div
             data-testid="virtual-node-capsule"
             className={`relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass} ${virtualStatusTone?.capsuleClassName ?? ''}`}
-            style={virtualStatusTone?.capsuleStyle ?? virtualAreaTintStyle(virtualToneColor)}
+            style={
+              virtualStatusTone?.capsuleStyle ??
+              areaTintStyle(data.visualColor ? [data.visualColor] : colors)
+            }
           >
             {hasArea && areaAccent ? (
               <div

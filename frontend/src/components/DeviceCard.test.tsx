@@ -426,6 +426,24 @@ describe('DeviceCard', () => {
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
   });
 
+  it('tints physical node body with all assigned area colors', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: ['area-1', 'area-2'] }),
+      areaColors: ['#2563eb', '#ff5722'],
+      metrics: mockMetrics(),
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const areaAccent = screen.getByTestId('physical-node-area-accent');
+
+    expect(body.style.background).toContain('linear-gradient');
+    expect(body.style.background).toContain('rgba(37, 99, 235, 0.1)');
+    expect(body.style.background).toContain('rgba(255, 87, 34, 0.1)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+    expect(areaAccent.style.background).toContain('rgb(255, 87, 34)');
+  });
+
   it('uses down as the primary tone for physical node body while preserving the area bar', () => {
     renderDeviceCard({
       device: mockDevice({ area_ids: ['area-1'], status: 'down' }),
@@ -646,6 +664,31 @@ describe('DeviceCard', () => {
     expect(iconShell.style.borderColor).toBe('rgba(255, 51, 102, 0.32)');
     expect(iconShell.style.backgroundColor).toBe('rgba(255, 51, 102, 0.14)');
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+  });
+
+  it('tints virtual capsules with all assigned area colors when no visual color is set', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        sys_name: '',
+        tags: { display_name: 'Shared Cloud', virtual_subtype: 'cloud' },
+        area_ids: ['area-1', 'area-2'],
+      }),
+      isVirtual: true,
+      subtype: 'cloud',
+      areaColors: ['#2563eb', '#ff5722'],
+    });
+
+    const capsule = screen.getByTestId('virtual-node-capsule');
+    const areaAccent = screen.getByTestId('virtual-node-area-accent');
+
+    expect(capsule.style.background).toContain('linear-gradient');
+    expect(capsule.style.background).toContain('rgba(37, 99, 235, 0.1)');
+    expect(capsule.style.background).toContain('rgba(255, 87, 34, 0.1)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+    expect(areaAccent.style.background).toContain('rgb(255, 87, 34)');
   });
 
   it('renders monitorable virtual nodes as capsule endpoints with status and IP', () => {
