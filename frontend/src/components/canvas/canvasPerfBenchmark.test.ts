@@ -8,6 +8,7 @@ describe('canvasPerfBenchmark', () => {
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('computeForceLayout');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('incrementalLayout');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('runtimePatch');
+    expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('composeCanvasTopologyCached');
 
     const result = runCanvasPerfBenchmark({
       iterations: 1,
@@ -17,6 +18,7 @@ describe('canvasPerfBenchmark', () => {
 
     expect(result.scenarios.small.metrics.incrementalLayout.count).toBe(1);
     expect(result.scenarios.small.metrics.runtimePatch.count).toBe(1);
+    expect(result.scenarios.small.metrics.composeCanvasTopologyCached.count).toBe(1);
   });
 
   it('produces aggregate metrics for every official scenario and benchmarked function', () => {

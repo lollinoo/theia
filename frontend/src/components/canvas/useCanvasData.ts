@@ -56,7 +56,10 @@ import {
   patchRuntimeEdges,
   patchRuntimeNodes,
 } from './runtimePatches';
-import { composeCanvasTopology } from './topologyComposer';
+import {
+  buildCanvasTopologyCompositionCacheKey,
+  createCanvasTopologyCompositionCache,
+} from './topologyCompositionCache';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
 
 interface UseCanvasDataParams {
@@ -555,6 +558,7 @@ export function useCanvasData({
   const lastCanvasTopologyEtagByMapRef = useRef<Map<string, string | null>>(new Map());
   const lastUsablePositionStateByMapRef = useRef<Map<string, string>>(new Map());
   const currentNodePositionsByMapRef = useRef<Map<string, Map<string, PositionState>>>(new Map());
+  const topologyCompositionCacheRef = useRef(createCanvasTopologyCompositionCache());
   const skippedSavedMapManualEdgeMigrationRef = useRef<Set<string>>(new Set());
   const grafanaUrlRef = useRef<string>('');
   const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
@@ -824,26 +828,61 @@ export function useCanvasData({
             alerts: alertsRef.current,
             prometheusStatus,
           });
-
-          if (!structureChanged) {
-            setDevices(fetchedDevices);
-            setTopologyLinks(fetchedLinks);
-            setTopologyAreas(fetchedAreas);
-            const { nodes: nextNodes, edges: nextEdges } = composeCanvasTopology({
+          const composeTopologyWithCache = (
+            computedPositions: Map<string, { x: number; y: number }>,
+            placementDeviceIds: Set<string>,
+          ) => {
+            const compositionInput = {
               devices: fetchedDevices,
               links: fetchedLinks,
               runtimeState,
               savedPositions: effectivePositions,
-              computedPositions: new Map(),
+              computedPositions,
               currentPositions: currentPositionsForComposition,
               defaultPosition,
               editMode,
               openDeviceMenu,
               openEdgeMenu,
               openSelfLinkDetails,
-              placementDeviceIds: new Set(),
+              placementDeviceIds,
               alerts: alertsRef.current,
-            });
+            };
+            return topologyCompositionCacheRef.current.compose(
+              compositionInput,
+              buildCanvasTopologyCompositionCacheKey({
+                mapKey,
+                topologySignature: topologyIdentity.signature,
+                topologyVersion: topologySource.topologyVersion,
+                topologyEtag: topologySource.etag,
+                schemaVersion: topologySource.schemaVersion,
+                devices: fetchedDevices,
+                links: fetchedLinks,
+                savedPositions: effectivePositions,
+                computedPositions,
+                currentPositions: currentPositionsForComposition,
+                defaultPosition,
+                editMode,
+                placementDeviceIds,
+                runtimeIdentity: topologySource.runtimeIdentity,
+                runtimeVersion: topologySource.runtimeVersion,
+                runtimeSnapshot,
+                alerts: alertsRef.current,
+                prometheusStatus,
+                openDeviceMenu,
+                openEdgeMenu,
+                openSelfLinkDetails,
+              }),
+            );
+          };
+
+          if (!structureChanged) {
+            setDevices(fetchedDevices);
+            setTopologyLinks(fetchedLinks);
+            setTopologyAreas(fetchedAreas);
+            const { nodes: nextNodes, edges: nextEdges } = composeTopologyWithCache(
+              new Map<string, { x: number; y: number }>(),
+              new Set(),
+            );
             nodesOwnerMapKeyRef.current = mapKey;
             setRenderedMapKey(mapKey);
             currentNodePositionsByMapRef.current.set(mapKey, nodePositionsToPositionMap(nextNodes));
@@ -953,21 +992,10 @@ export function useCanvasData({
                 })
               : new Map();
 
-          const { nodes: composedNodes, edges: composedEdges } = composeCanvasTopology({
-            devices: fetchedDevices,
-            links: fetchedLinks,
-            runtimeState,
-            savedPositions: effectivePositions,
+          const { nodes: composedNodes, edges: composedEdges } = composeTopologyWithCache(
             computedPositions,
-            currentPositions: currentPositionsForComposition,
-            defaultPosition,
-            editMode,
-            openDeviceMenu,
-            openEdgeMenu,
-            openSelfLinkDetails,
             placementDeviceIds,
-            alerts: alertsRef.current,
-          });
+          );
 
           // Apply all state updates together as urgent (not in startTransition).
           // Previously these were wrapped in startTransition which made them

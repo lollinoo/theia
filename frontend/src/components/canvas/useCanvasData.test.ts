@@ -377,6 +377,48 @@ describe('useCanvasData', () => {
     expect(fetchCanvasTopology).not.toHaveBeenCalled();
   });
 
+  it('reuses composed topology when repeated forced bootstraps return the same canvas input', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockImplementation(() =>
+      Promise.resolve(
+        canvasBootstrapResponse({
+          runtime_version: 3,
+          runtime_identity: 'rt-sha256:stable',
+          runtime_snapshot: mockSnapshot(),
+        }),
+      ),
+    );
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const edgeBuildCallsAfterInitialLoad = vi.mocked(buildTopologyEdges).mock.calls.length;
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-resync-required'));
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenCalledTimes(2);
+
+    const edgeBuildCallsAfterFirstResync = vi.mocked(buildTopologyEdges).mock.calls.length;
+    expect(edgeBuildCallsAfterFirstResync).toBeGreaterThanOrEqual(edgeBuildCallsAfterInitialLoad);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-resync-required'));
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenCalledTimes(3);
+    expect(buildTopologyEdges).toHaveBeenCalledTimes(edgeBuildCallsAfterFirstResync);
+  });
+
   it('treats a saved map id matching the old internal default key as distinct from the default canvas', async () => {
     const defaultDevice = mockDevice({
       id: 'default-dev',

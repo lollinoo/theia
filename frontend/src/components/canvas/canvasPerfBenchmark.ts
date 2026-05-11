@@ -29,11 +29,17 @@ import {
   patchRuntimeNodes,
 } from './runtimePatches';
 import { composeCanvasTopology } from './topologyComposer';
+import {
+  buildCanvasTopologyCompositionCacheKey,
+  createCanvasTopologyCompositionCache,
+} from './topologyCompositionCache';
+import { buildTopologyIdentity } from './topologyIdentity';
 
 export const CANVAS_PERF_BENCHMARK_METRICS = [
   'buildTopologyNodes',
   'buildTopologyEdges',
   'composeCanvasTopology',
+  'composeCanvasTopologyCached',
   'areaProjection',
   'runtimePatch',
   'incrementalLayout',
@@ -265,21 +271,48 @@ function benchmarkOperations(
     ),
   );
 
+  const compositionInput = {
+    devices: scenario.devices,
+    links: scenario.links,
+    runtimeState,
+    savedPositions: scenario.positions,
+    computedPositions: new Map<string, { x: number; y: number }>(),
+    currentPositions: buildCurrentPositions(nodes),
+    defaultPosition: { x: 120, y: 120 },
+    editMode: false,
+    openDeviceMenu: noopDeviceMenu,
+    openEdgeMenu: noopEdgeMenu,
+    placementDeviceIds,
+    alerts: scenario.alerts,
+  };
+
   measureLocalMetric(samples, scenarioName, 'composeCanvasTopology', () =>
-    composeCanvasTopology({
-      devices: scenario.devices,
-      links: scenario.links,
-      runtimeState,
-      savedPositions: scenario.positions,
-      computedPositions: new Map(),
-      currentPositions: buildCurrentPositions(nodes),
-      defaultPosition: { x: 120, y: 120 },
-      editMode: false,
-      openDeviceMenu: noopDeviceMenu,
-      openEdgeMenu: noopEdgeMenu,
-      placementDeviceIds,
-      alerts: scenario.alerts,
-    }),
+    composeCanvasTopology(compositionInput),
+  );
+
+  const compositionCache = createCanvasTopologyCompositionCache();
+  const compositionCacheKey = buildCanvasTopologyCompositionCacheKey({
+    mapKey: `benchmark:${scenarioName}`,
+    topologySignature: buildTopologyIdentity(scenario.devices, scenario.links).signature,
+    schemaVersion: 1,
+    devices: scenario.devices,
+    links: scenario.links,
+    savedPositions: scenario.positions,
+    computedPositions: compositionInput.computedPositions,
+    currentPositions: compositionInput.currentPositions,
+    defaultPosition: compositionInput.defaultPosition,
+    editMode: compositionInput.editMode,
+    placementDeviceIds,
+    runtimeIdentity: `benchmark:${scenarioName}`,
+    runtimeSnapshot: scenario.runtimeSnapshot,
+    alerts: scenario.alerts,
+    prometheusStatus,
+    openDeviceMenu: noopDeviceMenu,
+    openEdgeMenu: noopEdgeMenu,
+  });
+  compositionCache.compose(compositionInput, compositionCacheKey);
+  measureLocalMetric(samples, scenarioName, 'composeCanvasTopologyCached', () =>
+    compositionCache.compose(compositionInput, compositionCacheKey),
   );
 
   measureLocalMetric(samples, scenarioName, 'areaProjection', () =>
