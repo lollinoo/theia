@@ -118,7 +118,7 @@ Use SQLite only when the installation stays within all of these limits:
 - one active administrative operator at a time
 - no expectation of overlapping intensive polling, topology churn, scheduled backup activity, and configuration-write bursts
 
-Instance backup / restore is supported on PostgreSQL deployments when compatible PostgreSQL client tools are available on `PATH`. PostgreSQL backup jobs require `pg_dump` 17.x; restore validation, staging, and apply require `pg_restore` 17.x; non-dry-run restore apply also requires `pg_dump` 17.x so Theia can take a pre-restore live database backup before changing the database.
+Instance backup / restore is supported on PostgreSQL deployments when compatible PostgreSQL client tools are available on `PATH`. PostgreSQL backup jobs require `pg_dump` 17.x; restore validation, staging, and apply require `pg_restore` 17.x; non-dry-run restore apply also requires `pg_dump` 17.x so Theia can take a pre-restore live database backup before changing the database, and `psql` 17.x so Theia can reset the target schema before loading the staged dump.
 
 ### 4.2 PostgreSQL client tools
 
@@ -128,7 +128,7 @@ The bundled development, staging, and production compose stacks use PostgreSQL 1
 |------|-------------|-------------------|
 | `pg_dump` | Required for PostgreSQL instance backup and pre-restore live DB backup | 17.x |
 | `pg_restore` | Required for PostgreSQL restore validation and apply | 17.x |
-| `psql` | Bundled in official images for operator diagnostics/admin use; not required by backup/restore | 17.x |
+| `psql` | Required for PostgreSQL restore apply schema cleanup | 17.x |
 
 Missing or incompatible PostgreSQL client tools fail the backup or restore job at startup with actionable diagnostics. Error output redacts connection strings and passwords.
 
