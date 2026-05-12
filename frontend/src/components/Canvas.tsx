@@ -41,6 +41,11 @@ import {
   topologyFitViewPadding,
 } from './canvas/canvasHelpers';
 import {
+  clearSelectedGraphItems,
+  patchEditMode,
+  patchHighlightedNode,
+} from './canvas/canvasPresentationPatches';
+import {
   type CanvasRenderProjectionNodeCacheEntry,
   projectCanvasRenderGraph,
 } from './canvas/canvasRenderProjection';
@@ -183,6 +188,7 @@ export default function Canvas({
   const deviceNodeReadabilityScaleRef = useRef('1');
   const linkBadgeReadabilityScaleRef = useRef('1');
   const highlightTimerRef = useRef<number | null>(null);
+  const highlightedDeviceIdRef = useRef<string | null>(null);
   const interactionIdleTimerRef = useRef<number | null>(null);
   const areaColorNodeCacheRef = useRef(new Map<string, CanvasRenderProjectionNodeCacheEntry>());
   const ghostNodeMeasurementCacheRef = useRef(
@@ -245,29 +251,21 @@ export default function Canvas({
     setShowSearch(false);
     setSelectedNodeCount(0);
     ghostNodeMeasurementCacheRef.current.clear();
-    setNodes((currentNodes) => {
-      let changed = false;
-      const nextNodes = currentNodes.map((node) => {
-        if (!node.selected) {
-          return node;
-        }
-        changed = true;
-        return { ...node, selected: false };
-      });
-      return changed ? nextNodes : currentNodes;
-    });
-    setEdges((currentEdges) => {
-      let changed = false;
-      const nextEdges = currentEdges.map((edge) => {
-        if (!edge.selected) {
-          return edge;
-        }
-        changed = true;
-        return { ...edge, selected: false };
-      });
-      return changed ? nextEdges : currentEdges;
-    });
+    setNodes(
+      (currentNodes) =>
+        clearSelectedGraphItems(currentNodes, [], {
+          nodeIndexById: nodeIndexByIdRef.current,
+        }).nodes,
+    );
+    setEdges(
+      (currentEdges) =>
+        clearSelectedGraphItems([], currentEdges, {
+          edgeIndexById: edgeIndexByIdRef.current,
+        }).edges,
+    );
   }, [
+    edgeIndexByIdRef,
+    nodeIndexByIdRef,
     selectedMapKey,
     setDeviceMenu,
     setEdgeMenu,
@@ -722,7 +720,7 @@ export default function Canvas({
   ]);
 
   useEffect(() => {
-    setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, editMode } })));
+    setNodes((prev) => patchEditMode(prev, editMode));
     if (!editMode) setSelectedNodeCount(0);
   }, [editMode, setNodes]);
   useEffect(
@@ -733,6 +731,38 @@ export default function Canvas({
       }
     },
     [],
+  );
+
+  const applyDeviceHighlight = useCallback(
+    (deviceID: string) => {
+      highlightedDeviceIdRef.current = deviceID;
+      setNodes((currentNodes) => {
+        let nextNodes = currentNodes;
+        for (const node of currentNodes) {
+          if (node.id === deviceID || node.data.highlighted !== true) {
+            continue;
+          }
+          nextNodes = patchHighlightedNode(nextNodes, nodeIndexByIdRef.current, node.id, false);
+        }
+        return patchHighlightedNode(nextNodes, nodeIndexByIdRef.current, deviceID, true);
+      });
+    },
+    [nodeIndexByIdRef, setNodes],
+  );
+
+  const scheduleHighlightClear = useCallback(
+    (deviceID: string) => {
+      if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = window.setTimeout(() => {
+        setNodes((currentNodes) =>
+          patchHighlightedNode(currentNodes, nodeIndexByIdRef.current, deviceID, false),
+        );
+        if (highlightedDeviceIdRef.current === deviceID) {
+          highlightedDeviceIdRef.current = null;
+        }
+      }, 2000);
+    },
+    [nodeIndexByIdRef, setNodes],
   );
 
   const handleEdgesChange = useCallback(
@@ -776,20 +806,8 @@ export default function Canvas({
             zoom: 1.2,
             duration: 500,
           });
-          setNodes((cur) =>
-            cur.map((n) => ({
-              ...n,
-              data: { ...n.data, highlighted: n.id === deviceID },
-            })),
-          );
-          if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
-          highlightTimerRef.current = window.setTimeout(() => {
-            setNodes((cur) =>
-              cur.map((n) =>
-                n.id === deviceID ? { ...n, data: { ...n.data, highlighted: false } } : n,
-              ),
-            );
-          }, 2000);
+          applyDeviceHighlight(deviceID);
+          scheduleHighlightClear(deviceID);
         });
       });
       return;
@@ -801,18 +819,8 @@ export default function Canvas({
       zoom: 1.2,
       duration: 500,
     });
-    setNodes((cur) =>
-      cur.map((n) => ({
-        ...n,
-        data: { ...n.data, highlighted: n.id === deviceID },
-      })),
-    );
-    if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
-    highlightTimerRef.current = window.setTimeout(() => {
-      setNodes((cur) =>
-        cur.map((n) => (n.id === deviceID ? { ...n, data: { ...n.data, highlighted: false } } : n)),
-      );
-    }, 2000);
+    applyDeviceHighlight(deviceID);
+    scheduleHighlightClear(deviceID);
   }
 
   // Resolve Grafana URL for a device (per-device override or global)

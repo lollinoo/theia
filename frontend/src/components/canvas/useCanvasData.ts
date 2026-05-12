@@ -18,7 +18,6 @@ import {
   type AlertDTO,
   type PrometheusStatusPayload,
   type SnapshotPayload,
-  alertStatusForDevice,
   isPrometheusUnavailable,
 } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
@@ -37,7 +36,8 @@ import {
   measureCanvasAsyncWork,
   measureCanvasWork,
 } from './canvasInstrumentation';
-import { alertStatusForLink, buildTopologyEdges } from './edgeBuilder';
+import { patchAlertStatuses } from './canvasPresentationPatches';
+import { buildTopologyEdges } from './edgeBuilder';
 import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
@@ -158,14 +158,6 @@ const emptyAlerts: AlertDTO[] = [];
 
 function canvasMapKey(mapId: string | null): string {
   return mapId === null ? 'default:' : `map:${mapId}`;
-}
-
-function runtimeAlertStatusForDevice(
-  deviceId: string,
-  snapshot: SnapshotPayload | null,
-  alerts: AlertDTO[],
-) {
-  return snapshot?.devices[deviceId]?.alert_status ?? alertStatusForDevice(deviceId, alerts);
 }
 
 function measurementTriggerForCauses(
@@ -1413,49 +1405,28 @@ export function useCanvasData({
   ]);
 
   useEffect(() => {
-    setNodes((currentNodes) => {
-      let changed = false;
-      const nextNodes = currentNodes.map((node) => {
-        const alertStatus = runtimeAlertStatusForDevice(node.id, snapshot, alerts);
-        if (node.data.runtime.alertStatus === alertStatus) {
-          return node;
-        }
-        changed = true;
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            runtime: {
-              ...node.data.runtime,
-              alertStatus,
-            },
-          },
-        };
-      });
-      return changed ? nextNodes : currentNodes;
-    });
+    setNodes(
+      (currentNodes) =>
+        patchAlertStatuses(
+          currentNodes,
+          [],
+          { nodeIndexById: nodeIndexByIdRef?.current },
+          snapshot,
+          alerts,
+        ).nodes,
+    );
 
-    setEdges((currentEdges) => {
-      let changed = false;
-      const nextEdges = currentEdges.map((edge) => {
-        const alertStatus = edge.data?.link
-          ? alertStatusForLink(edge.data.link, alerts)
-          : undefined;
-        if (!edge.data || edge.data.alertStatus === alertStatus) {
-          return edge;
-        }
-        changed = true;
-        return {
-          ...edge,
-          data: {
-            ...edge.data,
-            alertStatus,
-          },
-        };
-      });
-      return changed ? nextEdges : currentEdges;
-    });
-  }, [alerts, setEdges, setNodes]);
+    setEdges(
+      (currentEdges) =>
+        patchAlertStatuses(
+          [],
+          currentEdges,
+          { edgeIndexById: edgeIndexByIdRef?.current },
+          snapshot,
+          alerts,
+        ).edges,
+    );
+  }, [alerts, edgeIndexByIdRef, nodeIndexByIdRef, setEdges, setNodes]);
 
   return {
     devices,
