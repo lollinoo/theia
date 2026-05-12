@@ -1,5 +1,6 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import type { EdgeChange, NodeChange } from '@xyflow/react';
+import { createElement } from 'react';
 import { describe, expect, it } from 'vitest';
 
 import type { DeviceNode } from '../DeviceCard';
@@ -23,6 +24,13 @@ function edge(id: string, source: string, target: string): LinkEdgeType {
     target,
     data: {},
   } as LinkEdgeType;
+}
+
+interface RenderSnapshot {
+  nodes: string[];
+  edges: string[];
+  nodeIndexById: Map<string, number>;
+  edgeIndexById: Map<string, number>;
 }
 
 describe('useCanvasGraphState', () => {
@@ -75,6 +83,43 @@ describe('useCanvasGraphState', () => {
         ['edge-b', 1],
       ]),
     );
+  });
+
+  it('does not expose replacement indexes through refs before commit', () => {
+    const renderSnapshots: RenderSnapshot[] = [];
+
+    function RefSyncProbe() {
+      const graphState = useCanvasGraphState();
+      renderSnapshots.push({
+        nodes: graphState.nodes.map((current) => current.id),
+        edges: graphState.edges.map((current) => current.id),
+        nodeIndexById: new Map(graphState.nodeIndexByIdRef.current),
+        edgeIndexById: new Map(graphState.edgeIndexByIdRef.current),
+      });
+
+      return createElement(
+        'button',
+        {
+          type: 'button',
+          onClick: () => {
+            graphState.setNodes([node('node-a')]);
+            graphState.setEdges([edge('edge-a', 'node-a', 'node-b')]);
+          },
+        },
+        'Replace graph',
+      );
+    }
+
+    render(createElement(RefSyncProbe));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Replace graph' }));
+
+    const replacementRender = renderSnapshots.find(
+      (snapshot) => snapshot.nodes[0] === 'node-a' && snapshot.edges[0] === 'edge-a',
+    );
+
+    expect(replacementRender?.nodeIndexById).toEqual(new Map());
+    expect(replacementRender?.edgeIndexById).toEqual(new Map());
   });
 
   it('applies node changes while refreshing the node index', () => {

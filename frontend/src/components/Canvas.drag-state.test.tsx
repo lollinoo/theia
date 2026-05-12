@@ -69,14 +69,34 @@ function mockNode(device: Device, x: number, y: number): DeviceNode {
   } as DeviceNode;
 }
 
+type MockNodeChange = {
+  id: string;
+  type: string;
+  dimensions?: { width: number; height: number };
+};
+
 const testState = vi.hoisted(() => ({
   devices: [] as Device[],
   links: [] as Link[],
   canonicalNodes: [] as DeviceNode[],
   displayedNodes: [] as DeviceNode[],
-  setNodes: vi.fn(),
   setEdges: vi.fn(),
-  onNodesChange: vi.fn(),
+  applyNodeChanges: vi.fn((changes: MockNodeChange[], currentNodes: DeviceNode[]) => {
+    let nextNodes = currentNodes;
+    for (const change of changes) {
+      if (change.type === 'remove') {
+        nextNodes = nextNodes.filter((node) => node.id !== change.id);
+        continue;
+      }
+
+      if (change.type === 'dimensions' && change.dimensions) {
+        nextNodes = nextNodes.map((node) =>
+          node.id === change.id ? { ...node, measured: { ...change.dimensions } } : node,
+        );
+      }
+    }
+    return nextNodes;
+  }),
   savePositions: vi.fn(),
   loadTopology: vi.fn(),
   removeDeviceFromCanvasMap: vi.fn(),
@@ -169,12 +189,27 @@ vi.mock('@xyflow/react', () => ({
         >
           Measure ghost node
         </button>
+        <button
+          type="button"
+          onClick={() =>
+            onNodesChange?.([
+              {
+                id: 'dev-a',
+                type: 'dimensions',
+                dimensions: { width: 88, height: 44 },
+              },
+            ])
+          }
+        >
+          Measure real node
+        </button>
         {children}
       </div>
     );
   },
+  applyNodeChanges: (changes: MockNodeChange[], currentNodes: DeviceNode[]) =>
+    testState.applyNodeChanges(changes, currentNodes),
   applyEdgeChanges: (_changes: unknown, current: unknown) => current,
-  useNodesState: () => [testState.canonicalNodes, testState.setNodes, testState.onNodesChange],
   useReactFlow: () => ({
     fitView: testState.fitView,
     zoomIn: vi.fn(),
@@ -237,28 +272,44 @@ vi.mock('../contexts/ThemeContext', () => ({
 vi.mock('../api/client', () => ({
   removeDeviceFromCanvasMap: (...args: unknown[]) => testState.removeDeviceFromCanvasMap(...args),
 }));
-vi.mock('./canvas/useCanvasData', () => ({
-  useCanvasData: (params: { mapId: string | null; mapName?: string }) => {
-    testState.canvasDataParams = params;
-    return {
-      devices: testState.devices,
-      setDevices: vi.fn(),
-      topologyLinks: testState.links,
-      loading: false,
-      error: null,
-      loadTopology: testState.loadTopology,
-      runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
-      grafanaUrlRef: { current: '' },
-      deviceGrafanaUrlsRef: { current: new Map<string, string>() },
-      refreshSettings: vi.fn(),
-      topologyRecoveryNotice: null,
-      dismissTopologyRecoveryNotice: vi.fn(),
-      retryTopologyRefresh: vi.fn(),
-      updateNodePosition: testState.updateNodePosition,
-      renderedMapKey: testState.renderedMapKey,
-    };
-  },
-}));
+vi.mock('./canvas/useCanvasData', async () => {
+  const ReactRuntime = await import('react');
+  return {
+    useCanvasData: (params: {
+      mapId: string | null;
+      mapName?: string;
+      setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
+    }) => {
+      const lastSeededNodesRef = ReactRuntime.useRef<DeviceNode[] | null>(null);
+      ReactRuntime.useLayoutEffect(() => {
+        if (lastSeededNodesRef.current === testState.canonicalNodes) {
+          return;
+        }
+        lastSeededNodesRef.current = testState.canonicalNodes;
+        params.setNodes(testState.canonicalNodes);
+      });
+
+      testState.canvasDataParams = params;
+      return {
+        devices: testState.devices,
+        setDevices: vi.fn(),
+        topologyLinks: testState.links,
+        loading: false,
+        error: null,
+        loadTopology: testState.loadTopology,
+        runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
+        grafanaUrlRef: { current: '' },
+        deviceGrafanaUrlsRef: { current: new Map<string, string>() },
+        refreshSettings: vi.fn(),
+        topologyRecoveryNotice: null,
+        dismissTopologyRecoveryNotice: vi.fn(),
+        retryTopologyRefresh: vi.fn(),
+        updateNodePosition: testState.updateNodePosition,
+        renderedMapKey: testState.renderedMapKey,
+      };
+    },
+  };
+});
 
 describe('Canvas drag state ownership', () => {
   beforeEach(() => {
@@ -299,9 +350,8 @@ describe('Canvas drag state ownership', () => {
       mockNode(deviceC, 500, 100),
     ];
     testState.displayedNodes = [];
-    testState.setNodes.mockReset();
     testState.setEdges.mockReset();
-    testState.onNodesChange.mockReset();
+    testState.applyNodeChanges.mockClear();
     testState.savePositions.mockReset();
     testState.loadTopology.mockReset();
     testState.loadTopology.mockResolvedValue(undefined);
@@ -355,10 +405,10 @@ describe('Canvas drag state ownership', () => {
       testState.displayedNodes.map((node) => `${node.id}:${node.data.isGhost === true}`),
     ).toEqual(['dev-a:false', 'dev-c:true']);
 
-    testState.setNodes.mockClear();
+    testState.applyNodeChanges.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Drag area node' }));
 
-    expect(testState.setNodes).not.toHaveBeenCalled();
+    expect(testState.applyNodeChanges).not.toHaveBeenCalled();
     expect(testState.savePositions).not.toHaveBeenCalled();
     expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
       x: 444,
@@ -366,7 +416,7 @@ describe('Canvas drag state ownership', () => {
     });
   });
 
-  it('keeps ghost node measurements out of canonical node state', () => {
+  it('filters ghost measurements while applying real node changes through graph state', () => {
     const props = {
       snapshot: null,
       reconnecting: false,
@@ -390,9 +440,27 @@ describe('Canvas drag state ownership', () => {
 
     expect(testState.displayedNodes.find((node) => node.id === 'dev-c')?.data.isGhost).toBe(true);
 
+    testState.applyNodeChanges.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Measure ghost node' }));
 
-    expect(testState.onNodesChange).not.toHaveBeenCalled();
+    expect(testState.applyNodeChanges).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Measure real node' }));
+
+    expect(testState.applyNodeChanges).toHaveBeenCalledWith(
+      [
+        {
+          id: 'dev-a',
+          type: 'dimensions',
+          dimensions: { width: 88, height: 44 },
+        },
+      ],
+      expect.arrayContaining([expect.objectContaining({ id: 'dev-a' })]),
+    );
+    expect(testState.displayedNodes.find((node) => node.id === 'dev-a')?.measured).toEqual({
+      width: 88,
+      height: 44,
+    });
 
     testState.canonicalNodes = [
       {
@@ -507,11 +575,11 @@ describe('Canvas drag state ownership', () => {
 
     testState.canonicalNodes = [
       {
-        ...testState.canonicalNodes[0],
+        ...testState.displayedNodes[0],
         position: { x: 125, y: 125 },
       },
-      testState.canonicalNodes[1],
-      testState.canonicalNodes[2],
+      testState.displayedNodes[1],
+      testState.displayedNodes[2],
     ];
 
     rerender(
@@ -1130,8 +1198,6 @@ describe('Canvas drag state ownership', () => {
       />,
     );
 
-    testState.setNodes.mockClear();
-
     rerender(
       <Canvas
         {...defaultCanvasProps}
@@ -1146,12 +1212,6 @@ describe('Canvas drag state ownership', () => {
       />,
     );
 
-    expect(testState.setNodes).toHaveBeenCalled();
-    const clearSelection = testState.setNodes.mock.lastCall?.[0] as (
-      nodes: DeviceNode[],
-    ) => DeviceNode[];
-    expect(clearSelection([selectedNode])[0]).toMatchObject({
-      selected: false,
-    });
+    expect(testState.displayedNodes.find((node) => node.id === 'dev-a')?.selected).toBe(false);
   });
 });

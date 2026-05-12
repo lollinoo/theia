@@ -1,6 +1,6 @@
 import * as ReactFlow from '@xyflow/react';
 import type { EdgeChange, NodeChange } from '@xyflow/react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 
 import type { DeviceNode } from '../DeviceCard';
@@ -26,16 +26,21 @@ function buildIndexById(items: { id: string }[]): Map<string, number> {
 }
 
 export function useCanvasGraphState(): CanvasGraphState {
-  const [nodes, setNodes] = ReactFlow.useNodesState<DeviceNode>([]);
+  const [nodes, setNodes] = useState<DeviceNode[]>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
   const nodeIndexById = useMemo(() => buildIndexById(nodes), [nodes]);
   const edgeIndexById = useMemo(() => buildIndexById(edges), [edges]);
-  const nodeIndexByIdRef = useRef(nodeIndexById);
-  const edgeIndexByIdRef = useRef(edgeIndexById);
+  const nodeIndexByIdRef = useRef<Map<string, number>>(new Map());
+  const edgeIndexByIdRef = useRef<Map<string, number>>(new Map());
 
-  nodeIndexByIdRef.current = nodeIndexById;
-  edgeIndexByIdRef.current = edgeIndexById;
+  useLayoutEffect(() => {
+    nodeIndexByIdRef.current = nodeIndexById;
+  }, [nodeIndexById]);
+
+  useLayoutEffect(() => {
+    edgeIndexByIdRef.current = edgeIndexById;
+  }, [edgeIndexById]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<DeviceNode>[]) => {
