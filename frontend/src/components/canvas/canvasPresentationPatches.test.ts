@@ -9,6 +9,7 @@ import {
   patchAlertStatuses,
   patchEditMode,
   patchHighlightedNode,
+  patchHighlightedNodeTransition,
 } from './canvasPresentationPatches';
 
 function mockDevice(id: string): Device {
@@ -129,6 +130,25 @@ describe('canvas presentation patches', () => {
     expect(result[2]).toBe(nodes[2]);
   });
 
+  it('patches a highlight transition by previous and current ids only', () => {
+    const nodes = [
+      mockNode('dev-a', { highlighted: true }),
+      mockNode('dev-b'),
+      mockNode('dev-c', { highlighted: true }),
+    ];
+    const nodeIndexById = new Map(nodes.map((node, index) => [node.id, index]));
+
+    const result = patchHighlightedNodeTransition(nodes, nodeIndexById, 'dev-a', 'dev-b');
+
+    expect(result).not.toBe(nodes);
+    expect(result[0]).not.toBe(nodes[0]);
+    expect(result[0].data.highlighted).toBe(false);
+    expect(result[1]).not.toBe(nodes[1]);
+    expect(result[1].data.highlighted).toBe(true);
+    expect(result[2]).toBe(nodes[2]);
+    expect(result[2].data.highlighted).toBe(true);
+  });
+
   it('patches alert statuses without changing unaffected node or edge references', () => {
     const nodes = [mockNode('dev-a'), mockNode('dev-b'), mockNode('dev-c')];
     const edgeA = mockEdge(mockLink('link-a', 'dev-a', 'dev-b', 'ether1', 'ether2'));
@@ -170,6 +190,69 @@ describe('canvas presentation patches', () => {
 
     expect(result.edges).not.toBe(edges);
     expect(result.edges[0]).toBe(edges[0]);
+    expect(result.edges[1]).not.toBe(edges[1]);
+    expect(result.edges[1].data?.alertStatus).toBe('down');
+  });
+
+  it('uses alert status indices and ignores missing or stale index entries', () => {
+    const nodes = [mockNode('dev-a'), mockNode('dev-b'), mockNode('dev-c')];
+    const edgeA = mockEdge(mockLink('link-a', 'dev-a', 'dev-b', 'ether1', 'ether2'));
+    const edgeB = mockEdge(mockLink('link-b', 'dev-b', 'dev-c', 'ether3', 'ether4'));
+    const edges = [edgeA, edgeB];
+    const snapshot = {
+      devices: {
+        'dev-a': { alert_status: 'degraded' },
+        'dev-b': { alert_status: 'degraded' },
+        'dev-c': { alert_status: 'down' },
+        'dev-missing': { alert_status: 'down' },
+      },
+      links: {},
+    } as unknown as SnapshotPayload;
+    const alerts: AlertDTO[] = [
+      {
+        device_id: 'dev-b',
+        severity: 'critical',
+        alert_name: 'LinkDown',
+        state: 'firing',
+        summary: 'ether2 is down',
+      },
+      {
+        device_id: 'dev-c',
+        severity: 'critical',
+        alert_name: 'LinkDown',
+        state: 'firing',
+        summary: 'ether4 is down',
+      },
+    ];
+
+    const result = patchAlertStatuses(
+      nodes,
+      edges,
+      {
+        nodeIndexById: new Map([
+          ['dev-b', 99],
+          ['dev-c', 2],
+        ]),
+        edgeIndexById: new Map([
+          ['link-a', 99],
+          ['link-b', 1],
+        ]),
+      },
+      snapshot,
+      alerts,
+    );
+
+    expect(result.nodes).not.toBe(nodes);
+    expect(result.nodes[0]).toBe(nodes[0]);
+    expect(result.nodes[0].data.runtime.alertStatus).toBe('normal');
+    expect(result.nodes[1]).toBe(nodes[1]);
+    expect(result.nodes[1].data.runtime.alertStatus).toBe('normal');
+    expect(result.nodes[2]).not.toBe(nodes[2]);
+    expect(result.nodes[2].data.runtime.alertStatus).toBe('down');
+
+    expect(result.edges).not.toBe(edges);
+    expect(result.edges[0]).toBe(edges[0]);
+    expect(result.edges[0].data?.alertStatus).toBe('normal');
     expect(result.edges[1]).not.toBe(edges[1]);
     expect(result.edges[1].data?.alertStatus).toBe('down');
   });

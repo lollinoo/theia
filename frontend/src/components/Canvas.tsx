@@ -44,6 +44,7 @@ import {
   clearSelectedGraphItems,
   patchEditMode,
   patchHighlightedNode,
+  patchHighlightedNodeTransition,
 } from './canvas/canvasPresentationPatches';
 import {
   type CanvasRenderProjectionNodeCacheEntry,
@@ -735,17 +736,16 @@ export default function Canvas({
 
   const applyDeviceHighlight = useCallback(
     (deviceID: string) => {
+      const previousDeviceId = highlightedDeviceIdRef.current;
       highlightedDeviceIdRef.current = deviceID;
-      setNodes((currentNodes) => {
-        let nextNodes = currentNodes;
-        for (const node of currentNodes) {
-          if (node.id === deviceID || node.data.highlighted !== true) {
-            continue;
-          }
-          nextNodes = patchHighlightedNode(nextNodes, nodeIndexByIdRef.current, node.id, false);
-        }
-        return patchHighlightedNode(nextNodes, nodeIndexByIdRef.current, deviceID, true);
-      });
+      setNodes((currentNodes) =>
+        patchHighlightedNodeTransition(
+          currentNodes,
+          nodeIndexByIdRef.current,
+          previousDeviceId,
+          deviceID,
+        ),
+      );
     },
     [nodeIndexByIdRef, setNodes],
   );
