@@ -47,7 +47,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'runtimePatch',
   'incrementalLayout',
   'computeForceLayout',
-] as const satisfies (CanvasMetricName | 'renderProjection')[];
+] as const satisfies CanvasMetricName[];
 
 export interface CanvasPerfBenchmarkScenarioResult {
   input: {
@@ -111,7 +111,7 @@ function measureLocalMetric<T>(
   } finally {
     const durationMs = Number(Math.max(0, nowMs() - startedAt).toFixed(3));
     samples.push({
-      name: name as CanvasMetricName,
+      name,
       scenario,
       durationMs,
       timestamp: Date.now(),
