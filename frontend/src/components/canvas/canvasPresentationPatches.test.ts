@@ -257,6 +257,35 @@ describe('canvas presentation patches', () => {
     expect(result.edges[1].data?.alertStatus).toBe('down');
   });
 
+  it('clears stale alert statuses when snapshot and alerts return to normal', () => {
+    const nodes = [mockNode('dev-a', { alertStatus: 'down' }), mockNode('dev-b')];
+    const edgeA = mockEdge(mockLink('link-a', 'dev-a', 'dev-b', 'ether1', 'ether2'), {
+      alertStatus: 'down',
+    });
+    const edges = [edgeA];
+    const snapshot = { devices: {}, links: {} } as SnapshotPayload;
+
+    const result = patchAlertStatuses(
+      nodes,
+      edges,
+      {
+        nodeIndexById: new Map(nodes.map((node, index) => [node.id, index])),
+        edgeIndexById: new Map(edges.map((edge, index) => [edge.id, index])),
+      },
+      snapshot,
+      [],
+    );
+
+    expect(result.nodes).not.toBe(nodes);
+    expect(result.nodes[0]).not.toBe(nodes[0]);
+    expect(result.nodes[0].data.runtime.alertStatus).toBe('normal');
+    expect(result.nodes[1]).toBe(nodes[1]);
+
+    expect(result.edges).not.toBe(edges);
+    expect(result.edges[0]).not.toBe(edges[0]);
+    expect(result.edges[0].data?.alertStatus).toBe('normal');
+  });
+
   it('preserves node and edge arrays when clearing selection with nothing selected', () => {
     const nodes = [mockNode('dev-a'), mockNode('dev-b')];
     const edges = [mockEdge(mockLink('link-a', 'dev-a', 'dev-b', 'ether1', 'ether2'))];
