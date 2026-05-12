@@ -296,6 +296,8 @@ function benchmarkOperations(
       scenario.alerts,
     ),
   );
+  const nodeIndexById = new Map(nodes.map((node, index) => [node.id, index]));
+  const edgeIndexById = new Map(edges.map((edge, index) => [edge.id, index]));
 
   const compositionInput = {
     devices: scenario.devices,
@@ -418,7 +420,7 @@ function benchmarkOperations(
         runtimeState: nextRuntimeState,
         plan,
       }),
-      nodes: patchRuntimeNodes({ nodes, runtimeState: nextRuntimeState, plan }),
+      nodes: patchRuntimeNodes({ nodes, runtimeState: nextRuntimeState, plan, nodeIndexById }),
       edges: patchRuntimeEdges({
         edges,
         links: scenario.links,
@@ -426,6 +428,7 @@ function benchmarkOperations(
         alerts: scenario.alerts,
         onEdgeContextMenu: noopEdgeMenu,
         plan,
+        edgeIndexById,
       }),
     };
   });
