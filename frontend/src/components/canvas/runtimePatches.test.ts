@@ -567,6 +567,53 @@ describe('runtime canvas patching', () => {
     expect(patchedEdges[1].data?.utilization).toBe(0.82);
   });
 
+  it('does not read unrelated runtime links when sparse edge indices are provided', () => {
+    const devices = [mockDevice('dev-1'), mockDevice('dev-2'), mockDevice('dev-3')];
+    const links = [mockLink('link-1', 'dev-1', 'dev-2'), mockLink('link-2', 'dev-2', 'dev-3')];
+    const devicesById = new Map(devices.map((device) => [device.id, device]));
+    const edges = links.map((link) => edgeFor(link, devicesById));
+    const runtimeState = buildRuntimeState({
+      devices,
+      links,
+      snapshot: snapshot(
+        {
+          'dev-1': mockDeviceRuntime('dev-1'),
+          'dev-2': mockDeviceRuntime('dev-2'),
+          'dev-3': mockDeviceRuntime('dev-3'),
+        },
+        {
+          'link-2': mockLinkRuntime('link-2', 'dev-2', 'dev-3', {
+            utilization: 0.82,
+          }),
+        },
+      ),
+      alerts: [],
+      prometheusStatus: null,
+    });
+    runtimeState.linksById.set('link-unrelated', {
+      get link() {
+        throw new Error('unrelated runtime link was read');
+      },
+    } as never);
+    const plan = {
+      deviceIds: new Set<string>(),
+      directLinkIds: new Set(['link-2']),
+      edgeIds: new Set(['link-2']),
+    };
+
+    expect(() =>
+      patchRuntimeEdges({
+        edges,
+        links,
+        runtimeState,
+        alerts: [],
+        onEdgeContextMenu: vi.fn(),
+        plan,
+        edgeIndexById: new Map([['link-2', 1]]),
+      }),
+    ).not.toThrow();
+  });
+
   it('ignores edge patch ids missing from a supplied sparse index', () => {
     const devices = [mockDevice('dev-1'), mockDevice('dev-2'), mockDevice('dev-3')];
     const links = [mockLink('link-1', 'dev-1', 'dev-2'), mockLink('link-2', 'dev-2', 'dev-3')];

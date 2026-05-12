@@ -87,35 +87,37 @@ function runtimeValueEqual(left: unknown, right: unknown): boolean {
   return false;
 }
 
-function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeData> {
-  const edgeDataById = new Map<string, LinkEdgeData>();
-
-  for (const [linkId, runtimeLink] of runtimeState.linksById.entries()) {
-    const sourceRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.source_device_id);
-    const targetRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.target_device_id);
-
-    edgeDataById.set(linkId, {
-      sourceDeviceStatus: runtimeLink.sourceDeviceStatus,
-      targetDeviceStatus: runtimeLink.targetDeviceStatus,
-      sourceDeviceAlertStatus: sourceRuntimeDevice?.alertStatus,
-      targetDeviceAlertStatus: targetRuntimeDevice?.alertStatus,
-      sourceDeviceHealth: sourceRuntimeDevice?.metrics?.health,
-      targetDeviceHealth: targetRuntimeDevice?.metrics?.health,
-      sourceDevicePrimaryHealth: sourceRuntimeDevice?.primaryHealth ?? undefined,
-      targetDevicePrimaryHealth: targetRuntimeDevice?.primaryHealth ?? undefined,
-      sourceDeviceReachability: sourceRuntimeDevice?.metrics?.reachability,
-      targetDeviceReachability: targetRuntimeDevice?.metrics?.reachability,
-      sourceDeviceNetworkReachable: sourceRuntimeDevice?.metrics?.network_reachable,
-      targetDeviceNetworkReachable: targetRuntimeDevice?.metrics?.network_reachable,
-      sourceDeviceSnmpReachable: sourceRuntimeDevice?.metrics?.snmp_reachable,
-      targetDeviceSnmpReachable: targetRuntimeDevice?.metrics?.snmp_reachable,
-      metrics: runtimeLink.metrics,
-      throughputLabel: runtimeLink.metricsUsable ? runtimeLink.throughputLabel : undefined,
-      utilization: runtimeLink.metricsUsable ? runtimeLink.utilization : null,
-    });
+function buildRuntimeEdgeDataForLink(
+  linkId: string,
+  runtimeState: RuntimeState,
+): LinkEdgeData | undefined {
+  const runtimeLink = runtimeState.linksById.get(linkId);
+  if (!runtimeLink) {
+    return undefined;
   }
 
-  return edgeDataById;
+  const sourceRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.source_device_id);
+  const targetRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.target_device_id);
+
+  return {
+    sourceDeviceStatus: runtimeLink.sourceDeviceStatus,
+    targetDeviceStatus: runtimeLink.targetDeviceStatus,
+    sourceDeviceAlertStatus: sourceRuntimeDevice?.alertStatus,
+    targetDeviceAlertStatus: targetRuntimeDevice?.alertStatus,
+    sourceDeviceHealth: sourceRuntimeDevice?.metrics?.health,
+    targetDeviceHealth: targetRuntimeDevice?.metrics?.health,
+    sourceDevicePrimaryHealth: sourceRuntimeDevice?.primaryHealth ?? undefined,
+    targetDevicePrimaryHealth: targetRuntimeDevice?.primaryHealth ?? undefined,
+    sourceDeviceReachability: sourceRuntimeDevice?.metrics?.reachability,
+    targetDeviceReachability: targetRuntimeDevice?.metrics?.reachability,
+    sourceDeviceNetworkReachable: sourceRuntimeDevice?.metrics?.network_reachable,
+    targetDeviceNetworkReachable: targetRuntimeDevice?.metrics?.network_reachable,
+    sourceDeviceSnmpReachable: sourceRuntimeDevice?.metrics?.snmp_reachable,
+    targetDeviceSnmpReachable: targetRuntimeDevice?.metrics?.snmp_reachable,
+    metrics: runtimeLink.metrics,
+    throughputLabel: runtimeLink.metricsUsable ? runtimeLink.throughputLabel : undefined,
+    utilization: runtimeLink.metricsUsable ? runtimeLink.utilization : null,
+  };
 }
 
 function runtimeNodeDataChanged(
@@ -310,24 +312,37 @@ export function patchRuntimeEdges({
     return edges;
   }
 
-  const linksById = new Map(links.map((link) => [link.id, link]));
-  const runtimeDevicesById = new Map(
-    Array.from(runtimeState.devicesById.values()).map(
-      (runtimeDevice) => [runtimeDevice.device.id, runtimeDevice.device] as const,
-    ),
-  );
-  const runtimeEdgeDataById = buildRuntimeEdgeData(runtimeState);
+  let linksById: Map<string, Link> | null = null;
   let changed = false;
+  const linkForEdge = (edge: LinkEdgeType, edgeId: string): Link | undefined => {
+    if (edge.data?.link) {
+      return edge.data.link;
+    }
+    linksById ??= new Map(links.map((link) => [link.id, link]));
+    return linksById.get(edgeId);
+  };
+  const runtimeDevicesByIdForLink = (link: Link): Map<string, Device> => {
+    const runtimeDevicesById = new Map<string, Device>();
+    const sourceRuntimeDevice = runtimeState.devicesById.get(link.source_device_id)?.device;
+    const targetRuntimeDevice = runtimeState.devicesById.get(link.target_device_id)?.device;
+    if (sourceRuntimeDevice) {
+      runtimeDevicesById.set(sourceRuntimeDevice.id, sourceRuntimeDevice);
+    }
+    if (targetRuntimeDevice) {
+      runtimeDevicesById.set(targetRuntimeDevice.id, targetRuntimeDevice);
+    }
+    return runtimeDevicesById;
+  };
   const buildPatchedEdge = (edge: LinkEdgeType, edgeId: string): LinkEdgeType | null => {
-    const link = linksById.get(edgeId) ?? edge.data?.link;
+    const link = linkForEdge(edge, edgeId);
     if (!link || !edge.data) {
       return null;
     }
 
-    const runtimeEdgeData = runtimeEdgeDataById.get(edgeId);
+    const runtimeEdgeData = buildRuntimeEdgeDataForLink(edgeId, runtimeState);
     const nextCoreData = buildEdgeData(
       link,
-      runtimeDevicesById,
+      runtimeDevicesByIdForLink(link),
       {
         ...edge.data,
         ...runtimeEdgeData,
