@@ -1,10 +1,11 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 /**
  * COMP-03 NavBar (NavigationPill) behavioral tests.
  * The NavBar was implemented as NavigationPill in this project.
  * These tests verify the requirements from COMP-03.
  */
 import { describe, expect, it, vi } from 'vitest';
+import type { CanvasMap } from '../types/api';
 import NavigationPill from './NavigationPill';
 
 // Mock API client
@@ -28,9 +29,28 @@ vi.mock('../contexts/ThemeContext', () => ({
 const defaultProps = {
   activeView: 'hub' as const,
   selectedAreaId: null as string | null,
+  selectedMapId: null as string | null,
+  selectedMapName: 'Default',
+  maps: [
+    {
+      id: 'default',
+      name: 'Default',
+      description: '',
+      source_area_id: null,
+      filter: {},
+      is_default: true,
+      device_count: 0,
+      link_count: 0,
+      position_count: 0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    } satisfies CanvasMap,
+  ],
   areas: [],
   onViewChange: vi.fn(),
   onAreaSelect: vi.fn(),
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
 };
 
 describe('NavigationPill (COMP-03: NavBar requirements)', () => {
@@ -67,10 +87,61 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
     expect(rootDiv.className).toContain('dark:backdrop-blur');
   });
 
-  it('keeps area filters horizontally constrained instead of replacing them with a new navigation layout', () => {
+  it('keeps desktop area filters scrollable with a More menu shortcut', () => {
     const { container } = render(
       <NavigationPill
         {...defaultProps}
+        areas={[
+          {
+            id: 'area-1',
+            name: 'Backbone',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 'area-2',
+            name: 'Distribution',
+            description: '',
+            color: '#FF5722',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 'area-3',
+            name: 'Access',
+            description: '',
+            color: '#2979FF',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 'area-4',
+            name: 'Wireless',
+            description: '',
+            color: '#FFD600',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+      />,
+    );
+
+    expect(container.innerHTML).toContain('overflow-x-auto');
+    expect(container.innerHTML).toContain('topology-scrollbar-none');
+    expect(screen.getByRole('button', { name: 'More 1 area' })).toBeInTheDocument();
+  });
+
+  it('keeps map and area controls available while viewing Devices', () => {
+    render(
+      <NavigationPill
+        {...defaultProps}
+        activeView="dashboard"
         areas={[
           {
             id: 'area-1',
@@ -85,7 +156,9 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
       />,
     );
 
-    expect(container.innerHTML).toContain('overflow-x-auto');
-    expect(container.innerHTML).toContain('max-w-[56vw]');
+    expect(screen.getByLabelText(/select topology map/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Area selector')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All areas' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Backbone' })).toBeInTheDocument();
   });
 });

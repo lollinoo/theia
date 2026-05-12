@@ -11,6 +11,7 @@ import {
 } from '../types/metrics';
 import { formatPollingEvery } from '../utils/freshness';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
+import { MaterialIcon } from './MaterialIcon';
 import { StatusDot } from './StatusDot';
 import {
   isCanvasRenderMetricsEnabled,
@@ -19,6 +20,7 @@ import {
 import { resolveDeviceCardRenderModel } from './deviceCardVariant';
 import {
   type DeviceMonitoringState,
+  type DeviceVisualStatus,
   resolveDeviceAddressState,
   resolveDeviceNodeStatusStyles,
   resolveDeviceOperationalReadouts,
@@ -26,7 +28,6 @@ import {
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
-import { VendorIcon } from './icons/VendorIcon';
 
 export interface DeviceNodeData {
   kind?: 'device' | 'ghost-device';
@@ -36,6 +37,7 @@ export interface DeviceNodeData {
   highlighted?: boolean;
   editMode?: boolean;
   areaColors?: string[];
+  visualColor?: string;
   onContextMenu?: (event: React.MouseEvent, deviceId: string) => void;
   isGhost?: boolean;
   onGhostClick?: (deviceId: string) => void;
@@ -144,7 +146,10 @@ function freshnessTone(tier: 'Fresh' | 'Stale' | 'Dead'): ReadoutTone {
   }
 }
 
-function freshnessMeta(freshness: FreshnessStatus): { tone: ReadoutTone; text: string } {
+function freshnessMeta(freshness: FreshnessStatus): {
+  tone: ReadoutTone;
+  text: string;
+} {
   switch (freshness) {
     case 'fresh':
       return { tone: freshnessTone('Fresh'), text: 'Fresh telemetry' };
@@ -157,7 +162,10 @@ function freshnessMeta(freshness: FreshnessStatus): { tone: ReadoutTone; text: s
   }
 }
 
-function runtimeTelemetryMeta(metrics: DeviceMetricsDTO): { tone: ReadoutTone; text: string } {
+function runtimeTelemetryMeta(metrics: DeviceMetricsDTO): {
+  tone: ReadoutTone;
+  text: string;
+} {
   if (
     metrics.primary_health === 'snmp_degraded' ||
     metrics.reachability === 'soft_down' ||
@@ -184,7 +192,9 @@ function readoutToneClass(tone: ReadoutTone): string {
   }
 }
 
-const compactPercentFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const compactPercentFormatter = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 0,
+});
 const DEVICE_NODE_SCALE_START_ZOOM = 0.9;
 const DEVICE_NODE_MIN_SCALE_ZOOM = 0.6;
 const DEVICE_NODE_MAX_READABILITY_SCALE = 1.12;
@@ -266,6 +276,219 @@ function ghostFrameStyle(color?: string): CSSProperties | undefined {
   };
 }
 
+interface RgbColor {
+  red: number;
+  green: number;
+  blue: number;
+}
+
+type CSSCustomProperties = CSSProperties & Record<`--${string}`, string>;
+
+interface VirtualStatusTone {
+  capsuleClassName: string;
+  capsuleStyle: CSSCustomProperties;
+  markerStyle: CSSProperties;
+  textStyle: CSSProperties;
+}
+
+interface PhysicalStatusTone {
+  bodyClassName: string;
+  bodyStyle: CSSCustomProperties;
+}
+
+const virtualAreaToneSurface: RgbColor = { red: 17, green: 26, blue: 38 };
+const whiteRgb: RgbColor = { red: 255, green: 255, blue: 255 };
+const minimumVirtualAreaToneContrast = 4.5;
+
+function hexToRgb(color: string): RgbColor | null {
+  const normalized = color.trim().replace(/^#/, '');
+  const hex =
+    normalized.length === 3
+      ? normalized
+          .split('')
+          .map((character) => `${character}${character}`)
+          .join('')
+      : normalized;
+
+  if (!/^[0-9a-fA-F]{6}$/.test(hex)) {
+    return null;
+  }
+
+  return {
+    red: Number.parseInt(hex.slice(0, 2), 16),
+    green: Number.parseInt(hex.slice(2, 4), 16),
+    blue: Number.parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function rgbToCss({ red, green, blue }: RgbColor): string {
+  return `rgb(${red}, ${green}, ${blue})`;
+}
+
+function rgbToRgba({ red, green, blue }: RgbColor, alpha: number): string {
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function hexToRgba(color: string, alpha: number): string | null {
+  const rgb = hexToRgb(color);
+  return rgb ? rgbToRgba(rgb, alpha) : null;
+}
+
+function relativeLuminance({ red, green, blue }: RgbColor): number {
+  const channelLuminance = (value: number) => {
+    const channel = value / 255;
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  };
+
+  return (
+    0.2126 * channelLuminance(red) +
+    0.7152 * channelLuminance(green) +
+    0.0722 * channelLuminance(blue)
+  );
+}
+
+function contrastRatio(foreground: RgbColor, background: RgbColor): number {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function mixRgb(start: RgbColor, end: RgbColor, amount: number): RgbColor {
+  return {
+    red: Math.round(start.red + (end.red - start.red) * amount),
+    green: Math.round(start.green + (end.green - start.green) * amount),
+    blue: Math.round(start.blue + (end.blue - start.blue) * amount),
+  };
+}
+
+function readableVirtualAreaTone(color: string): string | null {
+  const rgb = hexToRgb(color);
+  if (!rgb) return null;
+
+  for (let mixAmount = 0; mixAmount <= 0.8; mixAmount += 0.08) {
+    const candidate = mixRgb(rgb, whiteRgb, mixAmount);
+    if (contrastRatio(candidate, virtualAreaToneSurface) >= minimumVirtualAreaToneContrast) {
+      return rgbToCss(candidate);
+    }
+  }
+
+  return rgbToCss(mixRgb(rgb, whiteRgb, 0.8));
+}
+
+function areaTintStyle(colors: string[] | undefined): CSSProperties | undefined {
+  const tintColors = (colors ?? [])
+    .map((color) => hexToRgba(color, 0.1))
+    .filter((color): color is string => !!color);
+
+  if (tintColors.length === 0) return undefined;
+
+  if (tintColors.length === 1) {
+    return {
+      backgroundColor: tintColors[0],
+    };
+  }
+
+  return {
+    background: `linear-gradient(135deg, ${tintColors.join(', ')})`,
+  };
+}
+
+function virtualAreaMarkerStyle(color?: string): CSSProperties | undefined {
+  if (!color) return undefined;
+
+  const rgb = hexToRgb(color);
+  const readableColor = readableVirtualAreaTone(color);
+  if (!rgb || !readableColor) return undefined;
+
+  return {
+    backgroundColor: rgbToRgba(rgb, 0.14),
+    borderColor: rgbToRgba(rgb, 0.32),
+    color: readableColor,
+  };
+}
+
+function virtualAreaTextStyle(color?: string): CSSProperties | undefined {
+  const readableColor = color ? readableVirtualAreaTone(color) : null;
+  return readableColor ? { color: readableColor } : undefined;
+}
+
+function virtualPrimaryStatusTone(status: DeviceVisualStatus): VirtualStatusTone | null {
+  switch (status) {
+    case 'down':
+      return {
+        capsuleClassName: 'topology-virtual-node-status-pulse',
+        capsuleStyle: {
+          '--theia-virtual-node-status-bg': 'var(--nt-node-down-card-bg)',
+          '--theia-virtual-node-status-pulse-bg': 'var(--nt-node-down-card-pulse-bg)',
+          backgroundColor: 'var(--nt-node-down-card-bg)',
+        },
+        markerStyle: {
+          backgroundColor: 'var(--nt-node-down-badge-bg)',
+          borderColor: 'var(--nt-node-down-border)',
+          boxShadow: '0 0 0 1px var(--nt-node-down-ring), 0 0 18px var(--nt-node-down-glow)',
+          color: 'var(--nt-status-down)',
+        },
+        textStyle: { color: 'var(--nt-status-down)' },
+      };
+    case 'probing':
+      return {
+        capsuleClassName: 'topology-virtual-node-status-pulse',
+        capsuleStyle: {
+          '--theia-virtual-node-status-bg': 'var(--nt-node-probing-card-bg)',
+          '--theia-virtual-node-status-pulse-bg': 'var(--nt-node-probing-card-pulse-bg)',
+          backgroundColor: 'var(--nt-node-probing-card-bg)',
+        },
+        markerStyle: {
+          backgroundColor: 'var(--nt-node-probing-badge-bg)',
+          borderColor: 'var(--nt-node-probing-border)',
+          boxShadow: '0 0 0 1px var(--nt-node-probing-ring), 0 0 18px var(--nt-node-probing-glow)',
+          color: 'var(--nt-status-probing)',
+        },
+        textStyle: { color: 'var(--nt-status-probing)' },
+      };
+    default:
+      return null;
+  }
+}
+
+function physicalPrimaryStatusTone(status: DeviceVisualStatus): PhysicalStatusTone | null {
+  switch (status) {
+    case 'down':
+      return {
+        bodyClassName: 'topology-node-status-pulse',
+        bodyStyle: {
+          '--theia-node-status-bg': 'var(--nt-node-down-card-bg)',
+          '--theia-node-status-pulse-bg': 'var(--nt-node-down-card-pulse-bg)',
+          backgroundColor: 'var(--nt-node-down-card-bg)',
+        },
+      };
+    case 'probing':
+      return {
+        bodyClassName: 'topology-node-status-pulse',
+        bodyStyle: {
+          '--theia-node-status-bg': 'var(--nt-node-probing-card-bg)',
+          '--theia-node-status-pulse-bg': 'var(--nt-node-probing-card-pulse-bg)',
+          backgroundColor: 'var(--nt-node-probing-card-bg)',
+        },
+      };
+    default:
+      return null;
+  }
+}
+
+function physicalStatusAccent(status: DeviceVisualStatus): string | undefined {
+  switch (status) {
+    case 'down':
+      return 'var(--nt-node-down-border)';
+    case 'probing':
+      return 'var(--nt-node-probing-border)';
+    default:
+      return undefined;
+  }
+}
+
 function PollingDisabledNotice({ className = '' }: { className?: string }) {
   return (
     <div
@@ -295,7 +518,9 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       : resolveDeviceOperationalStatusState(runtimeDevice, monitoringState);
   const telemetryFallback =
     monitoringState === 'monitorable' && !isVirtual && !metrics
-      ? { tone: 'muted' as const, text: 'Unmonitored' }
+      ? headerState.dotStatus === 'probing'
+        ? { tone: 'critical' as const, text: 'Awaiting first poll' }
+        : { tone: 'muted' as const, text: 'Unmonitored' }
       : null;
   const freshness =
     monitoringState === 'monitorable' && metrics
@@ -311,6 +536,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const colors = data.areaColors ?? [];
   const hasArea = colors.length > 0;
   const firstColor = colors[0];
+  const virtualToneColor = isVirtual ? (data.visualColor ?? firstColor) : firstColor;
   const areaAccent =
     colors.length >= 2 ? `linear-gradient(90deg, ${colors.join(', ')})` : firstColor;
   const addressLabel = isMacAddress(data.device.ip) ? 'MAC' : 'IP';
@@ -321,11 +547,6 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     addressState,
     hasFreshnessMeta: freshness !== null,
   });
-  const operationalReadouts =
-    renderModel.variant === 'physical' && metrics
-      ? resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState)
-      : null;
-  const isVirtualUnmonitored = renderModel.variant === 'virtual-unmonitored';
   const selfLinks = data.selfLinks ?? [];
   const primarySelfLink = selfLinks[0];
   const statusStyles = resolveDeviceNodeStatusStyles({
@@ -336,6 +557,29 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   const runtimeBadges = metrics?.runtime_flags.map(runtimeBadgeLabel) ?? [];
   const renderKind = data.kind === 'ghost-device' || data.isGhost ? 'ghost-device' : 'device';
   const renderVariant = renderKind === 'device' ? renderModel.variant : undefined;
+  const isVirtualMonitorable = renderModel.variant === 'virtual-monitorable';
+  const virtualStatusTone = isVirtualMonitorable
+    ? virtualPrimaryStatusTone(headerState.dotStatus)
+    : null;
+  const physicalStatusTone =
+    renderModel.variant === 'physical' ? physicalPrimaryStatusTone(headerState.dotStatus) : null;
+  const physicalAccentBackground =
+    hasArea && areaAccent ? areaAccent : physicalStatusAccent(headerState.dotStatus);
+  const showPendingPhysicalReadouts =
+    renderModel.variant === 'physical' && !metrics && headerState.dotStatus === 'probing';
+  const physicalReadouts =
+    renderModel.variant === 'physical' && (metrics || showPendingPhysicalReadouts)
+      ? resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState)
+      : null;
+  const cardShapeClass = !isVirtual
+    ? 'min-h-[140px] rounded-[20px]'
+    : isVirtualMonitorable
+      ? 'min-h-[118px] min-w-[292px] max-w-[390px] rounded-[24px]'
+      : 'min-h-[92px] min-w-[232px] max-w-[310px] rounded-[24px]';
+  const virtualCapsuleHeightClass = isVirtualMonitorable ? 'min-h-[116px]' : 'min-h-[90px]';
+  const virtualCapsulePaddingClass = isVirtualMonitorable
+    ? 'py-3 pl-3.5 pr-4'
+    : 'py-2.5 pl-3.5 pr-3.5';
 
   useLayoutEffect(() => {
     if (renderStartedAt === null) {
@@ -386,7 +630,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   return (
     <div
       data-testid="device-node-card"
-      className={`topology-node-card topology-render-contained group relative w-full rounded-[20px] border border-outline bg-surface transition-[border-color] duration-150 hover:border-outline-strong ${isVirtual ? 'min-h-[160px] min-w-[200px] max-h-[235px] max-w-[285px]' : 'min-h-[140px]'} ${statusStyles.frameClass ?? ''}`}
+      className={`topology-node-card topology-render-contained group relative w-full border border-outline bg-surface transition-[border-color] duration-150 hover:border-outline-strong ${cardShapeClass} ${statusStyles.frameClass ?? ''}`}
       style={statusStyles.frameStyle}
       onContextMenu={(event) => {
         if (!data.onContextMenu) return;
@@ -454,14 +698,27 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         className={`${universalHandleClassName} !-left-1 !top-1/2 !-translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
       />
 
-      <div className="overflow-hidden rounded-[19px]">
-        <div
-          className="h-1.5 w-full"
-          style={hasArea && areaAccent ? { background: areaAccent } : undefined}
-        />
+      <div
+        className={
+          isVirtual
+            ? 'overflow-hidden rounded-[23px]'
+            : 'flex min-h-[inherit] flex-col overflow-hidden rounded-[19px]'
+        }
+      >
+        {renderModel.variant === 'physical' ? (
+          <div
+            data-testid="physical-node-area-accent"
+            className="h-1.5 w-full"
+            style={physicalAccentBackground ? { background: physicalAccentBackground } : undefined}
+          />
+        ) : null}
 
         {renderModel.variant === 'physical' ? (
-          <div className="px-4 pb-3.5 pt-3">
+          <div
+            data-testid="physical-node-body"
+            className={`flex-1 px-4 pb-3.5 pt-3 ${physicalStatusTone?.bodyClassName ?? ''}`}
+            style={physicalStatusTone?.bodyStyle ?? areaTintStyle(colors)}
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div
@@ -515,7 +772,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               ) : null}
             </div>
 
-            {operationalReadouts ? (
+            {physicalReadouts ? (
               <div
                 className="mt-2 grid h-[40px] grid-cols-3 overflow-hidden rounded-xl border border-outline-subtle bg-surface-container/55"
                 data-testid="physical-runtime-readouts"
@@ -529,10 +786,10 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     CPU
                   </span>
                   <span
-                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.cpuPercent)}`}
+                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(physicalReadouts.cpuPercent)}`}
                     style={readableFontStyle(12)}
                   >
-                    {formatRuntimePercent(operationalReadouts.cpuPercent)}
+                    {formatRuntimePercent(physicalReadouts.cpuPercent)}
                   </span>
                 </div>
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
@@ -543,10 +800,10 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     MEM
                   </span>
                   <span
-                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(operationalReadouts.memPercent)}`}
+                    className={`mt-1 truncate font-mono text-[12px] font-semibold leading-none ${runtimeMetricValueClass(physicalReadouts.memPercent)}`}
                     style={readableFontStyle(12)}
                   >
-                    {formatRuntimePercent(operationalReadouts.memPercent)}
+                    {formatRuntimePercent(physicalReadouts.memPercent)}
                   </span>
                 </div>
                 <div className="flex min-w-0 flex-col justify-center px-2.5">
@@ -560,7 +817,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     className="mt-1 truncate font-mono text-[12px] font-semibold leading-none text-on-bg"
                     style={readableFontStyle(12)}
                   >
-                    {formatRuntimeUptime(operationalReadouts.uptimeSecs)}
+                    {formatRuntimeUptime(physicalReadouts.uptimeSecs)}
                   </span>
                 </div>
               </div>
@@ -568,51 +825,76 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           </div>
         ) : (
           <div
-            className={`px-3.5 text-center ${isVirtualUnmonitored ? 'pb-4 pt-3.5' : 'pb-3 pt-2.5'}`}
+            data-testid="virtual-node-capsule"
+            className={`relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass} ${virtualStatusTone?.capsuleClassName ?? ''}`}
+            style={
+              virtualStatusTone?.capsuleStyle ??
+              areaTintStyle(data.visualColor ? [data.visualColor] : colors)
+            }
           >
-            <div className="flex flex-col items-center">
-              {renderModel.showVirtualStatusBadge ? (
-                <div className="mb-1.5 flex w-full justify-end">
+            {hasArea && areaAccent ? (
+              <div
+                data-testid="virtual-node-area-accent"
+                className="absolute inset-y-0 left-0 w-1 rounded-l-[23px]"
+                style={{ background: areaAccent }}
+              />
+            ) : null}
+
+            <div
+              data-testid="virtual-node-icon-shell"
+              className="relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10 text-primary"
+              style={virtualStatusTone?.markerStyle ?? virtualAreaMarkerStyle(virtualToneColor)}
+            >
+              <MaterialIcon name="hub" size={24} />
+            </div>
+
+            <div className="relative z-10 min-w-0 flex-1 text-left">
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
                   <div
-                    className={`inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusStyles.badgeClass}`}
+                    data-testid="virtual-node-type-label"
+                    className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
+                    style={{
+                      ...readableFontStyle(10),
+                      ...(virtualStatusTone?.textStyle ?? virtualAreaTextStyle(virtualToneColor)),
+                    }}
+                  >
+                    {deviceTypeLabel(data.device, isVirtual, data.subtype)}
+                  </div>
+                  <div
+                    className="mt-1 truncate text-[17px] font-semibold leading-tight text-on-bg"
+                    style={readableFontStyle(17)}
+                  >
+                    {label}
+                  </div>
+                </div>
+
+                {renderModel.showVirtualStatusBadge ? (
+                  <div
+                    data-testid="virtual-node-status-badge"
+                    className={`inline-flex max-w-[82px] shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
                     style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
                   >
                     <StatusDot status={headerState.dotStatus} />
                     <span className="truncate">{headerState.label}</span>
                   </div>
-                </div>
-              ) : null}
-
-              <div className="flex h-[56px] w-[56px] items-center justify-center rounded-[22px] border border-outline bg-surface-container-high text-on-bg">
-                <VendorIcon vendor={data.device.vendor} size={20} />
-              </div>
-
-              <div
-                className="mt-2.5 max-w-full truncate text-[10px] uppercase tracking-[0.14em] text-on-bg-secondary"
-                style={readableFontStyle(10)}
-              >
-                {deviceTypeLabel(data.device, isVirtual, data.subtype)}
-              </div>
-              <div
-                className="mt-1.5 w-full max-w-full text-[17px] font-semibold leading-tight tracking-tight text-on-bg"
-                style={readableFontStyle(17)}
-              >
-                <span className="block w-full truncate">{label}</span>
-              </div>
-
-              <div className="mt-3 flex w-full flex-col items-center gap-1.5">
-                {renderModel.showVirtualAddressChip ? (
-                  <span
-                    className="inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-3 py-1 font-mono text-[11px] text-on-bg"
-                    style={readableFontStyle(11)}
-                  >
-                    {addressLabel} {data.device.ip}
-                  </span>
                 ) : null}
               </div>
 
+              {renderModel.showVirtualAddressChip ? (
+                <span
+                  className="mt-1.5 inline-block max-w-full truncate rounded-full border border-outline bg-surface-container-high px-2.5 py-0.5 font-mono text-[11px] text-on-bg"
+                  style={readableFontStyle(11)}
+                >
+                  {addressLabel} {data.device.ip}
+                </span>
+              ) : null}
+
               {renderModel.showFreshnessMeta ? (
-                <div className="mt-3 flex w-full items-center justify-between gap-2 text-[10px]">
+                <div
+                  data-testid="virtual-node-runtime-meta"
+                  className="mt-1.5 flex w-full items-center justify-between gap-2 overflow-hidden text-[10px]"
+                >
                   <div
                     className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}
                     style={readableFontStyle(10)}
@@ -620,7 +902,8 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                     {freshness!.text}
                   </div>
                   <div
-                    className="min-w-0 truncate text-on-bg-secondary"
+                    data-testid="virtual-node-polling-meta"
+                    className="min-w-0 shrink-0 truncate text-right text-on-bg-secondary"
                     style={readableFontStyle(10)}
                   >
                     {pollingEvery}
@@ -628,10 +911,10 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
               ) : null}
 
-              {isPollingDisabled ? <PollingDisabledNotice className="mt-3 w-full" /> : null}
+              {isPollingDisabled ? <PollingDisabledNotice className="mt-2 w-full" /> : null}
 
               {runtimeBadges.length > 0 ? (
-                <div className="mt-2 flex w-full flex-wrap justify-center gap-1.5">
+                <div className="mt-2 flex w-full flex-wrap gap-1.5">
                   {runtimeBadges.map((badge) => (
                     <span
                       key={badge}
@@ -669,6 +952,7 @@ export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
     highlighted: data.highlighted,
     alertStatus: runtime.alertStatus,
     areaColors: data.areaColors ?? [],
+    visualColor: data.visualColor,
     kind: data.kind,
     isGhost: data.isGhost,
     isVirtual: data.isVirtual,
@@ -687,10 +971,6 @@ export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
     freshness: metrics?.freshness,
     expectedPollIntervalSeconds: metrics?.expected_poll_interval_seconds,
     editMode: data.editMode,
-    positionAbsoluteX: props.positionAbsoluteX,
-    positionAbsoluteY: props.positionAbsoluteY,
-    width: props.width,
-    height: props.height,
     selected: props.selected,
   };
 }
@@ -723,6 +1003,7 @@ function sameDeviceRenderSignature(
     previous.highlighted === next.highlighted &&
     previous.alertStatus === next.alertStatus &&
     sameStringArray(previous.areaColors, next.areaColors) &&
+    previous.visualColor === next.visualColor &&
     previous.kind === next.kind &&
     previous.isGhost === next.isGhost &&
     previous.isVirtual === next.isVirtual &&
@@ -741,10 +1022,6 @@ function sameDeviceRenderSignature(
     previous.freshness === next.freshness &&
     previous.expectedPollIntervalSeconds === next.expectedPollIntervalSeconds &&
     previous.editMode === next.editMode &&
-    previous.positionAbsoluteX === next.positionAbsoluteX &&
-    previous.positionAbsoluteY === next.positionAbsoluteY &&
-    previous.width === next.width &&
-    previous.height === next.height &&
     previous.selected === next.selected
   );
 }

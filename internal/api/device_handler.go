@@ -20,11 +20,30 @@ type DeviceHandler struct {
 	svc                   *service.DeviceService
 	credentialProfileRepo domain.CredentialProfileRepository
 	vendorRegistry        *vendor.Registry
+	canvasMapRepo         domain.CanvasMapRepository
+	areaRepo              domain.AreaRepository
+}
+
+// DeviceHandlerOption configures optional collaborators for device handlers.
+type DeviceHandlerOption func(*DeviceHandler)
+
+// WithPrimaryCanvasMapMembership enables default map membership for API-created devices.
+func WithPrimaryCanvasMapMembership(mapRepo domain.CanvasMapRepository, areaRepo domain.AreaRepository) DeviceHandlerOption {
+	return func(h *DeviceHandler) {
+		h.canvasMapRepo = mapRepo
+		h.areaRepo = areaRepo
+	}
 }
 
 // NewDeviceHandler creates a new DeviceHandler.
-func NewDeviceHandler(svc *service.DeviceService, credentialProfileRepo domain.CredentialProfileRepository, vendorRegistry *vendor.Registry) *DeviceHandler {
-	return &DeviceHandler{svc: svc, credentialProfileRepo: credentialProfileRepo, vendorRegistry: vendorRegistry}
+func NewDeviceHandler(svc *service.DeviceService, credentialProfileRepo domain.CredentialProfileRepository, vendorRegistry *vendor.Registry, options ...DeviceHandlerOption) *DeviceHandler {
+	handler := &DeviceHandler{svc: svc, credentialProfileRepo: credentialProfileRepo, vendorRegistry: vendorRegistry}
+	for _, option := range options {
+		if option != nil {
+			option(handler)
+		}
+	}
+	return handler
 }
 
 // --- JSON:API response types ---
@@ -84,18 +103,19 @@ var validSNMPv3SecurityLevels = map[string]bool{
 // --- Request types ---
 
 type createDeviceRequest struct {
-	IP                    string            `json:"ip"`
-	Hostname              string            `json:"hostname"`
-	Notes                 *string           `json:"notes"`
-	DeviceType            string            `json:"device_type,omitempty"`
-	SNMP                  snmpCredsRequest  `json:"snmp"`
-	Tags                  map[string]string `json:"tags"`
-	Vendor                string            `json:"vendor,omitempty"`
-	MetricsSource         string            `json:"metrics_source,omitempty"`
-	PrometheusLabelName   string            `json:"prometheus_label_name,omitempty"`
-	PrometheusLabelValue  string            `json:"prometheus_label_value,omitempty"`
-	TopologyDiscoveryMode string            `json:"topology_discovery_mode,omitempty"`
-	AreaIDs               []string          `json:"area_ids,omitempty"`
+	IP                       string            `json:"ip"`
+	Hostname                 string            `json:"hostname"`
+	Notes                    *string           `json:"notes"`
+	DeviceType               string            `json:"device_type,omitempty"`
+	SNMP                     snmpCredsRequest  `json:"snmp"`
+	Tags                     map[string]string `json:"tags"`
+	Vendor                   string            `json:"vendor,omitempty"`
+	MetricsSource            string            `json:"metrics_source,omitempty"`
+	PrometheusLabelName      string            `json:"prometheus_label_name,omitempty"`
+	PrometheusLabelValue     string            `json:"prometheus_label_value,omitempty"`
+	TopologyDiscoveryMode    string            `json:"topology_discovery_mode,omitempty"`
+	AreaIDs                  []string          `json:"area_ids,omitempty"`
+	SkipPrimaryMapMembership bool              `json:"skip_primary_map_membership,omitempty"`
 }
 
 type snmpCredsRequest struct {
@@ -179,19 +199,20 @@ type batchAddResponse struct {
 }
 
 type validatedCreateDeviceRequest struct {
-	IP                    string
-	Hostname              string
-	DeviceType            domain.DeviceType
-	SNMPCredentials       domain.SNMPCredentials
-	Tags                  map[string]string
-	Vendor                string
-	MetricsSource         domain.MetricsSource
-	PrometheusLabelName   string
-	PrometheusLabelValue  string
-	TopologyDiscoveryMode domain.TopologyDiscoveryMode
-	AreaIDs               []uuid.UUID
-	Notes                 *string
-	Virtual               bool
+	IP                       string
+	Hostname                 string
+	DeviceType               domain.DeviceType
+	SNMPCredentials          domain.SNMPCredentials
+	Tags                     map[string]string
+	Vendor                   string
+	MetricsSource            domain.MetricsSource
+	PrometheusLabelName      string
+	PrometheusLabelValue     string
+	TopologyDiscoveryMode    domain.TopologyDiscoveryMode
+	AreaIDs                  []uuid.UUID
+	Notes                    *string
+	Virtual                  bool
+	SkipPrimaryMapMembership bool
 }
 
 // HandleCreate handles POST /api/v1/devices
@@ -223,6 +244,12 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create device", err)
 		return
 	}
+	if !validated.SkipPrimaryMapMembership {
+		if err := h.addDeviceToPrimaryCanvasMap(device); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to add device to primary map", err)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(jsonAPISingle{Data: h.deviceToResource(device)})
@@ -242,6 +269,74 @@ func (h *DeviceHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(jsonAPIList{Data: resources})
+}
+
+// HandleListOrphans handles GET /api/v1/devices/orphans.
+func (h *DeviceHandler) HandleListOrphans(w http.ResponseWriter, r *http.Request) {
+	devices, err := h.svc.GetOrphanDevices(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list orphan devices", err)
+		return
+	}
+
+	resources := make([]jsonAPIResource, 0, len(devices))
+	for i := range devices {
+		resources = append(resources, h.deviceToResource(&devices[i]))
+	}
+
+	json.NewEncoder(w).Encode(jsonAPIList{Data: resources})
+}
+
+func (h *DeviceHandler) addDeviceToPrimaryCanvasMap(device *domain.Device) error {
+	if h.canvasMapRepo == nil || device == nil {
+		return nil
+	}
+	adder, ok := h.canvasMapRepo.(interface {
+		AddDeviceMembership(uuid.UUID, domain.CanvasMapDeviceMembership, []uuid.UUID, []domain.CanvasMapAreaMembership) error
+	})
+	if !ok {
+		return nil
+	}
+	primaryMap, err := h.canvasMapRepo.GetDefault()
+	if err != nil {
+		return fmt.Errorf("loading primary canvas map: %w", err)
+	}
+	areas, areaIDs, err := h.canvasMapAreaMembershipsForDevice(device)
+	if err != nil {
+		return err
+	}
+	return adder.AddDeviceMembership(
+		primaryMap.ID,
+		domain.CanvasMapDeviceMembership{
+			DeviceID: device.ID,
+			Role:     domain.CanvasMapDeviceRoleBase,
+			AreaIDs:  areaIDs,
+		},
+		nil,
+		areas,
+	)
+}
+
+func (h *DeviceHandler) canvasMapAreaMembershipsForDevice(device *domain.Device) ([]domain.CanvasMapAreaMembership, []uuid.UUID, error) {
+	if h.areaRepo == nil || device == nil || len(device.AreaIDs) == 0 {
+		return []domain.CanvasMapAreaMembership{}, []uuid.UUID{}, nil
+	}
+	areas := make([]domain.CanvasMapAreaMembership, 0, len(device.AreaIDs))
+	areaIDs := make([]uuid.UUID, 0, len(device.AreaIDs))
+	for _, areaID := range device.AreaIDs {
+		area, err := h.areaRepo.GetByID(areaID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("loading device area %s for primary canvas map: %w", areaID, err)
+		}
+		areas = append(areas, domain.CanvasMapAreaMembership{
+			AreaID:      area.ID,
+			Name:        area.Name,
+			Description: area.Description,
+			Color:       area.Color,
+		})
+		areaIDs = append(areaIDs, area.ID)
+	}
+	return areas, areaIDs, nil
 }
 
 // HandleGet handles GET /api/v1/devices/{id}
@@ -521,15 +616,16 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 		}
 
 		return validatedCreateDeviceRequest{
-			IP:              req.IP,
-			Hostname:        req.Hostname,
-			DeviceType:      domain.DeviceTypeVirtual,
-			SNMPCredentials: domain.SNMPCredentials{},
-			Tags:            req.Tags,
-			MetricsSource:   domain.MetricsSourceNone,
-			AreaIDs:         areaIDs,
-			Notes:           req.Notes,
-			Virtual:         true,
+			IP:                       req.IP,
+			Hostname:                 req.Hostname,
+			DeviceType:               domain.DeviceTypeVirtual,
+			SNMPCredentials:          domain.SNMPCredentials{},
+			Tags:                     req.Tags,
+			MetricsSource:            domain.MetricsSourceNone,
+			AreaIDs:                  areaIDs,
+			Notes:                    req.Notes,
+			Virtual:                  true,
+			SkipPrimaryMapMembership: req.SkipPrimaryMapMembership,
 		}, nil
 	}
 
@@ -587,18 +683,19 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 	}
 
 	return validatedCreateDeviceRequest{
-		IP:                    req.IP,
-		Hostname:              req.Hostname,
-		DeviceType:            deviceType,
-		SNMPCredentials:       creds,
-		Tags:                  req.Tags,
-		Vendor:                req.Vendor,
-		MetricsSource:         domain.MetricsSource(req.MetricsSource),
-		PrometheusLabelName:   req.PrometheusLabelName,
-		PrometheusLabelValue:  req.PrometheusLabelValue,
-		TopologyDiscoveryMode: domain.TopologyDiscoveryMode(req.TopologyDiscoveryMode),
-		AreaIDs:               areaIDs,
-		Notes:                 req.Notes,
+		IP:                       req.IP,
+		Hostname:                 req.Hostname,
+		DeviceType:               deviceType,
+		SNMPCredentials:          creds,
+		Tags:                     req.Tags,
+		Vendor:                   req.Vendor,
+		MetricsSource:            domain.MetricsSource(req.MetricsSource),
+		PrometheusLabelName:      req.PrometheusLabelName,
+		PrometheusLabelValue:     req.PrometheusLabelValue,
+		TopologyDiscoveryMode:    domain.TopologyDiscoveryMode(req.TopologyDiscoveryMode),
+		AreaIDs:                  areaIDs,
+		Notes:                    req.Notes,
+		SkipPrimaryMapMembership: req.SkipPrimaryMapMembership,
 	}, nil
 }
 
@@ -644,11 +741,18 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 			continue
 		}
-		if _, err := h.svc.AddDevice(r.Context(), validated.IP, validated.Hostname,
+		device, err := h.svc.AddDevice(r.Context(), validated.IP, validated.Hostname,
 			validated.DeviceType,
 			validated.SNMPCredentials, validated.Tags, validated.Vendor, validated.MetricsSource,
-			validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.Notes); err != nil {
+			validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.Notes)
+		if err != nil {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
+			continue
+		}
+		if !validated.SkipPrimaryMapMembership {
+			if err := h.addDeviceToPrimaryCanvasMap(device); err != nil {
+				failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
+			}
 		}
 	}
 
@@ -791,7 +895,8 @@ func isDeviceIPConflict(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "idx_devices_ip") ||
 		(strings.Contains(message, "duplicate key value violates unique constraint") && strings.Contains(message, "devices")) ||
-		strings.Contains(message, "unique constraint failed: devices.ip")
+		strings.Contains(message, "unique constraint failed: devices.ip") ||
+		strings.Contains(message, "device ip conflict")
 }
 
 func duplicateDeviceAddressMessage(address string) string {

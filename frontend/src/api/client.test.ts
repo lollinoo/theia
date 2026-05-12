@@ -1,26 +1,44 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type CreateDevicePayload,
+  ValidationError,
+  addDeviceToCanvasMap,
   cancelInstanceBackup,
+  createCanvasMap,
+  createCanvasMapArea,
   createDevice,
+  deleteCanvasMap,
+  deleteCanvasMapArea,
   deleteDevice,
+  duplicateCanvasMap,
   fetchBackupFileContent,
   fetchBackupJobs,
   fetchBridgeToken,
   fetchCanvasBootstrap,
+  fetchCanvasMapAreas,
+  fetchCanvasMapBootstrap,
+  fetchCanvasMapTopology,
+  fetchCanvasMaps,
   fetchCanvasTopology,
   fetchDevices,
   fetchInstanceBackups,
   fetchLinks,
+  fetchOrphanDevices,
   fetchSettings,
   fetchSettingsWithMetadata,
+  removeDeviceFromCanvasMap,
   resetCanvasBootstrapRequestCache,
   restoreInstanceBackup,
   revealSNMPProfile,
   runTopologyDiscovery,
+  setCanvasMapPrimary,
+  updateCanvasMap,
+  updateCanvasMapArea,
+  updateCanvasMapDeviceAreas,
+  updateCanvasMapDeviceVisualColor,
   updateDevice,
 } from './client';
-import { ServerError, ValidationError } from './errors';
+import { ServerError } from './errors';
 
 // Helper to create a mock Response
 function mockResponse(
@@ -68,6 +86,24 @@ function deviceResource(id: string, hostname: string, ip: string) {
     relationships: {
       interfaces: { data: [] },
     },
+  };
+}
+
+function emptyTopologyPayload() {
+  return {
+    schema_version: 1,
+    topology_version: 'topo-empty',
+    generated_at: '2026-05-07T00:00:00Z',
+    devices: [],
+    links: [],
+    positions: {},
+    areas: [],
+    capabilities: {
+      supports_topology_delta: false,
+      supports_position_revision: false,
+      supports_area_filtering: true,
+    },
+    settings: { layout: { version: 1 } },
   };
 }
 
@@ -161,6 +197,38 @@ describe('fetchDevices', () => {
     const result = await fetchDevices();
 
     expect(result[0].notes).toBe('Installed in rack 7');
+  });
+});
+
+describe('fetchOrphanDevices', () => {
+  it('fetches and parses orphan device list response', async () => {
+    const payload = { data: [deviceResource('uuid-orphan', 'orphan-01', '10.0.0.32')] };
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(payload));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchOrphanDevices();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/devices/orphans');
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('uuid-orphan');
+    expect(result[0].hostname).toBe('orphan-01');
+  });
+
+  it('wraps HTTP errors with orphan device context', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'Internal Server Error' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
+        ),
+    );
+
+    await expect(fetchOrphanDevices()).rejects.toThrow('Failed to fetch orphan devices');
   });
 });
 
@@ -574,6 +642,414 @@ describe('fetchCanvasBootstrap', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(first.topology.runtime_version).toBe(42);
     expect(second.topology.runtime_version).toBe(43);
+  });
+});
+
+describe('canvas map client', () => {
+  beforeEach(() => {
+    resetCanvasBootstrapRequestCache();
+  });
+
+  it('fetches canvas maps from map list endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({
+          data: [{ id: 'default', name: 'Default', is_default: true, filter: {} }],
+        }),
+      ),
+    );
+
+    await expect(fetchCanvasMaps()).resolves.toHaveLength(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
+  });
+
+  it('normalizes create conflicts as ValidationError', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'name exists' },
+            { ok: false, status: 409, statusText: 'Conflict' },
+          ),
+        ),
+    );
+
+    await expect(createCanvasMap({ name: 'Default' })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('uses map-specific topology and bootstrap endpoints', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(emptyTopologyPayload())));
+
+    await fetchCanvasMapBootstrap('map-1');
+    await fetchCanvasMapTopology('map-1', 'etag-1');
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas/maps/map-1/bootstrap',
+      expect.any(Object),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/map-1/topology',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'If-None-Match': 'etag-1' }),
+      }),
+    );
+  });
+
+  it('isolates default bootstrap cache from saved map bootstrap entries', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'default-bootstrap' }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-bootstrap' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const defaultBootstrap = await fetchCanvasBootstrap();
+    const mapBootstrap = await fetchCanvasMapBootstrap('__default__');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/__default__/bootstrap',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
+    expect(defaultBootstrap.topology.topology_version).toBe('default-bootstrap');
+    expect(mapBootstrap.topology.topology_version).toBe('map-bootstrap');
+  });
+
+  it('isolates saved map bootstrap cache entries by map id', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-a' }))
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-b' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mapA = await fetchCanvasMapBootstrap('map-a');
+    const mapB = await fetchCanvasMapBootstrap('map-b');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas/maps/map-a/bootstrap',
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/map-b/bootstrap',
+      expect.any(Object),
+    );
+    expect(mapA.topology.topology_version).toBe('map-a');
+    expect(mapB.topology.topology_version).toBe('map-b');
+  });
+
+  it('bypasses the saved map bootstrap cache when forced', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-initial' }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-forced' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const initial = await fetchCanvasMapBootstrap('map-1');
+    const forced = await fetchCanvasMapBootstrap('map-1', { force: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(initial.topology.topology_version).toBe('map-1-initial');
+    expect(forced.topology.topology_version).toBe('map-1-forced');
+  });
+
+  it('clears saved map bootstrap cache entries on reset', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-before-reset' }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-after-reset' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const beforeReset = await fetchCanvasMapBootstrap('map-1');
+    resetCanvasBootstrapRequestCache();
+    const afterReset = await fetchCanvasMapBootstrap('map-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(beforeReset.topology.topology_version).toBe('map-1-before-reset');
+    expect(afterReset.topology.topology_version).toBe('map-1-after-reset');
+  });
+
+  it('updates and duplicates canvas maps through their map endpoints', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    await updateCanvasMap('map-1', { source_area_id: null });
+    await duplicateCanvasMap('map-1', { name: 'Backbone Copy' });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas/maps/map-1',
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/map-1/duplicate',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('deletes canvas maps through the map endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' })),
+    );
+
+    await deleteCanvasMap('map-1');
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map-1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('sets a canvas map as primary through the primary endpoint', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: true,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const map = await setCanvasMapPrimary('map-1');
+
+    expect(map.is_default).toBe(true);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map-1/primary',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('removes a device from a canvas map without calling the global device endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' })),
+    );
+
+    await removeDeviceFromCanvasMap('map/a', 'device 1');
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/devices/device%201',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
+  });
+
+  it('adds an existing device to a canvas map through the map membership endpoint', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        device_count: 2,
+        link_count: 1,
+        position_count: 0,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const map = await addDeviceToCanvasMap('map/a', 'device 1', {
+      include_connected_links: true,
+    });
+
+    expect(map.device_count).toBe(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/devices/device%201',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ include_connected_links: true }),
+      }),
+    );
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
+  });
+
+  it('updates canvas map device area membership through a map-scoped endpoint', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        device_count: 2,
+        link_count: 1,
+        position_count: 0,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const map = await updateCanvasMapDeviceAreas('map/a', {
+      device_ids: ['device 1', 'device 2'],
+      area_ids: ['area 1'],
+    });
+
+    expect(map.device_count).toBe(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/device-areas',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ device_ids: ['device 1', 'device 2'], area_ids: ['area 1'] }),
+      }),
+    );
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
+  });
+
+  it('updates canvas map device visual color through the map device endpoint', async () => {
+    const response = mockResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: '',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        device_count: 1,
+        link_count: 0,
+        position_count: 0,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const map = await updateCanvasMapDeviceVisualColor('map/a', 'device 1', {
+      visual_color: '#123ABC',
+    });
+
+    expect(map.id).toBe('map-1');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/devices/device%201',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ visual_color: '#123ABC' }),
+      }),
+    );
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
+  });
+
+  it('manages canvas map areas through map-scoped endpoints', async () => {
+    const areaPayload = {
+      data: {
+        id: 'area-1',
+        name: 'Backbone',
+        description: 'Core',
+        color: '#2979FF',
+        device_count: 0,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ data: [areaPayload.data] }))
+      .mockResolvedValueOnce(mockResponse(areaPayload))
+      .mockResolvedValueOnce(mockResponse(areaPayload))
+      .mockResolvedValueOnce(
+        mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchCanvasMapAreas('map/a')).resolves.toHaveLength(1);
+    await createCanvasMapArea('map/a', {
+      name: 'Backbone',
+      description: 'Core',
+      color: '#2979FF',
+    });
+    await updateCanvasMapArea('map/a', 'area 1', {
+      name: 'Backbone',
+      description: 'Core',
+      color: '#2979FF',
+    });
+    await deleteCanvasMapArea('map/a', 'area 1');
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/canvas/maps/map%2Fa/areas',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/canvas/maps/map%2Fa/areas',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'Backbone', description: 'Core', color: '#2979FF' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/canvas/maps/map%2Fa/areas/area%201',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ name: 'Backbone', description: 'Core', color: '#2979FF' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      '/api/v1/canvas/maps/map%2Fa/areas/area%201',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
   });
 });
 

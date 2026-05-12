@@ -7,9 +7,22 @@ import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
 // Mock DeviceRow as a simple <tr> stub
 vi.mock('./DeviceRow', () => ({
-  DeviceRow: ({ row }: { row: RuntimeDeviceRow }) => (
+  DeviceRow: ({
+    row,
+    onDeletePermanently,
+  }: {
+    row: RuntimeDeviceRow;
+    onDeletePermanently?: () => void;
+  }) => (
     <tr data-testid={`device-row-${row.id}`}>
       <td>{row.hostname}</td>
+      {onDeletePermanently && (
+        <td>
+          <button type="button" onClick={onDeletePermanently}>
+            delete {row.id}
+          </button>
+        </td>
+      )}
     </tr>
   ),
 }));
@@ -195,5 +208,28 @@ describe('DeviceTable', () => {
     const renderedRows = Array.from(container.querySelectorAll('tbody tr'));
     expect(renderedRows[0]?.textContent).toContain('aaa-row');
     expect(renderedRows[1]?.textContent).toContain('bbb-row');
+  });
+
+  it('passes permanent delete actions to rows when provided', () => {
+    const onDeletePermanently = vi.fn();
+    const device = mockDevice({ id: 'dev-1' });
+    const rows = buildRuntimeDeviceRows({ devices: [device], snapshot: null });
+
+    render(
+      <DeviceTable
+        rows={rows}
+        areaMap={mockAreaMap()}
+        resolvedTheme="dark"
+        onSSHCredentials={noop}
+        onBackup={noop}
+        onBackupHistory={noop}
+        onViewConfig={noop}
+        onDeletePermanently={onDeletePermanently}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'delete dev-1' }));
+
+    expect(onDeletePermanently).toHaveBeenCalledWith(device);
   });
 });

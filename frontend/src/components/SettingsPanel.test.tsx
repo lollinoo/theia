@@ -62,6 +62,12 @@ describe('SettingsPanel (COMP-05)', () => {
     expect(html).not.toContain('yellow-400');
   });
 
+  it('does not render area management controls in global settings', () => {
+    render(<SettingsPanel />);
+
+    expect(screen.queryByTestId('area-manager')).not.toBeInTheDocument();
+  });
+
   it('renders topology discovery default selector and saves changes', async () => {
     const { updateSetting } = await import('../api/client');
 

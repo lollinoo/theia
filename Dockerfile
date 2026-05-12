@@ -25,6 +25,7 @@ RUN apt-get update && \
 COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_dump /usr/local/bin/pg_dump
 COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_restore /usr/local/bin/pg_restore
 COPY --from=postgres-tools /usr/lib/postgresql/17/bin/psql /usr/local/bin/psql
+COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5* /usr/lib/x86_64-linux-gnu/
 
 # Install Air for hot-reload (pinned version compatible with Go 1.24)
 RUN go install github.com/air-verse/air@v1.61.5
@@ -83,6 +84,7 @@ COPY --from=builder /app/theia /usr/local/bin/theia
 COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_dump /usr/local/bin/pg_dump
 COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_restore /usr/local/bin/pg_restore
 COPY --from=postgres-tools /usr/lib/postgresql/17/bin/psql /usr/local/bin/psql
+COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5* /usr/lib/x86_64-linux-gnu/
 
 RUN mkdir -p /data
 

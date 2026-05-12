@@ -87,6 +87,325 @@ func TestCopyPrimaryData_TruncateTargetRemovesStaleRows(t *testing.T) {
 	assertCopyTargetState(t, target, "core-router", "https://prom.example", true, "core", intPtr(45))
 }
 
+func TestDefaultCanvasMapAfterCopy_CopiesCopiedLegacyPositions(t *testing.T) {
+	source := openTestDB(t)
+	target := openTestDB(t)
+
+	if err := RunMigrations(source, testKey); err != nil {
+		t.Fatalf("RunMigrations(source) failed: %v", err)
+	}
+	if err := RunMigrations(target, testKey); err != nil {
+		t.Fatalf("RunMigrations(target) failed: %v", err)
+	}
+
+	const sourceDefaultMapID = "00000000-0000-0000-0000-000000000901"
+	const targetGeneratedMapID = "00000000-0000-0000-0000-000000000902"
+	setDefaultCanvasMapID(t, source, sourceDefaultMapID)
+	setDefaultCanvasMapID(t, target, targetGeneratedMapID)
+
+	const deviceID = "00000000-0000-0000-0000-000000000301"
+	if _, err := source.Exec(
+		`INSERT INTO devices (
+			id, hostname, ip, snmp_credentials_json, device_type, status, sys_name, sys_descr,
+			sys_object_id, hardware_model, vendor, managed, tags_json, created_at, updated_at,
+			metrics_source, prometheus_label_name, prometheus_label_value, sys_name_lookup,
+			poll_class, poll_interval_override, polling_enabled, notes
+		) VALUES (
+			?, 'router-301', '10.0.3.1', '{}', 'router', 'up', 'router-301', '',
+			'', 'CCR2004', 'mikrotik', 1, '{}', '2026-04-10 00:00:00',
+			'2026-04-10 00:00:00', 'prometheus', 'instance', 'router-301:9100', 'router-301',
+			'core', 60, 1, 'Canvas copy regression device'
+		)`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("inserting source device: %v", err)
+	}
+	if _, err := source.Exec(
+		`INSERT INTO device_positions (device_id, x, y, pinned, updated_at)
+		 VALUES (?, 71.5, 82.25, 1, '2026-04-10 03:04:05')`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("inserting source legacy position: %v", err)
+	}
+	if _, err := source.Exec(
+		`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
+		 VALUES (?, ?, 'base', '2026-04-10 03:04:05')`,
+		sourceDefaultMapID,
+		deviceID,
+	); err != nil {
+		t.Fatalf("inserting source default map membership: %v", err)
+	}
+
+	if err := CopyPrimaryData(source, target, CopyOptions{BatchSize: 2}); err != nil {
+		t.Fatalf("CopyPrimaryData() failed: %v", err)
+	}
+
+	var preSeedCount int
+	if err := target.QueryRow(`SELECT COUNT(*) FROM canvas_map_positions`).Scan(&preSeedCount); err != nil {
+		t.Fatalf("counting pre-seed canvas_map_positions: %v", err)
+	}
+	if preSeedCount != 0 {
+		t.Fatalf("pre-seed canvas_map_positions count = %d, want 0", preSeedCount)
+	}
+
+	if err := seedTargetDefaultCanvasMapAfterCopy(target); err != nil {
+		t.Fatalf("seedTargetDefaultCanvasMapAfterCopy() failed: %v", err)
+	}
+
+	var mapID string
+	if err := target.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = 1`).Scan(&mapID); err != nil {
+		t.Fatalf("querying target default map: %v", err)
+	}
+	if mapID != sourceDefaultMapID {
+		t.Fatalf("target default map id = %s, want copied source default %s", mapID, sourceDefaultMapID)
+	}
+
+	var x, y float64
+	var pinned int
+	if err := target.QueryRow(
+		`SELECT x, y, pinned FROM canvas_map_positions WHERE map_id = ? AND device_id = ?`,
+		mapID,
+		deviceID,
+	).Scan(&x, &y, &pinned); err != nil {
+		t.Fatalf("querying seeded canvas map position: %v", err)
+	}
+	if x != 71.5 || y != 82.25 || pinned != 1 {
+		t.Fatalf("seeded position = (%v, %v, pinned=%d), want (71.5, 82.25, pinned=1)", x, y, pinned)
+	}
+}
+
+func TestCopyPrimaryData_DefaultConflictPreservesGeneratedLookingTargetDefault(t *testing.T) {
+	source := openTestDB(t)
+	target := openTestDB(t)
+
+	if err := RunMigrations(source, testKey); err != nil {
+		t.Fatalf("RunMigrations(source) failed: %v", err)
+	}
+	if err := RunMigrations(target, testKey); err != nil {
+		t.Fatalf("RunMigrations(target) failed: %v", err)
+	}
+
+	const sourceDefaultMapID = "00000000-0000-0000-0000-000000000911"
+	const targetDefaultMapID = "00000000-0000-0000-0000-000000000912"
+	setDefaultCanvasMapID(t, source, sourceDefaultMapID)
+	setDefaultCanvasMapID(t, target, targetDefaultMapID)
+
+	if _, err := target.Exec(
+		`INSERT INTO canvas_maps (id, name, description, filter_json, is_default, created_at, updated_at)
+		 VALUES (
+			'00000000-0000-0000-0000-000000000913',
+			'Target Operations',
+			'User-created target map',
+			'{}',
+			0,
+			'2026-04-10 00:00:00',
+			'2026-04-10 00:00:00'
+		 )`,
+	); err != nil {
+		t.Fatalf("inserting target user-created map: %v", err)
+	}
+
+	err := CopyPrimaryData(source, target, CopyOptions{BatchSize: 2})
+	if err == nil {
+		t.Fatal("CopyPrimaryData() succeeded, want target default conflict")
+	}
+	if !strings.Contains(err.Error(), "target default canvas map conflicts with copied source default") {
+		t.Fatalf("CopyPrimaryData() error = %v, want target default conflict", err)
+	}
+
+	var targetDefaultCount int
+	if err := target.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ? AND is_default = 1`, targetDefaultMapID).Scan(&targetDefaultCount); err != nil {
+		t.Fatalf("querying preserved target default: %v", err)
+	}
+	if targetDefaultCount != 1 {
+		t.Fatalf("preserved target default count = %d, want 1", targetDefaultCount)
+	}
+
+	var sourceDefaultCount int
+	if err := target.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, sourceDefaultMapID).Scan(&sourceDefaultCount); err != nil {
+		t.Fatalf("querying copied source default after conflict: %v", err)
+	}
+	if sourceDefaultCount != 0 {
+		t.Fatalf("copied source default count after conflict = %d, want 0", sourceDefaultCount)
+	}
+}
+
+func TestCopyPrimaryData_DeletesFreshGeneratedTargetDefaultBeforeCopyingSourceDefault(t *testing.T) {
+	source := openTestDB(t)
+	target := openTestDB(t)
+
+	if err := RunMigrations(source, testKey); err != nil {
+		t.Fatalf("RunMigrations(source) failed: %v", err)
+	}
+	if err := RunMigrations(target, testKey); err != nil {
+		t.Fatalf("RunMigrations(target) failed: %v", err)
+	}
+
+	const sourceDefaultMapID = "00000000-0000-0000-0000-000000000921"
+	const targetGeneratedMapID = "00000000-0000-0000-0000-000000000922"
+	setDefaultCanvasMapID(t, source, sourceDefaultMapID)
+	setDefaultCanvasMapID(t, target, targetGeneratedMapID)
+
+	if err := CopyPrimaryData(source, target, CopyOptions{BatchSize: 2}); err != nil {
+		t.Fatalf("CopyPrimaryData() failed: %v", err)
+	}
+
+	var copiedDefaultID string
+	if err := target.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = 1`).Scan(&copiedDefaultID); err != nil {
+		t.Fatalf("querying copied target default: %v", err)
+	}
+	if copiedDefaultID != sourceDefaultMapID {
+		t.Fatalf("target default map id = %s, want copied source default %s", copiedDefaultID, sourceDefaultMapID)
+	}
+
+	var generatedDefaultCount int
+	if err := target.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, targetGeneratedMapID).Scan(&generatedDefaultCount); err != nil {
+		t.Fatalf("querying generated target default: %v", err)
+	}
+	if generatedDefaultCount != 0 {
+		t.Fatalf("generated target default count = %d, want 0", generatedDefaultCount)
+	}
+}
+
+func TestDeleteFreshGeneratedTargetDefaultCanvasMap_ConflictsWhenFreshnessChangesAfterRead(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, targetTx *Tx, targetDefaultID string)
+	}{
+		{
+			name: "position added",
+			mutate: func(t *testing.T, targetTx *Tx, targetDefaultID string) {
+				t.Helper()
+
+				const deviceID = "00000000-0000-0000-0000-000000000931"
+				if _, err := targetTx.Exec(
+					`INSERT INTO devices (id, ip, created_at, updated_at)
+					 VALUES (?, '192.0.2.31', '2026-04-10 00:00:00', '2026-04-10 00:00:00')`,
+					deviceID,
+				); err != nil {
+					t.Fatalf("inserting target device: %v", err)
+				}
+				if _, err := targetTx.Exec(
+					`INSERT INTO canvas_map_positions (map_id, device_id, x, y, pinned, updated_at)
+					 VALUES (?, ?, 10, 20, 1, '2026-04-10 00:00:00')`,
+					targetDefaultID,
+					deviceID,
+				); err != nil {
+					t.Fatalf("inserting target canvas map position: %v", err)
+				}
+			},
+		},
+		{
+			name: "second map added",
+			mutate: func(t *testing.T, targetTx *Tx, _ string) {
+				t.Helper()
+
+				if _, err := targetTx.Exec(
+					`INSERT INTO canvas_maps (id, name, description, filter_json, is_default, created_at, updated_at)
+					 VALUES (
+						'00000000-0000-0000-0000-000000000932',
+						'Target Operations',
+						'User-created target map',
+						'{}',
+						?,
+						'2026-04-10 00:00:00',
+						'2026-04-10 00:00:00'
+					 )`,
+					false,
+				); err != nil {
+					t.Fatalf("inserting second target canvas map: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := openTestDB(t)
+			if err := RunMigrations(target, testKey); err != nil {
+				t.Fatalf("RunMigrations(target) failed: %v", err)
+			}
+
+			const targetGeneratedMapID = "00000000-0000-0000-0000-000000000930"
+			setDefaultCanvasMapID(t, target, targetGeneratedMapID)
+
+			targetTx, err := wrapDB(target).Begin()
+			if err != nil {
+				t.Fatalf("beginning target transaction: %v", err)
+			}
+			defer targetTx.Rollback() //nolint:errcheck
+
+			targetDefault, ok, err := targetDefaultCanvasMapForCopy(targetTx)
+			if err != nil {
+				t.Fatalf("querying target default canvas map: %v", err)
+			}
+			if !ok {
+				t.Fatal("target default canvas map not found")
+			}
+			if !targetDefault.isFreshGeneratedMigrationDefault() {
+				t.Fatalf("target default should initially look fresh: %#v", targetDefault)
+			}
+
+			tt.mutate(t, targetTx, targetGeneratedMapID)
+
+			err = deleteFreshGeneratedTargetDefaultCanvasMap(targetTx, targetDefault)
+			if err == nil {
+				t.Fatal("deleteFreshGeneratedTargetDefaultCanvasMap() succeeded, want conflict")
+			}
+			if !strings.Contains(err.Error(), "target default canvas map conflicts with copied source default: "+targetGeneratedMapID) {
+				t.Fatalf("deleteFreshGeneratedTargetDefaultCanvasMap() error = %v, want target default conflict", err)
+			}
+
+			var targetDefaultCount int
+			if err := targetTx.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, targetGeneratedMapID).Scan(&targetDefaultCount); err != nil {
+				t.Fatalf("querying preserved target default: %v", err)
+			}
+			if targetDefaultCount != 1 {
+				t.Fatalf("preserved target default count = %d, want 1", targetDefaultCount)
+			}
+		})
+	}
+}
+
+func TestDeleteFreshGeneratedTargetDefaultCanvasMap_DeletesFreshGeneratedDefault(t *testing.T) {
+	target := openTestDB(t)
+	if err := RunMigrations(target, testKey); err != nil {
+		t.Fatalf("RunMigrations(target) failed: %v", err)
+	}
+
+	const targetGeneratedMapID = "00000000-0000-0000-0000-000000000940"
+	setDefaultCanvasMapID(t, target, targetGeneratedMapID)
+
+	targetTx, err := wrapDB(target).Begin()
+	if err != nil {
+		t.Fatalf("beginning target transaction: %v", err)
+	}
+	defer targetTx.Rollback() //nolint:errcheck
+
+	targetDefault, ok, err := targetDefaultCanvasMapForCopy(targetTx)
+	if err != nil {
+		t.Fatalf("querying target default canvas map: %v", err)
+	}
+	if !ok {
+		t.Fatal("target default canvas map not found")
+	}
+	if !targetDefault.isFreshGeneratedMigrationDefault() {
+		t.Fatalf("target default should initially look fresh: %#v", targetDefault)
+	}
+
+	if err := deleteFreshGeneratedTargetDefaultCanvasMap(targetTx, targetDefault); err != nil {
+		t.Fatalf("deleteFreshGeneratedTargetDefaultCanvasMap() failed: %v", err)
+	}
+
+	var targetDefaultCount int
+	if err := targetTx.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, targetGeneratedMapID).Scan(&targetDefaultCount); err != nil {
+		t.Fatalf("querying deleted target default: %v", err)
+	}
+	if targetDefaultCount != 0 {
+		t.Fatalf("target default count = %d, want 0", targetDefaultCount)
+	}
+}
+
 func TestNormalizeCredentialProfileSecretForCopy_Base64EncodesInvalidUTF8(t *testing.T) {
 	raw := string([]byte{0x9d, 0x01, 0x02})
 
@@ -511,6 +830,22 @@ func seedCopyTestSource(t *testing.T, db testExecer) {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("executing seed statement %q: %v", statement, err)
 		}
+	}
+}
+
+func setDefaultCanvasMapID(t *testing.T, db *sql.DB, id string) {
+	t.Helper()
+
+	result, err := db.Exec(`UPDATE canvas_maps SET id = ? WHERE is_default = 1`, id)
+	if err != nil {
+		t.Fatalf("setting default canvas map id: %v", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("checking default canvas map id update: %v", err)
+	}
+	if rowsAffected != 1 {
+		t.Fatalf("updated %d default canvas maps, want 1", rowsAffected)
 	}
 }
 

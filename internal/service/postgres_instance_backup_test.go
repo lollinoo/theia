@@ -421,6 +421,11 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
 			}
 			return nil, fmt.Errorf("unexpected pg_dump args: %v", args)
+		case "psql":
+			if commandArgsEqual(args, "--version") {
+				return []byte("psql (PostgreSQL) 17.4\n"), nil
+			}
+			return nil, fmt.Errorf("unexpected psql args: %v", args)
 		default:
 			return nil, fmt.Errorf("unexpected command %s", name)
 		}
@@ -625,6 +630,7 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	terminatePostgresConnections = func(ctx context.Context, dsn string) error { return nil }
 	t.Cleanup(func() { terminatePostgresConnections = originalTerminate })
 
+	cleanSchemaExecuted := false
 	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "pg_dump":
@@ -650,6 +656,9 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			if commandArgsEqual(args, "--version") {
 				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
 			}
+			if !cleanSchemaExecuted {
+				t.Fatal("pg_restore executed before PostgreSQL schema cleanup")
+			}
 			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
 				t.Fatal("pg_restore PGPASSWORD env does not match DSN password")
 			}
@@ -663,6 +672,29 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			if got := args[len(args)-1]; got != stagedDump {
 				t.Fatalf("pg_restore target = %q, want %q", got, stagedDump)
 			}
+			if commandArgExists(args, "--clean") {
+				t.Fatal("pg_restore should not use --clean after explicit schema cleanup")
+			}
+			return nil, nil
+		case "psql":
+			if commandArgsEqual(args, "--version") {
+				return []byte("psql (PostgreSQL) 17.4\n"), nil
+			}
+			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
+				t.Fatal("psql PGPASSWORD env does not match DSN password")
+			}
+			connInfo := commandFlagValue(args, "--dbname")
+			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "n3wpr3srl@2026") {
+				t.Fatalf("psql conninfo leaked password material: %q", connInfo)
+			}
+			command := commandFlagValue(args, "--command")
+			if !strings.Contains(command, "DROP SCHEMA IF EXISTS public CASCADE") {
+				t.Fatalf("psql schema cleanup command = %q, want DROP SCHEMA public CASCADE", command)
+			}
+			if !strings.Contains(command, "CREATE SCHEMA public") {
+				t.Fatalf("psql schema cleanup command = %q, want CREATE SCHEMA public", command)
+			}
+			cleanSchemaExecuted = true
 			return nil, nil
 		default:
 			return nil, fmt.Errorf("unexpected command %s", name)
@@ -694,6 +726,9 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	}
 	if !applied {
 		t.Fatal("ApplyPendingRestore() applied = false, want true")
+	}
+	if !cleanSchemaExecuted {
+		t.Fatal("PostgreSQL schema cleanup was not executed")
 	}
 
 	backupBytes, err := os.ReadFile(filepath.Join(deviceBackupDir, "router", "config.rsc"))

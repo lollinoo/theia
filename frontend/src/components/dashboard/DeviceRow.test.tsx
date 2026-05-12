@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Area, Device } from '../../types/api';
 import type { DeviceMetricsDTO } from '../../types/metrics';
@@ -140,6 +140,49 @@ describe('DeviceRow', () => {
     expect(titles).toContain('Backup History');
     expect(titles).toContain('View Config');
     expect(buttons.length).toBe(4);
+  });
+
+  it('renders a permanent delete action only when an orphan delete handler is provided', () => {
+    const onDeletePermanently = vi.fn();
+    const row = makeRow();
+    const { rerender } = render(
+      <table>
+        <tbody>
+          <DeviceRow
+            row={row}
+            areaMap={mockAreaMap()}
+            resolvedTheme="dark"
+            onSSHCredentials={noop}
+            onBackup={noop}
+            onBackupHistory={noop}
+            onViewConfig={noop}
+          />
+        </tbody>
+      </table>,
+    );
+
+    expect(screen.queryByTitle('Delete permanently')).toBeNull();
+
+    rerender(
+      <table>
+        <tbody>
+          <DeviceRow
+            row={row}
+            areaMap={mockAreaMap()}
+            resolvedTheme="dark"
+            onSSHCredentials={noop}
+            onBackup={noop}
+            onBackupHistory={noop}
+            onViewConfig={noop}
+            onDeletePermanently={onDeletePermanently}
+          />
+        </tbody>
+      </table>,
+    );
+
+    fireEvent.click(screen.getByTitle('Delete permanently'));
+
+    expect(onDeletePermanently).toHaveBeenCalledTimes(1);
   });
 
   it('renders StatusDot component', () => {

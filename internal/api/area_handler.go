@@ -205,7 +205,14 @@ func areaToResponse(a *domain.Area, deviceCount int) areaResponse {
 		Description: a.Description,
 		Color:       a.Color,
 		DeviceCount: deviceCount,
-		CreatedAt:   a.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   a.UpdatedAt.Format(time.RFC3339),
+		CreatedAt:   formatAreaTimestamp(a.CreatedAt),
+		UpdatedAt:   formatAreaTimestamp(a.UpdatedAt),
 	}
+}
+
+func formatAreaTimestamp(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }

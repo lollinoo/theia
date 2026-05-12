@@ -65,7 +65,8 @@ describe('Watermark', () => {
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.className).toContain('absolute');
     expect(wrapper.className).not.toContain('fixed');
-    expect(wrapper.className).toContain('bottom-[170px]');
+    expect(wrapper.className).toContain('bottom-[calc(15.5rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).toContain('sm:bottom-[184px]');
     expect(wrapper.className).toContain('right-4');
   });
 });

@@ -14,6 +14,8 @@ import {
   setWinBoxProfile,
   testSNMPConnection,
   unassignCredentialProfile,
+  updateCanvasMapDeviceAreas,
+  updateCanvasMapDeviceVisualColor,
   updateDevice,
   updateSetting,
 } from '../api/client';
@@ -48,6 +50,8 @@ import {
   type DeviceFormModel,
   applySNMPProfile,
   createDeviceConfigFormModel,
+  defaultVirtualNodeColor,
+  normalizeVirtualNodeColor,
 } from './forms/deviceFormModels';
 import { buildUpdateDevicePayload } from './forms/deviceFormSubmitters';
 
@@ -72,6 +76,8 @@ const DEFAULT_POLLING_DURATION_BY_CLASS: Record<DevicePollClass, string> = {
 
 const POLLING_OVERRIDE_ERROR = 'Polling override must be an integer between 5 and 3600 seconds';
 
+type DeviceUpdatePayload = Parameters<typeof updateDevice>[1];
+
 function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
   return JSON.stringify({
     id: device.id,
@@ -89,14 +95,86 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
     virtualSubtype: device.tags?.virtual_subtype ?? 'internet',
     pollIntervalOverride: device.poll_interval_override ?? null,
     pollingEnabled: device.polling_enabled !== false,
+    mapVisualColor: device.map_visual_color ?? null,
   });
+}
+
+function sameAreaIds(first: string[], second: string[]): boolean {
+  if (first.length !== second.length) return false;
+  const sortedFirst = [...first].sort();
+  const sortedSecond = [...second].sort();
+  return sortedFirst.every((value, index) => value === sortedSecond[index]);
+}
+
+function sameStringRecord(
+  first: Record<string, string> | undefined,
+  second: Record<string, string> | undefined,
+): boolean {
+  const firstEntries = Object.entries(first ?? {}).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const secondEntries = Object.entries(second ?? {}).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  if (firstEntries.length !== secondEntries.length) return false;
+  return firstEntries.every(
+    ([key, value], index) =>
+      secondEntries[index]?.[0] === key && secondEntries[index]?.[1] === value,
+  );
+}
+
+function deviceConfigGlobalPayloadHasChanges(
+  device: Device,
+  payload: DeviceUpdatePayload,
+): boolean {
+  if (payload.hostname !== undefined && payload.hostname !== device.hostname) return true;
+  if (payload.ip !== undefined && payload.ip !== device.ip) return true;
+  if (payload.notes !== undefined && payload.notes !== (device.notes ?? null)) return true;
+  if (payload.snmp !== undefined) return true;
+  if (payload.tags !== undefined && !sameStringRecord(payload.tags, device.tags)) return true;
+  if (payload.vendor !== undefined && payload.vendor !== device.vendor) return true;
+  if (payload.metrics_source !== undefined && payload.metrics_source !== device.metrics_source) {
+    return true;
+  }
+  if (
+    payload.prometheus_label_name !== undefined &&
+    payload.prometheus_label_name !== device.prometheus_label_name
+  ) {
+    return true;
+  }
+  if (
+    payload.prometheus_label_value !== undefined &&
+    payload.prometheus_label_value !== device.prometheus_label_value
+  ) {
+    return true;
+  }
+  if (
+    payload.topology_discovery_mode !== undefined &&
+    payload.topology_discovery_mode !== device.topology_discovery_mode
+  ) {
+    return true;
+  }
+  if (payload.area_ids !== undefined && !sameAreaIds(payload.area_ids, device.area_ids ?? [])) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeMapVisualColor(color: string | null | undefined): string | null {
+  return color ? normalizeVirtualNodeColor(color) : null;
 }
 
 interface DeviceConfigPanelProps {
   device: Device;
   readOnly?: boolean;
+  areas?: Area[];
+  mapContext?: {
+    mapId: string;
+    mapName: string;
+  };
   onDeviceUpdated: (updated: Device) => void;
   onDeviceDeleted: () => void;
+  onRemoveFromMap?: (deviceId: string) => void | Promise<void>;
   onSettingsChange?: () => void;
   onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void;
   isVirtual?: boolean;
@@ -105,8 +183,11 @@ interface DeviceConfigPanelProps {
 export function DeviceConfigPanel({
   device,
   readOnly = false,
+  areas: providedAreas,
+  mapContext,
   onDeviceUpdated,
   onDeviceDeleted,
+  onRemoveFromMap,
   onSettingsChange,
   onWinBoxAvailabilityChange,
   isVirtual,
@@ -125,6 +206,7 @@ export function DeviceConfigPanel({
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [removeFromMapLoading, setRemoveFromMapLoading] = useState(false);
 
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
   const [credentialProfiles, setCredentialProfiles] = useState<CredentialProfile[]>([]);
@@ -132,7 +214,7 @@ export function DeviceConfigPanel({
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
   const [showAddSelect, setShowAddSelect] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
-  const [areas, setAreas] = useState<Area[]>([]);
+  const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
   const [savedPolling, setSavedPolling] = useState(false);
@@ -157,6 +239,7 @@ export function DeviceConfigPanel({
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
   const deviceConfigSyncKey = buildDeviceConfigSyncKey(device, Boolean(isVirtual));
+  const areas = providedAreas ?? loadedAreas;
 
   function updateForm(update: Partial<DeviceFormModel>) {
     setForm((current) => ({ ...current, ...update }));
@@ -168,6 +251,10 @@ export function DeviceConfigPanel({
 
   function updatePrometheus(update: Partial<DeviceFormModel['prometheus']>) {
     setForm((current) => ({ ...current, prometheus: { ...current.prometheus, ...update } }));
+  }
+
+  function updateVirtual(update: Partial<DeviceFormModel['virtual']>) {
+    setForm((current) => ({ ...current, virtual: { ...current.virtual, ...update } }));
   }
 
   function syncPollingState(pollIntervalOverride: number | null | undefined) {
@@ -243,11 +330,6 @@ export function DeviceConfigPanel({
           /* non-fatal */
         });
     }
-    fetchAreas()
-      .then(setAreas)
-      .catch(() => {
-        /* non-fatal */
-      });
     checkPrometheusHealth()
       .then((result) => {
         setPrometheusAvailable(result.enabled !== false && result.available);
@@ -256,6 +338,19 @@ export function DeviceConfigPanel({
         setPrometheusAvailable(false);
       });
   }, []);
+
+  useEffect(() => {
+    if (providedAreas) {
+      setLoadedAreas([]);
+      return;
+    }
+
+    fetchAreas()
+      .then(setLoadedAreas)
+      .catch(() => {
+        /* non-fatal */
+      });
+  }, [providedAreas]);
 
   useEffect(() => {
     let cancelled = false;
@@ -486,7 +581,33 @@ export function DeviceConfigPanel({
     setEditLoading(true);
     setEditError(null);
     try {
-      const updated = await updateDevice(device.id, buildUpdateDevicePayload(device, form));
+      const payload = buildUpdateDevicePayload(device, form);
+      const mapScopedAreaEdit = Boolean(mapContext);
+      const nextVisualColor = normalizeMapVisualColor(form.virtual.visualColor);
+      const currentVisualColor = normalizeMapVisualColor(device.map_visual_color);
+      const mapScopedVisualColorEdit =
+        Boolean(isVirtual && mapContext) && nextVisualColor !== currentVisualColor;
+      const { area_ids: _areaIds, ...payloadWithoutAreaIds } = payload;
+      const globalPayload = mapScopedAreaEdit ? payloadWithoutAreaIds : payload;
+      const shouldUpdateGlobal =
+        !mapScopedVisualColorEdit || deviceConfigGlobalPayloadHasChanges(device, globalPayload);
+      const updatedGlobal = shouldUpdateGlobal
+        ? await updateDevice(device.id, globalPayload)
+        : device;
+      if (mapScopedAreaEdit && mapContext && !sameAreaIds(device.area_ids ?? [], form.areaIds)) {
+        await updateCanvasMapDeviceAreas(mapContext.mapId, {
+          device_ids: [device.id],
+          area_ids: form.areaIds,
+        });
+      }
+      if (mapScopedVisualColorEdit && mapContext) {
+        await updateCanvasMapDeviceVisualColor(mapContext.mapId, device.id, {
+          visual_color: nextVisualColor,
+        });
+      }
+      const updated = mapScopedAreaEdit
+        ? { ...updatedGlobal, area_ids: [...form.areaIds], map_visual_color: nextVisualColor }
+        : updatedGlobal;
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated(updated);
     } catch (err) {
@@ -515,6 +636,16 @@ export function DeviceConfigPanel({
     } catch {
       setDeleteLoading(false);
       setConfirmDelete(false);
+    }
+  }
+
+  async function handleRemoveFromMap() {
+    if (readOnly || !mapContext || !onRemoveFromMap) return;
+    setRemoveFromMapLoading(true);
+    try {
+      await onRemoveFromMap(device.id);
+    } finally {
+      setRemoveFromMapLoading(false);
     }
   }
 
@@ -956,6 +1087,36 @@ export function DeviceConfigPanel({
             </select>
           </div>
 
+          {isVirtual && mapContext && (
+            <div className="space-y-1">
+              <label
+                htmlFor="device-virtual-node-color"
+                className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
+              >
+                Virtual node color
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="device-virtual-node-color"
+                  aria-label="Virtual node color"
+                  type="color"
+                  value={form.virtual.visualColor ?? defaultVirtualNodeColor}
+                  onChange={(e) =>
+                    updateVirtual({ visualColor: normalizeVirtualNodeColor(e.target.value) })
+                  }
+                  className="h-10 w-12 shrink-0 cursor-pointer rounded-lg border border-outline-subtle bg-elevated p-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => updateVirtual({ visualColor: null })}
+                  className="rounded-lg bg-surface-high px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
+                >
+                  Use area/default color
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Vendor, SSH, Metrics Source, Prometheus, SNMP — physical devices only */}
           {!isVirtual && (
             <>
@@ -1360,7 +1521,25 @@ export function DeviceConfigPanel({
       {/* SNMP Test — visible when metrics source uses SNMP (physical only) */}
       {!isVirtual && usesSNMP && <SNMPTestButton deviceId={device.id} />}
 
-      {/* Delete Device */}
+      {mapContext && onRemoveFromMap && (
+        <div className="mt-6 space-y-2 rounded-lg border border-outline-subtle bg-surface-container px-3 py-3">
+          <p className="text-xs text-on-bg-secondary">
+            Removes this device only from {mapContext.mapName}. Inventory and other maps are kept.
+          </p>
+          <button
+            type="button"
+            disabled={readOnly || removeFromMapLoading}
+            onClick={() => {
+              void handleRemoveFromMap();
+            }}
+            className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {removeFromMapLoading ? 'Removing...' : 'Remove from this map'}
+          </button>
+        </div>
+      )}
+
+      {/* Delete Device Everywhere */}
       <div className="mt-6 space-y-3">
         {!confirmDelete ? (
           <button
@@ -1369,11 +1548,13 @@ export function DeviceConfigPanel({
             onClick={() => setConfirmDelete(true)}
             className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Delete Device
+            Delete device everywhere
           </button>
         ) : (
           <div className="space-y-2 rounded-lg border border-status-down/30 bg-status-down/10 p-3">
-            <p className="text-sm text-status-down">Are you sure? This cannot be undone.</p>
+            <p className="text-sm text-status-down">
+              Are you sure? This deletes the device everywhere and cannot be undone.
+            </p>
             <div className="flex gap-2">
               <button
                 type="button"

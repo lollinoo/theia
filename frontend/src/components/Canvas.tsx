@@ -3,25 +3,24 @@ import {
   type Connection,
   ConnectionMode,
   type EdgeChange,
-  type NodeChange,
   MiniMap,
+  type NodeChange,
   type OnMove,
   ReactFlow,
   SelectionMode,
   applyEdgeChanges,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
+  useStore,
 } from '@xyflow/react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { removeDeviceFromCanvasMap } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
-import type { Area, Device, Link } from '../types/api';
-import {
-  type AlertDTO,
-  type PrometheusStatusPayload,
-  type SnapshotPayload,
-} from '../types/metrics';
+import type { Area, CanvasMap, Device, Link } from '../types/api';
+import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
 import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
@@ -85,7 +84,7 @@ const TopologyMiniMap = memo(function TopologyMiniMap() {
     <MiniMap<DeviceNode>
       pannable
       zoomable
-      className="!m-0 !right-4 !bottom-0"
+      className="!m-0 !right-4 !bottom-[calc(6rem+env(safe-area-inset-bottom))] sm:!bottom-4"
       nodeColor={topologyMinimapNodeColor}
       style={minimapStyle}
       maskColor={minimapMaskColor}
@@ -156,11 +155,20 @@ interface CanvasProps {
   reconnecting: boolean;
   prometheusStatus: PrometheusStatusPayload | null;
   selectedAreaId: string | null;
+  mapId: string | null;
+  mapName: string;
+  visible?: boolean;
+  fitViewRevision?: number;
+  topologyRefreshRevision?: number;
+  maps?: CanvasMap[];
   areas?: Area[];
   onDevicesChange?: (devices: Device[]) => void;
   onLinksChange?: (links: Link[]) => void;
   onAreaSelect?: (areaId: string | null) => void;
-  onAreasChange?: () => void;
+  onMapSelect?: (map: CanvasMap) => void;
+  onManageMaps?: () => void;
+  onTopologyAreasChange?: (areas: Area[]) => void;
+  onTopologyLoadingChange?: (loading: boolean) => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
   onInteractionActiveChange?: (active: boolean) => void;
 }
@@ -171,11 +179,16 @@ export default function Canvas({
   reconnecting,
   prometheusStatus,
   selectedAreaId,
-  areas,
+  mapId,
+  mapName,
+  visible = true,
+  fitViewRevision,
+  topologyRefreshRevision,
   onDevicesChange,
   onLinksChange,
   onAreaSelect,
-  onAreasChange,
+  onTopologyAreasChange,
+  onTopologyLoadingChange,
   onDetailDeviceChange,
   onInteractionActiveChange,
 }: CanvasProps) {
@@ -225,12 +238,64 @@ export default function Canvas({
     shortcuts,
     getPanelTitle,
   } = useCanvasMenus({ reactFlow });
+  const selectedMapKey = mapId ?? '__default__';
+  const previousMapKeyRef = useRef<string | null>(null);
+  const previousFitViewRevisionRef = useRef(fitViewRevision);
+  const previousTopologyRefreshRevisionRef = useRef(topologyRefreshRevision);
 
   useEffect(() => {
     onDetailDeviceChange?.(getCanvasDetailDeviceId(panelContent));
   }, [panelContent, onDetailDeviceChange]);
 
   useEffect(() => () => onDetailDeviceChange?.(null), [onDetailDeviceChange]);
+
+  useEffect(() => {
+    if (previousMapKeyRef.current === null) {
+      previousMapKeyRef.current = selectedMapKey;
+      return;
+    }
+    if (previousMapKeyRef.current === selectedMapKey) {
+      return;
+    }
+
+    previousMapKeyRef.current = selectedMapKey;
+    setPanelContent(null);
+    setDeviceMenu(null);
+    setEdgeMenu(null);
+    setShowSearch(false);
+    setSelectedNodeCount(0);
+    ghostNodeMeasurementCacheRef.current.clear();
+    setNodes((currentNodes) => {
+      let changed = false;
+      const nextNodes = currentNodes.map((node) => {
+        if (!node.selected) {
+          return node;
+        }
+        changed = true;
+        return { ...node, selected: false };
+      });
+      return changed ? nextNodes : currentNodes;
+    });
+    setEdges((currentEdges) => {
+      let changed = false;
+      const nextEdges = currentEdges.map((edge) => {
+        if (!edge.selected) {
+          return edge;
+        }
+        changed = true;
+        return { ...edge, selected: false };
+      });
+      return changed ? nextEdges : currentEdges;
+    });
+  }, [
+    selectedMapKey,
+    setDeviceMenu,
+    setEdgeMenu,
+    setEdges,
+    setNodes,
+    setPanelContent,
+    setShowSearch,
+  ]);
 
   const setDeviceNodeReadabilityScale = useCallback((zoom: number) => {
     const nextScale = String(resolveDeviceNodeReadabilityScale(zoom));
@@ -299,7 +364,10 @@ export default function Canvas({
     ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => {
       setSelectedNodeCount(selectedNodes.length);
       if (selectedNodes.length > 1 && editMode) {
-        setPanelContent({ type: 'bulkEdit', data: { deviceIds: selectedNodes.map((n) => n.id) } });
+        setPanelContent({
+          type: 'bulkEdit',
+          data: { deviceIds: selectedNodes.map((n) => n.id) },
+        });
       }
     },
     [editMode, setPanelContent],
@@ -353,8 +421,10 @@ export default function Canvas({
     devices,
     setDevices,
     topologyLinks,
+    topologyAreas = [],
     loading,
     error,
+    renderedMapKey,
     loadTopology,
     runtimeSummary,
     grafanaUrlRef,
@@ -365,6 +435,8 @@ export default function Canvas({
     retryTopologyRefresh,
     updateNodePosition,
   } = useCanvasData({
+    mapId,
+    mapName,
     snapshot,
     alerts,
     reconnecting,
@@ -379,13 +451,49 @@ export default function Canvas({
     setEdges,
     onDevicesChange,
     onLinksChange,
+    onTopologyAreasChange,
   });
+
+  useEffect(() => {
+    onTopologyLoadingChange?.(loading);
+  }, [loading, onTopologyLoadingChange]);
+
+  useEffect(() => () => onTopologyLoadingChange?.(false), [onTopologyLoadingChange]);
+
+  useEffect(() => {
+    if (topologyRefreshRevision === undefined) {
+      return;
+    }
+    if (previousTopologyRefreshRevisionRef.current === topologyRefreshRevision) {
+      return;
+    }
+
+    previousTopologyRefreshRevisionRef.current = topologyRefreshRevision;
+    void loadTopology(true);
+  }, [loadTopology, topologyRefreshRevision]);
+
+  const handleRemoveDeviceFromMap = useCallback(
+    async (deviceId: string) => {
+      if (!mapId) {
+        return;
+      }
+      await removeDeviceFromCanvasMap(mapId, deviceId);
+      setPanelContent(null);
+      await loadTopology(true);
+    },
+    [loadTopology, mapId, setPanelContent],
+  );
+
+  const effectiveAreaId = selectedAreaId;
+  const selectedTopologyMapKey = mapId === null ? 'default:' : `map:${mapId}`;
+  const nodesInitialized = useNodesInitialized();
+  const flowViewportReady = useStore((state) => state.width > 0 && state.height > 0);
 
   // Area filtering: derive filtered devices/links and ghost devices
   const { filteredDevices, filteredLinks, ghostDevices } = useAreaFilteredTopology(
     devices,
     topologyLinks,
-    selectedAreaId,
+    effectiveAreaId,
   );
   const runtimeState = useMemo(
     () =>
@@ -402,21 +510,15 @@ export default function Canvas({
   // Build a lookup for area colors (adapted for current theme)
   const areaColorMap = useMemo(() => {
     const map = new Map<string, string>();
-    if (areas) {
-      for (const area of areas) {
-        map.set(area.id, adaptAreaColor(area.color, resolvedTheme));
-      }
+    for (const area of topologyAreas) {
+      map.set(area.id, adaptAreaColor(area.color, resolvedTheme));
     }
     return map;
-  }, [areas, resolvedTheme]);
+  }, [topologyAreas, resolvedTheme]);
 
-  // Inject areaColors into node data based on device.area_ids
+  // Inject map-local visual colors and area colors into node data.
   const nodesWithAreaColor = useMemo(() => {
     const previousCache = areaColorNodeCacheRef.current;
-    if (areaColorMap.size === 0) {
-      previousCache.clear();
-      return nodes;
-    }
 
     const nextCache = new Map<
       string,
@@ -427,7 +529,11 @@ export default function Canvas({
         .map((id) => areaColorMap.get(id))
         .filter((c): c is string => !!c);
       const newColors = colors.length > 0 ? colors : undefined;
-      const colorSignature = (newColors ?? []).join('\u0000');
+      const visualColor =
+        n.data.device.device_type === 'virtual'
+          ? (n.data.device.map_visual_color ?? undefined)
+          : undefined;
+      const colorSignature = `${visualColor ?? ''}\u0001${(newColors ?? []).join('\u0000')}`;
       const cached = previousCache.get(n.id);
       if (cached?.source === n && cached.colorSignature === colorSignature) {
         nextCache.set(n.id, cached);
@@ -435,10 +541,12 @@ export default function Canvas({
       }
 
       const prev = n.data.areaColors;
+      const colorsEqual =
+        prev?.length === newColors?.length && (prev ?? []).every((c, i) => c === newColors?.[i]);
       const node =
-        prev?.length === newColors?.length && (prev ?? []).every((c, i) => c === newColors?.[i])
+        colorsEqual && n.data.visualColor === visualColor
           ? n
-          : { ...n, data: { ...n.data, areaColors: newColors } };
+          : { ...n, data: { ...n.data, areaColors: newColors, visualColor } };
       nextCache.set(n.id, { source: n, colorSignature, node });
       return node;
     });
@@ -478,7 +586,7 @@ export default function Canvas({
   );
   const handleNodesChange = useCallback(
     (changes: NodeChange<DeviceNode>[]) => {
-      if (!selectedAreaId || ghostDeviceIds.size === 0) {
+      if (!effectiveAreaId || ghostDeviceIds.size === 0) {
         onNodesChange(changes);
         return;
       }
@@ -507,12 +615,12 @@ export default function Canvas({
         onNodesChange(canonicalChanges);
       }
     },
-    [ghostDeviceIds, onNodesChange, selectedAreaId],
+    [effectiveAreaId, ghostDeviceIds, onNodesChange],
   );
 
   // Build display nodes/edges by filtering the full node/edge set and adding ghost nodes
   const displayNodes = useMemo(() => {
-    if (!selectedAreaId) {
+    if (!effectiveAreaId) {
       return nodesWithAreaColor;
     }
 
@@ -540,7 +648,10 @@ export default function Canvas({
       const basePos =
         existingNode?.position ??
         (connectedRealNode
-          ? { x: connectedRealNode.position.x + 200, y: connectedRealNode.position.y }
+          ? {
+              x: connectedRealNode.position.x + 200,
+              y: connectedRealNode.position.y,
+            }
           : { x: 0, y: 0 });
       const runtimeDevice = runtimeState.devicesById.get(device.id);
 
@@ -573,7 +684,7 @@ export default function Canvas({
 
     return [...areaNodes, ...ghostNodes];
   }, [
-    selectedAreaId,
+    effectiveAreaId,
     nodesWithAreaColor,
     filteredDevices,
     filteredLinks,
@@ -585,14 +696,14 @@ export default function Canvas({
 
   const displayEdges = useMemo(() => {
     const selectedIds = selectedNodeIdsFromSignature(selectedRealNodeIdSignature);
-    if (!selectedAreaId) {
+    if (!effectiveAreaId) {
       return applyEdgeEmphasis(edgesWithAreaColor, selectedIds);
     }
     // Filter edges to only include filtered links
     const filteredLinkIds = new Set(filteredLinks.map((l) => l.id));
     const areaEdges = edgesWithAreaColor.filter((e) => filteredLinkIds.has(e.id));
     return applyEdgeEmphasis(areaEdges, selectedIds);
-  }, [selectedAreaId, edgesWithAreaColor, filteredLinks, selectedRealNodeIdSignature]);
+  }, [effectiveAreaId, edgesWithAreaColor, filteredLinks, selectedRealNodeIdSignature]);
 
   const renderEdges = useMemo(
     () => setEdgeInteractionMode(displayEdges, canvasInteractionActive ? 'interactive' : 'idle'),
@@ -608,14 +719,14 @@ export default function Canvas({
         displayedNodeCount: displayNodes.length,
         displayedEdgeCount: displayEdges.length,
         ghostNodeCount: ghostDevices.length,
-        selectedAreaId,
+        selectedAreaId: effectiveAreaId,
         selectedNodeCount,
         selectedEdgeCount,
       },
     });
 
     const projectionSignature = [
-      selectedAreaId ?? 'global',
+      effectiveAreaId ?? 'global',
       nodes.length,
       edges.length,
       displayNodes.length,
@@ -634,7 +745,7 @@ export default function Canvas({
       event: 'projection.area.changed',
       message: 'Canvas area projection changed',
       metadata: {
-        selectedAreaId,
+        selectedAreaId: effectiveAreaId,
         canonicalNodeCount: nodes.length,
         canonicalEdgeCount: edges.length,
         displayedNodeCount: displayNodes.length,
@@ -643,7 +754,7 @@ export default function Canvas({
       },
     });
   }, [
-    selectedAreaId,
+    effectiveAreaId,
     nodes.length,
     edges.length,
     displayNodes.length,
@@ -653,12 +764,22 @@ export default function Canvas({
     selectedNodeCount,
   ]);
 
-  // fitView when selectedAreaId changes to re-center on filtered subset
+  // fitView when effective area changes to re-center on filtered subset
   const prevAreaRef = useRef<string | null>(null);
+  const canFitVisibleTopology =
+    visible &&
+    flowViewportReady &&
+    nodesInitialized &&
+    displayNodes.length > 0 &&
+    renderedMapKey === selectedTopologyMapKey;
   useEffect(() => {
-    if (prevAreaRef.current !== selectedAreaId && displayNodes.length > 0) {
-      prevAreaRef.current = selectedAreaId;
-      window.requestAnimationFrame(() => {
+    if (canFitVisibleTopology && prevAreaRef.current !== effectiveAreaId) {
+      let canceled = false;
+      const frameId = window.requestAnimationFrame(() => {
+        if (canceled) {
+          return;
+        }
+        prevAreaRef.current = effectiveAreaId;
         reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
         recordCanvasDiagnosticEvent({
           level: 'debug',
@@ -666,13 +787,61 @@ export default function Canvas({
           event: 'reactflow.fit_view',
           message: 'React Flow fitView requested after area change',
           metadata: {
-            selectedAreaId,
+            selectedAreaId: effectiveAreaId,
             displayedNodeCount: displayNodes.length,
           },
         });
       });
+      return () => {
+        canceled = true;
+        window.cancelAnimationFrame(frameId);
+      };
     }
-  }, [selectedAreaId, displayNodes.length, reactFlow]);
+    return undefined;
+  }, [canFitVisibleTopology, effectiveAreaId, displayNodes.length, reactFlow]);
+
+  useEffect(() => {
+    if (fitViewRevision === undefined) {
+      return;
+    }
+    if (previousFitViewRevisionRef.current === fitViewRevision) {
+      return;
+    }
+    if (!canFitVisibleTopology) {
+      return;
+    }
+
+    let canceled = false;
+    const frameId = window.requestAnimationFrame(() => {
+      if (canceled) {
+        return;
+      }
+      previousFitViewRevisionRef.current = fitViewRevision;
+      reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+      recordCanvasDiagnosticEvent({
+        level: 'debug',
+        source: 'reactflow',
+        event: 'reactflow.fit_view',
+        message: 'React Flow fitView requested after canvas context activation',
+        metadata: {
+          selectedAreaId: effectiveAreaId,
+          mapId: mapId ?? 'default',
+          displayedNodeCount: displayNodes.length,
+        },
+      });
+    });
+    return () => {
+      canceled = true;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    canFitVisibleTopology,
+    displayNodes.length,
+    effectiveAreaId,
+    fitViewRevision,
+    mapId,
+    reactFlow,
+  ]);
 
   useEffect(() => {
     setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, editMode } })));
@@ -714,7 +883,7 @@ export default function Canvas({
   function focusOnDevice(deviceID: string) {
     // If the target device is not in the current area view, switch to its area first
     const device = devices.find((d) => d.id === deviceID);
-    if (device && selectedAreaId && !device.area_ids?.includes(selectedAreaId)) {
+    if (device && effectiveAreaId && !device.area_ids?.includes(effectiveAreaId)) {
       // Switch to the device's area (or global if unassigned)
       onAreaSelect?.(device.area_ids?.[0] ?? null);
       // Defer the focus/highlight until after the area switch triggers a re-render
@@ -727,7 +896,10 @@ export default function Canvas({
             duration: 500,
           });
           setNodes((cur) =>
-            cur.map((n) => ({ ...n, data: { ...n.data, highlighted: n.id === deviceID } })),
+            cur.map((n) => ({
+              ...n,
+              data: { ...n.data, highlighted: n.id === deviceID },
+            })),
           );
           if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
           highlightTimerRef.current = window.setTimeout(() => {
@@ -749,7 +921,10 @@ export default function Canvas({
       duration: 500,
     });
     setNodes((cur) =>
-      cur.map((n) => ({ ...n, data: { ...n.data, highlighted: n.id === deviceID } })),
+      cur.map((n) => ({
+        ...n,
+        data: { ...n.data, highlighted: n.id === deviceID },
+      })),
     );
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => {
@@ -818,7 +993,6 @@ export default function Canvas({
         editMode={editMode}
         alertCount={runtimeSummary.alertCount}
       />
-
       {deviceMenu &&
         (() => {
           const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
@@ -846,7 +1020,11 @@ export default function Canvas({
               setDeviceMenu(null);
             },
             onConfigure: () => {
-              if (d) setPanelContent({ type: 'deviceConfig', data: { deviceId: d.id } });
+              if (d)
+                setPanelContent({
+                  type: 'deviceConfig',
+                  data: { deviceId: d.id },
+                });
               setDeviceMenu(null);
             },
           });
@@ -875,7 +1053,11 @@ export default function Canvas({
                   label: 'Per-Interface Stats',
                   icon: 'devices',
                   onClick: () => {
-                    if (ml) setPanelContent({ type: 'interfaceStats', data: { linkId: ml.id } });
+                    if (ml)
+                      setPanelContent({
+                        type: 'interfaceStats',
+                        data: { linkId: ml.id },
+                      });
                     setEdgeMenu(null);
                   },
                 },
@@ -892,7 +1074,11 @@ export default function Canvas({
                   icon: 'search',
                   onClick: () => {
                     const el = edges.find((e) => e.id === edgeMenu.edgeID)?.data?.link;
-                    if (el) setPanelContent({ type: 'link-details', data: { link: el } });
+                    if (el)
+                      setPanelContent({
+                        type: 'link-details',
+                        data: { link: el },
+                      });
                     setEdgeMenu(null);
                   },
                 },
@@ -913,13 +1099,16 @@ export default function Canvas({
           alerts={alerts}
           devices={devices}
           topologyLinks={topologyLinks}
+          topologyAreas={topologyAreas}
           loadTopology={loadTopology}
           setDevices={setDevices}
           setNodes={setNodes}
           reactFlow={reactFlow}
           runtimeState={runtimeState}
+          mapId={mapId}
+          mapName={mapName}
           editMode={editMode}
-          onAreasChange={onAreasChange}
+          onRemoveDeviceFromMap={handleRemoveDeviceFromMap}
           onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {
             setDeviceWinboxAvailability(deviceId, hasWinboxProfile);
@@ -937,6 +1126,7 @@ export default function Canvas({
         selectedNodeCount={selectedNodeCount}
         prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
         onBulkEditClick={() => {
+          if (!editMode) return;
           const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
           if (selectedNodes.length > 1) {
             setPanelContent({
@@ -967,7 +1157,10 @@ export default function Canvas({
           void reactFlow.zoomOut({ duration: 200 });
         }}
         onFitView={() => {
-          void reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+          void reactFlow.fitView({
+            padding: topologyFitViewPadding,
+            duration: 280,
+          });
           recordCanvasDiagnosticEvent({
             level: 'debug',
             source: 'reactflow',
@@ -984,7 +1177,10 @@ export default function Canvas({
         }}
         onForceRefresh={() => window.__THEIA_CANVAS_FORCE_REFRESH__?.()}
         onFitView={() => {
-          void reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+          void reactFlow.fitView({
+            padding: topologyFitViewPadding,
+            duration: 280,
+          });
           recordCanvasDiagnosticEvent({
             level: 'debug',
             source: 'reactflow',
@@ -1027,7 +1223,11 @@ export default function Canvas({
             });
           } else {
             const cd = devices.find((d) => d.id === node.id);
-            if (cd) setPanelContent({ type: 'deviceDetails', data: { deviceId: cd.id } });
+            if (cd)
+              setPanelContent({
+                type: 'deviceDetails',
+                data: { deviceId: cd.id },
+              });
           }
         }}
         onEdgeClick={(_ev, edge) => {

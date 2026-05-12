@@ -13,6 +13,7 @@ interface DeviceRowProps {
   onBackup: () => void;
   onBackupHistory: () => void;
   onViewConfig: () => void;
+  onDeletePermanently?: () => void;
 }
 
 export function DeviceRow({
@@ -23,6 +24,7 @@ export function DeviceRow({
   onBackup,
   onBackupHistory,
   onViewConfig,
+  onDeletePermanently,
 }: DeviceRowProps) {
   const deviceAreas = row.areaIds.map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
 
@@ -86,14 +88,24 @@ export function DeviceRow({
       </td>
       {/* Actions -- icon buttons per D-08; virtual nodes have no SSH/backup */}
       <td className="px-3 py-2.5">
-        {row.deviceType !== 'virtual' && (
-          <div className="flex items-center justify-end gap-0.5">
-            <IconAction icon="terminal" title="SSH Credentials" onClick={onSSHCredentials} />
-            <IconAction icon="backup" title="Backup Now" onClick={onBackup} />
-            <IconAction icon="history" title="Backup History" onClick={onBackupHistory} />
-            <IconAction icon="description" title="View Config" onClick={onViewConfig} />
-          </div>
-        )}
+        <div className="flex items-center justify-end gap-0.5">
+          {row.deviceType !== 'virtual' && (
+            <>
+              <IconAction icon="terminal" title="SSH Credentials" onClick={onSSHCredentials} />
+              <IconAction icon="backup" title="Backup Now" onClick={onBackup} />
+              <IconAction icon="history" title="Backup History" onClick={onBackupHistory} />
+              <IconAction icon="description" title="View Config" onClick={onViewConfig} />
+            </>
+          )}
+          {onDeletePermanently && (
+            <IconAction
+              icon="delete"
+              title="Delete permanently"
+              onClick={onDeletePermanently}
+              danger
+            />
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -104,11 +116,13 @@ function IconAction({
   title,
   onClick,
   disabled,
+  danger,
 }: {
   icon: string;
   title: string;
   onClick: () => void;
   disabled?: boolean;
+  danger?: boolean;
 }) {
   return (
     <button
@@ -122,7 +136,9 @@ function IconAction({
       className={`p-1.5 rounded-md transition-colors ${
         disabled
           ? 'text-on-bg-muted cursor-not-allowed opacity-40'
-          : 'text-on-bg-secondary hover:text-on-bg hover:bg-surface-high'
+          : danger
+            ? 'text-status-down hover:bg-status-down/10'
+            : 'text-on-bg-secondary hover:text-on-bg hover:bg-surface-high'
       }`}
     >
       <MaterialIcon name={icon} size={16} />

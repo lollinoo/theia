@@ -179,7 +179,9 @@ describe('DeviceCard', () => {
       ],
     });
 
-    const selfLinkButton = screen.getByRole('button', { name: /view details for self link/i });
+    const selfLinkButton = screen.getByRole('button', {
+      name: /view details for self link/i,
+    });
     expect(selfLinkButton).toHaveTextContent('Self');
     expect(selfLinkButton).toHaveTextContent('ether1');
     expect(selfLinkButton).not.toHaveClass('shadow-floating');
@@ -217,6 +219,33 @@ describe('DeviceCard', () => {
         last_polled_at: '2026-04-13T12:00:30Z',
       }),
     });
+
+    expect(getDeviceRenderSignature(next)).toEqual(getDeviceRenderSignature(previous));
+  });
+
+  it('keeps render signature stable for React Flow geometry that the card does not render', () => {
+    const previous = {
+      ...makeNodeProps({
+        device: mockDevice(),
+        pinned: false,
+        metrics: mockMetrics(),
+      }),
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      width: 268,
+      height: 142,
+    };
+    const next = {
+      ...makeNodeProps({
+        device: mockDevice(),
+        pinned: false,
+        metrics: mockMetrics(),
+      }),
+      positionAbsoluteX: 640,
+      positionAbsoluteY: 480,
+      width: 280,
+      height: 150,
+    };
 
     expect(getDeviceRenderSignature(next)).toEqual(getDeviceRenderSignature(previous));
   });
@@ -381,6 +410,118 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/1 area/i)).toBeNull();
   });
 
+  it('tints physical node body from the area color while preserving the area bar', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: ['area-1'] }),
+      areaColors: ['#2563eb'],
+      metrics: mockMetrics(),
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const areaAccent = screen.getByTestId('physical-node-area-accent');
+
+    expect(body.style.backgroundColor).toBe('rgba(37, 99, 235, 0.1)');
+    expect(body.style.background).not.toContain('linear-gradient');
+    expect(body).not.toHaveClass('topology-node-status-pulse');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+  });
+
+  it('tints physical node body with all assigned area colors', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: ['area-1', 'area-2'] }),
+      areaColors: ['#2563eb', '#ff5722'],
+      metrics: mockMetrics(),
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const areaAccent = screen.getByTestId('physical-node-area-accent');
+
+    expect(body.style.background).toContain('linear-gradient');
+    expect(body.style.background).toContain('rgba(37, 99, 235, 0.1)');
+    expect(body.style.background).toContain('rgba(255, 87, 34, 0.1)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+    expect(areaAccent.style.background).toContain('rgb(255, 87, 34)');
+  });
+
+  it('uses down as the primary tone for physical node body while preserving the area bar', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: ['area-1'], status: 'down' }),
+      areaColors: ['#2563eb'],
+      metrics: mockMetrics({
+        health: 'critical',
+        operational_status: 'down',
+        primary_health: 'unreachable',
+      }),
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const areaAccent = screen.getByTestId('physical-node-area-accent');
+    const statusBadge = screen.getByTestId('physical-node-status-badge');
+
+    expect(screen.getByText('Down')).toBeInTheDocument();
+    expect(body).toHaveClass('topology-node-status-pulse');
+    expect(body.getAttribute('style')).toContain(
+      '--theia-node-status-bg: var(--nt-node-down-card-bg)',
+    );
+    expect(body.getAttribute('style')).toContain(
+      '--theia-node-status-pulse-bg: var(--nt-node-down-card-pulse-bg)',
+    );
+    expect(body.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+    expect(statusBadge.style.borderColor).toBe('var(--nt-node-down-badge-border)');
+    expect(statusBadge.style.backgroundColor).toBe('var(--nt-node-down-badge-bg)');
+  });
+
+  it('uses probing as the primary tone for physical node body', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: ['area-1'], status: 'probing' }),
+      areaColors: ['#2563eb'],
+      metrics: mockMetrics({
+        health: 'warning',
+        operational_status: 'probing',
+      }),
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const statusBadge = screen.getByTestId('physical-node-status-badge');
+
+    expect(screen.getByText('Probing')).toBeInTheDocument();
+    expect(body).toHaveClass('topology-node-status-pulse');
+    expect(body.getAttribute('style')).toContain(
+      '--theia-node-status-bg: var(--nt-node-probing-card-bg)',
+    );
+    expect(body.getAttribute('style')).toContain(
+      '--theia-node-status-pulse-bg: var(--nt-node-probing-card-pulse-bg)',
+    );
+    expect(body.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(statusBadge.style.borderColor).toBe('var(--nt-node-probing-border)');
+    expect(statusBadge.style.backgroundColor).toBe('var(--nt-node-probing-badge-bg)');
+  });
+
+  it('renders newly added probing physical nodes as awaiting first poll before metrics arrive', () => {
+    renderDeviceCard({
+      device: mockDevice({ area_ids: [], status: 'probing', ip: '1.1.1.2' }),
+      areaColors: [],
+      metrics: null,
+    });
+
+    const body = screen.getByTestId('physical-node-body');
+    const areaAccent = screen.getByTestId('physical-node-area-accent');
+
+    expect(screen.getByText('Probing')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting first poll')).toBeInTheDocument();
+    expect(screen.queryByText('Unmonitored')).toBeNull();
+    expect(screen.getByText('CPU')).toBeInTheDocument();
+    expect(screen.getByText('MEM')).toBeInTheDocument();
+    expect(screen.getByText('Uptime')).toBeInTheDocument();
+    expect(body).toHaveClass('flex-1', 'topology-node-status-pulse');
+    expect(body.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
+    expect(areaAccent.style.background).toBe('var(--nt-node-probing-border)');
+  });
+
   it('uses selected token shadow when highlighted', () => {
     const { container } = renderDeviceCard({ highlighted: true });
     expect(container.innerHTML).toContain('var(--color-node-selected)');
@@ -442,8 +583,8 @@ describe('DeviceCard', () => {
     expect(downCard.container.innerHTML).toContain('topology-node-down-pulse');
   });
 
-  it('renders unmonitored virtual nodes with neutral semantics instead of failure UI', () => {
-    renderDeviceCard({
+  it('renders unmonitored virtual nodes as neutral capsule endpoints', () => {
+    const { container } = renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
         ip: '',
@@ -453,6 +594,7 @@ describe('DeviceCard', () => {
       }),
       isVirtual: true,
       subtype: 'cloud',
+      areaColors: ['#2563eb'],
       metrics: mockMetrics({
         health: 'critical',
         last_polled_at: '2026-04-13T11:59:20Z',
@@ -460,6 +602,33 @@ describe('DeviceCard', () => {
       }),
     });
 
+    const card = screen.getByTestId('device-node-card');
+    const capsule = screen.getByTestId('virtual-node-capsule');
+
+    expect(card).toHaveClass('rounded-[24px]');
+    expect(card.className).toContain('min-w-[232px]');
+    expect(card.className).toContain('min-h-[92px]');
+    expect(card.className).toContain('max-w-[310px]');
+    expect(capsule).toHaveClass('rounded-[23px]', 'gap-3', 'py-2.5', 'pl-3.5', 'pr-3.5');
+    expect(screen.getByTestId('virtual-node-area-accent')).toHaveClass(
+      'inset-y-0',
+      'left-0',
+      'w-1',
+      'rounded-l-[23px]',
+    );
+    expect(screen.getByTestId('virtual-node-area-accent').className).not.toContain('inset-y-3');
+    expect(screen.getByTestId('virtual-node-area-accent').className).not.toContain('w-[22px]');
+    const iconShell = screen.getByTestId('virtual-node-icon-shell');
+    const typeLabel = screen.getByTestId('virtual-node-type-label');
+
+    expect(iconShell).toHaveClass('h-[50px]', 'w-[50px]');
+    expect(iconShell.style.color).toBe('rgb(89, 136, 240)');
+    expect(iconShell.style.borderColor).toBe('rgba(37, 99, 235, 0.32)');
+    expect(iconShell.style.backgroundColor).toBe('rgba(37, 99, 235, 0.14)');
+    expect(typeLabel.style.color).toBe('rgb(89, 136, 240)');
+    expect(capsule.style.backgroundColor).toBe('rgba(37, 99, 235, 0.1)');
+    expect(capsule.style.background).not.toContain('linear-gradient');
+    expect(capsule.style.background).not.toContain('transparent');
     expect(screen.getByText('AWS Cloud')).toBeInTheDocument();
     expect(screen.getByText('Cloud')).toBeInTheDocument();
     expect(screen.queryByText('Unmonitored')).toBeNull();
@@ -473,7 +642,56 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
-  it('renders monitorable virtual nodes with top-right status badge, IP chip, and footer meta', () => {
+  it('uses custom virtual visual color before the area color while preserving the area bar', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        sys_name: '',
+        tags: { display_name: 'Custom Cloud', virtual_subtype: 'cloud' },
+      }),
+      isVirtual: true,
+      subtype: 'cloud',
+      areaColors: ['#2563eb'],
+      visualColor: '#ff3366',
+    });
+
+    const capsule = screen.getByTestId('virtual-node-capsule');
+    const iconShell = screen.getByTestId('virtual-node-icon-shell');
+    const areaAccent = screen.getByTestId('virtual-node-area-accent');
+
+    expect(capsule.style.backgroundColor).toBe('rgba(255, 51, 102, 0.1)');
+    expect(iconShell.style.borderColor).toBe('rgba(255, 51, 102, 0.32)');
+    expect(iconShell.style.backgroundColor).toBe('rgba(255, 51, 102, 0.14)');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+  });
+
+  it('tints virtual capsules with all assigned area colors when no visual color is set', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        sys_name: '',
+        tags: { display_name: 'Shared Cloud', virtual_subtype: 'cloud' },
+        area_ids: ['area-1', 'area-2'],
+      }),
+      isVirtual: true,
+      subtype: 'cloud',
+      areaColors: ['#2563eb', '#ff5722'],
+    });
+
+    const capsule = screen.getByTestId('virtual-node-capsule');
+    const areaAccent = screen.getByTestId('virtual-node-area-accent');
+
+    expect(capsule.style.background).toContain('linear-gradient');
+    expect(capsule.style.background).toContain('rgba(37, 99, 235, 0.1)');
+    expect(capsule.style.background).toContain('rgba(255, 87, 34, 0.1)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+    expect(areaAccent.style.background).toContain('rgb(255, 87, 34)');
+  });
+
+  it('renders monitorable virtual nodes as capsule endpoints with status and IP', () => {
     renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
@@ -490,6 +708,14 @@ describe('DeviceCard', () => {
       }),
     });
 
+    expect(screen.getByTestId('virtual-node-capsule')).toHaveClass(
+      'rounded-[23px]',
+      'gap-3',
+      'py-3',
+      'pl-3.5',
+      'pr-4',
+    );
+    expect(screen.getByTestId('virtual-node-status-badge')).toBeInTheDocument();
     expect(screen.queryByText('Virtual node')).toBeNull();
     expect(screen.queryByText('Status')).toBeNull();
     expect(screen.getAllByText('Up')).toHaveLength(1);
@@ -500,6 +726,115 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('MEM')).toBeNull();
     expect(screen.queryByText('UP')).toBeNull();
     expect(screen.queryByText('TEMP')).toBeNull();
+  });
+
+  it('keeps monitorable virtual status and runtime meta inside the capsule padding', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '10.16.2.1',
+        status: 'down',
+        sys_name: '',
+        tags: { display_name: 'Gateway Community', virtual_subtype: 'generic' },
+      }),
+      isVirtual: true,
+      areaColors: ['#2563eb'],
+      metrics: mockMetrics({
+        health: 'critical',
+        primary_health: 'snmp_degraded',
+        snmp_reachable: 'false',
+        expected_poll_interval_seconds: 60,
+      }),
+    });
+
+    const capsule = screen.getByTestId('virtual-node-capsule');
+    const iconShell = screen.getByTestId('virtual-node-icon-shell');
+    const typeLabel = screen.getByTestId('virtual-node-type-label');
+
+    expect(capsule).toHaveClass('pr-4', 'py-3', 'topology-virtual-node-status-pulse');
+    expect(capsule.getAttribute('style')).toContain(
+      '--theia-virtual-node-status-bg: var(--nt-node-down-card-bg)',
+    );
+    expect(capsule.getAttribute('style')).toContain(
+      '--theia-virtual-node-status-pulse-bg: var(--nt-node-down-card-pulse-bg)',
+    );
+    expect(capsule.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(iconShell.style.color).toBe('var(--nt-status-down)');
+    expect(iconShell.style.borderColor).toBe('var(--nt-node-down-border)');
+    expect(iconShell.style.backgroundColor).toBe('var(--nt-node-down-badge-bg)');
+    expect(typeLabel.style.color).toBe('var(--nt-status-down)');
+    expect(screen.getByTestId('virtual-node-status-badge')).toHaveClass('max-w-[82px]', 'px-2');
+    expect(screen.getByTestId('virtual-node-runtime-meta')).toHaveClass('overflow-hidden');
+    expect(screen.getByTestId('virtual-node-runtime-meta').className).not.toContain('pr-1');
+    expect(screen.getByTestId('virtual-node-polling-meta')).toHaveClass('shrink-0', 'text-right');
+    expect(screen.getByText('Polling every 1m')).toBeInTheDocument();
+  });
+
+  it('uses probing as the primary tone for monitorable virtual nodes', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '10.16.2.2',
+        status: 'probing',
+        sys_name: '',
+        tags: { display_name: 'Gateway Probe', virtual_subtype: 'generic' },
+      }),
+      isVirtual: true,
+      areaColors: ['#2563eb'],
+      metrics: mockMetrics({
+        health: 'warning',
+        operational_status: 'probing',
+        expected_poll_interval_seconds: 60,
+      }),
+    });
+
+    const capsule = screen.getByTestId('virtual-node-capsule');
+    const iconShell = screen.getByTestId('virtual-node-icon-shell');
+    const typeLabel = screen.getByTestId('virtual-node-type-label');
+
+    expect(screen.getByText('Probing')).toBeInTheDocument();
+    expect(capsule).toHaveClass('topology-virtual-node-status-pulse');
+    expect(capsule.getAttribute('style')).toContain(
+      '--theia-virtual-node-status-bg: var(--nt-node-probing-card-bg)',
+    );
+    expect(capsule.getAttribute('style')).toContain(
+      '--theia-virtual-node-status-pulse-bg: var(--nt-node-probing-card-pulse-bg)',
+    );
+    expect(capsule.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(iconShell.style.color).toBe('var(--nt-status-probing)');
+    expect(iconShell.style.borderColor).toBe('var(--nt-node-probing-border)');
+    expect(iconShell.style.backgroundColor).toBe('var(--nt-node-probing-badge-bg)');
+    expect(typeLabel.style.color).toBe('var(--nt-status-probing)');
+  });
+
+  it('keeps down status primary over custom virtual visual color', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '10.16.2.3',
+        status: 'down',
+        sys_name: '',
+        tags: { display_name: 'Gateway Down', virtual_subtype: 'generic' },
+      }),
+      isVirtual: true,
+      areaColors: ['#2563eb'],
+      visualColor: '#ff3366',
+      metrics: mockMetrics({
+        health: 'critical',
+        operational_status: 'down',
+        primary_health: 'unreachable',
+      }),
+    });
+
+    const capsule = screen.getByTestId('virtual-node-capsule');
+    const iconShell = screen.getByTestId('virtual-node-icon-shell');
+
+    expect(screen.getByText('Down')).toBeInTheDocument();
+    expect(capsule.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(255, 51, 102, 0.1)');
+    expect(iconShell.style.color).toBe('var(--nt-status-down)');
   });
 
   it('renders monitorable virtual nodes as up even when health is absent', () => {
@@ -524,7 +859,7 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('Unknown')).toBeNull();
   });
 
-  it('enforces a 200x160 minimum size and 285x235 maximum size for virtual nodes', () => {
+  it('keeps no-IP virtual nodes compact and gives IP virtual nodes more room', () => {
     const unmonitored = renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
@@ -534,10 +869,10 @@ describe('DeviceCard', () => {
     });
 
     const unmonitoredCard = unmonitored.container.querySelector('.group');
-    expect(unmonitoredCard?.className).toContain('min-w-[200px]');
-    expect(unmonitoredCard?.className).toContain('min-h-[160px]');
-    expect(unmonitoredCard?.className).toContain('max-w-[285px]');
-    expect(unmonitoredCard?.className).toContain('max-h-[235px]');
+    expect(unmonitoredCard?.className).toContain('min-w-[232px]');
+    expect(unmonitoredCard?.className).toContain('min-h-[92px]');
+    expect(unmonitoredCard?.className).toContain('max-w-[310px]');
+    expect(unmonitoredCard?.className).not.toContain('max-h-[235px]');
 
     unmonitored.unmount();
 
@@ -550,10 +885,10 @@ describe('DeviceCard', () => {
     });
 
     const monitorableCard = monitorable.container.querySelector('.group');
-    expect(monitorableCard?.className).toContain('min-w-[200px]');
-    expect(monitorableCard?.className).toContain('min-h-[160px]');
-    expect(monitorableCard?.className).toContain('max-w-[285px]');
-    expect(monitorableCard?.className).toContain('max-h-[235px]');
+    expect(monitorableCard?.className).toContain('min-w-[292px]');
+    expect(monitorableCard?.className).toContain('min-h-[118px]');
+    expect(monitorableCard?.className).toContain('max-w-[390px]');
+    expect(monitorableCard?.className).not.toContain('max-h-[235px]');
   });
 
   it('truncates long virtual node text inside the size-capped card', () => {

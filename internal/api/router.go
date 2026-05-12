@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/service"
@@ -19,6 +20,8 @@ func NewRouter(
 	deviceService *service.DeviceService,
 	linkRepo domain.LinkRepository,
 	positionRepo domain.PositionRepository,
+	canvasMapRepo domain.CanvasMapRepository,
+	canvasMapPositionRepo domain.CanvasMapPositionRepository,
 	settingsRepo domain.SettingsRepository,
 	snmpProfileRepo domain.SNMPProfileRepository,
 	credentialProfileRepo *sqlite.CredentialProfileRepo,
@@ -35,15 +38,30 @@ func NewRouter(
 ) http.Handler {
 	mux := http.NewServeMux()
 
-	deviceHandler := NewDeviceHandler(deviceService, credentialProfileRepo, vendorRegistry)
+	deviceHandler := NewDeviceHandler(
+		deviceService,
+		credentialProfileRepo,
+		vendorRegistry,
+		WithPrimaryCanvasMapMembership(canvasMapRepo, areaRepo),
+	)
 	linkHandler := NewLinkHandler(linkRepo, deviceService)
-	positionHandler := NewPositionHandler(positionRepo)
+	positionHandler := NewPositionHandler(positionRepo, canvasMapRepo, canvasMapPositionRepo)
 	canvasTopologyHandler := NewCanvasTopologyHandler(
 		deviceService,
 		linkRepo,
 		positionRepo,
 		areaRepo,
 		vendorRegistry,
+		runtimeSnapshotFunc,
+	)
+	canvasMapHandler := NewCanvasMapHandler(
+		canvasMapRepo,
+		canvasMapPositionRepo,
+		positionRepo,
+		canvasTopologyHandler,
+		deviceService,
+		linkRepo,
+		areaRepo,
 		runtimeSnapshotFunc,
 	)
 	settingsHandler := NewSettingsHandler(settingsRepo)
@@ -75,6 +93,113 @@ func NewRouter(
 		canvasTopologyHandler.HandleGetCanvas(w, r)
 	})
 
+	mux.HandleFunc("/api/v1/canvas/maps", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			canvasMapHandler.HandleList(w, r)
+		case http.MethodPost:
+			canvasMapHandler.HandleCreate(w, r)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	mux.HandleFunc("/api/v1/canvas/maps/", func(w http.ResponseWriter, r *http.Request) {
+		_, action, ok := parseCanvasMapRoute(r.URL.Path)
+		if !ok {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+
+		switch action {
+		case "":
+			switch r.Method {
+			case http.MethodGet:
+				canvasMapHandler.HandleGet(w, r)
+			case http.MethodPatch:
+				canvasMapHandler.HandlePatch(w, r)
+			case http.MethodDelete:
+				canvasMapHandler.HandleDelete(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		case "duplicate":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleDuplicate(w, r)
+		case "primary":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleSetPrimary(w, r)
+		case "topology":
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleTopology(w, r)
+		case "bootstrap":
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleBootstrap(w, r)
+		case "positions":
+			switch r.Method {
+			case http.MethodGet:
+				canvasMapHandler.HandleListPositions(w, r)
+			case http.MethodPut:
+				canvasMapHandler.HandleSavePositions(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		case "device-areas":
+			if r.Method != http.MethodPut {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			canvasMapHandler.HandleUpdateDeviceAreas(w, r)
+		case "areas":
+			switch r.Method {
+			case http.MethodGet:
+				canvasMapHandler.HandleListAreas(w, r)
+			case http.MethodPost:
+				canvasMapHandler.HandleCreateArea(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		default:
+			if strings.HasPrefix(action, "areas/") {
+				switch r.Method {
+				case http.MethodPut:
+					canvasMapHandler.HandleUpdateArea(w, r)
+				case http.MethodDelete:
+					canvasMapHandler.HandleDeleteArea(w, r)
+				default:
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				}
+				return
+			}
+			if strings.HasPrefix(action, "devices/") {
+				switch r.Method {
+				case http.MethodDelete:
+					canvasMapHandler.HandleRemoveDevice(w, r)
+				case http.MethodPatch:
+					canvasMapHandler.HandlePatchDevice(w, r)
+				case http.MethodPost:
+					canvasMapHandler.HandleAddDevice(w, r)
+				default:
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				}
+				return
+			}
+			writeError(w, http.StatusNotFound, "not found")
+		}
+	})
+
 	// Device routes
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -95,7 +220,15 @@ func NewRouter(
 		deviceHandler.HandleBatchAdd(w, r)
 	})
 
-	// Device by ID routes (must be registered after /devices/batch to avoid conflicts)
+	mux.HandleFunc("/api/v1/devices/orphans", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		deviceHandler.HandleListOrphans(w, r)
+	})
+
+	// Device by ID routes (must be registered after /devices/batch and /devices/orphans to avoid conflicts)
 	mux.HandleFunc("/api/v1/devices/", func(w http.ResponseWriter, r *http.Request) {
 		// Check if this is an interfaces request
 		if strings.HasSuffix(r.URL.Path, "/interfaces") && r.Method == http.MethodGet {
@@ -540,6 +673,28 @@ func NewRouter(
 
 		handler.ServeHTTP(w, r)
 	})
+}
+
+func parseCanvasMapRoute(path string) (uuid.UUID, string, bool) {
+	const prefix = "/api/v1/canvas/maps/"
+	suffix, ok := strings.CutPrefix(path, prefix)
+	if !ok || suffix == "" {
+		return uuid.Nil, "", false
+	}
+
+	parts := strings.Split(suffix, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return uuid.Nil, "", false
+	}
+	mapID, err := uuid.Parse(parts[0])
+	if err != nil {
+		return uuid.Nil, "", false
+	}
+	action := strings.Join(parts[1:], "/")
+	if strings.Contains(action, "//") {
+		return uuid.Nil, "", false
+	}
+	return mapID, action, true
 }
 
 func isWinboxCredentialsRevealPath(path string) bool {

@@ -12,14 +12,22 @@ vi.mock('../DeviceConfigPanel', () => ({
   DeviceConfigPanel: (props: {
     device: Device;
     readOnly?: boolean;
+    areas?: { id: string; name: string }[];
+    mapContext?: { mapId: string; mapName: string };
     onDeviceUpdated?: (device: Device) => void;
+    onRemoveFromMap?: (deviceId: string) => void;
     onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void;
   }) => (
     <div>
       <div>Config device:{props.device.hostname}</div>
       <div>Device config read-only:{String(props.readOnly)}</div>
+      <div>Device config map:{props.mapContext?.mapName ?? 'none'}</div>
+      <div>Device config areas:{props.areas?.map((area) => area.name).join('|') ?? 'none'}</div>
       <button type="button" onClick={() => props.onWinBoxAvailabilityChange?.(true)}>
         Notify WinBox
+      </button>
+      <button type="button" onClick={() => props.onRemoveFromMap?.(props.device.id)}>
+        Remove mocked map device
       </button>
       <button
         type="button"
@@ -263,6 +271,81 @@ describe('CanvasPanels', () => {
     );
 
     expect(screen.getByText('Device config read-only:false')).toBeInTheDocument();
+  });
+
+  it('passes saved map context and remove callback to device config panels', () => {
+    const device = mockDevice();
+    const onRemoveDeviceFromMap = vi.fn();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+        mapId="map-1"
+        mapName="Backbone"
+        onRemoveDeviceFromMap={onRemoveDeviceFromMap}
+      />,
+    );
+
+    expect(screen.getByText('Device config map:Backbone')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove mocked map device' }));
+
+    expect(onRemoveDeviceFromMap).toHaveBeenCalledWith(device.id);
+  });
+
+  it('passes map-local topology areas to device config panels', () => {
+    const device = mockDevice();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
+        topologyLinks={[]}
+        topologyAreas={[
+          {
+            id: 'map-area-1',
+            name: 'Map Local Area',
+            description: '',
+            color: '#2979FF',
+            device_count: 1,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+        mapId="map-1"
+        mapName="Backbone"
+      />,
+    );
+
+    expect(screen.getByText('Device config areas:Map Local Area')).toBeInTheDocument();
   });
 
   it('clears node metrics immediately when a device config update changes the IP', () => {

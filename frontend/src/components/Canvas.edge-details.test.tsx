@@ -5,6 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../types/api';
 import Canvas from './Canvas';
 
+const defaultCanvasProps = {
+  mapId: null,
+  mapName: 'Default',
+  maps: [],
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
+};
+
 const testState = vi.hoisted(() => ({
   link: {
     id: 'link-1',
@@ -106,6 +114,9 @@ vi.mock('@xyflow/react', async () => {
       setCenter: vi.fn(),
       screenToFlowPosition: ({ x, y }: { x: number; y: number }) => ({ x, y }),
     }),
+    useNodesInitialized: () => true,
+    useStore: <T,>(selector: (state: { width: number; height: number }) => T) =>
+      selector({ width: 1200, height: 800 }),
   };
 });
 
@@ -136,6 +147,10 @@ vi.mock('./SidePanel', () => ({
 
 vi.mock('./ShortcutHelp', () => ({
   ShortcutHelp: () => null,
+}));
+
+vi.mock('./MapSelector', () => ({
+  MapSelector: () => null,
 }));
 
 vi.mock('./Toolbar', () => ({
@@ -241,6 +256,7 @@ describe('Canvas link details edge clicks', () => {
   it('opens link details when an edge is clicked in view mode', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -257,6 +273,7 @@ describe('Canvas link details edge clicks', () => {
   it('opens link details as editable when edit mode is enabled', async () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -277,6 +294,7 @@ describe('Canvas link details edge clicks', () => {
   it('updates open link details when edit mode is toggled', async () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}

@@ -134,6 +134,66 @@ var primaryDataCopySpecs = []tableCopySpec{
 		keyColumns: []string{"device_id"},
 	},
 	{
+		name: "canvas_maps",
+		columns: []columnSpec{
+			{name: "id", kind: columnKindText},
+			{name: "name", kind: columnKindText},
+			{name: "description", kind: columnKindText},
+			{name: "source_area_id", kind: columnKindText},
+			{name: "filter_json", kind: columnKindText},
+			{name: "is_default", kind: columnKindBool},
+			{name: "membership_materialized", kind: columnKindBool},
+			{name: "created_at", kind: columnKindTime},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"id"},
+	},
+	{
+		name: "canvas_map_positions",
+		columns: []columnSpec{
+			{name: "map_id", kind: columnKindText},
+			{name: "device_id", kind: columnKindText},
+			{name: "x", kind: columnKindFloat64},
+			{name: "y", kind: columnKindFloat64},
+			{name: "pinned", kind: columnKindBool},
+			{name: "updated_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"map_id", "device_id"},
+	},
+	{
+		name: "canvas_map_devices",
+		columns: []columnSpec{
+			{name: "map_id", kind: columnKindText},
+			{name: "device_id", kind: columnKindText},
+			{name: "role", kind: columnKindText},
+			{name: "visual_color", kind: columnKindText},
+			{name: "added_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"map_id", "device_id"},
+	},
+	{
+		name: "canvas_map_areas",
+		columns: []columnSpec{
+			{name: "map_id", kind: columnKindText},
+			{name: "area_id", kind: columnKindText},
+			{name: "name", kind: columnKindText},
+			{name: "description", kind: columnKindText},
+			{name: "color", kind: columnKindText},
+			{name: "added_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"map_id", "area_id"},
+	},
+	{
+		name: "canvas_map_device_areas",
+		columns: []columnSpec{
+			{name: "map_id", kind: columnKindText},
+			{name: "device_id", kind: columnKindText},
+			{name: "area_id", kind: columnKindText},
+			{name: "assigned_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"map_id", "device_id", "area_id"},
+	},
+	{
 		name: "device_areas",
 		columns: []columnSpec{
 			{name: "device_id", kind: columnKindText},
@@ -180,6 +240,15 @@ var primaryDataCopySpecs = []tableCopySpec{
 			{name: "updated_at", kind: columnKindTime},
 		},
 		keyColumns: []string{"id"},
+	},
+	{
+		name: "canvas_map_links",
+		columns: []columnSpec{
+			{name: "map_id", kind: columnKindText},
+			{name: "link_id", kind: columnKindText},
+			{name: "added_at", kind: columnKindTime},
+		},
+		keyColumns: []string{"map_id", "link_id"},
 	},
 	{
 		name: "settings",
@@ -272,6 +341,9 @@ func MigrateSQLiteToPostgres(sourcePath, targetDSN string, opts CopyOptions) err
 	if err := CopyPrimaryData(sourceDB, targetDB, opts); err != nil {
 		return err
 	}
+	if err := seedTargetDefaultCanvasMapAfterCopy(targetDB); err != nil {
+		return err
+	}
 
 	if _, err := wrapDB(targetDB).Exec("ANALYZE"); err != nil {
 		return fmt.Errorf("analyzing target database: %w", err)
@@ -287,6 +359,7 @@ func CopyPrimaryData(source, target *sql.DB, opts CopyOptions) error {
 		return fmt.Errorf("target database is nil")
 	}
 
+	sourceDialect := detectDialectFromDB(source)
 	batchSize := opts.BatchSize
 	if batchSize <= 0 {
 		batchSize = defaultCopyBatchSize
@@ -314,6 +387,10 @@ func CopyPrimaryData(source, target *sql.DB, opts CopyOptions) error {
 		if err := clearTargetTables(targetTx, primaryDataCopySpecs); err != nil {
 			return fmt.Errorf("clearing target data: %w", err)
 		}
+	} else {
+		if err := clearGeneratedTargetDefaultCanvasMapForCopy(sourceTx, targetTx, sourceDialect); err != nil {
+			return fmt.Errorf("preparing canvas map copy: %w", err)
+		}
 	}
 
 	for _, spec := range primaryDataCopySpecs {
@@ -330,6 +407,179 @@ func CopyPrimaryData(source, target *sql.DB, opts CopyOptions) error {
 		return fmt.Errorf("committing target transaction: %w", err)
 	}
 	return nil
+}
+
+func seedTargetDefaultCanvasMapAfterCopy(target *sql.DB) error {
+	if err := migrateDefaultCanvasMap(target); err != nil {
+		return fmt.Errorf("seeding target default canvas map after copy: %w", err)
+	}
+	return nil
+}
+
+func clearGeneratedTargetDefaultCanvasMapForCopy(sourceTx *sql.Tx, targetTx *Tx, sourceDialect Dialect) error {
+	sourceDefaultIDs, err := sourceDefaultCanvasMapIDs(sourceTx, sourceDialect)
+	if err != nil {
+		return err
+	}
+	if len(sourceDefaultIDs) == 0 {
+		return nil
+	}
+
+	targetDefault, ok, err := targetDefaultCanvasMapForCopy(targetTx)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if !sourceHasDifferentDefaultCanvasMapID(sourceDefaultIDs, targetDefault.id) {
+		return nil
+	}
+	if !targetDefault.isFreshGeneratedMigrationDefault() {
+		return fmt.Errorf("target default canvas map conflicts with copied source default: %s", targetDefault.id)
+	}
+
+	return deleteFreshGeneratedTargetDefaultCanvasMap(targetTx, targetDefault)
+}
+
+func deleteFreshGeneratedTargetDefaultCanvasMap(targetTx *Tx, targetDefault targetDefaultCanvasMapCopyState) error {
+	result, err := targetTx.Exec(
+		`DELETE FROM canvas_maps
+		 WHERE id = ?
+		   AND is_default = ?
+		   AND name = 'Default'
+		   AND description = 'Global canvas layout'
+		   AND source_area_id IS NULL
+		   AND filter_json = '{}'
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_positions)
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_devices)
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_links)
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_areas)
+		   AND NOT EXISTS (SELECT 1 FROM canvas_map_device_areas)
+		   AND (SELECT COUNT(*) FROM canvas_maps) = 1`,
+		targetDefault.id,
+		true,
+	)
+	if err != nil {
+		return fmt.Errorf("deleting generated target default canvas map %s: %w", targetDefault.id, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking generated target default canvas map delete %s: %w", targetDefault.id, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("target default canvas map conflicts with copied source default: %s", targetDefault.id)
+	}
+	return nil
+}
+
+func sourceHasDifferentDefaultCanvasMapID(sourceDefaultIDs map[string]struct{}, targetDefaultID string) bool {
+	for sourceDefaultID := range sourceDefaultIDs {
+		if sourceDefaultID != targetDefaultID {
+			return true
+		}
+	}
+	return false
+}
+
+func sourceDefaultCanvasMapIDs(sourceTx *sql.Tx, sourceDialect Dialect) (map[string]struct{}, error) {
+	query := `SELECT id FROM canvas_maps WHERE is_default = 1`
+	if sourceDialect == DialectPostgres {
+		query = `SELECT id FROM canvas_maps WHERE is_default = TRUE`
+	}
+
+	rows, err := sourceTx.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("querying source default canvas maps: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make(map[string]struct{})
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning source default canvas map id: %w", err)
+		}
+		ids[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating source default canvas map ids: %w", err)
+	}
+	return ids, nil
+}
+
+type targetDefaultCanvasMapCopyState struct {
+	id                   string
+	name                 string
+	description          string
+	sourceAreaID         sql.NullString
+	filterJSON           string
+	positionCount        int
+	mapCount             int
+	totalPositionCount   int
+	totalDeviceCount     int
+	totalLinkCount       int
+	totalAreaCount       int
+	totalDeviceAreaCount int
+}
+
+func targetDefaultCanvasMapForCopy(targetTx *Tx) (targetDefaultCanvasMapCopyState, bool, error) {
+	var targetDefault targetDefaultCanvasMapCopyState
+	err := targetTx.QueryRow(
+		`SELECT
+			cm.id,
+			cm.name,
+			cm.description,
+			cm.source_area_id,
+			cm.filter_json,
+			COUNT(cmp.device_id),
+			(SELECT COUNT(*) FROM canvas_maps),
+			(SELECT COUNT(*) FROM canvas_map_positions),
+			(SELECT COUNT(*) FROM canvas_map_devices),
+			(SELECT COUNT(*) FROM canvas_map_links),
+			(SELECT COUNT(*) FROM canvas_map_areas),
+			(SELECT COUNT(*) FROM canvas_map_device_areas)
+		 FROM canvas_maps cm
+		 LEFT JOIN canvas_map_positions cmp ON cmp.map_id = cm.id
+		 WHERE cm.is_default = ?
+		 GROUP BY cm.id, cm.name, cm.description, cm.source_area_id, cm.filter_json
+		 LIMIT 1`,
+		true,
+	).Scan(
+		&targetDefault.id,
+		&targetDefault.name,
+		&targetDefault.description,
+		&targetDefault.sourceAreaID,
+		&targetDefault.filterJSON,
+		&targetDefault.positionCount,
+		&targetDefault.mapCount,
+		&targetDefault.totalPositionCount,
+		&targetDefault.totalDeviceCount,
+		&targetDefault.totalLinkCount,
+		&targetDefault.totalAreaCount,
+		&targetDefault.totalDeviceAreaCount,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return targetDefaultCanvasMapCopyState{}, false, nil
+		}
+		return targetDefaultCanvasMapCopyState{}, false, fmt.Errorf("querying target default canvas map: %w", err)
+	}
+	return targetDefault, true, nil
+}
+
+func (state targetDefaultCanvasMapCopyState) isFreshGeneratedMigrationDefault() bool {
+	return state.name == "Default" &&
+		state.description == "Global canvas layout" &&
+		!state.sourceAreaID.Valid &&
+		state.filterJSON == "{}" &&
+		state.positionCount == 0 &&
+		state.mapCount == 1 &&
+		state.totalPositionCount == 0 &&
+		state.totalDeviceCount == 0 &&
+		state.totalLinkCount == 0 &&
+		state.totalAreaCount == 0 &&
+		state.totalDeviceAreaCount == 0
 }
 
 func clearTargetTables(targetTx *Tx, specs []tableCopySpec) error {

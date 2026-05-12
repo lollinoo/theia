@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchAreas, updateDevice } from '../api/client';
+import {
+  deleteDevice,
+  fetchAreas,
+  removeDeviceFromCanvasMap,
+  updateCanvasMapDeviceAreas,
+  updateDevice,
+} from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type { Device } from '../types/api';
 import { BulkEditPanel } from './BulkEditPanel';
@@ -10,7 +16,9 @@ vi.mock('../api/client', () => ({
   fetchAreas: vi.fn().mockResolvedValue([]),
   fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
   updateDevice: vi.fn().mockResolvedValue({}),
+  updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({}),
   deleteDevice: vi.fn().mockResolvedValue(undefined),
+  removeDeviceFromCanvasMap: vi.fn().mockResolvedValue(undefined),
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -37,6 +45,10 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(fetchAreas).mockResolvedValue([]);
+  vi.mocked(updateCanvasMapDeviceAreas).mockResolvedValue({});
+  vi.mocked(deleteDevice).mockResolvedValue(undefined);
+  vi.mocked(removeDeviceFromCanvasMap).mockResolvedValue(undefined);
 });
 
 // --- Gap 11: BulkEditPanel typed errors ---
@@ -128,6 +140,30 @@ describe('BulkEditPanel — save button is disabled without changes', () => {
 });
 
 describe('BulkEditPanel — bulk save behavior', () => {
+  it('preserves dirty edits when live device data refreshes for the same selection', () => {
+    const devices = [
+      mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
+      mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+    ];
+    const { rerender } = render(
+      <BulkEditPanel devices={devices} onDevicesUpdated={vi.fn()} onDevicesDeleted={vi.fn()} />,
+    );
+
+    const [vendorSelect] = screen.getAllByRole('combobox');
+    fireEvent.change(vendorSelect, { target: { value: '' } });
+
+    rerender(
+      <BulkEditPanel
+        devices={devices.map((device) => ({ ...device, status: 'down' }))}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByRole('combobox')[0]).toHaveValue('');
+    expect(screen.getByText('Apply to 2 Devices')).not.toBeDisabled();
+  });
+
   it('preserves the current update payload shape for each selected device', async () => {
     const updateDeviceMock = vi.mocked(updateDevice);
     updateDeviceMock.mockImplementation(async (id, payload) => mockDevice({ id, ...payload }));
@@ -243,5 +279,122 @@ describe('BulkEditPanel — bulk save behavior', () => {
       hostname: 'router-02',
       area_ids: ['area-3'],
     });
+  });
+
+  it('updates area memberships through the map-scoped endpoint when bulk editing a saved map', async () => {
+    const updateDeviceMock = vi.mocked(updateDevice);
+    const updateCanvasMapDeviceAreasMock = vi.mocked(updateCanvasMapDeviceAreas);
+    const onDevicesUpdated = vi.fn();
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', area_ids: ['area-1'] }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2', area_ids: ['area-1'] }),
+        ]}
+        areas={[
+          { id: 'area-1', name: 'Original Area', color: '#111111' },
+          { id: 'area-2', name: 'Duplicated Map Area', color: '#222222' },
+        ]}
+        mapContext={{ mapId: 'map-copy', mapName: 'Copy' }}
+        onDevicesUpdated={onDevicesUpdated}
+        onDevicesDeleted={vi.fn()}
+      />,
+    );
+
+    const [areaSelect] = screen.getAllByRole('combobox');
+    fireEvent.change(areaSelect, { target: { value: 'area-2' } });
+    fireEvent.click(screen.getByText('Apply to 2 Devices'));
+
+    await waitFor(() => {
+      expect(updateCanvasMapDeviceAreasMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(updateCanvasMapDeviceAreasMock).toHaveBeenCalledWith('map-copy', {
+      device_ids: ['dev-1', 'dev-2'],
+      area_ids: ['area-1', 'area-2'],
+    });
+    expect(updateDeviceMock).not.toHaveBeenCalled();
+    expect(onDevicesUpdated).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'dev-1', area_ids: ['area-1', 'area-2'] }),
+      expect.objectContaining({ id: 'dev-2', area_ids: ['area-1', 'area-2'] }),
+    ]);
+  });
+
+  it('renders separate map removal and permanent delete actions for saved-map bulk edits', () => {
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+        ]}
+        mapContext={{ mapId: 'map-copy', mapName: 'Copy' }}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Remove 2 devices from this map' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Delete 2 devices everywhere' })).toBeVisible();
+  });
+
+  it('removes selected devices only from the current saved map during map-scoped bulk delete', async () => {
+    const removeFromMapMock = vi.mocked(removeDeviceFromCanvasMap);
+    const deleteDeviceMock = vi.mocked(deleteDevice);
+    const onDevicesDeleted = vi.fn();
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+        ]}
+        mapContext={{ mapId: 'map-copy', mapName: 'Copy' }}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={onDevicesDeleted}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 2 devices from this map' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm remove from map' }));
+
+    await waitFor(() => {
+      expect(removeFromMapMock).toHaveBeenCalledTimes(2);
+    });
+
+    expect(removeFromMapMock).toHaveBeenNthCalledWith(1, 'map-copy', 'dev-1');
+    expect(removeFromMapMock).toHaveBeenNthCalledWith(2, 'map-copy', 'dev-2');
+    expect(deleteDeviceMock).not.toHaveBeenCalled();
+    expect(onDevicesDeleted).toHaveBeenCalled();
+  });
+
+  it('can permanently delete selected devices from a saved-map bulk edit', async () => {
+    const removeFromMapMock = vi.mocked(removeDeviceFromCanvasMap);
+    const deleteDeviceMock = vi.mocked(deleteDevice);
+    const onDevicesDeleted = vi.fn();
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+        ]}
+        mapContext={{ mapId: 'map-copy', mapName: 'Copy' }}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={onDevicesDeleted}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 2 devices everywhere' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete everywhere' }));
+
+    await waitFor(() => {
+      expect(deleteDeviceMock).toHaveBeenCalledTimes(2);
+    });
+
+    expect(deleteDeviceMock).toHaveBeenNthCalledWith(1, 'dev-1');
+    expect(deleteDeviceMock).toHaveBeenNthCalledWith(2, 'dev-2');
+    expect(removeFromMapMock).not.toHaveBeenCalled();
+    expect(onDevicesDeleted).toHaveBeenCalled();
   });
 });

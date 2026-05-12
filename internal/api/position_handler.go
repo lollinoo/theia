@@ -6,18 +6,29 @@ import (
 	"math"
 	"net/http"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 // PositionHandler provides HTTP handlers for device position persistence.
 type PositionHandler struct {
-	repo domain.PositionRepository
+	repo            domain.PositionRepository
+	mapRepo         domain.CanvasMapRepository
+	mapPositionRepo domain.CanvasMapPositionRepository
 }
 
 // NewPositionHandler creates a new PositionHandler.
-func NewPositionHandler(repo domain.PositionRepository) *PositionHandler {
-	return &PositionHandler{repo: repo}
+func NewPositionHandler(repo domain.PositionRepository, optionalRepos ...any) *PositionHandler {
+	handler := &PositionHandler{repo: repo}
+	for _, optional := range optionalRepos {
+		switch typed := optional.(type) {
+		case domain.CanvasMapRepository:
+			handler.mapRepo = typed
+		case domain.CanvasMapPositionRepository:
+			handler.mapPositionRepo = typed
+		}
+	}
+	return handler
 }
 
 type bulkPositionsRequest struct {
@@ -33,6 +44,22 @@ type positionPayload struct {
 
 // HandleList handles GET /api/v1/positions.
 func (h *PositionHandler) HandleList(w http.ResponseWriter, r *http.Request) {
+	if h.mapRepo != nil && h.mapPositionRepo != nil {
+		defaultMap, err := h.mapRepo.GetDefault()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", err)
+			return
+		}
+		positions, err := h.mapPositionRepo.GetAllForMap(defaultMap.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", err)
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": positions})
+		return
+	}
+
 	positions, err := h.repo.GetAll()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error", err)
@@ -70,6 +97,18 @@ func (h *PositionHandler) HandleSaveAll(w http.ResponseWriter, r *http.Request) 
 			math.IsNaN(pos.Y) || math.IsInf(pos.Y, 0) {
 			writeError(w, http.StatusBadRequest,
 				fmt.Sprintf("invalid coordinate for device %s: NaN and Infinity are not allowed", pos.DeviceID))
+			return
+		}
+	}
+
+	if h.mapRepo != nil && h.mapPositionRepo != nil {
+		defaultMap, err := h.mapRepo.GetDefault()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", err)
+			return
+		}
+		if err := h.mapPositionRepo.SaveAllForMap(defaultMap.ID, positions); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error", err)
 			return
 		}
 	}

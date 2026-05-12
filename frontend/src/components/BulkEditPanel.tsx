@@ -1,5 +1,11 @@
-import { useEffect, useState } from 'react';
-import { deleteDevice, fetchAreas, updateDevice } from '../api/client';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  deleteDevice,
+  fetchAreas,
+  removeDeviceFromCanvasMap,
+  updateCanvasMapDeviceAreas,
+  updateDevice,
+} from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type { Area, Device } from '../types/api';
 import {
@@ -10,37 +16,69 @@ import {
 
 interface BulkEditPanelProps {
   devices: Device[];
+  areas?: Area[];
+  mapContext?: { mapId: string; mapName: string };
   onDevicesUpdated: (updated: Device[]) => void;
   onDevicesDeleted: () => void;
 }
 
-export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: BulkEditPanelProps) {
-  const [areas, setAreas] = useState<Area[]>([]);
+type BulkDeleteAction = 'remove-from-map' | 'delete-everywhere';
+
+export function BulkEditPanel({
+  devices,
+  areas: providedAreas,
+  mapContext,
+  onDevicesUpdated,
+  onDevicesDeleted,
+}: BulkEditPanelProps) {
+  const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
+  const selectionKey = useMemo(() => devices.map((device) => device.id).join('|'), [devices]);
+  const selectionKeyRef = useRef(selectionKey);
+  const [baselineModel, setBaselineModel] = useState<BulkEditModel>(() =>
+    createBulkEditModel(devices),
+  );
   const [model, setModel] = useState<BulkEditModel>(() => createBulkEditModel(devices));
-  const initialModel = createBulkEditModel(devices);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<BulkDeleteAction | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteProgress, setDeleteProgress] = useState(0);
 
   // Load reference data
   useEffect(() => {
+    if (providedAreas) {
+      return;
+    }
     fetchAreas()
-      .then(setAreas)
+      .then(setLoadedAreas)
       .catch(() => {
         /* non-fatal */
       });
-  }, []);
+  }, [providedAreas]);
+
+  const areas = providedAreas ?? loadedAreas;
+  const hasChanges = model.areaIds.dirty || model.metricsSource.dirty || model.vendor.dirty;
 
   useEffect(() => {
-    setModel(createBulkEditModel(devices));
-  }, [devices]);
-
-  const hasChanges = model.areaIds.dirty || model.metricsSource.dirty || model.vendor.dirty;
+    const nextModel = createBulkEditModel(devices);
+    if (selectionKeyRef.current !== selectionKey) {
+      selectionKeyRef.current = selectionKey;
+      setBaselineModel(nextModel);
+      setModel(nextModel);
+      setSaveError(null);
+      setSaved(false);
+      setConfirmDelete(null);
+      setDeleteProgress(0);
+      return;
+    }
+    if (!hasChanges) {
+      setBaselineModel(nextModel);
+      setModel(nextModel);
+    }
+  }, [devices, hasChanges, selectionKey]);
 
   async function handleSave() {
     if (!hasChanges) return;
@@ -49,30 +87,57 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
     setSaved(false);
 
     try {
-      const results = await Promise.allSettled(
-        devices.map((device) => updateDevice(device.id, buildBulkUpdatePayload(device, model))),
-      );
+      const mapScopedAreaEdit = Boolean(mapContext && model.areaIds.dirty);
+      const globalModel = mapScopedAreaEdit
+        ? { ...model, areaIds: { ...model.areaIds, dirty: false } }
+        : model;
+      const hasGlobalChanges =
+        globalModel.areaIds.dirty || globalModel.metricsSource.dirty || globalModel.vendor.dirty;
 
       const updatedDevices: Device[] = [];
       const errors: string[] = [];
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
-        if (result.status === 'fulfilled') {
-          updatedDevices.push(result.value);
-        } else {
-          const reason = result.reason;
-          let errMsg: string;
-          if (reason instanceof ServerError) {
-            errMsg = reason.correlationId
-              ? `server error (ref: ${reason.correlationId})`
-              : 'server error';
-          } else if (reason instanceof ValidationError) {
-            errMsg = reason.message;
+      if (hasGlobalChanges) {
+        const results = await Promise.allSettled(
+          devices.map((device) =>
+            updateDevice(device.id, buildBulkUpdatePayload(device, globalModel)),
+          ),
+        );
+
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i];
+          if (result.status === 'fulfilled') {
+            updatedDevices.push(result.value);
           } else {
-            errMsg = reason instanceof Error ? reason.message : 'failed';
+            const reason = result.reason;
+            let errMsg: string;
+            if (reason instanceof ServerError) {
+              errMsg = reason.correlationId
+                ? `server error (ref: ${reason.correlationId})`
+                : 'server error';
+            } else if (reason instanceof ValidationError) {
+              errMsg = reason.message;
+            } else {
+              errMsg = reason instanceof Error ? reason.message : 'failed';
+            }
+            errors.push(`${devices[i].hostname || devices[i].ip}: ${errMsg}`);
           }
-          errors.push(`${devices[i].hostname || devices[i].ip}: ${errMsg}`);
         }
+      }
+
+      if (mapScopedAreaEdit && mapContext) {
+        await updateCanvasMapDeviceAreas(mapContext.mapId, {
+          device_ids: devices.map((device) => device.id),
+          area_ids: model.areaIds.value,
+        });
+        const updatedByID = new Map(updatedDevices.map((device) => [device.id, device]));
+        updatedDevices.splice(
+          0,
+          updatedDevices.length,
+          ...devices.map((device) => ({
+            ...(updatedByID.get(device.id) ?? device),
+            area_ids: [...model.areaIds.value],
+          })),
+        );
       }
 
       if (errors.length > 0) {
@@ -82,7 +147,9 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
       if (updatedDevices.length > 0) {
         onDevicesUpdated(updatedDevices);
         setSaved(true);
-        setModel(createBulkEditModel(devices));
+        const nextModel = createBulkEditModel(updatedDevices);
+        setBaselineModel(nextModel);
+        setModel(nextModel);
         setTimeout(() => setSaved(false), 2000);
       }
     } catch (err) {
@@ -102,25 +169,33 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
     }
   }
 
-  async function handleBulkDelete() {
+  async function handleBulkDelete(action: BulkDeleteAction) {
     setDeleteLoading(true);
     setDeleteProgress(0);
 
     let completed = 0;
     const results = await Promise.allSettled(
-      devices.map((d) =>
-        deleteDevice(d.id).then(() => {
+      devices.map((d) => {
+        const request =
+          action === 'remove-from-map' && mapContext
+            ? removeDeviceFromCanvasMap(mapContext.mapId, d.id)
+            : deleteDevice(d.id);
+        return request.then(() => {
           completed++;
           setDeleteProgress(completed);
-        }),
-      ),
+        });
+      }),
     );
 
     const failures = results.filter((r) => r.status === 'rejected');
     if (failures.length > 0) {
-      setSaveError(`${failures.length} of ${devices.length} deletes failed`);
+      setSaveError(
+        `${failures.length} of ${devices.length} ${
+          action === 'remove-from-map' ? 'map removals' : 'deletes'
+        } failed`,
+      );
       setDeleteLoading(false);
-      setConfirmDelete(false);
+      setConfirmDelete(null);
       return;
     }
 
@@ -278,7 +353,7 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
             if (e.target.value === '') {
               setModel((current) => ({
                 ...current,
-                metricsSource: initialModel.metricsSource,
+                metricsSource: baselineModel.metricsSource,
               }));
               return;
             }
@@ -321,23 +396,32 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
 
       {/* Bulk Delete */}
       <div className="mt-6 space-y-3">
-        {!confirmDelete ? (
-          <button
-            type="button"
-            onClick={() => setConfirmDelete(true)}
-            className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20"
-          >
-            Delete {devices.length} Devices
-          </button>
-        ) : (
-          <div className="space-y-2 rounded-lg border border-status-down/30 bg-status-down/10 p-3">
-            <p className="text-sm text-status-down">
-              Delete {devices.length} devices? This cannot be undone.
+        {mapContext && confirmDelete === null && (
+          <div className="space-y-2 rounded-lg border border-outline-subtle bg-surface-container px-3 py-3">
+            <p className="text-xs text-on-bg-secondary">
+              Removes selected devices only from {mapContext.mapName}. Inventory and other maps are
+              kept.
+            </p>
+            <button
+              type="button"
+              disabled={deleteLoading}
+              onClick={() => setConfirmDelete('remove-from-map')}
+              className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Remove {devices.length} devices from this map
+            </button>
+          </div>
+        )}
+
+        {confirmDelete === 'remove-from-map' && mapContext && (
+          <div className="space-y-2 rounded-lg border border-outline-subtle bg-surface-container p-3">
+            <p className="text-sm text-on-bg">
+              Remove {devices.length} devices from {mapContext.mapName}?
             </p>
             {deleteLoading && (
-              <div className="w-full rounded-full bg-status-down/20 h-1.5">
+              <div className="h-1.5 w-full rounded-full bg-primary/20">
                 <div
-                  className="h-1.5 rounded-full bg-status-down transition-all duration-300"
+                  className="h-1.5 rounded-full bg-primary transition-all duration-300"
                   style={{ width: `${(deleteProgress / devices.length) * 100}%` }}
                 />
               </div>
@@ -345,7 +429,7 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setConfirmDelete(false)}
+                onClick={() => setConfirmDelete(null)}
                 disabled={deleteLoading}
                 className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated disabled:opacity-50"
               >
@@ -355,13 +439,62 @@ export function BulkEditPanel({ devices, onDevicesUpdated, onDevicesDeleted }: B
                 type="button"
                 disabled={deleteLoading}
                 onClick={() => {
-                  void handleBulkDelete();
+                  void handleBulkDelete('remove-from-map');
+                }}
+                className="flex-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {deleteLoading
+                  ? `Removing ${deleteProgress}/${devices.length}...`
+                  : 'Confirm remove from map'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {confirmDelete === null && (
+          <button
+            type="button"
+            disabled={deleteLoading}
+            onClick={() => setConfirmDelete('delete-everywhere')}
+            className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Delete {devices.length} devices everywhere
+          </button>
+        )}
+
+        {confirmDelete === 'delete-everywhere' && (
+          <div className="space-y-2 rounded-lg border border-status-down/30 bg-status-down/10 p-3">
+            <p className="text-sm text-status-down">
+              Delete {devices.length} devices everywhere? This cannot be undone.
+            </p>
+            {deleteLoading && (
+              <div className="h-1.5 w-full rounded-full bg-status-down/20">
+                <div
+                  className="h-1.5 rounded-full bg-status-down transition-all duration-300"
+                  style={{ width: `${(deleteProgress / devices.length) * 100}%` }}
+                />
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(null)}
+                disabled={deleteLoading}
+                className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={() => {
+                  void handleBulkDelete('delete-everywhere');
                 }}
                 className="flex-1 rounded-lg bg-status-down px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {deleteLoading
                   ? `Deleting ${deleteProgress}/${devices.length}...`
-                  : 'Confirm Delete All'}
+                  : 'Confirm delete everywhere'}
               </button>
             </div>
           </div>

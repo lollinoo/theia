@@ -2,9 +2,17 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Device, Link } from '../types/api';
+import type { CanvasMap, Device, Link } from '../types/api';
 import Canvas from './Canvas';
 import type { DeviceNode } from './DeviceCard';
+
+const defaultCanvasProps = {
+  mapId: null,
+  mapName: 'Default',
+  maps: [],
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
+};
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -31,6 +39,23 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
   };
 }
 
+function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
+  return {
+    id: 'map-backbone',
+    name: 'Backbone',
+    description: '',
+    source_area_id: 'area-1',
+    filter: { area_id: 'area-1' },
+    is_default: false,
+    device_count: 1,
+    link_count: 1,
+    position_count: 1,
+    created_at: '2026-05-07T00:00:00Z',
+    updated_at: '2026-05-07T00:00:00Z',
+    ...overrides,
+  };
+}
+
 function mockNode(device: Device, x: number, y: number): DeviceNode {
   return {
     id: device.id,
@@ -53,7 +78,15 @@ const testState = vi.hoisted(() => ({
   setEdges: vi.fn(),
   onNodesChange: vi.fn(),
   savePositions: vi.fn(),
+  loadTopology: vi.fn(),
+  removeDeviceFromCanvasMap: vi.fn(),
   updateNodePosition: vi.fn(),
+  fitView: vi.fn(),
+  nodesInitialized: true,
+  renderedMapKey: 'default:' as string | null,
+  reactFlowStore: { width: 1200, height: 800 },
+  canvasDataParams: null as null | { mapId: string | null; mapName?: string },
+  canvasPanelsProps: {} as Record<string, unknown>,
   reactFlowProps: {} as Record<string, unknown>,
 }));
 
@@ -143,13 +176,16 @@ vi.mock('@xyflow/react', () => ({
   applyEdgeChanges: (_changes: unknown, current: unknown) => current,
   useNodesState: () => [testState.canonicalNodes, testState.setNodes, testState.onNodesChange],
   useReactFlow: () => ({
-    fitView: vi.fn(),
+    fitView: testState.fitView,
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
     getNodes: () => testState.displayedNodes,
     setCenter: vi.fn(),
     screenToFlowPosition: ({ x, y }: { x: number; y: number }) => ({ x, y }),
   }),
+  useNodesInitialized: () => testState.nodesInitialized,
+  useStore: <T,>(selector: (state: { width: number; height: number }) => T) =>
+    selector(testState.reactFlowStore),
 }));
 
 vi.mock('./DeviceCard', () => ({
@@ -160,13 +196,25 @@ vi.mock('./LinkEdge', () => ({ default: () => null }));
 vi.mock('./SearchOverlay', () => ({ default: () => null }));
 vi.mock('./ZoomControls', () => ({ default: () => null }));
 vi.mock('./ContextMenu', () => ({ ContextMenu: () => null }));
-vi.mock('./SidePanel', () => ({ SidePanel: () => null }));
+vi.mock('./SidePanel', () => ({
+  SidePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
 vi.mock('./Toolbar', () => ({ Toolbar: () => null }));
-vi.mock('./canvas/CanvasPanels', () => ({ CanvasPanels: () => null }));
+vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
+vi.mock('./canvas/CanvasPanels', () => ({
+  CanvasPanels: (props: Record<string, unknown>) => {
+    testState.canvasPanelsProps = props;
+    return null;
+  },
+}));
 vi.mock('./canvas/CanvasOverlays', () => ({ CanvasOverlays: () => null }));
-vi.mock('./canvas/detailSubscription', () => ({ getCanvasDetailDeviceId: () => null }));
-vi.mock('../hooks/useKeyboardShortcuts', () => ({ useKeyboardShortcuts: () => undefined }));
+vi.mock('./canvas/detailSubscription', () => ({
+  getCanvasDetailDeviceId: () => null,
+}));
+vi.mock('../hooks/useKeyboardShortcuts', () => ({
+  useKeyboardShortcuts: () => undefined,
+}));
 vi.mock('../hooks/usePositions', () => ({
   usePositions: () => ({ savePositions: testState.savePositions }),
 }));
@@ -186,23 +234,30 @@ vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({ resolvedTheme: 'dark' as const }),
   adaptAreaColor: (color: string) => color,
 }));
+vi.mock('../api/client', () => ({
+  removeDeviceFromCanvasMap: (...args: unknown[]) => testState.removeDeviceFromCanvasMap(...args),
+}));
 vi.mock('./canvas/useCanvasData', () => ({
-  useCanvasData: () => ({
-    devices: testState.devices,
-    setDevices: vi.fn(),
-    topologyLinks: testState.links,
-    loading: false,
-    error: null,
-    loadTopology: vi.fn().mockResolvedValue(undefined),
-    runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
-    grafanaUrlRef: { current: '' },
-    deviceGrafanaUrlsRef: { current: new Map<string, string>() },
-    refreshSettings: vi.fn(),
-    topologyRecoveryNotice: null,
-    dismissTopologyRecoveryNotice: vi.fn(),
-    retryTopologyRefresh: vi.fn(),
-    updateNodePosition: testState.updateNodePosition,
-  }),
+  useCanvasData: (params: { mapId: string | null; mapName?: string }) => {
+    testState.canvasDataParams = params;
+    return {
+      devices: testState.devices,
+      setDevices: vi.fn(),
+      topologyLinks: testState.links,
+      loading: false,
+      error: null,
+      loadTopology: testState.loadTopology,
+      runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
+      grafanaUrlRef: { current: '' },
+      deviceGrafanaUrlsRef: { current: new Map<string, string>() },
+      refreshSettings: vi.fn(),
+      topologyRecoveryNotice: null,
+      dismissTopologyRecoveryNotice: vi.fn(),
+      retryTopologyRefresh: vi.fn(),
+      updateNodePosition: testState.updateNodePosition,
+      renderedMapKey: testState.renderedMapKey,
+    };
+  },
 }));
 
 describe('Canvas drag state ownership', () => {
@@ -248,13 +303,42 @@ describe('Canvas drag state ownership', () => {
     testState.setEdges.mockReset();
     testState.onNodesChange.mockReset();
     testState.savePositions.mockReset();
+    testState.loadTopology.mockReset();
+    testState.loadTopology.mockResolvedValue(undefined);
+    testState.removeDeviceFromCanvasMap.mockReset();
+    testState.removeDeviceFromCanvasMap.mockResolvedValue(undefined);
     testState.updateNodePosition.mockReset();
+    testState.fitView.mockReset();
+    testState.nodesInitialized = true;
+    testState.renderedMapKey = 'default:';
+    testState.reactFlowStore = { width: 1200, height: 800 };
+    testState.canvasDataParams = null;
+    testState.canvasPanelsProps = {};
     testState.reactFlowProps = {};
+  });
+
+  it('keeps React Flow internals mounted while the canvas is hidden', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        visible={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Start pan' })).toBeInTheDocument();
+    expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
+    expect(testState.displayedNodes.map((node) => node.id)).toEqual(['dev-a', 'dev-b', 'dev-c']);
   });
 
   it('patches the dragged real node without replacing canonical nodes with the area projection', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -276,7 +360,10 @@ describe('Canvas drag state ownership', () => {
 
     expect(testState.setNodes).not.toHaveBeenCalled();
     expect(testState.savePositions).not.toHaveBeenCalled();
-    expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', { x: 444, y: 555 });
+    expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
+      x: 444,
+      y: 555,
+    });
   });
 
   it('keeps ghost node measurements out of canonical node state', () => {
@@ -292,6 +379,7 @@ describe('Canvas drag state ownership', () => {
     } as const;
     const { rerender } = render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={props.snapshot}
         reconnecting={props.reconnecting}
         prometheusStatus={props.prometheusStatus}
@@ -316,6 +404,7 @@ describe('Canvas drag state ownership', () => {
     ];
     rerender(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={props.snapshot}
         reconnecting={props.reconnecting}
         prometheusStatus={props.prometheusStatus}
@@ -337,6 +426,7 @@ describe('Canvas drag state ownership', () => {
 
       render(
         <Canvas
+          {...defaultCanvasProps}
           snapshot={null}
           reconnecting={false}
           prometheusStatus={null}
@@ -374,6 +464,7 @@ describe('Canvas drag state ownership', () => {
   it('updates canvas readability scales from viewport changes without React state churn', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -399,6 +490,7 @@ describe('Canvas drag state ownership', () => {
   it('preserves unchanged area-colored display node references when one canonical node changes', () => {
     const { rerender } = render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -424,6 +516,7 @@ describe('Canvas drag state ownership', () => {
 
     rerender(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -438,5 +531,627 @@ describe('Canvas drag state ownership', () => {
 
     expect(testState.displayedNodes[1]).toBe(firstStableNode);
     expect(testState.displayedNodes[2]).toBe(secondStableNode);
+  });
+
+  it('passes saved map metadata to canvas data and applies map-local area projection', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId="area-1"
+        mapId="map-backbone"
+        mapName="Backbone"
+        maps={[mockMap()]}
+        areas={[
+          { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+          { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+          { id: 'area-3', name: 'Area 3', color: '#22cc88' },
+        ]}
+      />,
+    );
+
+    expect(testState.canvasDataParams).toMatchObject({
+      mapId: 'map-backbone',
+      mapName: 'Backbone',
+    });
+    expect(
+      testState.displayedNodes.map((node) => `${node.id}:${node.data.isGhost === true}`),
+    ).toEqual(['dev-a:false', 'dev-c:true']);
+  });
+
+  it('fits the visible graph when the external fitView revision changes', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('keeps a pending external fit view revision until graph nodes are available', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const populatedNodes = [...testState.canonicalNodes];
+      testState.canonicalNodes = [];
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      expect(frameCallbacks).toHaveLength(0);
+      expect(testState.fitView).not.toHaveBeenCalled();
+
+      testState.canonicalNodes = populatedNodes;
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('keeps a pending external fit view revision until the canvas is visible', () => {
+    const CanvasWithVisibility = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { visible: boolean }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const { rerender } = render(
+        <CanvasWithVisibility
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+          visible={false}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithVisibility
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+          visible={false}
+        />,
+      );
+
+      expect(frameCallbacks).toHaveLength(0);
+      expect(testState.fitView).not.toHaveBeenCalled();
+
+      rerender(
+        <CanvasWithVisibility
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+          visible
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('keeps a pending external fit view revision until the displayed graph belongs to the selected map', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          mapId="map-new"
+          mapName="New map"
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      expect(frameCallbacks).toHaveLength(0);
+      expect(testState.fitView).not.toHaveBeenCalled();
+
+      testState.renderedMapKey = 'map:map-new';
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          mapId="map-new"
+          mapName="New map"
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('keeps a pending external fit view revision until nodes are initialized', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+      testState.nodesInitialized = false;
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      expect(frameCallbacks).toHaveLength(0);
+      expect(testState.fitView).not.toHaveBeenCalled();
+
+      testState.nodesInitialized = true;
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('keeps a pending external fit view revision until the React Flow viewport has dimensions', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      testState.reactFlowStore = { width: 0, height: 0 };
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      expect(frameCallbacks).toHaveLength(0);
+      expect(testState.fitView).not.toHaveBeenCalled();
+
+      testState.reactFlowStore = { width: 1200, height: 800 };
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('cancels a pending external fit view when the selected map changes before the frame runs', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      expect(frameCallbacks).toHaveLength(1);
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          mapId="map-new"
+          mapName="New map"
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const staleCallbackCount = frameCallbacks.length;
+      for (let index = 0; index < staleCallbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).not.toHaveBeenCalled();
+
+      testState.renderedMapKey = 'map:map-new';
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          mapId="map-new"
+          mapName="New map"
+          areas={[]}
+          fitViewRevision={1}
+        />,
+      );
+
+      const readyCallbackCount = frameCallbacks.length;
+      for (let index = staleCallbackCount; index < readyCallbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('passes saved map removal context to canvas panels', async () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        mapId="map-backbone"
+        mapName="Backbone"
+        maps={[mockMap()]}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.canvasPanelsProps.mapId).toBe('map-backbone');
+    expect(testState.canvasPanelsProps.mapName).toBe('Backbone');
+
+    const remove = testState.canvasPanelsProps.onRemoveDeviceFromMap as (
+      deviceId: string,
+    ) => Promise<void>;
+    await remove('dev-a');
+
+    expect(testState.removeDeviceFromCanvasMap).toHaveBeenCalledWith('map-backbone', 'dev-a');
+    expect(testState.loadTopology).toHaveBeenCalledWith(true);
+  });
+
+  it('clears selected canonical nodes when the active map changes', () => {
+    const selectedNode = {
+      ...testState.canonicalNodes[0],
+      selected: true,
+    };
+    testState.canonicalNodes = [
+      selectedNode,
+      testState.canonicalNodes[1],
+      testState.canonicalNodes[2],
+    ];
+
+    const { rerender } = render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    testState.setNodes.mockClear();
+
+    rerender(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        mapId="map-backbone"
+        mapName="Backbone"
+        maps={[mockMap()]}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.setNodes).toHaveBeenCalled();
+    const clearSelection = testState.setNodes.mock.lastCall?.[0] as (
+      nodes: DeviceNode[],
+    ) => DeviceNode[];
+    expect(clearSelection([selectedNode])[0]).toMatchObject({
+      selected: false,
+    });
   });
 });

@@ -376,6 +376,8 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	deviceChangeNotify := deviceRepo.SubscribeDeviceChanges(256)
 	linkChangeNotify := linkRepo.SubscribeLinkChanges(256)
 	positionRepo := sqlite.NewPositionRepo(db)
+	canvasMapRepo := sqlite.NewCanvasMapRepo(db)
+	canvasMapPositionRepo := sqlite.NewCanvasMapPositionRepo(db)
 	settingsRepo := sqlite.NewSettingsRepo(db)
 	logging.Debugf("runtime effective config %s", runtimeDebugSettingsSummary(cfg, settingsRepo))
 	snmpProfileRepo := sqlite.NewSNMPProfileRepo(db, encryptionKey)
@@ -449,7 +451,8 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	go hub.Run()
 
 	stateStore := state.NewStore()
-	sched := scheduler.NewScheduler(deviceLinkCache, settingsRepo)
+	pollingDeviceSource := scheduler.NewSavedMapDeviceSource(deviceLinkCache, canvasMapRepo)
+	sched := scheduler.NewScheduler(pollingDeviceSource, settingsRepo)
 	wirePollRescheduler(deviceService, sched)
 	snmpClientFactory := newCollectorSNMPClientFunc(settingsRepo)
 	essentialCollector := collector.NewEssentialCollector(vendorRegistry, snmpClientFactory)
@@ -510,7 +513,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler)
 	metricsHandler := observability.Handler()
 	server = &http.Server{
 		Addr: cfg.ListenAddr,

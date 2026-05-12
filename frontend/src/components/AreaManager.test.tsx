@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AreaManager } from './AreaManager';
@@ -15,6 +15,10 @@ const mockUpdateArea = vi.fn();
 const mockDeleteArea = vi.fn();
 const mockFetchDevices = vi.fn();
 const mockUpdateDevice = vi.fn();
+const mockCreateCanvasMapArea = vi.fn();
+const mockUpdateCanvasMapArea = vi.fn();
+const mockDeleteCanvasMapArea = vi.fn();
+const mockUpdateCanvasMapDeviceAreas = vi.fn();
 
 vi.mock('../api/client', () => ({
   fetchAreas: (...args: unknown[]) => mockFetchAreas(...args),
@@ -23,12 +27,48 @@ vi.mock('../api/client', () => ({
   deleteArea: (...args: unknown[]) => mockDeleteArea(...args),
   fetchDevices: (...args: unknown[]) => mockFetchDevices(...args),
   updateDevice: (...args: unknown[]) => mockUpdateDevice(...args),
+  createCanvasMapArea: (...args: unknown[]) => mockCreateCanvasMapArea(...args),
+  updateCanvasMapArea: (...args: unknown[]) => mockUpdateCanvasMapArea(...args),
+  deleteCanvasMapArea: (...args: unknown[]) => mockDeleteCanvasMapArea(...args),
+  updateCanvasMapDeviceAreas: (...args: unknown[]) => mockUpdateCanvasMapDeviceAreas(...args),
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockFetchAreas.mockResolvedValue([]);
   mockFetchDevices.mockResolvedValue([]);
+  mockCreateCanvasMapArea.mockResolvedValue({
+    id: 'map-area-new',
+    name: 'NewArea',
+    description: '',
+    color: '#00E676',
+    device_count: 0,
+    created_at: '',
+    updated_at: '',
+  });
+  mockUpdateCanvasMapArea.mockResolvedValue({
+    id: 'map-area-1',
+    name: 'Backbone',
+    description: '',
+    color: '#00E676',
+    device_count: 0,
+    created_at: '',
+    updated_at: '',
+  });
+  mockDeleteCanvasMapArea.mockResolvedValue(undefined);
+  mockUpdateCanvasMapDeviceAreas.mockResolvedValue({
+    id: 'map-1',
+    name: 'Backbone',
+    description: '',
+    source_area_id: null,
+    filter: {},
+    is_default: false,
+    device_count: 1,
+    link_count: 0,
+    position_count: 0,
+    created_at: '',
+    updated_at: '',
+  });
 });
 
 describe('AreaManager', () => {
@@ -141,5 +181,214 @@ describe('AreaManager', () => {
     await waitFor(() => {
       expect(screen.getByText(/5 devices will be unassigned/i)).toBeInTheDocument();
     });
+  });
+
+  it('creates areas through the selected saved map instead of global areas', async () => {
+    const onAreasChange = vi.fn();
+
+    render(
+      <AreaManager
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        areas={[]}
+        devices={[]}
+        onAreasChange={onAreasChange}
+      />,
+    );
+
+    expect(screen.getByText(/no areas yet/i)).toBeInTheDocument();
+    expect(mockFetchAreas).not.toHaveBeenCalled();
+    expect(mockFetchDevices).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: /new/i }));
+    await userEvent.type(screen.getByPlaceholderText(/backbone/i), 'NewArea');
+    await userEvent.click(screen.getByText(/create area/i));
+
+    await waitFor(() => {
+      expect(mockCreateCanvasMapArea).toHaveBeenCalledWith('map-1', {
+        name: 'NewArea',
+        description: '',
+        color: '#00E676',
+      });
+    });
+    expect(mockCreateArea).not.toHaveBeenCalled();
+    expect(onAreasChange).toHaveBeenCalled();
+  });
+
+  it('creates map-local areas with a custom color from the color picker', async () => {
+    const onAreasChange = vi.fn();
+
+    render(
+      <AreaManager
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        areas={[]}
+        devices={[]}
+        onAreasChange={onAreasChange}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /new/i }));
+    fireEvent.change(screen.getByLabelText('Custom color'), { target: { value: '#123abc' } });
+    await userEvent.type(screen.getByPlaceholderText(/backbone/i), 'CustomArea');
+    await userEvent.click(screen.getByText(/create area/i));
+
+    await waitFor(() => {
+      expect(mockCreateCanvasMapArea).toHaveBeenCalledWith('map-1', {
+        name: 'CustomArea',
+        description: '',
+        color: '#123ABC',
+      });
+    });
+    expect(onAreasChange).toHaveBeenCalled();
+  });
+
+  it('does not render preset color swatches in the area form', async () => {
+    render(
+      <AreaManager mapContext={{ mapId: 'map-1', mapName: 'Backbone' }} areas={[]} devices={[]} />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /new/i }));
+
+    expect(screen.getByLabelText('Custom color')).toBeInTheDocument();
+    expect(screen.queryByTitle('#00E676')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('#2979FF')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('#FF1744')).not.toBeInTheDocument();
+  });
+
+  it('updates map-local area colors from the color picker', async () => {
+    const onAreasChange = vi.fn();
+
+    render(
+      <AreaManager
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        areas={[
+          {
+            id: 'map-area-1',
+            name: 'Backbone',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '',
+            updated_at: '',
+          },
+        ]}
+        devices={[]}
+        onAreasChange={onAreasChange}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /edit area/i }));
+    fireEvent.change(screen.getByLabelText('Custom color'), { target: { value: '#abcdef' } });
+    await userEvent.click(screen.getByText(/save changes/i));
+
+    await waitFor(() => {
+      expect(mockUpdateCanvasMapArea).toHaveBeenCalledWith('map-1', 'map-area-1', {
+        name: 'Backbone',
+        description: '',
+        color: '#ABCDEF',
+      });
+    });
+    expect(onAreasChange).toHaveBeenCalled();
+  });
+
+  it('uses uniform icon button sizing for every area row action', () => {
+    render(
+      <AreaManager
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        areas={[
+          {
+            id: 'map-area-1',
+            name: 'Backbone',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '',
+            updated_at: '',
+          },
+        ]}
+        devices={[]}
+        onOpenArea={vi.fn()}
+        onCreateMapFromArea={vi.fn()}
+      />,
+    );
+
+    const actionButtons = [
+      screen.getByRole('button', { name: 'Open area Backbone' }),
+      screen.getByRole('button', { name: 'Create map from area Backbone' }),
+      screen.getByRole('button', { name: /edit area/i }),
+      screen.getByRole('button', { name: /delete area/i }),
+    ];
+
+    for (const button of actionButtons) {
+      expect(button.className).toContain('h-8');
+      expect(button.className).toContain('w-8');
+      expect(button.className).toContain('items-center');
+      expect(button.className).toContain('justify-center');
+    }
+  });
+
+  it('updates map-local device area assignments without mutating global devices', async () => {
+    const onAreasChange = vi.fn();
+
+    render(
+      <AreaManager
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        areas={[
+          {
+            id: 'map-area-1',
+            name: 'Backbone',
+            description: '',
+            color: '#00E676',
+            device_count: 1,
+            created_at: '',
+            updated_at: '',
+          },
+        ]}
+        devices={[
+          {
+            id: 'dev-1',
+            hostname: 'router-01',
+            ip: '10.0.0.1',
+            notes: '',
+            device_type: 'router',
+            status: 'up',
+            sys_name: 'router-01',
+            sys_descr: '',
+            hardware_model: '',
+            vendor: 'mikrotik',
+            managed: true,
+            backup_supported: true,
+            poll_class: 'standard',
+            poll_interval_override: null,
+            polling_enabled: true,
+            metrics_source: 'none',
+            prometheus_label_name: '',
+            prometheus_label_value: '',
+            topology_discovery_mode: 'inherit',
+            effective_topology_discovery_mode: 'off',
+            topology_bootstrap_state: 'idle',
+            last_topology_discovery_at: null,
+            last_topology_discovery_result: '',
+            area_ids: ['map-area-1'],
+            interfaces: [],
+            tags: {},
+            created_at: '',
+            updated_at: '',
+          },
+        ]}
+        onAreasChange={onAreasChange}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /edit area/i }));
+    await userEvent.click(screen.getByRole('button', { name: /remove device/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateCanvasMapDeviceAreas).toHaveBeenCalledWith('map-1', {
+        device_ids: ['dev-1'],
+        area_ids: [],
+      });
+    });
+    expect(mockUpdateDevice).not.toHaveBeenCalled();
+    expect(onAreasChange).toHaveBeenCalled();
   });
 });

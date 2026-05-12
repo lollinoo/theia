@@ -135,7 +135,7 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	}
 
 	if dialect == sqlite.DialectPostgres {
-		if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore"); err != nil {
+		if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore", "psql"); err != nil {
 			return false, err
 		}
 	}
@@ -366,7 +366,7 @@ func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB 
 	if strings.TrimSpace(c.dbDSN) == "" {
 		return fmt.Errorf("postgres restore requires db_dsn")
 	}
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore"); err != nil {
+	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore", "psql"); err != nil {
 		return err
 	}
 	conn, err := postgresCLIConnInfo(c.dbDSN)
@@ -382,9 +382,18 @@ func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB 
 	if _, err := runExternalCommandWithEnv(
 		ctx,
 		conn.env,
+		"psql",
+		"--set", "ON_ERROR_STOP=1",
+		"--single-transaction",
+		"--dbname", conn.connInfo,
+		"--command", "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;",
+	); err != nil {
+		return fmt.Errorf("clean postgres schema before restore: %w", err)
+	}
+	if _, err := runExternalCommandWithEnv(
+		ctx,
+		conn.env,
 		"pg_restore",
-		"--clean",
-		"--if-exists",
 		"--no-owner",
 		"--no-privileges",
 		"--single-transaction",

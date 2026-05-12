@@ -38,6 +38,8 @@ vi.mock('../api/client', () => ({
   setWinBoxProfile: vi.fn().mockResolvedValue(undefined),
   clearWinBoxProfile: vi.fn().mockResolvedValue(undefined),
   fetchAreas: vi.fn().mockResolvedValue([]),
+  updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({}),
+  updateCanvasMapDeviceVisualColor: vi.fn().mockResolvedValue({}),
   fetchSettings: vi.fn().mockResolvedValue({}),
   checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
   updateSetting: vi.fn().mockResolvedValue(undefined),
@@ -694,7 +696,7 @@ describe('DeviceConfigPanel', () => {
     expect(screen.getByText('Test SNMP Connectivity')).toBeInTheDocument();
   });
 
-  it('renders delete device button', () => {
+  it('renders delete device everywhere button', () => {
     render(
       <DeviceConfigPanel
         device={mockDevice()}
@@ -703,7 +705,27 @@ describe('DeviceConfigPanel', () => {
       />,
     );
 
-    expect(screen.getByText('Delete Device')).toBeInTheDocument();
+    expect(screen.getByText('Delete device everywhere')).toBeInTheDocument();
+  });
+
+  it('removes a device from the current map without calling global delete', async () => {
+    const { deleteDevice } = await import('../api/client');
+    const onRemoveFromMap = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        onRemoveFromMap={onRemoveFromMap}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove from this map' }));
+
+    await waitFor(() => expect(onRemoveFromMap).toHaveBeenCalledWith(mockDevice().id));
+    expect(deleteDevice).not.toHaveBeenCalled();
   });
 
   it('shows auto-discovered hostname when sys_name exists', () => {
@@ -753,6 +775,84 @@ describe('DeviceConfigPanel', () => {
     await waitFor(() => {
       expect(screen.getByText('Unassigned - select area...')).toBeInTheDocument();
     });
+  });
+
+  it('saves saved-map area assignments through map membership without mutating global areas', async () => {
+    const { fetchAreas, updateCanvasMapDeviceAreas, updateDevice } = await import('../api/client');
+    const onDeviceUpdated = vi.fn();
+    const mapArea = {
+      id: 'map-area-1',
+      name: 'Map Local Area',
+      description: '',
+      color: '#2979FF',
+      device_count: 0,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockDevice());
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        areas={[mapArea]}
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        onDeviceUpdated={onDeviceUpdated}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(fetchAreas).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByDisplayValue('Unassigned - select area...'), {
+      target: { value: 'map-area-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() =>
+      expect(updateCanvasMapDeviceAreas).toHaveBeenCalledWith('map-1', {
+        device_ids: ['dev-1'],
+        area_ids: ['map-area-1'],
+      }),
+    );
+    expect(updateDevice).toHaveBeenCalledWith(
+      'dev-1',
+      expect.not.objectContaining({ area_ids: expect.anything() }),
+    );
+    expect(onDeviceUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'dev-1', area_ids: ['map-area-1'] }),
+    );
+  });
+
+  it('saves and clears virtual node visual color through map membership only', async () => {
+    const { updateCanvasMapDeviceVisualColor, updateDevice } = await import('../api/client');
+    const virtualDevice = mockDevice({
+      device_type: 'virtual',
+      ip: '',
+      metrics_source: 'none',
+      tags: { display_name: 'Virtual cloud', virtual_subtype: 'cloud' },
+      map_visual_color: '#123ABC',
+    });
+
+    render(
+      <DeviceConfigPanel
+        device={virtualDevice}
+        isVirtual
+        mapContext={{ mapId: 'map-1', mapName: 'Backbone' }}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Virtual node color')).toHaveValue('#123abc');
+    fireEvent.click(screen.getByRole('button', { name: 'Use area/default color' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(updateCanvasMapDeviceVisualColor).toHaveBeenCalledWith('map-1', 'dev-1', {
+        visual_color: null,
+      });
+    });
+    expect(updateDevice).not.toHaveBeenCalled();
   });
 
   it('renders areas section between IP and Vendor fields', () => {

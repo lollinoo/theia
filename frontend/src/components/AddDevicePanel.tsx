@@ -1,16 +1,26 @@
 import { useEffect, useState } from 'react';
 import {
+  addDeviceToCanvasMap,
   assignCredentialProfile,
   checkPrometheusHealth,
   createDevice,
   fetchAreas,
   fetchCredentialProfiles,
+  fetchDevices,
   fetchSNMPProfiles,
   revealSNMPProfile,
   setWinBoxProfile,
+  updateCanvasMapDeviceAreas,
+  updateCanvasMapDeviceVisualColor,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
-import type { Area, CredentialProfile, SNMPProfile, TopologyDiscoveryMode } from '../types/api';
+import type {
+  Area,
+  CredentialProfile,
+  Device,
+  SNMPProfile,
+  TopologyDiscoveryMode,
+} from '../types/api';
 import {
   TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyDiscoveryMode,
@@ -26,17 +36,45 @@ import {
   type DeviceFormModel,
   applySNMPProfile,
   createAddDeviceFormModel,
+  defaultVirtualNodeColor,
+  normalizeVirtualNodeColor,
   resetDeviceFormMode,
 } from './forms/deviceFormModels';
 import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
 
 interface AddDevicePanelProps {
   onDeviceAdded: () => void;
+  areas?: Area[];
+  devices?: Device[];
+  mapContext?: {
+    mapId: string;
+  };
 }
 
 type MetricsMode = 'snmp' | 'prometheus' | 'prometheus_snmp_fallback';
+type DuplicateDeviceAddResult = 'not-handled' | 'added' | 'error';
 
-export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
+function normalizeDeviceLookupValue(value: string | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function duplicateMapDeviceAddressMessage(address: string): string {
+  const trimmed = address.trim();
+  return trimmed
+    ? `a device with IP/host "${trimmed}" already exists in this map`
+    : 'a device with that address already exists in this map';
+}
+
+function isDuplicateDeviceValidationError(err: unknown): err is ValidationError {
+  return err instanceof ValidationError && /device.*already exists/i.test(err.message);
+}
+
+export function AddDevicePanel({
+  onDeviceAdded,
+  areas: providedAreas,
+  devices = [],
+  mapContext,
+}: AddDevicePanelProps) {
   const [form, setForm] = useState(createAddDeviceFormModel);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +90,7 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const [winboxCredentialProfileId, setWinboxCredentialProfileId] = useState('');
 
   // areas
-  const [areas, setAreas] = useState<Area[]>([]);
+  const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
 
   // Field-level validation errors
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -65,21 +103,31 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
   const usesPrometheus =
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
+  const areas = providedAreas ?? loadedAreas;
 
   function updateForm(update: Partial<DeviceFormModel>) {
     setForm((current) => ({ ...current, ...update }));
   }
 
   function updateSnmp(update: Partial<DeviceFormModel['snmp']>) {
-    setForm((current) => ({ ...current, snmp: { ...current.snmp, ...update } }));
+    setForm((current) => ({
+      ...current,
+      snmp: { ...current.snmp, ...update },
+    }));
   }
 
   function updatePrometheus(update: Partial<DeviceFormModel['prometheus']>) {
-    setForm((current) => ({ ...current, prometheus: { ...current.prometheus, ...update } }));
+    setForm((current) => ({
+      ...current,
+      prometheus: { ...current.prometheus, ...update },
+    }));
   }
 
   function updateVirtual(update: Partial<DeviceFormModel['virtual']>) {
-    setForm((current) => ({ ...current, virtual: { ...current.virtual, ...update } }));
+    setForm((current) => ({
+      ...current,
+      virtual: { ...current.virtual, ...update },
+    }));
   }
 
   function setFieldError(field: string, err: string | null) {
@@ -119,11 +167,6 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       .catch(() => {
         /* non-fatal */
       });
-    fetchAreas()
-      .then(setAreas)
-      .catch(() => {
-        /* non-fatal */
-      });
     checkPrometheusHealth()
       .then((result) => {
         const nextAvailable = result.enabled !== false && result.available;
@@ -140,6 +183,108 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         setForm((current) => ({ ...current, metricsMode: 'snmp' }));
       });
   }, []);
+
+  useEffect(() => {
+    if (!providedAreas) {
+      fetchAreas()
+        .then(setLoadedAreas)
+        .catch(() => {
+          /* non-fatal */
+        });
+    }
+  }, [providedAreas]);
+
+  function buildCreatePayloadForCurrentScope() {
+    const payload = buildCreateDevicePayload(form);
+    if (!mapContext) {
+      return payload;
+    }
+    const { area_ids: _areaIds, ...payloadWithoutAreaIds } = payload;
+    return { ...payloadWithoutAreaIds, skip_primary_map_membership: true };
+  }
+
+  function currentMapAddressConflictMessage(
+    payload: ReturnType<typeof buildCreatePayloadForCurrentScope>,
+  ) {
+    if (!mapContext) {
+      return null;
+    }
+    const address = normalizeDeviceLookupValue(payload.ip);
+    if (!address) {
+      return null;
+    }
+    const hasConflict = devices.some((device) => normalizeDeviceLookupValue(device.ip) === address);
+    return hasConflict ? duplicateMapDeviceAddressMessage(payload.ip ?? '') : null;
+  }
+
+  async function addDeviceToCurrentMap(deviceId: string) {
+    if (!mapContext) {
+      return;
+    }
+    await addDeviceToCanvasMap(mapContext.mapId, deviceId, {
+      include_connected_links: true,
+    });
+    if (form.areaIds.length > 0) {
+      await updateCanvasMapDeviceAreas(mapContext.mapId, {
+        device_ids: [deviceId],
+        area_ids: form.areaIds,
+      });
+    }
+    if (form.mode === 'virtual' && form.virtual.visualColor) {
+      await updateCanvasMapDeviceVisualColor(mapContext.mapId, deviceId, {
+        visual_color: normalizeVirtualNodeColor(form.virtual.visualColor),
+      });
+    }
+  }
+
+  async function addExistingDeviceToCurrentMapOnDuplicate(
+    err: unknown,
+    payload: ReturnType<typeof buildCreatePayloadForCurrentScope>,
+  ): Promise<DuplicateDeviceAddResult> {
+    if (!mapContext || !isDuplicateDeviceValidationError(err)) {
+      return 'not-handled';
+    }
+
+    const lookupValues = new Set(
+      [payload.ip, payload.hostname].map(normalizeDeviceLookupValue).filter(Boolean),
+    );
+    if (lookupValues.size === 0) {
+      return 'not-handled';
+    }
+
+    const existingDevice = (await fetchDevices()).find(
+      (device) =>
+        lookupValues.has(normalizeDeviceLookupValue(device.ip)) ||
+        lookupValues.has(normalizeDeviceLookupValue(device.hostname)),
+    );
+    if (!existingDevice) {
+      return 'not-handled';
+    }
+    const requestedVirtual = form.mode === 'virtual';
+    if ((existingDevice.device_type === 'virtual') !== requestedVirtual) {
+      return 'not-handled';
+    }
+
+    try {
+      await addDeviceToCurrentMap(existingDevice.id);
+      return 'added';
+    } catch (mapErr) {
+      if (mapErr instanceof ServerError) {
+        setError(
+          mapErr.correlationId
+            ? `Something went wrong (ref: ${mapErr.correlationId})`
+            : 'Something went wrong',
+        );
+      } else if (mapErr instanceof ValidationError) {
+        setError(mapErr.message);
+      } else {
+        setError(
+          mapErr instanceof Error ? mapErr.message : 'Failed to add existing device to map.',
+        );
+      }
+      return 'error';
+    }
+  }
 
   async function applyProfile(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId);
@@ -203,12 +348,25 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
         setFieldErrors(errors);
         return;
       }
-      setLoading(true);
       setError(null);
+      const payload = buildCreatePayloadForCurrentScope();
+      const mapAddressConflict = currentMapAddressConflictMessage(payload);
+      if (mapAddressConflict) {
+        setError(mapAddressConflict);
+        return;
+      }
+      setLoading(true);
       try {
-        await createDevice(buildCreateDevicePayload(form));
+        const created = await createDevice(payload);
+        await addDeviceToCurrentMap(created.id);
         onDeviceAdded();
       } catch (err) {
+        const duplicateAddResult = await addExistingDeviceToCurrentMapOnDuplicate(err, payload);
+        if (duplicateAddResult === 'added') {
+          onDeviceAdded();
+          return;
+        }
+        if (duplicateAddResult === 'error') return;
         if (err instanceof ServerError) {
           setError(
             err.correlationId
@@ -256,13 +414,26 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
       return;
     }
 
-    setLoading(true);
     setError(null);
+    const payload = buildCreatePayloadForCurrentScope();
+    const mapAddressConflict = currentMapAddressConflictMessage(payload);
+    if (mapAddressConflict) {
+      setError(mapAddressConflict);
+      return;
+    }
+    setLoading(true);
     try {
-      const created = await createDevice(buildCreateDevicePayload(form));
+      const created = await createDevice(payload);
       await assignSelectedCredentials(created.id);
+      await addDeviceToCurrentMap(created.id);
       onDeviceAdded();
     } catch (err) {
+      const duplicateAddResult = await addExistingDeviceToCurrentMapOnDuplicate(err, payload);
+      if (duplicateAddResult === 'added') {
+        onDeviceAdded();
+        return;
+      }
+      if (duplicateAddResult === 'error') return;
       if (err instanceof ServerError) {
         setError(
           err.correlationId
@@ -386,6 +557,36 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
             </div>
           </div>
 
+          {mapContext && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="virtual-node-color"
+                className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
+              >
+                Virtual node color
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="virtual-node-color"
+                  aria-label="Virtual node color"
+                  type="color"
+                  value={form.virtual.visualColor ?? defaultVirtualNodeColor}
+                  onChange={(e) =>
+                    updateVirtual({ visualColor: normalizeVirtualNodeColor(e.target.value) })
+                  }
+                  className="h-10 w-12 shrink-0 cursor-pointer rounded-lg border border-outline-subtle bg-elevated p-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => updateVirtual({ visualColor: null })}
+                  className="rounded-lg bg-surface-high px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
+                >
+                  Use area/default color
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* IP Address (optional) */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
@@ -453,7 +654,8 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                 Prometheus{!prometheusAvailable ? ' (unavailable)' : ''}
               </option>
               <option value="prometheus_snmp_fallback" disabled={!prometheusAvailable}>
-                Prometheus + SNMP Fallback{!prometheusAvailable ? ' (unavailable)' : ''}
+                Prometheus + SNMP Fallback
+                {!prometheusAvailable ? ' (unavailable)' : ''}
               </option>
             </select>
             {form.metricsMode === 'prometheus' && (
@@ -477,7 +679,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
               id="topology-discovery-mode"
               value={form.topologyDiscoveryMode}
               onChange={(e) =>
-                updateForm({ topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode })
+                updateForm({
+                  topologyDiscoveryMode: e.target.value as TopologyDiscoveryMode,
+                })
               }
               className={selectClass}
             >
@@ -579,7 +783,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                 <select
                   value={form.snmp.version}
                   onChange={(e) =>
-                    updateSnmp({ version: e.target.value as DeviceFormModel['snmp']['version'] })
+                    updateSnmp({
+                      version: e.target.value as DeviceFormModel['snmp']['version'],
+                    })
                   }
                   className={selectClass}
                 >
@@ -823,7 +1029,9 @@ export function AddDevicePanel({ onDeviceAdded }: AddDevicePanelProps) {
                     <button
                       type="button"
                       onClick={() =>
-                        updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })
+                        updateForm({
+                          areaIds: form.areaIds.filter((areaId) => areaId !== id),
+                        })
                       }
                       className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
                     >

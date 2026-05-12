@@ -15,7 +15,6 @@ import {
   validateRetentionCount,
   validateURL,
 } from '../utils/validation';
-import { AreaManager } from './AreaManager';
 import { CredentialProfileManager } from './CredentialProfileManager';
 import { InstanceBackupManager } from './InstanceBackupManager';
 import { SNMPProfileManager } from './SNMPProfileManager';
@@ -191,11 +190,10 @@ function SavedIndicator({ visible }: SavedIndicatorProps) {
 }
 
 interface SettingsPanelProps {
-  onAreasChange?: () => void;
   onSettingsChange?: () => void;
 }
 
-export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanelProps) {
+export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
   const [grafanaUrl, setGrafanaUrl] = useState('');
@@ -766,10 +764,6 @@ export function SettingsPanel({ onAreasChange, onSettingsChange }: SettingsPanel
           TCP port the WinBox bridge listens on. Default is <span className="font-mono">1337</span>.
           Must match <span className="font-mono">ListenPort</span> in the bridge&apos;s config.json.
         </p>
-      </div>
-
-      <div className="mt-6">
-        <AreaManager onAreasChange={onAreasChange} />
       </div>
 
       <div className="mt-6">

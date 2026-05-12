@@ -95,6 +95,182 @@ func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
 	}
 }
 
+func TestDeviceRepoGetByIDsLoadsOnlyRequestedDevicesWithInterfacesAndAreas(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+	areaRepo := NewAreaRepo(db)
+
+	area := &domain.Area{
+		ID:    uuid.New(),
+		Name:  "Backbone",
+		Color: "#00AEEF",
+	}
+	if err := areaRepo.Create(area); err != nil {
+		t.Fatalf("Create area failed: %v", err)
+	}
+
+	first := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-a",
+		IP:         "10.80.0.1",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{{IfIndex: 1, IfName: "ether1", IfDescr: "uplink", Speed: 1000000000}},
+		AreaIDs:    []uuid.UUID{area.ID},
+	}
+	second := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-b",
+		IP:         "10.80.0.2",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	third := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-c",
+		IP:         "10.80.0.3",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	for _, device := range []*domain.Device{first, second, third} {
+		if err := repo.Create(device); err != nil {
+			t.Fatalf("Create device %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	devices, err := repo.GetByIDs([]uuid.UUID{second.ID, first.ID, uuid.New()})
+	if err != nil {
+		t.Fatalf("GetByIDs failed: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("GetByIDs returned %d devices, want 2: %#v", len(devices), devices)
+	}
+	byID := make(map[uuid.UUID]domain.Device, len(devices))
+	for _, device := range devices {
+		byID[device.ID] = device
+	}
+	if _, ok := byID[third.ID]; ok {
+		t.Fatalf("GetByIDs returned unrequested device %s", third.ID)
+	}
+	gotFirst := byID[first.ID]
+	if len(gotFirst.Interfaces) != 1 || gotFirst.Interfaces[0].IfName != "ether1" {
+		t.Fatalf("first interfaces = %#v, want ether1", gotFirst.Interfaces)
+	}
+	if len(gotFirst.AreaIDs) != 1 || gotFirst.AreaIDs[0] != area.ID {
+		t.Fatalf("first area IDs = %#v, want %s", gotFirst.AreaIDs, area.ID)
+	}
+
+	empty, err := repo.GetByIDs(nil)
+	if err != nil {
+		t.Fatalf("GetByIDs(nil) failed: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("GetByIDs(nil) = %#v, want empty", empty)
+	}
+}
+
+func TestDeviceRepoGetOrphansReturnsDevicesWithoutCanvasMapMembership(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKey, nil)
+	areaRepo := NewAreaRepo(db)
+	mapRepo := NewCanvasMapRepo(db)
+
+	area := &domain.Area{
+		ID:    uuid.New(),
+		Name:  "Staging",
+		Color: "#2979FF",
+	}
+	if err := areaRepo.Create(area); err != nil {
+		t.Fatalf("Create area failed: %v", err)
+	}
+
+	mapped := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "mapped-router",
+		IP:         "10.90.0.1",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	orphan := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "orphan-switch",
+		IP:         "10.90.0.2",
+		Managed:    true,
+		Status:     domain.DeviceStatusUnknown,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeSwitch,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{{IfIndex: 7, IfName: "ether7", IfDescr: "orphan port", Speed: 1000000000}},
+		AreaIDs:    []uuid.UUID{area.ID},
+	}
+	if err := repo.Create(mapped); err != nil {
+		t.Fatalf("Create mapped device failed: %v", err)
+	}
+	if err := repo.Create(orphan); err != nil {
+		t.Fatalf("Create orphan device failed: %v", err)
+	}
+
+	canvasMap, err := mapRepo.Create(domain.CanvasMapCreate{
+		Name:   "Operations",
+		Filter: domain.CanvasMapFilter{DeviceIDs: []uuid.UUID{}},
+	})
+	if err != nil {
+		t.Fatalf("Create canvas map failed: %v", err)
+	}
+	if err := mapRepo.ReplaceMembership(canvasMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{{
+			DeviceID: mapped.ID,
+			Role:     domain.CanvasMapDeviceRoleBase,
+		}},
+	}); err != nil {
+		t.Fatalf("ReplaceMembership failed: %v", err)
+	}
+
+	devices, err := repo.GetOrphans()
+	if err != nil {
+		t.Fatalf("GetOrphans failed: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 orphan device, got %d", len(devices))
+	}
+	if devices[0].ID != orphan.ID {
+		t.Fatalf("expected orphan device %s, got %s", orphan.ID, devices[0].ID)
+	}
+	if len(devices[0].Interfaces) != 1 || devices[0].Interfaces[0].IfName != "ether7" {
+		t.Fatalf("expected orphan interfaces to be loaded, got %#v", devices[0].Interfaces)
+	}
+	if len(devices[0].AreaIDs) != 1 || devices[0].AreaIDs[0] != area.ID {
+		t.Fatalf("expected orphan area IDs to be loaded, got %#v", devices[0].AreaIDs)
+	}
+}
+
 func TestDeviceRepoGetBySysName_EmptyOrUnknownLookup(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewDeviceRepo(db, testKey, nil)

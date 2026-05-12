@@ -68,6 +68,7 @@ export interface Device {
   topology_bootstrap_state?: TopologyBootstrapState;
   last_topology_discovery_at?: string | null;
   last_topology_discovery_result?: string;
+  map_visual_color?: string | null;
 }
 
 export interface Link {
@@ -95,6 +96,28 @@ export interface DevicePosition {
   updated_at?: string;
 }
 
+export interface CanvasMapFilter {
+  area_id?: string | null;
+  device_ids?: string[];
+  include_cross_area_links?: boolean;
+  include_ghost_devices?: boolean;
+  tags?: Record<string, string>;
+}
+
+export interface CanvasMap {
+  id: string;
+  name: string;
+  description: string;
+  source_area_id: string | null;
+  filter: CanvasMapFilter;
+  is_default: boolean;
+  device_count: number;
+  link_count: number;
+  position_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CanvasTopologyCapabilities {
   supports_topology_delta: boolean;
   supports_position_revision: boolean;
@@ -108,6 +131,7 @@ export interface CanvasTopologyResponse {
   runtime_identity?: string;
   runtime_snapshot?: SnapshotPayload;
   generated_at: string;
+  map?: CanvasMap;
   devices: Device[];
   links: Link[];
   positions: Record<string, DevicePosition>;
@@ -307,6 +331,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       topology_bootstrap_state: parseTopologyBootstrapState(attributes.topology_bootstrap_state),
       last_topology_discovery_at: readNullableString(attributes, 'last_topology_discovery_at'),
       last_topology_discovery_result: readString(attributes, 'last_topology_discovery_result'),
+      map_visual_color: readNullableString(attributes, 'map_visual_color'),
     };
   });
 }
@@ -374,6 +399,95 @@ function parseCanvasTopologyPositions(payload: unknown): Record<string, DevicePo
   );
 }
 
+function parseCanvasMapFilter(value: unknown): CanvasMapFilter {
+  if (value === undefined || value === null) {
+    return {};
+  }
+
+  if (!isRecord(value)) {
+    throw new Error('invalid canvas map filter');
+  }
+
+  const filter: CanvasMapFilter = {};
+
+  if ('area_id' in value) {
+    if (value.area_id !== null && typeof value.area_id !== 'string') {
+      throw new Error('invalid canvas map filter');
+    }
+    filter.area_id = value.area_id;
+  }
+
+  if ('device_ids' in value) {
+    if (
+      !Array.isArray(value.device_ids) ||
+      !value.device_ids.every((id) => typeof id === 'string')
+    ) {
+      throw new Error('invalid canvas map filter');
+    }
+    filter.device_ids = value.device_ids;
+  }
+
+  if ('include_cross_area_links' in value) {
+    if (typeof value.include_cross_area_links !== 'boolean') {
+      throw new Error('invalid canvas map filter');
+    }
+    filter.include_cross_area_links = value.include_cross_area_links;
+  }
+
+  if ('include_ghost_devices' in value) {
+    if (typeof value.include_ghost_devices !== 'boolean') {
+      throw new Error('invalid canvas map filter');
+    }
+    filter.include_ghost_devices = value.include_ghost_devices;
+  }
+
+  if ('tags' in value) {
+    if (!isRecord(value.tags) || Object.values(value.tags).some((tag) => typeof tag !== 'string')) {
+      throw new Error('invalid canvas map filter');
+    }
+    filter.tags = value.tags as Record<string, string>;
+  }
+
+  return filter;
+}
+
+export function parseCanvasMapResponse(payload: unknown): CanvasMap {
+  const resource = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
+
+  if (!isRecord(resource)) {
+    throw new Error('invalid canvas map payload');
+  }
+
+  const id = readString(resource, 'id');
+  const name = readString(resource, 'name');
+
+  if (id === '' || name === '') {
+    throw new Error('invalid canvas map identity');
+  }
+
+  return {
+    id,
+    name,
+    description: readString(resource, 'description'),
+    source_area_id: readNullableString(resource, 'source_area_id'),
+    filter: parseCanvasMapFilter(resource.filter),
+    is_default: readBoolean(resource, 'is_default'),
+    device_count: readNumber(resource, 'device_count'),
+    link_count: readNumber(resource, 'link_count'),
+    position_count: readNumber(resource, 'position_count'),
+    created_at: readString(resource, 'created_at'),
+    updated_at: readString(resource, 'updated_at'),
+  };
+}
+
+export function parseCanvasMapsResponse(payload: unknown): CanvasMap[] {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) {
+    throw new Error('invalid canvas maps response');
+  }
+
+  return payload.data.map(parseCanvasMapResponse);
+}
+
 export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyResponse {
   if (!isRecord(payload)) {
     throw new Error('invalid canvas topology response');
@@ -397,6 +511,7 @@ export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyRes
         ? undefined
         : parseSnapshotPayload(payload.runtime_snapshot),
     generated_at: readString(payload, 'generated_at'),
+    map: payload.map === undefined ? undefined : parseCanvasMapResponse(payload.map),
     devices: parseDevicesResponse({
       data: Array.isArray(payload.devices) ? payload.devices : [],
     }),

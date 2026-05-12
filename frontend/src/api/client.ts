@@ -4,6 +4,8 @@ import {
   type BackupFileContent,
   type BackupJob,
   type BackupStatus,
+  type CanvasMap,
+  type CanvasMapFilter,
   type CanvasTopologyResponse,
   type CredentialProfile,
   type Device,
@@ -20,6 +22,8 @@ import {
   type WinBoxCredentials,
   parseAreaResponse,
   parseAreasResponse,
+  parseCanvasMapResponse,
+  parseCanvasMapsResponse,
   parseCanvasTopologyResponse,
   parseCredentialProfileResponse,
   parseCredentialProfilesResponse,
@@ -85,55 +89,74 @@ export type CanvasTopologyFetchResult =
 
 const canvasBootstrapReuseWindowMs = 2000;
 
-let canvasBootstrapRequest: Promise<{ topology: CanvasTopologyResponse }> | null = null;
-let recentCanvasBootstrap: {
-  value: { topology: CanvasTopologyResponse };
-  expiresAt: number;
-} | null = null;
+type CanvasBootstrapCacheKey = string;
+
+const defaultCanvasBootstrapCacheKey = '__default__';
+
+const canvasBootstrapRequests = new Map<
+  CanvasBootstrapCacheKey,
+  Promise<{ topology: CanvasTopologyResponse }>
+>();
+const recentCanvasBootstraps = new Map<
+  CanvasBootstrapCacheKey,
+  { value: { topology: CanvasTopologyResponse }; expiresAt: number }
+>();
 
 type FetchCanvasBootstrapOptions = {
   force?: boolean;
 };
 
 export function resetCanvasBootstrapRequestCache(): void {
-  canvasBootstrapRequest = null;
-  recentCanvasBootstrap = null;
+  canvasBootstrapRequests.clear();
+  recentCanvasBootstraps.clear();
 }
 
 export async function fetchCanvasBootstrap(
   options: FetchCanvasBootstrapOptions = {},
 ): Promise<{ topology: CanvasTopologyResponse }> {
-  if (
-    options.force !== true &&
-    recentCanvasBootstrap !== null &&
-    Date.now() < recentCanvasBootstrap.expiresAt
-  ) {
-    return recentCanvasBootstrap.value;
+  return fetchCanvasBootstrapWithCache(
+    `default:${defaultCanvasBootstrapCacheKey}`,
+    '/api/v1/canvas',
+    options,
+  );
+}
+
+function fetchCanvasBootstrapWithCache(
+  cacheKey: CanvasBootstrapCacheKey,
+  path: string,
+  options: FetchCanvasBootstrapOptions = {},
+): Promise<{ topology: CanvasTopologyResponse }> {
+  const recentBootstrap = recentCanvasBootstraps.get(cacheKey);
+  if (options.force !== true && recentBootstrap && Date.now() < recentBootstrap.expiresAt) {
+    return Promise.resolve(recentBootstrap.value);
   }
 
-  if (options.force !== true && canvasBootstrapRequest !== null) {
-    return canvasBootstrapRequest;
+  const pendingRequest = canvasBootstrapRequests.get(cacheKey);
+  if (options.force !== true && pendingRequest) {
+    return pendingRequest;
   }
 
-  const request = fetchCanvasBootstrapUncached()
+  const request = fetchCanvasBootstrapUncached(path)
     .then((result) => {
-      recentCanvasBootstrap = {
+      recentCanvasBootstraps.set(cacheKey, {
         value: result,
         expiresAt: Date.now() + canvasBootstrapReuseWindowMs,
-      };
+      });
       return result;
     })
     .finally(() => {
-      if (canvasBootstrapRequest === request) {
-        canvasBootstrapRequest = null;
+      if (canvasBootstrapRequests.get(cacheKey) === request) {
+        canvasBootstrapRequests.delete(cacheKey);
       }
     });
-  canvasBootstrapRequest = request;
-  return canvasBootstrapRequest;
+  canvasBootstrapRequests.set(cacheKey, request);
+  return request;
 }
 
-async function fetchCanvasBootstrapUncached(): Promise<{ topology: CanvasTopologyResponse }> {
-  const response = await fetch('/api/v1/canvas', {
+async function fetchCanvasBootstrapUncached(
+  path: string,
+): Promise<{ topology: CanvasTopologyResponse }> {
+  const response = await fetch(path, {
     headers: {
       Accept: 'application/json',
     },
@@ -151,7 +174,7 @@ async function fetchCanvasBootstrapUncached(): Promise<{ topology: CanvasTopolog
         : response.statusText;
     throw new CanvasTopologyFetchError(
       response.status,
-      `/api/v1/canvas failed: ${response.status} ${errorMessage}`,
+      `${path} failed: ${response.status} ${errorMessage}`,
     );
   }
 
@@ -163,6 +186,13 @@ async function fetchCanvasBootstrapUncached(): Promise<{ topology: CanvasTopolog
 export async function fetchCanvasTopology(
   ifNoneMatch?: string,
 ): Promise<CanvasTopologyFetchResult> {
+  return fetchCanvasTopologyFromPath('/api/v1/topology/canvas', ifNoneMatch);
+}
+
+async function fetchCanvasTopologyFromPath(
+  path: string,
+  ifNoneMatch?: string,
+): Promise<CanvasTopologyFetchResult> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -170,7 +200,7 @@ export async function fetchCanvasTopology(
     headers['If-None-Match'] = ifNoneMatch;
   }
 
-  const response = await fetch('/api/v1/topology/canvas', { headers });
+  const response = await fetch(path, { headers });
   const etag = response.headers.get('ETag') ?? undefined;
 
   if (response.status === 304) {
@@ -192,7 +222,7 @@ export async function fetchCanvasTopology(
         : response.statusText;
     throw new CanvasTopologyFetchError(
       response.status,
-      `/api/v1/topology/canvas failed: ${response.status} ${errorMessage}`,
+      `${path} failed: ${response.status} ${errorMessage}`,
     );
   }
 
@@ -201,6 +231,166 @@ export async function fetchCanvasTopology(
     topology: parseCanvasTopologyResponse(payload),
     etag,
   };
+}
+
+export async function fetchCanvasMaps(): Promise<CanvasMap[]> {
+  return parseCanvasMapsResponse(await requestJSON('/api/v1/canvas/maps'));
+}
+
+export async function createCanvasMap(payload: {
+  name: string;
+  description?: string;
+  source_area_id?: string | null;
+  source_map_id?: string | null;
+  filter?: CanvasMapFilter;
+}): Promise<CanvasMap> {
+  return parseCanvasMapResponse(await requestJSONWithBody('/api/v1/canvas/maps', 'POST', payload));
+}
+
+export async function updateCanvasMap(
+  id: string,
+  payload: Partial<{
+    name: string;
+    description: string;
+    source_area_id: string | null;
+    filter: CanvasMapFilter;
+  }>,
+): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'PATCH', payload),
+  );
+}
+
+export async function deleteCanvasMap(id: string): Promise<void> {
+  await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'DELETE');
+}
+
+export async function setCanvasMapPrimary(id: string): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}/primary`, 'POST'),
+  );
+}
+
+export async function removeDeviceFromCanvasMap(mapId: string, deviceId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
+    'DELETE',
+  );
+}
+
+export async function addDeviceToCanvasMap(
+  mapId: string,
+  deviceId: string,
+  payload: { include_connected_links?: boolean } = {},
+): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
+      'POST',
+      payload,
+    ),
+  );
+}
+
+export async function updateCanvasMapDeviceAreas(
+  mapId: string,
+  payload: { device_ids: string[]; area_ids: string[] },
+): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/device-areas`,
+      'PUT',
+      payload,
+    ),
+  );
+}
+
+export async function updateCanvasMapDeviceVisualColor(
+  mapId: string,
+  deviceId: string,
+  payload: { visual_color: string | null },
+): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
+      'PATCH',
+      payload,
+    ),
+  );
+}
+
+export async function fetchCanvasMapAreas(mapId: string): Promise<Area[]> {
+  return parseAreasResponse(
+    await requestJSON(`/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas`),
+  );
+}
+
+export async function createCanvasMapArea(
+  mapId: string,
+  payload: { name: string; description: string; color: string },
+): Promise<Area> {
+  return parseAreaResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas`,
+      'POST',
+      payload,
+    ),
+  );
+}
+
+export async function updateCanvasMapArea(
+  mapId: string,
+  areaId: string,
+  payload: { name: string; description: string; color: string },
+): Promise<Area> {
+  return parseAreaResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas/${encodeURIComponent(areaId)}`,
+      'PUT',
+      payload,
+    ),
+  );
+}
+
+export async function deleteCanvasMapArea(mapId: string, areaId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas/${encodeURIComponent(areaId)}`,
+    'DELETE',
+  );
+}
+
+export async function duplicateCanvasMap(
+  id: string,
+  payload: { name: string },
+): Promise<CanvasMap> {
+  return parseCanvasMapResponse(
+    await requestJSONWithBody(
+      `/api/v1/canvas/maps/${encodeURIComponent(id)}/duplicate`,
+      'POST',
+      payload,
+    ),
+  );
+}
+
+export async function fetchCanvasMapBootstrap(
+  mapId: string,
+  options: FetchCanvasBootstrapOptions = {},
+): Promise<{ topology: CanvasTopologyResponse }> {
+  return fetchCanvasBootstrapWithCache(
+    `map:${mapId}`,
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/bootstrap`,
+    options,
+  );
+}
+
+export async function fetchCanvasMapTopology(
+  mapId: string,
+  ifNoneMatch?: string,
+): Promise<CanvasTopologyFetchResult> {
+  return fetchCanvasTopologyFromPath(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/topology`,
+    ifNoneMatch,
+  );
 }
 
 export interface HealthVersion {
@@ -230,6 +420,15 @@ export async function fetchDevices(): Promise<Device[]> {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
     throw new Error(`Failed to fetch devices: ${message}`);
+  }
+}
+
+export async function fetchOrphanDevices(): Promise<Device[]> {
+  try {
+    return parseDevicesResponse(await requestJSON('/api/v1/devices/orphans'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    throw new Error(`Failed to fetch orphan devices: ${message}`);
   }
 }
 
@@ -384,6 +583,7 @@ export interface CreateDevicePayload {
   prometheus_label_value?: string;
   topology_discovery_mode?: TopologyDiscoveryMode;
   area_ids?: string[];
+  skip_primary_map_membership?: boolean;
 }
 
 export async function createDevice(payload: CreateDevicePayload): Promise<Device> {

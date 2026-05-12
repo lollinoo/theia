@@ -38,7 +38,7 @@ test('recovers from websocket reconnects', async ({ page }) => {
 
   await waitForTopology(page);
 
-  const reconnectBanner = page.locator('div[aria-hidden]', { hasText: 'Reconnecting...' });
+  const reconnectBanner = page.getByTestId('reconnect-banner');
 
   await page.evaluate(() => {
     (window as Window & { __playwrightBackendReconnected?: boolean }).__playwrightBackendReconnected = false;

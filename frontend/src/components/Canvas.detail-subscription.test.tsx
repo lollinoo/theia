@@ -5,6 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
 import Canvas from './Canvas';
 
+const defaultCanvasProps = {
+  mapId: null,
+  mapName: 'Default',
+  maps: [],
+  onMapSelect: vi.fn(),
+  onManageMaps: vi.fn(),
+};
+
 const testState = vi.hoisted(() => ({
   devices: [
     {
@@ -75,6 +83,9 @@ vi.mock('@xyflow/react', async () => {
       setCenter: vi.fn(),
       screenToFlowPosition: ({ x, y }: { x: number; y: number }) => ({ x, y }),
     }),
+    useNodesInitialized: () => true,
+    useStore: <T,>(selector: (state: { width: number; height: number }) => T) =>
+      selector({ width: 1200, height: 800 }),
   };
 });
 
@@ -88,6 +99,7 @@ vi.mock('./SidePanel', () => ({
     open ? <div>{children}</div> : null,
 }));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
+vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
 vi.mock('./Toolbar', () => ({
   Toolbar: ({ onAlerts }: { onAlerts: () => void }) => (
     <button type="button" onClick={onAlerts}>
@@ -160,6 +172,7 @@ describe('Canvas detail subscription', () => {
 
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -184,6 +197,7 @@ describe('Canvas detail subscription', () => {
   it('does not re-render the minimap for runtime-only snapshot prop changes', () => {
     const { rerender } = render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -196,6 +210,7 @@ describe('Canvas detail subscription', () => {
 
     rerender(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={{ devices: {}, links: {} }}
         reconnecting={false}
         prometheusStatus={null}
@@ -210,6 +225,7 @@ describe('Canvas detail subscription', () => {
   it('passes responsive placement classes to the minimap without changing its behavior props', () => {
     render(
       <Canvas
+        {...defaultCanvasProps}
         snapshot={null}
         reconnecting={false}
         prometheusStatus={null}
@@ -220,10 +236,11 @@ describe('Canvas detail subscription', () => {
 
     const minimapProps = xyflowMocks.MiniMap.mock.calls[0]?.[0];
     expect(minimapProps.className).toContain('!m-0');
-    expect(minimapProps.className).toContain('!bottom-0');
+    expect(minimapProps.className).toContain('!bottom-[calc(6rem+env(safe-area-inset-bottom))]');
+    expect(minimapProps.className).toContain('sm:!bottom-4');
     expect(minimapProps.className).toContain('!right-4');
     expect(minimapProps.className).not.toContain('!right-0');
-    expect(minimapProps.className).not.toContain('!bottom-5');
+    expect(minimapProps.className).not.toContain('!bottom-4 !right-4');
     expect(minimapProps.className).not.toContain('!right-5');
     expect(minimapProps.pannable).toBe(true);
     expect(minimapProps.zoomable).toBe(true);

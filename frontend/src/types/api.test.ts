@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseCanvasTopologyResponse, parseDevicesResponse } from './api';
+import {
+  parseCanvasMapResponse,
+  parseCanvasMapsResponse,
+  parseCanvasTopologyResponse,
+  parseDevicesResponse,
+} from './api';
 
 function deviceResource(id: string, deviceType: string) {
   return {
@@ -34,6 +39,29 @@ function deviceResource(id: string, deviceType: string) {
         data: [],
       },
     },
+  };
+}
+
+function canvasTopologyPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: 1,
+    topology_version: 'topo-test',
+    generated_at: '2026-05-07T00:00:00Z',
+    devices: [],
+    links: [],
+    positions: {},
+    areas: [],
+    capabilities: {
+      supports_topology_delta: false,
+      supports_position_revision: false,
+      supports_area_filtering: true,
+    },
+    settings: {
+      layout: {
+        version: 1,
+      },
+    },
+    ...overrides,
   };
 }
 
@@ -82,6 +110,15 @@ describe('parseDevicesResponse', () => {
     expect(devices[0].polling_enabled).toBe(true);
   });
 
+  it('preserves map-local visual color from canvas topology device attributes', () => {
+    const resource = deviceResource('virtual-1', 'virtual');
+    (resource.attributes as Record<string, unknown>).map_visual_color = '#123ABC';
+
+    const devices = parseDevicesResponse({ data: [resource] });
+
+    expect(devices[0].map_visual_color).toBe('#123ABC');
+  });
+
   it('preserves explicit polling_enabled false', () => {
     const devices = parseDevicesResponse({
       data: [
@@ -96,6 +133,61 @@ describe('parseDevicesResponse', () => {
     });
 
     expect(devices[0].polling_enabled).toBe(false);
+  });
+});
+
+describe('parseCanvasMapResponse', () => {
+  it('parses wrapped canvas map payloads and defaults counts', () => {
+    const map = parseCanvasMapResponse({
+      data: {
+        id: 'map-1',
+        name: 'Backbone',
+        description: 'Backbone map',
+        source_area_id: null,
+        filter: {},
+        is_default: false,
+        created_at: '2026-05-07T00:00:00Z',
+        updated_at: '2026-05-07T00:00:00Z',
+      },
+    });
+
+    expect(map).toMatchObject({
+      id: 'map-1',
+      name: 'Backbone',
+      source_area_id: null,
+      filter: {},
+      device_count: 0,
+      link_count: 0,
+      position_count: 0,
+    });
+  });
+
+  it('rejects invalid map filter payloads', () => {
+    expect(() => parseCanvasMapResponse({ id: 'map-1', name: 'Broken', filter: 'area-a' })).toThrow(
+      'invalid canvas map filter',
+    );
+  });
+
+  it.each([
+    ['area_id', { area_id: 123 }],
+    ['device_ids', { device_ids: ['device-1', 123] }],
+    ['include_cross_area_links', { include_cross_area_links: 'yes' }],
+    ['include_ghost_devices', { include_ghost_devices: 'no' }],
+    ['tags', { tags: { role: 'core', invalid: 123 } }],
+  ])('rejects invalid %s filter fields', (_field, filter) => {
+    expect(() => parseCanvasMapResponse({ id: 'map-1', name: 'Broken', filter })).toThrow(
+      'invalid canvas map filter',
+    );
+  });
+});
+
+describe('parseCanvasMapsResponse', () => {
+  it('parses map list payloads', () => {
+    expect(
+      parseCanvasMapsResponse({
+        data: [{ id: 'default', name: 'Default', is_default: true, filter: {} }],
+      }),
+    ).toHaveLength(1);
   });
 });
 
@@ -140,6 +232,7 @@ describe('parseCanvasTopologyResponse', () => {
         links: {},
       },
       generated_at: '2026-04-30T12:00:00Z',
+      map: { id: 'map-1', name: 'Backbone', is_default: false, filter: {} },
       devices: [deviceResource('router-1', 'router')],
       links: [
         {
@@ -193,7 +286,9 @@ describe('parseCanvasTopologyResponse', () => {
     expect(topology.runtime_version).toBe(456);
     expect(topology.runtime_identity).toBe('rt-sha256:abc');
     expect(topology.runtime_snapshot?.devices['router-1'].operational_status).toBe('down');
+    expect(topology.map?.id).toBe('map-1');
     expect(topology.devices[0].hostname).toBe('router-1.example.test');
+    expect(topology.devices[0].map_visual_color).toBeNull();
     expect(topology.links[0]).toMatchObject({
       id: 'link-1',
       source_if_speed: 1000000000,
@@ -209,5 +304,30 @@ describe('parseCanvasTopologyResponse', () => {
     expect(topology.areas[0].name).toBe('Backbone');
     expect(topology.capabilities.supports_area_filtering).toBe(true);
     expect(topology.settings.layout.version).toBe(1);
+  });
+
+  it('leaves missing map metadata undefined', () => {
+    expect(parseCanvasTopologyResponse(canvasTopologyPayload()).map).toBeUndefined();
+  });
+
+  it('rejects invalid present map metadata', () => {
+    expect(() => parseCanvasTopologyResponse(canvasTopologyPayload({ map: 'map-1' }))).toThrow(
+      'invalid canvas map payload',
+    );
+  });
+
+  it('rejects invalid fields in present map metadata', () => {
+    expect(() =>
+      parseCanvasTopologyResponse(
+        canvasTopologyPayload({
+          map: {
+            id: 'map-1',
+            name: 'Broken',
+            is_default: false,
+            filter: { device_ids: ['device-1', 123] },
+          },
+        }),
+      ),
+    ).toThrow('invalid canvas map filter');
   });
 });

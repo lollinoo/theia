@@ -96,6 +96,67 @@ func TestLinkRepo_CreateAndGetByDeviceID(t *testing.T) {
 	}
 }
 
+func TestLinkRepoGetByIDsLoadsOnlyRequestedLinks(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	d3 := &domain.Device{
+		IP:         "10.1.0.3",
+		Hostname:   "device-C",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		Managed:    true,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(d3); err != nil {
+		t.Fatalf("Create device C: %v", err)
+	}
+
+	first := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether1",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	second := &domain.Link{
+		SourceDeviceID:    d2ID,
+		SourceIfName:      "ether2",
+		TargetDeviceID:    d3.ID,
+		TargetIfName:      "ether1",
+		DiscoveryProtocol: domain.DiscoveryProtocolCDP,
+	}
+	for _, link := range []*domain.Link{first, second} {
+		if err := linkRepo.Create(link); err != nil {
+			t.Fatalf("Create link: %v", err)
+		}
+	}
+
+	links, err := linkRepo.GetByIDs([]uuid.UUID{second.ID, uuid.New()})
+	if err != nil {
+		t.Fatalf("GetByIDs failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("GetByIDs returned %d links, want 1: %#v", len(links), links)
+	}
+	if links[0].ID != second.ID || links[0].DiscoveryProtocol != domain.DiscoveryProtocolCDP {
+		t.Fatalf("GetByIDs link = %#v, want second CDP link", links[0])
+	}
+
+	empty, err := linkRepo.GetByIDs(nil)
+	if err != nil {
+		t.Fatalf("GetByIDs(nil) failed: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("GetByIDs(nil) = %#v, want empty", empty)
+	}
+}
+
 func TestLinkRepo_Upsert_InsertNew(t *testing.T) {
 	db := setupTestDB(t)
 	deviceRepo := NewDeviceRepo(db, testKey, nil)

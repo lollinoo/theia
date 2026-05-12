@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/sqlite3"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/lollinoo/theia/internal/domain"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -21,6 +24,30 @@ func openTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func migrateSQLiteTestDBToVersion(t *testing.T, db *sql.DB, version uint) {
+	t.Helper()
+
+	sourceDriver, err := iofs.New(sqliteMigrationsFS, "migrations")
+	if err != nil {
+		t.Fatalf("creating migration source: %v", err)
+	}
+
+	dbDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{
+		MigrationsTable: "schema_migrations",
+	})
+	if err != nil {
+		t.Fatalf("creating migration db driver: %v", err)
+	}
+
+	m, err := migrate.NewWithInstance("iofs", sourceDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("creating migrator: %v", err)
+	}
+	if err := m.Migrate(version); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrating test database to version %d: %v", version, err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +81,424 @@ func TestMigrations(t *testing.T) {
 	}
 
 	t.Logf("schema_migrations: version=%d dirty=%v", version, dirty)
+}
+
+func TestRunMigrationsCreatesCanvasMapTables(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	for _, tableName := range []string{
+		"canvas_maps",
+		"canvas_map_devices",
+		"canvas_map_links",
+		"canvas_map_areas",
+		"canvas_map_positions",
+	} {
+		var count int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
+			tableName,
+		).Scan(&count); err != nil {
+			t.Fatalf("querying table %s: %v", tableName, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected table %s to exist", tableName)
+		}
+	}
+
+	rows, err := db.Query(`PRAGMA foreign_key_list(canvas_map_areas)`)
+	if err != nil {
+		t.Fatalf("querying canvas_map_areas foreign keys: %v", err)
+	}
+	defer rows.Close()
+
+	var referencedTables []string
+	for rows.Next() {
+		var (
+			id, seq                       int
+			tableName, from, to, onUpdate string
+			onDelete, match               string
+		)
+		if err := rows.Scan(&id, &seq, &tableName, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			t.Fatalf("scanning canvas_map_areas foreign key: %v", err)
+		}
+		referencedTables = append(referencedTables, tableName)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating canvas_map_areas foreign keys: %v", err)
+	}
+	if len(referencedTables) != 1 || referencedTables[0] != "canvas_maps" {
+		t.Fatalf("canvas_map_areas referenced tables = %#v, want only canvas_maps", referencedTables)
+	}
+}
+
+func TestRunMigrationsSeedsDefaultCanvasMapFromLegacyPositions(t *testing.T) {
+	db := openTestDB(t)
+	migrateSQLiteTestDBToVersion(t, db, 23)
+
+	deviceID := "00000000-0000-0000-0000-000000000101"
+	if _, err := db.Exec(
+		`INSERT INTO devices (id, hostname, ip, device_type, status, sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json, metrics_source, prometheus_label_name, prometheus_label_value, created_at, updated_at)
+		 VALUES (?, 'router-101', '10.0.1.101', 'router', 'up', 'router-101', '', '', '', 'default', 1, '{}', 'none', '', '', datetime('now'), datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert device: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO device_positions (device_id, x, y, pinned, updated_at)
+		 VALUES (?, 11, 22, 1, datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert legacy position: %v", err)
+	}
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+	if err := migrateDefaultCanvasMap(db); err != nil {
+		t.Fatalf("second migrateDefaultCanvasMap failed: %v", err)
+	}
+
+	var mapID string
+	var mapCount int
+	if err := db.QueryRow(`SELECT COUNT(*), id FROM canvas_maps WHERE is_default = 1`).Scan(&mapCount, &mapID); err != nil {
+		t.Fatalf("query default map: %v", err)
+	}
+	if mapCount != 1 {
+		t.Fatalf("expected one default map, got %d", mapCount)
+	}
+
+	var legacyCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM device_positions WHERE device_id = ?`, deviceID).Scan(&legacyCount); err != nil {
+		t.Fatalf("query legacy positions: %v", err)
+	}
+	if legacyCount != 1 {
+		t.Fatalf("expected legacy position to remain, got %d", legacyCount)
+	}
+
+	var scopedCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM canvas_map_positions WHERE map_id = ? AND device_id = ? AND x = 11 AND y = 22 AND pinned = 1`,
+		mapID,
+		deviceID,
+	).Scan(&scopedCount); err != nil {
+		t.Fatalf("query scoped positions: %v", err)
+	}
+	if scopedCount != 1 {
+		t.Fatalf("expected one copied map position, got %d", scopedCount)
+	}
+
+	var membershipCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM canvas_map_devices WHERE map_id = ? AND device_id = ? AND role = 'base'`,
+		mapID,
+		deviceID,
+	).Scan(&membershipCount); err != nil {
+		t.Fatalf("query default map membership: %v", err)
+	}
+	if membershipCount != 1 {
+		t.Fatalf("expected one default map device member, got %d", membershipCount)
+	}
+}
+
+func TestRunMigrationsCopiesLegacyPositionsOnExistingDatabase(t *testing.T) {
+	db := openTestDB(t)
+	migrateSQLiteTestDBToVersion(t, db, 23)
+
+	deviceID := "00000000-0000-0000-0000-000000000201"
+	if _, err := db.Exec(
+		`INSERT INTO devices (id, hostname, ip, device_type, status, created_at, updated_at)
+		 VALUES (?, 'router-201', '10.0.2.201', 'router', 'up', datetime('now'), datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert pre-canvas device: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO device_positions (device_id, x, y, pinned, updated_at)
+		 VALUES (?, 33, 44, 1, datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert pre-canvas legacy position: %v", err)
+	}
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	var defaultMapCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE is_default = 1`).Scan(&defaultMapCount); err != nil {
+		t.Fatalf("count default maps: %v", err)
+	}
+	if defaultMapCount != 1 {
+		t.Fatalf("expected one default map, got %d", defaultMapCount)
+	}
+
+	var mapID string
+	if err := db.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = 1`).Scan(&mapID); err != nil {
+		t.Fatalf("query default map id: %v", err)
+	}
+
+	var x, y float64
+	var pinned int
+	if err := db.QueryRow(
+		`SELECT x, y, pinned FROM canvas_map_positions WHERE map_id = ? AND device_id = ?`,
+		mapID,
+		deviceID,
+	).Scan(&x, &y, &pinned); err != nil {
+		t.Fatalf("query copied scoped position: %v", err)
+	}
+	if x != 33 || y != 44 || pinned != 1 {
+		t.Fatalf("copied scoped position = (%v, %v, pinned=%d), want (33, 44, pinned=1)", x, y, pinned)
+	}
+
+	var membershipCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM canvas_map_devices WHERE map_id = ? AND device_id = ? AND role = 'base'`,
+		mapID,
+		deviceID,
+	).Scan(&membershipCount); err != nil {
+		t.Fatalf("query copied membership: %v", err)
+	}
+	if membershipCount != 1 {
+		t.Fatalf("expected one default map device member, got %d", membershipCount)
+	}
+}
+
+func TestMigrateDefaultCanvasMapDoesNotAutoSyncFutureDevices(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	var mapID string
+	if err := db.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = 1`).Scan(&mapID); err != nil {
+		t.Fatalf("query default map id: %v", err)
+	}
+
+	deviceID := "00000000-0000-0000-0000-000000000203"
+	if _, err := db.Exec(
+		`INSERT INTO devices (id, hostname, ip, device_type, status, created_at, updated_at)
+		 VALUES (?, 'router-203', '10.0.2.203', 'router', 'up', datetime('now'), datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert future device: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO device_positions (device_id, x, y, pinned, updated_at)
+		 VALUES (?, 77, 88, 1, datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert future legacy position: %v", err)
+	}
+
+	if err := migrateDefaultCanvasMap(db); err != nil {
+		t.Fatalf("migrateDefaultCanvasMap failed: %v", err)
+	}
+
+	var membershipCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM canvas_map_devices WHERE map_id = ? AND device_id = ?`,
+		mapID,
+		deviceID,
+	).Scan(&membershipCount); err != nil {
+		t.Fatalf("query future membership: %v", err)
+	}
+	if membershipCount != 0 {
+		t.Fatalf("future device was auto-synced into default map membership")
+	}
+
+	var scopedPositionCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM canvas_map_positions WHERE map_id = ? AND device_id = ?`,
+		mapID,
+		deviceID,
+	).Scan(&scopedPositionCount); err != nil {
+		t.Fatalf("query future scoped position: %v", err)
+	}
+	if scopedPositionCount != 0 {
+		t.Fatalf("future device position was auto-synced into default map")
+	}
+}
+
+func TestRunMigrationsMaterializesExistingSavedMapsOnce(t *testing.T) {
+	db := openTestDB(t)
+	migrateSQLiteTestDBToVersion(t, db, 25)
+
+	areaID := "00000000-0000-0000-0000-000000000301"
+	deviceID := "00000000-0000-0000-0000-000000000302"
+	mapID := "00000000-0000-0000-0000-000000000303"
+	if _, err := db.Exec(
+		`INSERT INTO areas (id, name, description, color, created_at, updated_at)
+		 VALUES (?, 'Legacy Area', 'legacy area', '#2979FF', datetime('now'), datetime('now'))`,
+		areaID,
+	); err != nil {
+		t.Fatalf("insert legacy area: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO devices (id, hostname, ip, device_type, status, created_at, updated_at)
+		 VALUES (?, 'router-302', '10.0.3.2', 'router', 'up', datetime('now'), datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert legacy device: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO device_areas (device_id, area_id) VALUES (?, ?)`,
+		deviceID,
+		areaID,
+	); err != nil {
+		t.Fatalf("insert legacy device area: %v", err)
+	}
+	filterJSON := `{"area_id":"` + areaID + `","device_ids":[],"include_cross_area_links":false,"include_ghost_devices":false,"tags":{}}`
+	if _, err := db.Exec(
+		`INSERT INTO canvas_maps (id, name, description, source_area_id, filter_json, is_default, created_at, updated_at)
+		 VALUES (?, 'Legacy Saved Map', '', ?, ?, 0, datetime('now'), datetime('now'))`,
+		mapID,
+		areaID,
+		filterJSON,
+	); err != nil {
+		t.Fatalf("insert legacy saved map: %v", err)
+	}
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	var materialized int
+	if err := db.QueryRow(
+		`SELECT membership_materialized FROM canvas_maps WHERE id = ?`,
+		mapID,
+	).Scan(&materialized); err != nil {
+		t.Fatalf("query saved map materialized flag: %v", err)
+	}
+	if materialized != 1 {
+		t.Fatalf("saved map membership_materialized = %d, want 1", materialized)
+	}
+
+	var membershipCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM canvas_map_devices WHERE map_id = ? AND device_id = ? AND role = 'base'`,
+		mapID,
+		deviceID,
+	).Scan(&membershipCount); err != nil {
+		t.Fatalf("query saved map membership: %v", err)
+	}
+	if membershipCount != 1 {
+		t.Fatalf("expected saved map to materialize the legacy device, got %d rows", membershipCount)
+	}
+
+	lateDeviceID := "00000000-0000-0000-0000-000000000304"
+	if _, err := db.Exec(
+		`INSERT INTO devices (id, hostname, ip, device_type, status, created_at, updated_at)
+		 VALUES (?, 'router-304', '10.0.3.4', 'router', 'up', datetime('now'), datetime('now'))`,
+		lateDeviceID,
+	); err != nil {
+		t.Fatalf("insert late device: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO device_areas (device_id, area_id) VALUES (?, ?)`,
+		lateDeviceID,
+		areaID,
+	); err != nil {
+		t.Fatalf("insert late device area: %v", err)
+	}
+	if err := migrateDefaultCanvasMap(db); err != nil {
+		t.Fatalf("migrateDefaultCanvasMap after late device failed: %v", err)
+	}
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM canvas_map_devices WHERE map_id = ? AND device_id = ?`,
+		mapID,
+		lateDeviceID,
+	).Scan(&membershipCount); err != nil {
+		t.Fatalf("query late membership: %v", err)
+	}
+	if membershipCount != 0 {
+		t.Fatalf("late device was auto-synced into saved map membership")
+	}
+}
+
+func TestMigrateDefaultCanvasMapDoesNotOverwriteScopedPositions(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	deviceID := "00000000-0000-0000-0000-000000000202"
+	if _, err := db.Exec(
+		`INSERT INTO devices (id, hostname, ip, device_type, status, created_at, updated_at)
+		 VALUES (?, 'router-202', '10.0.2.202', 'router', 'up', datetime('now'), datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert device: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO device_positions (device_id, x, y, pinned, updated_at)
+		 VALUES (?, 55, 66, 1, datetime('now'))`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert legacy position: %v", err)
+	}
+
+	if err := migrateDefaultCanvasMap(db); err != nil {
+		t.Fatalf("migrateDefaultCanvasMap failed: %v", err)
+	}
+
+	var mapID string
+	if err := db.QueryRow(`SELECT id FROM canvas_maps WHERE is_default = 1`).Scan(&mapID); err != nil {
+		t.Fatalf("query default map id: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at)
+		 VALUES (?, ?, 'base', datetime('now'))`,
+		mapID,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert default map membership: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO canvas_map_positions (map_id, device_id, x, y, pinned, updated_at)
+		 VALUES (?, ?, 55, 66, 1, datetime('now'))`,
+		mapID,
+		deviceID,
+	); err != nil {
+		t.Fatalf("insert scoped position: %v", err)
+	}
+
+	if _, err := db.Exec(
+		`UPDATE canvas_map_positions
+		 SET x = 101, y = 202, pinned = 0, updated_at = datetime('now')
+		 WHERE map_id = ? AND device_id = ?`,
+		mapID,
+		deviceID,
+	); err != nil {
+		t.Fatalf("update scoped position: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE device_positions
+		 SET x = 303, y = 404, pinned = 1, updated_at = datetime('now')
+		 WHERE device_id = ?`,
+		deviceID,
+	); err != nil {
+		t.Fatalf("update legacy position: %v", err)
+	}
+
+	if err := migrateDefaultCanvasMap(db); err != nil {
+		t.Fatalf("second migrateDefaultCanvasMap failed: %v", err)
+	}
+
+	var x, y float64
+	var pinned int
+	if err := db.QueryRow(
+		`SELECT x, y, pinned FROM canvas_map_positions WHERE map_id = ? AND device_id = ?`,
+		mapID,
+		deviceID,
+	).Scan(&x, &y, &pinned); err != nil {
+		t.Fatalf("query scoped position after second migration: %v", err)
+	}
+	if x != 101 || y != 202 || pinned != 0 {
+		t.Fatalf("scoped position was overwritten: got (%v, %v, pinned=%d), want (101, 202, pinned=0)", x, y, pinned)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -524,11 +969,12 @@ func TestMigrateDevicePollClass_Idempotent(t *testing.T) {
 	// Insert a router (will be backfilled to 'core') and an AP (stays 'standard').
 	devices := []struct {
 		id         string
+		ip         string
 		deviceType string
 		wantClass  string
 	}{
-		{"00000000-0000-0000-0000-000000000201", "router", "core"},
-		{"00000000-0000-0000-0000-000000000202", "ap", "standard"},
+		{"00000000-0000-0000-0000-000000000201", "10.0.98.1", "router", "core"},
+		{"00000000-0000-0000-0000-000000000202", "10.0.98.2", "ap", "standard"},
 	}
 
 	for _, d := range devices {
@@ -541,7 +987,7 @@ func TestMigrateDevicePollClass_Idempotent(t *testing.T) {
 				poll_class
 			) VALUES (?, ?, ?, '{}', ?, 'unknown', '', '', '', '', '', 'default', 0, '{}',
 				datetime('now'), datetime('now'), 'prometheus', 'instance', '', 'standard')`,
-			d.id, "host-idem-"+d.deviceType, "10.0.98.1", d.deviceType,
+			d.id, "host-idem-"+d.deviceType, d.ip, d.deviceType,
 		)
 		if err != nil {
 			t.Fatalf("inserting device %s: %v", d.id, err)
