@@ -8,9 +8,7 @@ import {
   type OnMove,
   ReactFlow,
   SelectionMode,
-  applyEdgeChanges,
   useNodesInitialized,
-  useNodesState,
   useReactFlow,
   useStore,
 } from '@xyflow/react';
@@ -47,6 +45,7 @@ import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
+import { useCanvasGraphState } from './canvas/useCanvasGraphState';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { minimapColorForDevice, resolveDeviceMonitoringState } from './deviceVisualState';
 import { resolveLinkBadgeScale } from './linkSemantics';
@@ -192,8 +191,18 @@ export default function Canvas({
   onDetailDeviceChange,
   onInteractionActiveChange,
 }: CanvasProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
-  const [edges, setEdges] = useState<LinkEdgeType[]>([]);
+  const {
+    nodes,
+    edges,
+    setNodes,
+    setEdges,
+    onNodesChange,
+    onEdgesChange,
+    nodeIndexByIdRef,
+    edgeIndexByIdRef,
+  } = useCanvasGraphState();
+  void nodeIndexByIdRef;
+  void edgeIndexByIdRef;
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
@@ -857,9 +866,12 @@ export default function Canvas({
     [],
   );
 
-  const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
-    setEdges((cur) => applyEdgeChanges(changes, cur));
-  }, []);
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange<LinkEdgeType>[]) => {
+      onEdgesChange(changes);
+    },
+    [onEdgesChange],
+  );
   const handleConnect = useCallback(
     (connection: Connection) => {
       if (
