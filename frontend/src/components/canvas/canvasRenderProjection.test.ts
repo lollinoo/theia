@@ -284,4 +284,27 @@ describe('projectCanvasRenderGraph', () => {
       ['alpha-gamma', 'connected'],
     ]);
   });
+
+  it('keeps default-emphasis edge data references when selection is empty', () => {
+    const alpha = device({ id: 'alpha' });
+    const beta = device({ id: 'beta' });
+    const alphaBeta = link('alpha-beta', alpha, beta);
+    const alreadyDefault = edgeFor(alphaBeta, { emphasis: 'default' });
+
+    const result = projectCanvasRenderGraph(
+      inputFor({
+        nodes: [nodeFor(alpha, { x: 0, y: 0 }), nodeFor(beta, { x: 120, y: 0 })],
+        edges: [alreadyDefault],
+        devices: [alpha, beta],
+        links: [alphaBeta],
+        filteredDevices: [alpha, beta],
+        filteredLinks: [alphaBeta],
+        selectedRealNodeIds: new Set(),
+      }),
+    );
+
+    expect(result.displayEdges[0]).toBe(alreadyDefault);
+    expect(result.displayEdges[0]?.data).toBe(alreadyDefault.data);
+    expect(result.displayEdges[0]?.data?.emphasis).toBe('default');
+  });
 });

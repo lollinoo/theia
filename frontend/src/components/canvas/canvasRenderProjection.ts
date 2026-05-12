@@ -104,7 +104,7 @@ function applyEdgeEmphasis(
   if (selectedIds.size === 0) {
     let changed = false;
     const nextEdges = edges.map((edge) => {
-      if (!edge.data?.emphasis) return edge;
+      if (!edge.data?.emphasis || edge.data.emphasis === 'default') return edge;
       changed = true;
       return { ...edge, data: { ...edge.data, emphasis: 'default' as const } };
     });
