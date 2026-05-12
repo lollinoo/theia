@@ -77,6 +77,8 @@ interface UseCanvasDataParams {
   nodes: DeviceNode[];
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
   setEdges: React.Dispatch<React.SetStateAction<LinkEdgeType[]>>;
+  nodeIndexByIdRef?: React.MutableRefObject<Map<string, number>>;
+  edgeIndexByIdRef?: React.MutableRefObject<Map<string, number>>;
   onDevicesChange?: (devices: Device[]) => void;
   onLinksChange?: (links: Link[]) => void;
   onTopologyAreasChange?: (areas: Area[]) => void;
@@ -530,6 +532,8 @@ export function useCanvasData({
   nodes,
   setNodes,
   setEdges,
+  nodeIndexByIdRef,
+  edgeIndexByIdRef,
   onDevicesChange,
   onLinksChange,
   onTopologyAreasChange,
@@ -1383,6 +1387,7 @@ export function useCanvasData({
           nodes: currentNodes,
           runtimeState,
           plan: patchPlan,
+          nodeIndexById: nodeIndexByIdRef?.current,
         }),
       );
       setEdges((currentEdges) =>
@@ -1393,10 +1398,19 @@ export function useCanvasData({
           alerts: alertsRef.current,
           onEdgeContextMenu: openEdgeMenu,
           plan: patchPlan,
+          edgeIndexById: edgeIndexByIdRef?.current,
         }),
       );
     });
-  }, [openEdgeMenu, prometheusStatus, setEdges, setNodes, snapshot]);
+  }, [
+    edgeIndexByIdRef,
+    nodeIndexByIdRef,
+    openEdgeMenu,
+    prometheusStatus,
+    setEdges,
+    setNodes,
+    snapshot,
+  ]);
 
   useEffect(() => {
     setNodes((currentNodes) => {

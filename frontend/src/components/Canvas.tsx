@@ -201,8 +201,6 @@ export default function Canvas({
     nodeIndexByIdRef,
     edgeIndexByIdRef,
   } = useCanvasGraphState();
-  void nodeIndexByIdRef;
-  void edgeIndexByIdRef;
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
@@ -458,6 +456,8 @@ export default function Canvas({
     nodes,
     setNodes,
     setEdges,
+    nodeIndexByIdRef,
+    edgeIndexByIdRef,
     onDevicesChange,
     onLinksChange,
     onTopologyAreasChange,
