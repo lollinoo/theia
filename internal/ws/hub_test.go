@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,91 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncOnlyForHTTPBootstrapClient(t
 	})
 	if client.needsResync {
 		t.Fatal("expected client hello to clear HTTP resync marker")
+	}
+}
+
+func TestHubOverviewDelta_SkipsFallbackSerializationWhenAllClientsUseHTTPBootstrap(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	unsupported := math.NaN()
+	fallback := EmptySnapshot()
+	fallback.Devices["dev-1"] = DeviceRuntimeDTO{
+		DeviceID:   "dev-1",
+		CPUPercent: &unsupported,
+	}
+
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
+		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), MessageTypeSnapshot) {
+		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
+	}
+}
+
+func TestHubOverviewDelta_RecordsHTTPResyncMetricsOnceWhilePending(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, EmptySnapshot())
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 2, 3, EmptySnapshot())
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_ws_client_resync_required_total{bootstrap="http",reason="client_resync_scheduled",scope="overview"} 1`) {
+		t.Fatalf("expected one HTTP client resync metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_overview_mailbox_clear_total{reason="client_mailbox_full"} 32`) {
+		t.Fatalf("expected cleared mailbox metric for the first overflow, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_overview_resync_suppressed_total{reason="client_resync_scheduled"} 1`) {
+		t.Fatalf("expected duplicate resync suppression metric, got:\n%s", metrics)
+	}
+}
+
+func TestHubAddRemoveClientUpdatesConnectedClientMetric(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	hub := NewHub()
+	client := &Client{
+		hub:          hub,
+		send:         make(chan []byte, sendBufferSize),
+		overviewSend: make(chan []byte, overviewBufferSize),
+	}
+
+	hub.addClient(client)
+	if metrics := string(registry.MarshalPrometheus()); !strings.Contains(metrics, `theia_ws_connected_clients 1`) {
+		t.Fatalf("expected connected client gauge to be 1, got:\n%s", metrics)
+	}
+
+	hub.removeClient(client)
+	if metrics := string(registry.MarshalPrometheus()); !strings.Contains(metrics, `theia_ws_connected_clients 0`) {
+		t.Fatalf("expected connected client gauge to be 0, got:\n%s", metrics)
 	}
 }
 
