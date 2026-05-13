@@ -20,6 +20,8 @@ services:
     ports:
       - "127.0.10.21:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.21
       wisp-core12:
         ipv4_address: 10.100.0.10
       wisp-core1-north:
@@ -52,6 +54,8 @@ services:
     ports:
       - "127.0.10.22:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.22
       wisp-core12:
         ipv4_address: 10.100.0.11
       wisp-core2-north:
@@ -84,6 +88,8 @@ services:
     ports:
       - "127.0.10.23:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.23
       wisp-core1-north:
         ipv4_address: 10.100.1.11
       wisp-core2-north:
@@ -118,6 +124,8 @@ services:
     ports:
       - "127.0.10.24:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.24
       wisp-core1-south:
         ipv4_address: 10.100.2.11
       wisp-south-a:
@@ -152,6 +160,8 @@ services:
     ports:
       - "127.0.10.25:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.25
       wisp-core2-ix:
         ipv4_address: 10.100.4.11
       wisp-ix-dc:
@@ -210,6 +220,8 @@ services:
     ports:
       - "127.0.10.26:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.26
       wisp-north-a:
         ipv4_address: 10.110.0.11
       wisp-north-ring:
@@ -240,6 +252,8 @@ services:
     ports:
       - "127.0.10.27:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.27
       wisp-north-b:
         ipv4_address: 10.110.1.11
       wisp-north-ring:
@@ -270,6 +284,8 @@ services:
     ports:
       - "127.0.10.28:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.28
       wisp-south-a:
         ipv4_address: 10.120.0.11
       wisp-south-ring:
@@ -300,6 +316,8 @@ services:
     ports:
       - "127.0.10.29:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.29
       wisp-south-b:
         ipv4_address: 10.120.1.11
       wisp-south-ring:
@@ -330,6 +348,8 @@ services:
     ports:
       - "127.0.10.30:161:161/udp"
     networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.30
       wisp-ix-dc:
         ipv4_address: 10.130.0.11
       wisp-south-dc:
@@ -632,10 +652,14 @@ services:
   wisp-snmp-exporter:
     image: prom/snmp-exporter:latest
     container_name: theia-wisp-snmp-exporter
-    network_mode: host
     command:
       - --config.file=/etc/snmp_exporter/snmp.yml
       - --web.listen-address=:9117
+    ports:
+      - "127.0.0.1:${WISP_SNMP_EXPORTER_PORT:-9117}:9117"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.250
     volumes:
       - "./docker/prometheus/snmp.yml:/etc/snmp_exporter/snmp.yml:ro"
     depends_on:
@@ -687,10 +711,14 @@ services:
   wisp-prometheus:
     image: prom/prometheus:latest
     container_name: theia-wisp-prometheus
-    network_mode: host
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --web.listen-address=:9091
+    ports:
+      - "127.0.0.1:${WISP_PROMETHEUS_PORT:-9091}:9091"
+    networks:
+      wisp-access-mgmt:
+        ipv4_address: 172.31.250.251
     volumes:
       - "./docker/prometheus/prometheus.wisp.yml:/etc/prometheus/prometheus.yml:ro"
     depends_on:

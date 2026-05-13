@@ -1,0 +1,67 @@
+function Get-PrimaryMapId {
+  param([string]$ApiBase)
+
+  $payload = Invoke-RestMethod -Uri "$ApiBase/api/v1/canvas/maps" -TimeoutSec 10
+  $maps = @($payload.data) | Where-Object { $null -ne $_ }
+
+  foreach ($item in $maps) {
+    if ($item.is_default -eq $true) {
+      return [string]$item.id
+    }
+  }
+
+  if ($maps.Count -gt 0) {
+    return [string]$maps[0].id
+  }
+
+  return ""
+}
+
+function Get-DeviceIdByIp {
+  param(
+    [string]$ApiBase,
+    [string]$Ip
+  )
+
+  $payload = Invoke-RestMethod -Uri "$ApiBase/api/v1/devices" -TimeoutSec 10
+  foreach ($item in (@($payload.data) | Where-Object { $null -ne $_ })) {
+    if ($item.attributes.ip -eq $Ip) {
+      return [string]$item.id
+    }
+  }
+
+  return ""
+}
+
+function Add-DeviceToPrimaryMap {
+  param(
+    [string]$ApiBase,
+    [string]$DeviceId
+  )
+
+  $mapId = Get-PrimaryMapId -ApiBase $ApiBase
+  if ([string]::IsNullOrWhiteSpace($mapId) -or [string]::IsNullOrWhiteSpace($DeviceId)) {
+    return
+  }
+
+  try {
+    Invoke-RestMethod `
+      -Method Post `
+      -Uri "$ApiBase/api/v1/canvas/maps/$mapId/devices/$DeviceId" `
+      -ContentType "application/json" `
+      -Body '{"include_connected_links": true}' | Out-Null
+  }
+  catch {
+    $errorText = @(
+      $_.Exception.Message
+      $_.ErrorDetails.Message
+      ($_ | Out-String)
+    ) -join " "
+
+    if ($errorText -match "device already exists in this map") {
+      return
+    }
+
+    throw
+  }
+}

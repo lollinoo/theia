@@ -43,23 +43,31 @@ PY
 add_device_to_primary_map() {
   local device_id="$1"
   local map_id
+  local response
+  local body
+  local status
+
   map_id="$(primary_map_id || true)"
   if [ -z "$map_id" ] || [ -z "$device_id" ]; then
     return
   fi
 
-  curl -sf -X POST "$API_BASE/api/v1/canvas/maps/${map_id}/devices/${device_id}" \
+  response="$(curl -sS -X POST "$API_BASE/api/v1/canvas/maps/${map_id}/devices/${device_id}" \
     -H "Content-Type: application/json" \
-    -d '{"include_connected_links": true}' >/dev/null
-}
+    -d '{"include_connected_links": true}' \
+    -w $'\n%{http_code}' || true)"
+  status="${response##*$'\n'}"
+  body="${response%$'\n'"$status"}"
 
-created_device_id_from_response() {
-  python3 <<'PY'
-import json
-import sys
+  if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
+    return
+  fi
+  if [ "$status" = "409" ] && printf '%s' "$body" | grep -Fq "device already exists in this map"; then
+    return
+  fi
 
-payload = json.load(sys.stdin)
-data = payload.get("data", {})
-print(data.get("id", ""))
-PY
+  if [ -n "$body" ]; then
+    printf '%s\n' "$body" >&2
+  fi
+  return 1
 }

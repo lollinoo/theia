@@ -21,16 +21,21 @@ Network topology visualizer with SNMP monitoring, real-time metrics, and link ma
 |------|---------|---------|
 | Docker | 24+ | All services run in containers |
 | Docker Compose | v2 (plugin) | Orchestrates the stack |
-| `make` | any | Convenience commands |
+| GNU Make | 4+ recommended | Convenience commands |
+| PowerShell | 5.1+ on Windows | Windows-native Make recipes |
 | `curl` | any | Seed script / API testing |
 
 No Go or Node.js installation is required — the build happens inside Docker.
+
+Windows is supported with native GNU Make plus PowerShell and Docker Desktop. Git Bash and WSL are not required for Makefile targets. On macOS and Linux, the Makefile keeps using the existing POSIX shell scripts.
+
+Docker Desktop networking differs from native Linux networking. The standard development compose stack and the WISP lab publish explicit host ports and avoid `network_mode: host`. WISP seed commands auto-detect the Docker backend container and use the lab management network on Windows/macOS.
 
 ---
 
 ## Development Environment
 
-The dev stack runs everything locally with hot-reload for both backend and frontend, plus three SNMP device simulators (Router / Switch / AP) so you can develop without real network hardware.
+The dev stack runs the application locally with hot-reload for both backend and frontend, plus PostgreSQL and the optional Prometheus/SNMP exporter metrics path.
 
 ### Stack
 
@@ -41,16 +46,12 @@ The dev stack runs everything locally with hot-reload for both backend and front
 | PostgreSQL | `127.0.0.1:5432` | Bundled development database |
 | Prometheus | http://localhost:9090 | Metrics and alerting |
 | SNMP exporter | http://localhost:9116 | Prometheus SNMP scrape adapter |
-| SNMP Router sim | `127.0.10.10:161` | Router simulator (UDP) |
-| SNMP Switch sim | `127.0.10.11:161` | Cisco simulator (UDP) |
-| SNMP AP sim | `127.0.10.12:161` | Ubiquiti simulator (UDP) |
 
 ### 1. Clone and start
 
 ```bash
 git clone <repo-url>
 cd theia
-make install-hooks
 make dev
 ```
 
@@ -62,8 +63,6 @@ This builds all images and starts the full stack in the background. First build 
 cp config.example.yaml config.yaml
 ```
 
-`make install-hooks` is a one-time setup step per clone. It enables the repo-managed Git hooks so local commits must follow the conventional commits format, for example `feat(api): add device backup endpoint`. GitHub Actions validates the same rule again in CI.
-
 ### 2. Verify everything is up
 
 ```bash
@@ -74,13 +73,22 @@ curl -s http://localhost:8080/api/v1/health
 # {"status":"ok"}
 ```
 
-### 3. Seed the simulator devices
+### 3. Add devices
 
 ```bash
 make seed
 ```
 
-This calls the REST API to register the three SNMP simulators. After seeding, the backend probes them immediately via SNMP and the canvas will populate within ~10 seconds.
+This calls the REST API to register sample SNMP devices. Those addresses must be reachable from the backend container; the standard `docker-compose.yml` no longer starts local SNMP simulator containers.
+
+For a self-contained lab topology, start the WISP lab and seed it instead:
+
+```bash
+make wisp-lab
+make wisp-seed-all
+```
+
+After seeding reachable devices, the backend probes them immediately via SNMP and the canvas will populate within ~10 seconds.
 
 Open http://localhost:3000 to see the topology.
 
@@ -91,17 +99,12 @@ make logs           # Tail backend logs
 make stop           # Stop all containers
 make clean          # Stop + delete volumes (resets the database)
 make test           # Run unit tests
-make test-integration  # Run integration tests against SNMP sims
-
-# Debug SNMP simulators directly
-make snmpwalk-router   # snmpwalk 127.0.10.10
-make snmpwalk-switch   # snmpwalk 127.0.10.11
-make snmpwalk-ap       # snmpwalk 127.0.10.12
+make test-integration  # Run integration-tagged tests
 ```
 
 ### 4.1 Database default and small-install exception
 
-PostgreSQL is the standard database backend for Theia in development, staging, and production. The normal `make dev` flow starts the backend against the local PostgreSQL service on `127.0.0.1:5432`.
+PostgreSQL is the standard database backend for Theia in development, staging, and production. The normal `make dev` flow starts the backend against the bundled PostgreSQL service and publishes PostgreSQL on `127.0.0.1:5432` for host tools.
 
 SQLite is supported only for demo, lab, or very small installs, and only with explicit opt-in:
 
@@ -188,7 +191,7 @@ curl -X POST http://localhost:8080/api/v1/devices \
 
 ## WISP Lab
 
-If you want a denser topology than the default 3-device dev stack, this repo also includes a dedicated 10-router MikroTik-flavoured WISP lab with active OSPF and SNMP/LLDP discovery data for Theia.
+If you want a self-contained simulated topology, this repo also includes a dedicated 10-router MikroTik-flavoured WISP lab with active OSPF and SNMP/LLDP discovery data for Theia.
 
 ### What it gives you
 
@@ -196,6 +199,7 @@ If you want a denser topology than the default 3-device dev stack, this repo als
 - Real OSPF adjacencies via FRRouting inside the lab containers
 - Static SNMP + LLDP data so Theia can discover interfaces and links
 - A separate Prometheus instance on `http://localhost:9091`
+- A Docker management network for SNMP targets at `172.31.250.21` through `172.31.250.42`
 
 ### Topology shape
 
@@ -215,6 +219,7 @@ make wisp-lab
 
 This starts only the lab containers plus a dedicated Prometheus at `http://localhost:9091`. It does not replace the normal Theia dev stack.
 The lab now includes an internal transit router used only for eBGP with `wisp-ix-edge-01`, while the 10 MikroTik WISP routers remain the seeded topology shown in Theia.
+If the Docker backend container is already running, `make wisp-lab` also connects it to the WISP management network so SNMP probes work from Docker Desktop.
 
 If Theia is not already running, start it separately:
 
@@ -228,7 +233,7 @@ make dev
 make wisp-seed
 ```
 
-The seed script registers the routers at `127.0.10.21` through `127.0.10.30`. After probing completes, Theia should populate the WISP topology automatically from LLDP.
+The seed script defaults to `WISP_SEED_TARGET_MODE=auto`. With the Docker backend container running, it registers the routers at `172.31.250.21` through `172.31.250.30` and connects the backend to the lab network if needed. If no backend container is running, it falls back to host loopback targets `127.0.10.21` through `127.0.10.30`.
 
 ### Seed the radio access layer
 
@@ -236,7 +241,14 @@ The seed script registers the routers at `127.0.10.21` through `127.0.10.30`. Af
 make wisp-radio-seed
 ```
 
-This adds 4 sector APs and 8 subscriber CPE nodes on `127.0.10.31` through `127.0.10.42`. The AP sector interfaces simulate PtMP by advertising multiple LLDP neighbors on the same wireless interface.
+This adds 4 sector APs and 8 subscriber CPE nodes on the same target range: `172.31.250.31` through `172.31.250.42` for Docker-backed Theia, or `127.0.10.31` through `127.0.10.42` in host-loopback mode. The AP sector interfaces simulate PtMP by advertising multiple LLDP neighbors on the same wireless interface.
+
+Override the auto-detection only when needed:
+
+```bash
+make wisp-seed-all WISP_SEED_TARGET_MODE=docker
+make wisp-seed-all WISP_SEED_TARGET_MODE=host
+```
 
 For a fresh environment you can seed everything in one pass:
 
@@ -547,11 +559,12 @@ Common causes:
 docker exec theia-backend sh -c "apt-get install -y snmp -q && snmpget -v2c -c public <device-ip> 1.3.6.1.2.1.1.1.0"
 ```
 
+- For WISP lab devices on Docker Desktop, prefer `WISP_SEED_TARGET_MODE=docker` so Theia stores the `172.31.250.x` management targets reachable from the backend container
 - Verify the device IP is reachable from the Docker network
 - Confirm the SNMP community string matches the device configuration
 - For SNMPv3 devices, use `version: "3"` in the device payload with `username`, `auth_protocol`, `auth_passphrase`, `priv_protocol`, `priv_passphrase`
 
-### Frontend shows blank canvas after seed
+### Frontend shows blank canvas after seeding devices
 
 - Open browser devtools (F12) → Console for errors
 - Check that `/api/v1/devices` returns devices: `curl http://localhost:8080/api/v1/devices`
@@ -580,5 +593,5 @@ curl -X DELETE http://localhost:8080/api/v1/links/<uuid>
 ```bash
 make clean   # Stops containers and deletes the theia-data volume
 make dev     # Fresh start
-make seed    # Re-add simulator devices
+make seed    # Re-add sample devices if they are reachable from the backend container
 ```

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Seed script: adds the 3 SNMP simulator devices via the REST API
+# Seed script: adds sample SNMP devices via the REST API
 # Usage: ./scripts/seed.sh [API_BASE_URL]
 # =============================================================================
 set -euo pipefail
@@ -9,7 +9,8 @@ API_BASE="${1:-http://localhost:8080}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/seed-primary-map.sh"
 
-echo "=== Seeding Theia with SNMP simulator devices ==="
+echo "=== Seeding Theia with sample SNMP devices ==="
+echo "These devices must be reachable from the backend container."
 echo ""
 
 # Wait for API to be ready
@@ -47,7 +48,6 @@ create_seed_device() {
     -H "Content-Type: application/json" \
     -d "$payload")"
   echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
-  add_device_to_primary_map "$(echo "$response" | created_device_id_from_response)"
   echo ""
 }
 

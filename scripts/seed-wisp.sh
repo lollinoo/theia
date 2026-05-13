@@ -2,8 +2,10 @@
 set -euo pipefail
 
 API_BASE="${1:-http://localhost:8080}"
+TARGET_MODE="${2:-${WISP_SEED_TARGET_MODE:-auto}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/seed-primary-map.sh"
+source "$SCRIPT_DIR/wisp-lab-common.sh"
 
 echo "=== Seeding Theia with WISP lab routers ==="
 
@@ -17,6 +19,8 @@ for i in $(seq 1 30); do
   fi
   sleep 1
 done
+
+TARGET_PREFIX="$(wisp_seed_target_prefix "$TARGET_MODE")"
 
 create_router() {
   local ip="$1"
@@ -51,22 +55,21 @@ create_router() {
         \"lab\": \"wisp-ospf\",
         \"ospf_area\": \"${ospf_area}\"
       }
-    }")"
+  }")"
   echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
-  add_device_to_primary_map "$(echo "$response" | created_device_id_from_response)"
   echo ""
   sleep 0.5
 }
 
-create_router "127.0.10.21" "wisp-core-01" "core" "noc" "0.0.0.0"
-create_router "127.0.10.22" "wisp-core-02" "core" "noc" "0.0.0.0"
-create_router "127.0.10.23" "wisp-pop-north-01" "pop-abr" "pop-north" "0.0.0.0,0.0.0.10"
-create_router "127.0.10.24" "wisp-pop-south-01" "pop-abr" "pop-south" "0.0.0.0,0.0.0.20"
-create_router "127.0.10.25" "wisp-ix-edge-01" "edge" "ix" "0.0.0.0"
-create_router "127.0.10.26" "wisp-tower-north-01" "tower" "tower-north-a" "0.0.0.10"
-create_router "127.0.10.27" "wisp-tower-north-02" "tower" "tower-north-b" "0.0.0.10"
-create_router "127.0.10.28" "wisp-tower-south-01" "tower" "tower-south-a" "0.0.0.20"
-create_router "127.0.10.29" "wisp-tower-south-02" "tower" "tower-south-b" "0.0.0.20"
-create_router "127.0.10.30" "wisp-dc-agg-01" "datacenter-agg" "dc" "0.0.0.0"
+create_router "${TARGET_PREFIX}21" "wisp-core-01" "core" "noc" "0.0.0.0"
+create_router "${TARGET_PREFIX}22" "wisp-core-02" "core" "noc" "0.0.0.0"
+create_router "${TARGET_PREFIX}23" "wisp-pop-north-01" "pop-abr" "pop-north" "0.0.0.0,0.0.0.10"
+create_router "${TARGET_PREFIX}24" "wisp-pop-south-01" "pop-abr" "pop-south" "0.0.0.0,0.0.0.20"
+create_router "${TARGET_PREFIX}25" "wisp-ix-edge-01" "edge" "ix" "0.0.0.0"
+create_router "${TARGET_PREFIX}26" "wisp-tower-north-01" "tower" "tower-north-a" "0.0.0.10"
+create_router "${TARGET_PREFIX}27" "wisp-tower-north-02" "tower" "tower-north-b" "0.0.0.10"
+create_router "${TARGET_PREFIX}28" "wisp-tower-south-01" "tower" "tower-south-a" "0.0.0.20"
+create_router "${TARGET_PREFIX}29" "wisp-tower-south-02" "tower" "tower-south-b" "0.0.0.20"
+create_router "${TARGET_PREFIX}30" "wisp-dc-agg-01" "datacenter-agg" "dc" "0.0.0.0"
 
 echo "=== WISP lab seed complete ==="

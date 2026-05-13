@@ -2,19 +2,14 @@
 # Theia - Docker Compose
 # =============================================================================
 # Profiles:
-#   dev      — Frontend + backend + PostgreSQL + Prometheus + SNMP simulators
-#   test     — Backend + PostgreSQL + SNMP simulators only (for automated testing)
+#   dev      — Frontend + backend + PostgreSQL + Prometheus
+#   test     — Backend + PostgreSQL only (for automated testing)
 #   postgres — Local PostgreSQL only
 #
 # Usage:
 #   docker compose --profile dev up --build -d
 #   docker compose --profile test up -d --wait postgres
 #   docker compose --profile test run --rm backend go test ./...
-#
-# SNMP simulators are reachable from host network at:
-#   127.0.10.10:161  (router)
-#   127.0.10.11:161  (switch)
-#   127.0.10.12:161  (ap)
 # =============================================================================
 
 volumes:
@@ -34,7 +29,8 @@ services:
       target: dev
     profiles: ["dev", "test"]
     container_name: theia-backend
-    network_mode: host
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
     volumes:
       - ".:/app"
       - "theia-data:/app/data"
@@ -42,7 +38,7 @@ services:
       - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-postgres}
       - THEIA_ALLOW_SQLITE_SMALL_INSTALL=${THEIA_ALLOW_SQLITE_SMALL_INSTALL:-}
       - THEIA_DB_PATH=/app/data/theia.db
-      - THEIA_DB_DSN=${THEIA_DB_DSN:-postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable}
+      - THEIA_DB_DSN=${THEIA_DB_DSN:-postgres://theia:theia@postgres:5432/theia?sslmode=disable}
       - THEIA_DATA_DIR=/app/data
       - THEIA_LISTEN_ADDR=:8080
       - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-devkey1234567890}
@@ -53,12 +49,6 @@ services:
       - BUILD_DATE=${BUILD_DATE:-dev}
     depends_on:
       postgres:
-        condition: service_healthy
-      snmp-router:
-        condition: service_healthy
-      snmp-switch:
-        condition: service_healthy
-      snmp-ap:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/health"]
@@ -96,32 +86,27 @@ services:
       target: dev
     profiles: ["dev"]
     container_name: theia-frontend
-    network_mode: host
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
     volumes:
       - "./frontend/src:/app/src"
       - "./frontend/index.html:/app/index.html"
     environment:
-      - VITE_API_URL=http://localhost:8080
+      - VITE_API_URL=http://backend:8080
     depends_on:
       - backend
 
   # ---------------------------------------------------------------------------
-  # Metrics Stack — Prometheus scraping SNMP simulators through snmp_exporter
+  # Metrics Stack — Prometheus scraping SNMP targets through snmp_exporter
   # ---------------------------------------------------------------------------
   snmp-exporter:
     image: prom/snmp-exporter:latest
     profiles: ["dev"]
     container_name: theia-snmp-exporter
-    network_mode: host
+    ports:
+      - "${SNMP_EXPORTER_PORT:-9116}:9116"
     volumes:
       - "./docker/prometheus/snmp.yml:/etc/snmp_exporter/snmp.yml:ro"
-    depends_on:
-      snmp-router:
-        condition: service_healthy
-      snmp-switch:
-        condition: service_healthy
-      snmp-ap:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9116/metrics"]
       interval: 10s
@@ -133,7 +118,8 @@ services:
     image: prom/prometheus:latest
     profiles: ["dev"]
     container_name: theia-prometheus
-    network_mode: host
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - "./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
       - "./docker/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro"
@@ -145,79 +131,4 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
-
-  # ---------------------------------------------------------------------------
-  # SSH Mock — OpenSSH server for testing SSH backup functionality
-  # ---------------------------------------------------------------------------
-  ssh-mock:
-    image: lscr.io/linuxserver/openssh-server:latest
-    profiles: ["dev", "test"]
-    container_name: theia-ssh-mock
-    environment:
-      - USER_NAME=admin
-      - USER_PASSWORD=admin
-      - PASSWORD_ACCESS=true
-    ports:
-      - "127.0.10.20:2222:2222"
-    healthcheck:
-      test: ["CMD-SHELL", "ss -tlnp | grep -q ':2222'"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-
-  # ---------------------------------------------------------------------------
-  # SNMP Simulators — 3 devices forming Router <-> Switch <-> AP topology
-  # Reachable from host at 127.0.10.{10,11,12}:161
-  # ---------------------------------------------------------------------------
-  snmp-router:
-    build:
-      context: ./docker/snmp
-      dockerfile: Dockerfile.snmpd
-    profiles: ["dev", "test"]
-    container_name: theia-snmp-router
-    volumes:
-      - "./docker/snmp/router:/etc/snmp:ro"
-    ports:
-      - "127.0.10.10:161:161/udp"
-    healthcheck:
-      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.1.0"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-
-  snmp-switch:
-    build:
-      context: ./docker/snmp
-      dockerfile: Dockerfile.snmpd
-    profiles: ["dev", "test"]
-    container_name: theia-snmp-switch
-    volumes:
-      - "./docker/snmp/switch:/etc/snmp:ro"
-    ports:
-      - "127.0.10.11:161:161/udp"
-    healthcheck:
-      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.1.0"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-
-  snmp-ap:
-    build:
-      context: ./docker/snmp
-      dockerfile: Dockerfile.snmpd
-    profiles: ["dev", "test"]
-    container_name: theia-snmp-ap
-    volumes:
-      - "./docker/snmp/ap:/etc/snmp:ro"
-    ports:
-      - "127.0.10.12:161:161/udp"
-    healthcheck:
-      test: ["CMD", "snmpget", "-v2c", "-c", "public", "localhost", "1.3.6.1.2.1.1.1.0"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
       start_period: 10s
