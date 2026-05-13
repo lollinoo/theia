@@ -1,5 +1,6 @@
 import type { AutoLayoutEdge, AutoLayoutNode } from '../../hooks/useAutoLayout';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
+import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import { projectAreaTopology } from './areaProjection';
@@ -15,6 +16,7 @@ import {
   type CanvasPerfScenarioName,
   generateCanvasPerfScenario,
 } from './canvasPerfScenarios';
+import { projectCanvasRenderGraph } from './canvasRenderProjection';
 import { buildTopologyEdges } from './edgeBuilder';
 import {
   buildIncrementalLayoutInputs,
@@ -41,6 +43,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'composeCanvasTopology',
   'composeCanvasTopologyCached',
   'areaProjection',
+  'renderProjection',
   'runtimePatch',
   'incrementalLayout',
   'computeForceLayout',
@@ -88,6 +91,7 @@ const noopEdgeMenu = (() => undefined) as unknown as (
   event: MouseEvent | React.MouseEvent<SVGPathElement>,
   edgeId: string,
 ) => void;
+const noopGhostClick = () => undefined;
 
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -151,6 +155,28 @@ function buildLayoutInputs(scenario: CanvasPerfScenario): {
         target: link.target_device_id,
       })),
   };
+}
+
+const benchmarkAreaColors = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#d97706', '#0891b2'];
+
+function buildAreaColorMap(devices: Device[]): Map<string, string> {
+  const areaColorMap = new Map<string, string>();
+
+  for (const device of devices) {
+    for (const areaId of device.area_ids ?? []) {
+      if (areaColorMap.has(areaId)) continue;
+      areaColorMap.set(
+        areaId,
+        benchmarkAreaColors[areaColorMap.size % benchmarkAreaColors.length]!,
+      );
+    }
+  }
+
+  return areaColorMap;
+}
+
+function selectedDeviceIds(devices: Device[]): Set<string> {
+  return new Set(devices[0] ? [devices[0].id] : []);
 }
 
 function buildIncrementalBenchmarkState(scenario: CanvasPerfScenario): {
@@ -270,6 +296,8 @@ function benchmarkOperations(
       scenario.alerts,
     ),
   );
+  const nodeIndexById = new Map(nodes.map((node, index) => [node.id, index]));
+  const edgeIndexById = new Map(edges.map((edge, index) => [edge.id, index]));
 
   const compositionInput = {
     devices: scenario.devices,
@@ -323,6 +351,54 @@ function benchmarkOperations(
     }),
   );
 
+  const globalProjectionInput = projectAreaTopology({
+    devices: scenario.devices,
+    links: scenario.links,
+    selectedAreaId: null,
+  });
+  const selectedAreaProjectionInput = projectAreaTopology({
+    devices: scenario.devices,
+    links: scenario.links,
+    selectedAreaId: scenario.selectedAreaId,
+  });
+  const areaColorMap = buildAreaColorMap(scenario.devices);
+  measureLocalMetric(samples, scenarioName, 'renderProjection', () => {
+    const globalProjection = projectCanvasRenderGraph({
+      nodes,
+      edges,
+      devices: scenario.devices,
+      filteredDevices: globalProjectionInput.filteredDevices,
+      filteredLinks: globalProjectionInput.filteredLinks,
+      ghostDevices: globalProjectionInput.ghostDevices,
+      runtimeState,
+      areaColorMap,
+      effectiveAreaId: null,
+      selectedRealNodeIds: selectedDeviceIds(globalProjectionInput.filteredDevices),
+      ghostMeasurements: new Map(),
+      areaColorNodeCache: new Map(),
+      onGhostClick: noopGhostClick,
+    });
+
+    return {
+      global: globalProjection,
+      selectedArea: projectCanvasRenderGraph({
+        nodes,
+        edges,
+        devices: scenario.devices,
+        filteredDevices: selectedAreaProjectionInput.filteredDevices,
+        filteredLinks: selectedAreaProjectionInput.filteredLinks,
+        ghostDevices: selectedAreaProjectionInput.ghostDevices,
+        runtimeState,
+        areaColorMap,
+        effectiveAreaId: scenario.selectedAreaId,
+        selectedRealNodeIds: selectedDeviceIds(selectedAreaProjectionInput.filteredDevices),
+        ghostMeasurements: new Map(),
+        areaColorNodeCache: globalProjection.areaColorNodeCache,
+        onGhostClick: noopGhostClick,
+      }),
+    };
+  });
+
   measureLocalMetric(samples, scenarioName, 'runtimePatch', () => {
     const nextSnapshot = buildRuntimePatchSnapshot(scenario);
     const nextRuntimeState = buildRuntimeState({
@@ -344,7 +420,7 @@ function benchmarkOperations(
         runtimeState: nextRuntimeState,
         plan,
       }),
-      nodes: patchRuntimeNodes({ nodes, runtimeState: nextRuntimeState, plan }),
+      nodes: patchRuntimeNodes({ nodes, runtimeState: nextRuntimeState, plan, nodeIndexById }),
       edges: patchRuntimeEdges({
         edges,
         links: scenario.links,
@@ -352,6 +428,7 @@ function benchmarkOperations(
         alerts: scenario.alerts,
         onEdgeContextMenu: noopEdgeMenu,
         plan,
+        edgeIndexById,
       }),
     };
   });

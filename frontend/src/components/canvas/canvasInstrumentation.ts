@@ -7,6 +7,7 @@ export type CanvasMetricName =
   | 'composeCanvasTopology'
   | 'composeCanvasTopologyCached'
   | 'areaProjection'
+  | 'renderProjection'
   | 'runtimePatch'
   | 'incrementalLayout'
   | 'computeForceLayout'

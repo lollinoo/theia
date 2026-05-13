@@ -8,9 +8,7 @@ import {
   type OnMove,
   ReactFlow,
   SelectionMode,
-  applyEdgeChanges,
   useNodesInitialized,
-  useNodesState,
   useReactFlow,
   useStore,
 } from '@xyflow/react';
@@ -42,13 +40,24 @@ import {
   isGhostDeviceNode,
   topologyFitViewPadding,
 } from './canvas/canvasHelpers';
+import {
+  clearSelectedGraphItems,
+  patchEditMode,
+  patchHighlightedNode,
+  patchHighlightedNodeTransition,
+} from './canvas/canvasPresentationPatches';
+import {
+  type CanvasRenderProjectionNodeCacheEntry,
+  projectCanvasRenderGraph,
+} from './canvas/canvasRenderProjection';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
+import { useCanvasGraphState } from './canvas/useCanvasGraphState';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
-import { minimapColorForDevice, resolveDeviceMonitoringState } from './deviceVisualState';
+import { minimapColorForDevice } from './deviceVisualState';
 import { resolveLinkBadgeScale } from './linkSemantics';
 
 const nodeTypes = { device: DeviceCard };
@@ -104,35 +113,6 @@ function initialCanvasDiagnosticsVisible(): boolean {
 function isCanvasDiagnosticsShortcut(event: KeyboardEvent): boolean {
   const isPhysicalD = event.code === 'KeyD' || event.key.toLowerCase() === 'd';
   return event.altKey && (event.ctrlKey || event.metaKey) && isPhysicalD;
-}
-
-function selectedNodeIdsFromSignature(signature: string): Set<string> {
-  return new Set(signature === '' ? [] : signature.split('\u0000'));
-}
-
-function applyEdgeEmphasis(edges: LinkEdgeType[], selectedIds: Set<string>): LinkEdgeType[] {
-  if (selectedIds.size === 0) {
-    let changed = false;
-    const nextEdges = edges.map((edge) => {
-      if (!edge.data?.emphasis) return edge;
-      changed = true;
-      return { ...edge, data: { ...edge.data, emphasis: 'default' as const } };
-    });
-    return changed ? nextEdges : edges;
-  }
-
-  let changed = false;
-  const nextEdges = edges.map((edge) => {
-    if (!edge.data) return edge;
-    const emphasis =
-      selectedIds.has(edge.source) || selectedIds.has(edge.target)
-        ? ('connected' as const)
-        : ('muted' as const);
-    if (edge.data.emphasis === emphasis) return edge;
-    changed = true;
-    return { ...edge, data: { ...edge.data, emphasis } };
-  });
-  return changed ? nextEdges : edges;
 }
 
 function setEdgeInteractionMode(
@@ -192,8 +172,16 @@ export default function Canvas({
   onDetailDeviceChange,
   onInteractionActiveChange,
 }: CanvasProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<DeviceNode>([]);
-  const [edges, setEdges] = useState<LinkEdgeType[]>([]);
+  const {
+    nodes,
+    edges,
+    setNodes,
+    setEdges,
+    onNodesChange,
+    onEdgesChange,
+    nodeIndexByIdRef,
+    edgeIndexByIdRef,
+  } = useCanvasGraphState();
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
@@ -201,10 +189,9 @@ export default function Canvas({
   const deviceNodeReadabilityScaleRef = useRef('1');
   const linkBadgeReadabilityScaleRef = useRef('1');
   const highlightTimerRef = useRef<number | null>(null);
+  const highlightedDeviceIdRef = useRef<string | null>(null);
   const interactionIdleTimerRef = useRef<number | null>(null);
-  const areaColorNodeCacheRef = useRef(
-    new Map<string, { source: DeviceNode; colorSignature: string; node: DeviceNode }>(),
-  );
+  const areaColorNodeCacheRef = useRef(new Map<string, CanvasRenderProjectionNodeCacheEntry>());
   const ghostNodeMeasurementCacheRef = useRef(
     new Map<string, NonNullable<DeviceNode['measured']>>(),
   );
@@ -265,29 +252,21 @@ export default function Canvas({
     setShowSearch(false);
     setSelectedNodeCount(0);
     ghostNodeMeasurementCacheRef.current.clear();
-    setNodes((currentNodes) => {
-      let changed = false;
-      const nextNodes = currentNodes.map((node) => {
-        if (!node.selected) {
-          return node;
-        }
-        changed = true;
-        return { ...node, selected: false };
-      });
-      return changed ? nextNodes : currentNodes;
-    });
-    setEdges((currentEdges) => {
-      let changed = false;
-      const nextEdges = currentEdges.map((edge) => {
-        if (!edge.selected) {
-          return edge;
-        }
-        changed = true;
-        return { ...edge, selected: false };
-      });
-      return changed ? nextEdges : currentEdges;
-    });
+    setNodes(
+      (currentNodes) =>
+        clearSelectedGraphItems(currentNodes, [], {
+          nodeIndexById: nodeIndexByIdRef.current,
+        }).nodes,
+    );
+    setEdges(
+      (currentEdges) =>
+        clearSelectedGraphItems([], currentEdges, {
+          edgeIndexById: edgeIndexByIdRef.current,
+        }).edges,
+    );
   }, [
+    edgeIndexByIdRef,
+    nodeIndexByIdRef,
     selectedMapKey,
     setDeviceMenu,
     setEdgeMenu,
@@ -449,6 +428,8 @@ export default function Canvas({
     nodes,
     setNodes,
     setEdges,
+    nodeIndexByIdRef,
+    edgeIndexByIdRef,
     onDevicesChange,
     onLinksChange,
     onTopologyAreasChange,
@@ -516,74 +497,57 @@ export default function Canvas({
     return map;
   }, [topologyAreas, resolvedTheme]);
 
-  // Inject map-local visual colors and area colors into node data.
-  const nodesWithAreaColor = useMemo(() => {
-    const previousCache = areaColorNodeCacheRef.current;
-
-    const nextCache = new Map<
-      string,
-      { source: DeviceNode; colorSignature: string; node: DeviceNode }
-    >();
-    const nextNodes = nodes.map((n) => {
-      const colors = (n.data.device.area_ids ?? [])
-        .map((id) => areaColorMap.get(id))
-        .filter((c): c is string => !!c);
-      const newColors = colors.length > 0 ? colors : undefined;
-      const visualColor =
-        n.data.device.device_type === 'virtual'
-          ? (n.data.device.map_visual_color ?? undefined)
-          : undefined;
-      const colorSignature = `${visualColor ?? ''}\u0001${(newColors ?? []).join('\u0000')}`;
-      const cached = previousCache.get(n.id);
-      if (cached?.source === n && cached.colorSignature === colorSignature) {
-        nextCache.set(n.id, cached);
-        return cached.node;
-      }
-
-      const prev = n.data.areaColors;
-      const colorsEqual =
-        prev?.length === newColors?.length && (prev ?? []).every((c, i) => c === newColors?.[i]);
-      const node =
-        colorsEqual && n.data.visualColor === visualColor
-          ? n
-          : { ...n, data: { ...n.data, areaColors: newColors, visualColor } };
-      nextCache.set(n.id, { source: n, colorSignature, node });
-      return node;
-    });
-    areaColorNodeCacheRef.current = nextCache;
-    return nextNodes;
-  }, [nodes, areaColorMap]);
-
-  // Inject areaColor into edge data when both endpoints share at least one area
-  const edgesWithAreaColor = useMemo(() => {
-    if (areaColorMap.size === 0) return edges;
-    const deviceAreaMap = new Map<string, string[]>();
-    for (const device of devices) {
-      deviceAreaMap.set(device.id, device.area_ids ?? []);
-    }
-    return edges.map((e) => {
-      const srcAreas = new Set(deviceAreaMap.get(e.source) ?? []);
-      const tgtAreas = deviceAreaMap.get(e.target) ?? [];
-      const sharedArea = tgtAreas.find((a) => srcAreas.has(a));
-      const color = sharedArea ? areaColorMap.get(sharedArea) : undefined;
-      if (color === e.data?.areaColor) return e;
-      return { ...e, data: { ...e.data!, areaColor: color } };
-    });
-  }, [edges, areaColorMap, devices]);
-
-  const selectedRealNodeIdSignature = useMemo(
+  const selectedRealNodeIds = useMemo(
     () =>
-      nodes
-        .filter((node) => node.selected && !isGhostDeviceNode(node))
-        .map((node) => node.id)
-        .sort()
-        .join('\u0000'),
+      new Set(
+        nodes.filter((node) => node.selected && !isGhostDeviceNode(node)).map((node) => node.id),
+      ),
     [nodes],
   );
   const ghostDeviceIds = useMemo(
     () => new Set(ghostDevices.map((device) => device.id)),
     [ghostDevices],
   );
+  const handleGhostClick = useCallback(
+    (deviceId: string) => {
+      const clickedDevice = devices.find((device) => device.id === deviceId);
+      if (clickedDevice?.area_ids?.[0] && onAreaSelect) {
+        onAreaSelect(clickedDevice.area_ids[0]);
+      }
+    },
+    [devices, onAreaSelect],
+  );
+  const { displayNodes, displayEdges } = useMemo(() => {
+    const projection = projectCanvasRenderGraph({
+      nodes,
+      edges,
+      devices,
+      filteredDevices,
+      filteredLinks,
+      ghostDevices,
+      runtimeState,
+      areaColorMap,
+      effectiveAreaId,
+      selectedRealNodeIds,
+      ghostMeasurements: ghostNodeMeasurementCacheRef.current,
+      areaColorNodeCache: areaColorNodeCacheRef.current,
+      onGhostClick: handleGhostClick,
+    });
+    areaColorNodeCacheRef.current = projection.areaColorNodeCache;
+    return projection;
+  }, [
+    nodes,
+    edges,
+    devices,
+    filteredDevices,
+    filteredLinks,
+    ghostDevices,
+    runtimeState,
+    areaColorMap,
+    effectiveAreaId,
+    selectedRealNodeIds,
+    handleGhostClick,
+  ]);
   const handleNodesChange = useCallback(
     (changes: NodeChange<DeviceNode>[]) => {
       if (!effectiveAreaId || ghostDeviceIds.size === 0) {
@@ -617,93 +581,6 @@ export default function Canvas({
     },
     [effectiveAreaId, ghostDeviceIds, onNodesChange],
   );
-
-  // Build display nodes/edges by filtering the full node/edge set and adding ghost nodes
-  const displayNodes = useMemo(() => {
-    if (!effectiveAreaId) {
-      return nodesWithAreaColor;
-    }
-
-    const filteredDeviceIds = new Set(filteredDevices.map((d) => d.id));
-    // Keep existing nodes that are in the filtered area
-    const areaNodes = nodesWithAreaColor.filter((n) => filteredDeviceIds.has(n.id));
-
-    // Create ghost nodes for cross-area link endpoints
-    const ghostNodes: DeviceNode[] = ghostDevices.map((device) => {
-      const existingNode = nodesWithAreaColor.find((n) => n.id === device.id);
-
-      // Position ghost near its connected real node (offset by 200px per RESEARCH recommendation)
-      const connectedLink = filteredLinks.find(
-        (l) => l.source_device_id === device.id || l.target_device_id === device.id,
-      );
-      const connectedRealDeviceId = connectedLink
-        ? connectedLink.source_device_id === device.id
-          ? connectedLink.target_device_id
-          : connectedLink.source_device_id
-        : null;
-      const connectedRealNode = connectedRealDeviceId
-        ? areaNodes.find((n) => n.id === connectedRealDeviceId)
-        : null;
-
-      const basePos =
-        existingNode?.position ??
-        (connectedRealNode
-          ? {
-              x: connectedRealNode.position.x + 200,
-              y: connectedRealNode.position.y,
-            }
-          : { x: 0, y: 0 });
-      const runtimeDevice = runtimeState.devicesById.get(device.id);
-
-      return {
-        id: device.id,
-        type: 'device',
-        position: basePos,
-        measured: ghostNodeMeasurementCacheRef.current.get(device.id),
-        draggable: false,
-        data: {
-          kind: 'ghost-device',
-          device,
-          runtime: existingNode?.data.runtime ?? {
-            status: runtimeDevice?.device.status ?? device.status,
-            metrics: runtimeDevice?.metrics ?? null,
-            alertStatus: runtimeDevice?.alertStatus ?? 'normal',
-            monitoringState: runtimeDevice?.monitoringState ?? resolveDeviceMonitoringState(device),
-          },
-          pinned: false,
-          isGhost: true,
-          onGhostClick: (deviceId: string) => {
-            const clickedDevice = devices.find((d) => d.id === deviceId);
-            if (clickedDevice?.area_ids?.[0] && onAreaSelect) {
-              onAreaSelect(clickedDevice.area_ids[0]);
-            }
-          },
-        },
-      };
-    });
-
-    return [...areaNodes, ...ghostNodes];
-  }, [
-    effectiveAreaId,
-    nodesWithAreaColor,
-    filteredDevices,
-    filteredLinks,
-    ghostDevices,
-    devices,
-    runtimeState,
-    onAreaSelect,
-  ]);
-
-  const displayEdges = useMemo(() => {
-    const selectedIds = selectedNodeIdsFromSignature(selectedRealNodeIdSignature);
-    if (!effectiveAreaId) {
-      return applyEdgeEmphasis(edgesWithAreaColor, selectedIds);
-    }
-    // Filter edges to only include filtered links
-    const filteredLinkIds = new Set(filteredLinks.map((l) => l.id));
-    const areaEdges = edgesWithAreaColor.filter((e) => filteredLinkIds.has(e.id));
-    return applyEdgeEmphasis(areaEdges, selectedIds);
-  }, [effectiveAreaId, edgesWithAreaColor, filteredLinks, selectedRealNodeIdSignature]);
 
   const renderEdges = useMemo(
     () => setEdgeInteractionMode(displayEdges, canvasInteractionActive ? 'interactive' : 'idle'),
@@ -844,7 +721,7 @@ export default function Canvas({
   ]);
 
   useEffect(() => {
-    setNodes((prev) => prev.map((n) => ({ ...n, data: { ...n.data, editMode } })));
+    setNodes((prev) => patchEditMode(prev, editMode));
     if (!editMode) setSelectedNodeCount(0);
   }, [editMode, setNodes]);
   useEffect(
@@ -857,9 +734,43 @@ export default function Canvas({
     [],
   );
 
-  const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
-    setEdges((cur) => applyEdgeChanges(changes, cur));
-  }, []);
+  const applyDeviceHighlight = useCallback(
+    (deviceID: string) => {
+      const previousDeviceId = highlightedDeviceIdRef.current;
+      highlightedDeviceIdRef.current = deviceID;
+      setNodes((currentNodes) =>
+        patchHighlightedNodeTransition(
+          currentNodes,
+          nodeIndexByIdRef.current,
+          previousDeviceId,
+          deviceID,
+        ),
+      );
+    },
+    [nodeIndexByIdRef, setNodes],
+  );
+
+  const scheduleHighlightClear = useCallback(
+    (deviceID: string) => {
+      if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = window.setTimeout(() => {
+        setNodes((currentNodes) =>
+          patchHighlightedNode(currentNodes, nodeIndexByIdRef.current, deviceID, false),
+        );
+        if (highlightedDeviceIdRef.current === deviceID) {
+          highlightedDeviceIdRef.current = null;
+        }
+      }, 2000);
+    },
+    [nodeIndexByIdRef, setNodes],
+  );
+
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange<LinkEdgeType>[]) => {
+      onEdgesChange(changes);
+    },
+    [onEdgesChange],
+  );
   const handleConnect = useCallback(
     (connection: Connection) => {
       if (
@@ -895,20 +806,8 @@ export default function Canvas({
             zoom: 1.2,
             duration: 500,
           });
-          setNodes((cur) =>
-            cur.map((n) => ({
-              ...n,
-              data: { ...n.data, highlighted: n.id === deviceID },
-            })),
-          );
-          if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
-          highlightTimerRef.current = window.setTimeout(() => {
-            setNodes((cur) =>
-              cur.map((n) =>
-                n.id === deviceID ? { ...n, data: { ...n.data, highlighted: false } } : n,
-              ),
-            );
-          }, 2000);
+          applyDeviceHighlight(deviceID);
+          scheduleHighlightClear(deviceID);
         });
       });
       return;
@@ -920,18 +819,8 @@ export default function Canvas({
       zoom: 1.2,
       duration: 500,
     });
-    setNodes((cur) =>
-      cur.map((n) => ({
-        ...n,
-        data: { ...n.data, highlighted: n.id === deviceID },
-      })),
-    );
-    if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
-    highlightTimerRef.current = window.setTimeout(() => {
-      setNodes((cur) =>
-        cur.map((n) => (n.id === deviceID ? { ...n, data: { ...n.data, highlighted: false } } : n)),
-      );
-    }, 2000);
+    applyDeviceHighlight(deviceID);
+    scheduleHighlightClear(deviceID);
   }
 
   // Resolve Grafana URL for a device (per-device override or global)

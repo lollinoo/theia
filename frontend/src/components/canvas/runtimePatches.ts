@@ -24,6 +24,7 @@ interface PatchRuntimeNodesInput {
   nodes: DeviceNode[];
   runtimeState: RuntimeState;
   plan: RuntimePatchPlan;
+  nodeIndexById?: ReadonlyMap<string, number>;
 }
 
 interface PatchRuntimeDevicesInput {
@@ -39,6 +40,7 @@ interface PatchRuntimeEdgesInput {
   alerts: AlertDTO[];
   onEdgeContextMenu?: (event: MouseEvent | ReactMouseEvent<SVGPathElement>, edgeID: string) => void;
   plan: RuntimePatchPlan;
+  edgeIndexById?: ReadonlyMap<string, number>;
 }
 
 function collectChangedRuntimeIds<T>(
@@ -85,35 +87,37 @@ function runtimeValueEqual(left: unknown, right: unknown): boolean {
   return false;
 }
 
-function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeData> {
-  const edgeDataById = new Map<string, LinkEdgeData>();
-
-  for (const [linkId, runtimeLink] of runtimeState.linksById.entries()) {
-    const sourceRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.source_device_id);
-    const targetRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.target_device_id);
-
-    edgeDataById.set(linkId, {
-      sourceDeviceStatus: runtimeLink.sourceDeviceStatus,
-      targetDeviceStatus: runtimeLink.targetDeviceStatus,
-      sourceDeviceAlertStatus: sourceRuntimeDevice?.alertStatus,
-      targetDeviceAlertStatus: targetRuntimeDevice?.alertStatus,
-      sourceDeviceHealth: sourceRuntimeDevice?.metrics?.health,
-      targetDeviceHealth: targetRuntimeDevice?.metrics?.health,
-      sourceDevicePrimaryHealth: sourceRuntimeDevice?.primaryHealth ?? undefined,
-      targetDevicePrimaryHealth: targetRuntimeDevice?.primaryHealth ?? undefined,
-      sourceDeviceReachability: sourceRuntimeDevice?.metrics?.reachability,
-      targetDeviceReachability: targetRuntimeDevice?.metrics?.reachability,
-      sourceDeviceNetworkReachable: sourceRuntimeDevice?.metrics?.network_reachable,
-      targetDeviceNetworkReachable: targetRuntimeDevice?.metrics?.network_reachable,
-      sourceDeviceSnmpReachable: sourceRuntimeDevice?.metrics?.snmp_reachable,
-      targetDeviceSnmpReachable: targetRuntimeDevice?.metrics?.snmp_reachable,
-      metrics: runtimeLink.metrics,
-      throughputLabel: runtimeLink.metricsUsable ? runtimeLink.throughputLabel : undefined,
-      utilization: runtimeLink.metricsUsable ? runtimeLink.utilization : null,
-    });
+function buildRuntimeEdgeDataForLink(
+  linkId: string,
+  runtimeState: RuntimeState,
+): LinkEdgeData | undefined {
+  const runtimeLink = runtimeState.linksById.get(linkId);
+  if (!runtimeLink) {
+    return undefined;
   }
 
-  return edgeDataById;
+  const sourceRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.source_device_id);
+  const targetRuntimeDevice = runtimeState.devicesById.get(runtimeLink.link.target_device_id);
+
+  return {
+    sourceDeviceStatus: runtimeLink.sourceDeviceStatus,
+    targetDeviceStatus: runtimeLink.targetDeviceStatus,
+    sourceDeviceAlertStatus: sourceRuntimeDevice?.alertStatus,
+    targetDeviceAlertStatus: targetRuntimeDevice?.alertStatus,
+    sourceDeviceHealth: sourceRuntimeDevice?.metrics?.health,
+    targetDeviceHealth: targetRuntimeDevice?.metrics?.health,
+    sourceDevicePrimaryHealth: sourceRuntimeDevice?.primaryHealth ?? undefined,
+    targetDevicePrimaryHealth: targetRuntimeDevice?.primaryHealth ?? undefined,
+    sourceDeviceReachability: sourceRuntimeDevice?.metrics?.reachability,
+    targetDeviceReachability: targetRuntimeDevice?.metrics?.reachability,
+    sourceDeviceNetworkReachable: sourceRuntimeDevice?.metrics?.network_reachable,
+    targetDeviceNetworkReachable: targetRuntimeDevice?.metrics?.network_reachable,
+    sourceDeviceSnmpReachable: sourceRuntimeDevice?.metrics?.snmp_reachable,
+    targetDeviceSnmpReachable: targetRuntimeDevice?.metrics?.snmp_reachable,
+    metrics: runtimeLink.metrics,
+    throughputLabel: runtimeLink.metricsUsable ? runtimeLink.throughputLabel : undefined,
+    utilization: runtimeLink.metricsUsable ? runtimeLink.utilization : null,
+  };
 }
 
 function runtimeNodeDataChanged(
@@ -202,9 +206,42 @@ export function patchRuntimeNodes({
   nodes,
   runtimeState,
   plan,
+  nodeIndexById,
 }: PatchRuntimeNodesInput): DeviceNode[] {
   if (plan.deviceIds.size === 0) {
     return nodes;
+  }
+
+  if (nodeIndexById) {
+    let nextNodes: DeviceNode[] | null = null;
+
+    for (const deviceId of plan.deviceIds) {
+      const nodeIndex = nodeIndexById.get(deviceId);
+      if (nodeIndex === undefined) {
+        continue;
+      }
+
+      const node = nodes[nodeIndex];
+      if (!node || node.id !== deviceId || node.data.kind === 'ghost-device') {
+        continue;
+      }
+
+      const runtimeDevice = runtimeState.devicesById.get(deviceId);
+      if (!runtimeDevice || !runtimeNodeDataChanged(node, runtimeDevice)) {
+        continue;
+      }
+
+      nextNodes ??= nodes.slice();
+      nextNodes[nodeIndex] = {
+        ...node,
+        data: {
+          ...node.data,
+          runtime: buildNodeRuntimeData(runtimeDevice),
+        },
+      };
+    }
+
+    return nextNodes ?? nodes;
   }
 
   let changed = false;
@@ -269,34 +306,43 @@ export function patchRuntimeEdges({
   alerts,
   onEdgeContextMenu,
   plan,
+  edgeIndexById,
 }: PatchRuntimeEdgesInput): LinkEdgeType[] {
   if (plan.edgeIds.size === 0) {
     return edges;
   }
 
-  const linksById = new Map(links.map((link) => [link.id, link]));
-  const runtimeDevicesById = new Map(
-    Array.from(runtimeState.devicesById.values()).map(
-      (runtimeDevice) => [runtimeDevice.device.id, runtimeDevice.device] as const,
-    ),
-  );
-  const runtimeEdgeDataById = buildRuntimeEdgeData(runtimeState);
+  let linksById: Map<string, Link> | null = null;
   let changed = false;
-
-  const nextEdges = edges.map((edge) => {
-    if (!plan.edgeIds.has(edge.id)) {
-      return edge;
+  const linkForEdge = (edge: LinkEdgeType, edgeId: string): Link | undefined => {
+    if (edge.data?.link) {
+      return edge.data.link;
     }
-
-    const link = linksById.get(edge.id) ?? edge.data?.link;
+    linksById ??= new Map(links.map((link) => [link.id, link]));
+    return linksById.get(edgeId);
+  };
+  const runtimeDevicesByIdForLink = (link: Link): Map<string, Device> => {
+    const runtimeDevicesById = new Map<string, Device>();
+    const sourceRuntimeDevice = runtimeState.devicesById.get(link.source_device_id)?.device;
+    const targetRuntimeDevice = runtimeState.devicesById.get(link.target_device_id)?.device;
+    if (sourceRuntimeDevice) {
+      runtimeDevicesById.set(sourceRuntimeDevice.id, sourceRuntimeDevice);
+    }
+    if (targetRuntimeDevice) {
+      runtimeDevicesById.set(targetRuntimeDevice.id, targetRuntimeDevice);
+    }
+    return runtimeDevicesById;
+  };
+  const buildPatchedEdge = (edge: LinkEdgeType, edgeId: string): LinkEdgeType | null => {
+    const link = linkForEdge(edge, edgeId);
     if (!link || !edge.data) {
-      return edge;
+      return null;
     }
 
-    const runtimeEdgeData = runtimeEdgeDataById.get(edge.id);
+    const runtimeEdgeData = buildRuntimeEdgeDataForLink(edgeId, runtimeState);
     const nextCoreData = buildEdgeData(
       link,
-      runtimeDevicesById,
+      runtimeDevicesByIdForLink(link),
       {
         ...edge.data,
         ...runtimeEdgeData,
@@ -312,11 +358,50 @@ export function patchRuntimeEdges({
       interactionMode: edge.data.interactionMode,
     };
 
-    changed = true;
     return {
       ...edge,
       data: nextData,
     };
+  };
+
+  if (edgeIndexById) {
+    let nextEdges: LinkEdgeType[] | null = null;
+
+    for (const edgeId of plan.edgeIds) {
+      const edgeIndex = edgeIndexById.get(edgeId);
+      if (edgeIndex === undefined) {
+        continue;
+      }
+
+      const edge = edges[edgeIndex];
+      if (!edge || edge.id !== edgeId) {
+        continue;
+      }
+
+      const patchedEdge = buildPatchedEdge(edge, edgeId);
+      if (!patchedEdge) {
+        continue;
+      }
+
+      nextEdges ??= edges.slice();
+      nextEdges[edgeIndex] = patchedEdge;
+    }
+
+    return nextEdges ?? edges;
+  }
+
+  const nextEdges = edges.map((edge) => {
+    if (!plan.edgeIds.has(edge.id)) {
+      return edge;
+    }
+
+    const patchedEdge = buildPatchedEdge(edge, edge.id);
+    if (!patchedEdge) {
+      return edge;
+    }
+
+    changed = true;
+    return patchedEdge;
   });
 
   return changed ? nextEdges : edges;
