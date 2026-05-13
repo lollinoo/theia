@@ -1,0 +1,6 @@
+*.sh text eol=lf
+Makefile text eol=lf
+Dockerfile* text eol=lf
+docker/wisp-lab/Dockerfile text eol=lf
+docker/wisp-lab/*.py text eol=lf
+docker/wisp-lab/*.sh text eol=lf
