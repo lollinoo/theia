@@ -65,6 +65,7 @@ type Client struct {
 	overviewSend             chan []byte
 	hello                    chan clientControlMessage
 	needsResync              bool
+	overviewEpoch            uint64
 	usesHTTPRuntimeBootstrap bool
 	detailDeviceID           uuid.UUID
 }
@@ -178,16 +179,8 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 		return
 	}
 	clients := h.copyClients()
-	needsFallbackSnapshot := hasLegacyOverviewClients(clients)
 	var fallbackPayload []byte
-	if needsFallbackSnapshot {
-		fallbackMessage := NewSnapshotMessage(fallbackSnapshot, version)
-		fallbackPayload, err = json.Marshal(fallbackMessage)
-		if err != nil {
-			log.Printf("WebSocket hub: failed to marshal overview fallback snapshot: %v", err)
-			return
-		}
-	}
+	fallbackPayloadReady := false
 	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal overview resync marker: %v", err)
@@ -208,17 +201,21 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 		len(clients),
 	)
 	for _, client := range clients {
-		h.enqueueOverviewDelta(client, deltaPayload, resyncPayload, fallbackPayload)
-	}
-}
-
-func hasLegacyOverviewClients(clients []*Client) bool {
-	for _, client := range clients {
-		if !client.usesHTTPBootstrap() {
-			return true
+		_, needsFallbackSnapshot, observedOverviewEpoch := h.enqueueOverviewDelta(client, deltaPayload, resyncPayload)
+		if !needsFallbackSnapshot {
+			continue
 		}
+		if !fallbackPayloadReady {
+			fallbackMessage := NewSnapshotMessage(fallbackSnapshot, version)
+			fallbackPayload, err = json.Marshal(fallbackMessage)
+			if err != nil {
+				log.Printf("WebSocket hub: failed to marshal overview fallback snapshot: %v", err)
+				return
+			}
+			fallbackPayloadReady = true
+		}
+		h.enqueueOverviewLegacyFallback(client, deltaPayload, resyncPayload, fallbackPayload, observedOverviewEpoch)
 	}
-	return false
 }
 
 func runtimeDeltaPatchCounts(delta *RuntimeDeltaPayload) (int, int) {
@@ -339,6 +336,7 @@ func (h *Hub) enqueueOverviewSnapshot(client *Client, payload []byte) bool {
 		return false
 	}
 	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonSnapshot, clearQueuedMessages(client.overviewSend))
+	client.overviewEpoch++
 	client.needsResync = false
 	select {
 	case client.overviewSend <- payload:
@@ -349,38 +347,62 @@ func (h *Hub) enqueueOverviewSnapshot(client *Client, payload []byte) bool {
 	}
 }
 
-func (h *Hub) enqueueOverviewDelta(client *Client, deltaPayload, resyncPayload, fallbackPayload []byte) bool {
+func (h *Hub) enqueueOverviewDelta(client *Client, deltaPayload, resyncPayload []byte) (bool, bool, uint64) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
+		return false, false, 0
+	}
+	if !client.needsResync {
+		select {
+		case client.overviewSend <- deltaPayload:
+			client.overviewEpoch++
+			return true, false, client.overviewEpoch
+		default:
+		}
+	}
+	if client.usesHTTPRuntimeBootstrap {
+		observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
+		if client.needsResync {
+			h.recordOverviewResyncSuppressed(ResyncReasonClientResync)
+			return true, false, client.overviewEpoch
+		}
+		client.needsResync = true
+		h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientMailboxFull, clearQueuedMessages(client.overviewSend))
+		client.overviewEpoch++
+		select {
+		case client.overviewSend <- resyncPayload:
+			h.recordOverviewResyncRequired(ResyncReasonClientResync, true)
+			return true, false, client.overviewEpoch
+		default:
+			observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
+			return false, false, client.overviewEpoch
+		}
+	}
+	return true, true, client.overviewEpoch
+}
+
+func (h *Hub) enqueueOverviewLegacyFallback(client *Client, deltaPayload, resyncPayload, fallbackPayload []byte, observedOverviewEpoch uint64) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed || client.usesHTTPRuntimeBootstrap {
+		return false
+	}
+	if client.overviewEpoch != observedOverviewEpoch {
 		return false
 	}
 	if !client.needsResync {
 		select {
 		case client.overviewSend <- deltaPayload:
+			client.overviewEpoch++
 			return true
 		default:
 		}
 	}
 	observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
-	if client.usesHTTPRuntimeBootstrap {
-		if client.needsResync {
-			h.recordOverviewResyncSuppressed(ResyncReasonClientResync)
-			return true
-		}
-		client.needsResync = true
-		h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientMailboxFull, clearQueuedMessages(client.overviewSend))
-		select {
-		case client.overviewSend <- resyncPayload:
-			h.recordOverviewResyncRequired(ResyncReasonClientResync, true)
-			return true
-		default:
-			observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
-			return false
-		}
-	}
-	client.needsResync = true
 	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientMailboxFull, clearQueuedMessages(client.overviewSend))
+	client.overviewEpoch++
+	client.needsResync = true
 	select {
 	case client.overviewSend <- resyncPayload:
 		h.recordOverviewResyncRequired(ResyncReasonClientResync, false)
@@ -406,6 +428,7 @@ func (h *Hub) enqueueOverviewHTTPResync(client *Client, resyncPayload []byte, re
 	}
 	client.needsResync = true
 	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonHTTPResyncRequired, clearQueuedMessages(client.overviewSend))
+	client.overviewEpoch++
 	select {
 	case client.overviewSend <- resyncPayload:
 		h.recordOverviewResyncRequired(reason, true)
@@ -423,6 +446,7 @@ func (h *Hub) enqueueOverviewResync(client *Client, resyncPayload, snapshotPaylo
 		return false
 	}
 	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonExplicitResync, clearQueuedMessages(client.overviewSend))
+	client.overviewEpoch++
 	client.needsResync = false
 	select {
 	case client.overviewSend <- resyncPayload:
@@ -519,6 +543,7 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	c.usesHTTPRuntimeBootstrap = true
 	c.needsResync = false
 	c.hub.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientHello, clearQueuedMessages(c.overviewSend))
+	c.overviewEpoch++
 	c.mu.Unlock()
 
 	if c.hello == nil {
@@ -536,6 +561,7 @@ func (c *Client) markHTTPRuntimeResyncPending() {
 	c.usesHTTPRuntimeBootstrap = true
 	c.needsResync = true
 	c.hub.recordOverviewMailboxClear(wsOverviewMailboxClearReasonHTTPResyncPending, clearQueuedMessages(c.overviewSend))
+	c.overviewEpoch++
 	c.mu.Unlock()
 }
 

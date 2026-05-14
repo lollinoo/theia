@@ -93,17 +93,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var bootstrapMessage Message
 	bootstrapDecision := MessageTypeSnapshot
+	bootstrapResyncReason := ""
 	versionMatch := hasHello && hello.RuntimeVersion != nil && *hello.RuntimeVersion == version
 	identityMatch := hasHello && hello.RuntimeIdentity != "" && hello.RuntimeIdentity == runtimeIdentity
 	if hasHello && clientRuntimeCurrent(hello, version, runtimeIdentity) {
 		bootstrapMessage = NewReadyMessage(version, alerts.Version, runtimeIdentity)
 		bootstrapDecision = MessageTypeReady
 	} else if hasHello {
+		bootstrapResyncReason = ResyncReasonClientMissingRuntimeSnapshot
 		bootstrapMessage = Message{
 			Type: MessageTypeResyncRequired,
 			Payload: ResyncRequiredPayload{
 				Scope:  ResyncScopeOverview,
-				Reason: ResyncReasonClientMissingRuntimeSnapshot,
+				Reason: bootstrapResyncReason,
 			},
 		}
 		bootstrapDecision = MessageTypeResyncRequired
@@ -128,6 +130,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if !h.hub.WriteTo(client, bootstrapMessage) {
 		return
+	}
+	if bootstrapDecision == MessageTypeResyncRequired {
+		h.hub.recordOverviewResyncRequired(bootstrapResyncReason, true)
 	}
 	if !h.hub.WriteTo(client, NewAlertMessage(alerts.Alerts, alerts.Version)) {
 		return

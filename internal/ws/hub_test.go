@@ -221,6 +221,100 @@ func TestHubOverviewDelta_SkipsFallbackSerializationWhenAllClientsUseHTTPBootstr
 	}
 }
 
+func TestHubOverviewDelta_SkipsFallbackSerializationForReadyLegacyClient(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+
+	unsupported := math.NaN()
+	fallback := EmptySnapshot()
+	fallback.Devices["dev-1"] = DeviceRuntimeDTO{
+		DeviceID:   "dev-1",
+		CPUPercent: &unsupported,
+	}
+
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), MessageTypeRuntimeDelta) {
+		t.Fatalf("expected overview message to be runtime_delta, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), MessageTypeSnapshot) {
+		t.Fatalf("expected ready legacy client not to receive snapshot, got %s", string(payload))
+	}
+}
+
+func TestHubOverviewDelta_SkipsLegacyFallbackWhenClientBecomesHTTPBootstrap(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
+	if err != nil {
+		t.Fatalf("marshal resync payload: %v", err)
+	}
+	_, needsFallback, observedOverviewEpoch := hub.enqueueOverviewDelta(client, []byte(`{"type":"runtime_delta"}`), resyncPayload)
+	if !needsFallback {
+		t.Fatal("expected legacy overflow to request fallback")
+	}
+
+	version := uint64(2)
+	client.acceptHello(clientControlMessage{
+		Type:           MessageTypeHello,
+		RuntimeVersion: &version,
+	})
+
+	if ok := hub.enqueueOverviewLegacyFallback(client, []byte(`{"type":"runtime_delta"}`), resyncPayload, []byte(`{"type":"snapshot"}`), observedOverviewEpoch); ok {
+		t.Fatal("expected fallback enqueue to be skipped after HTTP bootstrap")
+	}
+	if got := len(client.overviewSend); got != 0 {
+		t.Fatalf("overview mailbox length = %d, want 0", got)
+	}
+	if client.needsResync {
+		t.Fatal("expected client to remain out of legacy fallback resync state")
+	}
+}
+
+func TestHubOverviewDelta_SkipsStaleLegacyFallbackAfterNewerSnapshot(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
+	if err != nil {
+		t.Fatalf("marshal resync payload: %v", err)
+	}
+	_, needsFallback, observedOverviewEpoch := hub.enqueueOverviewDelta(client, []byte(`{"type":"old-runtime-delta"}`), resyncPayload)
+	if !needsFallback {
+		t.Fatal("expected legacy overflow to request fallback")
+	}
+
+	hub.enqueueOverviewSnapshot(client, []byte(`{"type":"new-snapshot"}`))
+
+	if ok := hub.enqueueOverviewLegacyFallback(client, []byte(`{"type":"old-runtime-delta"}`), resyncPayload, []byte(`{"type":"old-snapshot"}`), observedOverviewEpoch); ok {
+		t.Fatal("expected stale fallback enqueue to be skipped after newer snapshot")
+	}
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), "new-snapshot") {
+		t.Fatalf("expected newer snapshot to remain queued, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), "old-runtime-delta") || strings.Contains(string(payload), "old-snapshot") {
+		t.Fatalf("expected stale fallback payloads not to be queued, got %s", string(payload))
+	}
+	if client.needsResync {
+		t.Fatal("expected newer snapshot state not to be marked for legacy resync")
+	}
+}
+
 func TestHubOverviewDelta_RecordsHTTPResyncMetricsOnceWhilePending(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {

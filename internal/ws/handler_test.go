@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/lollinoo/theia/internal/logging"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 func captureDebugLogs(t *testing.T) *bytes.Buffer {
@@ -272,6 +273,88 @@ func TestHandlerServeHTTP_QueryHelloSkipsBootstrapSnapshotWhenClientHelloMessage
 	}
 	if message.Type != MessageTypeReady {
 		t.Fatalf("bootstrap message type = %q, want %q", message.Type, MessageTypeReady)
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerServeHTTP_StaleQueryHelloRecordsHTTPBootstrapResyncMetric(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	hub := NewHub()
+	go hub.Run()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			return snapshot, 2
+		},
+		func() AlertMessagePayload {
+			return AlertMessagePayload{Version: 7, Alerts: []AlertDTO{}}
+		},
+		func() PrometheusStatusPayload {
+			return PrometheusStatusPayload{}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("canvas_schema_version", "1")
+	params.Set("runtime_version", "1")
+	params.Set("runtime_identity", "rt-sha256:stale")
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?" + params.Encode()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial websocket test server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read bootstrap websocket message: %v", err)
+	}
+	var message struct {
+		Type    string                `json:"type"`
+		Payload ResyncRequiredPayload `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("failed to decode bootstrap websocket message: %v", err)
+	}
+	if message.Type != MessageTypeResyncRequired {
+		t.Fatalf("first bootstrap message = %q, want resync_required", message.Type)
+	}
+	if message.Payload.Scope != ResyncScopeOverview {
+		t.Fatalf("resync scope = %q, want %q", message.Payload.Scope, ResyncScopeOverview)
+	}
+	if message.Payload.Reason != ResyncReasonClientMissingRuntimeSnapshot {
+		t.Fatalf("resync reason = %q, want %q", message.Payload.Reason, ResyncReasonClientMissingRuntimeSnapshot)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read alert bootstrap websocket message: %v", err)
+	}
+	var alertMessage struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &alertMessage); err != nil {
+		t.Fatalf("failed to decode alert bootstrap websocket message: %v", err)
+	}
+	if alertMessage.Type != MessageTypeAlert {
+		t.Fatalf("second bootstrap message = %q, want alert", alertMessage.Type)
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_ws_client_resync_required_total{bootstrap="http",reason="client_missing_runtime_snapshot",scope="overview"} 1`) {
+		t.Fatalf("expected HTTP bootstrap resync metric, got:\n%s", metrics)
 	}
 	conn.SetReadDeadline(time.Time{})
 }
