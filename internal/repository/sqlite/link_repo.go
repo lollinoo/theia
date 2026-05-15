@@ -323,11 +323,11 @@ func (r *LinkRepo) deleteOnce(id uuid.UUID) error {
 // interface pair. Unlike the old device-pair canonicalization, distinct parallel
 // uplinks between the same two devices must remain separate rows.
 //
-// Same-direction matches require the same device IDs plus the same target interface
-// and either the same source interface or an empty stored/incoming source interface
-// so incomplete discoveries can be enriched in place. Reverse-direction matches
-// require the mirrored device IDs plus the mirrored interface names for the same
-// physical cable.
+// Same-direction matches require the same device IDs plus compatible interface
+// names, where empty stored/incoming source or target interfaces are treated as
+// incomplete data that can be enriched in place. Reverse-direction matches require
+// the mirrored device IDs plus the mirrored interface names for the same physical
+// cable.
 //
 // All operations run inside a single transaction to prevent duplicate rows under
 // concurrent SNMP discovery.
@@ -360,36 +360,30 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 	defer tx.Rollback() //nolint:errcheck
 
 	// Check for an existing link in the same direction (A→B) for the same physical
-	// interface pair. Empty source interface names are treated as incomplete data
-	// that can match and be enriched in place.
-	var existingID string
-	var existingSrcIf, existingTgtIf, existingProtocol string
-	err = tx.QueryRow(
-		`SELECT id, source_if_name, target_if_name, discovery_protocol FROM links
-		 WHERE source_device_id = ? AND target_device_id = ?
-		   AND target_if_name = ?
-		   AND (source_if_name = ? OR source_if_name = '' OR ? = '')`,
-		link.SourceDeviceID.String(), link.TargetDeviceID.String(),
-		link.TargetIfName, link.SourceIfName, link.SourceIfName,
-	).Scan(&existingID, &existingSrcIf, &existingTgtIf, &existingProtocol)
-
-	if err == nil {
+	// interface pair. Empty interface names are treated as incomplete data that can
+	// match and be enriched in place, but ambiguous partial observations must not
+	// attach to an arbitrary parallel link.
+	sameDirection, err := findBestSameDirectionLinkMatch(tx, link)
+	if err != nil {
+		return domain.LinkUpsertResult{}, fmt.Errorf("checking same-direction link: %w", err)
+	}
+	if sameDirection != nil {
 		// Same-direction match: fill any empty port names and update protocol only
 		// when the stored row materially changes. Identical rediscovery is a no-op.
-		link.ID = uuid.MustParse(existingID)
-		newSrcIf := existingSrcIf
+		link.ID = uuid.MustParse(sameDirection.ID)
+		newSrcIf := sameDirection.SourceIfName
 		if newSrcIf == "" && link.SourceIfName != "" {
 			newSrcIf = link.SourceIfName
 		}
-		newTgtIf := existingTgtIf
+		newTgtIf := sameDirection.TargetIfName
 		if newTgtIf == "" && link.TargetIfName != "" {
 			newTgtIf = link.TargetIfName
 		}
 		link.SourceIfName = newSrcIf
 		link.TargetIfName = newTgtIf
 
-		portsChanged := newSrcIf != existingSrcIf || newTgtIf != existingTgtIf
-		protocolChanged := existingProtocol != string(link.DiscoveryProtocol)
+		portsChanged := newSrcIf != sameDirection.SourceIfName || newTgtIf != sameDirection.TargetIfName
+		protocolChanged := sameDirection.Protocol != string(link.DiscoveryProtocol)
 		if !portsChanged && !protocolChanged {
 			membershipChanged, err := r.addLinkToMaterializedBaseEndpointMaps(tx, link, now)
 			if err != nil {
@@ -414,7 +408,7 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 			`UPDATE links SET source_if_name = ?, target_if_name = ?,
 			 discovery_protocol = ?, updated_at = ? WHERE id = ?`,
 			newSrcIf, newTgtIf,
-			string(link.DiscoveryProtocol), link.UpdatedAt, existingID,
+			string(link.DiscoveryProtocol), link.UpdatedAt, sameDirection.ID,
 		); err != nil {
 			return domain.LinkUpsertResult{}, fmt.Errorf("updating link: %w", err)
 		}
@@ -433,9 +427,6 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 		result := domain.LinkUpsertResult{Created: false, Changed: true, Kind: kind}
 		r.recordUpsert(result, link.DiscoveryProtocol)
 		return result, nil
-	}
-	if err != sql.ErrNoRows {
-		return domain.LinkUpsertResult{}, fmt.Errorf("checking existing link: %w", err)
 	}
 
 	// Check for a reverse-direction record (B→A) for the same physical cable.
@@ -569,19 +560,18 @@ func (r *LinkRepo) addLinkToMaterializedBaseEndpointMaps(tx *Tx, link *domain.Li
 		 JOIN canvas_map_devices target_members
 		   ON target_members.map_id = source_members.map_id
 		  AND target_members.device_id = ?
-		  AND target_members.role = ?
 		 JOIN canvas_maps cm
 		   ON cm.id = source_members.map_id
 		  AND cm.membership_materialized = ?
 		 WHERE source_members.device_id = ?
-		   AND source_members.role = ?
+		   AND (source_members.role = ? OR target_members.role = ?)
 		 ON CONFLICT(map_id, link_id) DO NOTHING`,
 		link.ID.String(),
 		now,
 		link.TargetDeviceID.String(),
-		string(domain.CanvasMapDeviceRoleBase),
 		true,
 		link.SourceDeviceID.String(),
+		string(domain.CanvasMapDeviceRoleBase),
 		string(domain.CanvasMapDeviceRoleBase),
 	)
 	if err != nil {
@@ -671,6 +661,78 @@ func findManualCreateEquivalentLink(tx *Tx, link *domain.Link, browserLocalStora
 		link.TargetDeviceID.String(), link.TargetIfName,
 		link.SourceDeviceID.String(), link.SourceIfName,
 	))
+}
+
+type sameDirectionLinkMatch struct {
+	ID           string
+	SourceIfName string
+	TargetIfName string
+	Protocol     string
+	score        int
+}
+
+func findBestSameDirectionLinkMatch(tx *Tx, link *domain.Link) (*sameDirectionLinkMatch, error) {
+	rows, err := tx.Query(
+		`SELECT id, source_if_name, target_if_name, discovery_protocol FROM links
+		 WHERE source_device_id = ? AND target_device_id = ?
+		 ORDER BY created_at`,
+		link.SourceDeviceID.String(), link.TargetDeviceID.String(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var best *sameDirectionLinkMatch
+	ambiguous := false
+
+	for rows.Next() {
+		var candidate sameDirectionLinkMatch
+		if err := rows.Scan(&candidate.ID, &candidate.SourceIfName, &candidate.TargetIfName, &candidate.Protocol); err != nil {
+			return nil, fmt.Errorf("scanning same-direction link candidate: %w", err)
+		}
+
+		srcScore, srcMatch := sameDirectionInterfaceScore(candidate.SourceIfName, link.SourceIfName)
+		if !srcMatch {
+			continue
+		}
+		tgtScore, tgtMatch := sameDirectionInterfaceScore(candidate.TargetIfName, link.TargetIfName)
+		if !tgtMatch {
+			continue
+		}
+
+		candidate.score = srcScore + tgtScore
+		if best == nil || candidate.score > best.score {
+			candidateCopy := candidate
+			best = &candidateCopy
+			ambiguous = false
+			continue
+		}
+		if candidate.score == best.score {
+			ambiguous = true
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating same-direction link candidates: %w", err)
+	}
+	if ambiguous {
+		return nil, nil
+	}
+	return best, nil
+}
+
+func sameDirectionInterfaceScore(existing, incoming string) (int, bool) {
+	if existing == incoming {
+		if existing == "" {
+			return 1, true
+		}
+		return 3, true
+	}
+	if existing == "" || incoming == "" {
+		return 0, true
+	}
+	return 0, false
 }
 
 func scanLinkRow(row linkRowScanner) (*domain.Link, error) {
