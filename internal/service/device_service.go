@@ -227,12 +227,14 @@ func (s *DeviceService) updateTopologyDiscoveryState(deviceID uuid.UUID, mutate 
 
 func topologyDiscoveryResultLabel(neighborCount int, followupScheduled bool, criticalFailure bool) string {
 	switch {
+	case criticalFailure && (neighborCount > 0 || followupScheduled):
+		return "partial_discovery_failed"
+	case criticalFailure:
+		return "discovery_failed"
 	case neighborCount > 0 && followupScheduled:
 		return "ports_pending"
 	case neighborCount > 0:
 		return "neighbors_found"
-	case criticalFailure:
-		return "discovery_failed"
 	case followupScheduled:
 		return "ports_pending"
 	default:
