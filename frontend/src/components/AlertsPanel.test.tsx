@@ -70,6 +70,7 @@ describe('AlertsPanel (COMP-06)', () => {
     const { getByText } = render(
       <AlertsPanel
         model={mockModel({
+          activeAlertCount: 0,
           firingAlerts: [],
           prometheusDiagnostics: {
             title: 'Prometheus diagnostics unavailable',
@@ -88,14 +89,15 @@ describe('AlertsPanel (COMP-06)', () => {
     const { getByText } = render(
       <AlertsPanel
         model={mockModel({
+          activeAlertCount: 0,
           firingAlerts: [],
           resolvedAlerts: [mockAlert({ state: 'resolved', alertName: 'RecoveredCPU' })],
         })}
       />,
     );
 
-    expect(getByText('Resolved (1)')).toBeInTheDocument();
-    expect(getByText('RecoveredCPU')).toBeInTheDocument();
+    expect(getByText('Resolved alerts (1)')).toBeInTheDocument();
+    expect(getByText('Problem: Recovered CPU')).toBeInTheDocument();
   });
 
   it('shows the authoritative active alert count when normalized totals exceed rendered rows', () => {
@@ -108,14 +110,89 @@ describe('AlertsPanel (COMP-06)', () => {
       />,
     );
 
-    expect(getByText('Active (3)')).toBeInTheDocument();
+    expect(getByText('Active alerts (3)')).toBeInTheDocument();
     expect(
-      getByText(/showing 1 alert row while normalized runtime reports 3 active alerts/i),
+      getByText(
+        /runtime reports 3 active alerts, but only 1 can be shown as individual rows right now/i,
+      ),
     ).toBeInTheDocument();
   });
 
+  it('shows runtime active alert count when no individual rows can be rendered', () => {
+    const { getByText, queryByText } = render(
+      <AlertsPanel
+        model={mockModel({
+          activeAlertCount: 2,
+          firingAlerts: [],
+        })}
+      />,
+    );
+
+    expect(getByText('Active alerts (2)')).toBeInTheDocument();
+    expect(
+      getByText(/runtime reports 2 active alerts, but no individual rows can be shown right now/i),
+    ).toBeInTheDocument();
+    expect(queryByText('No active alerts')).not.toBeInTheDocument();
+  });
+
+  it('uses singular active alert copy when one runtime alert has no row', () => {
+    const { getByText, queryByText } = render(
+      <AlertsPanel
+        model={mockModel({
+          activeAlertCount: 1,
+          firingAlerts: [],
+        })}
+      />,
+    );
+
+    expect(getByText('Active alerts (1)')).toBeInTheDocument();
+    expect(
+      getByText(/runtime reports 1 active alert, but no individual rows can be shown right now/i),
+    ).toBeInTheDocument();
+    expect(queryByText('No active alerts')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['HighCPU', 'High CPU'],
+    ['SNMPDegraded', 'SNMP degraded'],
+    ['ALERT_CPU_HIGH', 'Alert CPU high'],
+    ['HTTP5xxErrors', 'HTTP 5xx errors'],
+    ['BGPNeighborDown', 'BGP neighbor down'],
+  ])('renders %s as the readable problem title %s', (alertName, expectedTitle) => {
+    const { getByText } = render(
+      <AlertsPanel
+        model={mockModel({
+          firingAlerts: [mockAlert({ alertName })],
+        })}
+      />,
+    );
+
+    expect(getByText(`Problem: ${expectedTitle}`)).toBeInTheDocument();
+  });
+
+  it('renders the device label as the primary location and normalizes the problem title', () => {
+    const { getByText } = render(
+      <AlertsPanel
+        model={mockModel({
+          firingAlerts: [
+            mockAlert({
+              deviceLabel: 'core-router-01',
+              alertName: 'LinkTelemetryUnavailable',
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(getByText('core-router-01')).toHaveClass('text-sm', 'font-medium', 'text-on-bg');
+    expect(getByText('Problem: Link telemetry unavailable')).toBeInTheDocument();
+    expect(getByText('Details: CPU usage is high')).toBeInTheDocument();
+  });
+
   it('does not render Prometheus diagnostics without a diagnostics model', () => {
-    const { queryByText } = render(<AlertsPanel model={mockModel({ firingAlerts: [] })} />);
+    const { queryByText } = render(
+      <AlertsPanel model={mockModel({ activeAlertCount: 0, firingAlerts: [] })} />,
+    );
 
     expect(queryByText('Prometheus diagnostics unavailable')).not.toBeInTheDocument();
   });

@@ -38,9 +38,62 @@ function stateBadge(state: string) {
   );
 }
 
+const alertTitleAcronyms = new Set([
+  'API',
+  'BGP',
+  'CPU',
+  'DNS',
+  'HTTP',
+  'HTTPS',
+  'ICMP',
+  'IP',
+  'LAN',
+  'OID',
+  'SNMP',
+  'SSH',
+  'SSL',
+  'TCP',
+  'TLS',
+  'UDP',
+  'VPN',
+  'WAN',
+]);
+
+function readableAlertTitle(alertName: string) {
+  const words = alertName
+    .trim()
+    .split(/[^A-Za-z0-9]+/)
+    .flatMap((part) => part.match(/[A-Z]+(?=[A-Z][a-z]|\d|$)|\d+[a-z]+|[A-Z]?[a-z]+|\d+/g) ?? []);
+
+  if (words.length === 0) {
+    return alertName;
+  }
+
+  return words
+    .map((word, index) => {
+      const upperWord = word.toUpperCase();
+      if (alertTitleAcronyms.has(upperWord)) {
+        return upperWord;
+      }
+      if (index === 0) {
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      }
+      return word.toLowerCase();
+    })
+    .join(' ');
+}
+
 export function AlertsPanel({ model }: AlertsPanelProps) {
   const { activeAlertCount, firingAlerts, resolvedAlerts, prometheusDiagnostics } = model;
+  const hasActiveAlerts = activeAlertCount > 0 || firingAlerts.length > 0;
   const hiddenActiveAlerts = Math.max(activeAlertCount - firingAlerts.length, 0);
+  const activeAlertLabel = activeAlertCount === 1 ? 'active alert' : 'active alerts';
+  const hiddenActiveAlertsMessage =
+    firingAlerts.length === 0
+      ? `Runtime reports ${activeAlertCount} ${activeAlertLabel}, but no individual rows can be shown ` +
+        'right now.'
+      : `Runtime reports ${activeAlertCount} ${activeAlertLabel}, but only ${firingAlerts.length} can ` +
+        'be shown as individual rows right now.';
 
   return (
     <div className="space-y-4">
@@ -58,16 +111,13 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
       )}
 
       {/* Firing alerts */}
-      {firingAlerts.length > 0 ? (
+      {hasActiveAlerts ? (
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Active ({activeAlertCount})
+            Active alerts ({activeAlertCount})
           </p>
           {hiddenActiveAlerts > 0 && (
-            <p className="text-[11px] text-on-bg-secondary">
-              Showing {firingAlerts.length} alert row{firingAlerts.length === 1 ? '' : 's'} while
-              normalized runtime reports {activeAlertCount} active alerts.
-            </p>
+            <p className="text-[11px] text-on-bg-secondary">{hiddenActiveAlertsMessage}</p>
           )}
           {firingAlerts.map((alert, i) => (
             <div
@@ -76,11 +126,13 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
             >
               <div className="flex items-center gap-2">
                 {stateBadge(alert.state)}
-                <span className="text-sm font-medium text-on-bg truncate">{alert.alertName}</span>
+                <span className="text-sm font-medium text-on-bg truncate">{alert.deviceLabel}</span>
                 {severityBadge(alert.severity)}
               </div>
-              <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
-              <p className="text-[11px] text-on-bg-secondary">{alert.deviceLabel}</p>
+              <p className="text-xs text-on-bg-secondary">
+                Problem: {readableAlertTitle(alert.alertName)}
+              </p>
+              <p className="text-[11px] text-on-bg-secondary">Details: {alert.summary}</p>
             </div>
           ))}
         </div>
@@ -96,7 +148,7 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
       {resolvedAlerts.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Resolved ({resolvedAlerts.length})
+            Resolved alerts ({resolvedAlerts.length})
           </p>
           {resolvedAlerts.map((alert, i) => (
             <div
@@ -105,11 +157,13 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
             >
               <div className="flex items-center gap-2">
                 {stateBadge(alert.state)}
-                <span className="text-sm font-medium text-on-bg truncate">{alert.alertName}</span>
+                <span className="text-sm font-medium text-on-bg truncate">{alert.deviceLabel}</span>
                 {severityBadge(alert.severity)}
               </div>
-              <p className="text-xs text-on-bg-secondary">{alert.summary}</p>
-              <p className="text-[11px] text-on-bg-secondary">{alert.deviceLabel}</p>
+              <p className="text-xs text-on-bg-secondary">
+                Problem: {readableAlertTitle(alert.alertName)}
+              </p>
+              <p className="text-[11px] text-on-bg-secondary">Details: {alert.summary}</p>
             </div>
           ))}
         </div>
