@@ -86,19 +86,24 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		unknownByProtocol = currentTotals
 	} else {
 		for _, neighbor := range neighbors {
-			if neighbor.RemoteSysName == "" {
+			normalizedIdentity := discoveredNeighborRemoteIdentity(neighbor)
+			if normalizedIdentity == "" {
 				continue
 			}
 
-			remoteDevice, err := s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
-			if err != nil {
-				log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, err)
-				continue
+			var remoteDevice *domain.Device
+			if strings.TrimSpace(neighbor.RemoteSysName) != "" {
+				var lookupErr error
+				remoteDevice, lookupErr = s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
+				if lookupErr != nil {
+					log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, lookupErr)
+					continue
+				}
 			}
 			if remoteDevice == nil {
 				unknownNeighbors[unknownNeighborKey{
-					RemoteSysName: neighbor.RemoteSysName,
-					Protocol:      neighbor.Protocol,
+					RemoteIdentity: unknownNeighborIdentity(neighbor, normalizedIdentity),
+					Protocol:       neighbor.Protocol,
 				}]++
 				unknownByProtocol[neighbor.Protocol]++
 				continue
@@ -155,15 +160,19 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
 
 	for _, neighbor := range neighbors {
-		if neighbor.RemoteSysName == "" {
+		normalizedIdentity := discoveredNeighborRemoteIdentity(neighbor)
+		if normalizedIdentity == "" {
 			continue
 		}
 
-		normalizedIdentity := topology.NormalizeRemoteIdentity(neighbor.RemoteSysName)
-		remoteDevice, err := s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
-		if err != nil {
-			log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, err)
-			continue
+		var remoteDevice *domain.Device
+		if strings.TrimSpace(neighbor.RemoteSysName) != "" {
+			var lookupErr error
+			remoteDevice, lookupErr = s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
+			if lookupErr != nil {
+				log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, lookupErr)
+				continue
+			}
 		}
 
 		observation := &topology.Observation{
@@ -184,8 +193,8 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 
 		if remoteDevice == nil {
 			unknownNeighbors[unknownNeighborKey{
-				RemoteSysName: neighbor.RemoteSysName,
-				Protocol:      neighbor.Protocol,
+				RemoteIdentity: unknownNeighborIdentity(neighbor, normalizedIdentity),
+				Protocol:       neighbor.Protocol,
 			}]++
 			unknownByProtocol[neighbor.Protocol]++
 			if err := s.topologyStore.UpsertUnresolvedNeighbor(&topology.UnresolvedNeighbor{
@@ -284,19 +293,33 @@ func upsertLinkDetailed(repo domain.LinkRepository, link *domain.Link) (domain.L
 }
 
 type unknownNeighborKey struct {
-	RemoteSysName string
-	Protocol      domain.DiscoveryProtocol
+	RemoteIdentity string
+	Protocol       domain.DiscoveryProtocol
 }
 
 func countNeighborsByProtocol(neighbors []snmp.NeighborInfo) map[domain.DiscoveryProtocol]int {
 	counts := make(map[domain.DiscoveryProtocol]int)
 	for _, neighbor := range neighbors {
-		if neighbor.RemoteSysName == "" {
+		if discoveredNeighborRemoteIdentity(neighbor) == "" {
 			continue
 		}
 		counts[neighbor.Protocol]++
 	}
 	return counts
+}
+
+func discoveredNeighborRemoteIdentity(neighbor snmp.NeighborInfo) string {
+	if strings.TrimSpace(neighbor.RemoteSysName) != "" {
+		return topology.NormalizeRemoteIdentity(neighbor.RemoteSysName)
+	}
+	return strings.ToLower(strings.TrimSpace(neighbor.RemoteChassisID))
+}
+
+func unknownNeighborIdentity(neighbor snmp.NeighborInfo, normalizedIdentity string) string {
+	if strings.TrimSpace(neighbor.RemoteSysName) != "" {
+		return neighbor.RemoteSysName
+	}
+	return normalizedIdentity
 }
 
 func shouldLogAutoLink(result domain.LinkUpsertResult, selfLink bool) bool {
@@ -334,7 +357,7 @@ func logUnknownNeighborSummary(deviceID uuid.UUID, localSysName string, unknowns
 		if details[i].key.Protocol != details[j].key.Protocol {
 			return details[i].key.Protocol < details[j].key.Protocol
 		}
-		return details[i].key.RemoteSysName < details[j].key.RemoteSysName
+		return details[i].key.RemoteIdentity < details[j].key.RemoteIdentity
 	})
 
 	parts := make([]string, 0, len(details))
@@ -343,7 +366,7 @@ func logUnknownNeighborSummary(deviceID uuid.UUID, localSysName string, unknowns
 			parts = append(parts, fmt.Sprintf("... +%d more", len(details)-index))
 			break
 		}
-		parts = append(parts, fmt.Sprintf("%s(%s)x%d", item.key.RemoteSysName, item.key.Protocol, item.count))
+		parts = append(parts, fmt.Sprintf("%s(%s)x%d", item.key.RemoteIdentity, item.key.Protocol, item.count))
 	}
 
 	log.Printf("Static discovery for %s observed off-map neighbors [%s]: %s",

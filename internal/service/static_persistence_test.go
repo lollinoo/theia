@@ -632,6 +632,7 @@ func TestApplyStaticDiscoveryAggregatesUnknownNeighborLogsAndMetrics(t *testing.
 				{RemoteSysName: "missing-a", RemotePortID: "ether1", LocalIfName: "ether7", Protocol: domain.DiscoveryProtocolLLDP},
 				{RemoteSysName: "missing-a", RemotePortID: "ether1", LocalIfName: "ether7", Protocol: domain.DiscoveryProtocolLLDP},
 				{RemoteSysName: "missing-b", RemotePortID: "ether2", LocalIfName: "ether8", Protocol: domain.DiscoveryProtocolLLDP},
+				{RemoteChassisID: " 0011.2233.4455 ", RemotePortID: "ether3", LocalIfName: "ether9", Protocol: domain.DiscoveryProtocolLLDP},
 			},
 		}); err != nil {
 			t.Fatalf("ApplyStaticDiscovery failed: %v", err)
@@ -641,18 +642,24 @@ func TestApplyStaticDiscoveryAggregatesUnknownNeighborLogsAndMetrics(t *testing.
 	if strings.Contains(logs, "Skipping neighbor") {
 		t.Fatalf("expected aggregated unknown-neighbor log, got %q", logs)
 	}
-	if !strings.Contains(logs, "Static discovery for switch1 observed off-map neighbors [lldp=3]") {
+	if !strings.Contains(logs, "Static discovery for switch1 observed off-map neighbors [lldp=4]") {
 		t.Fatalf("expected aggregated summary log, got %q", logs)
 	}
 	if !strings.Contains(logs, "missing-a(lldp)x2") || !strings.Contains(logs, "missing-b(lldp)x1") {
 		t.Fatalf("expected summarized neighbor names, got %q", logs)
+	}
+	if !strings.Contains(logs, "0011.2233.4455(lldp)x1") {
+		t.Fatalf("expected summarized chassis identity, got %q", logs)
 	}
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	registry.ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `theia_unknown_neighbors_total{device_id="`+device.ID.String()+`",protocol="lldp"} 3`) {
+	if !strings.Contains(body, `theia_discovery_neighbors{device_id="`+device.ID.String()+`",protocol="lldp"} 4`) {
+		t.Fatalf("expected discovery-neighbor gauge in metrics output, got %s", body)
+	}
+	if !strings.Contains(body, `theia_unknown_neighbors_total{device_id="`+device.ID.String()+`",protocol="lldp"} 4`) {
 		t.Fatalf("expected unknown-neighbor counter in metrics output, got %s", body)
 	}
 }
@@ -788,5 +795,113 @@ func TestApplyStaticDiscoveryWithObservationStore_PersistsObservationsAndUnresol
 	}
 	if links[0].SourceIfName != "ether1" || links[0].TargetIfName != "ether2" {
 		t.Fatalf("unexpected link after materialization: %+v", links[0])
+	}
+}
+
+func TestApplyStaticDiscoveryWithObservationStore_PersistsChassisOnlyUnresolvedNeighbor(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+
+	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
+	if err != nil {
+		t.Fatalf("opening sqlite db: %v", err)
+	}
+	defer db.Close()
+	if err := sqliterepo.RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	deviceRepo := sqliterepo.NewDeviceRepo(db, nil, nil)
+	linkRepo := sqliterepo.NewLinkRepo(db, nil)
+	observationRepo := sqliterepo.NewTopologyObservationRepo(db)
+	settingsRepo := newMockSettingsRepo()
+	svc := NewDeviceService(
+		deviceRepo,
+		linkRepo,
+		settingsRepo,
+		func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+			return nil, nil
+		},
+		nil,
+		WithTopologyObservationStore(observationRepo),
+	)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.61", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	if err := deviceRepo.Create(local); err != nil {
+		t.Fatalf("Create local failed: %v", err)
+	}
+
+	var persisted StaticPersistenceResult
+	logs := captureLogs(t, func() {
+		var applyErr error
+		persisted, applyErr = svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+			SysName: "local",
+			Neighbors: []snmp.NeighborInfo{{
+				RemoteChassisID: " 0011.2233.4455 ",
+				RemotePortID:    "ether2",
+				LocalIfName:     "ether1",
+				Protocol:        domain.DiscoveryProtocolLLDP,
+			}},
+		})
+		if applyErr != nil {
+			t.Fatalf("ApplyStaticDiscovery failed: %v", applyErr)
+		}
+	})
+
+	if persisted.TopologyChanged {
+		t.Fatal("expected no topology change without a resolvable remote device")
+	}
+	if persisted.LinksCreated != 0 {
+		t.Fatalf("LinksCreated = %d, want 0", persisted.LinksCreated)
+	}
+
+	observations, err := observationRepo.ListObservationsForDevices([]uuid.UUID{local.ID})
+	if err != nil {
+		t.Fatalf("ListObservationsForDevices failed: %v", err)
+	}
+	if len(observations) != 1 {
+		t.Fatalf("expected 1 persisted observation, got %d", len(observations))
+	}
+	if observations[0].RemoteIdentity != "0011.2233.4455" {
+		t.Fatalf("observation RemoteIdentity = %q, want 0011.2233.4455", observations[0].RemoteIdentity)
+	}
+	if observations[0].RemoteDeviceID != uuid.Nil {
+		t.Fatalf("RemoteDeviceID = %s, want nil", observations[0].RemoteDeviceID)
+	}
+
+	unresolved, err := observationRepo.GetUnresolvedNeighborsByDeviceID(local.ID)
+	if err != nil {
+		t.Fatalf("GetUnresolvedNeighborsByDeviceID failed: %v", err)
+	}
+	if len(unresolved) != 1 {
+		t.Fatalf("expected 1 unresolved neighbor, got %d", len(unresolved))
+	}
+	if unresolved[0].RemoteIdentity != "0011.2233.4455" {
+		t.Fatalf("RemoteIdentity = %q, want 0011.2233.4455", unresolved[0].RemoteIdentity)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 0 {
+		t.Fatalf("expected no canonical links, got %d", len(links))
+	}
+
+	if !strings.Contains(logs, "Static discovery for local observed off-map neighbors [lldp=1]") {
+		t.Fatalf("expected aggregated summary log, got %q", logs)
+	}
+	if !strings.Contains(logs, "0011.2233.4455(lldp)x1") {
+		t.Fatalf("expected chassis identity in summary log, got %q", logs)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	registry.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `theia_discovery_neighbors{device_id="`+local.ID.String()+`",protocol="lldp"} 1`) {
+		t.Fatalf("expected chassis-only neighbor in discovery count, got %s", body)
+	}
+	if !strings.Contains(body, `theia_unknown_neighbors_total{device_id="`+local.ID.String()+`",protocol="lldp"} 1`) {
+		t.Fatalf("expected chassis-only neighbor in unknown count, got %s", body)
 	}
 }
