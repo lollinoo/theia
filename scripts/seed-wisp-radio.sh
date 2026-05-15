@@ -33,8 +33,9 @@ create_device() {
   existing_id="$(device_id_by_ip "$ip" || true)"
 
   if [ -n "$existing_id" ]; then
-    echo "Skipping ${hostname} (${ip}) - already present; ensuring primary map membership"
+    echo "Skipping ${hostname} (${ip}) - already present; ensuring primary map membership and rerunning topology discovery"
     add_device_to_primary_map "$existing_id"
+    run_topology_discovery "$existing_id"
     return
   fi
 
@@ -45,6 +46,7 @@ create_device() {
       \"ip\": \"${ip}\",
       \"hostname\": \"${hostname}\",
       \"metrics_source\": \"snmp\",
+      \"topology_discovery_mode\": \"lldp_cdp\",
       \"snmp\": {
         \"version\": \"2c\",
         \"community\": \"public\"

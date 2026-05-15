@@ -35,8 +35,9 @@ function New-WispRouter {
 
   $existingId = Get-DeviceIdByIp -ApiBase $ApiBase -Ip $Ip
   if (-not [string]::IsNullOrWhiteSpace($existingId)) {
-    Write-Output "Skipping $Hostname ($Ip) - already present; ensuring primary map membership"
+    Write-Output "Skipping $Hostname ($Ip) - already present; ensuring primary map membership and rerunning topology discovery"
     Add-DeviceToPrimaryMap -ApiBase $ApiBase -DeviceId $existingId
+    Invoke-TopologyDiscovery -ApiBase $ApiBase -DeviceId $existingId
     return
   }
 
@@ -45,6 +46,7 @@ function New-WispRouter {
     ip = $Ip
     hostname = $Hostname
     metrics_source = "snmp"
+    topology_discovery_mode = "lldp_cdp"
     snmp = @{
       version = "2c"
       community = "public"
