@@ -673,6 +673,107 @@ func TestLinkRepo_Upsert_PreservesDistinctParallelUplinks(t *testing.T) {
 	}
 }
 
+func TestLinkRepo_UpsertAddsDiscoveredLinkToMaterializedMapsWithBothBaseEndpoints(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+	mapRepo := NewCanvasMapRepo(db)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	defaultMap, err := mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("GetDefault: %v", err)
+	}
+	if err := mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: d1ID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: d2ID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceMembership: %v", err)
+	}
+
+	link := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(link)
+	if err != nil {
+		t.Fatalf("UpsertDetailed: %v", err)
+	}
+	if !result.Created {
+		t.Fatalf("expected discovered link to be created, got %#v", result)
+	}
+
+	membership, err := mapRepo.GetMembership(defaultMap.ID)
+	if err != nil {
+		t.Fatalf("GetMembership: %v", err)
+	}
+	if len(membership.LinkIDs) != 1 || membership.LinkIDs[0] != link.ID {
+		t.Fatalf("map link membership = %#v, want discovered link %s", membership.LinkIDs, link.ID)
+	}
+}
+
+func TestLinkRepo_UpsertRepairsMissingMapMembershipForRediscoveredLink(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+	mapRepo := NewCanvasMapRepo(db)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	defaultMap, err := mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("GetDefault: %v", err)
+	}
+	existing := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(existing); err != nil {
+		t.Fatalf("Create existing link: %v", err)
+	}
+	if err := mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: d1ID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: d2ID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceMembership: %v", err)
+	}
+
+	rediscovered := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(rediscovered)
+	if err != nil {
+		t.Fatalf("UpsertDetailed: %v", err)
+	}
+	if result.Kind != domain.LinkUpsertKindNoop {
+		t.Fatalf("Kind = %q, want %q", result.Kind, domain.LinkUpsertKindNoop)
+	}
+	if !result.Changed {
+		t.Fatal("expected repaired map membership to report a topology change")
+	}
+
+	membership, err := mapRepo.GetMembership(defaultMap.ID)
+	if err != nil {
+		t.Fatalf("GetMembership: %v", err)
+	}
+	if len(membership.LinkIDs) != 1 || membership.LinkIDs[0] != existing.ID {
+		t.Fatalf("map link membership = %#v, want rediscovered link %s", membership.LinkIDs, existing.ID)
+	}
+}
+
 // TestLinkRepo_Upsert_CleansUpBrokenLink verifies that upserting a link with a
 // non-empty SourceIfName deletes any existing link for the same physical link
 // that has an empty SourceIfName (a "broken" link from an incomplete discovery).

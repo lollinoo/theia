@@ -22,16 +22,22 @@ type DeviceHandler struct {
 	vendorRegistry        *vendor.Registry
 	canvasMapRepo         domain.CanvasMapRepository
 	areaRepo              domain.AreaRepository
+	linkRepo              domain.LinkRepository
 }
 
 // DeviceHandlerOption configures optional collaborators for device handlers.
 type DeviceHandlerOption func(*DeviceHandler)
 
 // WithPrimaryCanvasMapMembership enables default map membership for API-created devices.
-func WithPrimaryCanvasMapMembership(mapRepo domain.CanvasMapRepository, areaRepo domain.AreaRepository) DeviceHandlerOption {
+func WithPrimaryCanvasMapMembership(
+	mapRepo domain.CanvasMapRepository,
+	areaRepo domain.AreaRepository,
+	linkRepo domain.LinkRepository,
+) DeviceHandlerOption {
 	return func(h *DeviceHandler) {
 		h.canvasMapRepo = mapRepo
 		h.areaRepo = areaRepo
+		h.linkRepo = linkRepo
 	}
 }
 
@@ -305,6 +311,18 @@ func (h *DeviceHandler) addDeviceToPrimaryCanvasMap(device *domain.Device) error
 	if err != nil {
 		return err
 	}
+	linkIDs := []uuid.UUID{}
+	if h.linkRepo != nil {
+		membership, err := h.canvasMapRepo.GetMembership(primaryMap.ID)
+		if err != nil {
+			return fmt.Errorf("loading primary canvas map membership: %w", err)
+		}
+		links, err := h.linkRepo.GetByDeviceID(device.ID)
+		if err != nil {
+			return fmt.Errorf("loading primary canvas map connected links: %w", err)
+		}
+		linkIDs = canvasMapConnectedBaseLinkIDs(device.ID, membership, links)
+	}
 	return adder.AddDeviceMembership(
 		primaryMap.ID,
 		domain.CanvasMapDeviceMembership{
@@ -312,7 +330,7 @@ func (h *DeviceHandler) addDeviceToPrimaryCanvasMap(device *domain.Device) error
 			Role:     domain.CanvasMapDeviceRoleBase,
 			AreaIDs:  areaIDs,
 		},
-		nil,
+		linkIDs,
 		areas,
 	)
 }

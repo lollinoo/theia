@@ -391,9 +391,20 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 		portsChanged := newSrcIf != existingSrcIf || newTgtIf != existingTgtIf
 		protocolChanged := existingProtocol != string(link.DiscoveryProtocol)
 		if !portsChanged && !protocolChanged {
+			membershipChanged, err := r.addLinkToMaterializedBaseEndpointMaps(tx, link, now)
+			if err != nil {
+				return domain.LinkUpsertResult{}, err
+			}
+			if membershipChanged {
+				if err = tx.Commit(); err != nil {
+					return domain.LinkUpsertResult{}, fmt.Errorf("committing link map membership repair: %w", err)
+				}
+				r.notify()
+				r.publishChange(domain.ChangeKindUpdated, link.ID)
+			}
 			result := domain.LinkUpsertResult{
 				Created: false,
-				Changed: false,
+				Changed: membershipChanged,
 				Kind:    domain.LinkUpsertKindNoop,
 			}
 			r.recordUpsert(result, link.DiscoveryProtocol)
@@ -406,6 +417,9 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 			string(link.DiscoveryProtocol), link.UpdatedAt, existingID,
 		); err != nil {
 			return domain.LinkUpsertResult{}, fmt.Errorf("updating link: %w", err)
+		}
+		if _, err = r.addLinkToMaterializedBaseEndpointMaps(tx, link, now); err != nil {
+			return domain.LinkUpsertResult{}, err
 		}
 		if err = tx.Commit(); err != nil {
 			return domain.LinkUpsertResult{}, fmt.Errorf("committing link update: %w", err)
@@ -434,6 +448,7 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 	}
 	if reverse != nil {
 		if shouldReorientReverseLink(reverse, link) {
+			link.ID = uuid.MustParse(reverse.ID)
 			if _, err = tx.Exec(
 				`UPDATE links SET source_device_id = ?, source_if_name = ?,
 				 target_device_id = ?, target_if_name = ?,
@@ -444,11 +459,14 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 			); err != nil {
 				return domain.LinkUpsertResult{}, fmt.Errorf("reorienting reverse link: %w", err)
 			}
+			if _, err = r.addLinkToMaterializedBaseEndpointMaps(tx, link, now); err != nil {
+				return domain.LinkUpsertResult{}, err
+			}
 			if err = tx.Commit(); err != nil {
 				return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link reorientation: %w", err)
 			}
 			r.notify()
-			r.publishChange(domain.ChangeKindUpdated, uuid.MustParse(reverse.ID))
+			r.publishChange(domain.ChangeKindUpdated, link.ID)
 			result := domain.LinkUpsertResult{Created: false, Changed: true, Kind: domain.LinkUpsertKindReoriented}
 			r.recordUpsert(result, link.DiscoveryProtocol)
 			return result, nil
@@ -473,9 +491,20 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 		protocolChanged := reverse.Protocol != string(link.DiscoveryProtocol)
 		if !portsChanged && !protocolChanged {
 			link.ID = uuid.MustParse(reverse.ID)
+			membershipChanged, err := r.addLinkToMaterializedBaseEndpointMaps(tx, link, now)
+			if err != nil {
+				return domain.LinkUpsertResult{}, err
+			}
+			if membershipChanged {
+				if err = tx.Commit(); err != nil {
+					return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link map membership repair: %w", err)
+				}
+				r.notify()
+				r.publishChange(domain.ChangeKindUpdated, link.ID)
+			}
 			result := domain.LinkUpsertResult{
 				Created: false,
-				Changed: false,
+				Changed: membershipChanged,
 				Kind:    domain.LinkUpsertKindNoop,
 			}
 			r.recordUpsert(result, link.DiscoveryProtocol)
@@ -488,6 +517,9 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 			string(link.DiscoveryProtocol), link.UpdatedAt, reverse.ID,
 		); err != nil {
 			return domain.LinkUpsertResult{}, fmt.Errorf("enriching reverse link: %w", err)
+		}
+		if _, err = r.addLinkToMaterializedBaseEndpointMaps(tx, link, now); err != nil {
+			return domain.LinkUpsertResult{}, err
 		}
 		if err = tx.Commit(); err != nil {
 			return domain.LinkUpsertResult{}, fmt.Errorf("committing reverse link update: %w", err)
@@ -516,6 +548,9 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 	); err != nil {
 		return domain.LinkUpsertResult{}, fmt.Errorf("inserting link: %w", err)
 	}
+	if _, err = r.addLinkToMaterializedBaseEndpointMaps(tx, link, now); err != nil {
+		return domain.LinkUpsertResult{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		return domain.LinkUpsertResult{}, fmt.Errorf("committing link insert: %w", err)
 	}
@@ -524,6 +559,50 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 	result := domain.LinkUpsertResult{Created: true, Changed: true, Kind: domain.LinkUpsertKindCreated}
 	r.recordUpsert(result, link.DiscoveryProtocol)
 	return result, nil
+}
+
+func (r *LinkRepo) addLinkToMaterializedBaseEndpointMaps(tx *Tx, link *domain.Link, now time.Time) (bool, error) {
+	result, err := tx.Exec(
+		`INSERT INTO canvas_map_links (map_id, link_id, added_at)
+		 SELECT source_members.map_id, ?, ?
+		 FROM canvas_map_devices source_members
+		 JOIN canvas_map_devices target_members
+		   ON target_members.map_id = source_members.map_id
+		  AND target_members.device_id = ?
+		  AND target_members.role = ?
+		 JOIN canvas_maps cm
+		   ON cm.id = source_members.map_id
+		  AND cm.membership_materialized = ?
+		 WHERE source_members.device_id = ?
+		   AND source_members.role = ?
+		 ON CONFLICT(map_id, link_id) DO NOTHING`,
+		link.ID.String(),
+		now,
+		link.TargetDeviceID.String(),
+		string(domain.CanvasMapDeviceRoleBase),
+		true,
+		link.SourceDeviceID.String(),
+		string(domain.CanvasMapDeviceRoleBase),
+	)
+	if err != nil {
+		return false, fmt.Errorf("adding link to materialized canvas maps: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return false, nil
+	}
+	if _, err := tx.Exec(
+		`UPDATE canvas_maps
+		 SET updated_at = ?
+		 WHERE id IN (
+			SELECT map_id FROM canvas_map_links WHERE link_id = ?
+		 )`,
+		now,
+		link.ID.String(),
+	); err != nil {
+		return false, fmt.Errorf("touching canvas maps for link membership: %w", err)
+	}
+	return true, nil
 }
 
 func (r *LinkRepo) recordUpsert(result domain.LinkUpsertResult, protocol domain.DiscoveryProtocol) {

@@ -42,7 +42,7 @@ func NewRouter(
 		deviceService,
 		credentialProfileRepo,
 		vendorRegistry,
-		WithPrimaryCanvasMapMembership(canvasMapRepo, areaRepo),
+		WithPrimaryCanvasMapMembership(canvasMapRepo, areaRepo, linkRepo),
 	)
 	linkHandler := NewLinkHandler(linkRepo, deviceService)
 	positionHandler := NewPositionHandler(positionRepo, canvasMapRepo, canvasMapPositionRepo)

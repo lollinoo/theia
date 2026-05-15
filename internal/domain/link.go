@@ -38,7 +38,7 @@ const (
 )
 
 // LinkUpsertResult reports whether an upsert inserted a new row and whether it
-// changed any topology-visible fields of an existing row.
+// changed topology-visible link state, including materialized map membership.
 type LinkUpsertResult struct {
 	Created bool
 	Changed bool
