@@ -445,7 +445,7 @@ func currentUnresolvedObservationSupportsLink(
 	currentObservations []topology.Observation,
 ) bool {
 	localPort, remotePort, ok := linkPortsForLocalEndpoint(localDeviceID, link)
-	if !ok || strings.TrimSpace(localPort) == "" {
+	if !ok || (strings.TrimSpace(localPort) == "" && strings.TrimSpace(remotePort) == "") {
 		return false
 	}
 
@@ -459,16 +459,21 @@ func currentUnresolvedObservationSupportsLink(
 		if observation.Protocol != link.DiscoveryProtocol {
 			continue
 		}
-		if strings.TrimSpace(observation.LocalPort) == "" {
+		if strings.TrimSpace(observation.LocalPort) != "" {
+			if strings.TrimSpace(localPort) == "" || !sameDiscoveryPort(observation.LocalPort, localPort) {
+				continue
+			}
+			if strings.TrimSpace(observation.RemotePort) == "" {
+				return true
+			}
+			if sameDiscoveryPort(observation.RemotePort, remotePort) {
+				return true
+			}
 			continue
 		}
-		if !sameDiscoveryPort(observation.LocalPort, localPort) {
-			continue
-		}
-		if strings.TrimSpace(observation.RemotePort) == "" {
-			return true
-		}
-		if sameDiscoveryPort(observation.RemotePort, remotePort) {
+		if strings.TrimSpace(observation.RemotePort) != "" &&
+			strings.TrimSpace(remotePort) != "" &&
+			sameDiscoveryPort(observation.RemotePort, remotePort) {
 			return true
 		}
 	}
