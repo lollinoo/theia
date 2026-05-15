@@ -3,16 +3,19 @@ package service
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
 	sqliterepo "github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/snmp"
+	"github.com/lollinoo/theia/internal/topology"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -904,4 +907,332 @@ func TestApplyStaticDiscoveryWithObservationStore_PersistsChassisOnlyUnresolvedN
 	if !strings.Contains(body, `theia_unknown_neighbors_total{device_id="`+local.ID.String()+`",protocol="lldp"} 1`) {
 		t.Fatalf("expected chassis-only neighbor in unknown count, got %s", body)
 	}
+}
+
+func TestApplyStaticDiscoveryWithObservationStore_PrunesStaleLLDPObservationAndAutoLink(t *testing.T) {
+	svc, deviceRepo, linkRepo, observationRepo := newObservationStoreStaticPersistenceService(t)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.71", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	remote := &domain.Device{ID: uuid.New(), Hostname: "remote", IP: "192.0.2.72", SysName: "remote", Managed: true, Status: domain.DeviceStatusUp}
+	for _, device := range []*domain.Device{local, remote} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	first, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: "remote",
+			RemotePortID:  "ether2",
+			LocalIfName:   "ether1",
+			Protocol:      domain.DiscoveryProtocolLLDP,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("first ApplyStaticDiscovery failed: %v", err)
+	}
+	if !first.TopologyChanged || first.LinksCreated != 1 {
+		t.Fatalf("first persistence result = %+v, want topology change with one created link", first)
+	}
+
+	second, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+	})
+	if err != nil {
+		t.Fatalf("second ApplyStaticDiscovery failed: %v", err)
+	}
+	if !second.TopologyChanged {
+		t.Fatal("expected stale auto-link pruning to report topology changed")
+	}
+
+	observations, err := observationRepo.ListObservationsForDevices([]uuid.UUID{local.ID, remote.ID})
+	if err != nil {
+		t.Fatalf("ListObservationsForDevices failed: %v", err)
+	}
+	if len(observations) != 0 {
+		t.Fatalf("expected stale LLDP observations to be pruned, got %d", len(observations))
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 0 {
+		t.Fatalf("expected stale LLDP auto-link to be deleted, got %d", len(links))
+	}
+}
+
+func TestApplyStaticDiscoveryWithObservationStore_SkipsPruneWhenLLDPDiscoveryFailure(t *testing.T) {
+	svc, deviceRepo, linkRepo, observationRepo := newObservationStoreStaticPersistenceService(t)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.81", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	remote := &domain.Device{ID: uuid.New(), Hostname: "remote", IP: "192.0.2.82", SysName: "remote", Managed: true, Status: domain.DeviceStatusUp}
+	for _, device := range []*domain.Device{local, remote} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	if _, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: "remote",
+			RemotePortID:  "ether2",
+			LocalIfName:   "ether1",
+			Protocol:      domain.DiscoveryProtocolLLDP,
+		}},
+	}); err != nil {
+		t.Fatalf("first ApplyStaticDiscovery failed: %v", err)
+	}
+
+	second, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		NeighborDiscoveryFailures: []snmp.NeighborDiscoveryFailure{{
+			Protocol: domain.DiscoveryProtocolLLDP,
+			OID:      snmp.OidLLDPLocPortId,
+			Critical: false,
+			Error:    "walk failed",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("second ApplyStaticDiscovery failed: %v", err)
+	}
+	if second.TopologyChanged {
+		t.Fatalf("expected failed LLDP discovery to skip pruning without topology change, got %+v", second)
+	}
+
+	observations, err := observationRepo.ListObservationsForDevices([]uuid.UUID{local.ID, remote.ID})
+	if err != nil {
+		t.Fatalf("ListObservationsForDevices failed: %v", err)
+	}
+	if len(observations) != 1 {
+		t.Fatalf("expected stale LLDP observation to remain after failure, got %d", len(observations))
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 || links[0].DiscoveryProtocol != domain.DiscoveryProtocolLLDP {
+		t.Fatalf("expected stale LLDP auto-link to remain after failure, got %+v", links)
+	}
+}
+
+func TestApplyStaticDiscoveryWithObservationStore_PruneDoesNotDeleteManualLinks(t *testing.T) {
+	svc, deviceRepo, linkRepo, _ := newObservationStoreStaticPersistenceService(t)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.91", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	remote := &domain.Device{ID: uuid.New(), Hostname: "remote", IP: "192.0.2.92", SysName: "remote", Managed: true, Status: domain.DeviceStatusUp}
+	for _, device := range []*domain.Device{local, remote} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	if _, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: "remote",
+			RemotePortID:  "ether2",
+			LocalIfName:   "ether1",
+			Protocol:      domain.DiscoveryProtocolLLDP,
+		}},
+	}); err != nil {
+		t.Fatalf("first ApplyStaticDiscovery failed: %v", err)
+	}
+
+	manualLink := &domain.Link{
+		SourceDeviceID:    local.ID,
+		SourceIfName:      "ether9",
+		TargetDeviceID:    remote.ID,
+		TargetIfName:      "ether10",
+		DiscoveryProtocol: domain.DiscoveryProtocolManual,
+	}
+	if err := linkRepo.Create(manualLink); err != nil {
+		t.Fatalf("Create manual link failed: %v", err)
+	}
+
+	if _, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+	}); err != nil {
+		t.Fatalf("second ApplyStaticDiscovery failed: %v", err)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected only manual link to remain, got %d links: %+v", len(links), links)
+	}
+	if links[0].ID != manualLink.ID || links[0].DiscoveryProtocol != domain.DiscoveryProtocolManual {
+		t.Fatalf("expected manual link to remain after LLDP pruning, got %+v", links[0])
+	}
+}
+
+func TestApplyStaticDiscoveryWithObservationStore_ReturnsErrorBeforePruneWhenNeighborLookupFails(t *testing.T) {
+	svc, deviceRepo, linkRepo, observationRepo := newObservationStoreStaticPersistenceService(t)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.101", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	remote := &domain.Device{ID: uuid.New(), Hostname: "remote", IP: "192.0.2.102", SysName: "remote", Managed: true, Status: domain.DeviceStatusUp}
+	for _, device := range []*domain.Device{local, remote} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	if _, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: "remote",
+			RemotePortID:  "ether2",
+			LocalIfName:   "ether1",
+			Protocol:      domain.DiscoveryProtocolLLDP,
+		}},
+	}); err != nil {
+		t.Fatalf("first ApplyStaticDiscovery failed: %v", err)
+	}
+
+	svc.deviceRepo = lookupErrorDeviceRepo{
+		DeviceRepository: deviceRepo,
+		err:              errors.New("sysname lookup unavailable"),
+	}
+
+	_, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: "remote",
+			RemotePortID:  "ether2",
+			LocalIfName:   "ether1",
+			Protocol:      domain.DiscoveryProtocolLLDP,
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected lookup error to stop reconciliation before pruning")
+	}
+	if !strings.Contains(err.Error(), "looking up neighbor remote") {
+		t.Fatalf("error = %q, want neighbor lookup context", err)
+	}
+
+	observations, err := observationRepo.ListObservationsForDevices([]uuid.UUID{local.ID, remote.ID})
+	if err != nil {
+		t.Fatalf("ListObservationsForDevices failed: %v", err)
+	}
+	if len(observations) != 1 {
+		t.Fatalf("expected existing observation to remain after lookup error, got %d", len(observations))
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected existing auto-link to remain after lookup error, got %d", len(links))
+	}
+}
+
+func TestApplyStaticDiscoveryWithObservationStore_PruneKeepsLinkSupportedByReverseObservation(t *testing.T) {
+	svc, deviceRepo, linkRepo, observationRepo := newObservationStoreStaticPersistenceService(t)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.111", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	remote := &domain.Device{ID: uuid.New(), Hostname: "remote", IP: "192.0.2.112", SysName: "remote", Managed: true, Status: domain.DeviceStatusUp}
+	for _, device := range []*domain.Device{local, remote} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	link := &domain.Link{
+		SourceDeviceID:    local.ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    remote.ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(link); err != nil {
+		t.Fatalf("Create link failed: %v", err)
+	}
+
+	now := time.Date(2026, 5, 15, 12, 30, 0, 0, time.UTC)
+	if err := observationRepo.UpsertObservation(&topology.Observation{
+		LocalDeviceID:   remote.ID,
+		RemoteIdentity:  topology.NormalizeRemoteIdentity(local.SysName),
+		RemoteDeviceID:  local.ID,
+		LocalPort:       "ether2",
+		RemotePort:      "ether1",
+		Protocol:        domain.DiscoveryProtocolLLDP,
+		FirstObservedAt: now,
+		LastObservedAt:  now,
+	}); err != nil {
+		t.Fatalf("UpsertObservation failed: %v", err)
+	}
+
+	if _, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+	}); err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected reverse observation to protect existing link, got %d links: %+v", len(links), links)
+	}
+	if links[0].ID != link.ID {
+		t.Fatalf("link ID = %s, want existing link %s", links[0].ID, link.ID)
+	}
+}
+
+type lookupErrorDeviceRepo struct {
+	domain.DeviceRepository
+	err error
+}
+
+func (r lookupErrorDeviceRepo) GetBySysName(string) (*domain.Device, error) {
+	return nil, r.err
+}
+
+func newObservationStoreStaticPersistenceService(
+	t *testing.T,
+) (*DeviceService, *sqliterepo.DeviceRepo, *sqliterepo.LinkRepo, *sqliterepo.TopologyObservationRepo) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
+	if err != nil {
+		t.Fatalf("opening sqlite db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+	if err := sqliterepo.RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	deviceRepo := sqliterepo.NewDeviceRepo(db, nil, nil)
+	linkRepo := sqliterepo.NewLinkRepo(db, nil)
+	observationRepo := sqliterepo.NewTopologyObservationRepo(db)
+	settingsRepo := newMockSettingsRepo()
+	svc := NewDeviceService(
+		deviceRepo,
+		linkRepo,
+		settingsRepo,
+		func(target string, creds domain.SNMPCredentials, _ domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+			return nil, nil
+		},
+		nil,
+		WithTopologyObservationStore(observationRepo),
+	)
+	return svc, deviceRepo, linkRepo, observationRepo
 }

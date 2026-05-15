@@ -165,16 +165,17 @@ func (d *deviceDiscoveryCoordinator) probeDevice(device *domain.Device) {
 	}
 
 	persisted, err := s.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
-		SysName:                   result.SysName,
-		SysDescr:                  result.SysDescr,
-		SysObjectID:               result.SysObjectID,
-		HardwareModel:             result.HardwareModel,
-		OSVersion:                 result.OSVersion,
-		Vendor:                    result.Vendor,
-		DeviceType:                result.DeviceType,
-		Interfaces:                result.Interfaces,
-		Neighbors:                 result.Neighbors,
-		NeighborDiscoveryFailures: result.NeighborDiscoveryFailures,
+		SysName:                    result.SysName,
+		SysDescr:                   result.SysDescr,
+		SysObjectID:                result.SysObjectID,
+		HardwareModel:              result.HardwareModel,
+		OSVersion:                  result.OSVersion,
+		Vendor:                     result.Vendor,
+		DeviceType:                 result.DeviceType,
+		Interfaces:                 result.Interfaces,
+		Neighbors:                  result.Neighbors,
+		NeighborDiscoveryProtocols: result.NeighborDiscoveryProtocols,
+		NeighborDiscoveryFailures:  result.NeighborDiscoveryFailures,
 	})
 	if err != nil {
 		if statusErr := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); statusErr != nil {

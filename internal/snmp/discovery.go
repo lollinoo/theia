@@ -182,16 +182,17 @@ func PollInterfaceCounters(client ClientInterface) []InterfaceCounter {
 
 // DiscoveryResult holds the aggregated data from an SNMP discovery walk.
 type DiscoveryResult struct {
-	SysName                   string
-	SysDescr                  string
-	SysObjectID               string
-	HardwareModel             string
-	OSVersion                 string
-	Vendor                    string
-	DeviceType                domain.DeviceType
-	Interfaces                []domain.Interface
-	Neighbors                 []NeighborInfo
-	NeighborDiscoveryFailures []NeighborDiscoveryFailure
+	SysName                    string
+	SysDescr                   string
+	SysObjectID                string
+	HardwareModel              string
+	OSVersion                  string
+	Vendor                     string
+	DeviceType                 domain.DeviceType
+	Interfaces                 []domain.Interface
+	Neighbors                  []NeighborInfo
+	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures  []NeighborDiscoveryFailure
 }
 
 // NeighborInfo represents a discovered LLDP or CDP neighbor.
@@ -262,7 +263,9 @@ func DiscoverDevice(client ClientInterface, registry *vendor.Registry) (*Discove
 // DiscoverDeviceWithPolicy gathers device details while allowing neighbor walks
 // to be disabled or protocol-limited.
 func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry, policy NeighborDiscoveryPolicy) (*DiscoveryResult, error) {
-	res := &DiscoveryResult{}
+	res := &DiscoveryResult{
+		NeighborDiscoveryProtocols: attemptedNeighborDiscoveryProtocols(policy),
+	}
 
 	// 1. Get System Info
 	pduList, err := client.Get([]string{OidSysName, OidSysDescr, OidSysObjectID})
@@ -298,6 +301,17 @@ func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry,
 	res.Neighbors, res.NeighborDiscoveryFailures = discoverNeighborsWithFailures(client, ifIndexToName, policy)
 
 	return res, nil
+}
+
+func attemptedNeighborDiscoveryProtocols(policy NeighborDiscoveryPolicy) []domain.DiscoveryProtocol {
+	protocols := make([]domain.DiscoveryProtocol, 0, 2)
+	if policy.LLDP {
+		protocols = append(protocols, domain.DiscoveryProtocolLLDP)
+	}
+	if policy.CDP {
+		protocols = append(protocols, domain.DiscoveryProtocolCDP)
+	}
+	return protocols
 }
 
 func discoverSoftwareVersion(client ClientInterface, staticOIDs vendor.StaticOIDs) string {

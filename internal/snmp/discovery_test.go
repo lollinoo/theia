@@ -583,6 +583,47 @@ func TestDiscoverDeviceWithPolicyRecordsCriticalNeighborDiscoveryFailures(t *tes
 	}
 }
 
+func TestDiscoverDeviceWithPolicyRecordsAttemptedNeighborDiscoveryProtocols(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy NeighborDiscoveryPolicy
+		want   []domain.DiscoveryProtocol
+	}{
+		{
+			name:   "lldp and cdp",
+			policy: NeighborDiscoveryPolicy{LLDP: true, CDP: true},
+			want:   []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP, domain.DiscoveryProtocolCDP},
+		},
+		{
+			name:   "lldp only",
+			policy: NeighborDiscoveryPolicy{LLDP: true},
+			want:   []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		},
+		{
+			name:   "cdp only",
+			policy: NeighborDiscoveryPolicy{CDP: true},
+			want:   []domain.DiscoveryProtocol{domain.DiscoveryProtocolCDP},
+		},
+		{
+			name:   "off",
+			policy: NeighborDiscoveryPolicy{},
+			want:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := DiscoverDeviceWithPolicy(minimalDiscoveryClient(), testDiscoveryRegistry(t), tt.policy)
+			if err != nil {
+				t.Fatalf("DiscoverDeviceWithPolicy returned error: %v", err)
+			}
+			if !discoveryProtocolsEqual(res.NeighborDiscoveryProtocols, tt.want) {
+				t.Fatalf("NeighborDiscoveryProtocols = %v, want %v", res.NeighborDiscoveryProtocols, tt.want)
+			}
+		})
+	}
+}
+
 func findNeighborDiscoveryFailure(failures []NeighborDiscoveryFailure, protocol domain.DiscoveryProtocol, oid string) *NeighborDiscoveryFailure {
 	for i := range failures {
 		if failures[i].Protocol == protocol && failures[i].OID == oid {
@@ -590,6 +631,51 @@ func findNeighborDiscoveryFailure(failures []NeighborDiscoveryFailure, protocol 
 		}
 	}
 	return nil
+}
+
+func discoveryProtocolsEqual(got, want []domain.DiscoveryProtocol) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func minimalDiscoveryClient() ClientInterface {
+	return &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("router1")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS RB5009")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+				}, nil
+			case OidIfXTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
 }
 
 func TestDiscoverSoftwareVersion_AppendsScalarInstanceSuffix(t *testing.T) {

@@ -118,8 +118,9 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryPropagatesNeighborDiscoveryFail
 	}
 
 	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, collector.StaticResult{
-		SysName:                   "edge-sw",
-		NeighborDiscoveryFailures: append([]snmp.NeighborDiscoveryFailure(nil), failures...),
+		SysName:                    "edge-sw",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP, domain.DiscoveryProtocolCDP},
+		NeighborDiscoveryFailures:  append([]snmp.NeighborDiscoveryFailure(nil), failures...),
 	})
 
 	topologyService.mu.Lock()
@@ -132,6 +133,11 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryPropagatesNeighborDiscoveryFail
 	}
 	if len(topologyService.lastIn.NeighborDiscoveryFailures) != 1 {
 		t.Fatalf("failure count = %d, want 1", len(topologyService.lastIn.NeighborDiscoveryFailures))
+	}
+	if len(topologyService.lastIn.NeighborDiscoveryProtocols) != 2 ||
+		topologyService.lastIn.NeighborDiscoveryProtocols[0] != domain.DiscoveryProtocolLLDP ||
+		topologyService.lastIn.NeighborDiscoveryProtocols[1] != domain.DiscoveryProtocolCDP {
+		t.Fatalf("protocols = %v, want [lldp cdp]", topologyService.lastIn.NeighborDiscoveryProtocols)
 	}
 	failure := topologyService.lastIn.NeighborDiscoveryFailures[0]
 	if failure.Protocol != domain.DiscoveryProtocolCDP || failure.OID != snmp.OidCDPDeviceID || !failure.Critical || failure.Error != "cdp walk failed" {

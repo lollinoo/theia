@@ -108,6 +108,7 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 	result.DeviceType = discovery.DeviceType
 	result.Interfaces = append([]domain.Interface(nil), discovery.Interfaces...)
 	result.Neighbors = append([]snmp.NeighborInfo(nil), discovery.Neighbors...)
+	result.NeighborDiscoveryProtocols = append([]domain.DiscoveryProtocol(nil), discovery.NeighborDiscoveryProtocols...)
 	result.NeighborDiscoveryFailures = append([]snmp.NeighborDiscoveryFailure(nil), discovery.NeighborDiscoveryFailures...)
 
 	return result

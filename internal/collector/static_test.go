@@ -139,6 +139,9 @@ func TestStaticCollectorPoll(t *testing.T) {
 				if result.Neighbors[0].RemoteSysName != "switch1" {
 					t.Fatalf("Neighbors[0].RemoteSysName = %q, want %q", result.Neighbors[0].RemoteSysName, "switch1")
 				}
+				if !slices.Equal(result.NeighborDiscoveryProtocols, []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP, domain.DiscoveryProtocolCDP}) {
+					t.Fatalf("NeighborDiscoveryProtocols = %v, want [lldp cdp]", result.NeighborDiscoveryProtocols)
+				}
 				if !slices.Contains(client.bulkWalkCalls, snmp.OidLLDPRemChassisId) {
 					t.Fatalf("expected LLDP walks when topology mode is enabled, got %v", client.bulkWalkCalls)
 				}
@@ -192,6 +195,9 @@ func TestStaticCollectorPoll(t *testing.T) {
 				}
 				if len(result.Neighbors) != 0 {
 					t.Fatalf("neighbor count = %d, want 0", len(result.Neighbors))
+				}
+				if len(result.NeighborDiscoveryProtocols) != 0 {
+					t.Fatalf("NeighborDiscoveryProtocols = %v, want none", result.NeighborDiscoveryProtocols)
 				}
 				if slices.Contains(client.bulkWalkCalls, snmp.OidLLDPRemChassisId) || slices.Contains(client.bulkWalkCalls, snmp.OidCDPDeviceID) {
 					t.Fatalf("expected no LLDP/CDP walks when topology mode is off, got %v", client.bulkWalkCalls)
@@ -325,6 +331,9 @@ func TestStaticCollectorPoll_PropagatesNeighborDiscoveryFailures(t *testing.T) {
 	}
 	if len(result.Neighbors) != 0 {
 		t.Fatalf("neighbor count = %d, want 0", len(result.Neighbors))
+	}
+	if !slices.Equal(result.NeighborDiscoveryProtocols, []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP}) {
+		t.Fatalf("NeighborDiscoveryProtocols = %v, want [lldp]", result.NeighborDiscoveryProtocols)
 	}
 	failure := findStaticNeighborDiscoveryFailure(result.NeighborDiscoveryFailures, domain.DiscoveryProtocolLLDP, snmp.OidLLDPRemChassisId)
 	if failure == nil {

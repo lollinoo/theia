@@ -124,3 +124,128 @@ func TestTopologyObservationRepo_UnresolvedNeighborLifecycle(t *testing.T) {
 		t.Fatalf("expected unresolved neighbor to disappear after resolve, got %d record(s)", len(unresolved))
 	}
 }
+
+func TestTopologyObservationRepo_PruneLocalObservationsKeepsCurrentKeys(t *testing.T) {
+	db := openTestDB(t)
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	deviceRepo := NewDeviceRepo(db, nil, nil)
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.20", SysName: "local", Managed: true}
+	otherLocal := &domain.Device{ID: uuid.New(), Hostname: "other-local", IP: "192.0.2.21", SysName: "other-local", Managed: true}
+	remoteGone := &domain.Device{ID: uuid.New(), Hostname: "remote-gone", IP: "192.0.2.22", SysName: "remote-gone", Managed: true}
+	remoteKept := &domain.Device{ID: uuid.New(), Hostname: "remote-kept", IP: "192.0.2.23", SysName: "remote-kept", Managed: true}
+	remoteCDP := &domain.Device{ID: uuid.New(), Hostname: "remote-cdp", IP: "192.0.2.24", SysName: "remote-cdp", Managed: true}
+	for _, device := range []*domain.Device{local, otherLocal, remoteGone, remoteKept, remoteCDP} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	repo := NewTopologyObservationRepo(db)
+	now := time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC)
+	observations := []topology.Observation{
+		{
+			LocalDeviceID:   local.ID,
+			RemoteIdentity:  topology.NormalizeRemoteIdentity(remoteGone.SysName),
+			RemoteDeviceID:  remoteGone.ID,
+			LocalPort:       "ether1",
+			RemotePort:      "ether2",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+			LastObservedAt:  now,
+			FirstObservedAt: now,
+		},
+		{
+			LocalDeviceID:   local.ID,
+			RemoteIdentity:  topology.NormalizeRemoteIdentity(remoteKept.SysName),
+			RemoteDeviceID:  remoteKept.ID,
+			LocalPort:       "ether3",
+			RemotePort:      "ether4",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+			LastObservedAt:  now,
+			FirstObservedAt: now,
+		},
+		{
+			LocalDeviceID:   local.ID,
+			RemoteIdentity:  topology.NormalizeRemoteIdentity(remoteCDP.SysName),
+			RemoteDeviceID:  remoteCDP.ID,
+			LocalPort:       "ether5",
+			RemotePort:      "ether6",
+			Protocol:        domain.DiscoveryProtocolCDP,
+			LastObservedAt:  now,
+			FirstObservedAt: now,
+		},
+		{
+			LocalDeviceID:   otherLocal.ID,
+			RemoteIdentity:  topology.NormalizeRemoteIdentity(remoteGone.SysName),
+			RemoteDeviceID:  remoteGone.ID,
+			LocalPort:       "ether7",
+			RemotePort:      "ether8",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+			LastObservedAt:  now,
+			FirstObservedAt: now,
+		},
+	}
+	for index := range observations {
+		if err := repo.UpsertObservation(&observations[index]); err != nil {
+			t.Fatalf("UpsertObservation %d failed: %v", index, err)
+		}
+	}
+
+	deleted, err := repo.PruneLocalObservations(
+		local.ID,
+		[]domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		[]topology.Observation{observations[1]},
+	)
+	if err != nil {
+		t.Fatalf("PruneLocalObservations failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted rows = %d, want 1", deleted)
+	}
+
+	remaining, err := repo.ListObservationsForDevices([]uuid.UUID{
+		local.ID,
+		otherLocal.ID,
+		remoteGone.ID,
+		remoteKept.ID,
+		remoteCDP.ID,
+	})
+	if err != nil {
+		t.Fatalf("ListObservationsForDevices failed: %v", err)
+	}
+	if hasObservation(remaining, local.ID, remoteGone.SysName, "ether1", "ether2", domain.DiscoveryProtocolLLDP) {
+		t.Fatal("stale LLDP observation for local device was not pruned")
+	}
+	if !hasObservation(remaining, local.ID, remoteKept.SysName, "ether3", "ether4", domain.DiscoveryProtocolLLDP) {
+		t.Fatal("current LLDP observation for local device was pruned")
+	}
+	if !hasObservation(remaining, local.ID, remoteCDP.SysName, "ether5", "ether6", domain.DiscoveryProtocolCDP) {
+		t.Fatal("CDP observation for local device was pruned")
+	}
+	if !hasObservation(remaining, otherLocal.ID, remoteGone.SysName, "ether7", "ether8", domain.DiscoveryProtocolLLDP) {
+		t.Fatal("LLDP observation for a different local device was pruned")
+	}
+}
+
+func hasObservation(
+	observations []topology.Observation,
+	localDeviceID uuid.UUID,
+	remoteIdentity string,
+	localPort string,
+	remotePort string,
+	protocol domain.DiscoveryProtocol,
+) bool {
+	normalizedRemote := topology.NormalizeRemoteIdentity(remoteIdentity)
+	for _, observation := range observations {
+		if observation.LocalDeviceID == localDeviceID &&
+			observation.RemoteIdentity == normalizedRemote &&
+			observation.LocalPort == localPort &&
+			observation.RemotePort == remotePort &&
+			observation.Protocol == protocol {
+			return true
+		}
+	}
+	return false
+}

@@ -15,16 +15,17 @@ import (
 )
 
 type StaticDiscoveryInput struct {
-	SysName                   string
-	SysDescr                  string
-	SysObjectID               string
-	HardwareModel             string
-	OSVersion                 string
-	Vendor                    string
-	DeviceType                domain.DeviceType
-	Interfaces                []domain.Interface
-	Neighbors                 []snmp.NeighborInfo
-	NeighborDiscoveryFailures []snmp.NeighborDiscoveryFailure
+	SysName                    string
+	SysDescr                   string
+	SysObjectID                string
+	HardwareModel              string
+	OSVersion                  string
+	Vendor                     string
+	DeviceType                 domain.DeviceType
+	Interfaces                 []domain.Interface
+	Neighbors                  []snmp.NeighborInfo
+	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures  []snmp.NeighborDiscoveryFailure
 }
 
 type StaticPersistenceResult struct {
@@ -76,7 +77,12 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	unknownNeighbors := make(map[unknownNeighborKey]int)
 	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
 	if s.topologyStore != nil {
-		materialized, currentUnknowns, currentTotals, materializeErr := s.applyDiscoveryViaObservationStore(*fresh, neighbors)
+		materialized, currentUnknowns, currentTotals, materializeErr := s.applyDiscoveryViaObservationStore(
+			*fresh,
+			neighbors,
+			input.NeighborDiscoveryProtocols,
+			input.NeighborDiscoveryFailures,
+		)
 		if materializeErr != nil {
 			return StaticPersistenceResult{}, materializeErr
 		}
@@ -147,17 +153,21 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 func (s *DeviceService) applyDiscoveryViaObservationStore(
 	fresh domain.Device,
 	neighbors []snmp.NeighborInfo,
+	attemptedProtocols []domain.DiscoveryProtocol,
+	failures []snmp.NeighborDiscoveryFailure,
 ) (StaticPersistenceResult, map[unknownNeighborKey]int, map[domain.DiscoveryProtocol]int, error) {
 	if s.topologyStore == nil {
 		return StaticPersistenceResult{}, nil, nil, nil
 	}
 
 	now := time.Now().UTC()
+	reconciledProtocols := reconciledNeighborDiscoveryProtocols(attemptedProtocols, neighbors, failures)
 	affectedDeviceIDs := map[uuid.UUID]struct{}{
 		fresh.ID: {},
 	}
 	unknownNeighbors := make(map[unknownNeighborKey]int)
 	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
+	currentObservations := make([]topology.Observation, 0, len(neighbors))
 
 	for _, neighbor := range neighbors {
 		normalizedIdentity := discoveredNeighborRemoteIdentity(neighbor)
@@ -170,8 +180,7 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 			var lookupErr error
 			remoteDevice, lookupErr = s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
 			if lookupErr != nil {
-				log.Printf("Error looking up neighbor %s: %v", neighbor.RemoteSysName, lookupErr)
-				continue
+				return StaticPersistenceResult{}, nil, nil, fmt.Errorf("looking up neighbor %s: %w", neighbor.RemoteSysName, lookupErr)
 			}
 		}
 
@@ -190,6 +199,7 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		if err := s.topologyStore.UpsertObservation(observation); err != nil {
 			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("upserting topology observation: %w", err)
 		}
+		currentObservations = append(currentObservations, *observation)
 
 		if remoteDevice == nil {
 			unknownNeighbors[unknownNeighborKey{
@@ -216,6 +226,19 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		}
 	}
 
+	prunedObservations := 0
+	if len(reconciledProtocols) > 0 {
+		var pruneErr error
+		prunedObservations, pruneErr = s.topologyStore.PruneLocalObservations(
+			fresh.ID,
+			reconciledProtocols,
+			currentObservations,
+		)
+		if pruneErr != nil {
+			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("pruning stale topology observations: %w", pruneErr)
+		}
+	}
+
 	deviceIDs := make([]uuid.UUID, 0, len(affectedDeviceIDs))
 	for deviceID := range affectedDeviceIDs {
 		deviceIDs = append(deviceIDs, deviceID)
@@ -229,6 +252,11 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 	applied, err := topology.ApplyObservations(observations, linkWriterAdapter{repo: s.linkRepo})
 	if err != nil {
 		return StaticPersistenceResult{}, nil, nil, fmt.Errorf("materializing canonical links: %w", err)
+	}
+
+	deletedStaleLinks, err := s.deleteStaleAutoDiscoveredLinks(fresh.ID, reconciledProtocols, observations)
+	if err != nil {
+		return StaticPersistenceResult{}, nil, nil, err
 	}
 
 	nameCache := map[uuid.UUID]string{
@@ -247,9 +275,116 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 	}
 
 	return StaticPersistenceResult{
-		TopologyChanged: applied.TopologyChanged,
+		TopologyChanged: applied.TopologyChanged || prunedObservations > 0 || deletedStaleLinks > 0,
 		LinksCreated:    applied.LinksCreated,
 	}, unknownNeighbors, unknownByProtocol, nil
+}
+
+func reconciledNeighborDiscoveryProtocols(
+	attemptedProtocols []domain.DiscoveryProtocol,
+	neighbors []snmp.NeighborInfo,
+	failures []snmp.NeighborDiscoveryFailure,
+) []domain.DiscoveryProtocol {
+	attempted := make(map[domain.DiscoveryProtocol]struct{})
+	for _, protocol := range attemptedProtocols {
+		if isReconcilableDiscoveryProtocol(protocol) {
+			attempted[protocol] = struct{}{}
+		}
+	}
+	if len(attempted) == 0 {
+		for _, neighbor := range neighbors {
+			if isReconcilableDiscoveryProtocol(neighbor.Protocol) {
+				attempted[neighbor.Protocol] = struct{}{}
+			}
+		}
+	}
+
+	failed := make(map[domain.DiscoveryProtocol]struct{})
+	for _, failure := range failures {
+		if isReconcilableDiscoveryProtocol(failure.Protocol) {
+			failed[failure.Protocol] = struct{}{}
+		}
+	}
+
+	protocols := make([]domain.DiscoveryProtocol, 0, 2)
+	for _, protocol := range []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP, domain.DiscoveryProtocolCDP} {
+		if _, ok := attempted[protocol]; !ok {
+			continue
+		}
+		if _, ok := failed[protocol]; ok {
+			continue
+		}
+		protocols = append(protocols, protocol)
+	}
+	return protocols
+}
+
+func isReconcilableDiscoveryProtocol(protocol domain.DiscoveryProtocol) bool {
+	return protocol == domain.DiscoveryProtocolLLDP || protocol == domain.DiscoveryProtocolCDP
+}
+
+func (s *DeviceService) deleteStaleAutoDiscoveredLinks(
+	localDeviceID uuid.UUID,
+	reconciledProtocols []domain.DiscoveryProtocol,
+	remainingObservations []topology.Observation,
+) (int, error) {
+	if s.linkRepo == nil || len(reconciledProtocols) == 0 {
+		return 0, nil
+	}
+
+	protocolSet := make(map[domain.DiscoveryProtocol]struct{}, len(reconciledProtocols))
+	for _, protocol := range reconciledProtocols {
+		if isReconcilableDiscoveryProtocol(protocol) {
+			protocolSet[protocol] = struct{}{}
+		}
+	}
+	if len(protocolSet) == 0 {
+		return 0, nil
+	}
+
+	supportedLinks := make(map[string]struct{})
+	for _, link := range topology.CandidateLinks(remainingObservations) {
+		if !isReconcilableDiscoveryProtocol(link.DiscoveryProtocol) {
+			continue
+		}
+		supportedLinks[physicalLinkKey(link)] = struct{}{}
+	}
+
+	links, err := s.linkRepo.GetByDeviceID(localDeviceID)
+	if err != nil {
+		return 0, fmt.Errorf("listing links for stale discovery reconciliation: %w", err)
+	}
+
+	deleted := 0
+	for _, link := range links {
+		if link.DiscoveryProtocol == domain.DiscoveryProtocolManual {
+			continue
+		}
+		if _, ok := protocolSet[link.DiscoveryProtocol]; !ok {
+			continue
+		}
+		if _, ok := supportedLinks[physicalLinkKey(link)]; ok {
+			continue
+		}
+		if err := s.linkRepo.Delete(link.ID); err != nil {
+			return deleted, fmt.Errorf("deleting stale auto-discovered link %s: %w", link.ID, err)
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+func physicalLinkKey(link domain.Link) string {
+	source := physicalEndpointKey(link.SourceDeviceID, link.SourceIfName)
+	target := physicalEndpointKey(link.TargetDeviceID, link.TargetIfName)
+	if target < source {
+		source, target = target, source
+	}
+	return source + "<->" + target
+}
+
+func physicalEndpointKey(deviceID uuid.UUID, port string) string {
+	return deviceID.String() + "|" + strings.ToLower(strings.TrimSpace(port))
 }
 
 func (s *DeviceService) lookupDeviceLabel(deviceID uuid.UUID, cache map[uuid.UUID]string) string {
