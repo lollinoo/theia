@@ -254,7 +254,7 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		return StaticPersistenceResult{}, nil, nil, fmt.Errorf("materializing canonical links: %w", err)
 	}
 
-	deletedStaleLinks, err := s.deleteStaleAutoDiscoveredLinks(fresh.ID, reconciledProtocols, observations)
+	deletedStaleLinks, err := s.deleteStaleAutoDiscoveredLinks(fresh.ID, reconciledProtocols, applied.Events)
 	if err != nil {
 		return StaticPersistenceResult{}, nil, nil, err
 	}
@@ -326,7 +326,7 @@ func isReconcilableDiscoveryProtocol(protocol domain.DiscoveryProtocol) bool {
 func (s *DeviceService) deleteStaleAutoDiscoveredLinks(
 	localDeviceID uuid.UUID,
 	reconciledProtocols []domain.DiscoveryProtocol,
-	remainingObservations []topology.Observation,
+	materializedEvents []topology.ApplyEvent,
 ) (int, error) {
 	if s.linkRepo == nil || len(reconciledProtocols) == 0 {
 		return 0, nil
@@ -342,10 +342,15 @@ func (s *DeviceService) deleteStaleAutoDiscoveredLinks(
 		return 0, nil
 	}
 
+	supportedLinkIDs := make(map[uuid.UUID]struct{})
 	supportedLinks := make(map[string]struct{})
-	for _, link := range topology.CandidateLinks(remainingObservations) {
+	for _, event := range materializedEvents {
+		link := event.Link
 		if !isReconcilableDiscoveryProtocol(link.DiscoveryProtocol) {
 			continue
+		}
+		if link.ID != uuid.Nil {
+			supportedLinkIDs[link.ID] = struct{}{}
 		}
 		supportedLinks[physicalLinkKey(link)] = struct{}{}
 	}
@@ -361,6 +366,9 @@ func (s *DeviceService) deleteStaleAutoDiscoveredLinks(
 			continue
 		}
 		if _, ok := protocolSet[link.DiscoveryProtocol]; !ok {
+			continue
+		}
+		if _, ok := supportedLinkIDs[link.ID]; ok {
 			continue
 		}
 		if _, ok := supportedLinks[physicalLinkKey(link)]; ok {
