@@ -226,12 +226,14 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		}
 	}
 
+	pruneProtocols := pruneSafeNeighborDiscoveryProtocols(reconciledProtocols, currentObservations)
+
 	prunedObservations := 0
-	if len(reconciledProtocols) > 0 {
+	if len(pruneProtocols) > 0 {
 		var pruneErr error
 		prunedObservations, pruneErr = s.topologyStore.PruneLocalObservations(
 			fresh.ID,
-			reconciledProtocols,
+			pruneProtocols,
 			currentObservations,
 		)
 		if pruneErr != nil {
@@ -249,14 +251,17 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		return StaticPersistenceResult{}, nil, nil, fmt.Errorf("listing topology observations: %w", err)
 	}
 
-	applied, err := topology.ApplyObservations(observations, linkWriterAdapter{repo: s.linkRepo})
+	applied, err := topology.ApplyObservations(
+		materializableTopologyObservations(observations),
+		linkWriterAdapter{repo: s.linkRepo},
+	)
 	if err != nil {
 		return StaticPersistenceResult{}, nil, nil, fmt.Errorf("materializing canonical links: %w", err)
 	}
 
 	deletedStaleLinks, err := s.deleteStaleAutoDiscoveredLinks(
 		fresh.ID,
-		reconciledProtocols,
+		pruneProtocols,
 		applied.Events,
 		currentObservations,
 	)
@@ -322,6 +327,49 @@ func reconciledNeighborDiscoveryProtocols(
 		protocols = append(protocols, protocol)
 	}
 	return protocols
+}
+
+func pruneSafeNeighborDiscoveryProtocols(
+	protocols []domain.DiscoveryProtocol,
+	currentObservations []topology.Observation,
+) []domain.DiscoveryProtocol {
+	unsafe := make(map[domain.DiscoveryProtocol]struct{})
+	for _, observation := range currentObservations {
+		if !isAmbiguousResolvedDiscoveryObservation(observation) {
+			continue
+		}
+		unsafe[observation.Protocol] = struct{}{}
+	}
+	if len(unsafe) == 0 {
+		return protocols
+	}
+
+	filtered := make([]domain.DiscoveryProtocol, 0, len(protocols))
+	for _, protocol := range protocols {
+		if _, ok := unsafe[protocol]; ok {
+			continue
+		}
+		filtered = append(filtered, protocol)
+	}
+	return filtered
+}
+
+func materializableTopologyObservations(observations []topology.Observation) []topology.Observation {
+	filtered := make([]topology.Observation, 0, len(observations))
+	for _, observation := range observations {
+		if isAmbiguousResolvedDiscoveryObservation(observation) {
+			continue
+		}
+		filtered = append(filtered, observation)
+	}
+	return filtered
+}
+
+func isAmbiguousResolvedDiscoveryObservation(observation topology.Observation) bool {
+	return observation.RemoteDeviceID != uuid.Nil &&
+		isReconcilableDiscoveryProtocol(observation.Protocol) &&
+		strings.TrimSpace(observation.LocalPort) == "" &&
+		strings.TrimSpace(observation.RemotePort) == ""
 }
 
 func isReconcilableDiscoveryProtocol(protocol domain.DiscoveryProtocol) bool {

@@ -1020,6 +1020,86 @@ func TestApplyStaticDiscoveryWithObservationStore_PartialPortSnapshotKeepsEnrich
 	}
 }
 
+func TestApplyStaticDiscoveryWithObservationStore_AmbiguousResolvedSnapshotKeepsParallelAutoLinks(t *testing.T) {
+	svc, deviceRepo, linkRepo, _ := newObservationStoreStaticPersistenceService(t)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.77", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	remote := &domain.Device{ID: uuid.New(), Hostname: "remote", IP: "192.0.2.78", SysName: "remote", Managed: true, Status: domain.DeviceStatusUp}
+	for _, device := range []*domain.Device{local, remote} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	first, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName: "remote",
+				RemotePortID:  "ether2",
+				LocalIfName:   "ether1",
+				Protocol:      domain.DiscoveryProtocolLLDP,
+			},
+			{
+				RemoteSysName: "remote",
+				RemotePortID:  "ether4",
+				LocalIfName:   "ether3",
+				Protocol:      domain.DiscoveryProtocolLLDP,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first ApplyStaticDiscovery failed: %v", err)
+	}
+	if !first.TopologyChanged || first.LinksCreated != 2 {
+		t.Fatalf("first persistence result = %+v, want topology change with two created links", first)
+	}
+
+	if _, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: "remote",
+			Protocol:      domain.DiscoveryProtocolLLDP,
+		}},
+	}); err != nil {
+		t.Fatalf("second ApplyStaticDiscovery failed: %v", err)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected exactly two full LLDP links after ambiguous snapshot, got %d links: %+v", len(links), links)
+	}
+
+	expectedPorts := map[string]bool{
+		"ether1\x00ether2": false,
+		"ether3\x00ether4": false,
+	}
+	for _, link := range links {
+		if link.SourceDeviceID != local.ID || link.TargetDeviceID != remote.ID {
+			t.Fatalf("expected only local to remote LLDP links, got %+v", link)
+		}
+		if link.SourceIfName == "" || link.TargetIfName == "" {
+			t.Fatalf("expected no blank-port LLDP link after ambiguous snapshot, got %+v", link)
+		}
+		key := link.SourceIfName + "\x00" + link.TargetIfName
+		if _, ok := expectedPorts[key]; ok {
+			expectedPorts[key] = true
+			continue
+		}
+		t.Fatalf("unexpected LLDP link after ambiguous snapshot: %+v", link)
+	}
+	for key, found := range expectedPorts {
+		if !found {
+			t.Fatalf("expected full LLDP link %q to remain after ambiguous snapshot, got %+v", key, links)
+		}
+	}
+}
+
 func TestApplyStaticDiscoveryWithObservationStore_UnresolvedChassisSnapshotKeepsExistingAutoLink(t *testing.T) {
 	svc, deviceRepo, linkRepo, _ := newObservationStoreStaticPersistenceService(t)
 
