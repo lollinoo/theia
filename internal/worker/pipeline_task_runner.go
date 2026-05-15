@@ -179,15 +179,16 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 func (r *pipelineTaskRunner) persistStaticDiscovery(device domain.Device, result collector.StaticResult) {
 	p := r.pipeline
 	persisted, err := p.topologyService.ApplyStaticDiscovery(device.ID, service.StaticDiscoveryInput{
-		SysName:       result.SysName,
-		SysDescr:      result.SysDescr,
-		SysObjectID:   result.SysObjectID,
-		HardwareModel: result.HardwareModel,
-		OSVersion:     result.OSVersion,
-		Vendor:        result.Vendor,
-		DeviceType:    result.DeviceType,
-		Interfaces:    append([]domain.Interface(nil), result.Interfaces...),
-		Neighbors:     append([]snmp.NeighborInfo(nil), result.Neighbors...),
+		SysName:                   result.SysName,
+		SysDescr:                  result.SysDescr,
+		SysObjectID:               result.SysObjectID,
+		HardwareModel:             result.HardwareModel,
+		OSVersion:                 result.OSVersion,
+		Vendor:                    result.Vendor,
+		DeviceType:                result.DeviceType,
+		Interfaces:                append([]domain.Interface(nil), result.Interfaces...),
+		Neighbors:                 append([]snmp.NeighborInfo(nil), result.Neighbors...),
+		NeighborDiscoveryFailures: append([]snmp.NeighborDiscoveryFailure(nil), result.NeighborDiscoveryFailures...),
 	})
 	if err != nil {
 		log.Printf("pipeline: static persistence failed for %s: %v", device.ID, err)

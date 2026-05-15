@@ -15,15 +15,16 @@ import (
 )
 
 type StaticDiscoveryInput struct {
-	SysName       string
-	SysDescr      string
-	SysObjectID   string
-	HardwareModel string
-	OSVersion     string
-	Vendor        string
-	DeviceType    domain.DeviceType
-	Interfaces    []domain.Interface
-	Neighbors     []snmp.NeighborInfo
+	SysName                   string
+	SysDescr                  string
+	SysObjectID               string
+	HardwareModel             string
+	OSVersion                 string
+	Vendor                    string
+	DeviceType                domain.DeviceType
+	Interfaces                []domain.Interface
+	Neighbors                 []snmp.NeighborInfo
+	NeighborDiscoveryFailures []snmp.NeighborDiscoveryFailure
 }
 
 type StaticPersistenceResult struct {
@@ -132,7 +133,7 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		}
 	}
 	logUnknownNeighborSummary(fresh.ID, fresh.SysName, unknownNeighbors, unknownByProtocol)
-	s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false)
+	s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false, snmp.HasCriticalNeighborDiscoveryFailure(input.NeighborDiscoveryFailures))
 	s.reconcileResolvedBootstrapPeers(fresh.ID)
 
 	return result, nil

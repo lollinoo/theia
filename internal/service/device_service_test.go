@@ -677,6 +677,63 @@ func TestProbeDevice_BootstrapOnceCompletesWithoutNeighbors(t *testing.T) {
 	}
 }
 
+func TestProbeDevice_RecordsDiscoveryFailedForCriticalNeighborFailureWithNoNeighbors(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		if mode != domain.TopologyDiscoveryModeBootstrapOnce {
+			t.Fatalf("expected bootstrap_once mode, got %s", mode)
+		}
+		return &snmp.DiscoveryResult{
+			SysName:    "edge-sw-2",
+			DeviceType: domain.DeviceTypeSwitch,
+			NeighborDiscoveryFailures: []snmp.NeighborDiscoveryFailure{
+				{
+					Protocol: domain.DiscoveryProtocolLLDP,
+					OID:      snmp.OidLLDPRemChassisId,
+					Critical: true,
+					Error:    "lldp walk failed",
+				},
+			},
+		}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	device := &domain.Device{
+		ID:                     uuid.New(),
+		IP:                     "10.0.0.10",
+		Hostname:               "edge-sw-2",
+		Managed:                true,
+		Status:                 domain.DeviceStatusProbing,
+		DeviceType:             domain.DeviceTypeSwitch,
+		MetricsSource:          domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+		TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	svc.probeDevice(device)
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.LastTopologyDiscoveryAt == nil {
+		t.Fatal("expected last_topology_discovery_at to be populated")
+	}
+	if updated.LastTopologyDiscoveryResult != "discovery_failed" {
+		t.Fatalf("expected last_topology_discovery_result discovery_failed, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
 func TestRunTopologyDiscoveryNow_SetsPendingAndTriggersReprobe(t *testing.T) {
 	deviceRepo := newMockDeviceRepo()
 	linkRepo := newMockLinkRepo()

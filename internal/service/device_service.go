@@ -225,12 +225,16 @@ func (s *DeviceService) updateTopologyDiscoveryState(deviceID uuid.UUID, mutate 
 	}
 }
 
-func topologyDiscoveryResultLabel(neighborCount int, followupScheduled bool) string {
+func topologyDiscoveryResultLabel(neighborCount int, followupScheduled bool, criticalFailure bool) string {
 	switch {
-	case followupScheduled:
+	case neighborCount > 0 && followupScheduled:
 		return "ports_pending"
 	case neighborCount > 0:
 		return "neighbors_found"
+	case criticalFailure:
+		return "discovery_failed"
+	case followupScheduled:
+		return "ports_pending"
 	default:
 		return "no_neighbors"
 	}
@@ -409,7 +413,7 @@ func (s *DeviceService) reserveIncompleteLinkReprobe(deviceID uuid.UUID) (time.T
 	return bookedAt, true
 }
 
-func (s *DeviceService) syncTopologyDiscoveryMetadata(deviceID uuid.UUID, neighborCount int, followupScheduled bool) {
+func (s *DeviceService) syncTopologyDiscoveryMetadata(deviceID uuid.UUID, neighborCount int, followupScheduled bool, criticalFailure bool) {
 	recordedAt := s.now().UTC()
 	hasIncomplete := s.hasIncompleteLLDPLinks(deviceID)
 
@@ -423,6 +427,7 @@ func (s *DeviceService) syncTopologyDiscoveryMetadata(deviceID uuid.UUID, neighb
 		fresh.LastTopologyDiscoveryResult = topologyDiscoveryResultLabel(
 			neighborCount,
 			followupScheduled || hasIncomplete,
+			criticalFailure,
 		)
 
 		if mode != domain.TopologyDiscoveryModeBootstrapOnce {
