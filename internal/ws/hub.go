@@ -14,13 +14,16 @@ import (
 )
 
 const (
-	writeWait          = 60 * time.Second
-	pongWait           = 60 * time.Second
-	pingPeriod         = 54 * time.Second
-	maxMessageSize     = 4096
+	writeWait         = 60 * time.Second
+	pongWait          = 60 * time.Second
+	pingPeriod        = 54 * time.Second
+	maxMessageSize    = 4096
+	clientHelloBuffer = 1
+
+	// These bounded queues are part of the WebSocket anti-OOM contract:
+	// producers drop/resync slow clients instead of blocking or growing memory.
 	sendBufferSize     = 16
 	overviewBufferSize = 32
-	clientHelloBuffer  = 1
 
 	wsBackpressureScopeBroadcast    = "broadcast"
 	wsBackpressureScopeClientSend   = "client_send"
@@ -29,6 +32,16 @@ const (
 	wsBackpressureReasonHubBufferFull     = "hub_buffer_full"
 	wsBackpressureReasonClientBufferFull  = "client_buffer_full"
 	wsBackpressureReasonClientMailboxFull = "client_mailbox_full"
+
+	wsResyncBootstrapHTTP   = "http"
+	wsResyncBootstrapLegacy = "legacy"
+
+	wsOverviewMailboxClearReasonSnapshot           = "snapshot"
+	wsOverviewMailboxClearReasonClientMailboxFull  = wsBackpressureReasonClientMailboxFull
+	wsOverviewMailboxClearReasonExplicitResync     = "resync"
+	wsOverviewMailboxClearReasonClientHello        = "client_hello"
+	wsOverviewMailboxClearReasonHTTPResyncPending  = "http_resync_pending"
+	wsOverviewMailboxClearReasonHTTPResyncRequired = "http_resync_required"
 )
 
 // Hub manages all active WebSocket clients and server-side broadcasts.
@@ -52,6 +65,7 @@ type Client struct {
 	overviewSend             chan []byte
 	hello                    chan clientControlMessage
 	needsResync              bool
+	overviewEpoch            uint64
 	usesHTTPRuntimeBootstrap bool
 	detailDeviceID           uuid.UUID
 }
@@ -83,6 +97,7 @@ func (h *Hub) addClient(client *Client) {
 	h.clients[client] = true
 	clientCount := len(h.clients)
 	h.mu.Unlock()
+	observability.Default().SetWSConnectedClients(clientCount)
 	logging.Debugf("websocket client registered clients=%d", clientCount)
 }
 
@@ -146,7 +161,7 @@ func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint6
 	logging.Debugf("websocket message queued scope=overview_broadcast type=%s version=%d bytes=%d clients=%d", msg.Type, version, len(payload), len(clients))
 	for _, client := range clients {
 		if client.usesHTTPBootstrap() {
-			h.enqueueOverviewHTTPResync(client, resyncPayload)
+			h.enqueueOverviewHTTPResync(client, resyncPayload, ResyncReasonClientResync)
 			continue
 		}
 		h.enqueueOverviewSnapshot(client, payload)
@@ -163,12 +178,9 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 		log.Printf("WebSocket hub: failed to marshal overview delta: %v", err)
 		return
 	}
-	fallbackMessage := NewSnapshotMessage(fallbackSnapshot, version)
-	fallbackPayload, err := json.Marshal(fallbackMessage)
-	if err != nil {
-		log.Printf("WebSocket hub: failed to marshal overview fallback snapshot: %v", err)
-		return
-	}
+	clients := h.copyClients()
+	var fallbackPayload []byte
+	fallbackPayloadReady := false
 	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal overview resync marker: %v", err)
@@ -176,7 +188,6 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 	}
 	observability.Default().ObserveWSMessage("broadcast", deltaMessage.Type, len(deltaPayload))
 	h.recordBroadcast(deltaPayload)
-	clients := h.copyClients()
 	devicePatchCount, linkPatchCount := runtimeDeltaPatchCounts(delta)
 	logging.Debugf(
 		"websocket message queued scope=overview_broadcast type=%s base_version=%d version=%d device_patches=%d link_patches=%d bytes=%d fallback_bytes=%d clients=%d",
@@ -190,7 +201,20 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 		len(clients),
 	)
 	for _, client := range clients {
-		h.enqueueOverviewDelta(client, deltaPayload, resyncPayload, fallbackPayload)
+		_, needsFallbackSnapshot, observedOverviewEpoch := h.enqueueOverviewDelta(client, deltaPayload, resyncPayload)
+		if !needsFallbackSnapshot {
+			continue
+		}
+		if !fallbackPayloadReady {
+			fallbackMessage := NewSnapshotMessage(fallbackSnapshot, version)
+			fallbackPayload, err = json.Marshal(fallbackMessage)
+			if err != nil {
+				log.Printf("WebSocket hub: failed to marshal overview fallback snapshot: %v", err)
+				return
+			}
+			fallbackPayloadReady = true
+		}
+		h.enqueueOverviewLegacyFallback(client, deltaPayload, resyncPayload, fallbackPayload, observedOverviewEpoch)
 	}
 }
 
@@ -243,10 +267,10 @@ func (h *Hub) BroadcastOverviewResync(reason string, snapshot *SnapshotPayload, 
 	)
 	for _, client := range clients {
 		if client.usesHTTPBootstrap() {
-			h.enqueueOverviewHTTPResync(client, resyncPayload)
+			h.enqueueOverviewHTTPResync(client, resyncPayload, reason)
 			continue
 		}
-		h.enqueueOverviewResync(client, resyncPayload, snapshotPayload)
+		h.enqueueOverviewResync(client, resyncPayload, snapshotPayload, reason)
 	}
 }
 
@@ -311,7 +335,8 @@ func (h *Hub) enqueueOverviewSnapshot(client *Client, payload []byte) bool {
 	if client.closed {
 		return false
 	}
-	clearQueuedMessages(client.overviewSend)
+	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonSnapshot, clearQueuedMessages(client.overviewSend))
+	client.overviewEpoch++
 	client.needsResync = false
 	select {
 	case client.overviewSend <- payload:
@@ -322,38 +347,65 @@ func (h *Hub) enqueueOverviewSnapshot(client *Client, payload []byte) bool {
 	}
 }
 
-func (h *Hub) enqueueOverviewDelta(client *Client, deltaPayload, resyncPayload, fallbackPayload []byte) bool {
+func (h *Hub) enqueueOverviewDelta(client *Client, deltaPayload, resyncPayload []byte) (bool, bool, uint64) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
+		return false, false, 0
+	}
+	if !client.needsResync {
+		select {
+		case client.overviewSend <- deltaPayload:
+			client.overviewEpoch++
+			return true, false, client.overviewEpoch
+		default:
+		}
+	}
+	if client.usesHTTPRuntimeBootstrap {
+		observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
+		if client.needsResync {
+			h.recordOverviewResyncSuppressed(ResyncReasonClientResync)
+			return true, false, client.overviewEpoch
+		}
+		client.needsResync = true
+		h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientMailboxFull, clearQueuedMessages(client.overviewSend))
+		client.overviewEpoch++
+		select {
+		case client.overviewSend <- resyncPayload:
+			h.recordOverviewResyncRequired(ResyncReasonClientResync, true)
+			return true, false, client.overviewEpoch
+		default:
+			observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
+			return false, false, client.overviewEpoch
+		}
+	}
+	return true, true, client.overviewEpoch
+}
+
+func (h *Hub) enqueueOverviewLegacyFallback(client *Client, deltaPayload, resyncPayload, fallbackPayload []byte, observedOverviewEpoch uint64) bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closed || client.usesHTTPRuntimeBootstrap {
+		return false
+	}
+	if client.overviewEpoch != observedOverviewEpoch {
 		return false
 	}
 	if !client.needsResync {
 		select {
 		case client.overviewSend <- deltaPayload:
+			client.overviewEpoch++
 			return true
 		default:
 		}
 	}
 	observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
-	if client.usesHTTPRuntimeBootstrap {
-		if client.needsResync {
-			return true
-		}
-		client.needsResync = true
-		clearQueuedMessages(client.overviewSend)
-		select {
-		case client.overviewSend <- resyncPayload:
-			return true
-		default:
-			observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
-			return false
-		}
-	}
+	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientMailboxFull, clearQueuedMessages(client.overviewSend))
+	client.overviewEpoch++
 	client.needsResync = true
-	clearQueuedMessages(client.overviewSend)
 	select {
 	case client.overviewSend <- resyncPayload:
+		h.recordOverviewResyncRequired(ResyncReasonClientResync, false)
 	default:
 	}
 	select {
@@ -364,19 +416,22 @@ func (h *Hub) enqueueOverviewDelta(client *Client, deltaPayload, resyncPayload, 
 	return true
 }
 
-func (h *Hub) enqueueOverviewHTTPResync(client *Client, resyncPayload []byte) bool {
+func (h *Hub) enqueueOverviewHTTPResync(client *Client, resyncPayload []byte, reason string) bool {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
 		return false
 	}
 	if client.needsResync {
+		h.recordOverviewResyncSuppressed(reason)
 		return true
 	}
 	client.needsResync = true
-	clearQueuedMessages(client.overviewSend)
+	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonHTTPResyncRequired, clearQueuedMessages(client.overviewSend))
+	client.overviewEpoch++
 	select {
 	case client.overviewSend <- resyncPayload:
+		h.recordOverviewResyncRequired(reason, true)
 		return true
 	default:
 		observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
@@ -384,16 +439,18 @@ func (h *Hub) enqueueOverviewHTTPResync(client *Client, resyncPayload []byte) bo
 	}
 }
 
-func (h *Hub) enqueueOverviewResync(client *Client, resyncPayload, snapshotPayload []byte) bool {
+func (h *Hub) enqueueOverviewResync(client *Client, resyncPayload, snapshotPayload []byte, reason string) bool {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
 		return false
 	}
-	clearQueuedMessages(client.overviewSend)
+	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonExplicitResync, clearQueuedMessages(client.overviewSend))
+	client.overviewEpoch++
 	client.needsResync = false
 	select {
 	case client.overviewSend <- resyncPayload:
+		h.recordOverviewResyncRequired(reason, false)
 	default:
 	}
 	select {
@@ -424,6 +481,7 @@ func (h *Hub) removeClient(client *Client) {
 		_ = client.conn.Close()
 	}
 	if ok {
+		observability.Default().SetWSConnectedClients(clientCount)
 		logging.Debugf("websocket client unregistered clients=%d", clientCount)
 	}
 }
@@ -484,7 +542,8 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	c.mu.Lock()
 	c.usesHTTPRuntimeBootstrap = true
 	c.needsResync = false
-	clearQueuedMessages(c.overviewSend)
+	c.hub.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientHello, clearQueuedMessages(c.overviewSend))
+	c.overviewEpoch++
 	c.mu.Unlock()
 
 	if c.hello == nil {
@@ -501,7 +560,8 @@ func (c *Client) markHTTPRuntimeResyncPending() {
 	c.mu.Lock()
 	c.usesHTTPRuntimeBootstrap = true
 	c.needsResync = true
-	clearQueuedMessages(c.overviewSend)
+	c.hub.recordOverviewMailboxClear(wsOverviewMailboxClearReasonHTTPResyncPending, clearQueuedMessages(c.overviewSend))
+	c.overviewEpoch++
 	c.mu.Unlock()
 }
 
@@ -578,6 +638,22 @@ func (h *Hub) recordBroadcast(payload []byte) {
 	}
 }
 
+func (h *Hub) recordOverviewResyncRequired(reason string, httpBootstrap bool) {
+	bootstrap := wsResyncBootstrapLegacy
+	if httpBootstrap {
+		bootstrap = wsResyncBootstrapHTTP
+	}
+	observability.Default().IncWSClientResyncRequired(ResyncScopeOverview, reason, bootstrap)
+}
+
+func (h *Hub) recordOverviewResyncSuppressed(reason string) {
+	observability.Default().IncWSOverviewResyncSuppressed(reason)
+}
+
+func (h *Hub) recordOverviewMailboxClear(reason string, cleared int) {
+	observability.Default().AddWSOverviewMailboxCleared(reason, cleared)
+}
+
 func (h *Hub) copyClients() []*Client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -588,12 +664,14 @@ func (h *Hub) copyClients() []*Client {
 	return clients
 }
 
-func clearQueuedMessages(ch chan []byte) {
+func clearQueuedMessages(ch chan []byte) int {
+	cleared := 0
 	for {
 		select {
 		case <-ch:
+			cleared++
 		default:
-			return
+			return cleared
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,185 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncOnlyForHTTPBootstrapClient(t
 	})
 	if client.needsResync {
 		t.Fatal("expected client hello to clear HTTP resync marker")
+	}
+}
+
+func TestHubOverviewDelta_SkipsFallbackSerializationWhenAllClientsUseHTTPBootstrap(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	unsupported := math.NaN()
+	fallback := EmptySnapshot()
+	fallback.Devices["dev-1"] = DeviceRuntimeDTO{
+		DeviceID:   "dev-1",
+		CPUPercent: &unsupported,
+	}
+
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
+		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), MessageTypeSnapshot) {
+		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
+	}
+}
+
+func TestHubOverviewDelta_SkipsFallbackSerializationForReadyLegacyClient(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+
+	unsupported := math.NaN()
+	fallback := EmptySnapshot()
+	fallback.Devices["dev-1"] = DeviceRuntimeDTO{
+		DeviceID:   "dev-1",
+		CPUPercent: &unsupported,
+	}
+
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), MessageTypeRuntimeDelta) {
+		t.Fatalf("expected overview message to be runtime_delta, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), MessageTypeSnapshot) {
+		t.Fatalf("expected ready legacy client not to receive snapshot, got %s", string(payload))
+	}
+}
+
+func TestHubOverviewDelta_SkipsLegacyFallbackWhenClientBecomesHTTPBootstrap(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
+	if err != nil {
+		t.Fatalf("marshal resync payload: %v", err)
+	}
+	_, needsFallback, observedOverviewEpoch := hub.enqueueOverviewDelta(client, []byte(`{"type":"runtime_delta"}`), resyncPayload)
+	if !needsFallback {
+		t.Fatal("expected legacy overflow to request fallback")
+	}
+
+	version := uint64(2)
+	client.acceptHello(clientControlMessage{
+		Type:           MessageTypeHello,
+		RuntimeVersion: &version,
+	})
+
+	if ok := hub.enqueueOverviewLegacyFallback(client, []byte(`{"type":"runtime_delta"}`), resyncPayload, []byte(`{"type":"snapshot"}`), observedOverviewEpoch); ok {
+		t.Fatal("expected fallback enqueue to be skipped after HTTP bootstrap")
+	}
+	if got := len(client.overviewSend); got != 0 {
+		t.Fatalf("overview mailbox length = %d, want 0", got)
+	}
+	if client.needsResync {
+		t.Fatal("expected client to remain out of legacy fallback resync state")
+	}
+}
+
+func TestHubOverviewDelta_SkipsStaleLegacyFallbackAfterNewerSnapshot(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
+	if err != nil {
+		t.Fatalf("marshal resync payload: %v", err)
+	}
+	_, needsFallback, observedOverviewEpoch := hub.enqueueOverviewDelta(client, []byte(`{"type":"old-runtime-delta"}`), resyncPayload)
+	if !needsFallback {
+		t.Fatal("expected legacy overflow to request fallback")
+	}
+
+	hub.enqueueOverviewSnapshot(client, []byte(`{"type":"new-snapshot"}`))
+
+	if ok := hub.enqueueOverviewLegacyFallback(client, []byte(`{"type":"old-runtime-delta"}`), resyncPayload, []byte(`{"type":"old-snapshot"}`), observedOverviewEpoch); ok {
+		t.Fatal("expected stale fallback enqueue to be skipped after newer snapshot")
+	}
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+	payload := <-client.overviewSend
+	if !strings.Contains(string(payload), "new-snapshot") {
+		t.Fatalf("expected newer snapshot to remain queued, got %s", string(payload))
+	}
+	if strings.Contains(string(payload), "old-runtime-delta") || strings.Contains(string(payload), "old-snapshot") {
+		t.Fatalf("expected stale fallback payloads not to be queued, got %s", string(payload))
+	}
+	if client.needsResync {
+		t.Fatal("expected newer snapshot state not to be marked for legacy resync")
+	}
+}
+
+func TestHubOverviewDelta_RecordsHTTPResyncMetricsOnceWhilePending(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.usesHTTPRuntimeBootstrap = true
+	for i := 0; i < cap(client.overviewSend); i++ {
+		client.overviewSend <- []byte("occupied")
+	}
+
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, EmptySnapshot())
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 2, 3, EmptySnapshot())
+
+	if got := len(client.overviewSend); got != 1 {
+		t.Fatalf("overview mailbox length = %d, want 1", got)
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_ws_client_resync_required_total{bootstrap="http",reason="client_resync_scheduled",scope="overview"} 1`) {
+		t.Fatalf("expected one HTTP client resync metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_overview_mailbox_clear_total{reason="client_mailbox_full"} 32`) {
+		t.Fatalf("expected cleared mailbox metric for the first overflow, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_overview_resync_suppressed_total{reason="client_resync_scheduled"} 1`) {
+		t.Fatalf("expected duplicate resync suppression metric, got:\n%s", metrics)
+	}
+}
+
+func TestHubAddRemoveClientUpdatesConnectedClientMetric(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	hub := NewHub()
+	client := &Client{
+		hub:          hub,
+		send:         make(chan []byte, sendBufferSize),
+		overviewSend: make(chan []byte, overviewBufferSize),
+	}
+
+	hub.addClient(client)
+	if metrics := string(registry.MarshalPrometheus()); !strings.Contains(metrics, `theia_ws_connected_clients 1`) {
+		t.Fatalf("expected connected client gauge to be 1, got:\n%s", metrics)
+	}
+
+	hub.removeClient(client)
+	if metrics := string(registry.MarshalPrometheus()); !strings.Contains(metrics, `theia_ws_connected_clients 0`) {
+		t.Fatalf("expected connected client gauge to be 0, got:\n%s", metrics)
 	}
 }
 

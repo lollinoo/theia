@@ -13,6 +13,11 @@ import (
 )
 
 const (
+	// Default overview broadcasts should stay limited to runtime overview,
+	// topology invalidations, polling health, alert summaries, and status
+	// markers. High-cardinality counters, raw Prometheus data, and diagnostics
+	// belong on detail subscriptions or HTTP/API pull paths.
+
 	// MessageTypeSnapshot pushes the full state to clients.
 	MessageTypeSnapshot = "snapshot"
 	// MessageTypeSnapshotDelta pushes only changed entries since the last broadcast.

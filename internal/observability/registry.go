@@ -53,6 +53,12 @@ type wsBackpressureKey struct {
 	Reason string
 }
 
+type wsClientResyncKey struct {
+	Scope     string
+	Reason    string
+	Bootstrap string
+}
+
 type refreshSnapshotBuildKey struct {
 	Mode   string
 	Result string
@@ -112,8 +118,12 @@ type Registry struct {
 	snmpCollectorOperations    map[snmpCollectorOperationKey]uint64
 	snmpCollectorDuration      map[snmpCollectorOperationKey]*histogram
 	snmpCollectorEarlyExit     map[snmpCollectorEarlyExitKey]uint64
+	wsConnectedClients         float64
 	wsMessagesTotal            map[wsMetricKey]uint64
 	wsBackpressureTotal        map[wsBackpressureKey]uint64
+	wsClientResyncTotal        map[wsClientResyncKey]uint64
+	wsOverviewMailboxClear     map[string]uint64
+	wsOverviewResyncSuppressed map[string]uint64
 	wsPayloadBytes             map[wsMetricKey]*histogram
 	unknownNeighborsTotal      map[deviceProtocolKey]uint64
 	stateChangesDroppedTotal   uint64
@@ -164,6 +174,9 @@ func NewRegistry() *Registry {
 		snmpCollectorEarlyExit:     make(map[snmpCollectorEarlyExitKey]uint64),
 		wsMessagesTotal:            make(map[wsMetricKey]uint64),
 		wsBackpressureTotal:        make(map[wsBackpressureKey]uint64),
+		wsClientResyncTotal:        make(map[wsClientResyncKey]uint64),
+		wsOverviewMailboxClear:     make(map[string]uint64),
+		wsOverviewResyncSuppressed: make(map[string]uint64),
 		wsPayloadBytes:             make(map[wsMetricKey]*histogram),
 		unknownNeighborsTotal:      make(map[deviceProtocolKey]uint64),
 	}
@@ -311,6 +324,26 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_ws_backpressure_total",
 		"WebSocket backpressure events by scope and reason.",
 		sortedWSBackpressureRows(r.wsBackpressureTotal),
+	)
+	writeCounterVec(&b,
+		"theia_ws_client_resync_required_total",
+		"WebSocket resync markers emitted by scope, reason, and client bootstrap mode.",
+		sortedWSClientResyncRows(r.wsClientResyncTotal),
+	)
+	writeCounterVec(&b,
+		"theia_ws_overview_mailbox_clear_total",
+		"Overview mailbox messages dropped while replacing stale backlog by reason.",
+		sortedStringCounterRows("reason", r.wsOverviewMailboxClear),
+	)
+	writeCounterVec(&b,
+		"theia_ws_overview_resync_suppressed_total",
+		"Overview resync markers suppressed because one is already pending by reason.",
+		sortedStringCounterRows("reason", r.wsOverviewResyncSuppressed),
+	)
+	writeGaugeSingle(&b,
+		"theia_ws_connected_clients",
+		"Current connected WebSocket clients.",
+		r.wsConnectedClients,
 	)
 	writeHistogramVec(&b,
 		"theia_ws_message_payload_bytes",
@@ -568,6 +601,51 @@ func (r *Registry) IncWSBackpressure(scope, reason string) {
 		Reason: reason,
 	}]++
 }
+
+func (r *Registry) IncWSClientResyncRequired(scope, reason, bootstrap string) {
+	if scope == "" || reason == "" || bootstrap == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsClientResyncTotal[wsClientResyncKey{
+		Scope:     scope,
+		Reason:    reason,
+		Bootstrap: bootstrap,
+	}]++
+}
+
+func (r *Registry) AddWSOverviewMailboxCleared(reason string, count int) {
+	if reason == "" || count <= 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsOverviewMailboxClear[reason] += uint64(count)
+}
+
+func (r *Registry) IncWSOverviewResyncSuppressed(reason string) {
+	if reason == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsOverviewResyncSuppressed[reason]++
+}
+
+func (r *Registry) SetWSConnectedClients(count int) {
+	if count < 0 {
+		count = 0
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsConnectedClients = float64(count)
+}
+
 func (r *Registry) AddUnknownNeighbors(deviceID uuid.UUID, protocol domain.DiscoveryProtocol, count int) {
 	if count <= 0 {
 		return
@@ -1021,6 +1099,36 @@ func sortedWSBackpressureRows(values map[wsBackpressureKey]uint64) []counterRow 
 	}
 	return rows
 }
+
+func sortedWSClientResyncRows(values map[wsClientResyncKey]uint64) []counterRow {
+	keys := make([]wsClientResyncKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Bootstrap != keys[j].Bootstrap {
+			return keys[i].Bootstrap < keys[j].Bootstrap
+		}
+		if keys[i].Reason != keys[j].Reason {
+			return keys[i].Reason < keys[j].Reason
+		}
+		return keys[i].Scope < keys[j].Scope
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"bootstrap": key.Bootstrap,
+				"reason":    key.Reason,
+				"scope":     key.Scope,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
 func sortedWSHistogramRows(values map[wsMetricKey]*histogram) []histogramRow {
 	keys := make([]wsMetricKey, 0, len(values))
 	for key := range values {

@@ -42,6 +42,11 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.ObserveWSMessage("broadcast", "snapshot", 512)
 	registry.IncWSBackpressure("broadcast", "hub_buffer_full")
 	registry.IncWSBackpressure("client_send", "client_buffer_full")
+	registry.IncWSClientResyncRequired("overview", "client_resync_scheduled", "http")
+	registry.IncWSClientResyncRequired("overview", "state_changes_dropped", "legacy")
+	registry.AddWSOverviewMailboxCleared("client_mailbox_full", 2)
+	registry.IncWSOverviewResyncSuppressed("client_resync_scheduled")
+	registry.SetWSConnectedClients(3)
 	registry.AddUnknownNeighbors(deviceID, domain.DiscoveryProtocolLLDP, 4)
 	registry.AddDroppedStateChanges(7)
 
@@ -83,6 +88,11 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_ws_messages_total{scope="broadcast",type="snapshot"} 1`)
 	assertContainsMetric(t, body, `theia_ws_backpressure_total{reason="hub_buffer_full",scope="broadcast"} 1`)
 	assertContainsMetric(t, body, `theia_ws_backpressure_total{reason="client_buffer_full",scope="client_send"} 1`)
+	assertContainsMetric(t, body, `theia_ws_client_resync_required_total{bootstrap="http",reason="client_resync_scheduled",scope="overview"} 1`)
+	assertContainsMetric(t, body, `theia_ws_client_resync_required_total{bootstrap="legacy",reason="state_changes_dropped",scope="overview"} 1`)
+	assertContainsMetric(t, body, `theia_ws_overview_mailbox_clear_total{reason="client_mailbox_full"} 2`)
+	assertContainsMetric(t, body, `theia_ws_overview_resync_suppressed_total{reason="client_resync_scheduled"} 1`)
+	assertContainsMetric(t, body, `theia_ws_connected_clients 3`)
 	assertContainsMetric(t, body, `theia_unknown_neighbors_total{device_id="`+deviceID.String()+`",protocol="lldp"} 4`)
 	assertContainsMetric(t, body, `theia_state_changes_dropped_total 7`)
 }
