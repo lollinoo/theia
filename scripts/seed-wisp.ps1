@@ -68,7 +68,7 @@ function New-WispRouter {
 
 Write-Output "=== Seeding Theia with WISP lab routers ==="
 Wait-ApiReady -ApiBase $ApiBase
-$targetPrefix = Get-WispSeedTargetPrefix -TargetMode $TargetMode
+$targetPrefix = Get-WispSeedTargetPrefix -TargetMode $TargetMode -ApiBase $ApiBase
 
 New-WispRouter "$($targetPrefix)21" "wisp-core-01" "core" "noc" "0.0.0.0"
 New-WispRouter "$($targetPrefix)22" "wisp-core-02" "core" "noc" "0.0.0.0"

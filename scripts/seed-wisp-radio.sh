@@ -20,7 +20,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-TARGET_PREFIX="$(wisp_seed_target_prefix "$TARGET_MODE")"
+TARGET_PREFIX="$(wisp_seed_target_prefix "$TARGET_MODE" "$API_BASE")"
 
 create_device() {
   local ip="$1"

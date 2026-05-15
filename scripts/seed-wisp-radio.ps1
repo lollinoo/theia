@@ -71,7 +71,7 @@ function New-WispRadioDevice {
 
 Write-Output "=== Seeding Theia with WISP radio access nodes ==="
 Wait-ApiReady -ApiBase $ApiBase
-$targetPrefix = Get-WispSeedTargetPrefix -TargetMode $TargetMode
+$targetPrefix = Get-WispSeedTargetPrefix -TargetMode $TargetMode -ApiBase $ApiBase
 
 New-WispRadioDevice "$($targetPrefix)31" "wisp-ap-north-a-01" "sector-ap" "tower-north-a" "north" "sector-a"
 New-WispRadioDevice "$($targetPrefix)32" "wisp-ap-north-b-01" "sector-ap" "tower-north-b" "north" "sector-b"

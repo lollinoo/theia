@@ -117,8 +117,44 @@ function Disconnect-WispBackendFromLabNetwork {
   return $true
 }
 
+function Get-WispApiBaseHost {
+  param([string]$ApiBase = "")
+
+  if ([string]::IsNullOrWhiteSpace($ApiBase)) {
+    return ""
+  }
+
+  try {
+    $uri = [System.Uri]::new($ApiBase)
+    return (($uri.Host.Trim().ToLowerInvariant()) -replace '^\[|\]$', '')
+  }
+  catch {
+    return ""
+  }
+}
+
+function Test-WispApiBaseHostIsLocal {
+  param([string]$ApiBase = "")
+
+  $hostName = Get-WispApiBaseHost -ApiBase $ApiBase
+  if ($hostName -eq "localhost") {
+    return $true
+  }
+
+  $ipAddress = $null
+  if ([System.Net.IPAddress]::TryParse($hostName, [ref]$ipAddress)) {
+    return ($ipAddress.Equals([System.Net.IPAddress]::Loopback) -or
+      $ipAddress.Equals([System.Net.IPAddress]::IPv6Loopback))
+  }
+
+  return $false
+}
+
 function Get-WispSeedTargetPrefix {
-  param([string]$TargetMode = "")
+  param(
+    [string]$TargetMode = "",
+    [string]$ApiBase = ""
+  )
 
   if ([string]::IsNullOrWhiteSpace($TargetMode)) {
     $TargetMode = $env:WISP_SEED_TARGET_MODE
@@ -128,27 +164,37 @@ function Get-WispSeedTargetPrefix {
   }
 
   $normalizedMode = $TargetMode.Trim().ToLowerInvariant()
+  $apiBaseHost = Get-WispApiBaseHost -ApiBase $ApiBase
   switch ($normalizedMode) {
     "docker" {
       if (-not (Connect-WispBackendToLabNetwork)) {
         throw "WISP_SEED_TARGET_MODE=docker requires the '$script:WispBackendContainer' container and '$script:WispLabNetwork' network to be running."
       }
-      Write-Host "Using WISP Docker management targets ${script:WispDockerTargetPrefix}21-${script:WispDockerTargetPrefix}42"
+      Write-Host "Using WISP Docker management targets ${script:WispDockerTargetPrefix}21-${script:WispDockerTargetPrefix}42 (mode: docker)"
       return $script:WispDockerTargetPrefix
     }
     "host" {
-      Write-Host "Using WISP host loopback targets ${script:WispHostTargetPrefix}21-${script:WispHostTargetPrefix}42"
+      Write-Host "Using WISP host loopback targets ${script:WispHostTargetPrefix}21-${script:WispHostTargetPrefix}42 (mode: host)"
       return $script:WispHostTargetPrefix
     }
     "auto" {
+      if (Test-WispApiBaseHostIsLocal -ApiBase $ApiBase) {
+        Write-Host "Using WISP host loopback targets ${script:WispHostTargetPrefix}21-${script:WispHostTargetPrefix}42 (auto: API host '$apiBaseHost' is local)"
+        return $script:WispHostTargetPrefix
+      }
+
       if (Test-WispBackendRunning) {
         if (Connect-WispBackendToLabNetwork) {
-          Write-Host "Using WISP Docker management targets ${script:WispDockerTargetPrefix}21-${script:WispDockerTargetPrefix}42"
+          Write-Host "Using WISP Docker management targets ${script:WispDockerTargetPrefix}21-${script:WispDockerTargetPrefix}42 (auto: backend container is running and connected)"
           return $script:WispDockerTargetPrefix
         }
       }
 
-      Write-Host "Using WISP host loopback targets ${script:WispHostTargetPrefix}21-${script:WispHostTargetPrefix}42"
+      $autoReason = "Docker backend unavailable"
+      if (-not [string]::IsNullOrWhiteSpace($apiBaseHost)) {
+        $autoReason = "$autoReason for API host '$apiBaseHost'"
+      }
+      Write-Host "Using WISP host loopback targets ${script:WispHostTargetPrefix}21-${script:WispHostTargetPrefix}42 (auto: $autoReason)"
       return $script:WispHostTargetPrefix
     }
     default {
