@@ -1311,6 +1311,50 @@ func TestCanvasMapHandlerAddDeviceToMapAddsLocalMembershipWithoutTouchingOtherMa
 	}
 }
 
+func TestCanvasMapHandlerAddExistingDeviceRepairsConnectedLinks(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	deviceA := seedCanvasMapTestDevice(t, fixture, "router-map-repair-a", "10.72.0.11", nil)
+	deviceB := seedCanvasMapTestDevice(t, fixture, "router-map-repair-b", "10.72.0.12", nil)
+	linkAB := seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{"name": "Existing Member Repair Map"})
+	if err := fixture.mapRepo.ReplaceMembership(uuid.MustParse(canvasMap.ID), domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: deviceA.ID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: deviceB.ID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("replace membership: %v", err)
+	}
+
+	rec := canvasMapRequest(
+		t,
+		fixture.router,
+		http.MethodPost,
+		"/api/v1/canvas/maps/"+canvasMap.ID+"/devices/"+deviceB.ID.String(),
+		map[string]any{"include_connected_links": true},
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST existing map device: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	updated := decodeCanvasMapData(t, rec)
+	if updated.DeviceCount != 2 || updated.LinkCount != 1 {
+		t.Fatalf("updated map counts = devices:%d links:%d, want 2/1", updated.DeviceCount, updated.LinkCount)
+	}
+
+	membership, err := fixture.mapRepo.GetMembership(uuid.MustParse(canvasMap.ID))
+	if err != nil {
+		t.Fatalf("get membership: %v", err)
+	}
+	if len(membership.LinkIDs) != 1 || membership.LinkIDs[0] != linkAB.ID {
+		t.Fatalf("map links = %#v, want repaired link %s", membership.LinkIDs, linkAB.ID)
+	}
+
+	topology := mustLoadCanvasMapTopologyForTest(t, fixture, canvasMap.ID)
+	if len(topology.Links) != 1 || topology.Links[0].ID != linkAB.ID.String() {
+		t.Fatalf("topology links = %#v, want repaired link %s", topology.Links, linkAB.ID)
+	}
+}
+
 func TestCanvasMapHandlerAddDeviceToMapRejectsExistingMember(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	device := seedCanvasMapTestDevice(t, fixture, "router-map-add-existing", "10.72.1.1", nil)

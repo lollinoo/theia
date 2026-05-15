@@ -450,8 +450,37 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
 		return
 	}
+	adder, ok := h.mapRepo.(interface {
+		AddDeviceMembership(uuid.UUID, domain.CanvasMapDeviceMembership, []uuid.UUID, []domain.CanvasMapAreaMembership) error
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "canvas map incremental membership unavailable")
+		return
+	}
 	for _, member := range membership.Devices {
 		if member.DeviceID == deviceID {
+			if includeConnectedLinks {
+				links, err := h.linkRepo.GetByDeviceID(deviceID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to list canvas map device links", err)
+					return
+				}
+				linkIDs := canvasMapConnectedBaseLinkIDs(deviceID, membership, links)
+				missingLinkIDs := canvasMapMissingLinkIDs(membership.LinkIDs, linkIDs)
+				if len(missingLinkIDs) > 0 {
+					if err := adder.AddDeviceMembership(canvasMap.ID, member, linkIDs, membership.Areas); err != nil {
+						h.writeMapRepoMutationError(w, err)
+						return
+					}
+					updated, err := h.mapRepo.GetByID(canvasMap.ID)
+					if err != nil {
+						writeError(w, http.StatusInternalServerError, "failed to load updated canvas map", err)
+						return
+					}
+					json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
+					return
+				}
+			}
 			writeError(w, http.StatusConflict, "device already exists in this map")
 			return
 		}
@@ -488,13 +517,6 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	adder, ok := h.mapRepo.(interface {
-		AddDeviceMembership(uuid.UUID, domain.CanvasMapDeviceMembership, []uuid.UUID, []domain.CanvasMapAreaMembership) error
-	})
-	if !ok {
-		writeError(w, http.StatusNotImplemented, "canvas map incremental membership unavailable")
-		return
-	}
 	if err := adder.AddDeviceMembership(
 		canvasMap.ID,
 		domain.CanvasMapDeviceMembership{
@@ -515,6 +537,24 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
+}
+
+func canvasMapMissingLinkIDs(existing []uuid.UUID, candidates []uuid.UUID) []uuid.UUID {
+	if len(candidates) == 0 {
+		return []uuid.UUID{}
+	}
+	known := make(map[uuid.UUID]struct{}, len(existing))
+	for _, id := range existing {
+		known[id] = struct{}{}
+	}
+	missing := make([]uuid.UUID, 0, len(candidates))
+	for _, id := range candidates {
+		if _, ok := known[id]; ok {
+			continue
+		}
+		missing = append(missing, id)
+	}
+	return missing
 }
 
 func (h *CanvasMapHandler) HandlePatchDevice(w http.ResponseWriter, r *http.Request) {
