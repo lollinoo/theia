@@ -71,3 +71,28 @@ add_device_to_primary_map() {
   fi
   return 1
 }
+
+run_topology_discovery() {
+  local device_id="$1"
+  local response
+  local body
+  local status
+
+  if [ -z "$device_id" ]; then
+    return
+  fi
+
+  response="$(curl -sS -X POST "$API_BASE/api/v1/devices/${device_id}/topology-discovery" \
+    -w $'\n%{http_code}' || true)"
+  status="${response##*$'\n'}"
+  body="${response%$'\n'"$status"}"
+
+  if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
+    return
+  fi
+
+  if [ -n "$body" ]; then
+    printf '%s\n' "$body" >&2
+  fi
+  return 1
+}

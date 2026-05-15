@@ -182,15 +182,17 @@ func PollInterfaceCounters(client ClientInterface) []InterfaceCounter {
 
 // DiscoveryResult holds the aggregated data from an SNMP discovery walk.
 type DiscoveryResult struct {
-	SysName       string
-	SysDescr      string
-	SysObjectID   string
-	HardwareModel string
-	OSVersion     string
-	Vendor        string
-	DeviceType    domain.DeviceType
-	Interfaces    []domain.Interface
-	Neighbors     []NeighborInfo
+	SysName                    string
+	SysDescr                   string
+	SysObjectID                string
+	HardwareModel              string
+	OSVersion                  string
+	Vendor                     string
+	DeviceType                 domain.DeviceType
+	Interfaces                 []domain.Interface
+	Neighbors                  []NeighborInfo
+	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures  []NeighborDiscoveryFailure
 }
 
 // NeighborInfo represents a discovered LLDP or CDP neighbor.
@@ -201,6 +203,27 @@ type NeighborInfo struct {
 	LocalIfIndex    int // Note: the internal model uses LocalIfName, but discovery gathers index first. We map it later.
 	LocalIfName     string
 	Protocol        domain.DiscoveryProtocol
+}
+
+// NeighborDiscoveryFailure records a failed LLDP/CDP neighbor table walk while
+// preserving any other inventory or partial neighbor data discovered in the
+// same SNMP poll.
+type NeighborDiscoveryFailure struct {
+	Protocol domain.DiscoveryProtocol
+	OID      string
+	Critical bool
+	Error    string
+}
+
+// HasCriticalNeighborDiscoveryFailure reports whether any critical neighbor
+// discovery walk failed.
+func HasCriticalNeighborDiscoveryFailure(failures []NeighborDiscoveryFailure) bool {
+	for _, failure := range failures {
+		if failure.Critical {
+			return true
+		}
+	}
+	return false
 }
 
 // NeighborDiscoveryPolicy controls whether LLDP/CDP walks are executed.
@@ -240,7 +263,9 @@ func DiscoverDevice(client ClientInterface, registry *vendor.Registry) (*Discove
 // DiscoverDeviceWithPolicy gathers device details while allowing neighbor walks
 // to be disabled or protocol-limited.
 func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry, policy NeighborDiscoveryPolicy) (*DiscoveryResult, error) {
-	res := &DiscoveryResult{}
+	res := &DiscoveryResult{
+		NeighborDiscoveryProtocols: attemptedNeighborDiscoveryProtocols(policy),
+	}
 
 	// 1. Get System Info
 	pduList, err := client.Get([]string{OidSysName, OidSysDescr, OidSysObjectID})
@@ -273,9 +298,20 @@ func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry,
 	}
 
 	// 3. Walk LLDP & CDP to discover neighbors
-	res.Neighbors = discoverNeighbors(client, ifIndexToName, policy)
+	res.Neighbors, res.NeighborDiscoveryFailures = discoverNeighborsWithFailures(client, ifIndexToName, policy)
 
 	return res, nil
+}
+
+func attemptedNeighborDiscoveryProtocols(policy NeighborDiscoveryPolicy) []domain.DiscoveryProtocol {
+	protocols := make([]domain.DiscoveryProtocol, 0, 2)
+	if policy.LLDP {
+		protocols = append(protocols, domain.DiscoveryProtocolLLDP)
+	}
+	if policy.CDP {
+		protocols = append(protocols, domain.DiscoveryProtocolCDP)
+	}
+	return protocols
 }
 
 func discoverSoftwareVersion(client ClientInterface, staticOIDs vendor.StaticOIDs) string {
@@ -391,7 +427,13 @@ func discoverInterfaces(client ClientInterface) []domain.Interface {
 // connection. CDP is only used to fill gaps when LLDP data is absent or
 // incomplete for a given local/remote interface pair.
 func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, policy NeighborDiscoveryPolicy) []NeighborInfo {
+	neighbors, _ := discoverNeighborsWithFailures(client, ifIndexToName, policy)
+	return neighbors
+}
+
+func discoverNeighborsWithFailures(client ClientInterface, ifIndexToName map[int]string, policy NeighborDiscoveryPolicy) ([]NeighborInfo, []NeighborDiscoveryFailure) {
 	var neighbors []NeighborInfo
+	var failures []NeighborDiscoveryFailure
 	lldpMap := make(map[string]*NeighborInfo)
 
 	if policy.LLDP {
@@ -399,7 +441,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, pol
 		// On MikroTik (and most vendors), LLDP local port numbers differ from
 		// IF-MIB ifIndex values. This map bridges the two numbering schemes.
 		lldpPortNumToIfIndex := make(map[int]int)
-		lldpLocPortIfIndexPDUs, _ := client.BulkWalk(OidLLDPLocPortIfIndex)
+		lldpLocPortIfIndexPDUs := walkNeighborDiscoveryOID(client, &failures, domain.DiscoveryProtocolLLDP, OidLLDPLocPortIfIndex, false)
 		for _, pdu := range lldpLocPortIfIndexPDUs {
 			suffix := strings.TrimPrefix(pdu.Name, OidLLDPLocPortIfIndex+".")
 			if suffix == pdu.Name {
@@ -416,7 +458,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, pol
 		}
 
 		lldpPortNumToPortId := make(map[int]string)
-		lldpLocPortIdPDUs, _ := client.BulkWalk(OidLLDPLocPortId)
+		lldpLocPortIdPDUs := walkNeighborDiscoveryOID(client, &failures, domain.DiscoveryProtocolLLDP, OidLLDPLocPortId, false)
 		for _, pdu := range lldpLocPortIdPDUs {
 			suffix := strings.TrimPrefix(pdu.Name, OidLLDPLocPortId+".")
 			if suffix == pdu.Name {
@@ -431,7 +473,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, pol
 			}
 		}
 
-		lldpRemChassisIdPDUs, _ := client.BulkWalk(OidLLDPRemChassisId)
+		lldpRemChassisIdPDUs := walkNeighborDiscoveryOID(client, &failures, domain.DiscoveryProtocolLLDP, OidLLDPRemChassisId, true)
 		for _, pdu := range lldpRemChassisIdPDUs {
 			indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemChassisId)
 			if indexStr == pdu.Name {
@@ -460,7 +502,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, pol
 			}
 		}
 
-		lldpRemPortIdPDUs, _ := client.BulkWalk(OidLLDPRemPortId)
+		lldpRemPortIdPDUs := walkNeighborDiscoveryOID(client, &failures, domain.DiscoveryProtocolLLDP, OidLLDPRemPortId, false)
 		for _, pdu := range lldpRemPortIdPDUs {
 			indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemPortId)
 			if indexStr == pdu.Name {
@@ -471,7 +513,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, pol
 			}
 		}
 
-		lldpRemSysNamePDUs, _ := client.BulkWalk(OidLLDPRemSysName)
+		lldpRemSysNamePDUs := walkNeighborDiscoveryOID(client, &failures, domain.DiscoveryProtocolLLDP, OidLLDPRemSysName, false)
 		for _, pdu := range lldpRemSysNamePDUs {
 			indexStr := extractLLDPIndex(pdu.Name, OidLLDPRemSysName)
 			if indexStr == pdu.Name {
@@ -487,7 +529,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, pol
 	// Simplified CDP tracking:
 	cdpMap := make(map[string]*NeighborInfo)
 	if policy.CDP {
-		cdpDeviceIDPDUs, _ := client.BulkWalk(OidCDPDeviceID)
+		cdpDeviceIDPDUs := walkNeighborDiscoveryOID(client, &failures, domain.DiscoveryProtocolCDP, OidCDPDeviceID, true)
 		for _, pdu := range cdpDeviceIDPDUs {
 			indexStr := extractCDPIndex(pdu.Name, OidCDPDeviceID)
 			if indexStr == pdu.Name {
@@ -506,7 +548,7 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, pol
 			}
 		}
 
-		cdpPortIDPDUs, _ := client.BulkWalk(OidCDPPortID)
+		cdpPortIDPDUs := walkNeighborDiscoveryOID(client, &failures, domain.DiscoveryProtocolCDP, OidCDPPortID, false)
 		for _, pdu := range cdpPortIDPDUs {
 			indexStr := extractCDPIndex(pdu.Name, OidCDPPortID)
 			if n, ok := cdpMap[indexStr]; ok {
@@ -541,7 +583,20 @@ func discoverNeighbors(client ClientInterface, ifIndexToName map[int]string, pol
 		neighbors = append(neighbors, *n)
 	}
 
-	return dedupePreferredNeighbors(neighbors)
+	return dedupePreferredNeighbors(neighbors), failures
+}
+
+func walkNeighborDiscoveryOID(client ClientInterface, failures *[]NeighborDiscoveryFailure, protocol domain.DiscoveryProtocol, oid string, critical bool) []gosnmp.SnmpPDU {
+	pdus, err := client.BulkWalk(oid)
+	if err != nil {
+		*failures = append(*failures, NeighborDiscoveryFailure{
+			Protocol: protocol,
+			OID:      oid,
+			Critical: critical,
+			Error:    err.Error(),
+		})
+	}
+	return pdus
 }
 
 func findLLDPGapFillCandidate(lldpByLocalIf map[string][]*NeighborInfo, cdp NeighborInfo) *NeighborInfo {

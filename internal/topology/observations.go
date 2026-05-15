@@ -40,6 +40,7 @@ type UnresolvedNeighbor struct {
 
 type ObservationStore interface {
 	UpsertObservation(*Observation) error
+	PruneLocalObservations(localDeviceID uuid.UUID, protocols []domain.DiscoveryProtocol, keep []Observation) (int, error)
 	ListObservationsForDevices([]uuid.UUID) ([]Observation, error)
 	UpsertUnresolvedNeighbor(*UnresolvedNeighbor) error
 	ResolveUnresolvedNeighbor(localDeviceID uuid.UUID, remoteIdentity string, protocol domain.DiscoveryProtocol, resolvedAt time.Time) error

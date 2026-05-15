@@ -139,6 +139,9 @@ func TestStaticCollectorPoll(t *testing.T) {
 				if result.Neighbors[0].RemoteSysName != "switch1" {
 					t.Fatalf("Neighbors[0].RemoteSysName = %q, want %q", result.Neighbors[0].RemoteSysName, "switch1")
 				}
+				if !slices.Equal(result.NeighborDiscoveryProtocols, []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP, domain.DiscoveryProtocolCDP}) {
+					t.Fatalf("NeighborDiscoveryProtocols = %v, want [lldp cdp]", result.NeighborDiscoveryProtocols)
+				}
 				if !slices.Contains(client.bulkWalkCalls, snmp.OidLLDPRemChassisId) {
 					t.Fatalf("expected LLDP walks when topology mode is enabled, got %v", client.bulkWalkCalls)
 				}
@@ -192,6 +195,9 @@ func TestStaticCollectorPoll(t *testing.T) {
 				}
 				if len(result.Neighbors) != 0 {
 					t.Fatalf("neighbor count = %d, want 0", len(result.Neighbors))
+				}
+				if len(result.NeighborDiscoveryProtocols) != 0 {
+					t.Fatalf("NeighborDiscoveryProtocols = %v, want none", result.NeighborDiscoveryProtocols)
 				}
 				if slices.Contains(client.bulkWalkCalls, snmp.OidLLDPRemChassisId) || slices.Contains(client.bulkWalkCalls, snmp.OidCDPDeviceID) {
 					t.Fatalf("expected no LLDP/CDP walks when topology mode is off, got %v", client.bulkWalkCalls)
@@ -277,6 +283,70 @@ func TestStaticResultImplementsStateUpdate(t *testing.T) {
 	var _ StateUpdate = StaticResult{}
 }
 
+func TestStaticCollectorPoll_PropagatesNeighborDiscoveryFailures(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := &scriptedCollectorClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysName: {
+				{Name: snmp.OidSysName, Type: gosnmp.OctetString, Value: []byte("router-static")},
+			},
+			snmp.OidSysDescr: {
+				{Name: snmp.OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS RB5009")},
+			},
+			snmp.OidSysObjectID: {
+				{Name: snmp.OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"},
+			},
+		},
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfTable: {
+				{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+			},
+			snmp.OidIfXTable: {
+				{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+			},
+		},
+		bulkWalkErrs: map[string]error{
+			snmp.OidLLDPRemChassisId: errors.New("lldp walk failed"),
+		},
+	}
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID: uuid.New(),
+		IP: "192.0.2.52",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}, time.Second, 1, domain.TopologyDiscoveryModeLLDP)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if len(result.Neighbors) != 0 {
+		t.Fatalf("neighbor count = %d, want 0", len(result.Neighbors))
+	}
+	if !slices.Equal(result.NeighborDiscoveryProtocols, []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP}) {
+		t.Fatalf("NeighborDiscoveryProtocols = %v, want [lldp]", result.NeighborDiscoveryProtocols)
+	}
+	failure := findStaticNeighborDiscoveryFailure(result.NeighborDiscoveryFailures, domain.DiscoveryProtocolLLDP, snmp.OidLLDPRemChassisId)
+	if failure == nil {
+		t.Fatalf("expected propagated LLDP failure, got %#v", result.NeighborDiscoveryFailures)
+	}
+	if !failure.Critical {
+		t.Fatalf("failure Critical = false, want true")
+	}
+	if failure.Error != "lldp walk failed" {
+		t.Fatalf("failure Error = %q, want lldp walk failed", failure.Error)
+	}
+}
+
 func TestStaticCollectorHasNoServiceOrRepositoryCollaborators(t *testing.T) {
 	t.Parallel()
 
@@ -295,6 +365,15 @@ func TestStaticCollectorHasNoServiceOrRepositoryCollaborators(t *testing.T) {
 			t.Fatalf("field %q type = %q, want no service or repository collaborator", typ.Field(i).Name, typ.Field(i).Type)
 		}
 	}
+}
+
+func findStaticNeighborDiscoveryFailure(failures []snmp.NeighborDiscoveryFailure, protocol domain.DiscoveryProtocol, oid string) *snmp.NeighborDiscoveryFailure {
+	for i := range failures {
+		if failures[i].Protocol == protocol && failures[i].OID == oid {
+			return &failures[i]
+		}
+	}
+	return nil
 }
 
 func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {

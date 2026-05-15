@@ -103,6 +103,48 @@ func (s *fakeTopologyService) ApplyStaticDiscovery(deviceID uuid.UUID, input ser
 	return s.result, s.err
 }
 
+func TestPipelineTaskRunnerPersistStaticDiscoveryPropagatesNeighborDiscoveryFailures(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	failures := []snmp.NeighborDiscoveryFailure{
+		{
+			Protocol: domain.DiscoveryProtocolCDP,
+			OID:      snmp.OidCDPDeviceID,
+			Critical: true,
+			Error:    "cdp walk failed",
+		},
+	}
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, collector.StaticResult{
+		SysName:                    "edge-sw",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP, domain.DiscoveryProtocolCDP},
+		NeighborDiscoveryFailures:  append([]snmp.NeighborDiscoveryFailure(nil), failures...),
+	})
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("expected ApplyStaticDiscovery once, got %d", topologyService.calls)
+	}
+	if topologyService.lastID != deviceID {
+		t.Fatalf("device ID = %s, want %s", topologyService.lastID, deviceID)
+	}
+	if len(topologyService.lastIn.NeighborDiscoveryFailures) != 1 {
+		t.Fatalf("failure count = %d, want 1", len(topologyService.lastIn.NeighborDiscoveryFailures))
+	}
+	if len(topologyService.lastIn.NeighborDiscoveryProtocols) != 2 ||
+		topologyService.lastIn.NeighborDiscoveryProtocols[0] != domain.DiscoveryProtocolLLDP ||
+		topologyService.lastIn.NeighborDiscoveryProtocols[1] != domain.DiscoveryProtocolCDP {
+		t.Fatalf("protocols = %v, want [lldp cdp]", topologyService.lastIn.NeighborDiscoveryProtocols)
+	}
+	failure := topologyService.lastIn.NeighborDiscoveryFailures[0]
+	if failure.Protocol != domain.DiscoveryProtocolCDP || failure.OID != snmp.OidCDPDeviceID || !failure.Critical || failure.Error != "cdp walk failed" {
+		t.Fatalf("propagated failure = %#v, want CDP device ID critical failure", failure)
+	}
+}
+
 type fakePrometheusClient struct {
 	mu            sync.Mutex
 	hostnames     map[string]string

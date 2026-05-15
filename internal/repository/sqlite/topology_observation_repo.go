@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -109,6 +110,74 @@ func (r *TopologyObservationRepo) upsertObservationOnce(observation *topology.Ob
 	return tx.Commit()
 }
 
+// PruneLocalObservations deletes local observations for the selected protocols
+// that are absent from the supplied current observation keys.
+func (r *TopologyObservationRepo) PruneLocalObservations(localDeviceID uuid.UUID, protocols []domain.DiscoveryProtocol, keep []topology.Observation) (int, error) {
+	deleted := 0
+	err := withSQLiteBusyRetry(func() error {
+		var pruneErr error
+		deleted, pruneErr = r.pruneLocalObservationsOnce(localDeviceID, protocols, keep)
+		return pruneErr
+	})
+	return deleted, err
+}
+
+func (r *TopologyObservationRepo) pruneLocalObservationsOnce(localDeviceID uuid.UUID, protocols []domain.DiscoveryProtocol, keep []topology.Observation) (int, error) {
+	if localDeviceID == uuid.Nil || len(protocols) == 0 {
+		return 0, nil
+	}
+
+	normalizedProtocols := normalizeObservationProtocols(protocols)
+	if len(normalizedProtocols) == 0 {
+		return 0, nil
+	}
+
+	args := make([]interface{}, 0, 1+len(normalizedProtocols)+len(keep)*4)
+	args = append(args, localDeviceID.String())
+
+	protocolPlaceholders := make([]string, 0, len(normalizedProtocols))
+	protocolSet := make(map[domain.DiscoveryProtocol]struct{}, len(normalizedProtocols))
+	for _, protocol := range normalizedProtocols {
+		protocolPlaceholders = append(protocolPlaceholders, "?")
+		args = append(args, string(protocol))
+		protocolSet[protocol] = struct{}{}
+	}
+
+	keepClauses := make([]string, 0, len(keep))
+	seenKeep := make(map[string]struct{}, len(keep))
+	for _, observation := range keep {
+		if observation.LocalDeviceID != localDeviceID {
+			continue
+		}
+		if _, ok := protocolSet[observation.Protocol]; !ok {
+			continue
+		}
+		key := observation.RemoteIdentity + "\x00" + observation.LocalPort + "\x00" + observation.RemotePort + "\x00" + string(observation.Protocol)
+		if _, ok := seenKeep[key]; ok {
+			continue
+		}
+		seenKeep[key] = struct{}{}
+		keepClauses = append(keepClauses, "(remote_identity = ? AND local_port = ? AND remote_port = ? AND protocol = ?)")
+		args = append(args, observation.RemoteIdentity, observation.LocalPort, observation.RemotePort, string(observation.Protocol))
+	}
+
+	query := fmt.Sprintf(
+		`DELETE FROM topology_observations
+		 WHERE local_device_id = ? AND protocol IN (%s)`,
+		strings.Join(protocolPlaceholders, ", "),
+	)
+	if len(keepClauses) > 0 {
+		query += " AND NOT (" + strings.Join(keepClauses, " OR ") + ")"
+	}
+
+	result, err := r.db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("pruning topology observations: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	return int(rowsAffected), nil
+}
+
 func (r *TopologyObservationRepo) ListObservationsForDevices(deviceIDs []uuid.UUID) ([]topology.Observation, error) {
 	if len(deviceIDs) == 0 {
 		return nil, nil
@@ -151,6 +220,24 @@ func (r *TopologyObservationRepo) ListObservationsForDevices(deviceIDs []uuid.UU
 		return nil, fmt.Errorf("iterating topology observations: %w", err)
 	}
 	return observations, nil
+}
+
+func normalizeObservationProtocols(protocols []domain.DiscoveryProtocol) []domain.DiscoveryProtocol {
+	seen := make(map[domain.DiscoveryProtocol]struct{}, len(protocols))
+	for _, protocol := range protocols {
+		if protocol == "" {
+			continue
+		}
+		seen[protocol] = struct{}{}
+	}
+	normalized := make([]domain.DiscoveryProtocol, 0, len(seen))
+	for protocol := range seen {
+		normalized = append(normalized, protocol)
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		return normalized[i] < normalized[j]
+	})
+	return normalized
 }
 
 func (r *TopologyObservationRepo) UpsertUnresolvedNeighbor(neighbor *topology.UnresolvedNeighbor) error {

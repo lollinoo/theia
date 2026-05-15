@@ -203,18 +203,20 @@ func (r OperationalResult) ToStoreUpdate(expectedInterval time.Duration) state.S
 // StaticResult carries low-volatility inventory and topology data for a single
 // device poll.
 type StaticResult struct {
-	DeviceID      uuid.UUID
-	SysName       string
-	SysDescr      string
-	SysObjectID   string
-	HardwareModel string
-	OSVersion     string
-	Vendor        string
-	DeviceType    domain.DeviceType
-	Interfaces    []domain.Interface
-	Neighbors     []snmp.NeighborInfo
-	CollectedAt   time.Time
-	Err           error
+	DeviceID                   uuid.UUID
+	SysName                    string
+	SysDescr                   string
+	SysObjectID                string
+	HardwareModel              string
+	OSVersion                  string
+	Vendor                     string
+	DeviceType                 domain.DeviceType
+	Interfaces                 []domain.Interface
+	Neighbors                  []snmp.NeighborInfo
+	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures  []snmp.NeighborDiscoveryFailure
+	CollectedAt                time.Time
+	Err                        error
 }
 
 // GetDeviceID returns the device identifier for this static result.

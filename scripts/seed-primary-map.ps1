@@ -65,3 +65,19 @@ function Add-DeviceToPrimaryMap {
     throw
   }
 }
+
+function Invoke-TopologyDiscovery {
+  param(
+    [string]$ApiBase,
+    [string]$DeviceId
+  )
+
+  if ([string]::IsNullOrWhiteSpace($DeviceId)) {
+    return
+  }
+
+  Invoke-RestMethod `
+    -Method Post `
+    -Uri "$ApiBase/api/v1/devices/$DeviceId/topology-discovery" `
+    -TimeoutSec 30 | Out-Null
+}

@@ -78,9 +78,41 @@ wisp_disconnect_backend_from_lab_network() {
   return 0
 }
 
+wisp_api_base_host() {
+  local api_base="${1:-}"
+  local host="$api_base"
+
+  host="${host#*://}"
+  host="${host%%/*}"
+  host="${host##*@}"
+
+  if [[ "$host" == \[*\]* ]]; then
+    host="${host#\[}"
+    host="${host%%\]*}"
+  else
+    host="${host%%:*}"
+  fi
+
+  printf '%s' "$host" | tr '[:upper:]' '[:lower:]'
+}
+
+wisp_api_base_host_is_local() {
+  case "$(wisp_api_base_host "${1:-}")" in
+    localhost|127.0.0.1|::1)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 wisp_seed_target_prefix() {
   local target_mode="${1:-${WISP_SEED_TARGET_MODE:-auto}}"
+  local api_base="${2:-${API_BASE:-}}"
+  local api_base_host
   target_mode="$(printf '%s' "$target_mode" | tr '[:upper:]' '[:lower:]')"
+  api_base_host="$(wisp_api_base_host "$api_base")"
 
   case "$target_mode" in
     docker)
@@ -88,19 +120,29 @@ wisp_seed_target_prefix() {
         echo "WISP_SEED_TARGET_MODE=docker requires the '$WISP_BACKEND_CONTAINER' container and '$WISP_LAB_NETWORK' network to be running." >&2
         return 1
       fi
-      echo "Using WISP Docker management targets ${WISP_DOCKER_TARGET_PREFIX}21-${WISP_DOCKER_TARGET_PREFIX}42" >&2
+      echo "Using WISP Docker management targets ${WISP_DOCKER_TARGET_PREFIX}21-${WISP_DOCKER_TARGET_PREFIX}42 (mode: docker)" >&2
       printf '%s' "$WISP_DOCKER_TARGET_PREFIX"
       ;;
     host)
-      echo "Using WISP host loopback targets ${WISP_HOST_TARGET_PREFIX}21-${WISP_HOST_TARGET_PREFIX}42" >&2
+      echo "Using WISP host loopback targets ${WISP_HOST_TARGET_PREFIX}21-${WISP_HOST_TARGET_PREFIX}42 (mode: host)" >&2
       printf '%s' "$WISP_HOST_TARGET_PREFIX"
       ;;
     auto)
+      if wisp_api_base_host_is_local "$api_base"; then
+        echo "Using WISP host loopback targets ${WISP_HOST_TARGET_PREFIX}21-${WISP_HOST_TARGET_PREFIX}42 (auto: API host '$api_base_host' is local)" >&2
+        printf '%s' "$WISP_HOST_TARGET_PREFIX"
+        return 0
+      fi
+
       if wisp_backend_running && wisp_connect_backend_to_lab_network; then
-        echo "Using WISP Docker management targets ${WISP_DOCKER_TARGET_PREFIX}21-${WISP_DOCKER_TARGET_PREFIX}42" >&2
+        echo "Using WISP Docker management targets ${WISP_DOCKER_TARGET_PREFIX}21-${WISP_DOCKER_TARGET_PREFIX}42 (auto: backend container is running and connected)" >&2
         printf '%s' "$WISP_DOCKER_TARGET_PREFIX"
       else
-        echo "Using WISP host loopback targets ${WISP_HOST_TARGET_PREFIX}21-${WISP_HOST_TARGET_PREFIX}42" >&2
+        local auto_reason="Docker backend unavailable"
+        if [ -n "$api_base_host" ]; then
+          auto_reason="$auto_reason for API host '$api_base_host'"
+        fi
+        echo "Using WISP host loopback targets ${WISP_HOST_TARGET_PREFIX}21-${WISP_HOST_TARGET_PREFIX}42 (auto: $auto_reason)" >&2
         printf '%s' "$WISP_HOST_TARGET_PREFIX"
       fi
       ;;

@@ -497,6 +497,187 @@ func TestDiscoverDevice(t *testing.T) {
 	}
 }
 
+func TestDiscoverDeviceWithPolicyRecordsCriticalNeighborDiscoveryFailures(t *testing.T) {
+	tests := []struct {
+		name         string
+		policy       NeighborDiscoveryPolicy
+		failOID      string
+		wantProtocol domain.DiscoveryProtocol
+	}{
+		{
+			name:         "lldp remote chassis failure",
+			policy:       NeighborDiscoveryPolicy{LLDP: true},
+			failOID:      OidLLDPRemChassisId,
+			wantProtocol: domain.DiscoveryProtocolLLDP,
+		},
+		{
+			name:         "cdp device id failure",
+			policy:       NeighborDiscoveryPolicy{CDP: true},
+			failOID:      OidCDPDeviceID,
+			wantProtocol: domain.DiscoveryProtocolCDP,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := testDiscoveryRegistry(t)
+			mock := &MockClient{
+				GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+					var pdus []gosnmp.SnmpPDU
+					for _, oid := range oids {
+						switch oid {
+						case OidSysName:
+							pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("router1")})
+						case OidSysDescr:
+							pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS RB5009")})
+						case OidSysObjectID:
+							pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+						}
+					}
+					return pdus, nil
+				},
+				BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+					switch rootOid {
+					case OidIfTable:
+						return []gosnmp.SnmpPDU{
+							{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+							{Name: OidIfOperStatus + ".1", Type: gosnmp.Integer, Value: 1},
+						}, nil
+					case OidIfXTable:
+						return []gosnmp.SnmpPDU{
+							{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+						}, nil
+					case tt.failOID:
+						return nil, assertiveError("neighbor walk timeout")
+					default:
+						return nil, nil
+					}
+				},
+			}
+
+			res, err := DiscoverDeviceWithPolicy(mock, reg, tt.policy)
+			if err != nil {
+				t.Fatalf("DiscoverDeviceWithPolicy returned error: %v", err)
+			}
+			if res.SysName != "router1" {
+				t.Fatalf("SysName = %q, want router1", res.SysName)
+			}
+			if len(res.Interfaces) != 1 {
+				t.Fatalf("interface count = %d, want 1", len(res.Interfaces))
+			}
+			if len(res.Neighbors) != 0 {
+				t.Fatalf("neighbor count = %d, want 0", len(res.Neighbors))
+			}
+
+			failure := findNeighborDiscoveryFailure(res.NeighborDiscoveryFailures, tt.wantProtocol, tt.failOID)
+			if failure == nil {
+				t.Fatalf("expected critical %s failure for %s, got %#v", tt.wantProtocol, tt.failOID, res.NeighborDiscoveryFailures)
+			}
+			if !failure.Critical {
+				t.Fatalf("failure Critical = false, want true")
+			}
+			if failure.Error != "neighbor walk timeout" {
+				t.Fatalf("failure Error = %q, want neighbor walk timeout", failure.Error)
+			}
+		})
+	}
+}
+
+func TestDiscoverDeviceWithPolicyRecordsAttemptedNeighborDiscoveryProtocols(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy NeighborDiscoveryPolicy
+		want   []domain.DiscoveryProtocol
+	}{
+		{
+			name:   "lldp and cdp",
+			policy: NeighborDiscoveryPolicy{LLDP: true, CDP: true},
+			want:   []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP, domain.DiscoveryProtocolCDP},
+		},
+		{
+			name:   "lldp only",
+			policy: NeighborDiscoveryPolicy{LLDP: true},
+			want:   []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		},
+		{
+			name:   "cdp only",
+			policy: NeighborDiscoveryPolicy{CDP: true},
+			want:   []domain.DiscoveryProtocol{domain.DiscoveryProtocolCDP},
+		},
+		{
+			name:   "off",
+			policy: NeighborDiscoveryPolicy{},
+			want:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := DiscoverDeviceWithPolicy(minimalDiscoveryClient(), testDiscoveryRegistry(t), tt.policy)
+			if err != nil {
+				t.Fatalf("DiscoverDeviceWithPolicy returned error: %v", err)
+			}
+			if !discoveryProtocolsEqual(res.NeighborDiscoveryProtocols, tt.want) {
+				t.Fatalf("NeighborDiscoveryProtocols = %v, want %v", res.NeighborDiscoveryProtocols, tt.want)
+			}
+		})
+	}
+}
+
+func findNeighborDiscoveryFailure(failures []NeighborDiscoveryFailure, protocol domain.DiscoveryProtocol, oid string) *NeighborDiscoveryFailure {
+	for i := range failures {
+		if failures[i].Protocol == protocol && failures[i].OID == oid {
+			return &failures[i]
+		}
+	}
+	return nil
+}
+
+func discoveryProtocolsEqual(got, want []domain.DiscoveryProtocol) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func minimalDiscoveryClient() ClientInterface {
+	return &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("router1")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS RB5009")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+				}, nil
+			case OidIfXTable:
+				return []gosnmp.SnmpPDU{
+					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+}
+
 func TestDiscoverSoftwareVersion_AppendsScalarInstanceSuffix(t *testing.T) {
 	t.Parallel()
 

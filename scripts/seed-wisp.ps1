@@ -35,8 +35,9 @@ function New-WispRouter {
 
   $existingId = Get-DeviceIdByIp -ApiBase $ApiBase -Ip $Ip
   if (-not [string]::IsNullOrWhiteSpace($existingId)) {
-    Write-Output "Skipping $Hostname ($Ip) - already present; ensuring primary map membership"
+    Write-Output "Skipping $Hostname ($Ip) - already present; ensuring primary map membership and rerunning topology discovery"
     Add-DeviceToPrimaryMap -ApiBase $ApiBase -DeviceId $existingId
+    Invoke-TopologyDiscovery -ApiBase $ApiBase -DeviceId $existingId
     return
   }
 
@@ -45,6 +46,7 @@ function New-WispRouter {
     ip = $Ip
     hostname = $Hostname
     metrics_source = "snmp"
+    topology_discovery_mode = "lldp_cdp"
     snmp = @{
       version = "2c"
       community = "public"
@@ -66,7 +68,7 @@ function New-WispRouter {
 
 Write-Output "=== Seeding Theia with WISP lab routers ==="
 Wait-ApiReady -ApiBase $ApiBase
-$targetPrefix = Get-WispSeedTargetPrefix -TargetMode $TargetMode
+$targetPrefix = Get-WispSeedTargetPrefix -TargetMode $TargetMode -ApiBase $ApiBase
 
 New-WispRouter "$($targetPrefix)21" "wisp-core-01" "core" "noc" "0.0.0.0"
 New-WispRouter "$($targetPrefix)22" "wisp-core-02" "core" "noc" "0.0.0.0"

@@ -54,6 +54,8 @@ export function formatTopologyDiscoveryResult(result?: string): string {
     return 'Never run';
   }
   switch (result) {
+    case 'partial_discovery_failed':
+      return 'Partial discovery failed';
     case 'neighbors_found':
       return 'Neighbors found';
     case 'ports_pending':

@@ -673,6 +673,327 @@ func TestLinkRepo_Upsert_PreservesDistinctParallelUplinks(t *testing.T) {
 	}
 }
 
+func TestLinkRepo_Upsert_EmptyIncomingInterfacesDoesNotArbitrarilyMatchParallelUplinks(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	first := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "sfp-sfpplus1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether1",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(first); err != nil {
+		t.Fatalf("Create first uplink: %v", err)
+	}
+	second := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "sfp-sfpplus2",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(second); err != nil {
+		t.Fatalf("Create second uplink: %v", err)
+	}
+
+	incomplete := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(incomplete)
+	if err != nil {
+		t.Fatalf("UpsertDetailed incomplete link: %v", err)
+	}
+	if !result.Created {
+		t.Fatalf("ambiguous incomplete link should create a separate row, got %#v", result)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 links after ambiguous incomplete upsert, got %d", len(all))
+	}
+	linksByID := make(map[uuid.UUID]domain.Link, len(all))
+	for _, link := range all {
+		linksByID[link.ID] = link
+	}
+	if linksByID[first.ID].SourceIfName != "sfp-sfpplus1" || linksByID[first.ID].TargetIfName != "ether1" {
+		t.Fatalf("first uplink was mutated: %+v", linksByID[first.ID])
+	}
+	if linksByID[second.ID].SourceIfName != "sfp-sfpplus2" || linksByID[second.ID].TargetIfName != "ether2" {
+		t.Fatalf("second uplink was mutated: %+v", linksByID[second.ID])
+	}
+	if linksByID[incomplete.ID].SourceIfName != "" || linksByID[incomplete.ID].TargetIfName != "" {
+		t.Fatalf("incomplete link stored interfaces = %q/%q, want empty/empty",
+			linksByID[incomplete.ID].SourceIfName,
+			linksByID[incomplete.ID].TargetIfName)
+	}
+}
+
+func TestLinkRepo_Upsert_PrefersExactSameDirectionMatchOverPartialCandidate(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	partial := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(partial); err != nil {
+		t.Fatalf("Create partial link: %v", err)
+	}
+	full := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(full); err != nil {
+		t.Fatalf("Create full link: %v", err)
+	}
+
+	rediscovered := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(rediscovered)
+	if err != nil {
+		t.Fatalf("UpsertDetailed exact rediscovery: %v", err)
+	}
+	if result.Created || result.Changed || result.Kind != domain.LinkUpsertKindNoop {
+		t.Fatalf("exact rediscovery result = %#v, want unchanged no-op", result)
+	}
+	if rediscovered.ID != full.ID {
+		t.Fatalf("rediscovered ID = %s, want exact full row %s", rediscovered.ID, full.ID)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected partial and full rows to remain, got %d links", len(all))
+	}
+	linksByID := make(map[uuid.UUID]domain.Link, len(all))
+	for _, link := range all {
+		linksByID[link.ID] = link
+	}
+	if linksByID[partial.ID].TargetIfName != "" {
+		t.Fatalf("partial row target interface = %q, want still empty", linksByID[partial.ID].TargetIfName)
+	}
+	if linksByID[full.ID].TargetIfName != "ether2" {
+		t.Fatalf("full row target interface = %q, want ether2", linksByID[full.ID].TargetIfName)
+	}
+}
+
+func TestLinkRepo_UpsertAddsDiscoveredLinkToMaterializedMapsWithBothBaseEndpoints(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+	mapRepo := NewCanvasMapRepo(db)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	defaultMap, err := mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("GetDefault: %v", err)
+	}
+	if err := mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: d1ID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: d2ID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceMembership: %v", err)
+	}
+
+	link := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(link)
+	if err != nil {
+		t.Fatalf("UpsertDetailed: %v", err)
+	}
+	if !result.Created {
+		t.Fatalf("expected discovered link to be created, got %#v", result)
+	}
+
+	membership, err := mapRepo.GetMembership(defaultMap.ID)
+	if err != nil {
+		t.Fatalf("GetMembership: %v", err)
+	}
+	if len(membership.LinkIDs) != 1 || membership.LinkIDs[0] != link.ID {
+		t.Fatalf("map link membership = %#v, want discovered link %s", membership.LinkIDs, link.ID)
+	}
+}
+
+func TestLinkRepo_UpsertAddsDiscoveredLinkToMaterializedMapWithBaseAndGhostEndpoints(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+	mapRepo := NewCanvasMapRepo(db)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	canvasMap, err := mapRepo.Create(domain.CanvasMapCreate{Name: "Materialized area"})
+	if err != nil {
+		t.Fatalf("Create map: %v", err)
+	}
+	if err := mapRepo.ReplaceMembership(canvasMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: d1ID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: d2ID, Role: domain.CanvasMapDeviceRoleGhost},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceMembership: %v", err)
+	}
+
+	link := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(link)
+	if err != nil {
+		t.Fatalf("UpsertDetailed: %v", err)
+	}
+	if !result.Created {
+		t.Fatalf("expected discovered link to be created, got %#v", result)
+	}
+
+	membership, err := mapRepo.GetMembership(canvasMap.ID)
+	if err != nil {
+		t.Fatalf("GetMembership: %v", err)
+	}
+	if len(membership.LinkIDs) != 1 || membership.LinkIDs[0] != link.ID {
+		t.Fatalf("map link membership = %#v, want discovered link %s", membership.LinkIDs, link.ID)
+	}
+}
+
+func TestLinkRepo_UpsertDoesNotAddDiscoveredLinkToMaterializedMapWithOnlyGhostEndpoints(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+	mapRepo := NewCanvasMapRepo(db)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	canvasMap, err := mapRepo.Create(domain.CanvasMapCreate{Name: "Ghost-only area"})
+	if err != nil {
+		t.Fatalf("Create map: %v", err)
+	}
+	if err := mapRepo.ReplaceMembership(canvasMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: d1ID, Role: domain.CanvasMapDeviceRoleGhost},
+			{DeviceID: d2ID, Role: domain.CanvasMapDeviceRoleGhost},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceMembership: %v", err)
+	}
+
+	link := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(link)
+	if err != nil {
+		t.Fatalf("UpsertDetailed: %v", err)
+	}
+	if !result.Created {
+		t.Fatalf("expected discovered link to be created, got %#v", result)
+	}
+
+	membership, err := mapRepo.GetMembership(canvasMap.ID)
+	if err != nil {
+		t.Fatalf("GetMembership: %v", err)
+	}
+	if len(membership.LinkIDs) != 0 {
+		t.Fatalf("map link membership = %#v, want no ghost-only link membership", membership.LinkIDs)
+	}
+}
+
+func TestLinkRepo_UpsertRepairsMissingMapMembershipForRediscoveredLink(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+	mapRepo := NewCanvasMapRepo(db)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+	defaultMap, err := mapRepo.GetDefault()
+	if err != nil {
+		t.Fatalf("GetDefault: %v", err)
+	}
+	existing := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(existing); err != nil {
+		t.Fatalf("Create existing link: %v", err)
+	}
+	if err := mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: d1ID, Role: domain.CanvasMapDeviceRoleBase},
+			{DeviceID: d2ID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceMembership: %v", err)
+	}
+
+	rediscovered := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(rediscovered)
+	if err != nil {
+		t.Fatalf("UpsertDetailed: %v", err)
+	}
+	if result.Kind != domain.LinkUpsertKindNoop {
+		t.Fatalf("Kind = %q, want %q", result.Kind, domain.LinkUpsertKindNoop)
+	}
+	if !result.Changed {
+		t.Fatal("expected repaired map membership to report a topology change")
+	}
+
+	membership, err := mapRepo.GetMembership(defaultMap.ID)
+	if err != nil {
+		t.Fatalf("GetMembership: %v", err)
+	}
+	if len(membership.LinkIDs) != 1 || membership.LinkIDs[0] != existing.ID {
+		t.Fatalf("map link membership = %#v, want rediscovered link %s", membership.LinkIDs, existing.ID)
+	}
+}
+
 // TestLinkRepo_Upsert_CleansUpBrokenLink verifies that upserting a link with a
 // non-empty SourceIfName deletes any existing link for the same physical link
 // that has an empty SourceIfName (a "broken" link from an incomplete discovery).
@@ -800,6 +1121,63 @@ func TestLinkRepo_Upsert_EmptySourceIfNamePreservesExisting(t *testing.T) {
 	}
 	if all[0].TargetIfName != "ether2" {
 		t.Errorf("TargetIfName overwritten: got %q, want %q", all[0].TargetIfName, "ether2")
+	}
+}
+
+func TestLinkRepo_Upsert_EmptyTargetIfNameEnrichesExistingSameDirectionLink(t *testing.T) {
+	db := setupTestDB(t)
+	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	linkRepo := NewLinkRepo(db, nil)
+
+	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
+
+	incomplete := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	if err := linkRepo.Create(incomplete); err != nil {
+		t.Fatalf("Create incomplete link: %v", err)
+	}
+
+	enriched := &domain.Link{
+		SourceDeviceID:    d1ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    d2ID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	result, err := linkRepo.UpsertDetailed(enriched)
+	if err != nil {
+		t.Fatalf("UpsertDetailed enriched link: %v", err)
+	}
+	if result.Created {
+		t.Fatal("expected partial same-direction link to be enriched, not created")
+	}
+	if !result.Changed {
+		t.Fatal("expected target interface enrichment to report a change")
+	}
+	if result.Kind != domain.LinkUpsertKindEnriched {
+		t.Fatalf("Kind = %q, want %q", result.Kind, domain.LinkUpsertKindEnriched)
+	}
+
+	all, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 link after target interface enrichment, got %d", len(all))
+	}
+	if all[0].ID != incomplete.ID {
+		t.Fatalf("link ID changed: got %s, want %s", all[0].ID, incomplete.ID)
+	}
+	if all[0].SourceIfName != "ether1" {
+		t.Errorf("SourceIfName = %q, want %q", all[0].SourceIfName, "ether1")
+	}
+	if all[0].TargetIfName != "ether2" {
+		t.Errorf("TargetIfName = %q, want %q", all[0].TargetIfName, "ether2")
 	}
 }
 

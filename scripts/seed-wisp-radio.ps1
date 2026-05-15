@@ -36,8 +36,9 @@ function New-WispRadioDevice {
 
   $existingId = Get-DeviceIdByIp -ApiBase $ApiBase -Ip $Ip
   if (-not [string]::IsNullOrWhiteSpace($existingId)) {
-    Write-Output "Skipping $Hostname ($Ip) - already present; ensuring primary map membership"
+    Write-Output "Skipping $Hostname ($Ip) - already present; ensuring primary map membership and rerunning topology discovery"
     Add-DeviceToPrimaryMap -ApiBase $ApiBase -DeviceId $existingId
+    Invoke-TopologyDiscovery -ApiBase $ApiBase -DeviceId $existingId
     return
   }
 
@@ -46,6 +47,7 @@ function New-WispRadioDevice {
     ip = $Ip
     hostname = $Hostname
     metrics_source = "snmp"
+    topology_discovery_mode = "lldp_cdp"
     snmp = @{
       version = "2c"
       community = "public"
@@ -69,7 +71,7 @@ function New-WispRadioDevice {
 
 Write-Output "=== Seeding Theia with WISP radio access nodes ==="
 Wait-ApiReady -ApiBase $ApiBase
-$targetPrefix = Get-WispSeedTargetPrefix -TargetMode $TargetMode
+$targetPrefix = Get-WispSeedTargetPrefix -TargetMode $TargetMode -ApiBase $ApiBase
 
 New-WispRadioDevice "$($targetPrefix)31" "wisp-ap-north-a-01" "sector-ap" "tower-north-a" "north" "sector-a"
 New-WispRadioDevice "$($targetPrefix)32" "wisp-ap-north-b-01" "sector-ap" "tower-north-b" "north" "sector-b"
