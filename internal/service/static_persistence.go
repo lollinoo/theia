@@ -254,7 +254,12 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		return StaticPersistenceResult{}, nil, nil, fmt.Errorf("materializing canonical links: %w", err)
 	}
 
-	deletedStaleLinks, err := s.deleteStaleAutoDiscoveredLinks(fresh.ID, reconciledProtocols, applied.Events)
+	deletedStaleLinks, err := s.deleteStaleAutoDiscoveredLinks(
+		fresh.ID,
+		reconciledProtocols,
+		applied.Events,
+		currentObservations,
+	)
 	if err != nil {
 		return StaticPersistenceResult{}, nil, nil, err
 	}
@@ -327,6 +332,7 @@ func (s *DeviceService) deleteStaleAutoDiscoveredLinks(
 	localDeviceID uuid.UUID,
 	reconciledProtocols []domain.DiscoveryProtocol,
 	materializedEvents []topology.ApplyEvent,
+	currentObservations []topology.Observation,
 ) (int, error) {
 	if s.linkRepo == nil || len(reconciledProtocols) == 0 {
 		return 0, nil
@@ -374,12 +380,65 @@ func (s *DeviceService) deleteStaleAutoDiscoveredLinks(
 		if _, ok := supportedLinks[physicalLinkKey(link)]; ok {
 			continue
 		}
+		if currentUnresolvedObservationSupportsLink(localDeviceID, link, currentObservations) {
+			continue
+		}
 		if err := s.linkRepo.Delete(link.ID); err != nil {
 			return deleted, fmt.Errorf("deleting stale auto-discovered link %s: %w", link.ID, err)
 		}
 		deleted++
 	}
 	return deleted, nil
+}
+
+func currentUnresolvedObservationSupportsLink(
+	localDeviceID uuid.UUID,
+	link domain.Link,
+	currentObservations []topology.Observation,
+) bool {
+	localPort, remotePort, ok := linkPortsForLocalEndpoint(localDeviceID, link)
+	if !ok || strings.TrimSpace(localPort) == "" {
+		return false
+	}
+
+	for _, observation := range currentObservations {
+		if observation.LocalDeviceID != localDeviceID {
+			continue
+		}
+		if observation.RemoteDeviceID != uuid.Nil {
+			continue
+		}
+		if observation.Protocol != link.DiscoveryProtocol {
+			continue
+		}
+		if strings.TrimSpace(observation.LocalPort) == "" {
+			continue
+		}
+		if !sameDiscoveryPort(observation.LocalPort, localPort) {
+			continue
+		}
+		if strings.TrimSpace(observation.RemotePort) == "" {
+			return true
+		}
+		if sameDiscoveryPort(observation.RemotePort, remotePort) {
+			return true
+		}
+	}
+	return false
+}
+
+func linkPortsForLocalEndpoint(localDeviceID uuid.UUID, link domain.Link) (string, string, bool) {
+	if link.SourceDeviceID == localDeviceID {
+		return link.SourceIfName, link.TargetIfName, true
+	}
+	if link.TargetDeviceID == localDeviceID {
+		return link.TargetIfName, link.SourceIfName, true
+	}
+	return "", "", false
+}
+
+func sameDiscoveryPort(left, right string) bool {
+	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
 }
 
 func physicalLinkKey(link domain.Link) string {

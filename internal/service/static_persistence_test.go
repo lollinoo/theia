@@ -1020,6 +1020,62 @@ func TestApplyStaticDiscoveryWithObservationStore_PartialPortSnapshotKeepsEnrich
 	}
 }
 
+func TestApplyStaticDiscoveryWithObservationStore_UnresolvedChassisSnapshotKeepsExistingAutoLink(t *testing.T) {
+	svc, deviceRepo, linkRepo, _ := newObservationStoreStaticPersistenceService(t)
+
+	local := &domain.Device{ID: uuid.New(), Hostname: "local", IP: "192.0.2.75", SysName: "local", Managed: true, Status: domain.DeviceStatusUp}
+	remote := &domain.Device{ID: uuid.New(), Hostname: "remote", IP: "192.0.2.76", SysName: "remote", Managed: true, Status: domain.DeviceStatusUp}
+	for _, device := range []*domain.Device{local, remote} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	first, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName:   "remote",
+			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+			RemotePortID:    "ether2",
+			LocalIfName:     "ether1",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("first ApplyStaticDiscovery failed: %v", err)
+	}
+	if !first.TopologyChanged || first.LinksCreated != 1 {
+		t.Fatalf("first persistence result = %+v, want topology change with one created link", first)
+	}
+
+	if _, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName:                    "local",
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteChassisID: "aa:bb:cc:dd:ee:ff",
+			LocalIfName:     "ether1",
+			Protocol:        domain.DiscoveryProtocolLLDP,
+		}},
+	}); err != nil {
+		t.Fatalf("second ApplyStaticDiscovery failed: %v", err)
+	}
+
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links failed: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected unresolved snapshot to keep one auto-link, got %d links: %+v", len(links), links)
+	}
+	if links[0].SourceDeviceID != local.ID || links[0].TargetDeviceID != remote.ID {
+		t.Fatalf("expected local to remote link to remain, got %+v", links[0])
+	}
+	if links[0].SourceIfName != "ether1" || links[0].TargetIfName != "ether2" {
+		t.Fatalf("expected full ports ether1/ether2 to remain, got %+v", links[0])
+	}
+}
+
 func TestApplyStaticDiscoveryWithObservationStore_SkipsPruneWhenLLDPDiscoveryFailure(t *testing.T) {
 	svc, deviceRepo, linkRepo, observationRepo := newObservationStoreStaticPersistenceService(t)
 
