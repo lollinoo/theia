@@ -43,6 +43,11 @@ type ErrorPayload = {
   error?: string;
 };
 
+export interface OperatorSession {
+  authenticated: boolean;
+  subject?: string;
+}
+
 async function requestJSON(path: string): Promise<unknown> {
   const response = await fetch(path, {
     headers: {
@@ -64,6 +69,29 @@ async function requestJSON(path: string): Promise<unknown> {
   }
 
   return payload;
+}
+
+export async function fetchOperatorSession(): Promise<OperatorSession> {
+  const payload = await requestJSON('/api/v1/session');
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  return {
+    authenticated: record.authenticated === true,
+    subject: typeof record.subject === 'string' ? record.subject : undefined,
+  };
+}
+
+export async function createOperatorSession(
+  token: string,
+  operator: string,
+): Promise<OperatorSession> {
+  const payload = await requestJSONWithBody('/api/v1/session', 'POST', { token, operator });
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  return {
+    authenticated: record.authenticated === true,
+    subject: typeof record.subject === 'string' ? record.subject : undefined,
+  };
 }
 
 export class CanvasTopologyFetchError extends Error {

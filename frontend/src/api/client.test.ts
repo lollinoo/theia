@@ -7,6 +7,7 @@ import {
   createCanvasMap,
   createCanvasMapArea,
   createDevice,
+  createOperatorSession,
   deleteCanvasMap,
   deleteCanvasMapArea,
   deleteDevice,
@@ -23,6 +24,7 @@ import {
   fetchDevices,
   fetchInstanceBackups,
   fetchLinks,
+  fetchOperatorSession,
   fetchOrphanDevices,
   fetchSettings,
   fetchSettingsWithMetadata,
@@ -109,6 +111,36 @@ function emptyTopologyPayload() {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('operator sessions', () => {
+  it('fetches current operator session state', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ authenticated: true, subject: 'alice' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchOperatorSession();
+
+    expect(result).toEqual({ authenticated: true, subject: 'alice' });
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/session');
+  });
+
+  it('creates an operator session without exposing token in the URL', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ authenticated: true, subject: 'alice' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await createOperatorSession('secret-token', 'alice');
+
+    expect(result).toEqual({ authenticated: true, subject: 'alice' });
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/session');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({ token: 'secret-token', operator: 'alice' }),
+    });
+  });
 });
 
 describe('fetchDevices', () => {
