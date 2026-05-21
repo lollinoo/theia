@@ -139,15 +139,26 @@ func (r *LinkRepo) createManualIdempotentOnce(link *domain.Link, browserLocalSto
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	now := time.Now().UTC()
 	existing, err := findManualCreateEquivalentLink(tx, link, browserLocalStorageMigration)
 	if err != nil {
 		return nil, false, fmt.Errorf("checking equivalent manual link: %w", err)
 	}
 	if existing != nil {
+		membershipChanged, err := r.addLinkToMaterializedBaseEndpointMaps(tx, existing, now)
+		if err != nil {
+			return nil, false, err
+		}
+		if membershipChanged {
+			if err = tx.Commit(); err != nil {
+				return nil, false, fmt.Errorf("committing manual link map membership repair: %w", err)
+			}
+			r.notify()
+			r.publishChange(domain.ChangeKindUpdated, existing.ID)
+		}
 		return existing, false, nil
 	}
 
-	now := time.Now().UTC()
 	link.CreatedAt = now
 	link.UpdatedAt = now
 	if link.ID == uuid.Nil {
@@ -164,6 +175,9 @@ func (r *LinkRepo) createManualIdempotentOnce(link *domain.Link, browserLocalSto
 		string(link.DiscoveryProtocol), link.CreatedAt, link.UpdatedAt,
 	); err != nil {
 		return nil, false, fmt.Errorf("inserting manual link: %w", err)
+	}
+	if _, err = r.addLinkToMaterializedBaseEndpointMaps(tx, link, now); err != nil {
+		return nil, false, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("committing manual link insert: %w", err)

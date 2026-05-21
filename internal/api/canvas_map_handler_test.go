@@ -1655,6 +1655,117 @@ func TestCanvasMapHandlerTopologyETagChangesForMapMetadataPatch(t *testing.T) {
 	}
 }
 
+func TestCanvasMapHandlerTopologyETagChangesAfterManualLinkCreate(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	source := seedCanvasMapTestDevice(t, fixture, "router-manual-a", "10.69.0.1", nil)
+	target := seedCanvasMapTestDevice(t, fixture, "router-manual-b", "10.69.0.2", nil)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name": "Manual Link Map",
+		"filter": map[string]any{
+			"device_ids": []string{source.ID.String(), target.ID.String()},
+		},
+	})
+
+	first := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial topology: expected 200, got %d; body: %s", first.Code, first.Body.String())
+	}
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected initial ETag")
+	}
+
+	createRec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/links", map[string]any{
+		"source_device_id": source.ID.String(),
+		"source_if_name":   "ether1",
+		"target_device_id": target.ID.String(),
+		"target_if_name":   "ether1",
+	})
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST manual link: expected 201, got %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Data domain.Link `json:"data"`
+	}
+	decodeCanvasMapTestResponse(t, createRec, &created)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	req.Header.Set("If-None-Match", etag)
+	second := httptest.NewRecorder()
+	fixture.router.ServeHTTP(second, req)
+	if second.Code != http.StatusOK {
+		t.Fatalf("topology after manual link create with stale ETag: expected 200, got %d; body: %s", second.Code, second.Body.String())
+	}
+	if second.Header().Get("ETag") == "" || second.Header().Get("ETag") == etag {
+		t.Fatalf("expected changed ETag, got initial=%q next=%q", etag, second.Header().Get("ETag"))
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, second, &topology)
+	if len(topology.Links) != 1 || topology.Links[0].ID != created.Data.ID.String() {
+		t.Fatalf("topology links = %#v, want created manual link %s", topology.Links, created.Data.ID)
+	}
+}
+
+func TestCanvasMapHandlerTopologyETagChangesWhenManualLinkCreateRepairsMapMembership(t *testing.T) {
+	fixture := newCanvasMapIntegrationRouter(t)
+	source := seedCanvasMapTestDevice(t, fixture, "router-manual-repair-a", "10.69.1.1", nil)
+	target := seedCanvasMapTestDevice(t, fixture, "router-manual-repair-b", "10.69.1.2", nil)
+	canvasMap := mustCreateCanvasMapForTest(t, fixture, map[string]any{
+		"name": "Manual Link Repair Map",
+		"filter": map[string]any{
+			"device_ids": []string{source.ID.String(), target.ID.String()},
+		},
+	})
+	existing := &domain.Link{
+		ID:                uuid.New(),
+		SourceDeviceID:    source.ID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    target.ID,
+		TargetIfName:      "ether1",
+		DiscoveryProtocol: domain.DiscoveryProtocolManual,
+	}
+	if err := fixture.linkRepo.Create(existing); err != nil {
+		t.Fatalf("seed existing manual link: %v", err)
+	}
+
+	first := canvasMapRequest(t, fixture.router, http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial topology: expected 200, got %d; body: %s", first.Code, first.Body.String())
+	}
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected initial ETag")
+	}
+	var initialTopology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, first, &initialTopology)
+	if len(initialTopology.Links) != 0 {
+		t.Fatalf("initial topology links = %#v, want missing membership reproduction", initialTopology.Links)
+	}
+
+	createRec := canvasMapRequest(t, fixture.router, http.MethodPost, "/api/v1/links", map[string]any{
+		"source_device_id": source.ID.String(),
+		"source_if_name":   "ether1",
+		"target_device_id": target.ID.String(),
+		"target_if_name":   "ether1",
+	})
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("POST existing manual link: expected 200, got %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/canvas/maps/"+canvasMap.ID+"/topology", nil)
+	req.Header.Set("If-None-Match", etag)
+	second := httptest.NewRecorder()
+	fixture.router.ServeHTTP(second, req)
+	if second.Code != http.StatusOK {
+		t.Fatalf("topology after manual link membership repair with stale ETag: expected 200, got %d; body: %s", second.Code, second.Body.String())
+	}
+	var topology canvasTopologyResponse
+	decodeCanvasMapTestResponse(t, second, &topology)
+	if len(topology.Links) != 1 || topology.Links[0].ID != existing.ID.String() {
+		t.Fatalf("topology links = %#v, want repaired manual link %s", topology.Links, existing.ID)
+	}
+}
+
 func TestCanvasMapHandlerListComputesCountsFromMaterializedMembership(t *testing.T) {
 	fixture := newCanvasMapIntegrationRouter(t)
 	deviceA := seedCanvasMapTestDevice(t, fixture, "router-a", "10.60.0.1", nil)
