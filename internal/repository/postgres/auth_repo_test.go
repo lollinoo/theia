@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -117,6 +118,38 @@ func TestAuthRepoListsSeededRolesAndPermissions(t *testing.T) {
 	}
 }
 
+func TestAuthRepoNotFoundErrorsMatchDomainSentinels(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	if _, err := repo.GetUserByID(ctx, uuid.New()); !errors.Is(err, domain.ErrAuthUserNotFound) {
+		t.Fatalf("GetUserByID error = %v, want ErrAuthUserNotFound", err)
+	}
+	if _, err := repo.GetUserByLoginIdentifier(ctx, "missing@example.test"); !errors.Is(err, domain.ErrAuthUserNotFound) {
+		t.Fatalf("GetUserByLoginIdentifier error = %v, want ErrAuthUserNotFound", err)
+	}
+	if err := repo.UpdateUser(ctx, &domain.User{ID: uuid.New()}); !errors.Is(err, domain.ErrAuthUserNotFound) {
+		t.Fatalf("UpdateUser error = %v, want ErrAuthUserNotFound", err)
+	}
+	if _, err := repo.GetRoleByName(ctx, "missing-role"); !errors.Is(err, domain.ErrAuthRoleNotFound) {
+		t.Fatalf("GetRoleByName error = %v, want ErrAuthRoleNotFound", err)
+	}
+	if _, err := repo.GetSessionByTokenHash(ctx, "missing-session"); !errors.Is(err, domain.ErrAuthSessionNotFound) {
+		t.Fatalf("GetSessionByTokenHash error = %v, want ErrAuthSessionNotFound", err)
+	}
+	if err := repo.RevokeSession(ctx, uuid.New(), time.Now().UTC()); !errors.Is(err, domain.ErrAuthSessionNotFound) {
+		t.Fatalf("RevokeSession error = %v, want ErrAuthSessionNotFound", err)
+	}
+	if err := repo.TouchSession(ctx, uuid.New(), time.Now().UTC()); !errors.Is(err, domain.ErrAuthSessionNotFound) {
+		t.Fatalf("TouchSession error = %v, want ErrAuthSessionNotFound", err)
+	}
+	if _, err := repo.GetPasswordResetTokenByHash(ctx, "missing-reset-token"); !errors.Is(err, domain.ErrPasswordResetTokenNotFound) {
+		t.Fatalf("GetPasswordResetTokenByHash error = %v, want ErrPasswordResetTokenNotFound", err)
+	}
+	if err := repo.MarkPasswordResetTokenUsed(ctx, uuid.New(), time.Now().UTC()); !errors.Is(err, domain.ErrPasswordResetTokenNotFound) {
+		t.Fatalf("MarkPasswordResetTokenUsed error = %v, want ErrPasswordResetTokenNotFound", err)
+	}
+}
+
 func TestAuthRepoAssignRemoveRoleIsIdempotentAndLoadsAggregate(t *testing.T) {
 	repo, ctx := newAuthRepoForTest(t)
 
@@ -163,6 +196,36 @@ func TestAuthRepoAssignRemoveRoleIsIdempotentAndLoadsAggregate(t *testing.T) {
 	}
 	if len(aggregate.Roles) != 0 || len(aggregate.Permissions) != 0 {
 		t.Fatalf("aggregate after remove = %#v", aggregate)
+	}
+}
+
+func TestAuthRepoListUsersFiltersByRole(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	viewer := testAuthUser("viewer-user", "viewer-user@example.test")
+	if err := repo.CreateUser(ctx, &viewer); err != nil {
+		t.Fatalf("CreateUser viewer: %v", err)
+	}
+	admin := testAuthUser("admin-user", "admin-user@example.test")
+	if err := repo.CreateUser(ctx, &admin); err != nil {
+		t.Fatalf("CreateUser admin: %v", err)
+	}
+	if err := repo.AssignRole(ctx, viewer.ID, domain.RoleViewer, nil); err != nil {
+		t.Fatalf("AssignRole viewer: %v", err)
+	}
+	if err := repo.AssignRole(ctx, admin.ID, domain.RoleAdmin, nil); err != nil {
+		t.Fatalf("AssignRole admin: %v", err)
+	}
+
+	listed, err := repo.ListUsers(ctx, domain.UserListFilter{RoleID: domain.RoleViewer})
+	if err != nil {
+		t.Fatalf("ListUsers role filter: %v", err)
+	}
+	if len(listed) != 1 || listed[0].User.ID != viewer.ID {
+		t.Fatalf("ListUsers role filter returned %#v", listed)
+	}
+	if len(listed[0].Roles) != 1 || listed[0].Roles[0].ID != domain.RoleViewer {
+		t.Fatalf("ListUsers role filter roles = %#v", listed[0].Roles)
 	}
 }
 

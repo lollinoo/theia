@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +51,17 @@ const (
 	PermissionBackupsRead       = "backups:read"
 	PermissionBackupsUpdate     = "backups:update"
 	PermissionBridgeTokenCreate = "bridge:token:create"
+)
+
+var (
+	// ErrAuthUserNotFound indicates that an auth user lookup or update target does not exist.
+	ErrAuthUserNotFound = errors.New("auth user not found")
+	// ErrAuthRoleNotFound indicates that an auth role lookup target does not exist.
+	ErrAuthRoleNotFound = errors.New("auth role not found")
+	// ErrAuthSessionNotFound indicates that an auth session lookup or update target does not exist.
+	ErrAuthSessionNotFound = errors.New("auth session not found")
+	// ErrPasswordResetTokenNotFound indicates that a password reset token lookup or update target does not exist.
+	ErrPasswordResetTokenNotFound = errors.New("password reset token not found")
 )
 
 // SystemPermission describes a built-in RBAC permission.
@@ -171,6 +183,7 @@ type AdminDashboardStats struct {
 type UserListFilter struct {
 	Status UserStatus
 	Query  string
+	RoleID string
 	Limit  int
 	Offset int
 }

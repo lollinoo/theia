@@ -105,6 +105,10 @@ func (r *AuthRepo) ListUsers(ctx context.Context, filter domain.UserListFilter) 
 		like := "%" + strings.ToLower(strings.TrimSpace(filter.Query)) + "%"
 		args = append(args, like, like, "%"+strings.TrimSpace(filter.Query)+"%")
 	}
+	if filter.RoleID != "" {
+		conditions = append(conditions, "EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = users.id AND ur.role_id = ?)")
+		args = append(args, filter.RoleID)
+	}
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
@@ -188,7 +192,7 @@ func (r *AuthRepo) UpdateUser(ctx context.Context, user *domain.User) error {
 	if err != nil {
 		return fmt.Errorf("updating auth user: %w", err)
 	}
-	if err := requireRowsAffected(res, "auth user not found"); err != nil {
+	if err := requireRowsAffected(res, domain.ErrAuthUserNotFound); err != nil {
 		return fmt.Errorf("updating auth user: %w", err)
 	}
 	return nil
@@ -401,7 +405,7 @@ func (r *AuthRepo) RevokeSession(ctx context.Context, sessionID uuid.UUID, when 
 	if err != nil {
 		return fmt.Errorf("revoking auth session: %w", err)
 	}
-	if err := requireRowsAffected(res, "auth session not found"); err != nil {
+	if err := requireRowsAffected(res, domain.ErrAuthSessionNotFound); err != nil {
 		return fmt.Errorf("revoking auth session: %w", err)
 	}
 	return nil
@@ -431,7 +435,7 @@ func (r *AuthRepo) TouchSession(ctx context.Context, sessionID uuid.UUID, when t
 	if err != nil {
 		return fmt.Errorf("touching auth session: %w", err)
 	}
-	if err := requireRowsAffected(res, "auth session not found"); err != nil {
+	if err := requireRowsAffected(res, domain.ErrAuthSessionNotFound); err != nil {
 		return fmt.Errorf("touching auth session: %w", err)
 	}
 	return nil
@@ -488,7 +492,7 @@ func (r *AuthRepo) MarkPasswordResetTokenUsed(ctx context.Context, tokenID uuid.
 	if err != nil {
 		return fmt.Errorf("marking password reset token used: %w", err)
 	}
-	if err := requireRowsAffected(res, "password reset token not found"); err != nil {
+	if err := requireRowsAffected(res, domain.ErrPasswordResetTokenNotFound); err != nil {
 		return fmt.Errorf("marking password reset token used: %w", err)
 	}
 	return nil
@@ -708,7 +712,7 @@ func (r *AuthRepo) scanUser(row authRowScanner) (*domain.User, error) {
 	user, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("auth user not found")
+			return nil, domain.ErrAuthUserNotFound
 		}
 		return nil, err
 	}
@@ -768,7 +772,7 @@ func scanRole(row authRowScanner) (*domain.Role, error) {
 	role, err := scanRoleValue(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("auth role not found")
+			return nil, domain.ErrAuthRoleNotFound
 		}
 		return nil, err
 	}
@@ -813,7 +817,7 @@ func (r *AuthRepo) scanSession(row authRowScanner) (*domain.AuthSession, error) 
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("auth session not found")
+			return nil, domain.ErrAuthSessionNotFound
 		}
 		return nil, err
 	}
@@ -838,7 +842,7 @@ func (r *AuthRepo) scanPasswordResetToken(row authRowScanner) (*domain.PasswordR
 	err := row.Scan(&id, &userID, &token.TokenHash, &token.CreatedAt, &token.ExpiresAt, &token.UsedAt, &createdBy)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("password reset token not found")
+			return nil, domain.ErrPasswordResetTokenNotFound
 		}
 		return nil, err
 	}
@@ -913,13 +917,13 @@ func uuidPtrString(value *uuid.UUID) interface{} {
 	return value.String()
 }
 
-func requireRowsAffected(result sql.Result, notFoundMessage string) error {
+func requireRowsAffected(result sql.Result, notFoundErr error) error {
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("checking rows affected: %w", err)
 	}
 	if rows == 0 {
-		return errors.New(notFoundMessage)
+		return notFoundErr
 	}
 	return nil
 }
