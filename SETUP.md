@@ -102,24 +102,9 @@ make test           # Run unit tests
 make test-integration  # Run integration-tagged tests
 ```
 
-### 4.1 Database default and small-install exception
+### 4.1 Database
 
 PostgreSQL is the standard database backend for Theia in development, staging, and production. The normal `make dev` flow starts the backend against the bundled PostgreSQL service and publishes PostgreSQL on `127.0.0.1:5432` for host tools.
-
-SQLite is supported only for demo, lab, or very small installs, and only with explicit opt-in:
-
-```bash
-THEIA_DB_DRIVER=sqlite \
-THEIA_ALLOW_SQLITE_SMALL_INSTALL=true \
-make dev
-```
-
-Use SQLite only when the installation stays within all of these limits:
-
-- up to 50 managed devices
-- one active Theia process
-- one active administrative operator at a time
-- no expectation of overlapping intensive polling, topology churn, scheduled backup activity, and configuration-write bursts
 
 Instance backup / restore is supported on PostgreSQL deployments when compatible PostgreSQL client tools are available on `PATH`. PostgreSQL backup jobs require `pg_dump` 17.x; restore validation, staging, and apply require `pg_restore` 17.x; non-dry-run restore apply also requires `pg_dump` 17.x so Theia can take a pre-restore live database backup before changing the database, and `psql` 17.x so Theia can reset the target schema before loading the staged dump.
 
@@ -134,34 +119,6 @@ The bundled development, staging, and production compose stacks use PostgreSQL 1
 | `psql` | Required for PostgreSQL restore apply schema cleanup | 17.x |
 
 Missing or incompatible PostgreSQL client tools fail the backup or restore job at startup with actionable diagnostics. Error output redacts connection strings and passwords.
-
-### 4.3 Migrate an existing SQLite dataset to PostgreSQL
-
-Once an installation outgrows the small-install envelope, migration to PostgreSQL is the expected path. Stop the backend first so the SQLite source stays stable during the copy, then import the database into PostgreSQL:
-
-```bash
-make postgres-up
-export THEIA_DB_DSN='<postgresql-target-dsn>'
-make migrate-postgres
-```
-
-The import command runs the PostgreSQL schema migrations first, then copies all application tables from the SQLite file configured in `config.yaml` (or from `MIGRATE_SOURCE` if you override it).
-
-You can also run the migrator directly if you have a local Go toolchain installed:
-
-```bash
-go run ./cmd/theia-db-migrate \
-  -config config.yaml \
-  -source-sqlite ./data/theia.db \
-  -target-dsn '<postgresql-target-dsn>' \
-  -truncate-target
-```
-
-Notes:
-
-- `-truncate-target` makes the import deterministic by clearing the target tables before copying.
-- Device backup archives and `known_hosts` remain file-based in `data_dir`; move that directory separately if you are migrating the whole deployment to another host.
-- Instance backup metadata rows are copied. PostgreSQL-backed instance backup and restore APIs are available after migration when the target deployment has compatible PostgreSQL client tools on `PATH`.
 
 ### 5. How hot-reload works
 
@@ -325,17 +282,7 @@ cp .env.prod.example .env.prod
 make prod
 ```
 
-`make prod` starts the standard production stack on PostgreSQL using the bundled `postgres` service from `docker-compose.prod.yml`.
-
-The shipped `make prod` and `make prod-metrics` targets hard-depend on the bundled `postgres` service in `docker-compose.prod.yml`. If you need an external PostgreSQL service or the SQLite small-install exception path, use a custom compose override or edit instead of only setting `THEIA_DB_DSN` or `THEIA_DB_DRIVER`.
-
-SQLite is only for explicit demo, lab, or very small production installs. To use that exception path, first remove or override the bundled `postgres` dependency in your production compose setup, then set:
-
-```bash
-# THEIA_DB_DRIVER=sqlite
-# THEIA_ALLOW_SQLITE_SMALL_INSTALL=true
-make prod
-```
+`make prod` starts the standard production stack on PostgreSQL using the bundled `postgres` service from `docker-compose.prod.yml`. If you need an external PostgreSQL service, use a custom compose override and provide `THEIA_DB_DSN`.
 
 Or with the metrics stack (Prometheus + SNMP exporter):
 
@@ -426,17 +373,7 @@ cp .env.staging.example .env.staging
 make staging
 ```
 
-`make staging` starts the standard staging stack on PostgreSQL using the bundled `postgres` service from `docker-compose.staging.yml`.
-
-The shipped `make staging` target hard-depends on the bundled `postgres` service in `docker-compose.staging.yml`. If you need an external PostgreSQL service or the SQLite small-install exception path, use a custom compose override or edit instead of only setting `THEIA_DB_DSN` or `THEIA_DB_DRIVER`.
-
-SQLite is only for explicit demo, lab, or very small staging installs. To use that exception path, first remove or override the bundled `postgres` dependency in your staging compose setup, then set:
-
-```bash
-# THEIA_DB_DRIVER=sqlite
-# THEIA_ALLOW_SQLITE_SMALL_INSTALL=true
-make staging
-```
+`make staging` starts the standard staging stack on PostgreSQL using the bundled `postgres` service from `docker-compose.staging.yml`. If you need an external PostgreSQL service, use a custom compose override and provide `THEIA_DB_DSN`.
 
 Default staging ports:
 
@@ -462,11 +399,9 @@ Configuration is loaded from local `config.yaml` when present. The tracked `conf
 
 | config.yaml key | Environment variable | Default | Description |
 |-----------------|---------------------|---------|-------------|
-| `db_driver` | `THEIA_DB_DRIVER` | `postgres` | Primary database driver: `postgres` by default; `sqlite` only with explicit small-install opt-in |
 | `deployment_env` | `THEIA_DEPLOYMENT_ENV` | none | Set to `production` or `staging` for deployed environments so startup enforces required secret validation |
 | `listen_addr` | `THEIA_LISTEN_ADDR` | `:8080` | HTTP server bind address |
-| `db_path` | `THEIA_DB_PATH` | `./data/theia.db` | SQLite database file path |
-| `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN for the standard postgres path; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
+| `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
 | `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Optional directory containing pre-built bridge binaries; leave empty to disable bridge downloads |
 | `log_level` | `THEIA_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
