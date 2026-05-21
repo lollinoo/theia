@@ -179,7 +179,7 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 				}
 			}
 			if surface.requireBlankEnvValue {
-				for _, key := range []string{"THEIA_DB_DSN", "POSTGRES_PASSWORD"} {
+				for _, key := range []string{"THEIA_DB_DSN", "POSTGRES_PASSWORD", "THEIA_OPERATOR_TOKEN", "THEIA_METRICS_TOKEN"} {
 					value, ok := envExampleAssignment(content, key)
 					if !ok {
 						t.Errorf("%s must include %s=", surface.path, key)
@@ -194,6 +194,10 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 				const postgresPasswordRequirement = "- POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
 				if got := countActiveLines(content, postgresPasswordRequirement); got < 2 {
 					t.Errorf("%s must pass POSTGRES_PASSWORD to both backend and postgres service; found %d active entries", surface.path, got)
+				}
+				const operatorTokenRequirement = "- THEIA_OPERATOR_TOKEN=${THEIA_OPERATOR_TOKEN:?THEIA_OPERATOR_TOKEN must be set}"
+				if got := countActiveLines(content, operatorTokenRequirement); got != 1 {
+					t.Errorf("%s must pass required THEIA_OPERATOR_TOKEN to backend; found %d active entries", surface.path, got)
 				}
 			}
 		})
@@ -561,6 +565,24 @@ func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "change-me"},
 			want: []string{"POSTGRES_PASSWORD", "example"},
 		},
+		{
+			name: "production requires operator token",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_OPERATOR_TOKEN", "required"},
+		},
+		{
+			name: "production rejects weak operator token",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", OperatorToken: "short-token"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_OPERATOR_TOKEN", "weak"},
+		},
+		{
+			name: "staging rejects weak metrics token",
+			cfg:  &runtimeConfig{DeploymentEnv: "staging", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", OperatorToken: "0123456789abcdef0123456789abcdef", MetricsToken: "short-token"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_METRICS_TOKEN", "weak"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -598,7 +620,7 @@ func TestValidateDeploymentSecretPolicyAllowsDevelopmentBlankAndSafeProductionSe
 		},
 		{
 			name: "production accepts non-placeholder secrets",
-			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", OperatorToken: "0123456789abcdef0123456789abcdef"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "another-strong-password"},
 		},
 	}

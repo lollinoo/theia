@@ -49,11 +49,14 @@ services:
       - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8081}
       - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
       - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:?THEIA_ENCRYPTION_KEY must be set}
+      - THEIA_OPERATOR_TOKEN=${THEIA_OPERATOR_TOKEN:?THEIA_OPERATOR_TOKEN must be set}
+      - THEIA_METRICS_TOKEN=${THEIA_METRICS_TOKEN:-}
+      - THEIA_ALLOWED_ORIGINS=${THEIA_ALLOWED_ORIGINS:-}
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:${BACKEND_PORT:-8081}/api/v1/health"]
+      test: ["CMD-SHELL", "curl -sf -H \"Authorization: Bearer $$THEIA_OPERATOR_TOKEN\" \"http://localhost:${BACKEND_PORT:-8081}/api/v1/health\""]
       interval: 15s
       timeout: 5s
       retries: 5

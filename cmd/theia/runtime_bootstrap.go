@@ -25,6 +25,7 @@ import (
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/scheduler"
+	"github.com/lollinoo/theia/internal/security"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/state"
@@ -95,6 +96,16 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 	}
 	if postgresPassword := os.Getenv("POSTGRES_PASSWORD"); isKnownSecretPlaceholder(postgresPassword) {
 		return fmt.Errorf("%s deployment rejects example POSTGRES_PASSWORD values", deploymentEnv)
+	}
+	operatorToken := strings.TrimSpace(cfg.OperatorToken)
+	if operatorToken == "" {
+		return fmt.Errorf("THEIA_OPERATOR_TOKEN is required for %s deployment", deploymentEnv)
+	}
+	if isKnownSecretPlaceholder(operatorToken) || len(operatorToken) < 32 {
+		return fmt.Errorf("%s deployment rejects weak THEIA_OPERATOR_TOKEN values", deploymentEnv)
+	}
+	if metricsToken := strings.TrimSpace(cfg.MetricsToken); metricsToken != "" && (isKnownSecretPlaceholder(metricsToken) || len(metricsToken) < 32) {
+		return fmt.Errorf("%s deployment rejects weak THEIA_METRICS_TOKEN values", deploymentEnv)
 	}
 
 	return nil
@@ -436,7 +447,22 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	deviceBackupScheduler.Start(ctx)
 
-	wsHandler := ws.NewHandler(hub, pipeline.GetOverviewSnapshot, pipeline.GetAlerts, pipeline.GetPrometheusStatus)
+	sessionManager := security.NewSessionManager(cfg.OperatorToken)
+	if strings.TrimSpace(cfg.OperatorToken) == "" {
+		sessionManager = nil
+	}
+	apiSecurity := api.SecurityConfig{
+		OperatorToken:  cfg.OperatorToken,
+		AllowedOrigins: cfg.AllowedOrigins,
+		Sessions:       sessionManager,
+	}
+	wsHandler := ws.NewHandler(
+		hub,
+		pipeline.GetOverviewSnapshot,
+		pipeline.GetAlerts,
+		pipeline.GetPrometheusStatus,
+		ws.WithAllowedOrigins(cfg.AllowedOrigins),
+	)
 	children := runtimeChildren{pipeline}
 	if backupScheduler != nil {
 		children = append(children, backupScheduler)
@@ -461,13 +487,22 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity))
 	metricsHandler := observability.Handler()
+	metricsSecurity := apiSecurity
+	if strings.TrimSpace(cfg.MetricsToken) != "" {
+		metricsSecurity.OperatorToken = cfg.MetricsToken
+		metricsSecurity.Sessions = nil
+	}
 	server = &http.Server{
 		Addr: cfg.ListenAddr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/metrics" {
-				metricsHandler.ServeHTTP(w, r)
+				authenticatedRequest, ok := api.AuthenticateOperatorRequest(w, r, metricsSecurity)
+				if !ok {
+					return
+				}
+				metricsHandler.ServeHTTP(w, authenticatedRequest)
 				return
 			}
 			router.ServeHTTP(w, r)

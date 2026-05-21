@@ -7,7 +7,8 @@
 #
 # All values can be overridden with environment variables:
 #   THEIA_LISTEN_ADDR, THEIA_DB_DSN, THEIA_DATA_DIR, THEIA_LOG_LEVEL,
-#   THEIA_BRIDGE_BINARIES_DIR
+#   THEIA_BRIDGE_BINARIES_DIR, THEIA_DEPLOYMENT_ENV, THEIA_OPERATOR_TOKEN,
+#   THEIA_METRICS_TOKEN, THEIA_ALLOWED_ORIGINS
 # =============================================================================
 
 # Address and port the HTTP server listens on.
@@ -25,6 +26,21 @@ data_dir: "./data"
 # Optional directory containing pre-built bridge binaries.
 # Leave empty to disable bridge downloads.
 bridge_binaries_dir: ""
+
+# Set to production or staging to require operator and secret validation.
+deployment_env: ""
+
+# Operator login/API bearer token. Required for staging and production.
+# Keep this blank in tracked files and provide it through local env or secrets.
+operator_token: ""
+
+# Optional separate bearer token for /metrics. Falls back to operator_token when empty.
+metrics_token: ""
+
+# Optional exact browser origins allowed to reach REST/WebSocket endpoints.
+# Same-host requests are always allowed. Use env form:
+# THEIA_ALLOWED_ORIGINS=http://localhost:3000,https://theia.example.com
+allowed_origins: []
 
 # Log verbosity: debug, info, warn, error
 # Default: "info"
