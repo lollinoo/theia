@@ -125,8 +125,6 @@ func SystemRolePermissionKeys(roleName string) []string {
 		}
 	case RoleManager:
 		return []string{
-			PermissionUsersRead,
-			PermissionRolesRead,
 			PermissionAdminDashboard,
 			PermissionSettingsRead,
 			PermissionTopologyRead,
@@ -134,8 +132,6 @@ func SystemRolePermissionKeys(roleName string) []string {
 			PermissionDevicesRead,
 			PermissionDevicesCreate,
 			PermissionDevicesUpdate,
-			PermissionCredentialsRead,
-			PermissionCredentialsUpdate,
 			PermissionBackupsRead,
 			PermissionBackupsUpdate,
 			PermissionBridgeTokenCreate,
@@ -148,7 +144,6 @@ func SystemRolePermissionKeys(roleName string) []string {
 			PermissionDevicesRead,
 			PermissionDevicesUpdate,
 			PermissionBackupsRead,
-			PermissionBridgeTokenCreate,
 		}
 	case RoleViewer:
 		return []string{

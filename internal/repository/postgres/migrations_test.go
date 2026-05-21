@@ -86,6 +86,7 @@ func TestPostgresMigrationsDeclareAuthRBACSchemaAndIndexes(t *testing.T) {
 		"idx_audit_logs_created_at",
 		"ON DELETE CASCADE",
 		"ON DELETE SET NULL",
+		"metadata_json TEXT NOT NULL DEFAULT '{}'",
 		"status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('active', 'disabled', 'pending', 'locked'))",
 	} {
 		if !strings.Contains(migration, expected) {
@@ -93,8 +94,58 @@ func TestPostgresMigrationsDeclareAuthRBACSchemaAndIndexes(t *testing.T) {
 		}
 	}
 
+	if strings.Contains(migration, "metadata_json JSONB") {
+		t.Fatal("auth RBAC migration stores audit metadata as JSONB instead of TEXT")
+	}
 	if strings.Contains(strings.ToLower(migration), "sqli"+"te") {
 		t.Fatal("auth RBAC migration still references legacy dialect")
+	}
+}
+
+func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing.T) {
+	managerPermissions := domain.SystemRolePermissionKeys(domain.RoleManager)
+	for _, disallowed := range []string{
+		domain.PermissionUsersRead,
+		domain.PermissionRolesRead,
+		domain.PermissionCredentialsRead,
+		domain.PermissionCredentialsUpdate,
+	} {
+		if containsPermissionKey(managerPermissions, disallowed) {
+			t.Fatalf("manager role unexpectedly includes %q", disallowed)
+		}
+	}
+	for _, expected := range []string{
+		domain.PermissionAdminDashboard,
+		domain.PermissionSettingsRead,
+		domain.PermissionTopologyRead,
+		domain.PermissionTopologyUpdate,
+		domain.PermissionDevicesRead,
+		domain.PermissionDevicesCreate,
+		domain.PermissionDevicesUpdate,
+		domain.PermissionBackupsRead,
+		domain.PermissionBackupsUpdate,
+		domain.PermissionBridgeTokenCreate,
+	} {
+		if !containsPermissionKey(managerPermissions, expected) {
+			t.Fatalf("manager role missing %q", expected)
+		}
+	}
+
+	userPermissions := domain.SystemRolePermissionKeys(domain.RoleUser)
+	if containsPermissionKey(userPermissions, domain.PermissionBridgeTokenCreate) {
+		t.Fatal("user role unexpectedly includes bridge token creation")
+	}
+	for _, expected := range []string{
+		domain.PermissionSettingsRead,
+		domain.PermissionTopologyRead,
+		domain.PermissionTopologyUpdate,
+		domain.PermissionDevicesRead,
+		domain.PermissionDevicesUpdate,
+		domain.PermissionBackupsRead,
+	} {
+		if !containsPermissionKey(userPermissions, expected) {
+			t.Fatalf("user role missing %q", expected)
+		}
 	}
 }
 
@@ -138,4 +189,13 @@ func TestRunMigrationsOnConfiguredPostgresTestDB(t *testing.T) {
 			t.Fatalf("permission count for role %q = %d, want %d", roleName, assignedCount, len(domain.SystemRolePermissionKeys(roleName)))
 		}
 	}
+}
+
+func containsPermissionKey(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }

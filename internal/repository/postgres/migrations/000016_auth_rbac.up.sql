@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     action TEXT NOT NULL,
     resource TEXT NOT NULL,
     resource_id TEXT NOT NULL DEFAULT '',
-    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
     ip_address TEXT NOT NULL DEFAULT '',
     user_agent TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
