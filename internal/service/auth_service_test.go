@@ -807,6 +807,75 @@ func TestAuthServiceAdminNonSuperCannotAssignSuperAdmin(t *testing.T) {
 	}
 }
 
+func TestAuthServiceAdminNonSuperCannotUpdateSuperAdminProfile(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  func(targetID uuid.UUID) AdminUpdateUserInput
+		assert func(t *testing.T, user domain.User)
+	}{
+		{
+			name: "username",
+			input: func(targetID uuid.UUID) AdminUpdateUserInput {
+				username := "renamed-root"
+				return AdminUpdateUserInput{UserID: targetID, Username: &username}
+			},
+			assert: func(t *testing.T, user domain.User) {
+				t.Helper()
+				if user.Username != "root" || user.UsernameNormalized != "root" {
+					t.Fatalf("username = %q/%q, want root/root", user.Username, user.UsernameNormalized)
+				}
+			},
+		},
+		{
+			name: "email",
+			input: func(targetID uuid.UUID) AdminUpdateUserInput {
+				email := "renamed-root@example.test"
+				return AdminUpdateUserInput{UserID: targetID, Email: &email}
+			},
+			assert: func(t *testing.T, user domain.User) {
+				t.Helper()
+				if user.Email != "root@example.test" || user.EmailNormalized != "root@example.test" {
+					t.Fatalf("email = %q/%q, want root@example.test/root@example.test", user.Email, user.EmailNormalized)
+				}
+			},
+		},
+		{
+			name: "display_name",
+			input: func(targetID uuid.UUID) AdminUpdateUserInput {
+				displayName := "Renamed Root"
+				return AdminUpdateUserInput{UserID: targetID, DisplayName: &displayName}
+			},
+			assert: func(t *testing.T, user domain.User) {
+				t.Helper()
+				if user.DisplayName != "Root" {
+					t.Fatalf("display name = %q, want Root", user.DisplayName)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newAuthServiceHarness(t)
+			ctx := context.Background()
+			actorUser := h.addUser(t, "admin", "admin@example.test", testAuthPassword, domain.UserStatusActive)
+			h.assignRole(t, actorUser.ID, domain.RoleAdmin)
+			target := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+			target.DisplayName = "Root"
+			if err := h.store.UpdateUser(ctx, &target); err != nil {
+				t.Fatalf("UpdateUser target display name: %v", err)
+			}
+			h.assignRole(t, target.ID, domain.RoleSuperAdmin)
+
+			_, err := h.service.UpdateAdminUser(ctx, h.authenticatedUser(t, actorUser.ID), tt.input(target.ID))
+			if !errors.Is(err, ErrPermissionDenied) {
+				t.Fatalf("UpdateAdminUser error = %v, want ErrPermissionDenied", err)
+			}
+			tt.assert(t, h.store.user(t, target.ID))
+		})
+	}
+}
+
 func TestAuthServiceAdminSuperAdminCanAssignRoleAndAudits(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	ctx := context.Background()
@@ -828,6 +897,76 @@ func TestAuthServiceAdminSuperAdminCanAssignRoleAndAudits(t *testing.T) {
 		t.Fatalf("target roles = %#v, want admin", aggregate.Roles)
 	}
 	assertAuditAction(t, h.store.auditLogs(), "admin.user_role_assigned")
+}
+
+func TestAuthServiceAdminCannotSetOwnStatusInactive(t *testing.T) {
+	tests := []struct {
+		name   string
+		status domain.UserStatus
+		update func(ctx context.Context, service *AuthService, actor *AuthenticatedUser, userID uuid.UUID, status domain.UserStatus) (*domain.UserWithRolesAndPermissions, error)
+	}{
+		{
+			name:   "set_status_disabled",
+			status: domain.UserStatusDisabled,
+			update: func(ctx context.Context, service *AuthService, actor *AuthenticatedUser, userID uuid.UUID, status domain.UserStatus) (*domain.UserWithRolesAndPermissions, error) {
+				return service.SetAdminUserStatus(ctx, actor, AdminUserStatusInput{UserID: userID, Status: status})
+			},
+		},
+		{
+			name:   "set_status_locked",
+			status: domain.UserStatusLocked,
+			update: func(ctx context.Context, service *AuthService, actor *AuthenticatedUser, userID uuid.UUID, status domain.UserStatus) (*domain.UserWithRolesAndPermissions, error) {
+				return service.SetAdminUserStatus(ctx, actor, AdminUserStatusInput{UserID: userID, Status: status})
+			},
+		},
+		{
+			name:   "set_status_pending",
+			status: domain.UserStatusPending,
+			update: func(ctx context.Context, service *AuthService, actor *AuthenticatedUser, userID uuid.UUID, status domain.UserStatus) (*domain.UserWithRolesAndPermissions, error) {
+				return service.SetAdminUserStatus(ctx, actor, AdminUserStatusInput{UserID: userID, Status: status})
+			},
+		},
+		{
+			name:   "update_user_status_disabled",
+			status: domain.UserStatusDisabled,
+			update: func(ctx context.Context, service *AuthService, actor *AuthenticatedUser, userID uuid.UUID, status domain.UserStatus) (*domain.UserWithRolesAndPermissions, error) {
+				return service.UpdateAdminUser(ctx, actor, AdminUpdateUserInput{UserID: userID, Status: &status})
+			},
+		},
+		{
+			name:   "update_user_status_locked",
+			status: domain.UserStatusLocked,
+			update: func(ctx context.Context, service *AuthService, actor *AuthenticatedUser, userID uuid.UUID, status domain.UserStatus) (*domain.UserWithRolesAndPermissions, error) {
+				return service.UpdateAdminUser(ctx, actor, AdminUpdateUserInput{UserID: userID, Status: &status})
+			},
+		},
+		{
+			name:   "update_user_status_pending",
+			status: domain.UserStatusPending,
+			update: func(ctx context.Context, service *AuthService, actor *AuthenticatedUser, userID uuid.UUID, status domain.UserStatus) (*domain.UserWithRolesAndPermissions, error) {
+				return service.UpdateAdminUser(ctx, actor, AdminUpdateUserInput{UserID: userID, Status: &status})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newAuthServiceHarness(t)
+			ctx := context.Background()
+			actorUser := h.addUser(t, "admin", "admin@example.test", testAuthPassword, domain.UserStatusActive)
+			h.assignRole(t, actorUser.ID, domain.RoleAdmin)
+			actor := h.authenticatedUser(t, actorUser.ID)
+
+			_, err := tt.update(ctx, h.service, actor, actorUser.ID, tt.status)
+			if !errors.Is(err, ErrPermissionDenied) {
+				t.Fatalf("status update error = %v, want ErrPermissionDenied", err)
+			}
+			stored := h.store.user(t, actorUser.ID)
+			if stored.Status != domain.UserStatusActive {
+				t.Fatalf("status = %s, want active", stored.Status)
+			}
+		})
+	}
 }
 
 func TestAuthServiceAdminCannotRemoveOrDisableLastActiveSuperAdmin(t *testing.T) {

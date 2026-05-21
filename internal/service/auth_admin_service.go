@@ -165,6 +165,9 @@ func (s *AuthService) UpdateAdminUser(ctx context.Context, actor *AuthenticatedU
 	if err != nil {
 		return nil, fmt.Errorf("loading admin update user: %w", err)
 	}
+	if target.HasRole(domain.RoleSuperAdmin) && !actorIsSuperAdmin(actor) && adminUpdateTouchesProfile(input) {
+		return nil, ErrPermissionDenied
+	}
 	user := target.User
 	changed := make([]string, 0, 4)
 	if input.Username != nil {
@@ -424,6 +427,9 @@ func (s *AuthService) canChangeAdminUserStatus(ctx context.Context, actor *Authe
 			return err
 		}
 	}
+	if actorIsTarget(actor, target.User.ID) && status != domain.UserStatusActive {
+		return ErrPermissionDenied
+	}
 	return nil
 }
 
@@ -436,6 +442,10 @@ func (s *AuthService) ensureNotLastActiveSuperAdmin(ctx context.Context) error {
 		return ErrAdminLastActiveSuperAdmin
 	}
 	return nil
+}
+
+func adminUpdateTouchesProfile(input AdminUpdateUserInput) bool {
+	return input.Username != nil || input.Email != nil || input.DisplayName != nil
 }
 
 func actorIsSuperAdmin(actor *AuthenticatedUser) bool {
