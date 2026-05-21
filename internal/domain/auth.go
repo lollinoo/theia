@@ -62,6 +62,8 @@ var (
 	ErrAuthSessionNotFound = errors.New("auth session not found")
 	// ErrPasswordResetTokenNotFound indicates that a password reset token lookup or update target does not exist.
 	ErrPasswordResetTokenNotFound = errors.New("password reset token not found")
+	// ErrPasswordResetTokenExpired indicates that a password reset token is expired or already used.
+	ErrPasswordResetTokenExpired = errors.New("password reset token expired")
 )
 
 // SystemPermission describes a built-in RBAC permission.
@@ -253,6 +255,7 @@ type PasswordResetRepository interface {
 	CreatePasswordResetToken(ctx context.Context, token *PasswordResetToken) error
 	GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (*PasswordResetToken, error)
 	MarkPasswordResetTokenUsed(ctx context.Context, tokenID uuid.UUID, when time.Time) error
+	CompletePasswordReset(ctx context.Context, tokenHash string, passwordHash string, when time.Time) (*PasswordResetToken, error)
 }
 
 // AuditLogRepository persists auth audit logs and derived stats.

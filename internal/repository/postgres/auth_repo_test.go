@@ -335,6 +335,148 @@ func TestAuthRepoPasswordResetTokenPersistsExpiryAndUsedAt(t *testing.T) {
 	}
 }
 
+func TestAuthRepoCompletePasswordResetUpdatesPasswordRevokesSessionsAndConsumesToken(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	user := testAuthUser("reset-complete-user", "reset-complete-user@example.test")
+	user.MustChangePassword = true
+	user.FailedLoginAttempts = 4
+	lockedUntil := user.CreatedAt.Add(time.Hour)
+	user.LockedUntil = &lockedUntil
+	if err := repo.CreateUser(ctx, &user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	now := time.Date(2026, 5, 21, 11, 30, 0, 0, time.UTC)
+	session := domain.AuthSession{
+		ID:            uuid.New(),
+		UserID:        user.ID,
+		TokenHash:     "reset-complete-session-hash",
+		CSRFTokenHash: "reset-complete-csrf-hash",
+		CreatedAt:     now,
+		ExpiresAt:     now.Add(time.Hour),
+	}
+	if err := repo.CreateSession(ctx, &session); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	token := domain.PasswordResetToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: "reset-complete-token-hash",
+		CreatedAt: now,
+		ExpiresAt: now.Add(30 * time.Minute),
+	}
+	if err := repo.CreatePasswordResetToken(ctx, &token); err != nil {
+		t.Fatalf("CreatePasswordResetToken: %v", err)
+	}
+
+	completed, err := repo.CompletePasswordReset(ctx, token.TokenHash, "new-reset-password-hash", now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("CompletePasswordReset: %v", err)
+	}
+	if completed.ID != token.ID || completed.UserID != user.ID {
+		t.Fatalf("completed token = %#v, want token ID %s user ID %s", completed, token.ID, user.ID)
+	}
+
+	gotUser, err := repo.GetUserByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if gotUser.PasswordHash != "new-reset-password-hash" {
+		t.Fatalf("PasswordHash = %q, want new reset hash", gotUser.PasswordHash)
+	}
+	if gotUser.MustChangePassword {
+		t.Fatal("MustChangePassword = true, want false")
+	}
+	if gotUser.PasswordChangedAt == nil || !gotUser.PasswordChangedAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("PasswordChangedAt = %#v, want reset completion time", gotUser.PasswordChangedAt)
+	}
+	if gotUser.FailedLoginAttempts != 0 || gotUser.LockedUntil != nil {
+		t.Fatalf("login failure state = attempts:%d locked:%#v, want cleared", gotUser.FailedLoginAttempts, gotUser.LockedUntil)
+	}
+
+	gotToken, err := repo.GetPasswordResetTokenByHash(ctx, token.TokenHash)
+	if err != nil {
+		t.Fatalf("GetPasswordResetTokenByHash: %v", err)
+	}
+	if gotToken.UsedAt == nil || !gotToken.UsedAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("UsedAt = %#v, want reset completion time", gotToken.UsedAt)
+	}
+	gotSession, err := repo.GetSessionByTokenHash(ctx, session.TokenHash)
+	if err != nil {
+		t.Fatalf("GetSessionByTokenHash: %v", err)
+	}
+	if gotSession.RevokedAt == nil || !gotSession.RevokedAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("RevokedAt = %#v, want reset completion time", gotSession.RevokedAt)
+	}
+}
+
+func TestAuthRepoCompletePasswordResetRejectsUsedAndExpiredTokens(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	user := testAuthUser("reset-reject-user", "reset-reject-user@example.test")
+	if err := repo.CreateUser(ctx, &user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	now := time.Date(2026, 5, 21, 11, 45, 0, 0, time.UTC)
+	session := domain.AuthSession{
+		ID:            uuid.New(),
+		UserID:        user.ID,
+		TokenHash:     "reset-reject-session-hash",
+		CSRFTokenHash: "reset-reject-csrf-hash",
+		CreatedAt:     now,
+		ExpiresAt:     now.Add(time.Hour),
+	}
+	if err := repo.CreateSession(ctx, &session); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	usedAt := now.Add(-time.Minute)
+	usedToken := domain.PasswordResetToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: "used-reset-token-hash",
+		CreatedAt: now.Add(-10 * time.Minute),
+		ExpiresAt: now.Add(20 * time.Minute),
+		UsedAt:    &usedAt,
+	}
+	if err := repo.CreatePasswordResetToken(ctx, &usedToken); err != nil {
+		t.Fatalf("CreatePasswordResetToken used: %v", err)
+	}
+	expiredToken := domain.PasswordResetToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: "expired-reset-token-hash",
+		CreatedAt: now.Add(-time.Hour),
+		ExpiresAt: now.Add(-time.Minute),
+	}
+	if err := repo.CreatePasswordResetToken(ctx, &expiredToken); err != nil {
+		t.Fatalf("CreatePasswordResetToken expired: %v", err)
+	}
+
+	for _, tokenHash := range []string{usedToken.TokenHash, expiredToken.TokenHash} {
+		if _, err := repo.CompletePasswordReset(ctx, tokenHash, "new-password-hash", now); !errors.Is(err, domain.ErrPasswordResetTokenExpired) {
+			t.Fatalf("CompletePasswordReset(%q) error = %v, want ErrPasswordResetTokenExpired", tokenHash, err)
+		}
+	}
+
+	gotUser, err := repo.GetUserByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if gotUser.PasswordHash != user.PasswordHash {
+		t.Fatalf("PasswordHash = %q, want unchanged %q", gotUser.PasswordHash, user.PasswordHash)
+	}
+	gotSession, err := repo.GetSessionByTokenHash(ctx, session.TokenHash)
+	if err != nil {
+		t.Fatalf("GetSessionByTokenHash: %v", err)
+	}
+	if gotSession.RevokedAt != nil {
+		t.Fatalf("RevokedAt = %#v, want nil for rejected reset", gotSession.RevokedAt)
+	}
+}
+
 func TestAuthRepoAuditAppendListOrderingAndDashboardStats(t *testing.T) {
 	repo, ctx := newAuthRepoForTest(t)
 

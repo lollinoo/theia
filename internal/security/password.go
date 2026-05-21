@@ -143,6 +143,11 @@ func parseArgon2idHash(encodedHash string) (argon2idParams, []byte, []byte, erro
 	if err != nil {
 		return argon2idParams{}, nil, nil, err
 	}
+	if params.memory != argon2idMemory ||
+		params.iterations != argon2idIterations ||
+		params.parallelism != argon2idParallelism {
+		return argon2idParams{}, nil, nil, errInvalidPasswordHash
+	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
 		return argon2idParams{}, nil, nil, fmt.Errorf("%w: salt", errInvalidPasswordHash)
@@ -151,7 +156,7 @@ func parseArgon2idHash(encodedHash string) (argon2idParams, []byte, []byte, erro
 	if err != nil {
 		return argon2idParams{}, nil, nil, fmt.Errorf("%w: hash", errInvalidPasswordHash)
 	}
-	if len(salt) == 0 || len(hash) == 0 {
+	if len(salt) != argon2idSaltLength || len(hash) != argon2idKeyLength {
 		return argon2idParams{}, nil, nil, errInvalidPasswordHash
 	}
 	return params, salt, hash, nil
@@ -164,11 +169,25 @@ func parseArgon2idParams(raw string) (argon2idParams, error) {
 		if !ok {
 			return argon2idParams{}, errInvalidPasswordHash
 		}
+		switch key {
+		case "m", "t", "p":
+		default:
+			return argon2idParams{}, errInvalidPasswordHash
+		}
+		if _, exists := values[key]; exists {
+			return argon2idParams{}, errInvalidPasswordHash
+		}
 		parsed, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
 			return argon2idParams{}, fmt.Errorf("%w: params", errInvalidPasswordHash)
 		}
+		if parsed == 0 {
+			return argon2idParams{}, errInvalidPasswordHash
+		}
 		values[key] = parsed
+	}
+	if len(values) != 3 {
+		return argon2idParams{}, errInvalidPasswordHash
 	}
 	memory, ok := values["m"]
 	if !ok {

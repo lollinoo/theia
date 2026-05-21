@@ -60,6 +60,8 @@ type AuthService struct {
 	passwordResets     domain.PasswordResetRepository
 	auditLogs          domain.AuditLogRepository
 	sessionSecret      []byte
+	dummyPasswordHash  string
+	verifyPassword     func(password, hash string) (bool, error)
 	now                func() time.Time
 	sessionTTL         time.Duration
 	passwordResetTTL   time.Duration
@@ -150,6 +152,10 @@ func NewAuthService(config AuthServiceConfig) (*AuthService, error) {
 	if len(config.SessionSecret) == 0 {
 		return nil, errors.New("auth service session secret is required")
 	}
+	dummyPasswordHash, err := security.HashPassword("dummy auth password verifier")
+	if err != nil {
+		return nil, fmt.Errorf("hashing dummy auth password: %w", err)
+	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
@@ -173,6 +179,8 @@ func NewAuthService(config AuthServiceConfig) (*AuthService, error) {
 		passwordResets:     config.PasswordResets,
 		auditLogs:          config.AuditLogs,
 		sessionSecret:      append([]byte(nil), config.SessionSecret...),
+		dummyPasswordHash:  dummyPasswordHash,
+		verifyPassword:     security.VerifyPassword,
 		now:                func() time.Time { return now().UTC() },
 		sessionTTL:         sessionTTL,
 		passwordResetTTL:   passwordResetTTL,
@@ -228,6 +236,7 @@ func (s *AuthService) EnsureBootstrapSuperAdmin(ctx context.Context) (*domain.Us
 func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult, error) {
 	normalized := normalizeLoginIdentifier(input.Identifier)
 	if normalized == "" {
+		s.runDummyPasswordVerification(input.Password)
 		_ = s.appendAuditLog(ctx, nil, nil, "auth.login_failed", "auth", "", `{"reason":"invalid_credentials"}`)
 		return nil, ErrInvalidCredentials
 	}
@@ -235,16 +244,19 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult
 	user, err := s.users.GetUserByLoginIdentifier(ctx, normalized)
 	if err != nil {
 		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			s.runDummyPasswordVerification(input.Password)
 			_ = s.appendAuditLog(ctx, nil, nil, "auth.login_failed", "auth", "", `{"reason":"invalid_credentials"}`)
 			return nil, ErrInvalidCredentials
 		}
 		return nil, fmt.Errorf("getting auth user by login identifier: %w", err)
 	}
+	s.resetExpiredLockState(user)
 	if err := s.rejectInactiveOrLocked(ctx, user, input.IPAddress, input.UserAgent); err != nil {
+		s.runDummyPasswordVerification(input.Password)
 		return nil, err
 	}
 
-	ok, err := security.VerifyPassword(input.Password, user.PasswordHash)
+	ok, err := s.verifyPassword(input.Password, user.PasswordHash)
 	if err != nil || !ok {
 		if updateErr := s.recordFailedLogin(ctx, user, input.IPAddress, input.UserAgent); updateErr != nil {
 			return nil, updateErr
@@ -354,7 +366,7 @@ func (s *AuthService) ChangePassword(ctx context.Context, input PasswordChangeIn
 	if err != nil {
 		return fmt.Errorf("getting password change user: %w", err)
 	}
-	ok, err := security.VerifyPassword(input.CurrentPassword, user.PasswordHash)
+	ok, err := s.verifyPassword(input.CurrentPassword, user.PasswordHash)
 	if err != nil || !ok {
 		return ErrInvalidCredentials
 	}
@@ -417,41 +429,22 @@ func (s *AuthService) CompletePasswordReset(ctx context.Context, input PasswordR
 	if err := security.ValidatePasswordPolicy(input.NewPassword); err != nil {
 		return fmt.Errorf("%w: %v", ErrPasswordPolicyViolation, err)
 	}
-	reset, err := s.passwordResets.GetPasswordResetTokenByHash(ctx, security.HashToken(strings.TrimSpace(input.Token), s.sessionSecret))
-	if err != nil {
-		if errors.Is(err, domain.ErrPasswordResetTokenNotFound) {
-			return ErrInvalidCredentials
-		}
-		return fmt.Errorf("getting password reset token: %w", err)
-	}
 	now := s.now()
-	if reset.UsedAt != nil || !reset.ExpiresAt.After(now) {
-		return ErrPasswordResetExpired
-	}
-	user, err := s.users.GetUserByID(ctx, reset.UserID)
-	if err != nil {
-		return fmt.Errorf("getting password reset user: %w", err)
-	}
 	passwordHash, err := security.HashPassword(input.NewPassword)
 	if err != nil {
 		return fmt.Errorf("hashing reset password: %w", err)
 	}
-	user.PasswordHash = passwordHash
-	user.MustChangePassword = false
-	user.PasswordChangedAt = &now
-	user.UpdatedAt = now
-	user.FailedLoginAttempts = 0
-	user.LockedUntil = nil
-	if err := s.users.UpdateUser(ctx, user); err != nil {
-		return fmt.Errorf("updating reset password: %w", err)
+	reset, err := s.passwordResets.CompletePasswordReset(ctx, security.HashToken(strings.TrimSpace(input.Token), s.sessionSecret), passwordHash, now)
+	if err != nil {
+		if errors.Is(err, domain.ErrPasswordResetTokenNotFound) {
+			return ErrInvalidCredentials
+		}
+		if errors.Is(err, domain.ErrPasswordResetTokenExpired) {
+			return ErrPasswordResetExpired
+		}
+		return fmt.Errorf("completing password reset: %w", err)
 	}
-	if err := s.passwordResets.MarkPasswordResetTokenUsed(ctx, reset.ID, now); err != nil {
-		return fmt.Errorf("marking password reset token used: %w", err)
-	}
-	if err := s.sessions.RevokeUserSessions(ctx, user.ID, nil, now); err != nil {
-		return fmt.Errorf("revoking auth sessions after password reset: %w", err)
-	}
-	if err := s.appendAuditLog(ctx, reset.CreatedBy, &user.ID, "auth.password_reset_completed", "auth", user.ID.String(), `{}`); err != nil {
+	if err := s.appendAuditLog(ctx, reset.CreatedBy, &reset.UserID, "auth.password_reset_completed", "auth", reset.UserID.String(), `{}`); err != nil {
 		return err
 	}
 	return nil
@@ -510,8 +503,19 @@ func (s *AuthService) ensureAggregateCanAuthenticate(user *domain.User) error {
 	return nil
 }
 
+func (s *AuthService) resetExpiredLockState(user *domain.User) {
+	if user.LockedUntil != nil && !user.LockedUntil.After(s.now()) {
+		user.LockedUntil = nil
+		user.FailedLoginAttempts = 0
+	}
+}
+
 func (s *AuthService) recordFailedLogin(ctx context.Context, user *domain.User, ipAddress, userAgent string) error {
 	now := s.now()
+	if user.LockedUntil != nil && !user.LockedUntil.After(now) {
+		user.LockedUntil = nil
+		user.FailedLoginAttempts = 0
+	}
 	user.FailedLoginAttempts++
 	user.UpdatedAt = now
 	if user.FailedLoginAttempts >= s.failedThreshold {
@@ -528,6 +532,10 @@ func (s *AuthService) recordFailedLogin(ctx context.Context, user *domain.User, 
 		return err
 	}
 	return nil
+}
+
+func (s *AuthService) runDummyPasswordVerification(password string) {
+	_, _ = s.verifyPassword(password, s.dummyPasswordHash)
 }
 
 func (s *AuthService) appendAuditLog(ctx context.Context, actorUserID, targetUserID *uuid.UUID, action, resource, resourceID, metadataJSON string) error {

@@ -498,6 +498,80 @@ func (r *AuthRepo) MarkPasswordResetTokenUsed(ctx context.Context, tokenID uuid.
 	return nil
 }
 
+// CompletePasswordReset atomically consumes a valid reset token, updates the user's password, and revokes sessions.
+func (r *AuthRepo) CompletePasswordReset(ctx context.Context, tokenHash string, passwordHash string, when time.Time) (*domain.PasswordResetToken, error) {
+	tx, err := r.db.raw.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("beginning complete password reset transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	token, err := r.scanPasswordResetToken(tx.QueryRowContext(ctx, rebindQuery(
+		`SELECT id, user_id, token_hash, created_at, expires_at, used_at, created_by
+		 FROM password_reset_tokens
+		 WHERE token_hash = ?
+		 FOR UPDATE`),
+		tokenHash,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("completing password reset token lookup: %w", err)
+	}
+	if token.UsedAt != nil || !token.ExpiresAt.After(when) {
+		return nil, domain.ErrPasswordResetTokenExpired
+	}
+
+	res, err := tx.ExecContext(ctx, rebindQuery(
+		`UPDATE users SET
+			password_hash = ?,
+			must_change_password = ?,
+			updated_at = ?,
+			password_changed_at = ?,
+			failed_login_attempts = ?,
+			locked_until = NULL
+		WHERE id = ?`),
+		passwordHash,
+		false,
+		when,
+		when,
+		0,
+		token.UserID.String(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("updating password reset user: %w", err)
+	}
+	if err := requireRowsAffected(res, domain.ErrAuthUserNotFound); err != nil {
+		return nil, fmt.Errorf("updating password reset user: %w", err)
+	}
+
+	res, err = tx.ExecContext(ctx, rebindQuery(
+		`UPDATE password_reset_tokens
+		 SET used_at = ?
+		 WHERE id = ? AND used_at IS NULL`),
+		when,
+		token.ID.String(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("marking password reset token used: %w", err)
+	}
+	if err := requireRowsAffected(res, domain.ErrPasswordResetTokenExpired); err != nil {
+		return nil, fmt.Errorf("marking password reset token used: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, rebindQuery(
+		`UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ?`),
+		when,
+		token.UserID.String(),
+	); err != nil {
+		return nil, fmt.Errorf("revoking auth sessions after password reset: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing complete password reset transaction: %w", err)
+	}
+	token.UsedAt = &when
+	return token, nil
+}
+
 // AppendAuditLog inserts an audit log.
 func (r *AuthRepo) AppendAuditLog(ctx context.Context, log *domain.AuditLog) error {
 	if log.ID == uuid.Nil {

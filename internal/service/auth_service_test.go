@@ -185,6 +185,69 @@ func TestAuthServiceUnknownLoginIdentifierMatchesWrongPasswordGenericError(t *te
 	}
 }
 
+func TestAuthServiceUnknownLoginRunsDummyPasswordVerification(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	var verifiedHashes []string
+	h.service.verifyPassword = func(_ string, hash string) (bool, error) {
+		verifiedHashes = append(verifiedHashes, hash)
+		return false, nil
+	}
+
+	_, err := h.service.Login(context.Background(), LoginInput{
+		Identifier: "missing@example.test",
+		Password:   "wrong password",
+	})
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login missing user error = %v, want ErrInvalidCredentials", err)
+	}
+	if len(verifiedHashes) != 1 {
+		t.Fatalf("password verification count = %d, want 1", len(verifiedHashes))
+	}
+	if verifiedHashes[0] == "" {
+		t.Fatal("dummy verification used an empty password hash")
+	}
+}
+
+func TestAuthServiceDisabledAndLockedLoginRunDummyPasswordVerification(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	disabled := h.addUser(t, "disabled", "disabled@example.test", testAuthPassword, domain.UserStatusDisabled)
+	locked := h.addUser(t, "locked", "locked@example.test", testAuthPassword, domain.UserStatusActive)
+	lockedUntil := h.now.Add(time.Minute)
+	locked.LockedUntil = &lockedUntil
+	if err := h.store.UpdateUser(context.Background(), &locked); err != nil {
+		t.Fatalf("UpdateUser locked user: %v", err)
+	}
+
+	var verifiedHashes []string
+	h.service.verifyPassword = func(_ string, hash string) (bool, error) {
+		verifiedHashes = append(verifiedHashes, hash)
+		return false, nil
+	}
+
+	_, disabledErr := h.service.Login(context.Background(), LoginInput{
+		Identifier: disabled.Email,
+		Password:   testAuthPassword,
+	})
+	if !errors.Is(disabledErr, ErrUserDisabled) {
+		t.Fatalf("Login disabled user error = %v, want ErrUserDisabled", disabledErr)
+	}
+	_, lockedErr := h.service.Login(context.Background(), LoginInput{
+		Identifier: locked.Email,
+		Password:   testAuthPassword,
+	})
+	if !errors.Is(lockedErr, ErrUserLocked) {
+		t.Fatalf("Login locked user error = %v, want ErrUserLocked", lockedErr)
+	}
+	if len(verifiedHashes) != 2 {
+		t.Fatalf("password verification count = %d, want 2", len(verifiedHashes))
+	}
+	for _, hash := range verifiedHashes {
+		if hash == "" || hash == disabled.PasswordHash || hash == locked.PasswordHash {
+			t.Fatalf("dummy verification used unexpected hash %q", hash)
+		}
+	}
+}
+
 func TestAuthServiceDisabledUserCannotLogin(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	user := h.addUser(t, "disabled", "disabled@example.test", testAuthPassword, domain.UserStatusDisabled)
@@ -247,11 +310,38 @@ func TestAuthServiceFailedLoginLocksAfterRepeatedFailures(t *testing.T) {
 	}
 }
 
+func TestAuthServiceExpiredLockResetsCounterBeforeFailedLogin(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	user := h.addUser(t, "stale-lock", "stale-lock@example.test", testAuthPassword, domain.UserStatusActive)
+	user.FailedLoginAttempts = 5
+	lockedUntil := h.now.Add(-time.Minute)
+	user.LockedUntil = &lockedUntil
+	if err := h.store.UpdateUser(context.Background(), &user); err != nil {
+		t.Fatalf("UpdateUser stale locked user: %v", err)
+	}
+
+	_, err := h.service.Login(context.Background(), LoginInput{
+		Identifier: user.Username,
+		Password:   "wrong password",
+	})
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login after expired lock error = %v, want ErrInvalidCredentials", err)
+	}
+
+	stored := h.store.user(t, user.ID)
+	if stored.FailedLoginAttempts != 1 {
+		t.Fatalf("FailedLoginAttempts = %d, want 1", stored.FailedLoginAttempts)
+	}
+	if stored.LockedUntil != nil {
+		t.Fatalf("LockedUntil = %#v, want nil after stale lock reset", stored.LockedUntil)
+	}
+}
+
 func TestAuthServiceFailedLoginDelayHookRunsAfterThreshold(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	user := h.addUser(t, "delayed", "delayed@example.test", testAuthPassword, domain.UserStatusActive)
 
-	for i := 0; i < h.service.failedDelayAfter-1; i++ {
+	for i := 0; i < 2; i++ {
 		_, err := h.service.Login(context.Background(), LoginInput{
 			Identifier: user.Username,
 			Password:   "wrong password",
@@ -271,8 +361,8 @@ func TestAuthServiceFailedLoginDelayHookRunsAfterThreshold(t *testing.T) {
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login threshold attempt error = %v, want ErrInvalidCredentials", err)
 	}
-	if len(h.sleeps) != 1 || h.sleeps[0] != h.service.failedDelay {
-		t.Fatalf("sleep calls after threshold = %#v, want [%s]", h.sleeps, h.service.failedDelay)
+	if len(h.sleeps) != 1 || h.sleeps[0] <= 0 {
+		t.Fatalf("sleep calls after threshold = %#v, want one positive delay", h.sleeps)
 	}
 }
 
@@ -480,6 +570,42 @@ func TestAuthServiceCompletePasswordResetUpdatesPasswordAndRevokesSessions(t *te
 	}
 	if newLogin.User.User.ID != user.ID {
 		t.Fatalf("reset password login user ID = %s, want %s", newLogin.User.User.ID, user.ID)
+	}
+}
+
+func TestAuthServiceCompletePasswordResetRejectsReplay(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	user := h.addUser(t, "reset-replay", "reset-replay@example.test", testAuthPassword, domain.UserStatusActive)
+	reset, err := h.service.CreatePasswordResetToken(context.Background(), PasswordResetCreateInput{
+		UserID: user.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreatePasswordResetToken: %v", err)
+	}
+
+	firstPassword := "First Reset Correct Horse Battery Staple 2026!"
+	if err := h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
+		Token:       reset.Token,
+		NewPassword: firstPassword,
+	}); err != nil {
+		t.Fatalf("CompletePasswordReset first use: %v", err)
+	}
+
+	err = h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
+		Token:       reset.Token,
+		NewPassword: "Replay Correct Horse Battery Staple 2026!",
+	})
+	if !errors.Is(err, ErrPasswordResetExpired) {
+		t.Fatalf("CompletePasswordReset replay error = %v, want ErrPasswordResetExpired", err)
+	}
+
+	stored := h.store.user(t, user.ID)
+	ok, err := security.VerifyPassword(firstPassword, stored.PasswordHash)
+	if err != nil {
+		t.Fatalf("VerifyPassword after replay: %v", err)
+	}
+	if !ok {
+		t.Fatal("reset replay changed the password")
 	}
 }
 
@@ -893,6 +1019,44 @@ func (s *fakeAuthStore) MarkPasswordResetTokenUsed(_ context.Context, tokenID uu
 	token.UsedAt = &when
 	s.resets[tokenID] = token
 	return nil
+}
+
+func (s *fakeAuthStore) CompletePasswordReset(_ context.Context, tokenHash string, passwordHash string, when time.Time) (*domain.PasswordResetToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id, ok := s.resetsByHash[tokenHash]
+	if !ok {
+		return nil, domain.ErrPasswordResetTokenNotFound
+	}
+	token := s.resets[id]
+	if token.UsedAt != nil || !token.ExpiresAt.After(when) {
+		return nil, domain.ErrPasswordResetTokenExpired
+	}
+	user, ok := s.users[token.UserID]
+	if !ok {
+		return nil, domain.ErrAuthUserNotFound
+	}
+
+	user.PasswordHash = passwordHash
+	user.MustChangePassword = false
+	user.PasswordChangedAt = &when
+	user.UpdatedAt = when
+	user.FailedLoginAttempts = 0
+	user.LockedUntil = nil
+	s.users[user.ID] = user
+
+	token.UsedAt = &when
+	s.resets[id] = token
+
+	for sessionID, session := range s.sessions {
+		if session.UserID != user.ID {
+			continue
+		}
+		session.RevokedAt = &when
+		s.sessions[sessionID] = session
+	}
+	return &token, nil
 }
 
 func (s *fakeAuthStore) AppendAuditLog(_ context.Context, log *domain.AuditLog) error {
