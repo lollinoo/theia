@@ -1,5 +1,12 @@
 package domain
 
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+)
+
 // UserStatus describes whether a user can authenticate and use the system.
 type UserStatus string
 
@@ -51,6 +58,175 @@ type SystemPermission struct {
 	Description string
 	Resource    string
 	Action      string
+}
+
+// User is the repository model for an authenticated system user.
+//
+// PasswordHash is needed at the repository/service boundary for authentication
+// checks. It must not be exposed by API response DTOs.
+type User struct {
+	ID                  uuid.UUID
+	Username            string
+	UsernameNormalized  string
+	Email               string
+	EmailNormalized     string
+	PasswordHash        string
+	DisplayName         string
+	Status              UserStatus
+	MustChangePassword  bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	LastLoginAt         *time.Time
+	PasswordChangedAt   *time.Time
+	FailedLoginAttempts int
+	LockedUntil         *time.Time
+	CreatedBy           *uuid.UUID
+	UpdatedBy           *uuid.UUID
+}
+
+// Role describes an RBAC role.
+type Role struct {
+	ID           string
+	Name         string
+	Description  string
+	IsSystemRole bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// Permission describes an RBAC permission.
+type Permission struct {
+	ID          string
+	Key         string
+	Description string
+	Resource    string
+	Action      string
+}
+
+// UserRole records a role assignment for a user.
+type UserRole struct {
+	UserID    uuid.UUID
+	RoleID    string
+	CreatedAt time.Time
+	CreatedBy *uuid.UUID
+}
+
+// AuthSession stores a server-side authentication session.
+type AuthSession struct {
+	ID            uuid.UUID
+	UserID        uuid.UUID
+	TokenHash     string
+	CSRFTokenHash string
+	CreatedAt     time.Time
+	ExpiresAt     time.Time
+	RevokedAt     *time.Time
+	LastSeenAt    *time.Time
+	IPAddress     string
+	UserAgent     string
+}
+
+// PasswordResetToken stores a single password reset token hash and lifecycle.
+type PasswordResetToken struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	TokenHash string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	UsedAt    *time.Time
+	CreatedBy *uuid.UUID
+}
+
+// AuditLog records an authentication or authorization administration event.
+type AuditLog struct {
+	ID           uuid.UUID
+	ActorUserID  *uuid.UUID
+	TargetUserID *uuid.UUID
+	Action       string
+	Resource     string
+	ResourceID   string
+	MetadataJSON string
+	IPAddress    string
+	UserAgent    string
+	CreatedAt    time.Time
+}
+
+// UserWithRolesAndPermissions aggregates a user with its effective RBAC grants.
+type UserWithRolesAndPermissions struct {
+	User        User
+	Roles       []Role
+	Permissions []Permission
+}
+
+// AdminDashboardStats contains high-level auth administration counters.
+type AdminDashboardStats struct {
+	TotalUsers                int
+	ActiveUsers               int
+	DisabledUsers             int
+	LockedUsers               int
+	RecentLogins              int
+	RecentFailedLoginAttempts int
+}
+
+// UserListFilter filters user administration lists.
+type UserListFilter struct {
+	Status UserStatus
+	Query  string
+	Limit  int
+	Offset int
+}
+
+// AuditLogFilter filters audit log administration lists.
+type AuditLogFilter struct {
+	ActorUserID  *uuid.UUID
+	TargetUserID *uuid.UUID
+	Action       string
+	Resource     string
+	Limit        int
+	Offset       int
+}
+
+// UserRepository persists users and user aggregates.
+type UserRepository interface {
+	CreateUser(ctx context.Context, user *User) error
+	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
+	GetUserByLoginIdentifier(ctx context.Context, normalized string) (*User, error)
+	ListUsers(ctx context.Context, filter UserListFilter) ([]UserWithRolesAndPermissions, error)
+	UpdateUser(ctx context.Context, user *User) error
+	CountUsers(ctx context.Context) (int, error)
+	CountActiveSuperAdmins(ctx context.Context) (int, error)
+	GetUserRolesAndPermissions(ctx context.Context, userID uuid.UUID) (*UserWithRolesAndPermissions, error)
+}
+
+// RoleRepository persists roles and role assignments.
+type RoleRepository interface {
+	ListRoles(ctx context.Context) ([]Role, error)
+	ListPermissions(ctx context.Context) ([]Permission, error)
+	GetRoleByName(ctx context.Context, name string) (*Role, error)
+	AssignRole(ctx context.Context, userID uuid.UUID, roleID string, createdBy *uuid.UUID) error
+	RemoveRole(ctx context.Context, userID uuid.UUID, roleID string) error
+}
+
+// SessionRepository persists authentication sessions.
+type SessionRepository interface {
+	CreateSession(ctx context.Context, session *AuthSession) error
+	GetSessionByTokenHash(ctx context.Context, tokenHash string) (*AuthSession, error)
+	RevokeSession(ctx context.Context, sessionID uuid.UUID, when time.Time) error
+	RevokeUserSessions(ctx context.Context, userID uuid.UUID, exceptSessionID *uuid.UUID, when time.Time) error
+	TouchSession(ctx context.Context, sessionID uuid.UUID, when time.Time) error
+}
+
+// PasswordResetRepository persists password reset tokens.
+type PasswordResetRepository interface {
+	CreatePasswordResetToken(ctx context.Context, token *PasswordResetToken) error
+	GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (*PasswordResetToken, error)
+	MarkPasswordResetTokenUsed(ctx context.Context, tokenID uuid.UUID, when time.Time) error
+}
+
+// AuditLogRepository persists auth audit logs and derived stats.
+type AuditLogRepository interface {
+	AppendAuditLog(ctx context.Context, log *AuditLog) error
+	ListAuditLogs(ctx context.Context, filter AuditLogFilter) ([]AuditLog, error)
+	DashboardStats(ctx context.Context) (*AdminDashboardStats, error)
 }
 
 // SystemRoleNames returns built-in role names in deterministic order.
