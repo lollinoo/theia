@@ -19,8 +19,15 @@ const REQUIRED_TOPOLOGY_HUB_ICONS = [
 
 const REQUIRED_DASHBOARD_DEVICE_ACTION_ICONS = ['description', 'history'] as const;
 
+const REQUIRED_AUTH_ADMIN_ICONS = [
+  'admin_panel_settings',
+  'block',
+  'lock_reset',
+  'refresh',
+] as const;
+
 function iconNamesFromScript(): Set<string> {
-  const match = subsetScript.match(/ICON_NAMES=\(\n(?<body>[\s\S]*?)\n\)/);
+  const match = subsetScript.match(/ICON_NAMES=\(\r?\n(?<body>[\s\S]*?)\r?\n\)/);
   if (!match?.groups?.body) {
     throw new Error('Missing ICON_NAMES array in subset-material-icons.sh');
   }
@@ -43,6 +50,14 @@ describe('Material Symbols subset contract', () => {
     const iconNames = iconNamesFromScript();
 
     for (const iconName of REQUIRED_DASHBOARD_DEVICE_ACTION_ICONS) {
+      expect(iconNames.has(iconName), iconName).toBe(true);
+    }
+  });
+
+  it('declares every auth and admin icon in the generated subset inputs', () => {
+    const iconNames = iconNamesFromScript();
+
+    for (const iconName of REQUIRED_AUTH_ADMIN_ICONS) {
       expect(iconNames.has(iconName), iconName).toBe(true);
     }
   });
