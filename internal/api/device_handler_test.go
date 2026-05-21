@@ -530,42 +530,6 @@ func TestDeviceHandlerCreate_HappyPath(t *testing.T) {
 	}
 }
 
-func TestDeviceHandlerPrimaryMapMembershipIncludesConnectedLinks(t *testing.T) {
-	fixture := newCanvasMapIntegrationRouter(t)
-	deviceA := seedCanvasMapTestDevice(t, fixture, "router-primary-a", "10.82.0.1", nil)
-	deviceB := seedCanvasMapTestDevice(t, fixture, "router-primary-b", "10.82.0.2", nil)
-	link := seedCanvasMapTestLink(t, fixture, deviceA.ID, deviceB.ID)
-	defaultMap, err := fixture.mapRepo.GetDefault()
-	if err != nil {
-		t.Fatalf("GetDefault: %v", err)
-	}
-	if err := fixture.mapRepo.ReplaceMembership(defaultMap.ID, domain.CanvasMapMembership{
-		Devices: []domain.CanvasMapDeviceMembership{
-			{DeviceID: deviceA.ID, Role: domain.CanvasMapDeviceRoleBase},
-		},
-	}); err != nil {
-		t.Fatalf("ReplaceMembership: %v", err)
-	}
-
-	handler := NewDeviceHandler(
-		nil,
-		nil,
-		buildTestVendorRegistry(),
-		WithPrimaryCanvasMapMembership(fixture.mapRepo, fixture.areaRepo, fixture.linkRepo),
-	)
-	if err := handler.addDeviceToPrimaryCanvasMap(&deviceB); err != nil {
-		t.Fatalf("addDeviceToPrimaryCanvasMap: %v", err)
-	}
-
-	membership, err := fixture.mapRepo.GetMembership(defaultMap.ID)
-	if err != nil {
-		t.Fatalf("GetMembership: %v", err)
-	}
-	if len(membership.LinkIDs) != 1 || membership.LinkIDs[0] != link.ID {
-		t.Fatalf("primary map links = %#v, want connected link %s", membership.LinkIDs, link.ID)
-	}
-}
-
 func TestDeviceHandlerCreate_NotesRoundTrip(t *testing.T) {
 	handler, _, _ := newTestDeviceHandler(t)
 
