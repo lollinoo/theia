@@ -1,5 +1,5 @@
 .PHONY: dev test test-integration build clean seed verify stop logs help \
-       postgres-up postgres-down dev-postgres migrate-postgres \
+       postgres-up postgres-down dev-postgres \
        prod-postgres prod-postgres-metrics staging-postgres \
        wisp-lab wisp-lab-down wisp-seed wisp-radio-seed wisp-seed-all wisp-ospf wisp-bgp \
        phase4-scale-lab phase4-validate \
@@ -99,21 +99,6 @@ postgres-down: ## Stop local PostgreSQL for Theia
 dev-postgres: ## Start dev stack on PostgreSQL (same as standard dev path)
 	@$(MAKE) dev
 
-ifeq ($(IS_WINDOWS),1)
-migrate-postgres: ## Copy the current SQLite data set into PostgreSQL
-	@$$targetDsn = if ($$env:MIGRATE_DSN) { $$env:MIGRATE_DSN } else { $$env:THEIA_DB_DSN }; if (-not $$targetDsn) { Write-Error "Set MIGRATE_DSN or THEIA_DB_DSN to the PostgreSQL DSN"; exit 1 }; go run ./cmd/theia-db-migrate -config config.yaml -source-sqlite "$$env:MIGRATE_SOURCE" -target-dsn "$$targetDsn" -truncate-target; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
-else
-migrate-postgres: ## Copy the current SQLite data set into PostgreSQL
-	@if [ -z "$${MIGRATE_DSN:-$${THEIA_DB_DSN}}" ]; then \
-		echo "Set MIGRATE_DSN or THEIA_DB_DSN to the PostgreSQL DSN"; exit 1; \
-	fi
-	go run ./cmd/theia-db-migrate \
-		-config config.yaml \
-		-source-sqlite "$${MIGRATE_SOURCE}" \
-		-target-dsn "$${MIGRATE_DSN:-$${THEIA_DB_DSN}}" \
-		-truncate-target
-endif
-
 stop: ## Stop all containers
 	docker compose $(DEV_COMPOSE_PROFILES) down
 
@@ -171,7 +156,7 @@ backend-fast: ## Run the backend-fast quality gate locally
 endif
 
 realtime-stress: ## Run focused realtime stress tests locally
-	go test ./internal/ws ./internal/worker ./internal/service ./internal/scalelab -count=1 -run 'Test(HubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull|HubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull|HubRepeatedDetailSubscriptionsConvergeToSingleTarget|PipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay|RestoreCoordinatorApplyPendingRestoreIsIdempotentAfterSuccess|BurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses)'
+	go test ./internal/ws ./internal/worker ./internal/service ./internal/scalelab -count=1 -run 'Test(HubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull|HubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull|HubRepeatedDetailSubscriptionsConvergeToSingleTarget|PipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay|BurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses)'
 
 ifeq ($(IS_WINDOWS),1)
 collector-contract: ## Run focused collector contract tests locally
@@ -224,26 +209,24 @@ prod-metrics: ## Start production stack with Prometheus + SNMP exporter
 ifeq ($(IS_WINDOWS),1)
 prod-postgres: ## Start production stack on PostgreSQL
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
-	@$$env:THEIA_DB_DRIVER='postgres'; docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
+	@docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
 	@Write-Output ""
 	@Write-Output "MikroTik Theia production stack is running on PostgreSQL."
 
 prod-postgres-metrics: ## Start production stack on PostgreSQL with metrics
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
-	@$$env:THEIA_DB_DRIVER='postgres'; docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres --profile metrics up -d; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
+	@docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres --profile metrics up -d; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
 	@Write-Output ""
 	@Write-Output "MikroTik Theia production metrics stack is running on PostgreSQL."
 else
 prod-postgres: ## Start production stack on PostgreSQL
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
-	THEIA_DB_DRIVER=postgres \
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d
 	@echo ""
 	@echo "MikroTik Theia production stack is running on PostgreSQL."
 
 prod-postgres-metrics: ## Start production stack on PostgreSQL with metrics
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
-	THEIA_DB_DRIVER=postgres \
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres --profile metrics up -d
 	@echo ""
 	@echo "MikroTik Theia production metrics stack is running on PostgreSQL."
@@ -283,13 +266,12 @@ staging: ## Start staging stack (auto-updates via Watchtower)
 ifeq ($(IS_WINDOWS),1)
 staging-postgres: ## Start staging stack on PostgreSQL
 	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d postgres
-	@$$env:THEIA_DB_DRIVER='postgres'; docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
+	@docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
 	@Write-Output ""
 	@Write-Output "MikroTik Theia staging stack is running on PostgreSQL."
 else
 staging-postgres: ## Start staging stack on PostgreSQL
 	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d postgres
-	THEIA_DB_DRIVER=postgres \
 	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d
 	@echo ""
 	@echo "MikroTik Theia staging stack is running on PostgreSQL."

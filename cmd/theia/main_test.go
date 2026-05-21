@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"errors"
-	"log"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -19,15 +16,6 @@ import (
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 )
-
-type stubPendingRestoreCoordinator struct {
-	applied bool
-	err     error
-	called  bool
-	dbPath  string
-	backup  string
-	hosts   string
-}
 
 type stubBootstrapRunner struct {
 	runCalls []string
@@ -53,101 +41,6 @@ func TestRunMainDelegatesToBootstrapRunner(t *testing.T) {
 	}
 	if !slices.Equal(runner.runCalls, []string{"/tmp/theia.yaml"}) {
 		t.Fatalf("runner calls = %v, want [/tmp/theia.yaml]", runner.runCalls)
-	}
-}
-
-func (s *stubPendingRestoreCoordinator) ApplyPendingRestore() (bool, error) {
-	s.called = true
-	return s.applied, s.err
-}
-
-func TestApplyPendingSQLiteRestore_WrapsCoordinatorError(t *testing.T) {
-	coordinator := &stubPendingRestoreCoordinator{err: errors.New("boom")}
-	original := newRestoreCoordinator
-	newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
-		coordinator.dbPath = dbPath
-		coordinator.backup = deviceBackupDir
-		coordinator.hosts = knownHostsPath
-		return coordinator
-	}
-	t.Cleanup(func() { newRestoreCoordinator = original })
-
-	err := applyPendingSQLiteRestore("/tmp/theia.db", "/tmp/backups", "/tmp/known_hosts")
-	if err == nil {
-		t.Fatal("applyPendingSQLiteRestore() error = nil, want wrapped error")
-	}
-	if !strings.Contains(err.Error(), "apply pending restore: boom") {
-		t.Fatalf("applyPendingSQLiteRestore() error = %q, want wrapped coordinator error", err)
-	}
-	if !coordinator.called {
-		t.Fatal("ApplyPendingRestore() was not called")
-	}
-	if coordinator.dbPath != "/tmp/theia.db" || coordinator.backup != "/tmp/backups" || coordinator.hosts != "/tmp/known_hosts" {
-		t.Fatalf("coordinator paths = (%q, %q, %q), want runtime paths", coordinator.dbPath, coordinator.backup, coordinator.hosts)
-	}
-}
-
-func TestApplyPendingSQLiteRestore_ReturnsNilWhenNothingApplied(t *testing.T) {
-	coordinator := &stubPendingRestoreCoordinator{}
-	original := newRestoreCoordinator
-	newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
-		return coordinator
-	}
-	t.Cleanup(func() { newRestoreCoordinator = original })
-
-	var logBuffer bytes.Buffer
-	originalWriter := log.Writer()
-	originalFlags := log.Flags()
-	log.SetOutput(&logBuffer)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(originalWriter)
-		log.SetFlags(originalFlags)
-	})
-
-	if err := applyPendingSQLiteRestore("/tmp/theia.db", "/tmp/backups", "/tmp/known_hosts"); err != nil {
-		t.Fatalf("applyPendingSQLiteRestore() error = %v, want nil", err)
-	}
-	if !coordinator.called {
-		t.Fatal("ApplyPendingRestore() was not called")
-	}
-	if logBuffer.Len() != 0 {
-		t.Fatalf("unexpected restore log output: %q", logBuffer.String())
-	}
-}
-
-func TestApplyPendingSQLiteRestore_LogsSuccessExactlyOnceWhenApplied(t *testing.T) {
-	coordinator := &stubPendingRestoreCoordinator{applied: true}
-	original := newRestoreCoordinator
-	newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
-		return coordinator
-	}
-	t.Cleanup(func() { newRestoreCoordinator = original })
-
-	var logBuffer bytes.Buffer
-	originalWriter := log.Writer()
-	originalFlags := log.Flags()
-	log.SetOutput(&logBuffer)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(originalWriter)
-		log.SetFlags(originalFlags)
-	})
-
-	if err := applyPendingSQLiteRestore("/tmp/theia.db", "/tmp/backups", "/tmp/known_hosts"); err != nil {
-		t.Fatalf("applyPendingSQLiteRestore() error = %v, want nil", err)
-	}
-	if !coordinator.called {
-		t.Fatal("ApplyPendingRestore() was not called")
-	}
-
-	const expected = "Restore applied successfully, continuing with normal startup"
-	logOutput := logBuffer.String()
-	if !strings.Contains(logOutput, expected) {
-		t.Fatalf("log output = %q, want success message %q", logOutput, expected)
-	}
-	if count := strings.Count(logOutput, expected); count != 1 {
-		t.Fatalf("success message count = %d, want 1; log output = %q", count, logOutput)
 	}
 }
 

@@ -21,20 +21,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/version"
 )
 
 // InstanceBackupService orchestrates full Theia instance backups (database + config files).
 type InstanceBackupService struct {
 	db              *sql.DB
-	dialect         sqlite.Dialect
 	repo            domain.InstanceBackupRepository
 	settingsRepo    domain.SettingsRepository
 	backupDir       string // THEIA_INSTANCE_BACKUP_DIR
 	deviceBackupDir string // THEIA_BACKUP_DIR (device config files)
 	knownHostsPath  string // SSH known hosts file path
-	dbPath          string // live DB path
+	stateDir        string // local restore marker/staging directory
 	dbDSN           string // live DB DSN for postgres backups/restores
 	encryptionKey   []byte // for key hash in manifest
 	restoreLimits   RestoreArchiveLimits
@@ -49,7 +47,6 @@ type backupManifest struct {
 	Version           int    `json:"version"`
 	AppVersion        string `json:"app_version"`
 	GitCommit         string `json:"git_commit"`
-	DBDriver          string `json:"db_driver,omitempty"`
 	DBEntryName       string `json:"db_entry_name,omitempty"`
 	MigrationVersion  int    `json:"migration_version"`
 	CreatedAt         string `json:"created_at"`
@@ -60,7 +57,6 @@ type backupManifest struct {
 }
 
 const (
-	sqliteArchiveDBEntry   = "theia.db"
 	postgresArchiveDBEntry = "database.dump"
 )
 
@@ -142,19 +138,18 @@ func NewInstanceBackupService(
 	backupDir string,
 	deviceBackupDir string,
 	knownHostsPath string,
-	dbPath string,
+	stateDir string,
 	dbDSN string,
 	encryptionKey []byte,
 ) *InstanceBackupService {
 	return &InstanceBackupService{
 		db:              db,
-		dialect:         sqlite.DetectDialect(db),
 		repo:            repo,
 		settingsRepo:    settingsRepo,
 		backupDir:       backupDir,
 		deviceBackupDir: deviceBackupDir,
 		knownHostsPath:  knownHostsPath,
-		dbPath:          dbPath,
+		stateDir:        stateDir,
 		dbDSN:           strings.TrimSpace(dbDSN),
 		encryptionKey:   encryptionKey,
 		restoreLimits:   DefaultRestoreArchiveLimits,
@@ -325,7 +320,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		Message: "Creating database snapshot",
 	})
 
-	// Step 1: Create a dialect-appropriate database snapshot/dump.
+	// Step 1: Create a PostgreSQL database dump.
 	dbArtifact, err := s.backupDatabase(ctx, backupSubDir)
 	if err != nil {
 		cleanupOnError(fmt.Sprintf("backing up database: %v", err), err)
@@ -373,7 +368,6 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		Version:           1,
 		AppVersion:        version.Version,
 		GitCommit:         version.GitCommit,
-		DBDriver:          string(s.dialect),
 		DBEntryName:       dbArtifact.archiveEntryName,
 		MigrationVersion:  dbArtifact.migrationVersion,
 		CreatedAt:         backup.CreatedAt.UTC().Format(time.RFC3339),
@@ -801,7 +795,7 @@ func (s *InstanceBackupService) createArchive(
 		Total:   manifest.TotalSizeBytes,
 	})
 
-	// Add the database payload (SQLite file or PostgreSQL dump).
+	// Add the PostgreSQL dump.
 	dbSize, err := addFileToTarContext(ctx, tw, dbArtifact.archiveEntryName, dbArtifact.tempPath)
 	if err != nil {
 		return 0, fmt.Errorf("adding database to archive: %w", err)
@@ -855,64 +849,9 @@ func (s *InstanceBackupService) createArchive(
 	return totalSize, nil
 }
 
-// backupDatabase creates a clean copy or logical dump of the live database.
+// backupDatabase creates a logical dump of the live PostgreSQL database.
 func (s *InstanceBackupService) backupDatabase(ctx context.Context, backupSubDir string) (databaseBackupArtifact, error) {
-	switch s.dialect {
-	case sqlite.DialectPostgres:
-		return s.backupPostgresDatabase(ctx, filepath.Join(backupSubDir, postgresArchiveDBEntry+".tmp"))
-	default:
-		return s.backupSQLiteDatabase(ctx, filepath.Join(backupSubDir, sqliteArchiveDBEntry+".tmp"))
-	}
-}
-
-func (s *InstanceBackupService) backupSQLiteDatabase(ctx context.Context, destPath string) (databaseBackupArtifact, error) {
-	// Validate destination path to prevent injection (T-15-04)
-	cleanDest := filepath.Clean(destPath)
-	if strings.ContainsAny(cleanDest, "';") {
-		return databaseBackupArtifact{}, fmt.Errorf("invalid destination path: contains forbidden characters")
-	}
-
-	// Checkpoint WAL to ensure all data is in the main database file
-	if _, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		log.Printf("Warning: WAL checkpoint failed (non-fatal): %v", err)
-	}
-
-	// VACUUM INTO creates a clean, compacted copy of the database
-	// Try parameterized first; fall back to formatted string if needed
-	_, err := s.db.ExecContext(ctx, "VACUUM INTO ?", cleanDest)
-	if err != nil {
-		// Some SQLite versions don't support parameterized VACUUM INTO
-		_, err = s.db.ExecContext(ctx, fmt.Sprintf("VACUUM INTO '%s'", cleanDest))
-		if err != nil {
-			return databaseBackupArtifact{}, fmt.Errorf("VACUUM INTO failed: %w", err)
-		}
-	}
-
-	// Verify integrity of the backup copy
-	backupDB, err := sql.Open("sqlite3", cleanDest+"?mode=ro")
-	if err != nil {
-		return databaseBackupArtifact{}, fmt.Errorf("opening backup DB for integrity check: %w", err)
-	}
-	defer backupDB.Close()
-
-	var integrityResult string
-	if err := backupDB.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrityResult); err != nil {
-		return databaseBackupArtifact{}, fmt.Errorf("integrity check failed: %w", err)
-	}
-	if integrityResult != "ok" {
-		return databaseBackupArtifact{}, fmt.Errorf("backup database integrity check failed: %s", integrityResult)
-	}
-
-	migrationVersion, err := readSQLiteMigrationVersion(cleanDest)
-	if err != nil {
-		return databaseBackupArtifact{}, fmt.Errorf("reading migration version: %w", err)
-	}
-
-	return databaseBackupArtifact{
-		tempPath:         cleanDest,
-		archiveEntryName: sqliteArchiveDBEntry,
-		migrationVersion: migrationVersion,
-	}, nil
+	return s.backupPostgresDatabase(ctx, filepath.Join(backupSubDir, postgresArchiveDBEntry+".tmp"))
 }
 
 func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, destPath string) (databaseBackupArtifact, error) {
@@ -963,25 +902,7 @@ func computeEncryptionKeyHash(key []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// readSQLiteMigrationVersion reads the current schema migration version from a SQLite database file.
-func readSQLiteMigrationVersion(dbPath string) (int, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
-	if err != nil {
-		return 0, fmt.Errorf("opening DB for migration version: %w", err)
-	}
-	defer db.Close()
-
-	var version int
-	if err := db.QueryRow("SELECT version FROM schema_migrations").Scan(&version); err != nil {
-		return 0, fmt.Errorf("querying migration version: %w", err)
-	}
-	return version, nil
-}
-
 func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context) (int, error) {
-	if s.dialect == sqlite.DialectSQLite {
-		return readSQLiteMigrationVersion(s.dbPath)
-	}
 	if s.db == nil {
 		return 0, fmt.Errorf("database connection unavailable")
 	}
@@ -993,26 +914,14 @@ func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context)
 	return version, nil
 }
 
-func manifestDatabaseDialect(manifest backupManifest) (sqlite.Dialect, error) {
-	if strings.TrimSpace(manifest.DBDriver) == "" {
-		return sqlite.DialectSQLite, nil
-	}
-	return sqlite.NormalizeDialect(manifest.DBDriver)
-}
-
-func manifestDatabaseEntryName(dialect sqlite.Dialect, manifest backupManifest) (string, error) {
+func manifestDatabaseEntryName(manifest backupManifest) (string, error) {
 	if entry := strings.TrimSpace(manifest.DBEntryName); entry != "" {
-		switch entry {
-		case sqliteArchiveDBEntry, postgresArchiveDBEntry:
+		if entry == postgresArchiveDBEntry {
 			return entry, nil
-		default:
-			return "", fmt.Errorf("unsupported database entry %q in manifest", entry)
 		}
+		return "", fmt.Errorf("unsupported database entry %q in manifest", entry)
 	}
-	if dialect == sqlite.DialectPostgres {
-		return postgresArchiveDBEntry, nil
-	}
-	return sqliteArchiveDBEntry, nil
+	return postgresArchiveDBEntry, nil
 }
 
 func (s *InstanceBackupService) validatePostgresDump(ctx context.Context, dumpPath string) error {
@@ -1234,15 +1143,7 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 		return nil, fmt.Errorf("parsing manifest.json: %w", err)
 	}
 
-	archiveDialect, err := manifestDatabaseDialect(manifest)
-	if err != nil {
-		return nil, fmt.Errorf("parsing manifest database driver: %w", err)
-	}
-	if archiveDialect != s.dialect {
-		return nil, fmt.Errorf("archive database driver %q does not match current runtime database driver %q", archiveDialect, s.dialect)
-	}
-
-	dbEntryName, err := manifestDatabaseEntryName(archiveDialect, manifest)
+	dbEntryName, err := manifestDatabaseEntryName(manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -1264,25 +1165,8 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 
 	// Step 6: Validate the extracted database payload.
-	switch archiveDialect {
-	case sqlite.DialectPostgres:
-		if err := s.validatePostgresDump(ctx, extractedDBPath); err != nil {
-			return nil, err
-		}
-	default:
-		checkDB, err := sql.Open("sqlite3", extractedDBPath+"?mode=ro")
-		if err != nil {
-			return nil, fmt.Errorf("opening extracted DB for integrity check: %w", err)
-		}
-		var integrityResult string
-		if err := checkDB.QueryRow("PRAGMA integrity_check").Scan(&integrityResult); err != nil {
-			checkDB.Close()
-			return nil, fmt.Errorf("running integrity check: %w", err)
-		}
-		checkDB.Close()
-		if integrityResult != "ok" {
-			return nil, fmt.Errorf("database integrity check failed: %s", integrityResult)
-		}
+	if err := s.validatePostgresDump(ctx, extractedDBPath); err != nil {
+		return nil, err
 	}
 
 	// Step 7: Read current migration version from live DB
@@ -1299,19 +1183,6 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 
 	// Step 9: Determine if migration is needed
 	needsMigration := manifest.MigrationVersion < currentVersion
-
-	// Step 10: Run cross-version migration if needed and not dry run
-	if archiveDialect == sqlite.DialectSQLite && needsMigration && !dryRun {
-		migDB, err := sql.Open("sqlite3", extractedDBPath)
-		if err != nil {
-			return nil, fmt.Errorf("opening extracted DB for migration: %w", err)
-		}
-		if err := sqlite.RunMigrations(migDB, s.encryptionKey); err != nil {
-			migDB.Close()
-			return nil, fmt.Errorf("running migrations on extracted DB: %w", err)
-		}
-		migDB.Close()
-	}
 
 	// Step 11: Get DB file size for report
 	dbInfo, err := os.Stat(extractedDBPath)
@@ -1338,18 +1209,16 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 		report.Message = "Validation passed. Archive is ready to restore."
 		return report, nil
 	}
-	if archiveDialect == sqlite.DialectPostgres {
-		if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore", "psql"); err != nil {
-			return nil, err
-		}
+	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore", "psql"); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
 	// Step 14: Stage files for restore
-	stagingDir := filepath.Join(filepath.Dir(s.dbPath), ".restore-staging")
-	markerPath := filepath.Join(filepath.Dir(s.dbPath), ".theia-restore-pending")
+	stagingDir := filepath.Join(s.stateDir, ".restore-staging")
+	markerPath := filepath.Join(s.stateDir, ".theia-restore-pending")
 	if err := os.RemoveAll(stagingDir); err != nil {
 		return nil, fmt.Errorf("removing existing staging dir: %w", err)
 	}
@@ -1398,12 +1267,11 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 		stagedDBPath,
 		filepath.Join(stagingDir, "backups"),
 		filepath.Join(stagingDir, "known_hosts"),
-		s.dbPath,
+		s.stateDir,
 		s.deviceBackupDir,
 		s.knownHostsPath,
 		time.Now().UTC().Format(time.RFC3339),
 	)
-	marker.DBDriver = string(archiveDialect)
 	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return nil, cleanupStagingOnError(fmt.Errorf("marshaling marker JSON: %w", err))
@@ -1556,17 +1424,19 @@ func archiveEntryHasTraversal(name string) bool {
 
 // isAllowedRestoreArchiveFile checks if a regular file entry matches the restore archive contract.
 func isAllowedRestoreArchiveFile(name string) bool {
-	switch name {
-	case "manifest.json", sqliteArchiveDBEntry, postgresArchiveDBEntry, "known_hosts":
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	switch normalized {
+	case "manifest.json", postgresArchiveDBEntry, "known_hosts":
 		return true
 	default:
-		return strings.HasPrefix(name, "backups/")
+		return strings.HasPrefix(normalized, "backups/")
 	}
 }
 
 // isAllowedRestoreArchiveDirectory checks if a directory entry matches the restore archive contract.
 func isAllowedRestoreArchiveDirectory(name string) bool {
-	return name == "backups" || strings.HasPrefix(name, "backups/")
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	return normalized == "backups" || strings.HasPrefix(normalized, "backups/")
 }
 
 // copyFile copies a single file from src to dst with private file permissions.

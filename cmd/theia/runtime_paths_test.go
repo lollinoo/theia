@@ -7,9 +7,9 @@ import (
 	"github.com/lollinoo/theia/internal/config"
 )
 
-func TestResolveRuntimePaths_DBPathSetsAppDataAndDefaultArtifacts(t *testing.T) {
+func TestResolveRuntimePaths_DataDirSetsAppDataAndDefaultArtifacts(t *testing.T) {
 	cfg := &config.Config{
-		DBPath: filepath.Join("/srv", "theia", "theia.db"),
+		DataDir: filepath.Join("/srv", "theia"),
 	}
 
 	got := resolveRuntimePaths(cfg)
@@ -30,7 +30,6 @@ func TestResolveRuntimePaths_DataDirWinsAndEnvOverridesArtifactDirs(t *testing.T
 	t.Setenv("THEIA_INSTANCE_BACKUP_DIR", filepath.Join("/env", "instance-backups"))
 
 	cfg := &config.Config{
-		DBPath:  filepath.Join("/srv", "db", "theia.db"),
 		DataDir: filepath.Join("/srv", "runtime"),
 	}
 

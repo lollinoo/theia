@@ -6,18 +6,18 @@ import (
 	"strings"
 
 	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/service"
 )
 
 // CredentialProfileHandler provides HTTP handlers for credential profile CRUD.
 type CredentialProfileHandler struct {
-	svc                  *service.BackupService
-	credentialProfileRepo *sqlite.CredentialProfileRepo
+	svc                   *service.BackupService
+	credentialProfileRepo *postgres.CredentialProfileRepo
 }
 
 // NewCredentialProfileHandler creates a new CredentialProfileHandler.
-func NewCredentialProfileHandler(svc *service.BackupService, credentialProfileRepo *sqlite.CredentialProfileRepo) *CredentialProfileHandler {
+func NewCredentialProfileHandler(svc *service.BackupService, credentialProfileRepo *postgres.CredentialProfileRepo) *CredentialProfileHandler {
 	return &CredentialProfileHandler{svc: svc, credentialProfileRepo: credentialProfileRepo}
 }
 

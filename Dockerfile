@@ -3,7 +3,7 @@
 # =============================================================================
 # Stages:
 #   dev        - Development with Air hot-reload (used by docker-compose)
-#   builder    - Compiles production binary with CGO
+#   builder    - Compiles production binary
 #   production - Minimal runtime image
 # =============================================================================
 
@@ -15,11 +15,10 @@ FROM postgres:17-bookworm AS postgres-tools
 # ---------------------------------------------------------------------------
 # Stage: dev — Development with Air hot-reload
 # ---------------------------------------------------------------------------
-# Debian-based (not Alpine) because CGO + mattn/go-sqlite3 requires glibc
 FROM golang:1.24-bookworm AS dev
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libc6-dev curl libpq5 libreadline8 && \
+    apt-get install -y --no-install-recommends curl libpq5 libreadline8 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_dump /usr/local/bin/pg_dump
@@ -30,7 +29,7 @@ COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5* /usr/lib/x86_64
 # Install Air for hot-reload (pinned version compatible with Go 1.24)
 RUN go install github.com/air-verse/air@v1.61.5
 
-ENV CGO_ENABLED=1
+ENV CGO_ENABLED=0
 
 WORKDIR /app
 
@@ -48,10 +47,10 @@ CMD ["air", "-c", ".air.toml"]
 FROM golang:1.24-bookworm AS builder
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libc6-dev && \
+    apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-ENV CGO_ENABLED=1
+ENV CGO_ENABLED=0
 
 WORKDIR /build
 

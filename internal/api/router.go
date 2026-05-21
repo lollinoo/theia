@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/vendor"
 	"github.com/lollinoo/theia/internal/ws"
@@ -24,7 +24,7 @@ func NewRouter(
 	canvasMapPositionRepo domain.CanvasMapPositionRepository,
 	settingsRepo domain.SettingsRepository,
 	snmpProfileRepo domain.SNMPProfileRepository,
-	credentialProfileRepo *sqlite.CredentialProfileRepo,
+	credentialProfileRepo *postgres.CredentialProfileRepo,
 	areaRepo domain.AreaRepository,
 	backupService *service.BackupService,
 	vendorRegistry *vendor.Registry,

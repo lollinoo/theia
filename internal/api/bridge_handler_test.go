@@ -11,10 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/lollinoo/theia/internal/crypto"
-	"github.com/lollinoo/theia/internal/domain"
 )
 
 // setupBridgeTest creates a temp dir and optionally populates it with dummy bridge binaries.
@@ -315,92 +311,6 @@ func TestBridgeToken_ShortSecretReturns400(t *testing.T) {
 		t.Error("expected key shorter than 32 bytes")
 	}
 	// The handler would return 400 for this — the guard is: len(keyBytes) != 32
-}
-
-func TestBridgeToken_UsesStoredBridgeSecretWithoutRequestBody(t *testing.T) {
-	deviceCredHandler, repo, db, deviceID, profileID, encKey := setupDeviceCredentialProfileTest(t)
-	encryptedPwd, err := crypto.Encrypt([]byte("token-pass-value"), encKey)
-	if err != nil {
-		t.Fatalf("encrypt password: %v", err)
-	}
-	if _, err := db.Exec(`UPDATE credential_profiles SET encrypted_secret = ? WHERE id = ?`, string(encryptedPwd), profileID.String()); err != nil {
-		t.Fatalf("update profile secret: %v", err)
-	}
-	if err := repo.AssignProfile(deviceID, profileID); err != nil {
-		t.Fatalf("assign profile: %v", err)
-	}
-	if err := repo.SetWinboxProfile(deviceID, profileID); err != nil {
-		t.Fatalf("set winbox profile: %v", err)
-	}
-	settingsRepo := newMockSettingsRepo()
-	settingsRepo.settings[domain.SettingBridgeSecret] = testBridgeSecret
-	handler := NewBridgeHandlerWithCredentials("", deviceCredHandler.svc, repo, settingsRepo)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+deviceID.String(), nil)
-	w := httptest.NewRecorder()
-	handler.HandleBridgeToken(w, req)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d; body=%s", resp.StatusCode, w.Body.String())
-	}
-	var body struct {
-		Token     string `json:"token"`
-		ExpiresAt string `json:"expires_at"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body.Token == "" {
-		t.Fatal("expected token")
-	}
-	expiresAt, err := time.Parse(time.RFC3339, body.ExpiresAt)
-	if err != nil {
-		t.Fatalf("expected RFC3339 expires_at, got %q: %v", body.ExpiresAt, err)
-	}
-	if !expiresAt.After(time.Now()) {
-		t.Fatalf("expected future expires_at, got %s", body.ExpiresAt)
-	}
-
-	payload := decryptBridgeTokenPayload(t, body.Token, testBridgeSecret)
-	if payload["password"] != "token-pass-value" {
-		t.Fatalf("expected encrypted payload password to round-trip, got %q", payload["password"])
-	}
-	if payload["expires_at"] != body.ExpiresAt {
-		t.Fatalf("expected encrypted payload expires_at=%q, got %q", body.ExpiresAt, payload["expires_at"])
-	}
-}
-
-func TestBridgeToken_RejectsExtraPathSegments(t *testing.T) {
-	deviceCredHandler, repo, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
-	settingsRepo := newMockSettingsRepo()
-	settingsRepo.settings[domain.SettingBridgeSecret] = testBridgeSecret
-	handler := NewBridgeHandlerWithCredentials("", deviceCredHandler.svc, repo, settingsRepo)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+deviceID.String()+"/extra", nil)
-	w := httptest.NewRecorder()
-	handler.HandleBridgeToken(w, req)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body=%s", resp.StatusCode, w.Body.String())
-	}
-}
-
-func TestBridgeToken_MissingStoredBridgeSecretReturns422(t *testing.T) {
-	deviceCredHandler, repo, _, deviceID, _, _ := setupDeviceCredentialProfileTest(t)
-	settingsRepo := newMockSettingsRepo()
-	delete(settingsRepo.settings, domain.SettingBridgeSecret)
-	handler := NewBridgeHandlerWithCredentials("", deviceCredHandler.svc, repo, settingsRepo)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+deviceID.String(), nil)
-	w := httptest.NewRecorder()
-	handler.HandleBridgeToken(w, req)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422, got %d; body=%s", resp.StatusCode, w.Body.String())
-	}
 }
 
 func decryptBridgeTokenPayload(t *testing.T, tokenHex, secretHex string) map[string]string {

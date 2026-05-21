@@ -1,3 +1,0 @@
-ALTER TABLE devices DROP COLUMN area_id;
-DROP INDEX IF EXISTS idx_areas_name;
-DROP TABLE IF EXISTS areas;

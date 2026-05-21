@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,11 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
-
-	reposqlite "github.com/lollinoo/theia/internal/repository/sqlite"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 type postgresServiceTestSetup struct {
@@ -27,7 +25,7 @@ type postgresServiceTestSetup struct {
 	instanceBackupDir string
 	deviceBackupDir   string
 	knownHostsPath    string
-	dbPath            string
+	stateDir          string
 	dbDSN             string
 	encryptionKey     []byte
 }
@@ -36,42 +34,39 @@ func setupPostgresServiceTest(t *testing.T) *postgresServiceTestSetup {
 	t.Helper()
 
 	tmpDir := t.TempDir()
-	metadataPath := filepath.Join(tmpDir, "metadata.db")
-	db, err := sql.Open("sqlite3", metadataPath)
+	db, err := openMigrationVersionTestDB()
 	if err != nil {
-		t.Fatalf("opening metadata db: %v", err)
-	}
-	if err := reposqlite.RunMigrations(db); err != nil {
-		t.Fatalf("running metadata migrations: %v", err)
+		t.Fatalf("opening migration version db: %v", err)
 	}
 
-	repo := reposqlite.NewInstanceBackupRepo(db)
-	settingsRepo := reposqlite.NewSettingsRepo(db)
+	repo := newInstanceBackupCancelTestRepo()
 	instanceBackupDir := filepath.Join(tmpDir, "instance-backups")
 	deviceBackupDir := filepath.Join(tmpDir, "device-backups")
 	knownHostsPath := filepath.Join(tmpDir, "known_hosts")
-	dbPath := filepath.Join(tmpDir, "theia.db")
+	stateDir := filepath.Join(tmpDir, "runtime")
 	if err := os.MkdirAll(instanceBackupDir, 0o755); err != nil {
 		t.Fatalf("creating instance backup dir: %v", err)
 	}
 	if err := os.MkdirAll(deviceBackupDir, 0o755); err != nil {
 		t.Fatalf("creating device backup dir: %v", err)
 	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("creating state dir: %v", err)
+	}
 	encryptionKey := sha256.Sum256([]byte("postgres-backup-test-key"))
-	dbDSN := "postgres://theia:n3wpr3srl@2026@localhost:5432/theia?sslmode=disable"
+	dbDSN := "postgres://theia:strong-password@localhost:5432/theia?sslmode=disable"
 
 	svc := NewInstanceBackupService(
 		db,
 		repo,
-		settingsRepo,
+		nil,
 		instanceBackupDir,
 		deviceBackupDir,
 		knownHostsPath,
-		dbPath,
+		stateDir,
 		dbDSN,
 		encryptionKey[:],
 	)
-	svc.dialect = reposqlite.DialectPostgres
 
 	t.Cleanup(func() {
 		_ = db.Close()
@@ -83,10 +78,70 @@ func setupPostgresServiceTest(t *testing.T) *postgresServiceTestSetup {
 		instanceBackupDir: instanceBackupDir,
 		deviceBackupDir:   deviceBackupDir,
 		knownHostsPath:    knownHostsPath,
-		dbPath:            dbPath,
+		stateDir:          stateDir,
 		dbDSN:             dbDSN,
 		encryptionKey:     encryptionKey[:],
 	}
+}
+
+const migrationVersionTestDriverName = "theia_postgres_migration_version_test"
+
+var registerMigrationVersionTestDriver sync.Once
+
+func openMigrationVersionTestDB() (*sql.DB, error) {
+	registerMigrationVersionTestDriver.Do(func() {
+		sql.Register(migrationVersionTestDriverName, migrationVersionTestDriver{})
+	})
+	return sql.Open(migrationVersionTestDriverName, "")
+}
+
+type migrationVersionTestDriver struct{}
+
+func (migrationVersionTestDriver) Open(name string) (driver.Conn, error) {
+	return migrationVersionTestConn{}, nil
+}
+
+type migrationVersionTestConn struct{}
+
+func (migrationVersionTestConn) Prepare(query string) (driver.Stmt, error) {
+	return nil, driver.ErrSkip
+}
+
+func (migrationVersionTestConn) Close() error {
+	return nil
+}
+
+func (migrationVersionTestConn) Begin() (driver.Tx, error) {
+	return nil, driver.ErrSkip
+}
+
+func (migrationVersionTestConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(strings.ToLower(query), "schema_migrations") {
+		return &singleIntRows{value: 15}, nil
+	}
+	return nil, fmt.Errorf("unexpected query %q", query)
+}
+
+type singleIntRows struct {
+	value int
+	done  bool
+}
+
+func (r *singleIntRows) Columns() []string {
+	return []string{"version"}
+}
+
+func (r *singleIntRows) Close() error {
+	return nil
+}
+
+func (r *singleIntRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	dest[0] = int64(r.value)
+	r.done = true
+	return nil
 }
 
 func stubExternalCommands(t *testing.T, runner func(context.Context, string, ...string) ([]byte, error)) {
@@ -251,11 +306,11 @@ func TestInstanceBackupServiceCreate_PostgresArchive(t *testing.T) {
 			if commandArgsEqual(args, "--version") {
 				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
 			}
-			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
+			if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 				t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
 			}
 			connInfo := commandFlagValue(args, "--dbname")
-			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "n3wpr3srl@2026") {
+			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "strong-password") {
 				t.Fatalf("pg_dump conninfo leaked password material: %q", connInfo)
 			}
 			if strings.Contains(connInfo, "postgres://") {
@@ -283,16 +338,10 @@ func TestInstanceBackupServiceCreate_PostgresArchive(t *testing.T) {
 	if _, ok := entries[postgresArchiveDBEntry]; !ok {
 		t.Fatalf("archive missing %s", postgresArchiveDBEntry)
 	}
-	if _, ok := entries[sqliteArchiveDBEntry]; ok {
-		t.Fatalf("archive unexpectedly contains %s", sqliteArchiveDBEntry)
-	}
 
 	var manifest backupManifest
 	if err := json.Unmarshal(entries["manifest.json"], &manifest); err != nil {
 		t.Fatalf("unmarshal manifest: %v", err)
-	}
-	if manifest.DBDriver != string(reposqlite.DialectPostgres) {
-		t.Fatalf("manifest.DBDriver = %q, want %q", manifest.DBDriver, reposqlite.DialectPostgres)
 	}
 	if manifest.DBEntryName != postgresArchiveDBEntry {
 		t.Fatalf("manifest.DBEntryName = %q, want %q", manifest.DBEntryName, postgresArchiveDBEntry)
@@ -438,7 +487,6 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 		Version:           1,
 		AppVersion:        "dev",
 		GitCommit:         "test",
-		DBDriver:          string(reposqlite.DialectPostgres),
 		DBEntryName:       postgresArchiveDBEntry,
 		MigrationVersion:  manifestMigrationVersion(t, ts.db),
 		CreatedAt:         "2026-04-23T00:00:00Z",
@@ -461,7 +509,7 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 		t.Fatal("expected report.Valid to be true")
 	}
 
-	stagingDir := filepath.Join(filepath.Dir(ts.dbPath), ".restore-staging")
+	stagingDir := filepath.Join(ts.stateDir, ".restore-staging")
 	if _, err := os.Stat(filepath.Join(stagingDir, postgresArchiveDBEntry)); err != nil {
 		t.Fatalf("staged postgres dump missing: %v", err)
 	}
@@ -472,16 +520,13 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 		t.Fatalf("staged known_hosts missing: %v", err)
 	}
 
-	markerBytes, err := os.ReadFile(filepath.Join(filepath.Dir(ts.dbPath), ".theia-restore-pending"))
+	markerBytes, err := os.ReadFile(filepath.Join(ts.stateDir, ".theia-restore-pending"))
 	if err != nil {
 		t.Fatalf("reading restore marker: %v", err)
 	}
 	var marker restoreMarker
 	if err := json.Unmarshal(markerBytes, &marker); err != nil {
 		t.Fatalf("unmarshal restore marker: %v", err)
-	}
-	if marker.DBDriver != string(reposqlite.DialectPostgres) {
-		t.Fatalf("marker.DBDriver = %q, want %q", marker.DBDriver, reposqlite.DialectPostgres)
 	}
 	if !strings.HasSuffix(marker.StagedDB, postgresArchiveDBEntry) {
 		t.Fatalf("marker.StagedDB = %q, want suffix %q", marker.StagedDB, postgresArchiveDBEntry)
@@ -513,7 +558,6 @@ func TestInstanceBackupServiceValidateAndStageRestore_PostgresRejectsUnsupported
 		Version:           1,
 		AppVersion:        "dev",
 		GitCommit:         "test",
-		DBDriver:          string(reposqlite.DialectPostgres),
 		DBEntryName:       postgresArchiveDBEntry,
 		MigrationVersion:  manifestMigrationVersion(t, ts.db),
 		CreatedAt:         "2026-04-23T00:00:00Z",
@@ -566,7 +610,6 @@ func TestInstanceBackupServiceValidateAndStageRestore_PostgresRejectsUnsupported
 		Version:           1,
 		AppVersion:        "dev",
 		GitCommit:         "test",
-		DBDriver:          string(reposqlite.DialectPostgres),
 		DBEntryName:       postgresArchiveDBEntry,
 		MigrationVersion:  manifestMigrationVersion(t, ts.db),
 		CreatedAt:         "2026-04-23T00:00:00Z",
@@ -585,24 +628,23 @@ func TestInstanceBackupServiceValidateAndStageRestore_PostgresRejectsUnsupported
 	}
 	assertPostgresCLIActionableError(t, err.Error(), "pg_dump")
 
-	stagingDir := filepath.Join(filepath.Dir(ts.dbPath), ".restore-staging")
+	stagingDir := filepath.Join(ts.stateDir, ".restore-staging")
 	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
 		t.Fatalf("restore staging dir should not exist, stat err = %v", err)
 	}
-	markerPath := filepath.Join(filepath.Dir(ts.dbPath), ".theia-restore-pending")
+	markerPath := filepath.Join(ts.stateDir, ".theia-restore-pending")
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
 		t.Fatalf("restore marker should not exist, stat err = %v", err)
 	}
 }
 
 func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
-	const dbDSN = "postgres://theia:n3wpr3srl@2026@localhost:5432/theia?sslmode=disable"
+	const dbDSN = "postgres://theia:strong-password@localhost:5432/theia?sslmode=disable"
 
-	runtimeDir := t.TempDir()
-	dbPath := filepath.Join(runtimeDir, "theia.db")
-	deviceBackupDir := filepath.Join(runtimeDir, "device-backups")
-	knownHostsPath := filepath.Join(runtimeDir, "known_hosts")
-	stagingDir := filepath.Join(runtimeDir, ".restore-staging")
+	stateDir := t.TempDir()
+	deviceBackupDir := filepath.Join(stateDir, "device-backups")
+	knownHostsPath := filepath.Join(stateDir, "known_hosts")
+	stagingDir := filepath.Join(stateDir, ".restore-staging")
 	stagedDump := filepath.Join(stagingDir, postgresArchiveDBEntry)
 	if err := os.MkdirAll(filepath.Join(stagingDir, "backups", "router"), 0o755); err != nil {
 		t.Fatalf("creating staging dir: %v", err)
@@ -637,11 +679,11 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			if commandArgsEqual(args, "--version") {
 				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
 			}
-			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
+			if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 				t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
 			}
 			connInfo := commandFlagValue(args, "--dbname")
-			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "n3wpr3srl@2026") {
+			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "strong-password") {
 				t.Fatalf("pg_dump conninfo leaked password material: %q", connInfo)
 			}
 			dest := commandFlagValue(args, "--file")
@@ -659,11 +701,11 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			if !cleanSchemaExecuted {
 				t.Fatal("pg_restore executed before PostgreSQL schema cleanup")
 			}
-			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
+			if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 				t.Fatal("pg_restore PGPASSWORD env does not match DSN password")
 			}
 			connInfo := commandFlagValue(args, "--dbname")
-			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "n3wpr3srl@2026") {
+			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "strong-password") {
 				t.Fatalf("pg_restore conninfo leaked password material: %q", connInfo)
 			}
 			if strings.Contains(connInfo, "postgres://") {
@@ -680,11 +722,11 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			if commandArgsEqual(args, "--version") {
 				return []byte("psql (PostgreSQL) 17.4\n"), nil
 			}
-			if commandEnvValue(env, "PGPASSWORD") != "n3wpr3srl@2026" {
+			if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 				t.Fatal("psql PGPASSWORD env does not match DSN password")
 			}
 			connInfo := commandFlagValue(args, "--dbname")
-			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "n3wpr3srl@2026") {
+			if strings.Contains(connInfo, "password") || strings.Contains(connInfo, "strong-password") {
 				t.Fatalf("psql conninfo leaked password material: %q", connInfo)
 			}
 			command := commandFlagValue(args, "--command")
@@ -705,21 +747,20 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 		stagedDump,
 		filepath.Join(stagingDir, "backups"),
 		filepath.Join(stagingDir, "known_hosts"),
-		dbPath,
+		stateDir,
 		deviceBackupDir,
 		knownHostsPath,
 		"2026-04-23T00:00:00Z",
 	)
-	marker.DBDriver = string(reposqlite.DialectPostgres)
 	markerJSON, err := json.Marshal(marker)
 	if err != nil {
 		t.Fatalf("marshal marker: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(runtimeDir, ".theia-restore-pending"), markerJSON, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, ".theia-restore-pending"), markerJSON, 0o600); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
 
-	coordinator := NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath)
+	coordinator := NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath)
 	applied, err := coordinator.ApplyPendingRestore()
 	if err != nil {
 		t.Fatalf("ApplyPendingRestore() error = %v", err)
@@ -745,10 +786,10 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	if string(knownHostsBytes) != "restored-known-hosts" {
 		t.Fatalf("restored known_hosts = %q, want restored-known-hosts", string(knownHostsBytes))
 	}
-	if _, err := os.Stat(dbPath + ".pre-restore.dump"); err != nil {
+	if _, err := os.Stat(filepath.Join(stateDir, "postgres.pre-restore.dump")); err != nil {
 		t.Fatalf("pre-restore dump missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(runtimeDir, ".theia-restore-pending")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(stateDir, ".theia-restore-pending")); !os.IsNotExist(err) {
 		t.Fatalf("restore marker should be removed, stat err = %v", err)
 	}
 	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
@@ -757,13 +798,12 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 }
 
 func TestRestoreCoordinatorApplyPendingRestore_PostgresChecksPgDumpAndPgRestoreBeforeSideEffects(t *testing.T) {
-	const dbDSN = "postgres://theia:n3wpr3srl@2026@localhost:5432/theia?sslmode=disable"
+	const dbDSN = "postgres://theia:strong-password@localhost:5432/theia?sslmode=disable"
 
-	runtimeDir := t.TempDir()
-	dbPath := filepath.Join(runtimeDir, "theia.db")
-	deviceBackupDir := filepath.Join(runtimeDir, "device-backups")
-	knownHostsPath := filepath.Join(runtimeDir, "known_hosts")
-	stagingDir := filepath.Join(runtimeDir, ".restore-staging")
+	stateDir := t.TempDir()
+	deviceBackupDir := filepath.Join(stateDir, "device-backups")
+	knownHostsPath := filepath.Join(stateDir, "known_hosts")
+	stagingDir := filepath.Join(stateDir, ".restore-staging")
 	stagedDump := filepath.Join(stagingDir, postgresArchiveDBEntry)
 	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
 		t.Fatalf("creating staging dir: %v", err)
@@ -815,22 +855,21 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresChecksPgDumpAndPgRestoreB
 		stagedDump,
 		"",
 		"",
-		dbPath,
+		stateDir,
 		deviceBackupDir,
 		knownHostsPath,
 		"2026-04-23T00:00:00Z",
 	)
-	marker.DBDriver = string(reposqlite.DialectPostgres)
 	markerJSON, err := json.Marshal(marker)
 	if err != nil {
 		t.Fatalf("marshal marker: %v", err)
 	}
-	markerPath := filepath.Join(runtimeDir, ".theia-restore-pending")
+	markerPath := filepath.Join(stateDir, ".theia-restore-pending")
 	if err := os.WriteFile(markerPath, markerJSON, 0o600); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
 
-	coordinator := NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath)
+	coordinator := NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath)
 	applied, err := coordinator.ApplyPendingRestore()
 	if err == nil {
 		t.Fatal("ApplyPendingRestore() error = nil, want unsupported pg_restore version")
@@ -848,7 +887,7 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresChecksPgDumpAndPgRestoreB
 	if actualRestoreExecuted {
 		t.Fatal("actual pg_restore executed after unsupported version")
 	}
-	if _, err := os.Stat(dbPath + ".pre-restore.dump"); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(stateDir, "postgres.pre-restore.dump")); !os.IsNotExist(err) {
 		t.Fatalf("pre-restore dump should not exist, stat err = %v", err)
 	}
 	if _, err := os.Stat(markerPath); err != nil {

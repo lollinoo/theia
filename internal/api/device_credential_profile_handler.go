@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/service"
 )
 
@@ -17,11 +17,11 @@ import (
 // credential profile assignment and WinBox credential endpoints.
 type DeviceCredentialProfileHandler struct {
 	svc                   *service.BackupService
-	credentialProfileRepo *sqlite.CredentialProfileRepo
+	credentialProfileRepo *postgres.CredentialProfileRepo
 }
 
 // NewDeviceCredentialProfileHandler creates a new DeviceCredentialProfileHandler.
-func NewDeviceCredentialProfileHandler(svc *service.BackupService, credentialProfileRepo *sqlite.CredentialProfileRepo) *DeviceCredentialProfileHandler {
+func NewDeviceCredentialProfileHandler(svc *service.BackupService, credentialProfileRepo *postgres.CredentialProfileRepo) *DeviceCredentialProfileHandler {
 	return &DeviceCredentialProfileHandler{svc: svc, credentialProfileRepo: credentialProfileRepo}
 }
 

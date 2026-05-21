@@ -11,9 +11,7 @@ import (
 // Runtime settings (Prometheus URL, polling interval, etc.) are stored
 // in the primary database settings table and managed via the API.
 type Config struct {
-	DBDriver          string `yaml:"db_driver"`
 	ListenAddr        string `yaml:"listen_addr"`
-	DBPath            string `yaml:"db_path"`
 	DBDSN             string `yaml:"db_dsn"`
 	DataDir           string `yaml:"data_dir"`
 	LogLevel          string `yaml:"log_level"`
@@ -24,9 +22,7 @@ type Config struct {
 // defaults returns a Config with sensible default values.
 func defaults() *Config {
 	return &Config{
-		DBDriver:   "postgres",
 		ListenAddr: ":8080",
-		DBPath:     "./data/theia.db",
 		DataDir:    "./data",
 		LogLevel:   "info",
 	}
@@ -36,9 +32,7 @@ func defaults() *Config {
 // variable overrides. Environment variables take precedence over the file.
 //
 // Supported env vars:
-//   - THEIA_DB_DRIVER
 //   - THEIA_LISTEN_ADDR
-//   - THEIA_DB_PATH
 //   - THEIA_DB_DSN
 //   - THEIA_DATA_DIR
 //   - THEIA_LOG_LEVEL
@@ -60,14 +54,8 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Environment variable overrides
-	if v := os.Getenv("THEIA_DB_DRIVER"); v != "" {
-		cfg.DBDriver = v
-	}
 	if v := os.Getenv("THEIA_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
-	}
-	if v := os.Getenv("THEIA_DB_PATH"); v != "" {
-		cfg.DBPath = v
 	}
 	if v := os.Getenv("THEIA_DB_DSN"); v != "" {
 		cfg.DBDSN = v

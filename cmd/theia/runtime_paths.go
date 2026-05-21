@@ -16,16 +16,8 @@ type runtimePaths struct {
 
 func resolveRuntimePaths(cfg *config.Config) runtimePaths {
 	appDataDir := "./data"
-	if cfg != nil {
-		if cfg.DataDir != "" {
-			appDataDir = cfg.DataDir
-		}
-		if cfg.DBPath != "" {
-			appDataDir = filepath.Dir(cfg.DBPath)
-		}
-		if cfg.DataDir != "" {
-			appDataDir = cfg.DataDir
-		}
+	if cfg != nil && cfg.DataDir != "" {
+		appDataDir = cfg.DataDir
 	}
 
 	backupDir := os.Getenv("THEIA_BACKUP_DIR")

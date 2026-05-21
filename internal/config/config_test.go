@@ -3,26 +3,35 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestLoad_DefaultsToPostgres(t *testing.T) {
+func TestConfigSchemaIsPostgresOnly(t *testing.T) {
+	cfgType := reflect.TypeOf(Config{})
+	for _, fieldName := range []string{"DB" + "Driver", "DB" + "Path"} {
+		if _, ok := cfgType.FieldByName(fieldName); ok {
+			t.Fatalf("Config still exposes %s; runtime database selection must stay removed", fieldName)
+		}
+	}
+}
+
+func TestLoad_DefaultsToPostgresDSNConfiguration(t *testing.T) {
 	cfg, err := Load("/nonexistent-config.yaml")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	if cfg.DBDriver != "postgres" {
-		t.Fatalf("DBDriver = %q, want postgres", cfg.DBDriver)
+	if cfg.DBDSN != "" {
+		t.Fatalf("DBDSN = %q, want empty default", cfg.DBDSN)
 	}
-	if cfg.DBPath != "./data/theia.db" {
-		t.Fatalf("DBPath = %q, want ./data/theia.db", cfg.DBPath)
+	if cfg.DataDir != "./data" {
+		t.Fatalf("DataDir = %q, want ./data", cfg.DataDir)
 	}
 }
 
 func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
-	t.Setenv("THEIA_DB_DRIVER", "postgres")
 	t.Setenv("THEIA_DB_DSN", "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable")
 	t.Setenv("THEIA_DATA_DIR", "/tmp/theia-data")
 	t.Setenv("THEIA_DEPLOYMENT_ENV", "production")
@@ -32,9 +41,6 @@ func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	if cfg.DBDriver != "postgres" {
-		t.Fatalf("DBDriver = %q, want postgres", cfg.DBDriver)
-	}
 	if cfg.DBDSN == "" {
 		t.Fatal("DBDSN should be populated from env")
 	}
@@ -55,20 +61,17 @@ func TestLoad_FileHandling(t *testing.T) {
 	}{
 		{
 			name:     "loads values from yaml file",
-			contents: "db_driver: sqlite\nlisten_addr: \":9090\"\ndb_path: ./custom.db\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\ndeployment_env: staging\n",
+			contents: "listen_addr: \":9090\"\ndb_dsn: postgres://user:pass@db:5432/theia?sslmode=disable\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\ndeployment_env: staging\n",
 			assert: func(t *testing.T, cfg *Config, err error) {
 				t.Helper()
 				if err != nil {
 					t.Fatalf("Load failed: %v", err)
 				}
-				if cfg.DBDriver != "sqlite" {
-					t.Fatalf("DBDriver = %q, want sqlite", cfg.DBDriver)
-				}
 				if cfg.ListenAddr != ":9090" {
 					t.Fatalf("ListenAddr = %q, want :9090", cfg.ListenAddr)
 				}
-				if cfg.DBPath != "./custom.db" {
-					t.Fatalf("DBPath = %q, want ./custom.db", cfg.DBPath)
+				if cfg.DBDSN != "postgres://user:pass@db:5432/theia?sslmode=disable" {
+					t.Fatalf("DBDSN = %q, want yaml dsn", cfg.DBDSN)
 				}
 				if cfg.DataDir != "./custom-data" {
 					t.Fatalf("DataDir = %q, want ./custom-data", cfg.DataDir)
@@ -83,7 +86,7 @@ func TestLoad_FileHandling(t *testing.T) {
 		},
 		{
 			name:     "returns parse error for invalid yaml",
-			contents: "db_driver: [",
+			contents: "db_dsn: [",
 			assert: func(t *testing.T, cfg *Config, err error) {
 				t.Helper()
 				if err == nil {
@@ -96,9 +99,9 @@ func TestLoad_FileHandling(t *testing.T) {
 		},
 		{
 			name:     "environment overrides yaml values",
-			contents: "db_driver: sqlite\ndata_dir: ./from-file\ndeployment_env: staging\n",
+			contents: "db_dsn: postgres://file:pass@db:5432/theia?sslmode=disable\ndata_dir: ./from-file\ndeployment_env: staging\n",
 			env: map[string]string{
-				"THEIA_DB_DRIVER":      "postgres",
+				"THEIA_DB_DSN":         "postgres://env:pass@db:5432/theia?sslmode=disable",
 				"THEIA_DATA_DIR":       "./from-env",
 				"THEIA_DEPLOYMENT_ENV": "production",
 			},
@@ -107,8 +110,8 @@ func TestLoad_FileHandling(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Load failed: %v", err)
 				}
-				if cfg.DBDriver != "postgres" {
-					t.Fatalf("DBDriver = %q, want postgres", cfg.DBDriver)
+				if cfg.DBDSN != "postgres://env:pass@db:5432/theia?sslmode=disable" {
+					t.Fatalf("DBDSN = %q, want env dsn", cfg.DBDSN)
 				}
 				if cfg.DataDir != "./from-env" {
 					t.Fatalf("DataDir = %q, want ./from-env", cfg.DataDir)

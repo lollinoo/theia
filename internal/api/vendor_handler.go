@@ -12,14 +12,14 @@ import (
 
 // VendorHandler provides HTTP handlers for vendor configuration management.
 type VendorHandler struct {
-	registry        *vendor.Registry
+	registry         *vendor.Registry
 	vendorConfigRepo domain.VendorConfigRepository
 }
 
 // NewVendorHandler creates a new VendorHandler.
 func NewVendorHandler(registry *vendor.Registry, vendorConfigRepo domain.VendorConfigRepository) *VendorHandler {
 	return &VendorHandler{
-		registry:        registry,
+		registry:         registry,
 		vendorConfigRepo: vendorConfigRepo,
 	}
 }

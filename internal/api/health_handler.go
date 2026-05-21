@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/lollinoo/theia/internal/polling"
-	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/version"
 )
 
@@ -56,7 +56,7 @@ func (h *HealthHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		},
 		"components": map[string]string{
 			"db":          dbStatus,
-			"db_dialect":  string(sqlite.DetectDialect(h.db)),
+			"db_dialect":  postgres.DialectPostgres,
 			"snmp_poller": pollerStatus,
 		},
 		"polling": pollingHealth,
