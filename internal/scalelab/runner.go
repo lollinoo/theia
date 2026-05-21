@@ -1,7 +1,6 @@
 package scalelab
 
 import (
-	"database/sql"
 	"fmt"
 	"math"
 	"sort"
@@ -9,9 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
-	sqliterepo "github.com/lollinoo/theia/internal/repository/sqlite"
 	"github.com/lollinoo/theia/internal/topology"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func Run(profile Profile, scenario Scenario, fixture ReplayFixture) (LabReport, error) {
@@ -37,22 +34,7 @@ func Run(profile Profile, scenario Scenario, fixture ReplayFixture) (LabReport, 
 }
 
 func runReplay(profile Profile, scenario Scenario, fixture ReplayFixture) (ReplayReport, error) {
-	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
-	if err != nil {
-		return ReplayReport{}, fmt.Errorf("opening in-memory sqlite db: %w", err)
-	}
-	defer db.Close()
-
-	if err := sqliterepo.RunMigrations(db); err != nil {
-		return ReplayReport{}, fmt.Errorf("running migrations: %w", err)
-	}
-
-	deviceRepo := sqliterepo.NewDeviceRepo(db, []byte("0123456789abcdef0123456789abcdef"), nil)
-	linkRepo := sqliterepo.NewLinkRepo(db, nil)
-
-	if err := seedReplayDevices(deviceRepo, fixture); err != nil {
-		return ReplayReport{}, err
-	}
+	linkRepo := newReplayLinkWriter()
 
 	observations, unresolved, selfNeighbors, err := toObservations(fixture)
 	if err != nil {
@@ -101,47 +83,6 @@ func runReplay(profile Profile, scenario Scenario, fixture ReplayFixture) (Repla
 	}, nil
 }
 
-func seedReplayDevices(repo *sqliterepo.DeviceRepo, fixture ReplayFixture) error {
-	seen := make(map[string]struct{})
-	for _, observation := range fixture.Observations {
-		if observation.LocalDeviceID != "" {
-			seen[observation.LocalDeviceID] = struct{}{}
-		}
-		if observation.RemoteDeviceID != "" {
-			seen[observation.RemoteDeviceID] = struct{}{}
-		}
-	}
-
-	for rawID := range seen {
-		id, err := uuid.Parse(rawID)
-		if err != nil {
-			return fmt.Errorf("parsing replay device id %q: %w", rawID, err)
-		}
-		device := &domain.Device{
-			ID:       id,
-			Hostname: rawID,
-			IP:       replayDeviceIP(id),
-			SNMPCredentials: domain.SNMPCredentials{
-				Version: domain.SNMPVersionV2c,
-				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-			},
-			DeviceType: domain.DeviceTypeRouter,
-			Status:     domain.DeviceStatusUp,
-			Managed:    true,
-			SysName:    rawID,
-		}
-		if err := repo.Create(device); err != nil {
-			return fmt.Errorf("creating replay device %s: %w", rawID, err)
-		}
-	}
-
-	return nil
-}
-
-func replayDeviceIP(id uuid.UUID) string {
-	return fmt.Sprintf("10.%d.%d.%d", int(id[13]), int(id[14]), int(id[15]))
-}
-
 func toObservations(fixture ReplayFixture) ([]topology.Observation, int, int, error) {
 	observations := make([]topology.Observation, 0, len(fixture.Observations))
 	unresolved := 0
@@ -185,6 +126,46 @@ func toObservations(fixture ReplayFixture) ([]topology.Observation, int, int, er
 	}
 
 	return observations, unresolved, selfNeighbors, nil
+}
+
+type replayLinkWriter struct {
+	links map[string]domain.Link
+}
+
+func newReplayLinkWriter() *replayLinkWriter {
+	return &replayLinkWriter{links: make(map[string]domain.Link)}
+}
+
+func (w *replayLinkWriter) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error) {
+	key := replayLinkKey(link)
+	if existing, ok := w.links[key]; ok {
+		link.ID = existing.ID
+		return domain.LinkUpsertResult{Kind: domain.LinkUpsertKindNoop}, nil
+	}
+
+	if link.ID == uuid.Nil {
+		link.ID = uuid.New()
+	}
+	w.links[key] = *link
+	return domain.LinkUpsertResult{
+		Created: true,
+		Changed: true,
+		Kind:    domain.LinkUpsertKindCreated,
+	}, nil
+}
+
+func replayLinkKey(link *domain.Link) string {
+	if link == nil {
+		return ""
+	}
+	left := link.SourceDeviceID.String() + "|" + link.SourceIfName
+	right := link.TargetDeviceID.String() + "|" + link.TargetIfName
+	if right < left {
+		left, right = right, left
+	}
+	return string(link.DiscoveryProtocol) + "|" +
+		left + "|" +
+		right
 }
 
 func summarizeLatencies(values []float64) LatencySummary {

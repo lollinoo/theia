@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/lollinoo/theia/internal/repository/sqlite"
 )
 
 var terminatePostgresConnections = func(ctx context.Context, dsn string) error {
@@ -37,8 +35,7 @@ type restoreMarker struct {
 	StagedDB         string `json:"staged_db"`
 	StagedBackups    string `json:"staged_backups"`
 	StagedKnownHosts string `json:"staged_known_hosts"`
-	DBDriver         string `json:"db_driver,omitempty"`
-	DBPath           string `json:"db_path"`
+	StateDir         string `json:"state_dir"`
 	DeviceBackupDir  string `json:"device_backup_dir"`
 	KnownHostsPath   string `json:"known_hosts_path"`
 	Timestamp        string `json:"timestamp"`
@@ -48,7 +45,7 @@ func newRestoreMarker(
 	stagedDB string,
 	stagedBackups string,
 	stagedKnownHosts string,
-	dbPath string,
+	stateDir string,
 	deviceBackupDir string,
 	knownHostsPath string,
 	timestamp string,
@@ -57,7 +54,7 @@ func newRestoreMarker(
 		StagedDB:         stagedDB,
 		StagedBackups:    stagedBackups,
 		StagedKnownHosts: stagedKnownHosts,
-		DBPath:           dbPath,
+		StateDir:         stateDir,
 		DeviceBackupDir:  deviceBackupDir,
 		KnownHostsPath:   knownHostsPath,
 		Timestamp:        timestamp,
@@ -65,23 +62,15 @@ func newRestoreMarker(
 }
 
 type RestoreCoordinator struct {
-	dbPath          string
+	stateDir        string
 	dbDSN           string
 	deviceBackupDir string
 	knownHostsPath  string
 }
 
-func NewRestoreCoordinator(dbPath, deviceBackupDir, knownHostsPath string) *RestoreCoordinator {
+func NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath string) *RestoreCoordinator {
 	return &RestoreCoordinator{
-		dbPath:          dbPath,
-		deviceBackupDir: deviceBackupDir,
-		knownHostsPath:  knownHostsPath,
-	}
-}
-
-func NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath string) *RestoreCoordinator {
-	return &RestoreCoordinator{
-		dbPath:          dbPath,
+		stateDir:        stateDir,
 		dbDSN:           strings.TrimSpace(dbDSN),
 		deviceBackupDir: deviceBackupDir,
 		knownHostsPath:  knownHostsPath,
@@ -93,12 +82,10 @@ func NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath
 // leave live targets unchanged and keep the marker and staging dir; post-DB
 // activation optional artifact failures keep the marker/staging and refresh the
 // staged DB for retry when the retry destination remains valid and safe; success
-// removes both the marker and staging dir. SQLite activation preserves the
-// staged DB instead of moving it so interrupted activation can retry from the
-// original staged database.
+// removes both the marker and staging dir.
 func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	ctx := context.Background()
-	markerPath := filepath.Join(filepath.Dir(c.dbPath), ".theia-restore-pending")
+	markerPath := filepath.Join(c.stateDir, ".theia-restore-pending")
 	markerData, err := os.ReadFile(markerPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -115,81 +102,64 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		return false, fmt.Errorf("restore marker missing staged_db")
 	}
 
-	dialect := sqlite.DialectSQLite
-	if strings.TrimSpace(marker.DBDriver) != "" {
-		dialect, err = sqlite.NormalizeDialect(marker.DBDriver)
-		if err != nil {
-			return false, fmt.Errorf("parse restore marker database driver: %w", err)
-		}
-	}
-
-	if filepath.Clean(marker.DBPath) != filepath.Clean(c.dbPath) ||
+	if filepath.Clean(marker.StateDir) != filepath.Clean(c.stateDir) ||
 		filepath.Clean(marker.DeviceBackupDir) != filepath.Clean(c.deviceBackupDir) ||
 		filepath.Clean(marker.KnownHostsPath) != filepath.Clean(c.knownHostsPath) {
 		return false, fmt.Errorf("restore marker targets do not match runtime paths")
 	}
 
-	stagingDir := filepath.Join(filepath.Dir(c.dbPath), ".restore-staging")
-	if err := c.validateStagedRestoreArtifacts(marker, dialect, stagingDir); err != nil {
+	stagingDir := filepath.Join(c.stateDir, ".restore-staging")
+	if err := c.validateStagedRestoreArtifacts(marker, stagingDir); err != nil {
 		return false, err
 	}
 
-	if dialect == sqlite.DialectPostgres {
-		if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore", "psql"); err != nil {
-			return false, err
-		}
-	}
-
-	if err := c.backupLiveDB(dialect); err != nil {
+	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore", "psql"); err != nil {
 		return false, err
 	}
 
-	switch dialect {
-	case sqlite.DialectPostgres:
-		if err := c.applyPostgresRestore(ctx, marker.StagedDB); err != nil {
-			return false, err
-		}
-	default:
-		if err := c.applySQLiteRestore(marker.StagedDB); err != nil {
-			return false, err
-		}
+	if err := c.backupLiveDB(); err != nil {
+		return false, err
+	}
+
+	if err := c.applyPostgresRestore(ctx, marker.StagedDB); err != nil {
+		return false, err
 	}
 
 	if restoreCoordinatorAfterDBActivationHook != nil {
 		if err := restoreCoordinatorAfterDBActivationHook(); err != nil {
-			return false, c.restoreRetryableError(marker.StagedDB, dialect, stagingDir, fmt.Errorf("after db activation hook: %w", err))
+			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("after db activation hook: %w", err))
 		}
 	}
 
 	if marker.StagedBackups != "" || marker.StagedKnownHosts != "" {
 		if err := validateRestoreStagingDir(stagingDir); err != nil {
-			return false, c.restoreRetryableError(marker.StagedDB, dialect, stagingDir, fmt.Errorf("validate restore staging dir: %w", err))
+			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate restore staging dir: %w", err))
 		}
 	}
 
 	if marker.StagedBackups != "" && marker.DeviceBackupDir != "" {
 		if _, err := os.Lstat(marker.StagedBackups); err == nil {
 			if err := validateOptionalStagedBackupDir(marker.StagedBackups); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, dialect, stagingDir, fmt.Errorf("validate staged backup dir: %w", err))
+				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate staged backup dir: %w", err))
 			}
 			if err := replaceDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, dialect, stagingDir, fmt.Errorf("activate staged backup dir: %w", err))
+				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("activate staged backup dir: %w", err))
 			}
 		} else if !os.IsNotExist(err) {
-			return false, c.restoreRetryableError(marker.StagedDB, dialect, stagingDir, fmt.Errorf("stat staged backup dir: %w", err))
+			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("stat staged backup dir: %w", err))
 		}
 	}
 
 	if marker.StagedKnownHosts != "" && marker.KnownHostsPath != "" {
 		if _, err := os.Lstat(marker.StagedKnownHosts); err == nil {
 			if err := validateOptionalStagedKnownHosts(marker.StagedKnownHosts); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, dialect, stagingDir, fmt.Errorf("validate staged known_hosts: %w", err))
+				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate staged known_hosts: %w", err))
 			}
 			if err := replaceFileForRestore(marker.StagedKnownHosts, marker.KnownHostsPath); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, dialect, stagingDir, fmt.Errorf("activate staged known_hosts: %w", err))
+				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("activate staged known_hosts: %w", err))
 			}
 		} else if !os.IsNotExist(err) {
-			return false, c.restoreRetryableError(marker.StagedDB, dialect, stagingDir, fmt.Errorf("stat staged known_hosts: %w", err))
+			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("stat staged known_hosts: %w", err))
 		}
 	}
 
@@ -206,15 +176,12 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	return true, nil
 }
 
-func (c *RestoreCoordinator) validateStagedRestoreArtifacts(marker restoreMarker, dialect sqlite.Dialect, stagingDir string) error {
+func (c *RestoreCoordinator) validateStagedRestoreArtifacts(marker restoreMarker, stagingDir string) error {
 	if err := validateRestoreStagingDir(stagingDir); err != nil {
 		return err
 	}
 
-	expectedStagedDB := filepath.Join(stagingDir, "theia.db")
-	if dialect == sqlite.DialectPostgres {
-		expectedStagedDB = filepath.Join(stagingDir, "database.dump")
-	}
+	expectedStagedDB := filepath.Join(stagingDir, "database.dump")
 	if marker.StagedDB != expectedStagedDB {
 		return fmt.Errorf("restore marker staged db path does not match runtime staging path")
 	}
@@ -314,54 +281,6 @@ func validateOptionalStagedKnownHosts(path string) error {
 	return nil
 }
 
-func (c *RestoreCoordinator) applySQLiteRestore(stagedDB string) error {
-	if err := validateStagedDBFile(stagedDB); err != nil {
-		return err
-	}
-
-	if _, err := os.Stat(c.dbPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("stat live db: %w", err)
-	}
-
-	tmpFile, err := os.CreateTemp(filepath.Dir(c.dbPath), ".theia-db-restore-*")
-	if err != nil {
-		return fmt.Errorf("create restored db temp: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close restored db temp: %w", err)
-	}
-	cleanupTemp := true
-	defer func() {
-		if cleanupTemp {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-
-	if err := copyFileForRestore(stagedDB, tmpPath); err != nil {
-		return fmt.Errorf("copy staged db: %w", err)
-	}
-
-	if err := os.Remove(c.dbPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove live db: %w", err)
-	}
-	if err := os.Remove(c.dbPath + "-wal"); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove live db wal: %w", err)
-	}
-	if err := os.Remove(c.dbPath + "-shm"); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove live db shm: %w", err)
-	}
-	if err := os.Rename(tmpPath, c.dbPath); err != nil {
-		return fmt.Errorf("activate staged db: %w", err)
-	}
-	cleanupTemp = false
-	if err := os.Chmod(c.dbPath, 0600); err != nil {
-		return fmt.Errorf("chmod restored db: %w", err)
-	}
-	return nil
-}
-
 func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB string) error {
 	if strings.TrimSpace(c.dbDSN) == "" {
 		return fmt.Errorf("postgres restore requires db_dsn")
@@ -406,36 +325,16 @@ func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB 
 	return nil
 }
 
-func (c *RestoreCoordinator) backupLiveDB(dialect sqlite.Dialect) error {
-	if dialect == sqlite.DialectPostgres {
-		bakPath := c.dbPath + ".pre-restore.dump"
-		if _, err := os.Stat(bakPath); err == nil {
-			return nil
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("stat existing db backup: %w", err)
-		}
-		if err := c.dumpLivePostgresDatabase(context.Background(), bakPath); err != nil {
-			return fmt.Errorf("backup current db: %w", err)
-		}
-		return nil
-	}
-
-	if _, err := os.Stat(c.dbPath); err == nil {
-		bakPath := c.dbPath + ".pre-restore.bak"
-		if _, err := os.Stat(bakPath); err == nil {
-			return nil
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("stat existing db backup: %w", err)
-		}
-
-		if err := copyFileForRestore(c.dbPath, bakPath); err != nil {
-			return fmt.Errorf("backup current db: %w", err)
-		}
+func (c *RestoreCoordinator) backupLiveDB() error {
+	bakPath := filepath.Join(c.stateDir, "postgres.pre-restore.dump")
+	if _, err := os.Stat(bakPath); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat live db: %w", err)
+		return fmt.Errorf("stat existing db backup: %w", err)
 	}
-
+	if err := c.dumpLivePostgresDatabase(context.Background(), bakPath); err != nil {
+		return fmt.Errorf("backup current db: %w", err)
+	}
 	return nil
 }
 
@@ -465,34 +364,23 @@ func (c *RestoreCoordinator) dumpLivePostgresDatabase(ctx context.Context, destP
 	return nil
 }
 
-func (c *RestoreCoordinator) restoreRetryableError(stagedDB string, dialect sqlite.Dialect, stagingDir string, activationErr error) error {
-	if err := validateRetryStagedDBDestination(stagedDB, dialect, stagingDir); err != nil {
+func (c *RestoreCoordinator) restoreRetryableError(stagedDB string, stagingDir string, activationErr error) error {
+	if err := validateRetryStagedDBDestination(stagedDB, stagingDir); err != nil {
 		return fmt.Errorf("%w (skip restore staged db for retry: %v)", activationErr, err)
 	}
 
-	if dialect == sqlite.DialectPostgres {
-		if err := c.dumpLivePostgresDatabase(context.Background(), stagedDB); err != nil {
-			return fmt.Errorf("%w (restore staged db for retry: %v)", activationErr, err)
-		}
-		return activationErr
-	}
-
-	if err := copyFileForRestore(c.dbPath, stagedDB); err != nil {
+	if err := c.dumpLivePostgresDatabase(context.Background(), stagedDB); err != nil {
 		return fmt.Errorf("%w (restore staged db for retry: %v)", activationErr, err)
 	}
-
 	return activationErr
 }
 
-func validateRetryStagedDBDestination(stagedDB string, dialect sqlite.Dialect, stagingDir string) error {
+func validateRetryStagedDBDestination(stagedDB string, stagingDir string) error {
 	if err := validateRestoreStagingDir(stagingDir); err != nil {
 		return err
 	}
 
-	expectedStagedDB := filepath.Join(stagingDir, "theia.db")
-	if dialect == sqlite.DialectPostgres {
-		expectedStagedDB = filepath.Join(stagingDir, "database.dump")
-	}
+	expectedStagedDB := filepath.Join(stagingDir, "database.dump")
 	if stagedDB != expectedStagedDB {
 		return fmt.Errorf("restore marker staged db path does not match runtime staging path")
 	}
