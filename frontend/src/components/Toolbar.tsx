@@ -6,7 +6,6 @@ interface ToolbarProps {
   onAddDevice: () => void;
   onCreateLink: () => void;
   onAlerts: () => void;
-  onSettings: () => void;
   onToggleEditMode: () => void;
   editMode: boolean;
   alertCount?: number;
@@ -17,7 +16,6 @@ export function Toolbar({
   onAddDevice,
   onCreateLink,
   onAlerts,
-  onSettings,
   onToggleEditMode,
   editMode,
   alertCount = 0,
@@ -66,11 +64,6 @@ export function Toolbar({
           )}
         </div>
       ),
-    },
-    {
-      label: `Settings (${modifier}+,)`,
-      onClick: onSettings,
-      icon: <MaterialIcon name="settings" />,
     },
   ];
 

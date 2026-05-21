@@ -17,8 +17,9 @@ import {
   updateAdminUser,
 } from '../api/client';
 import { MaterialIcon } from './MaterialIcon';
+import { SettingsPanel } from './SettingsPanel';
 
-type AdminTab = 'overview' | 'users' | 'roles' | 'audit';
+type AdminTab = 'overview' | 'users' | 'roles' | 'audit' | 'settings';
 
 const tabs: Array<{ id: AdminTab; label: string }> = [
   { id: 'overview', label: 'Overview' },
@@ -26,6 +27,8 @@ const tabs: Array<{ id: AdminTab; label: string }> = [
   { id: 'roles', label: 'Roles' },
   { id: 'audit', label: 'Audit Logs' },
 ];
+
+const settingsTab = { id: 'settings', label: 'Settings' } as const;
 
 const emptyDashboard: AdminDashboardResponse = {
   stats: {
@@ -126,6 +129,16 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
       setResetToken(null);
     }
   }, [activeTab]);
+
+  const canManageSettings =
+    permissions.includes('settings:read') && permissions.includes('settings:update');
+  const visibleTabs = canManageSettings ? [...tabs, settingsTab] : tabs;
+
+  useEffect(() => {
+    if (activeTab === 'settings' && !canManageSettings) {
+      setActiveTab('overview');
+    }
+  }, [activeTab, canManageSettings]);
 
   const filteredUsers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -286,7 +299,7 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
         </div>
 
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="Admin sections">
-          {tabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -475,6 +488,11 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
 
             {activeTab === 'roles' && <RolesTable roles={roles} permissions={permissions} />}
             {activeTab === 'audit' && <AuditTable logs={auditLogs} />}
+            {activeTab === 'settings' && canManageSettings && (
+              <section className="rounded-lg border border-outline-subtle bg-surface">
+                <SettingsPanel />
+              </section>
+            )}
           </>
         )}
       </div>

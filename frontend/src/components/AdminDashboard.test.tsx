@@ -15,6 +15,8 @@ import {
 } from '../api/client';
 import { AdminDashboard } from './AdminDashboard';
 
+const settingsPanelPropsMock = vi.hoisted(() => vi.fn());
+
 vi.mock('../api/client', () => ({
   fetchAdminDashboard: vi.fn(),
   fetchAdminUsers: vi.fn(),
@@ -27,6 +29,13 @@ vi.mock('../api/client', () => ({
   assignAdminUserRole: vi.fn(),
   removeAdminUserRole: vi.fn(),
   createAdminPasswordReset: vi.fn(),
+}));
+
+vi.mock('./SettingsPanel', () => ({
+  SettingsPanel: (props: { onSettingsChange?: () => void }) => {
+    settingsPanelPropsMock(props);
+    return <div data-testid="global-settings-panel">Global settings</div>;
+  },
 }));
 
 const adminUser = {
@@ -62,6 +71,7 @@ describe('AdminDashboard', () => {
     vi.mocked(assignAdminUserRole).mockReset();
     vi.mocked(removeAdminUserRole).mockReset();
     vi.mocked(createAdminPasswordReset).mockReset();
+    settingsPanelPropsMock.mockClear();
 
     vi.mocked(fetchAdminDashboard).mockResolvedValue({
       stats: {
@@ -127,6 +137,30 @@ describe('AdminDashboard', () => {
     expect(await screen.findByText('user.update')).toBeInTheDocument();
     expect(screen.getByText('admin-user-1')).toBeInTheDocument();
     expect(screen.getByText('user:user-1')).toBeInTheDocument();
+  });
+
+  it('exposes global settings inside admin only when the user can read and update settings', async () => {
+    vi.mocked(fetchAdminPermissions).mockResolvedValue([
+      'admin:dashboard:read',
+      'settings:read',
+      'settings:update',
+    ]);
+
+    render(<AdminDashboard />);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Settings' }));
+
+    expect(screen.getByTestId('global-settings-panel')).toBeInTheDocument();
+    expect(settingsPanelPropsMock).toHaveBeenLastCalledWith({});
+  });
+
+  it('hides global settings from admin users without settings update permission', async () => {
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['admin:dashboard:read']);
+
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('Total users')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Settings' })).not.toBeInTheDocument();
   });
 
   it('searches users and confirms privilege-changing actions', async () => {

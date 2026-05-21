@@ -67,12 +67,6 @@ export function useCanvasMenus({ reactFlow }: UseCanvasMenusParams): UseCanvasMe
         description: 'Toggle edit mode',
         handler: () => setEditMode((m) => !m),
       },
-      settings: {
-        key: ',',
-        ctrl: true,
-        description: 'Settings',
-        handler: () => setPanelContent({ type: 'settings' }),
-      },
       zoomIn: {
         key: '+',
         description: 'Zoom in',
@@ -117,7 +111,6 @@ export function useCanvasMenus({ reactFlow }: UseCanvasMenusParams): UseCanvasMe
   function getPanelTitle(): string {
     if (!panelContent) return '';
     if (panelContent.type === 'alerts') return 'Alerts';
-    if (panelContent.type === 'settings') return 'Settings';
     if (panelContent.type === 'addDevice') return 'Add Device';
     if (panelContent.type === 'create-link') return 'Create Link';
     if (panelContent.type === 'link-details') return 'Link Details';

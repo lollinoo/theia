@@ -16,7 +16,6 @@ const defaultProps = {
   onAddDevice: vi.fn(),
   onCreateLink: vi.fn(),
   onAlerts: vi.fn(),
-  onSettings: vi.fn(),
   onToggleEditMode: vi.fn(),
   editMode: false,
   alertCount: 0,
@@ -28,13 +27,13 @@ describe('Toolbar (COMP-04)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
     // With MaterialIcon mocked, the mocked spans appear instead of SVGs
     const materialIcons = container.querySelectorAll('[data-testid^="material-icon-"]');
-    expect(materialIcons.length).toBeGreaterThanOrEqual(7);
+    expect(materialIcons.length).toBeGreaterThanOrEqual(6);
     // No real SVG elements should remain (only the mocked spans)
     const svgElements = container.querySelectorAll('svg');
     expect(svgElements.length).toBe(0);
   });
 
-  it('renders icons for all 6 toolbar actions', () => {
+  it('renders icons for canvas actions without a global settings shortcut', () => {
     render(<Toolbar {...defaultProps} />);
     fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
 
@@ -43,7 +42,7 @@ describe('Toolbar (COMP-04)', () => {
     expect(screen.getByTestId('material-icon-add')).toBeInTheDocument();
     expect(screen.getByTestId('material-icon-link')).toBeInTheDocument();
     expect(screen.getByTestId('material-icon-notifications')).toBeInTheDocument();
-    expect(screen.getAllByTestId('material-icon-settings').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByTestId('material-icon-settings')).not.toBeInTheDocument();
   });
 
   it('does not render border-b separators between buttons', () => {
@@ -79,7 +78,7 @@ describe('Toolbar (COMP-04)', () => {
     expect(screen.getByTitle(/Add Device/)).toBeInTheDocument();
     expect(screen.getByTitle(/Create Link/)).toBeInTheDocument();
     expect(screen.getByTitle('Alerts')).toBeInTheDocument();
-    expect(screen.getByTitle(/Settings/)).toBeInTheDocument();
+    expect(screen.queryByTitle(/Settings/)).not.toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
   });
 
@@ -115,7 +114,7 @@ describe('Toolbar (COMP-04)', () => {
     expect(screen.getByTitle(/Add Device/)).toBeInTheDocument();
     expect(screen.getByTitle(/Create Link/)).toBeInTheDocument();
     expect(screen.getByTitle('Alerts')).toBeInTheDocument();
-    expect(screen.getByTitle(/Settings/)).toBeInTheDocument();
+    expect(screen.queryByTitle(/Settings/)).not.toBeInTheDocument();
     expect(screen.getByTitle(/Search/).className).not.toContain('hidden sm:flex');
   });
 });

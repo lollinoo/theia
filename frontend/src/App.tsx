@@ -122,6 +122,8 @@ function App() {
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
   const { hasPermission } = useAuth();
   const canViewAdmin = hasPermission('admin:dashboard:read');
+  const canReadSettings = hasPermission('settings:read');
+  const canUpdateSettings = hasPermission('settings:update');
 
   useEffect(() => {
     if (canvasInteractionActive) {
@@ -542,8 +544,11 @@ function App() {
             onDuplicateMap={handleDuplicateMap}
             onDeleteMap={handleDeleteMap}
             onSetPrimaryMap={handleSetPrimaryMap}
+            canOpenSettings={canViewAdmin && canReadSettings && canUpdateSettings}
             onOpenSettings={() => {
-              setActiveView('canvas');
+              if (canViewAdmin && canReadSettings && canUpdateSettings) {
+                setActiveView('admin');
+              }
             }}
           />
         </div>
