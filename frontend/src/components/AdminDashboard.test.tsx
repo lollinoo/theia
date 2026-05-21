@@ -183,6 +183,7 @@ describe('AdminDashboard', () => {
 
     fireEvent.click(within(row).getByRole('button', { name: 'Reset password for alice' }));
     expect(await screen.findByText('reset-token-1')).toBeInTheDocument();
+    expect(screen.getByText(/Use this token from the sign-in reset form/i)).toBeInTheDocument();
   });
 
   it('clears one-time reset tokens when leaving users, refreshing, dismissing, or hiding admin', async () => {

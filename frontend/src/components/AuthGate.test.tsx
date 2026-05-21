@@ -6,6 +6,7 @@ import {
   fetchCurrentUser,
   loginUser,
   logoutUser,
+  resetPasswordWithToken,
 } from '../api/client';
 import { AuthProvider } from '../contexts/AuthContext';
 import { AuthGate } from './AuthGate';
@@ -15,6 +16,7 @@ vi.mock('../api/client', () => ({
   loginUser: vi.fn(),
   logoutUser: vi.fn(),
   changePassword: vi.fn(),
+  resetPasswordWithToken: vi.fn(),
 }));
 
 function renderGate() {
@@ -47,6 +49,7 @@ describe('AuthGate', () => {
     vi.mocked(loginUser).mockReset();
     vi.mocked(logoutUser).mockReset();
     vi.mocked(changePassword).mockReset();
+    vi.mocked(resetPasswordWithToken).mockReset();
   });
 
   it('renders children when a password session already exists', async () => {
@@ -128,5 +131,35 @@ describe('AuthGate', () => {
 
     expect(await screen.findByText('Sign in to Theia')).toBeInTheDocument();
     expect(screen.queryByText('secured app')).not.toBeInTheDocument();
+  });
+
+  it('completes a one-time reset token before returning to sign in', async () => {
+    vi.mocked(fetchCurrentUser).mockResolvedValue({ authenticated: false });
+    vi.mocked(resetPasswordWithToken).mockResolvedValue(undefined);
+
+    renderGate();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Use reset token' }));
+    fireEvent.change(screen.getByLabelText('One-time reset token'), {
+      target: { value: ' reset-token-1 ' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'Correct Horse Battery Staple 2026!' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'Correct Horse Battery Staple 2026!' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reset password' }));
+
+    await waitFor(() => {
+      expect(resetPasswordWithToken).toHaveBeenCalledWith({
+        token: 'reset-token-1',
+        new_password: 'Correct Horse Battery Staple 2026!',
+      });
+    });
+    expect(loginUser).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText('Password reset complete. Sign in with your new password.'),
+    ).toBeInTheDocument();
   });
 });

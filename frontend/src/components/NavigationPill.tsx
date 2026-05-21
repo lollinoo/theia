@@ -18,6 +18,7 @@ interface NavigationPillProps {
   onAreaSelect: (areaId: string | null) => void;
   onMapSelect: (map: CanvasMap) => void;
   onManageMaps: () => void;
+  onLogout: () => void;
 }
 
 function NavigationPill({
@@ -32,6 +33,7 @@ function NavigationPill({
   onAreaSelect,
   onMapSelect,
   onManageMaps,
+  onLogout,
 }: NavigationPillProps) {
   const [version, setVersion] = useState('');
   const areaScrollerRef = useRef<HTMLDivElement>(null);
@@ -392,6 +394,16 @@ function NavigationPill({
         title={resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}
       >
         <MaterialIcon name={resolvedTheme === 'dark' ? 'light_mode' : 'dark_mode'} size={20} />
+      </button>
+
+      <button
+        type="button"
+        onClick={onLogout}
+        className="flex items-center rounded-full border border-transparent px-2 py-2 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-3"
+        aria-label="Logout"
+        title="Logout"
+      >
+        <MaterialIcon name="logout" size={20} />
       </button>
     </div>
   );

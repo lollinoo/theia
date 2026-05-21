@@ -65,6 +65,7 @@ const defaultProps = {
   onAreaSelect: vi.fn(),
   onMapSelect: vi.fn(),
   onManageMaps: vi.fn(),
+  onLogout: vi.fn(),
 };
 
 describe('NavigationPill', () => {
@@ -187,6 +188,16 @@ describe('NavigationPill', () => {
     fireEvent.click(screen.getByRole('option', { name: /Backbone Map/ }));
 
     expect(onMapSelect).toHaveBeenCalledWith(defaultProps.maps[1]);
+  });
+
+  it('renders a logout action for every authenticated user', () => {
+    const onLogout = vi.fn();
+
+    render(<NavigationPill {...defaultProps} onLogout={onLogout} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Logout' }));
+
+    expect(onLogout).toHaveBeenCalledTimes(1);
   });
 
   it('clicking All areas calls onAreaSelect with null for the current map', () => {

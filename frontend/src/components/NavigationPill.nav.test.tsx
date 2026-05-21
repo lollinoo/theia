@@ -54,6 +54,7 @@ const defaultProps = {
   onAreaSelect: vi.fn(),
   onMapSelect: vi.fn(),
   onManageMaps: vi.fn(),
+  onLogout: vi.fn(),
 };
 
 describe('NavigationPill (COMP-03: NavBar requirements)', () => {

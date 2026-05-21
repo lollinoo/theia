@@ -41,6 +41,7 @@ ICON_NAMES=(
   light_mode
   link
   lock_reset
+  logout
   map
   notifications
   open_in_full

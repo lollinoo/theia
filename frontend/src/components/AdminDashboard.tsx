@@ -342,6 +342,10 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
             <div className="mt-2 rounded-md bg-bg px-3 py-2 font-mono text-sm text-on-bg">
               {resetToken.token}
             </div>
+            <p className="mt-2 text-xs text-on-bg-secondary">
+              Use this token from the sign-in reset form to set a new password. It is not a login
+              password.
+            </p>
           </div>
         )}
 

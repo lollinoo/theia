@@ -120,7 +120,7 @@ function App() {
   const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
-  const { hasPermission } = useAuth();
+  const { hasPermission, logout } = useAuth();
   const canViewAdmin = hasPermission('admin:dashboard:read');
   const canReadSettings = hasPermission('settings:read');
   const canUpdateSettings = hasPermission('settings:update');
@@ -516,6 +516,9 @@ function App() {
           onMapSelect={handleNavigationMapSelect}
           onManageMaps={() => {
             setActiveView('hub');
+          }}
+          onLogout={() => {
+            void logout();
           }}
         />
         {/* All views stay mounted; inactive ones keep dimensions for React Flow. */}

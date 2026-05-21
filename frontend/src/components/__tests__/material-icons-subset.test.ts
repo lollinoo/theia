@@ -23,6 +23,7 @@ const REQUIRED_AUTH_ADMIN_ICONS = [
   'admin_panel_settings',
   'block',
   'lock_reset',
+  'logout',
   'refresh',
 ] as const;
 
