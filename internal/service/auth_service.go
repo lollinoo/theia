@@ -342,6 +342,30 @@ func (s *AuthService) CurrentUser(ctx context.Context, rawSessionToken string) (
 	return &AuthenticatedUser{User: *aggregate, Session: authenticatedSessionFromDomain(*session)}, nil
 }
 
+// ValidateCSRF verifies that a raw CSRF token belongs to the current session.
+func (s *AuthService) ValidateCSRF(ctx context.Context, rawSessionToken, rawCSRFToken string) error {
+	rawSessionToken = strings.TrimSpace(rawSessionToken)
+	rawCSRFToken = strings.TrimSpace(rawCSRFToken)
+	if rawSessionToken == "" || rawCSRFToken == "" {
+		return ErrInvalidSession
+	}
+	session, err := s.sessions.GetSessionByTokenHash(ctx, security.HashToken(rawSessionToken, s.sessionSecret))
+	if err != nil {
+		if errors.Is(err, domain.ErrAuthSessionNotFound) {
+			return ErrInvalidSession
+		}
+		return fmt.Errorf("getting auth session for csrf validation: %w", err)
+	}
+	now := s.now()
+	if session.RevokedAt != nil || !session.ExpiresAt.After(now) {
+		return ErrInvalidSession
+	}
+	if security.HashToken(rawCSRFToken, s.sessionSecret) != session.CSRFTokenHash {
+		return ErrInvalidSession
+	}
+	return nil
+}
+
 // Logout revokes the session identified by rawSessionToken.
 func (s *AuthService) Logout(ctx context.Context, rawSessionToken string) error {
 	session, err := s.sessions.GetSessionByTokenHash(ctx, security.HashToken(strings.TrimSpace(rawSessionToken), s.sessionSecret))

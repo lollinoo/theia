@@ -397,6 +397,30 @@ func TestAuthServiceCurrentUserSessionLookup(t *testing.T) {
 	}
 }
 
+func TestAuthServiceValidateCSRFUsesStoredSessionTokenHash(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	user := h.addUser(t, "csrf", "csrf@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, user.ID, domain.RoleViewer)
+
+	login, err := h.service.Login(context.Background(), LoginInput{
+		Identifier: user.Username,
+		Password:   testAuthPassword,
+	})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	if err := h.service.ValidateCSRF(context.Background(), login.SessionToken, login.CSRFToken); err != nil {
+		t.Fatalf("ValidateCSRF valid token: %v", err)
+	}
+	if err := h.service.ValidateCSRF(context.Background(), login.SessionToken, "wrong-csrf"); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("ValidateCSRF wrong token error = %v, want ErrInvalidSession", err)
+	}
+	if err := h.service.ValidateCSRF(context.Background(), "wrong-session", login.CSRFToken); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("ValidateCSRF wrong session error = %v, want ErrInvalidSession", err)
+	}
+}
+
 func TestAuthServiceLogoutRevokesSessionAndCurrentUserFails(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	user := h.addUser(t, "logout", "logout@example.test", testAuthPassword, domain.UserStatusActive)

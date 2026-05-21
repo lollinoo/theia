@@ -7,7 +7,8 @@
 #
 # All values can be overridden with environment variables:
 #   THEIA_LISTEN_ADDR, THEIA_DB_DSN, THEIA_DATA_DIR, THEIA_LOG_LEVEL,
-#   THEIA_BRIDGE_BINARIES_DIR, THEIA_DEPLOYMENT_ENV, THEIA_OPERATOR_TOKEN,
+#   THEIA_BRIDGE_BINARIES_DIR, THEIA_DEPLOYMENT_ENV, THEIA_SESSION_SECRET,
+#   THEIA_SESSION_TTL_MINUTES, THEIA_PASSWORD_RESET_TTL_MINUTES,
 #   THEIA_METRICS_TOKEN, THEIA_ALLOWED_ORIGINS
 # =============================================================================
 
@@ -27,14 +28,20 @@ data_dir: "./data"
 # Leave empty to disable bridge downloads.
 bridge_binaries_dir: ""
 
-# Set to production or staging to require operator and secret validation.
+# Set to production or staging to require secret validation.
 deployment_env: ""
 
-# Operator login/API bearer token. Required for staging and production.
+# Password-session signing and token hashing secret. Required for staging and production.
 # Keep this blank in tracked files and provide it through local env or secrets.
-operator_token: ""
+session_secret: ""
 
-# Optional separate bearer token for /metrics. Falls back to operator_token when empty.
+# Session TTL in minutes. Zero uses the application default.
+session_ttl_minutes: 0
+
+# Password reset token TTL in minutes. Zero uses the application default.
+password_reset_ttl_minutes: 0
+
+# Dedicated bearer token for /metrics. Required for staging and production.
 metrics_token: ""
 
 # Optional exact browser origins allowed to reach REST/WebSocket endpoints.

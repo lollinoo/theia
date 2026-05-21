@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -20,9 +21,7 @@ func TestEnsurePrivateDirCreatesMissingDirWith0700(t *testing.T) {
 	if !info.IsDir() {
 		t.Fatal("path is not a directory")
 	}
-	if got := info.Mode().Perm(); got != privateDirMode {
-		t.Fatalf("dir mode = %o, want %o", got, privateDirMode)
-	}
+	assertRuntimePathMode(t, "dir", info.Mode().Perm(), privateDirMode)
 }
 
 func TestEnsurePrivateDirTightensExisting0755DirTo0700(t *testing.T) {
@@ -39,9 +38,7 @@ func TestEnsurePrivateDirTightensExisting0755DirTo0700(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}
-	if got := info.Mode().Perm(); got != privateDirMode {
-		t.Fatalf("dir mode = %o, want %o", got, privateDirMode)
-	}
+	assertRuntimePathMode(t, "dir", info.Mode().Perm(), privateDirMode)
 }
 
 func TestEnsurePrivateDirLeavesExisting0700DirUnchanged(t *testing.T) {
@@ -63,11 +60,13 @@ func TestEnsurePrivateDirLeavesExisting0700DirUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat() after ensurePrivateDir = %v", err)
 	}
-	if got := after.Mode().Perm(); got != privateDirMode {
-		t.Fatalf("dir mode = %o, want %o", got, privateDirMode)
-	}
-	if got := after.Mode().Perm(); got != before.Mode().Perm() {
-		t.Fatalf("dir mode changed from %o to %o", before.Mode().Perm(), got)
+	if runtime.GOOS != "windows" {
+		if got := after.Mode().Perm(); got != privateDirMode {
+			t.Fatalf("dir mode = %o, want %o", got, privateDirMode)
+		}
+		if got := after.Mode().Perm(); got != before.Mode().Perm() {
+			t.Fatalf("dir mode changed from %o to %o", before.Mode().Perm(), got)
+		}
 	}
 }
 
@@ -93,9 +92,7 @@ func TestEnsurePrivateDirRejectsSymlink(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "private")
-	if err := os.Symlink(target, path); err != nil {
-		t.Fatalf("Symlink() error = %v", err)
-	}
+	createRuntimeTestSymlink(t, target, path)
 
 	err := ensurePrivateDir(path)
 	if err == nil {
@@ -120,9 +117,7 @@ func TestEnsureFileModeTightensExisting0644FileTo0600(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}
-	if got := info.Mode().Perm(); got != privateFileMode {
-		t.Fatalf("file mode = %o, want %o", got, privateFileMode)
-	}
+	assertRuntimePathMode(t, "file", info.Mode().Perm(), privateFileMode)
 }
 
 func TestEnsureFileModeRejectsDirectory(t *testing.T) {
@@ -137,5 +132,25 @@ func TestEnsureFileModeRejectsDirectory(t *testing.T) {
 	}
 	if got, want := err.Error(), "ensure file mode: path is a directory"; got != want {
 		t.Fatalf("ensureFileMode() error = %q, want %q", got, want)
+	}
+}
+
+func createRuntimeTestSymlink(t *testing.T, target, path string) {
+	t.Helper()
+	if err := os.Symlink(target, path); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("Windows symlink privilege unavailable: %v", err)
+		}
+		t.Fatalf("Symlink() error = %v", err)
+	}
+}
+
+func assertRuntimePathMode(t *testing.T, name string, got, want os.FileMode) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if got != want {
+		t.Fatalf("%s mode = %o, want %o", name, got, want)
 	}
 }

@@ -179,7 +179,7 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 				}
 			}
 			if surface.requireBlankEnvValue {
-				for _, key := range []string{"THEIA_DB_DSN", "POSTGRES_PASSWORD", "THEIA_OPERATOR_TOKEN", "THEIA_METRICS_TOKEN"} {
+				for _, key := range []string{"THEIA_DB_DSN", "POSTGRES_PASSWORD", "THEIA_SESSION_SECRET", "THEIA_METRICS_TOKEN"} {
 					value, ok := envExampleAssignment(content, key)
 					if !ok {
 						t.Errorf("%s must include %s=", surface.path, key)
@@ -195,9 +195,13 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 				if got := countActiveLines(content, postgresPasswordRequirement); got < 2 {
 					t.Errorf("%s must pass POSTGRES_PASSWORD to both backend and postgres service; found %d active entries", surface.path, got)
 				}
-				const operatorTokenRequirement = "- THEIA_OPERATOR_TOKEN=${THEIA_OPERATOR_TOKEN:?THEIA_OPERATOR_TOKEN must be set}"
-				if got := countActiveLines(content, operatorTokenRequirement); got != 1 {
-					t.Errorf("%s must pass required THEIA_OPERATOR_TOKEN to backend; found %d active entries", surface.path, got)
+				const sessionSecretRequirement = "- THEIA_SESSION_SECRET=${THEIA_SESSION_SECRET:?THEIA_SESSION_SECRET must be set}"
+				if got := countActiveLines(content, sessionSecretRequirement); got != 1 {
+					t.Errorf("%s must pass required THEIA_SESSION_SECRET to backend; found %d active entries", surface.path, got)
+				}
+				const metricsTokenRequirement = "- THEIA_METRICS_TOKEN=${THEIA_METRICS_TOKEN:?THEIA_METRICS_TOKEN must be set}"
+				if got := countActiveLines(content, metricsTokenRequirement); got != 1 {
+					t.Errorf("%s must pass required THEIA_METRICS_TOKEN to backend; found %d active entries", surface.path, got)
 				}
 			}
 		})
@@ -362,9 +366,7 @@ func TestRuntimeBootstrapRunHardensBackupDirForPostgres(t *testing.T) {
 		t.Fatalf("Mkdir(backupTarget): %v", err)
 	}
 	backupLink := filepath.Join(runtimeDir, "backup-link")
-	if err := os.Symlink(backupTarget, backupLink); err != nil {
-		t.Fatalf("Symlink(backupLink): %v", err)
-	}
+	createRuntimeTestSymlink(t, backupTarget, backupLink)
 
 	originalLoadRuntimeConfig := loadRuntimeConfig
 	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
@@ -432,9 +434,7 @@ func TestRuntimeBootstrapRunTightensExistingKnownHostsFile(t *testing.T) {
 	if statErr != nil {
 		t.Fatalf("Stat(known_hosts): %v", statErr)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("known_hosts mode = %04o, want %04o", got, 0o600)
-	}
+	assertRuntimePathMode(t, "known_hosts", info.Mode().Perm(), 0o600)
 }
 
 func TestRuntimeBootstrapRunRejectsMissingPostgresDSNWithGuidance(t *testing.T) {
@@ -566,20 +566,26 @@ func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(
 			want: []string{"POSTGRES_PASSWORD", "example"},
 		},
 		{
-			name: "production requires operator token",
+			name: "production requires session secret",
 			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
-			want: []string{"THEIA_OPERATOR_TOKEN", "required"},
+			want: []string{"THEIA_SESSION_SECRET", "required"},
 		},
 		{
-			name: "production rejects weak operator token",
-			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", OperatorToken: "short-token"},
+			name: "production rejects weak session secret",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", SessionSecret: "short-secret"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
-			want: []string{"THEIA_OPERATOR_TOKEN", "weak"},
+			want: []string{"THEIA_SESSION_SECRET", "weak"},
+		},
+		{
+			name: "production requires metrics token",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", SessionSecret: "0123456789abcdef0123456789abcdef"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_METRICS_TOKEN", "required"},
 		},
 		{
 			name: "staging rejects weak metrics token",
-			cfg:  &runtimeConfig{DeploymentEnv: "staging", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", OperatorToken: "0123456789abcdef0123456789abcdef", MetricsToken: "short-token"},
+			cfg:  &runtimeConfig{DeploymentEnv: "staging", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", SessionSecret: "0123456789abcdef0123456789abcdef", MetricsToken: "short-token"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
 			want: []string{"THEIA_METRICS_TOKEN", "weak"},
 		},
@@ -620,7 +626,7 @@ func TestValidateDeploymentSecretPolicyAllowsDevelopmentBlankAndSafeProductionSe
 		},
 		{
 			name: "production accepts non-placeholder secrets",
-			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", OperatorToken: "0123456789abcdef0123456789abcdef"},
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", SessionSecret: "0123456789abcdef0123456789abcdef", MetricsToken: "abcdef0123456789abcdef0123456789"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "another-strong-password"},
 		},
 	}

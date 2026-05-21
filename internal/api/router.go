@@ -17,6 +17,7 @@ import (
 // Uses standard net/http (no framework needed at this scale).
 type routerOptions struct {
 	security SecurityConfig
+	auth     authProvider
 }
 
 // RouterOption customizes router middleware behavior.
@@ -26,6 +27,19 @@ type RouterOption func(*routerOptions)
 func WithSecurity(config SecurityConfig) RouterOption {
 	return func(options *routerOptions) {
 		options.security = config
+	}
+}
+
+// WithAuthService configures password-session authentication and RBAC.
+func WithAuthService(authService *service.AuthService) RouterOption {
+	return func(options *routerOptions) {
+		options.auth = authService
+	}
+}
+
+func withAuthProvider(auth authProvider) RouterOption {
+	return func(options *routerOptions) {
+		options.auth = auth
 	}
 }
 
@@ -59,7 +73,7 @@ func NewRouter(
 	}
 
 	mux := http.NewServeMux()
-	sessionHandler := NewSessionHandler(routerOpts.security)
+	authHandler := NewAuthHandler(routerOpts.auth)
 
 	deviceHandler := NewDeviceHandler(
 		deviceService,
@@ -651,21 +665,28 @@ func NewRouter(
 		mux.Handle("/api/v1/ws", wsHandler)
 	}
 
-	handler := applyMiddleware(mux, routerOpts.security, true, 1<<20)
-	downloadHandler := applyMiddleware(mux, routerOpts.security, false, 0)
-	publicSessionHandler := applyPublicMiddleware(sessionHandler, routerOpts.security, true, 16<<10)
+	handler := applyMiddleware(mux, routerOpts.security, routerOpts.auth, true, 1<<20)
+	downloadHandler := applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, 0)
+	publicAuthHandler := applyPublicMiddleware(authHandler, routerOpts.security, true, 16<<10)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/session" {
-			publicSessionHandler.ServeHTTP(w, r)
+		if isAuthRoute(r.URL.Path) {
+			publicAuthHandler.ServeHTTP(w, r)
 			return
 		}
 
 		// WebSocket upgrades must bypass the JSON/logger middleware chain because
 		// the wrapped ResponseWriter does not expose the hijacker interface.
 		if wsHandler != nil && r.URL.Path == "/api/v1/ws" {
-			authenticatedRequest, ok := AuthenticateOperatorRequest(w, r, routerOpts.security)
+			authenticatedRequest, user, _, ok := AuthenticateUserRequest(w, r, routerOpts.auth)
 			if !ok {
+				return
+			}
+			if user.User.User.MustChangePassword {
+				writeAuthCodeError(w, http.StatusForbidden, "password_change_required", "password change required")
+				return
+			}
+			if !requireAnyPermission(w, routerOpts.auth, user, []string{domain.PermissionTopologyRead}) {
 				return
 			}
 			wsHandler.ServeHTTP(w, authenticatedRequest)
@@ -690,7 +711,7 @@ func NewRouter(
 			if instanceBackupService != nil {
 				restoreLimit = instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
 			}
-			applyMiddleware(mux, routerOpts.security, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes).ServeHTTP(w, r)
+			applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes).ServeHTTP(w, r)
 			return
 		}
 
@@ -702,6 +723,15 @@ func NewRouter(
 
 		handler.ServeHTTP(w, r)
 	})
+}
+
+func isAuthRoute(path string) bool {
+	switch path {
+	case "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/me", "/api/v1/auth/password/change", "/api/v1/session":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseCanvasMapRoute(path string) (uuid.UUID, string, bool) {

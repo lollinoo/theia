@@ -2,14 +2,13 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/lollinoo/theia/internal/security"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 func TestMaxBodySizeAllowed(t *testing.T) {
@@ -132,10 +131,9 @@ func TestWebSocketBypassesMaxBodySize(t *testing.T) {
 	}
 }
 
-func TestOperatorAuthRequiresBearerTokenWhenConfigured(t *testing.T) {
-	config := SecurityConfig{OperatorToken: "0123456789abcdef0123456789abcdef"}
+func TestUserAuthRequiresSession(t *testing.T) {
 	served := false
-	handler := OperatorAuth(config)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := UserAuth(newFakeAPIAuthProvider())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		served = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -152,19 +150,20 @@ func TestOperatorAuthRequiresBearerTokenWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestOperatorAuthAddsSubjectForBearerToken(t *testing.T) {
-	config := SecurityConfig{OperatorToken: "0123456789abcdef0123456789abcdef"}
-	handler := OperatorAuth(config)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		subject := OperatorSubjectFromRequest(r)
-		if !subject.Authenticated || subject.Name != "alice" {
-			t.Fatalf("subject = %+v, want authenticated alice", subject)
+func TestUserAuthAddsAuthenticatedUserContext(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, domain.PermissionSettingsRead))
+	handler := UserAuth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := AuthenticatedUserFromRequest(r)
+		if !ok || user.User.User.Username != "alice" {
+			t.Fatalf("user = %+v ok=%t, want authenticated alice", user, ok)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
-	req.Header.Set("Authorization", "Bearer 0123456789abcdef0123456789abcdef")
-	req.Header.Set("X-Theia-Operator", "alice")
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	addSessionCookie(req, testSessionToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -187,15 +186,15 @@ func TestRequireAuthenticatedOperatorRejectsAnonymousContext(t *testing.T) {
 
 func TestRequireAuthenticatedOperatorAcceptsSubjectContext(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/id/reveal", nil)
-	req = req.WithContext(security.WithOperatorSubject(context.Background(), security.OperatorSubject{Name: "alice", Authenticated: true}))
+	req = withTestOperator(req)
 	rec := httptest.NewRecorder()
 
 	subject, ok := requireAuthenticatedOperator(rec, req, "credential reveal")
 	if !ok {
 		t.Fatal("expected authenticated context to be accepted")
 	}
-	if subject.Name != "alice" {
-		t.Fatalf("subject = %+v, want alice", subject)
+	if subject.Name != "test-operator" {
+		t.Fatalf("subject = %+v, want test-operator", subject)
 	}
 }
 
