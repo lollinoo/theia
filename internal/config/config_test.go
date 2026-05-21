@@ -35,6 +35,9 @@ func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 	t.Setenv("THEIA_DB_DSN", "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable")
 	t.Setenv("THEIA_DATA_DIR", "/tmp/theia-data")
 	t.Setenv("THEIA_DEPLOYMENT_ENV", "production")
+	t.Setenv("THEIA_OPERATOR_TOKEN", "0123456789abcdef0123456789abcdef")
+	t.Setenv("THEIA_METRICS_TOKEN", "abcdef0123456789abcdef0123456789")
+	t.Setenv("THEIA_ALLOWED_ORIGINS", "https://theia.example.com,http://localhost:3000")
 
 	cfg, err := Load("/nonexistent-config.yaml")
 	if err != nil {
@@ -50,6 +53,15 @@ func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 	if cfg.DeploymentEnv != "production" {
 		t.Fatalf("DeploymentEnv = %q, want production", cfg.DeploymentEnv)
 	}
+	if cfg.OperatorToken == "" {
+		t.Fatal("OperatorToken should be populated from env")
+	}
+	if cfg.MetricsToken == "" {
+		t.Fatal("MetricsToken should be populated from env")
+	}
+	if got, want := cfg.AllowedOrigins, []string{"https://theia.example.com", "http://localhost:3000"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("AllowedOrigins = %#v, want %#v", got, want)
+	}
 }
 
 func TestLoad_FileHandling(t *testing.T) {
@@ -61,7 +73,7 @@ func TestLoad_FileHandling(t *testing.T) {
 	}{
 		{
 			name:     "loads values from yaml file",
-			contents: "listen_addr: \":9090\"\ndb_dsn: postgres://user:pass@db:5432/theia?sslmode=disable\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\ndeployment_env: staging\n",
+			contents: "listen_addr: \":9090\"\ndb_dsn: postgres://user:pass@db:5432/theia?sslmode=disable\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\ndeployment_env: staging\noperator_token: yaml-token\nmetrics_token: yaml-metrics\nallowed_origins:\n  - https://theia.example.com\n",
 			assert: func(t *testing.T, cfg *Config, err error) {
 				t.Helper()
 				if err != nil {
@@ -81,6 +93,15 @@ func TestLoad_FileHandling(t *testing.T) {
 				}
 				if cfg.DeploymentEnv != "staging" {
 					t.Fatalf("DeploymentEnv = %q, want staging", cfg.DeploymentEnv)
+				}
+				if cfg.OperatorToken != "yaml-token" {
+					t.Fatalf("OperatorToken = %q, want yaml-token", cfg.OperatorToken)
+				}
+				if cfg.MetricsToken != "yaml-metrics" {
+					t.Fatalf("MetricsToken = %q, want yaml-metrics", cfg.MetricsToken)
+				}
+				if got, want := cfg.AllowedOrigins, []string{"https://theia.example.com"}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("AllowedOrigins = %#v, want %#v", got, want)
 				}
 			},
 		},
