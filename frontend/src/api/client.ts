@@ -69,6 +69,11 @@ export interface ChangePasswordPayload {
   new_password: string;
 }
 
+export interface ResetPasswordPayload {
+  token: string;
+  new_password: string;
+}
+
 export interface AdminDashboardStats {
   total_users: number;
   active_users: number;
@@ -298,6 +303,10 @@ export async function changePassword(payload: ChangePasswordPayload): Promise<Au
   return parseAuthSession(
     await requestJSONWithBody('/api/v1/auth/password/change', 'POST', payload),
   );
+}
+
+export async function resetPasswordWithToken(payload: ResetPasswordPayload): Promise<void> {
+  await requestJSONWithBody('/api/v1/auth/password/reset', 'POST', payload);
 }
 
 export async function fetchAdminDashboard(): Promise<AdminDashboardResponse> {

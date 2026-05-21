@@ -25,6 +25,7 @@ type authProvider interface {
 	CurrentUser(ctx context.Context, rawSessionToken string) (*service.AuthenticatedUser, error)
 	Logout(ctx context.Context, rawSessionToken string) error
 	ChangePassword(ctx context.Context, input service.PasswordChangeInput) error
+	CompletePasswordReset(ctx context.Context, input service.PasswordResetCompleteInput) error
 	ValidateCSRF(ctx context.Context, rawSessionToken, rawCSRFToken string) error
 	RequirePermission(user *service.AuthenticatedUser, permissionKey string) error
 	RequireRole(user *service.AuthenticatedUser, roleID string) error
@@ -83,6 +84,12 @@ func (h *AuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handlePasswordChange(w, r)
+	case "/api/v1/auth/password/reset":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handlePasswordReset(w, r)
 	case "/api/v1/session":
 		h.handleLegacySession(w, r)
 	default:
@@ -188,6 +195,32 @@ func (h *AuthHandler) handlePasswordChange(w http.ResponseWriter, r *http.Reques
 		Authenticated: true,
 		User:          safeUserFromAggregate(updated.User),
 	})
+}
+
+func (h *AuthHandler) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
+	if h.auth == nil {
+		writeError(w, http.StatusServiceUnavailable, "authentication service not configured")
+		return
+	}
+	var req struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"new_password"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Token) == "" || strings.TrimSpace(req.NewPassword) == "" {
+		writeError(w, http.StatusBadRequest, "token and new_password are required")
+		return
+	}
+	if err := h.auth.CompletePasswordReset(r.Context(), service.PasswordResetCompleteInput{
+		Token:       req.Token,
+		NewPassword: req.NewPassword,
+	}); err != nil {
+		writePasswordResetError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *AuthHandler) handleLegacySession(w http.ResponseWriter, r *http.Request) {
@@ -335,6 +368,19 @@ func writePasswordChangeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidCredentials):
 		writeAuthCodeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid current password")
+	case errors.Is(err, service.ErrPasswordPolicyViolation):
+		writeAuthCodeError(w, http.StatusBadRequest, "password_policy_violation", "password does not meet policy")
+	default:
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+	}
+}
+
+func writePasswordResetError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrInvalidCredentials):
+		writeAuthCodeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid reset token")
+	case errors.Is(err, service.ErrPasswordResetExpired):
+		writeAuthCodeError(w, http.StatusGone, "password_reset_expired", "password reset token expired")
 	case errors.Is(err, service.ErrPasswordPolicyViolation):
 		writeAuthCodeError(w, http.StatusBadRequest, "password_policy_violation", "password does not meet policy")
 	default:

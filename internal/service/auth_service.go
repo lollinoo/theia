@@ -192,22 +192,69 @@ func NewAuthService(config AuthServiceConfig) (*AuthService, error) {
 	}, nil
 }
 
-// EnsureBootstrapSuperAdmin creates the fixed bootstrap super-admin when no users exist.
+// EnsureBootstrapSuperAdmin creates or repairs the fixed bootstrap super-admin when none are active.
 func (s *AuthService) EnsureBootstrapSuperAdmin(ctx context.Context) (*domain.User, bool, error) {
-	count, err := s.users.CountUsers(ctx)
+	count, err := s.users.CountActiveSuperAdmins(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("counting auth users: %w", err)
+		return nil, false, fmt.Errorf("counting active bootstrap super admins: %w", err)
 	}
 	if count > 0 {
 		return nil, false, nil
 	}
 
 	now := s.now()
+	user, created, err := s.ensureBootstrapUser(ctx, now)
+	if err != nil {
+		return nil, false, err
+	}
+	repaired := created
+	if user.Status != domain.UserStatusActive || user.LockedUntil != nil {
+		user.Status = domain.UserStatusActive
+		user.MustChangePassword = true
+		user.FailedLoginAttempts = 0
+		user.LockedUntil = nil
+		user.UpdatedAt = now
+		if err := s.users.UpdateUser(ctx, user); err != nil {
+			return nil, false, fmt.Errorf("reactivating bootstrap super admin: %w", err)
+		}
+		repaired = true
+	}
+	aggregate, err := s.users.GetUserRolesAndPermissions(ctx, user.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading bootstrap super admin roles: %w", err)
+	}
+	if !aggregate.HasRole(domain.RoleSuperAdmin) {
+		if err := s.roles.AssignRole(ctx, user.ID, domain.RoleSuperAdmin, nil); err != nil {
+			return nil, false, fmt.Errorf("assigning bootstrap super admin role: %w", err)
+		}
+		repaired = true
+	}
+	if repaired {
+		action := "auth.bootstrap_super_admin_repaired"
+		if created {
+			action = "auth.bootstrap_super_admin_created"
+		}
+		if err := s.appendAuditLog(ctx, nil, &user.ID, action, "auth", user.ID.String(), `{}`); err != nil {
+			return nil, false, err
+		}
+	}
+	return user, created, nil
+}
+
+func (s *AuthService) ensureBootstrapUser(ctx context.Context, now time.Time) (*domain.User, bool, error) {
+	user, err := s.users.GetUserByLoginIdentifier(ctx, normalizeLoginIdentifier("administrator"))
+	if err == nil {
+		return user, false, nil
+	}
+	if !errors.Is(err, domain.ErrAuthUserNotFound) {
+		return nil, false, fmt.Errorf("getting bootstrap super admin: %w", err)
+	}
+
 	passwordHash, err := security.HashPassword("theia")
 	if err != nil {
 		return nil, false, fmt.Errorf("hashing bootstrap password: %w", err)
 	}
-	user := domain.User{
+	user = &domain.User{
 		ID:                 uuid.New(),
 		Username:           "administrator",
 		UsernameNormalized: normalizeLoginIdentifier("administrator"),
@@ -220,16 +267,10 @@ func (s *AuthService) EnsureBootstrapSuperAdmin(ctx context.Context) (*domain.Us
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
-	if err := s.users.CreateUser(ctx, &user); err != nil {
+	if err := s.users.CreateUser(ctx, user); err != nil {
 		return nil, false, fmt.Errorf("creating bootstrap super admin: %w", err)
 	}
-	if err := s.roles.AssignRole(ctx, user.ID, domain.RoleSuperAdmin, nil); err != nil {
-		return nil, false, fmt.Errorf("assigning bootstrap super admin role: %w", err)
-	}
-	if err := s.appendAuditLog(ctx, nil, &user.ID, "auth.bootstrap_super_admin_created", "auth", user.ID.String(), `{}`); err != nil {
-		return nil, false, err
-	}
-	return &user, true, nil
+	return user, true, nil
 }
 
 // Login authenticates a username or email and creates a server-side session.

@@ -250,6 +250,134 @@ func TestAuthPasswordChangeAllowedWhilePasswordChangeRequired(t *testing.T) {
 	}
 }
 
+func TestAuthPasswordResetPublicRouteCompletesWithoutSessionOrCSRF(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/auth/password/reset",
+		strings.NewReader(`{"token":"raw-reset-token","new_password":"Correct Horse Battery Staple Reset 2026!"}`),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	if !auth.completePasswordResetCalled {
+		t.Fatal("CompletePasswordReset was not called")
+	}
+	if auth.completedPasswordReset.Token != "raw-reset-token" {
+		t.Fatalf("reset token = %q, want raw-reset-token", auth.completedPasswordReset.Token)
+	}
+	if auth.completedPasswordReset.NewPassword != "Correct Horse Battery Staple Reset 2026!" {
+		t.Fatalf("new password = %q", auth.completedPasswordReset.NewPassword)
+	}
+}
+
+func TestAuthPasswordResetMapsServiceErrorsWithoutTokenLeak(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "invalid token",
+			err:        service.ErrInvalidCredentials,
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "invalid_credentials",
+		},
+		{
+			name:       "expired token",
+			err:        service.ErrPasswordResetExpired,
+			wantStatus: http.StatusGone,
+			wantCode:   "password_reset_expired",
+		},
+		{
+			name:       "password policy",
+			err:        service.ErrPasswordPolicyViolation,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "password_policy_violation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth := newFakeAPIAuthProvider()
+			auth.completePasswordResetErr = tt.err
+			router := newAuthTestRouter(auth)
+
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/auth/password/reset",
+				strings.NewReader(`{"token":"sensitive-reset-token","new_password":"short"}`),
+			)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if strings.Contains(body, "sensitive-reset-token") || strings.Contains(body, "token_hash") {
+				t.Fatalf("password reset error response leaked token material: %s", body)
+			}
+			var parsed map[string]string
+			if err := json.NewDecoder(strings.NewReader(body)).Decode(&parsed); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if parsed["code"] != tt.wantCode {
+				t.Fatalf("code = %q, want %q", parsed["code"], tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestAuthPasswordResetPublicRouteUsesOriginGuard(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	router := NewRouter(
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"",
+		nil,
+		nil,
+		WithSecurity(SecurityConfig{AllowedOrigins: []string{"https://ops.example"}}),
+		withAuthProvider(auth),
+	)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/auth/password/reset",
+		strings.NewReader(`{"token":"raw-reset-token","new_password":"Correct Horse Battery Staple Reset 2026!"}`),
+	)
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if auth.completePasswordResetCalled {
+		t.Fatal("CompletePasswordReset was called despite rejected origin")
+	}
+}
+
 func TestAuthLoginSetsSessionAndCSRFCookies(t *testing.T) {
 	auth := newFakeAPIAuthProvider()
 	auth.login = &service.LoginResult{
@@ -397,17 +525,20 @@ func newAuthTestRouter(auth *fakeAPIAuthProvider) http.Handler {
 }
 
 type fakeAPIAuthProvider struct {
-	login                 *service.LoginResult
-	loginErr              error
-	changeErr             error
-	usersByToken          map[string]*service.AuthenticatedUser
-	csrfByToken           map[string]string
-	logoutTokens          []string
-	changePasswordCalled  bool
-	adminUsers            []domain.UserWithRolesAndPermissions
-	createdAdminUser      *domain.UserWithRolesAndPermissions
-	listAdminUsersCalled  bool
-	createAdminUserCalled bool
+	login                       *service.LoginResult
+	loginErr                    error
+	changeErr                   error
+	completePasswordResetErr    error
+	usersByToken                map[string]*service.AuthenticatedUser
+	csrfByToken                 map[string]string
+	logoutTokens                []string
+	changePasswordCalled        bool
+	completePasswordResetCalled bool
+	completedPasswordReset      service.PasswordResetCompleteInput
+	adminUsers                  []domain.UserWithRolesAndPermissions
+	createdAdminUser            *domain.UserWithRolesAndPermissions
+	listAdminUsersCalled        bool
+	createAdminUserCalled       bool
 }
 
 func newFakeAPIAuthProvider() *fakeAPIAuthProvider {
@@ -467,6 +598,12 @@ func (f *fakeAPIAuthProvider) ChangePassword(_ context.Context, input service.Pa
 		}
 	}
 	return service.ErrInvalidSession
+}
+
+func (f *fakeAPIAuthProvider) CompletePasswordReset(_ context.Context, input service.PasswordResetCompleteInput) error {
+	f.completePasswordResetCalled = true
+	f.completedPasswordReset = input
+	return f.completePasswordResetErr
 }
 
 func (f *fakeAPIAuthProvider) ValidateCSRF(_ context.Context, rawSessionToken, csrfToken string) error {

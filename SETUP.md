@@ -436,10 +436,14 @@ Base path:
 - Production: `http://localhost/api/v1`
 - Staging: `http://localhost:3001/api/v1`
 
-Programmatic API clients should first `POST /auth/login` with `{"identifier":"<username>","password":"<password>"}` and store the returned `theia_session` and `theia_csrf` cookies. Send the cookies on API requests; also send `X-CSRF-Token: <theia_csrf>` on POST, PUT, PATCH, and DELETE requests.
+Programmatic API clients should first `POST /auth/login` with `{"identifier":"<username>","password":"<password>"}` and store the returned `theia_session` and `theia_csrf` cookies. Send the cookies on API requests; also send `X-CSRF-Token: <theia_csrf>` on POST, PUT, PATCH, and DELETE requests. One-time admin reset tokens are redeemed through public `POST /auth/password/reset` with `{"token":"<token>","new_password":"<new password>"}`.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/auth/login` | Start a password session |
+| GET | `/auth/me` | Get the current password session |
+| POST | `/auth/password/change` | Change password for the current session |
+| POST | `/auth/password/reset` | Complete a one-time password reset token |
 | GET | `/health` | Health check |
 | GET | `/devices` | List all devices |
 | POST | `/devices` | Add a device |

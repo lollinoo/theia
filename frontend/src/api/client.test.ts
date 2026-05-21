@@ -41,6 +41,7 @@ import {
   removeAdminUserRole,
   removeDeviceFromCanvasMap,
   resetCanvasBootstrapRequestCache,
+  resetPasswordWithToken,
   restoreInstanceBackup,
   revealSNMPProfile,
   runTopologyDiscovery,
@@ -281,6 +282,30 @@ describe('password sessions', () => {
       expect.objectContaining({
         method: 'POST',
         headers: expect.not.objectContaining({ 'X-CSRF-Token': expect.any(String) }),
+      }),
+    );
+  });
+
+  it('completes password reset with token without bearer authorization', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await resetPasswordWithToken({
+      token: 'one-time-reset-token',
+      new_password: 'Correct Horse Battery Staple Reset 2026!',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/auth/password/reset',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          token: 'one-time-reset-token',
+          new_password: 'Correct Horse Battery Staple Reset 2026!',
+        }),
+        headers: expect.not.objectContaining({ Authorization: expect.any(String) }),
       }),
     );
   });

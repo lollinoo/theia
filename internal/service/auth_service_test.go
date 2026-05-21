@@ -743,6 +743,71 @@ func TestAuthServiceBootstrapCreatesForcedChangeSuperAdminOnlyForEmptyStore(t *t
 	}
 }
 
+func TestAuthServiceBootstrapRepairsExistingAdministratorWithoutRole(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	administrator := h.addUser(t, "administrator", "administrator@theia.local", "theia", domain.UserStatusActive)
+
+	repaired, didCreate, err := h.service.EnsureBootstrapSuperAdmin(ctx)
+	if err != nil {
+		t.Fatalf("EnsureBootstrapSuperAdmin: %v", err)
+	}
+	if didCreate {
+		t.Fatal("EnsureBootstrapSuperAdmin didCreate = true, want false for repaired user")
+	}
+	if repaired == nil || repaired.ID != administrator.ID {
+		t.Fatalf("repaired user = %#v, want existing administrator %s", repaired, administrator.ID)
+	}
+	aggregate, err := h.store.GetUserRolesAndPermissions(ctx, administrator.ID)
+	if err != nil {
+		t.Fatalf("GetUserRolesAndPermissions: %v", err)
+	}
+	if !aggregate.HasRole(domain.RoleSuperAdmin) {
+		t.Fatalf("administrator roles = %#v, want super_admin", aggregate.Roles)
+	}
+	count, err := h.store.CountUsers(ctx)
+	if err != nil {
+		t.Fatalf("CountUsers: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("user count = %d, want 1", count)
+	}
+}
+
+func TestAuthServiceBootstrapCreatesAdministratorWhenUsersExistWithoutActiveSuperAdmin(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	h.addUser(t, "viewer", "viewer@example.test", testAuthPassword, domain.UserStatusActive)
+
+	created, didCreate, err := h.service.EnsureBootstrapSuperAdmin(ctx)
+	if err != nil {
+		t.Fatalf("EnsureBootstrapSuperAdmin: %v", err)
+	}
+	if !didCreate {
+		t.Fatal("EnsureBootstrapSuperAdmin didCreate = false, want true")
+	}
+	if created == nil || created.Username != "administrator" {
+		t.Fatalf("created user = %#v, want administrator", created)
+	}
+	if created.Status != domain.UserStatusActive || !created.MustChangePassword {
+		t.Fatalf("bootstrap status/must-change = %s/%t", created.Status, created.MustChangePassword)
+	}
+	ok, err := security.VerifyPassword("theia", created.PasswordHash)
+	if err != nil {
+		t.Fatalf("VerifyPassword bootstrap password: %v", err)
+	}
+	if !ok {
+		t.Fatal("bootstrap password does not verify")
+	}
+	aggregate, err := h.store.GetUserRolesAndPermissions(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetUserRolesAndPermissions: %v", err)
+	}
+	if !aggregate.HasRole(domain.RoleSuperAdmin) {
+		t.Fatalf("bootstrap roles = %#v, want super_admin", aggregate.Roles)
+	}
+}
+
 func TestAuthServiceAdminCreateUserSetsSafeDefaultsAndAudits(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	ctx := context.Background()
