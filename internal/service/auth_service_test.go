@@ -743,6 +743,127 @@ func TestAuthServiceBootstrapCreatesForcedChangeSuperAdminOnlyForEmptyStore(t *t
 	}
 }
 
+func TestAuthServiceAdminCreateUserSetsSafeDefaultsAndAudits(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+	actor := h.authenticatedUser(t, actorUser.ID)
+
+	created, err := h.service.CreateAdminUser(ctx, actor, AdminCreateUserInput{
+		Username:    "new-admin",
+		Email:       "new-admin@example.test",
+		DisplayName: "New Admin",
+		Password:    "Created Correct Horse Battery 2026!",
+		Roles:       []string{domain.RoleAdmin},
+	})
+	if err != nil {
+		t.Fatalf("CreateAdminUser: %v", err)
+	}
+	if created.User.Status != domain.UserStatusActive || !created.User.MustChangePassword {
+		t.Fatalf("created status/must-change = %s/%t, want active/true", created.User.Status, created.User.MustChangePassword)
+	}
+	if created.User.CreatedBy == nil || *created.User.CreatedBy != actorUser.ID {
+		t.Fatalf("CreatedBy = %#v, want actor %s", created.User.CreatedBy, actorUser.ID)
+	}
+	stored := h.store.user(t, created.User.ID)
+	ok, err := security.VerifyPassword("Created Correct Horse Battery 2026!", stored.PasswordHash)
+	if err != nil {
+		t.Fatalf("VerifyPassword: %v", err)
+	}
+	if !ok {
+		t.Fatal("created password hash does not verify")
+	}
+	aggregate, err := h.store.GetUserRolesAndPermissions(ctx, created.User.ID)
+	if err != nil {
+		t.Fatalf("GetUserRolesAndPermissions: %v", err)
+	}
+	if !aggregate.HasRole(domain.RoleAdmin) {
+		t.Fatalf("created roles = %#v, want admin", aggregate.Roles)
+	}
+	assertAuditAction(t, h.store.auditLogs(), "admin.user_created")
+}
+
+func TestAuthServiceAdminNonSuperCannotAssignSuperAdmin(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "admin", "admin@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleAdmin)
+	target := h.addUser(t, "target", "target@example.test", testAuthPassword, domain.UserStatusActive)
+
+	_, err := h.service.AssignAdminUserRole(ctx, h.authenticatedUser(t, actorUser.ID), AdminUserRoleInput{
+		UserID: target.ID,
+		RoleID: domain.RoleSuperAdmin,
+	})
+	if !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("AssignAdminUserRole error = %v, want ErrPermissionDenied", err)
+	}
+	aggregate, err := h.store.GetUserRolesAndPermissions(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("GetUserRolesAndPermissions: %v", err)
+	}
+	if aggregate.HasRole(domain.RoleSuperAdmin) {
+		t.Fatal("non-super admin assigned super_admin")
+	}
+}
+
+func TestAuthServiceAdminSuperAdminCanAssignRoleAndAudits(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+	target := h.addUser(t, "target", "target@example.test", testAuthPassword, domain.UserStatusActive)
+
+	if _, err := h.service.AssignAdminUserRole(ctx, h.authenticatedUser(t, actorUser.ID), AdminUserRoleInput{
+		UserID: target.ID,
+		RoleID: domain.RoleAdmin,
+	}); err != nil {
+		t.Fatalf("AssignAdminUserRole: %v", err)
+	}
+	aggregate, err := h.store.GetUserRolesAndPermissions(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("GetUserRolesAndPermissions: %v", err)
+	}
+	if !aggregate.HasRole(domain.RoleAdmin) {
+		t.Fatalf("target roles = %#v, want admin", aggregate.Roles)
+	}
+	assertAuditAction(t, h.store.auditLogs(), "admin.user_role_assigned")
+}
+
+func TestAuthServiceAdminCannotRemoveOrDisableLastActiveSuperAdmin(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+	actor := h.authenticatedUser(t, actorUser.ID)
+
+	_, err := h.service.RemoveAdminUserRole(ctx, actor, AdminUserRoleInput{
+		UserID: actorUser.ID,
+		RoleID: domain.RoleSuperAdmin,
+	})
+	if !errors.Is(err, ErrAdminLastActiveSuperAdmin) {
+		t.Fatalf("RemoveAdminUserRole error = %v, want ErrAdminLastActiveSuperAdmin", err)
+	}
+	_, err = h.service.SetAdminUserStatus(ctx, actor, AdminUserStatusInput{
+		UserID: actorUser.ID,
+		Status: domain.UserStatusDisabled,
+	})
+	if !errors.Is(err, ErrAdminLastActiveSuperAdmin) {
+		t.Fatalf("SetAdminUserStatus error = %v, want ErrAdminLastActiveSuperAdmin", err)
+	}
+	stored := h.store.user(t, actorUser.ID)
+	if stored.Status != domain.UserStatusActive {
+		t.Fatalf("status = %s, want active", stored.Status)
+	}
+	aggregate, err := h.store.GetUserRolesAndPermissions(ctx, actorUser.ID)
+	if err != nil {
+		t.Fatalf("GetUserRolesAndPermissions: %v", err)
+	}
+	if !aggregate.HasRole(domain.RoleSuperAdmin) {
+		t.Fatal("last active super_admin role was removed")
+	}
+}
+
 type fakeAuthStore struct {
 	mu             sync.Mutex
 	users          map[uuid.UUID]domain.User
@@ -1178,4 +1299,34 @@ func copyAuthUser(user domain.User) *domain.User {
 
 func testNormalize(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func (h *authServiceHarness) authenticatedUser(t *testing.T, userID uuid.UUID) *AuthenticatedUser {
+	t.Helper()
+
+	aggregate, err := h.store.GetUserRolesAndPermissions(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("GetUserRolesAndPermissions: %v", err)
+	}
+	return &AuthenticatedUser{
+		User: *aggregate,
+		Session: AuthenticatedSession{
+			ID:     uuid.New(),
+			UserID: userID,
+		},
+	}
+}
+
+func assertAuditAction(t *testing.T, logs []domain.AuditLog, action string) {
+	t.Helper()
+
+	for _, log := range logs {
+		if log.Action == action {
+			if strings.Contains(log.MetadataJSON, "password") || strings.Contains(log.MetadataJSON, "token") {
+				t.Fatalf("audit log %q metadata contains a secret-bearing key: %s", action, log.MetadataJSON)
+			}
+			return
+		}
+	}
+	t.Fatalf("audit action %q not found in %#v", action, logs)
 }

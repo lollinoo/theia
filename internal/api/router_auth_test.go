@@ -32,6 +32,7 @@ func TestNewRouterRequiresUserSessionForProtectedSurface(t *testing.T) {
 		{name: "bridge token", method: http.MethodPost, path: "/api/v1/bridge/token/00000000-0000-0000-0000-000000000001"},
 		{name: "health", method: http.MethodGet, path: "/api/v1/health"},
 		{name: "websocket", method: http.MethodGet, path: "/api/v1/ws"},
+		{name: "admin users", method: http.MethodGet, path: "/api/v1/admin/users"},
 	}
 
 	for _, tt := range tests {
@@ -72,6 +73,118 @@ func TestNewRouterRejectsAuthenticatedUserMissingPermission(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminUsersListDeniedWithoutUsersRead(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, domain.PermissionAdminDashboard))
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	addSessionCookie(req, testSessionToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if auth.listAdminUsersCalled {
+		t.Fatal("ListAdminUsers was called despite missing users:read")
+	}
+}
+
+func TestAdminUsersListReturnsSafePayload(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionUsersRead))
+	auth.adminUsers = []domain.UserWithRolesAndPermissions{{
+		User: domain.User{
+			ID:           uuid.New(),
+			Username:     "operator",
+			Email:        "operator@example.test",
+			DisplayName:  "Operator",
+			Status:       domain.UserStatusActive,
+			PasswordHash: "secret-password-hash",
+		},
+		Roles: []domain.Role{{ID: domain.RoleViewer, Name: domain.RoleViewer}},
+	}}
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	addSessionCookie(req, testSessionToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{"password_hash", "secret-password-hash", "token_hash", "reset_token_hash"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("admin users response leaked %q in %s", forbidden, body)
+		}
+	}
+	var parsed struct {
+		Users []safeUserResponse `json:"users"`
+	}
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&parsed); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(parsed.Users) != 1 || parsed.Users[0].Username != "operator" {
+		t.Fatalf("users response = %+v, want operator", parsed.Users)
+	}
+	if !auth.listAdminUsersCalled {
+		t.Fatal("ListAdminUsers was not called")
+	}
+}
+
+func TestAdminUsersCreateReturnsSafePayload(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionUsersCreate))
+	auth.createdAdminUser = &domain.UserWithRolesAndPermissions{
+		User: domain.User{
+			ID:                 uuid.New(),
+			Username:           "created",
+			Email:              "created@example.test",
+			DisplayName:        "Created User",
+			Status:             domain.UserStatusActive,
+			MustChangePassword: true,
+			PasswordHash:       "secret-password-hash",
+		},
+		Roles: []domain.Role{{ID: domain.RoleUser, Name: domain.RoleUser}},
+	}
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/users",
+		strings.NewReader(`{"username":"created","email":"created@example.test","display_name":"Created User","password":"Correct Horse Battery Staple 2026!","roles":["user"]}`),
+	)
+	addSessionCookie(req, testSessionToken)
+	addCSRFCookieAndHeader(req, testCSRFToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{"password_hash", "secret-password-hash", "token_hash", "reset_token_hash"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("admin user create response leaked %q in %s", forbidden, body)
+		}
+	}
+	var parsed struct {
+		User safeUserResponse `json:"user"`
+	}
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&parsed); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if parsed.User.Username != "created" || !parsed.User.MustChangePassword {
+		t.Fatalf("created user response = %+v, want safe created user", parsed.User)
+	}
+	if !auth.createAdminUserCalled {
+		t.Fatal("CreateAdminUser was not called")
 	}
 }
 
@@ -284,13 +397,17 @@ func newAuthTestRouter(auth *fakeAPIAuthProvider) http.Handler {
 }
 
 type fakeAPIAuthProvider struct {
-	login                *service.LoginResult
-	loginErr             error
-	changeErr            error
-	usersByToken         map[string]*service.AuthenticatedUser
-	csrfByToken          map[string]string
-	logoutTokens         []string
-	changePasswordCalled bool
+	login                 *service.LoginResult
+	loginErr              error
+	changeErr             error
+	usersByToken          map[string]*service.AuthenticatedUser
+	csrfByToken           map[string]string
+	logoutTokens          []string
+	changePasswordCalled  bool
+	adminUsers            []domain.UserWithRolesAndPermissions
+	createdAdminUser      *domain.UserWithRolesAndPermissions
+	listAdminUsersCalled  bool
+	createAdminUserCalled bool
 }
 
 func newFakeAPIAuthProvider() *fakeAPIAuthProvider {
@@ -378,6 +495,64 @@ func (f *fakeAPIAuthProvider) RequireRole(user *service.AuthenticatedUser, roleI
 		return nil
 	}
 	return service.ErrPermissionDenied
+}
+
+func (f *fakeAPIAuthProvider) AdminDashboard(context.Context, *service.AuthenticatedUser) (*service.AdminDashboardResult, error) {
+	return &service.AdminDashboardResult{}, nil
+}
+
+func (f *fakeAPIAuthProvider) ListAdminUsers(context.Context, *service.AuthenticatedUser, domain.UserListFilter) ([]domain.UserWithRolesAndPermissions, error) {
+	f.listAdminUsersCalled = true
+	return f.adminUsers, nil
+}
+
+func (f *fakeAPIAuthProvider) CreateAdminUser(context.Context, *service.AuthenticatedUser, service.AdminCreateUserInput) (*domain.UserWithRolesAndPermissions, error) {
+	f.createAdminUserCalled = true
+	if f.createdAdminUser == nil {
+		return nil, domain.ErrAuthUserNotFound
+	}
+	return f.createdAdminUser, nil
+}
+
+func (f *fakeAPIAuthProvider) GetAdminUser(_ context.Context, _ *service.AuthenticatedUser, id uuid.UUID) (*domain.UserWithRolesAndPermissions, error) {
+	for _, user := range f.adminUsers {
+		if user.User.ID == id {
+			return &user, nil
+		}
+	}
+	return nil, domain.ErrAuthUserNotFound
+}
+
+func (f *fakeAPIAuthProvider) UpdateAdminUser(context.Context, *service.AuthenticatedUser, service.AdminUpdateUserInput) (*domain.UserWithRolesAndPermissions, error) {
+	return f.createdAdminUser, nil
+}
+
+func (f *fakeAPIAuthProvider) SetAdminUserStatus(context.Context, *service.AuthenticatedUser, service.AdminUserStatusInput) (*domain.UserWithRolesAndPermissions, error) {
+	return f.createdAdminUser, nil
+}
+
+func (f *fakeAPIAuthProvider) AssignAdminUserRole(context.Context, *service.AuthenticatedUser, service.AdminUserRoleInput) (*domain.UserWithRolesAndPermissions, error) {
+	return f.createdAdminUser, nil
+}
+
+func (f *fakeAPIAuthProvider) RemoveAdminUserRole(context.Context, *service.AuthenticatedUser, service.AdminUserRoleInput) (*domain.UserWithRolesAndPermissions, error) {
+	return f.createdAdminUser, nil
+}
+
+func (f *fakeAPIAuthProvider) CreateAdminPasswordResetToken(context.Context, *service.AuthenticatedUser, uuid.UUID) (*service.PasswordResetTokenResult, error) {
+	return &service.PasswordResetTokenResult{Token: "raw-reset-token", ExpiresAt: time.Now().UTC().Add(time.Minute)}, nil
+}
+
+func (f *fakeAPIAuthProvider) ListAdminRoles(context.Context, *service.AuthenticatedUser) ([]service.AdminRole, error) {
+	return nil, nil
+}
+
+func (f *fakeAPIAuthProvider) ListAdminPermissions(context.Context, *service.AuthenticatedUser) ([]domain.Permission, error) {
+	return nil, nil
+}
+
+func (f *fakeAPIAuthProvider) ListAdminAuditLogs(context.Context, *service.AuthenticatedUser, domain.AuditLogFilter) ([]domain.AuditLog, error) {
+	return nil, nil
 }
 
 func testAPIUser(username string, mustChange bool, permissions ...string) *service.AuthenticatedUser {

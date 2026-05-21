@@ -347,9 +347,35 @@ func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 		return permissionsForMethod(method, domain.PermissionRolesRead, domain.PermissionRolesAssign, domain.PermissionRolesUpdate, domain.PermissionRolesUpdate), true
 	}
 	if strings.HasPrefix(path, "/api/v1/admin") {
-		return []string{domain.PermissionAdminDashboard}, true
+		return adminRoutePermissions(method, path)
 	}
 	return nil, false
+}
+
+func adminRoutePermissions(method, path string) ([]string, bool) {
+	switch {
+	case path == "/api/v1/admin/dashboard":
+		return []string{domain.PermissionAdminDashboard}, true
+	case path == "/api/v1/admin/users":
+		return permissionsForMethod(method, domain.PermissionUsersRead, domain.PermissionUsersCreate, domain.PermissionUsersUpdate, ""), true
+	case strings.HasPrefix(path, "/api/v1/admin/users/"):
+		if strings.HasSuffix(path, "/password-reset") {
+			return []string{domain.PermissionUsersUpdate}, true
+		}
+		if strings.Contains(path, "/roles") {
+			return []string{domain.PermissionRolesAssign}, true
+		}
+		if strings.HasSuffix(path, "/status") {
+			return permissionsForMethod(method, "", "", domain.PermissionUsersUpdate, ""), true
+		}
+		return permissionsForMethod(method, domain.PermissionUsersRead, "", domain.PermissionUsersUpdate, ""), true
+	case path == "/api/v1/admin/roles" || path == "/api/v1/admin/permissions":
+		return []string{domain.PermissionRolesRead}, true
+	case path == "/api/v1/admin/audit-logs":
+		return []string{domain.PermissionAuditLogsRead}, true
+	default:
+		return nil, false
+	}
 }
 
 func deviceRoutePermissions(method, path string) ([]string, bool) {

@@ -74,6 +74,8 @@ func NewRouter(
 
 	mux := http.NewServeMux()
 	authHandler := NewAuthHandler(routerOpts.auth)
+	adminAuth, _ := routerOpts.auth.(adminProvider)
+	adminHandler := NewAdminHandler(adminAuth)
 
 	deviceHandler := NewDeviceHandler(
 		deviceService,
@@ -112,6 +114,8 @@ func NewRouter(
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(instanceBackupService, restoreRestarter)
 	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo, settingsRepo)
+
+	mux.Handle("/api/v1/admin/", adminHandler)
 
 	// Canvas topology read model route
 	mux.HandleFunc("/api/v1/topology/canvas", func(w http.ResponseWriter, r *http.Request) {
