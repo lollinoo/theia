@@ -2,7 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(join(__dirname, '../../index.css'), 'utf-8');
+const css = readFileSync(join(__dirname, '../../index.css'), 'utf-8').replace(/\r\n/g, '\n');
 
 function extractThemeBlock(marker: string): string {
   const markerIndex = css.indexOf(marker);
