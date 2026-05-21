@@ -256,6 +256,10 @@ func (h *DeviceCredentialProfileHandler) HandleRevealWinboxCredentials(w http.Re
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	subject, ok := requireAuthenticatedOperator(w, r, "credential reveal")
+	if !ok {
+		return
+	}
 
 	deviceID, err := extractWinboxCredentialsRevealDeviceID(r.URL.Path)
 	if err != nil {
@@ -282,7 +286,7 @@ func (h *DeviceCredentialProfileHandler) HandleRevealWinboxCredentials(w http.Re
 	assignment, err := h.credentialProfileRepo.GetWinboxAssignment(deviceID)
 	if err != nil {
 		// "no WinBox profile designated" is the canonical message from the repo
-		log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=not_found", deviceID, reason, r.RemoteAddr, r.UserAgent())
+		log.Printf("winbox credentials reveal subject=%q device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=not_found", subject.Name, deviceID, reason, r.RemoteAddr, r.UserAgent())
 		writeError(w, http.StatusNotFound, "no WinBox profile designated")
 		return
 	}
@@ -290,23 +294,23 @@ func (h *DeviceCredentialProfileHandler) HandleRevealWinboxCredentials(w http.Re
 	ip, password, err := h.svc.GetWinboxCredentials(deviceID, assignment.EncryptedSecret, assignment.Username)
 	if err != nil {
 		if strings.Contains(err.Error(), "no password") {
-			log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=no_password", deviceID, reason, r.RemoteAddr, r.UserAgent())
+			log.Printf("winbox credentials reveal subject=%q device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=no_password", subject.Name, deviceID, reason, r.RemoteAddr, r.UserAgent())
 			writeError(w, http.StatusUnprocessableEntity, "WinBox profile has no password configured")
 			return
 		}
 		if strings.Contains(err.Error(), "not found") {
-			log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=not_found", deviceID, reason, r.RemoteAddr, r.UserAgent())
+			log.Printf("winbox credentials reveal subject=%q device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=not_found", subject.Name, deviceID, reason, r.RemoteAddr, r.UserAgent())
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=error", deviceID, reason, r.RemoteAddr, r.UserAgent())
+		log.Printf("winbox credentials reveal subject=%q device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=error", subject.Name, deviceID, reason, r.RemoteAddr, r.UserAgent())
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	log.Printf("winbox credentials reveal device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=success", deviceID, reason, r.RemoteAddr, r.UserAgent())
+	log.Printf("winbox credentials reveal subject=%q device_id=%s reason=%q remote_addr=%q user_agent=%q outcome=success", subject.Name, deviceID, reason, r.RemoteAddr, r.UserAgent())
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"data": map[string]string{
 			"ip":       ip,

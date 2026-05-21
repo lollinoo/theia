@@ -244,6 +244,7 @@ func TestBridgeToken_NilRepoReturns503(t *testing.T) {
 	handler := NewBridgeHandler("")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+testDeviceID, strings.NewReader(`{"bridge_secret":"`+testBridgeSecret+`"}`))
+	req = withTestOperator(req)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.HandleBridgeToken(w, req)
@@ -268,6 +269,18 @@ func TestBridgeToken_GetMethodReturns405(t *testing.T) {
 	}
 }
 
+func TestBridgeToken_PostRequiresAuthenticatedOperator(t *testing.T) {
+	handler := NewBridgeHandler("")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+testDeviceID, nil)
+	w := httptest.NewRecorder()
+	handler.HandleBridgeToken(w, req)
+
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", w.Result().StatusCode)
+	}
+}
+
 // TestBridgeToken_MissingSecretReturns400 verifies that omitting bridge_secret returns 400.
 func TestBridgeToken_MissingSecretReturns400(t *testing.T) {
 	handler := NewBridgeHandlerWithCredentials("", nil, nil, nil)
@@ -287,6 +300,7 @@ func TestBridgeToken_MissingSecretReturns400(t *testing.T) {
 	// Calling with nil svc/repo → 503 takes precedence over body validation.
 	// Confirm 503 is returned before body is even parsed.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+testDeviceID, strings.NewReader(`{}`))
+	req = withTestOperator(req)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.HandleBridgeToken(w, req)

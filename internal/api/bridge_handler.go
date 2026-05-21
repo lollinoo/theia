@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -114,6 +115,10 @@ func (h *BridgeHandler) HandleBridgeToken(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	subject, ok := requireAuthenticatedOperator(w, r, "bridge token issuance")
+	if !ok {
+		return
+	}
 
 	if h.backupSvc == nil || h.credentialProfileRepo == nil || h.settingsRepo == nil {
 		writeError(w, http.StatusServiceUnavailable, "bridge token endpoint not configured")
@@ -195,6 +200,7 @@ func (h *BridgeHandler) HandleBridgeToken(w http.ResponseWriter, r *http.Request
 		"token":      hex.EncodeToString(ciphertext),
 		"expires_at": expiresAt,
 	})
+	log.Printf("bridge token issued subject=%q device_id=%s outcome=success", subject.Name, deviceID)
 }
 
 func extractBridgeTokenDeviceID(path string) (uuid.UUID, error) {
