@@ -1,11 +1,17 @@
 primary_map_id() {
   python3 - "$API_BASE" <<'PY'
 import json
+import os
 import sys
 import urllib.request
 
 api_base = sys.argv[1]
-with urllib.request.urlopen(f"{api_base}/api/v1/canvas/maps", timeout=10) as response:
+headers = {}
+token = os.environ.get("THEIA_OPERATOR_TOKEN", "").strip()
+if token:
+    headers["Authorization"] = f"Bearer {token}"
+request = urllib.request.Request(f"{api_base}/api/v1/canvas/maps", headers=headers)
+with urllib.request.urlopen(request, timeout=10) as response:
     payload = json.load(response)
 
 maps = payload.get("data", [])
@@ -23,11 +29,17 @@ device_id_by_ip() {
   local ip="$1"
   python3 - "$API_BASE" "$ip" <<'PY'
 import json
+import os
 import sys
 import urllib.request
 
 api_base, target_ip = sys.argv[1], sys.argv[2]
-with urllib.request.urlopen(f"{api_base}/api/v1/devices", timeout=10) as response:
+headers = {}
+token = os.environ.get("THEIA_OPERATOR_TOKEN", "").strip()
+if token:
+    headers["Authorization"] = f"Bearer {token}"
+request = urllib.request.Request(f"{api_base}/api/v1/devices", headers=headers)
+with urllib.request.urlopen(request, timeout=10) as response:
     payload = json.load(response)
 
 for item in payload.get("data", []):
@@ -39,6 +51,11 @@ for item in payload.get("data", []):
 raise SystemExit(1)
 PY
 }
+
+THEIA_CURL_AUTH_ARGS=()
+if [ -n "${THEIA_OPERATOR_TOKEN:-}" ]; then
+  THEIA_CURL_AUTH_ARGS=(-H "Authorization: Bearer ${THEIA_OPERATOR_TOKEN}")
+fi
 
 add_device_to_primary_map() {
   local device_id="$1"
@@ -53,6 +70,7 @@ add_device_to_primary_map() {
   fi
 
   response="$(curl -sS -X POST "$API_BASE/api/v1/canvas/maps/${map_id}/devices/${device_id}" \
+    "${THEIA_CURL_AUTH_ARGS[@]}" \
     -H "Content-Type: application/json" \
     -d '{"include_connected_links": true}' \
     -w $'\n%{http_code}' || true)"
@@ -83,6 +101,7 @@ run_topology_discovery() {
   fi
 
   response="$(curl -sS -X POST "$API_BASE/api/v1/devices/${device_id}/topology-discovery" \
+    "${THEIA_CURL_AUTH_ARGS[@]}" \
     -w $'\n%{http_code}' || true)"
   status="${response##*$'\n'}"
   body="${response%$'\n'"$status"}"

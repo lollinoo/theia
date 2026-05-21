@@ -1,7 +1,16 @@
+function Get-TheiaApiHeaders {
+  $headers = @{}
+  $token = $env:THEIA_OPERATOR_TOKEN
+  if (-not [string]::IsNullOrWhiteSpace($token)) {
+    $headers["Authorization"] = "Bearer $token"
+  }
+  return $headers
+}
+
 function Get-PrimaryMapId {
   param([string]$ApiBase)
 
-  $payload = Invoke-RestMethod -Uri "$ApiBase/api/v1/canvas/maps" -TimeoutSec 10
+  $payload = Invoke-RestMethod -Uri "$ApiBase/api/v1/canvas/maps" -Headers (Get-TheiaApiHeaders) -TimeoutSec 10
   $maps = @($payload.data) | Where-Object { $null -ne $_ }
 
   foreach ($item in $maps) {
@@ -23,7 +32,7 @@ function Get-DeviceIdByIp {
     [string]$Ip
   )
 
-  $payload = Invoke-RestMethod -Uri "$ApiBase/api/v1/devices" -TimeoutSec 10
+  $payload = Invoke-RestMethod -Uri "$ApiBase/api/v1/devices" -Headers (Get-TheiaApiHeaders) -TimeoutSec 10
   foreach ($item in (@($payload.data) | Where-Object { $null -ne $_ })) {
     if ($item.attributes.ip -eq $Ip) {
       return [string]$item.id
@@ -49,6 +58,7 @@ function Add-DeviceToPrimaryMap {
       -Method Post `
       -Uri "$ApiBase/api/v1/canvas/maps/$mapId/devices/$DeviceId" `
       -ContentType "application/json" `
+      -Headers (Get-TheiaApiHeaders) `
       -Body '{"include_connected_links": true}' | Out-Null
   }
   catch {
@@ -79,5 +89,6 @@ function Invoke-TopologyDiscovery {
   Invoke-RestMethod `
     -Method Post `
     -Uri "$ApiBase/api/v1/devices/$DeviceId/topology-discovery" `
+    -Headers (Get-TheiaApiHeaders) `
     -TimeoutSec 30 | Out-Null
 }

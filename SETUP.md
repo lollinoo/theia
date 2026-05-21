@@ -52,10 +52,20 @@ The dev stack runs the application locally with hot-reload for both backend and 
 ```bash
 git clone <repo-url>
 cd theia
+export THEIA_OPERATOR_TOKEN="<local-operator-token>"
 make dev
 ```
 
-This builds all images and starts the full stack in the background. First build takes 2–4 minutes to compile Go and download npm packages.
+This builds all images and starts the full stack in the background. First build takes 2-4 minutes to compile Go and download npm packages.
+
+On PowerShell, set the token in the same terminal before starting the stack:
+
+```powershell
+$env:THEIA_OPERATOR_TOKEN = "<local-operator-token>"
+make dev
+```
+
+The dev Docker stack refuses to start without `THEIA_OPERATOR_TOKEN`. The browser login form uses that token, and local API scripts such as `make wisp-seed-all` read the same environment variable when they call authenticated endpoints.
 
 `config.yaml` is a local-only file and is ignored by git because it can contain a database DSN or other deployment-specific values. The dev stack works through environment variables without it. If you need a local config file, start from the template:
 
@@ -191,6 +201,7 @@ make wisp-seed
 ```
 
 The seed script defaults to `WISP_SEED_TARGET_MODE=auto`. With the Docker backend container running, it registers the routers at `172.31.250.21` through `172.31.250.30` and connects the backend to the lab network if needed. If no backend container is running, it falls back to host loopback targets `127.0.10.21` through `127.0.10.30`.
+Authenticated dev stacks require the same `THEIA_OPERATOR_TOKEN` environment variable in the shell that runs the seed target.
 
 ### Seed the radio access layer
 
@@ -409,7 +420,7 @@ Configuration is loaded from local `config.yaml` when present. The tracked `conf
 | `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
 | `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Optional directory containing pre-built bridge binaries; leave empty to disable bridge downloads |
-| `operator_token` | `THEIA_OPERATOR_TOKEN` | none | Operator login and API bearer token; required for staging and production |
+| `operator_token` | `THEIA_OPERATOR_TOKEN` | none | Operator login and API bearer token; required by bundled Docker stacks and for staging/production runtime startup |
 | `metrics_token` | `THEIA_METRICS_TOKEN` | none | Optional separate bearer token for `/metrics`; when empty, `/metrics` accepts the operator token |
 | `allowed_origins` | `THEIA_ALLOWED_ORIGINS` | none | Optional comma-separated exact browser origins for direct backend REST/WebSocket access; same-host proxy requests are allowed |
 | `log_level` | `THEIA_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |

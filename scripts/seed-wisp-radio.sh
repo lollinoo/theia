@@ -10,7 +10,7 @@ source "$SCRIPT_DIR/wisp-lab-common.sh"
 echo "=== Seeding Theia with WISP radio access nodes ==="
 
 for i in $(seq 1 30); do
-  if curl -sf "$API_BASE/api/v1/health" >/dev/null 2>&1; then
+  if curl -sf "${THEIA_CURL_AUTH_ARGS[@]}" "$API_BASE/api/v1/health" >/dev/null 2>&1; then
     break
   fi
   if [ "$i" -eq 30 ]; then
@@ -41,6 +41,7 @@ create_device() {
 
   echo "Adding ${hostname} (${ip})..."
   response="$(curl -sf -X POST "$API_BASE/api/v1/devices" \
+    "${THEIA_CURL_AUTH_ARGS[@]}" \
     -H "Content-Type: application/json" \
     -d "{
       \"ip\": \"${ip}\",

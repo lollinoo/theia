@@ -64,6 +64,7 @@ dev: ## Start full dev stack (backend + frontend + PostgreSQL + Prometheus)
 	@Write-Output "  Prometheus: http://localhost:9090"
 	@Write-Output "  SNMP exporter: http://localhost:9116"
 	@Write-Output ""
+	@Write-Output "Browser login and API scripts use THEIA_OPERATOR_TOKEN from your environment."
 	@Write-Output "Run 'make wisp-lab' and 'make wisp-seed-all' to add lab devices"
 	@Write-Output "Run 'make logs' to follow backend logs"
 else
@@ -79,6 +80,7 @@ dev: ## Start full dev stack (backend + frontend + PostgreSQL + Prometheus)
 	@echo "  Prometheus: http://localhost:9090"
 	@echo "  SNMP exporter: http://localhost:9116"
 	@echo ""
+	@echo "Browser login and API scripts use THEIA_OPERATOR_TOKEN from your environment."
 	@echo "Run 'make wisp-lab' and 'make wisp-seed-all' to add lab devices"
 	@echo "Run 'make logs' to follow backend logs"
 endif

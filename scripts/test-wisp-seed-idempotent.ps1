@@ -27,13 +27,15 @@ function Invoke-RestMethod {
     [string]$Method,
     [string]$ContentType,
     [string]$Body,
-    [int]$TimeoutSec
+    [int]$TimeoutSec,
+    [hashtable]$Headers
   )
 
   $script:restCalls += [pscustomobject]@{
     Method = $Method
     Uri = $Uri
     Body = $Body
+    Headers = $Headers
   }
 
   if ($Uri -eq "http://unit.test/api/v1/canvas/maps") {
@@ -66,8 +68,20 @@ function Invoke-RestMethod {
 
 $script:postAttempts = 0
 $script:topologyDiscoveryAttempts = 0
-Add-DeviceToPrimaryMap -ApiBase "http://unit.test" -DeviceId "device-1"
-Invoke-TopologyDiscovery -ApiBase "http://unit.test" -DeviceId "device-1"
+$previousOperatorToken = $env:THEIA_OPERATOR_TOKEN
+$env:THEIA_OPERATOR_TOKEN = "test-operator-token-not-secret-1234"
+try {
+  Add-DeviceToPrimaryMap -ApiBase "http://unit.test" -DeviceId "device-1"
+  Invoke-TopologyDiscovery -ApiBase "http://unit.test" -DeviceId "device-1"
+}
+finally {
+  if ($null -eq $previousOperatorToken) {
+    Remove-Item Env:\THEIA_OPERATOR_TOKEN -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:THEIA_OPERATOR_TOKEN = $previousOperatorToken
+  }
+}
 Assert-True ($script:postAttempts -eq 1) "duplicate primary-map membership should be attempted once and treated as idempotent"
 Assert-True ($script:topologyDiscoveryAttempts -eq 1) "topology discovery should be triggered once for an existing WISP device"
 
@@ -84,6 +98,8 @@ for ($i = 0; $i -lt $script:restCalls.Count; $i++) {
 Assert-True ($membershipCallIndex -ge 0) "primary-map membership call should be captured"
 Assert-True ($discoveryCallIndex -ge 0) "topology discovery call should be captured"
 Assert-True ($discoveryCallIndex -gt $membershipCallIndex) "topology discovery should run after primary-map membership"
+Assert-True ($script:restCalls[$membershipCallIndex].Headers.Authorization -eq "Bearer test-operator-token-not-secret-1234") "primary-map membership calls must send the operator bearer token when configured"
+Assert-True ($script:restCalls[$discoveryCallIndex].Headers.Authorization -eq "Bearer test-operator-token-not-secret-1234") "topology discovery calls must send the operator bearer token when configured"
 
 $seedFiles = @(
   "scripts/seed.ps1",
@@ -97,6 +113,12 @@ $seedFiles = @(
 foreach ($seedFile in $seedFiles) {
   $content = Get-Content -Raw -Path $seedFile
   Assert-True ($content -notmatch "Get-CreatedDeviceIdFromResponse|created_device_id_from_response") "$seedFile must not re-add newly created devices to the primary map"
+  if ($seedFile.EndsWith(".ps1")) {
+    Assert-True ($content -match "Get-TheiaApiHeaders") "$seedFile must send configured operator bearer auth"
+  }
+  else {
+    Assert-True ($content -match "THEIA_CURL_AUTH_ARGS") "$seedFile must send configured operator bearer auth"
+  }
 }
 
 $wispSeedFiles = @(

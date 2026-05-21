@@ -2,7 +2,21 @@ param()
 
 $ErrorActionPreference = "Stop"
 
-$composeJson = & docker compose --profile dev --profile test config --format json
+$previousOperatorToken = $env:THEIA_OPERATOR_TOKEN
+$env:THEIA_OPERATOR_TOKEN = "test-operator-token-not-secret-1234"
+
+try {
+  $composeJson = & docker compose --profile dev --profile test config --format json
+}
+finally {
+  if ($null -eq $previousOperatorToken) {
+    Remove-Item Env:\THEIA_OPERATOR_TOKEN -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:THEIA_OPERATOR_TOKEN = $previousOperatorToken
+  }
+}
+
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }
@@ -64,6 +78,11 @@ Assert-True ($backend.depends_on.PSObject.Properties.Name -notcontains "snmp-ap"
 
 $backendEnvironment = Get-ServiceProperty $backend "environment"
 Assert-True ($backendEnvironment.THEIA_DB_DSN -like "*@postgres:5432/theia*") "backend must reach PostgreSQL over the Compose network"
+Assert-True ($backendEnvironment.THEIA_OPERATOR_TOKEN -eq "test-operator-token-not-secret-1234") "backend must receive THEIA_OPERATOR_TOKEN in dev/test Compose profiles"
+
+$composeSource = Get-Content -Raw -Path "docker-compose.yml"
+Assert-True ($composeSource -match 'THEIA_OPERATOR_TOKEN=\$\{THEIA_OPERATOR_TOKEN:\?THEIA_OPERATOR_TOKEN must be set\}') "docker-compose.yml must fail closed when THEIA_OPERATOR_TOKEN is missing"
+Assert-True ($composeSource -match 'Authorization: Bearer \$\$THEIA_OPERATOR_TOKEN') "backend healthcheck must authenticate with THEIA_OPERATOR_TOKEN"
 
 $frontendEnvironment = Get-ServiceProperty $frontend "environment"
 Assert-True ($frontendEnvironment.VITE_API_URL -eq "http://backend:8080") "frontend dev proxy must reach backend over the Compose network"

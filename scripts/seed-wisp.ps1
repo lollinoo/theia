@@ -12,7 +12,7 @@ function Wait-ApiReady {
 
   foreach ($attempt in 1..30) {
     try {
-      Invoke-WebRequest -Uri "$ApiBase/api/v1/health" -UseBasicParsing -TimeoutSec 2 | Out-Null
+      Invoke-WebRequest -Uri "$ApiBase/api/v1/health" -Headers (Get-TheiaApiHeaders) -UseBasicParsing -TimeoutSec 2 | Out-Null
       return
     }
     catch {
@@ -60,7 +60,7 @@ function New-WispRouter {
     }
   } | ConvertTo-Json -Depth 5
 
-  $response = Invoke-RestMethod -Method Post -Uri "$ApiBase/api/v1/devices" -ContentType "application/json" -Body $payload
+  $response = Invoke-RestMethod -Method Post -Uri "$ApiBase/api/v1/devices" -Headers (Get-TheiaApiHeaders) -ContentType "application/json" -Body $payload
   $response | ConvertTo-Json -Depth 10
   Write-Output ""
   Start-Sleep -Milliseconds 500
