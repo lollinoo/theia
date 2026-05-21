@@ -90,6 +90,11 @@ func (s *AuthService) CreateAdminUser(ctx context.Context, actor *AuthenticatedU
 	if err := s.RequirePermission(actor, domain.PermissionUsersCreate); err != nil {
 		return nil, err
 	}
+	if len(input.Roles) > 0 {
+		if err := s.RequirePermission(actor, domain.PermissionRolesAssign); err != nil {
+			return nil, err
+		}
+	}
 	username := strings.TrimSpace(input.Username)
 	email := strings.TrimSpace(input.Email)
 	displayName := strings.TrimSpace(input.DisplayName)
@@ -204,8 +209,8 @@ func (s *AuthService) UpdateAdminUser(ctx context.Context, actor *AuthenticatedU
 	}
 	user.UpdatedAt = s.now()
 	user.UpdatedBy = actorUserID(actor)
-	if err := s.users.UpdateUser(ctx, &user); err != nil {
-		return nil, fmt.Errorf("updating admin user: %w", err)
+	if err := s.updateAdminUser(ctx, target, &user); err != nil {
+		return nil, err
 	}
 	if err := s.appendAuditLog(ctx, actorUserID(actor), &user.ID, "admin.user_updated", "auth_user", user.ID.String(), auditMetadata(map[string]interface{}{
 		"fields": changed,
@@ -240,8 +245,8 @@ func (s *AuthService) SetAdminUserStatus(ctx context.Context, actor *Authenticat
 	user.Status = input.Status
 	user.UpdatedAt = s.now()
 	user.UpdatedBy = actorUserID(actor)
-	if err := s.users.UpdateUser(ctx, &user); err != nil {
-		return nil, fmt.Errorf("updating admin user status: %w", err)
+	if err := s.updateAdminUser(ctx, target, &user); err != nil {
+		return nil, err
 	}
 	if err := s.appendAuditLog(ctx, actorUserID(actor), &user.ID, "admin.user_status_changed", "auth_user", user.ID.String(), auditMetadata(map[string]interface{}{
 		"status": string(input.Status),
@@ -302,19 +307,19 @@ func (s *AuthService) RemoveAdminUserRole(ctx context.Context, actor *Authentica
 	if err != nil {
 		return nil, fmt.Errorf("loading admin role target: %w", err)
 	}
-	if roleID == domain.RoleSuperAdmin && target.User.Status == domain.UserStatusActive && target.HasRole(domain.RoleSuperAdmin) {
-		if err := s.ensureNotLastActiveSuperAdmin(ctx); err != nil {
-			return nil, err
-		}
-	}
 	if actorIsTarget(actor, input.UserID) {
+		if roleID == domain.RoleSuperAdmin && target.User.Status == domain.UserStatusActive && target.HasRole(domain.RoleSuperAdmin) {
+			if err := s.ensureNotLastActiveSuperAdmin(ctx); err != nil {
+				return nil, err
+			}
+		}
 		return nil, ErrPermissionDenied
 	}
 	if (roleID == domain.RoleSuperAdmin || target.HasRole(domain.RoleSuperAdmin)) && !actorIsSuperAdmin(actor) {
 		return nil, ErrPermissionDenied
 	}
-	if err := s.roles.RemoveRole(ctx, input.UserID, roleID); err != nil {
-		return nil, fmt.Errorf("removing admin user role: %w", err)
+	if err := s.removeAdminUserRole(ctx, target, roleID); err != nil {
+		return nil, err
 	}
 	if err := s.appendAuditLog(ctx, actorUserID(actor), &input.UserID, "admin.user_role_removed", "auth_user", input.UserID.String(), auditMetadata(map[string]interface{}{
 		"role_id": roleID,
@@ -332,6 +337,16 @@ func (s *AuthService) RemoveAdminUserRole(ctx context.Context, actor *Authentica
 func (s *AuthService) CreateAdminPasswordResetToken(ctx context.Context, actor *AuthenticatedUser, userID uuid.UUID) (*PasswordResetTokenResult, error) {
 	if err := s.RequirePermission(actor, domain.PermissionUsersUpdate); err != nil {
 		return nil, err
+	}
+	if actorIsTarget(actor, userID) {
+		return nil, ErrPermissionDenied
+	}
+	target, err := s.users.GetUserRolesAndPermissions(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("loading admin password reset target: %w", err)
+	}
+	if target.HasRole(domain.RoleSuperAdmin) && !actorIsSuperAdmin(actor) {
+		return nil, ErrPermissionDenied
 	}
 	return s.CreatePasswordResetToken(ctx, PasswordResetCreateInput{
 		UserID:    userID,
@@ -422,15 +437,48 @@ func (s *AuthService) canChangeAdminUserStatus(ctx context.Context, actor *Authe
 	if target.HasRole(domain.RoleSuperAdmin) && !actorIsSuperAdmin(actor) {
 		return ErrPermissionDenied
 	}
-	if target.User.Status == domain.UserStatusActive && status != domain.UserStatusActive && target.HasRole(domain.RoleSuperAdmin) {
-		if err := s.ensureNotLastActiveSuperAdmin(ctx); err != nil {
-			return err
-		}
-	}
 	if actorIsTarget(actor, target.User.ID) && status != domain.UserStatusActive {
+		if target.User.Status == domain.UserStatusActive && target.HasRole(domain.RoleSuperAdmin) {
+			if err := s.ensureNotLastActiveSuperAdmin(ctx); err != nil {
+				return err
+			}
+		}
 		return ErrPermissionDenied
 	}
 	return nil
+}
+
+func (s *AuthService) updateAdminUser(ctx context.Context, current *domain.UserWithRolesAndPermissions, next *domain.User) error {
+	if current.User.Status == domain.UserStatusActive && next.Status != domain.UserStatusActive && current.HasRole(domain.RoleSuperAdmin) {
+		if err := s.users.UpdateUserPreservingLastActiveSuperAdmin(ctx, next); err != nil {
+			return mapAdminLastActiveSuperAdminError("updating admin user", err)
+		}
+		return nil
+	}
+	if err := s.users.UpdateUser(ctx, next); err != nil {
+		return fmt.Errorf("updating admin user: %w", err)
+	}
+	return nil
+}
+
+func (s *AuthService) removeAdminUserRole(ctx context.Context, target *domain.UserWithRolesAndPermissions, roleID string) error {
+	if roleID == domain.RoleSuperAdmin && target.User.Status == domain.UserStatusActive && target.HasRole(domain.RoleSuperAdmin) {
+		if err := s.roles.RemoveRolePreservingLastActiveSuperAdmin(ctx, target.User.ID, roleID); err != nil {
+			return mapAdminLastActiveSuperAdminError("removing admin user role", err)
+		}
+		return nil
+	}
+	if err := s.roles.RemoveRole(ctx, target.User.ID, roleID); err != nil {
+		return fmt.Errorf("removing admin user role: %w", err)
+	}
+	return nil
+}
+
+func mapAdminLastActiveSuperAdminError(operation string, err error) error {
+	if errors.Is(err, domain.ErrAuthLastActiveSuperAdmin) || errors.Is(err, ErrAdminLastActiveSuperAdmin) {
+		return ErrAdminLastActiveSuperAdmin
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (s *AuthService) ensureNotLastActiveSuperAdmin(ctx context.Context) error {

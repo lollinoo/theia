@@ -199,6 +199,60 @@ func TestAuthRepoAssignRemoveRoleIsIdempotentAndLoadsAggregate(t *testing.T) {
 	}
 }
 
+func TestAuthRepoGuardedSuperAdminMutationsPreserveLastActive(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	root := testAuthUser("guarded-root", "guarded-root@example.test")
+	if err := repo.CreateUser(ctx, &root); err != nil {
+		t.Fatalf("CreateUser root: %v", err)
+	}
+	if err := repo.AssignRole(ctx, root.ID, domain.RoleSuperAdmin, nil); err != nil {
+		t.Fatalf("AssignRole root: %v", err)
+	}
+
+	if err := repo.RemoveRolePreservingLastActiveSuperAdmin(ctx, root.ID, domain.RoleSuperAdmin); !errors.Is(err, domain.ErrAuthLastActiveSuperAdmin) {
+		t.Fatalf("RemoveRolePreservingLastActiveSuperAdmin error = %v, want ErrAuthLastActiveSuperAdmin", err)
+	}
+	aggregate, err := repo.GetUserRolesAndPermissions(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("GetUserRolesAndPermissions after blocked remove: %v", err)
+	}
+	if !aggregate.HasRole(domain.RoleSuperAdmin) {
+		t.Fatal("blocked guarded role removal removed the super_admin role")
+	}
+
+	disabledRoot := root
+	disabledRoot.Status = domain.UserStatusDisabled
+	if err := repo.UpdateUserPreservingLastActiveSuperAdmin(ctx, &disabledRoot); !errors.Is(err, domain.ErrAuthLastActiveSuperAdmin) {
+		t.Fatalf("UpdateUserPreservingLastActiveSuperAdmin error = %v, want ErrAuthLastActiveSuperAdmin", err)
+	}
+	storedRoot, err := repo.GetUserByID(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID after blocked status update: %v", err)
+	}
+	if storedRoot.Status != domain.UserStatusActive {
+		t.Fatalf("status after blocked guarded update = %s, want active", storedRoot.Status)
+	}
+
+	other := testAuthUser("second-root", "second-root@example.test")
+	if err := repo.CreateUser(ctx, &other); err != nil {
+		t.Fatalf("CreateUser second root: %v", err)
+	}
+	if err := repo.AssignRole(ctx, other.ID, domain.RoleSuperAdmin, nil); err != nil {
+		t.Fatalf("AssignRole second root: %v", err)
+	}
+	if err := repo.UpdateUserPreservingLastActiveSuperAdmin(ctx, &disabledRoot); err != nil {
+		t.Fatalf("UpdateUserPreservingLastActiveSuperAdmin with second root: %v", err)
+	}
+	storedRoot, err = repo.GetUserByID(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID after allowed status update: %v", err)
+	}
+	if storedRoot.Status != domain.UserStatusDisabled {
+		t.Fatalf("status after allowed guarded update = %s, want disabled", storedRoot.Status)
+	}
+}
+
 func TestAuthRepoListUsersFiltersByRole(t *testing.T) {
 	repo, ctx := newAuthRepoForTest(t)
 

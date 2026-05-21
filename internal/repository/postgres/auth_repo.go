@@ -17,6 +17,8 @@ type AuthRepo struct {
 	db *DB
 }
 
+const authSuperAdminMutationLockID int64 = 8413371001
+
 // NewAuthRepo creates a PostgreSQL-backed auth repository.
 func NewAuthRepo(db *sql.DB) *AuthRepo {
 	return &AuthRepo{db: wrapDB(db)}
@@ -198,6 +200,81 @@ func (r *AuthRepo) UpdateUser(ctx context.Context, user *domain.User) error {
 	return nil
 }
 
+// UpdateUserPreservingLastActiveSuperAdmin updates a user while rejecting demotion of the final active super-admin.
+func (r *AuthRepo) UpdateUserPreservingLastActiveSuperAdmin(ctx context.Context, user *domain.User) error {
+	if user.UpdatedAt.IsZero() {
+		user.UpdatedAt = time.Now().UTC()
+	}
+	tx, err := r.db.raw.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning guarded auth user update transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := lockAuthSuperAdminMutation(ctx, tx); err != nil {
+		return fmt.Errorf("locking guarded auth user update: %w", err)
+	}
+	if user.Status != domain.UserStatusActive {
+		activeSuperAdmin, err := txUserIsActiveSuperAdmin(ctx, tx, user.ID)
+		if err != nil {
+			return fmt.Errorf("checking guarded auth user status: %w", err)
+		}
+		if activeSuperAdmin {
+			count, err := txCountActiveSuperAdmins(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("counting guarded active super admins: %w", err)
+			}
+			if count <= 1 {
+				return domain.ErrAuthLastActiveSuperAdmin
+			}
+		}
+	}
+
+	res, err := tx.ExecContext(ctx, rebindQuery(
+		`UPDATE users SET
+			username = ?,
+			username_normalized = ?,
+			email = ?,
+			email_normalized = ?,
+			password_hash = ?,
+			display_name = ?,
+			status = ?,
+			must_change_password = ?,
+			updated_at = ?,
+			last_login_at = ?,
+			password_changed_at = ?,
+			failed_login_attempts = ?,
+			locked_until = ?,
+			updated_by = ?
+		WHERE id = ?`),
+		user.Username,
+		user.UsernameNormalized,
+		user.Email,
+		user.EmailNormalized,
+		user.PasswordHash,
+		user.DisplayName,
+		string(user.Status),
+		user.MustChangePassword,
+		user.UpdatedAt,
+		user.LastLoginAt,
+		user.PasswordChangedAt,
+		user.FailedLoginAttempts,
+		user.LockedUntil,
+		uuidPtrString(user.UpdatedBy),
+		user.ID.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("updating guarded auth user: %w", err)
+	}
+	if err := requireRowsAffected(res, domain.ErrAuthUserNotFound); err != nil {
+		return fmt.Errorf("updating guarded auth user: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing guarded auth user update transaction: %w", err)
+	}
+	return nil
+}
+
 // CountUsers returns the total number of users.
 func (r *AuthRepo) CountUsers(ctx context.Context) (int, error) {
 	var count int
@@ -332,6 +409,47 @@ func (r *AuthRepo) RemoveRole(ctx context.Context, userID uuid.UUID, roleID stri
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing remove auth role transaction: %w", err)
+	}
+	return nil
+}
+
+// RemoveRolePreservingLastActiveSuperAdmin removes a role while preserving the final active super-admin.
+func (r *AuthRepo) RemoveRolePreservingLastActiveSuperAdmin(ctx context.Context, userID uuid.UUID, roleID string) error {
+	tx, err := r.db.raw.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning guarded remove auth role transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := lockAuthSuperAdminMutation(ctx, tx); err != nil {
+		return fmt.Errorf("locking guarded remove auth role: %w", err)
+	}
+	if roleID == domain.RoleSuperAdmin {
+		activeSuperAdmin, err := txUserIsActiveSuperAdmin(ctx, tx, userID)
+		if err != nil {
+			return fmt.Errorf("checking guarded auth role removal target: %w", err)
+		}
+		if activeSuperAdmin {
+			count, err := txCountActiveSuperAdmins(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("counting guarded active super admins: %w", err)
+			}
+			if count <= 1 {
+				return domain.ErrAuthLastActiveSuperAdmin
+			}
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, rebindQuery(
+		`DELETE FROM user_roles
+		 WHERE user_id = ? AND role_id = ?`),
+		userID.String(),
+		roleID,
+	); err != nil {
+		return fmt.Errorf("removing guarded auth role: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing guarded remove auth role transaction: %w", err)
 	}
 	return nil
 }
@@ -1000,6 +1118,46 @@ func requireRowsAffected(result sql.Result, notFoundErr error) error {
 		return notFoundErr
 	}
 	return nil
+}
+
+func lockAuthSuperAdminMutation(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, rebindQuery(`SELECT pg_advisory_xact_lock(?)`), authSuperAdminMutationLockID)
+	return err
+}
+
+func txUserIsActiveSuperAdmin(ctx context.Context, tx *sql.Tx, userID uuid.UUID) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, rebindQuery(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM users u
+			JOIN user_roles ur ON ur.user_id = u.id
+			WHERE u.id = ? AND u.status = ? AND ur.role_id = ?
+		)`),
+		userID.String(),
+		string(domain.UserStatusActive),
+		domain.RoleSuperAdmin,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func txCountActiveSuperAdmins(ctx context.Context, tx *sql.Tx) (int, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, rebindQuery(
+		`SELECT COUNT(DISTINCT u.id)
+		 FROM users u
+		 JOIN user_roles ur ON ur.user_id = u.id
+		 WHERE u.status = ? AND ur.role_id = ?`),
+		string(domain.UserStatusActive),
+		domain.RoleSuperAdmin,
+	).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (r *AuthRepo) execContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {

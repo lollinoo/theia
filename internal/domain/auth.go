@@ -64,6 +64,8 @@ var (
 	ErrPasswordResetTokenNotFound = errors.New("password reset token not found")
 	// ErrPasswordResetTokenExpired indicates that a password reset token is expired or already used.
 	ErrPasswordResetTokenExpired = errors.New("password reset token expired")
+	// ErrAuthLastActiveSuperAdmin indicates a mutation would remove the final active super-admin.
+	ErrAuthLastActiveSuperAdmin = errors.New("last active super admin")
 )
 
 // SystemPermission describes a built-in RBAC permission.
@@ -227,6 +229,7 @@ type UserRepository interface {
 	GetUserByLoginIdentifier(ctx context.Context, normalized string) (*User, error)
 	ListUsers(ctx context.Context, filter UserListFilter) ([]UserWithRolesAndPermissions, error)
 	UpdateUser(ctx context.Context, user *User) error
+	UpdateUserPreservingLastActiveSuperAdmin(ctx context.Context, user *User) error
 	CountUsers(ctx context.Context) (int, error)
 	CountActiveSuperAdmins(ctx context.Context) (int, error)
 	GetUserRolesAndPermissions(ctx context.Context, userID uuid.UUID) (*UserWithRolesAndPermissions, error)
@@ -239,6 +242,7 @@ type RoleRepository interface {
 	GetRoleByName(ctx context.Context, name string) (*Role, error)
 	AssignRole(ctx context.Context, userID uuid.UUID, roleID string, createdBy *uuid.UUID) error
 	RemoveRole(ctx context.Context, userID uuid.UUID, roleID string) error
+	RemoveRolePreservingLastActiveSuperAdmin(ctx context.Context, userID uuid.UUID, roleID string) error
 }
 
 // SessionRepository persists authentication sessions.

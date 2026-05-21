@@ -784,6 +784,37 @@ func TestAuthServiceAdminCreateUserSetsSafeDefaultsAndAudits(t *testing.T) {
 	assertAuditAction(t, h.store.auditLogs(), "admin.user_created")
 }
 
+func TestAuthServiceAdminCreateUserWithRolesRequiresRolesAssign(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "creator", "creator@example.test", testAuthPassword, domain.UserStatusActive)
+	actor := &AuthenticatedUser{
+		User: domain.UserWithRolesAndPermissions{
+			User: actorUser,
+			Permissions: []domain.Permission{
+				{ID: domain.PermissionUsersCreate, Key: domain.PermissionUsersCreate},
+			},
+		},
+	}
+
+	_, err := h.service.CreateAdminUser(ctx, actor, AdminCreateUserInput{
+		Username: "created-with-role",
+		Email:    "created-with-role@example.test",
+		Password: "Created Correct Horse Battery 2026!",
+		Roles:    []string{domain.RoleViewer},
+	})
+	if !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("CreateAdminUser error = %v, want ErrPermissionDenied", err)
+	}
+	count, err := h.store.CountUsers(ctx)
+	if err != nil {
+		t.Fatalf("CountUsers: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("user count = %d, want only actor", count)
+	}
+}
+
 func TestAuthServiceAdminNonSuperCannotAssignSuperAdmin(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	ctx := context.Background()
@@ -899,6 +930,38 @@ func TestAuthServiceAdminSuperAdminCanAssignRoleAndAudits(t *testing.T) {
 	assertAuditAction(t, h.store.auditLogs(), "admin.user_role_assigned")
 }
 
+func TestAuthServiceAdminNonSuperCannotCreateResetTokenForSuperAdmin(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "admin", "admin@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleAdmin)
+	target := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, target.ID, domain.RoleSuperAdmin)
+
+	_, err := h.service.CreateAdminPasswordResetToken(ctx, h.authenticatedUser(t, actorUser.ID), target.ID)
+	if !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("CreateAdminPasswordResetToken error = %v, want ErrPermissionDenied", err)
+	}
+	if len(h.store.resets) != 0 {
+		t.Fatalf("password reset token count = %d, want 0", len(h.store.resets))
+	}
+}
+
+func TestAuthServiceAdminCannotCreateResetTokenForSelf(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "admin", "admin@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleAdmin)
+
+	_, err := h.service.CreateAdminPasswordResetToken(ctx, h.authenticatedUser(t, actorUser.ID), actorUser.ID)
+	if !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("CreateAdminPasswordResetToken error = %v, want ErrPermissionDenied", err)
+	}
+	if len(h.store.resets) != 0 {
+		t.Fatalf("password reset token count = %d, want 0", len(h.store.resets))
+	}
+}
+
 func TestAuthServiceAdminCannotSetOwnStatusInactive(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1003,6 +1066,59 @@ func TestAuthServiceAdminCannotRemoveOrDisableLastActiveSuperAdmin(t *testing.T)
 	}
 }
 
+func TestAuthServiceAdminLastActiveSuperAdminMutationsUseRepositoryGuard(t *testing.T) {
+	t.Run("role_removal", func(t *testing.T) {
+		h := newAuthServiceHarness(t)
+		ctx := context.Background()
+		actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusDisabled)
+		h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+		target := h.addUser(t, "target-root", "target-root@example.test", testAuthPassword, domain.UserStatusActive)
+		h.assignRole(t, target.ID, domain.RoleSuperAdmin)
+
+		_, err := h.service.RemoveAdminUserRole(ctx, h.authenticatedUser(t, actorUser.ID), AdminUserRoleInput{
+			UserID: target.ID,
+			RoleID: domain.RoleSuperAdmin,
+		})
+		if !errors.Is(err, ErrAdminLastActiveSuperAdmin) {
+			t.Fatalf("RemoveAdminUserRole error = %v, want ErrAdminLastActiveSuperAdmin", err)
+		}
+		if h.store.protectedRoleRemovals != 1 {
+			t.Fatalf("protected role removals = %d, want 1", h.store.protectedRoleRemovals)
+		}
+		aggregate, err := h.store.GetUserRolesAndPermissions(ctx, target.ID)
+		if err != nil {
+			t.Fatalf("GetUserRolesAndPermissions: %v", err)
+		}
+		if !aggregate.HasRole(domain.RoleSuperAdmin) {
+			t.Fatal("last active super_admin role was removed")
+		}
+	})
+
+	t.Run("status_demotion", func(t *testing.T) {
+		h := newAuthServiceHarness(t)
+		ctx := context.Background()
+		actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusDisabled)
+		h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+		target := h.addUser(t, "target-root", "target-root@example.test", testAuthPassword, domain.UserStatusActive)
+		h.assignRole(t, target.ID, domain.RoleSuperAdmin)
+
+		_, err := h.service.SetAdminUserStatus(ctx, h.authenticatedUser(t, actorUser.ID), AdminUserStatusInput{
+			UserID: target.ID,
+			Status: domain.UserStatusDisabled,
+		})
+		if !errors.Is(err, ErrAdminLastActiveSuperAdmin) {
+			t.Fatalf("SetAdminUserStatus error = %v, want ErrAdminLastActiveSuperAdmin", err)
+		}
+		if h.store.protectedUserUpdates != 1 {
+			t.Fatalf("protected user updates = %d, want 1", h.store.protectedUserUpdates)
+		}
+		stored := h.store.user(t, target.ID)
+		if stored.Status != domain.UserStatusActive {
+			t.Fatalf("status = %s, want active", stored.Status)
+		}
+	})
+}
+
 type fakeAuthStore struct {
 	mu             sync.Mutex
 	users          map[uuid.UUID]domain.User
@@ -1015,6 +1131,9 @@ type fakeAuthStore struct {
 	resets         map[uuid.UUID]domain.PasswordResetToken
 	resetsByHash   map[string]uuid.UUID
 	audit          []domain.AuditLog
+
+	protectedRoleRemovals int
+	protectedUserUpdates  int
 }
 
 func newFakeAuthStore() *fakeAuthStore {
@@ -1106,6 +1225,27 @@ func (s *fakeAuthStore) UpdateUser(_ context.Context, user *domain.User) error {
 	return nil
 }
 
+func (s *fakeAuthStore) UpdateUserPreservingLastActiveSuperAdmin(_ context.Context, user *domain.User) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.protectedUserUpdates++
+	current, ok := s.users[user.ID]
+	if !ok {
+		return domain.ErrAuthUserNotFound
+	}
+	if current.Status == domain.UserStatusActive && user.Status != domain.UserStatusActive {
+		if _, ok := s.userRoles[user.ID][domain.RoleSuperAdmin]; ok && s.countActiveSuperAdminsLocked() <= 1 {
+			return domain.ErrAuthLastActiveSuperAdmin
+		}
+	}
+	stored := *user
+	s.users[stored.ID] = stored
+	s.usersByLogin[stored.UsernameNormalized] = stored.ID
+	s.usersByLogin[stored.EmailNormalized] = stored.ID
+	return nil
+}
+
 func (s *fakeAuthStore) CountUsers(_ context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1117,6 +1257,10 @@ func (s *fakeAuthStore) CountActiveSuperAdmins(_ context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.countActiveSuperAdminsLocked(), nil
+}
+
+func (s *fakeAuthStore) countActiveSuperAdminsLocked() int {
 	count := 0
 	for id, user := range s.users {
 		if user.Status != domain.UserStatusActive {
@@ -1126,7 +1270,7 @@ func (s *fakeAuthStore) CountActiveSuperAdmins(_ context.Context) (int, error) {
 			count++
 		}
 	}
-	return count, nil
+	return count
 }
 
 func (s *fakeAuthStore) GetUserRolesAndPermissions(_ context.Context, userID uuid.UUID) (*domain.UserWithRolesAndPermissions, error) {
@@ -1195,6 +1339,22 @@ func (s *fakeAuthStore) RemoveRole(_ context.Context, userID uuid.UUID, roleID s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	delete(s.userRoles[userID], roleID)
+	return nil
+}
+
+func (s *fakeAuthStore) RemoveRolePreservingLastActiveSuperAdmin(_ context.Context, userID uuid.UUID, roleID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.protectedRoleRemovals++
+	if roleID == domain.RoleSuperAdmin {
+		if user, ok := s.users[userID]; ok && user.Status == domain.UserStatusActive {
+			if _, ok := s.userRoles[userID][domain.RoleSuperAdmin]; ok && s.countActiveSuperAdminsLocked() <= 1 {
+				return domain.ErrAuthLastActiveSuperAdmin
+			}
+		}
+	}
 	delete(s.userRoles[userID], roleID)
 	return nil
 }
