@@ -1,0 +1,149 @@
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  assignAdminUserRole,
+  createAdminPasswordReset,
+  createAdminUser,
+  fetchAdminAuditLogs,
+  fetchAdminDashboard,
+  fetchAdminPermissions,
+  fetchAdminRoles,
+  fetchAdminUsers,
+  removeAdminUserRole,
+  setAdminUserStatus,
+  updateAdminUser,
+} from '../api/client';
+import { AdminDashboard } from './AdminDashboard';
+
+vi.mock('../api/client', () => ({
+  fetchAdminDashboard: vi.fn(),
+  fetchAdminUsers: vi.fn(),
+  fetchAdminRoles: vi.fn(),
+  fetchAdminPermissions: vi.fn(),
+  fetchAdminAuditLogs: vi.fn(),
+  createAdminUser: vi.fn(),
+  updateAdminUser: vi.fn(),
+  setAdminUserStatus: vi.fn(),
+  assignAdminUserRole: vi.fn(),
+  removeAdminUserRole: vi.fn(),
+  createAdminPasswordReset: vi.fn(),
+}));
+
+const adminUser = {
+  id: 'user-1',
+  username: 'alice',
+  email: 'alice@example.test',
+  display_name: 'Alice',
+  status: 'active',
+  must_change_password: false,
+  roles: ['operator'],
+  permissions: ['topology:read'],
+};
+
+const adminRole = {
+  id: 'role-1',
+  name: 'operator',
+  description: 'Operators',
+  is_system_role: true,
+  permissions: ['topology:read'],
+};
+
+describe('AdminDashboard', () => {
+  beforeEach(() => {
+    vi.mocked(fetchAdminDashboard).mockReset();
+    vi.mocked(fetchAdminUsers).mockReset();
+    vi.mocked(fetchAdminRoles).mockReset();
+    vi.mocked(fetchAdminPermissions).mockReset();
+    vi.mocked(fetchAdminAuditLogs).mockReset();
+    vi.mocked(createAdminUser).mockReset();
+    vi.mocked(updateAdminUser).mockReset();
+    vi.mocked(setAdminUserStatus).mockReset();
+    vi.mocked(assignAdminUserRole).mockReset();
+    vi.mocked(removeAdminUserRole).mockReset();
+    vi.mocked(createAdminPasswordReset).mockReset();
+
+    vi.mocked(fetchAdminDashboard).mockResolvedValue({
+      stats: {
+        total_users: 1,
+        active_users: 1,
+        disabled_users: 0,
+        locked_users: 0,
+        recent_logins: 3,
+        recent_failed_login_attempts: 1,
+      },
+      recent_audit_logs: [
+        {
+          id: 'audit-1',
+          actor_username: 'administrator',
+          action: 'auth.login',
+          target_type: 'user',
+          target_id: 'user-1',
+          created_at: '2026-05-21T10:00:00Z',
+        },
+      ],
+    });
+    vi.mocked(fetchAdminUsers).mockResolvedValue([adminUser]);
+    vi.mocked(fetchAdminRoles).mockResolvedValue([adminRole]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['topology:read', 'admin:dashboard:read']);
+    vi.mocked(fetchAdminAuditLogs).mockResolvedValue([
+      {
+        id: 'audit-2',
+        actor_username: 'administrator',
+        action: 'user.update',
+        target_type: 'user',
+        target_id: 'user-1',
+        created_at: '2026-05-21T11:00:00Z',
+      },
+    ]);
+    vi.mocked(createAdminUser).mockResolvedValue(adminUser);
+    vi.mocked(updateAdminUser).mockResolvedValue(adminUser);
+    vi.mocked(setAdminUserStatus).mockResolvedValue({
+      ...adminUser,
+      status: 'disabled',
+    });
+    vi.mocked(assignAdminUserRole).mockResolvedValue(adminUser);
+    vi.mocked(removeAdminUserRole).mockResolvedValue(adminUser);
+    vi.mocked(createAdminPasswordReset).mockResolvedValue({
+      reset_token: 'reset-token-1',
+    });
+  });
+
+  it('fetches and renders overview, users, roles, and audit logs', async () => {
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('Admin')).toBeInTheDocument();
+    expect(screen.getByText('Total users')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Users' }));
+    expect(screen.getByText('alice')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Roles' }));
+    expect(await screen.findByText('operator')).toBeInTheDocument();
+    expect(screen.getAllByText('topology:read').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Audit Logs' }));
+    expect(await screen.findByText('user.update')).toBeInTheDocument();
+  });
+
+  it('searches users and confirms privilege-changing actions', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<AdminDashboard />);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Users' }));
+    fireEvent.change(screen.getByLabelText('Search users'), {
+      target: { value: 'alice' },
+    });
+    expect(screen.getByText('alice')).toBeInTheDocument();
+
+    const row = screen.getByRole('row', { name: /alice/i });
+    fireEvent.click(within(row).getByRole('button', { name: 'Disable user alice' }));
+
+    await waitFor(() => {
+      expect(setAdminUserStatus).toHaveBeenCalledWith('user-1', 'disabled');
+    });
+    expect(confirmSpy).toHaveBeenCalled();
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Reset password for alice' }));
+    expect(await screen.findByText('reset-token-1')).toBeInTheDocument();
+  });
+});

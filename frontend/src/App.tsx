@@ -9,6 +9,7 @@ import {
   setCanvasMapPrimary,
   updateCanvasMap,
 } from './api/client';
+import { AdminDashboard } from './components/AdminDashboard';
 import Canvas from './components/Canvas';
 import { Dashboard } from './components/Dashboard';
 import NavigationPill from './components/NavigationPill';
@@ -27,11 +28,12 @@ import {
   type RenameMapDialogSubmit,
 } from './components/topology-hub/RenameMapDialog';
 import TopologyHub from './components/topology-hub/TopologyHub';
+import { useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useWebSocket } from './hooks/useWebSocket';
 import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api';
 
-export type ActiveView = 'hub' | 'canvas' | 'dashboard';
+export type ActiveView = 'hub' | 'canvas' | 'dashboard' | 'admin';
 
 const runtimeUpdatePauseIdleDelayMs = 1500;
 const enableSavedMaps = true;
@@ -44,7 +46,10 @@ function viewLayerClass(active: boolean, className = ''): string {
   return `${viewLayerBaseClass} ${activeClass} ${className}`.trim();
 }
 
-function viewLayerStateProps(active: boolean): { 'aria-hidden': boolean; inert?: '' } {
+function viewLayerStateProps(active: boolean): {
+  'aria-hidden': boolean;
+  inert?: '';
+} {
   return active ? { 'aria-hidden': false } : { 'aria-hidden': true, inert: '' };
 }
 
@@ -115,6 +120,8 @@ function App() {
   const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
+  const { hasPermission } = useAuth();
+  const canViewAdmin = hasPermission('admin:dashboard:read');
 
   useEffect(() => {
     if (canvasInteractionActive) {
@@ -206,13 +213,22 @@ function App() {
 
   const handleViewChange = useCallback(
     (view: ActiveView) => {
+      if (view === 'admin' && !canViewAdmin) {
+        return;
+      }
       setActiveView(view);
       if (view === 'canvas') {
         requestCanvasFitView();
       }
     },
-    [requestCanvasFitView],
+    [canViewAdmin, requestCanvasFitView],
   );
+
+  useEffect(() => {
+    if (activeView === 'admin' && !canViewAdmin) {
+      setActiveView('canvas');
+    }
+  }, [activeView, canViewAdmin]);
 
   const handleSelectMapContext = useCallback(
     (map: CanvasMap) => {
@@ -492,6 +508,7 @@ function App() {
           selectedMapName={selectedMapName}
           maps={canvasMaps}
           areas={navigationAreas}
+          canViewAdmin={canViewAdmin}
           onViewChange={handleViewChange}
           onAreaSelect={handleNavigationAreaSelect}
           onMapSelect={handleNavigationMapSelect}
@@ -581,6 +598,14 @@ function App() {
             loading={canvasTopologyLoading}
           />
         </div>
+        {canViewAdmin && (
+          <div
+            {...viewLayerStateProps(activeView === 'admin')}
+            className={viewLayerClass(activeView === 'admin', 'overflow-y-auto')}
+          >
+            <AdminDashboard />
+          </div>
+        )}
         {enableSavedMaps && (
           <>
             <CreateMapDialog

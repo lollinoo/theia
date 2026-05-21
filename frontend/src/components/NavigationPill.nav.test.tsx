@@ -10,9 +10,11 @@ import NavigationPill from './NavigationPill';
 
 // Mock API client
 vi.mock('../api/client', () => ({
-  fetchHealthVersion: vi
-    .fn()
-    .mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
+  fetchHealthVersion: vi.fn().mockResolvedValue({
+    version: '1.3.0',
+    git_commit: 'abc',
+    build_date: '2026-01-01',
+  }),
 }));
 
 // Mock ThemeContext - resolvedTheme=dark to check light_mode icon
@@ -47,6 +49,7 @@ const defaultProps = {
     } satisfies CanvasMap,
   ],
   areas: [],
+  canViewAdmin: false,
   onViewChange: vi.fn(),
   onAreaSelect: vi.fn(),
   onMapSelect: vi.fn(),

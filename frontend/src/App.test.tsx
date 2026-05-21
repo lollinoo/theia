@@ -74,7 +74,7 @@ vi.mock('./components/NavigationPill', () => ({
     maps: CanvasMap[];
     selectedMapId: string | null;
     selectedMapName: string;
-    onViewChange: (view: 'hub' | 'canvas' | 'dashboard') => void;
+    onViewChange: (view: 'hub' | 'canvas' | 'dashboard' | 'admin') => void;
     onAreaSelect: (areaId: string | null) => void;
     onMapSelect: (map: CanvasMap) => void;
     onManageMaps: () => void;
@@ -354,6 +354,10 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
       </div>
     );
   },
+}));
+
+vi.mock('./components/AdminDashboard', () => ({
+  AdminDashboard: () => <div data-testid="admin-dashboard">Admin</div>,
 }));
 
 vi.mock('./components/Dashboard', () => ({
@@ -939,7 +943,9 @@ describe('App', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Rename map' }));
 
     await waitFor(() =>
-      expect(updateCanvasMapMock).toHaveBeenCalledWith('map-rename', { name: 'Branch Renamed' }),
+      expect(updateCanvasMapMock).toHaveBeenCalledWith('map-rename', {
+        name: 'Branch Renamed',
+      }),
     );
     expect(screen.queryByRole('dialog', { name: 'Rename map' })).not.toBeInTheDocument();
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent(

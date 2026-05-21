@@ -5,9 +5,11 @@ import NavigationPill from './NavigationPill';
 
 // Mock fetchHealthVersion
 vi.mock('../api/client', () => ({
-  fetchHealthVersion: vi
-    .fn()
-    .mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
+  fetchHealthVersion: vi.fn().mockResolvedValue({
+    version: '1.3.0',
+    git_commit: 'abc',
+    build_date: '2026-01-01',
+  }),
 }));
 
 // Mock useTheme
@@ -58,6 +60,7 @@ const defaultProps = {
   selectedMapName: 'Default',
   maps: [mockMap(), mockMap({ id: 'map-1', name: 'Backbone Map', is_default: false })],
   areas: [mockArea(), mockArea({ id: 'area-2', name: 'Distribution', color: '#FF5722' })],
+  canViewAdmin: false,
   onViewChange: vi.fn(),
   onAreaSelect: vi.fn(),
   onMapSelect: vi.fn(),
@@ -283,6 +286,18 @@ describe('NavigationPill', () => {
     const devicesButton = screen.getByLabelText('Devices Dashboard');
     fireEvent.click(devicesButton);
     expect(onViewChange).toHaveBeenCalledWith('dashboard');
+  });
+
+  it('hides Admin without permission and shows it when allowed', () => {
+    const onViewChange = vi.fn();
+    const { rerender } = render(<NavigationPill {...defaultProps} onViewChange={onViewChange} />);
+
+    expect(screen.queryByLabelText('Admin Dashboard')).not.toBeInTheDocument();
+
+    rerender(<NavigationPill {...defaultProps} canViewAdmin={true} onViewChange={onViewChange} />);
+    fireEvent.click(screen.getByLabelText('Admin Dashboard'));
+
+    expect(onViewChange).toHaveBeenCalledWith('admin');
   });
 
   it('preserves the enterprise navigation model with area filters and fixed action buttons', () => {

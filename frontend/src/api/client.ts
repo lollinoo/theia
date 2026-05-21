@@ -43,9 +43,192 @@ type ErrorPayload = {
   error?: string;
 };
 
-export interface OperatorSession {
+export interface AuthUser {
+  id: string;
+  username: string;
+  email: string;
+  display_name: string;
+  status: string;
+  must_change_password: boolean;
+  roles: string[];
+  permissions: string[];
+}
+
+export interface AuthSession {
   authenticated: boolean;
-  subject?: string;
+  user?: AuthUser;
+}
+
+export interface LoginPayload {
+  identifier: string;
+  password: string;
+}
+
+export interface ChangePasswordPayload {
+  current_password: string;
+  new_password: string;
+}
+
+export interface AdminDashboardStats {
+  total_users: number;
+  active_users: number;
+  disabled_users: number;
+  locked_users: number;
+  recent_logins: number;
+  recent_failed_login_attempts: number;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  actor_user_id?: string;
+  actor_username?: string;
+  action: string;
+  target_type?: string;
+  target_id?: string;
+  ip_address?: string;
+  user_agent?: string;
+  created_at: string;
+}
+
+export interface AdminDashboardResponse {
+  stats: AdminDashboardStats;
+  recent_audit_logs: AdminAuditLog[];
+}
+
+export interface AdminRole {
+  id: string;
+  name: string;
+  description: string;
+  is_system_role: boolean;
+  permissions: string[];
+}
+
+export interface CreateAdminUserPayload {
+  username: string;
+  password: string;
+  email?: string;
+  display_name?: string;
+  must_change_password?: boolean;
+  role_ids?: string[];
+}
+
+export interface UpdateAdminUserPayload {
+  username?: string;
+  email?: string;
+  display_name?: string;
+  must_change_password?: boolean;
+}
+
+export interface AdminPasswordResetResponse {
+  reset_token: string;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  return typeof record[key] === 'string' ? record[key] : '';
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => (typeof item === 'string' ? [item] : []));
+}
+
+function parseAuthUser(value: unknown): AuthUser {
+  const record =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  return {
+    id: stringField(record, 'id'),
+    username: stringField(record, 'username'),
+    email: stringField(record, 'email'),
+    display_name: stringField(record, 'display_name'),
+    status: stringField(record, 'status') || 'unknown',
+    must_change_password: record.must_change_password === true,
+    roles: stringArray(record.roles),
+    permissions: stringArray(record.permissions),
+  };
+}
+
+function parseAuthSession(payload: unknown): AuthSession {
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const authenticated = record.authenticated === true;
+  const user = authenticated && record.user !== undefined ? parseAuthUser(record.user) : undefined;
+  return user ? { authenticated, user } : { authenticated };
+}
+
+function parseAdminAuditLog(value: unknown): AdminAuditLog {
+  const record =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  return {
+    id: stringField(record, 'id'),
+    actor_user_id: stringField(record, 'actor_user_id') || undefined,
+    actor_username: stringField(record, 'actor_username') || undefined,
+    action: stringField(record, 'action'),
+    target_type: stringField(record, 'target_type') || undefined,
+    target_id: stringField(record, 'target_id') || undefined,
+    ip_address: stringField(record, 'ip_address') || undefined,
+    user_agent: stringField(record, 'user_agent') || undefined,
+    created_at: stringField(record, 'created_at'),
+  };
+}
+
+function parseAdminDashboard(payload: unknown): AdminDashboardResponse {
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const stats =
+    typeof record.stats === 'object' && record.stats !== null
+      ? (record.stats as Record<string, unknown>)
+      : {};
+  const logs = Array.isArray(record.recent_audit_logs) ? record.recent_audit_logs : [];
+  return {
+    stats: {
+      total_users: typeof stats.total_users === 'number' ? stats.total_users : 0,
+      active_users: typeof stats.active_users === 'number' ? stats.active_users : 0,
+      disabled_users: typeof stats.disabled_users === 'number' ? stats.disabled_users : 0,
+      locked_users: typeof stats.locked_users === 'number' ? stats.locked_users : 0,
+      recent_logins: typeof stats.recent_logins === 'number' ? stats.recent_logins : 0,
+      recent_failed_login_attempts:
+        typeof stats.recent_failed_login_attempts === 'number'
+          ? stats.recent_failed_login_attempts
+          : 0,
+    },
+    recent_audit_logs: logs.map(parseAdminAuditLog),
+  };
+}
+
+function parseAdminRole(value: unknown): AdminRole {
+  const record =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  return {
+    id: stringField(record, 'id'),
+    name: stringField(record, 'name'),
+    description: stringField(record, 'description'),
+    is_system_role: record.is_system_role === true,
+    permissions: stringArray(record.permissions),
+  };
+}
+
+function csrfTokenFromCookie(): string | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  const csrfCookie = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('theia_csrf='));
+  if (!csrfCookie) {
+    return null;
+  }
+  return decodeURIComponent(csrfCookie.slice('theia_csrf='.length));
+}
+
+function headersWithCsrf(headers: Record<string, string>): Record<string, string> {
+  const csrfToken = csrfTokenFromCookie();
+  if (!csrfToken) {
+    return headers;
+  }
+  return { ...headers, 'X-CSRF-Token': csrfToken };
 }
 
 async function requestJSON(path: string): Promise<unknown> {
@@ -71,27 +254,117 @@ async function requestJSON(path: string): Promise<unknown> {
   return payload;
 }
 
-export async function fetchOperatorSession(): Promise<OperatorSession> {
-  const payload = await requestJSON('/api/v1/session');
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  return {
-    authenticated: record.authenticated === true,
-    subject: typeof record.subject === 'string' ? record.subject : undefined,
-  };
+export async function fetchCurrentUser(): Promise<AuthSession> {
+  return parseAuthSession(await requestJSON('/api/v1/auth/me'));
 }
 
-export async function createOperatorSession(
-  token: string,
-  operator: string,
-): Promise<OperatorSession> {
-  const payload = await requestJSONWithBody('/api/v1/session', 'POST', { token, operator });
+export async function loginUser(payload: LoginPayload): Promise<AuthSession> {
+  return parseAuthSession(await requestJSONWithBody('/api/v1/auth/login', 'POST', payload));
+}
+
+export async function logoutUser(): Promise<AuthSession> {
+  return parseAuthSession(await requestJSONWithBody('/api/v1/auth/logout', 'POST'));
+}
+
+export async function changePassword(payload: ChangePasswordPayload): Promise<AuthSession> {
+  return parseAuthSession(
+    await requestJSONWithBody('/api/v1/auth/password/change', 'POST', payload),
+  );
+}
+
+export async function fetchAdminDashboard(): Promise<AdminDashboardResponse> {
+  return parseAdminDashboard(await requestJSON('/api/v1/admin/dashboard'));
+}
+
+export async function fetchAdminUsers(): Promise<AuthUser[]> {
+  const payload = await requestJSON('/api/v1/admin/users');
   const record =
     typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  return {
-    authenticated: record.authenticated === true,
-    subject: typeof record.subject === 'string' ? record.subject : undefined,
-  };
+  const users = Array.isArray(record.users) ? record.users : [];
+  return users.map(parseAuthUser);
+}
+
+export async function fetchAdminRoles(): Promise<AdminRole[]> {
+  const payload = await requestJSON('/api/v1/admin/roles');
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const roles = Array.isArray(record.roles) ? record.roles : [];
+  return roles.map(parseAdminRole);
+}
+
+export async function fetchAdminPermissions(): Promise<string[]> {
+  const payload = await requestJSON('/api/v1/admin/permissions');
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  return stringArray(record.permissions);
+}
+
+export async function fetchAdminAuditLogs(): Promise<AdminAuditLog[]> {
+  const payload = await requestJSON('/api/v1/admin/audit-logs');
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const logs = Array.isArray(record.audit_logs) ? record.audit_logs : [];
+  return logs.map(parseAdminAuditLog);
+}
+
+function parseAdminUserEnvelope(payload: unknown): AuthUser {
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  return parseAuthUser(record.user);
+}
+
+export async function createAdminUser(payload: CreateAdminUserPayload): Promise<AuthUser> {
+  return parseAdminUserEnvelope(await requestJSONWithBody('/api/v1/admin/users', 'POST', payload));
+}
+
+export async function updateAdminUser(
+  id: string,
+  payload: UpdateAdminUserPayload,
+): Promise<AuthUser> {
+  return parseAdminUserEnvelope(
+    await requestJSONWithBody(`/api/v1/admin/users/${encodeURIComponent(id)}`, 'PATCH', payload),
+  );
+}
+
+export async function setAdminUserStatus(id: string, status: string): Promise<AuthUser> {
+  return parseAdminUserEnvelope(
+    await requestJSONWithBody(`/api/v1/admin/users/${encodeURIComponent(id)}/status`, 'PATCH', {
+      status,
+    }),
+  );
+}
+
+export async function assignAdminUserRole(userId: string, roleId: string): Promise<AuthUser> {
+  return parseAdminUserEnvelope(
+    await requestJSONWithBody(`/api/v1/admin/users/${encodeURIComponent(userId)}/roles`, 'POST', {
+      role_id: roleId,
+    }),
+  );
+}
+
+export async function removeAdminUserRole(userId: string, roleId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/admin/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleId)}`,
+    'DELETE',
+  );
+}
+
+export async function createAdminPasswordReset(
+  userId: string,
+): Promise<AdminPasswordResetResponse> {
+  const payload = await requestJSONWithBody(
+    `/api/v1/admin/users/${encodeURIComponent(userId)}/password-reset`,
+    'POST',
+  );
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const resetToken =
+    typeof record.reset_token === 'string'
+      ? record.reset_token
+      : typeof record.token === 'string'
+        ? record.token
+        : '';
+  return { reset_token: resetToken };
 }
 
 export class CanvasTopologyFetchError extends Error {
@@ -472,10 +745,10 @@ export async function fetchLinks(): Promise<Link[]> {
 async function requestJSONWithBody(path: string, method: string, body?: unknown): Promise<unknown> {
   const response = await fetch(path, {
     method,
-    headers: {
+    headers: headersWithCsrf({
       Accept: 'application/json',
       'Content-Type': 'application/json',
-    },
+    }),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -1095,7 +1368,7 @@ export function bulkDownloadUrl(_deviceIds: string[]): string {
 export async function triggerBulkDownload(deviceIds: string[]): Promise<void> {
   const response = await fetch('/api/v1/backups/bulk-download', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headersWithCsrf({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ device_ids: deviceIds }),
   });
   if (!response.ok) {
@@ -1238,6 +1511,7 @@ export async function restoreInstanceBackup(file: File, dryRun: boolean): Promis
 
   const response = await fetch(url, {
     method: 'POST',
+    headers: headersWithCsrf({}),
     body: formData,
     // Do NOT set Content-Type — browser sets multipart boundary automatically
   });

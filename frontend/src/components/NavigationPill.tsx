@@ -13,6 +13,7 @@ interface NavigationPillProps {
   selectedMapName: string;
   maps: CanvasMap[];
   areas: Area[];
+  canViewAdmin?: boolean;
   onViewChange: (view: ActiveView) => void;
   onAreaSelect: (areaId: string | null) => void;
   onMapSelect: (map: CanvasMap) => void;
@@ -26,6 +27,7 @@ function NavigationPill({
   selectedMapName,
   maps,
   areas,
+  canViewAdmin = false,
   onViewChange,
   onAreaSelect,
   onMapSelect,
@@ -55,6 +57,7 @@ function NavigationPill({
   const isTopologyContextView = activeView === 'canvas' || activeView === 'dashboard';
   const isAllAreas = isTopologyContextView && selectedAreaId === null;
   const isDashboard = activeView === 'dashboard';
+  const isAdmin = activeView === 'admin';
   const maxInlineAreas = 3;
   const { inlineAreas, overflowAreas } = useMemo(
     () => ({
@@ -67,7 +70,11 @@ function NavigationPill({
   const updateAreaScrollState = useCallback(() => {
     const scroller = areaScrollerRef.current;
     if (!scroller) {
-      setAreaScrollState({ hasOverflow: false, canScrollLeft: false, canScrollRight: false });
+      setAreaScrollState({
+        hasOverflow: false,
+        canScrollLeft: false,
+        canScrollRight: false,
+      });
       return;
     }
 
@@ -94,7 +101,9 @@ function NavigationPill({
     const scroller = areaScrollerRef.current;
     if (!scroller) return;
 
-    scroller.addEventListener('scroll', updateAreaScrollState, { passive: true });
+    scroller.addEventListener('scroll', updateAreaScrollState, {
+      passive: true,
+    });
     window.addEventListener('resize', updateAreaScrollState);
     const resizeObserver =
       typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateAreaScrollState) : null;
@@ -357,6 +366,22 @@ function NavigationPill({
       >
         <MaterialIcon name="devices" size={20} />
       </button>
+
+      {canViewAdmin && (
+        <button
+          type="button"
+          onClick={() => onViewChange('admin')}
+          className={`flex items-center rounded-full border px-2 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-3 ${
+            isAdmin
+              ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
+              : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
+          }`}
+          aria-label="Admin Dashboard"
+          title="Admin"
+        >
+          <MaterialIcon name="admin_panel_settings" size={20} />
+        </button>
+      )}
 
       {/* THEME TOGGLE */}
       <button
