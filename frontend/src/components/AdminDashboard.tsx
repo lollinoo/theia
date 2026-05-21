@@ -56,7 +56,11 @@ function rolesLabel(user: AuthUser): string {
   return user.roles.length > 0 ? user.roles.join(', ') : 'No roles';
 }
 
-export function AdminDashboard() {
+interface AdminDashboardProps {
+  visible?: boolean;
+}
+
+export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [dashboard, setDashboard] = useState<AdminDashboardResponse>(emptyDashboard);
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -85,6 +89,7 @@ export function AdminDashboard() {
   const load = async () => {
     setLoading(true);
     setError(null);
+    setResetToken(null);
     try {
       const [nextDashboard, nextUsers, nextRoles, nextPermissions, nextAuditLogs] =
         await Promise.all([
@@ -109,6 +114,18 @@ export function AdminDashboard() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!visible) {
+      setResetToken(null);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (activeTab !== 'users') {
+      setResetToken(null);
+    }
+  }, [activeTab]);
 
   const filteredUsers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -163,7 +180,10 @@ export function AdminDashboard() {
   }
 
   async function changeStatus(user: AuthUser, status: string) {
-    if (status !== 'active' && !window.confirm(`Change ${user.username} status to ${status}?`)) {
+    if (status === user.status) {
+      return;
+    }
+    if (!window.confirm(`Change ${user.username} status to ${status}?`)) {
       return;
     }
     setSavingUserId(user.id);
@@ -292,8 +312,19 @@ export function AdminDashboard() {
 
         {resetToken && (
           <div className="rounded-lg border border-outline-subtle bg-surface-container px-4 py-3">
-            <div className="text-sm font-semibold text-on-bg">
-              One-time reset token for {resetToken.username}
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-on-bg">
+                One-time reset token for {resetToken.username}
+              </div>
+              <button
+                type="button"
+                onClick={() => setResetToken(null)}
+                className="inline-flex items-center gap-1 rounded-md border border-outline-subtle bg-surface px-2 py-1 text-xs text-on-bg transition-colors hover:bg-surface-container-high"
+                aria-label="Dismiss reset token"
+              >
+                <MaterialIcon name="close" size={14} />
+                Dismiss
+              </button>
             </div>
             <div className="mt-2 rounded-md bg-bg px-3 py-2 font-mono text-sm text-on-bg">
               {resetToken.token}
@@ -707,24 +738,25 @@ function AuditTable({ logs, compact = false }: { logs: AdminAuditLog[]; compact?
               <th className="px-3 py-2 font-semibold">Time</th>
               <th className="px-3 py-2 font-semibold">Actor</th>
               <th className="px-3 py-2 font-semibold">Action</th>
-              {!compact && <th className="px-3 py-2 font-semibold">Target</th>}
+              {!compact && <th className="px-3 py-2 font-semibold">Resource</th>}
             </tr>
           </thead>
           <tbody>
-            {logs.map((log) => (
-              <tr key={log.id} className="border-t border-outline-subtle">
-                <td className="px-3 py-3 font-mono text-xs text-on-bg-secondary">
-                  {log.created_at}
-                </td>
-                <td className="px-3 py-3 text-on-bg">{log.actor_username ?? 'system'}</td>
-                <td className="px-3 py-3 font-medium text-on-bg">{log.action}</td>
-                {!compact && (
-                  <td className="px-3 py-3 text-on-bg-secondary">
-                    {[log.target_type, log.target_id].filter(Boolean).join(':') || 'none'}
+            {logs.map((log) => {
+              const resourceLabel =
+                [log.resource, log.resource_id].filter(Boolean).join(':') ||
+                (log.target_user_id ? `user:${log.target_user_id}` : 'none');
+              return (
+                <tr key={log.id} className="border-t border-outline-subtle">
+                  <td className="px-3 py-3 font-mono text-xs text-on-bg-secondary">
+                    {log.created_at}
                   </td>
-                )}
-              </tr>
-            ))}
+                  <td className="px-3 py-3 text-on-bg">{log.actor_user_id ?? 'system'}</td>
+                  <td className="px-3 py-3 font-medium text-on-bg">{log.action}</td>
+                  {!compact && <td className="px-3 py-3 text-on-bg-secondary">{resourceLabel}</td>}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

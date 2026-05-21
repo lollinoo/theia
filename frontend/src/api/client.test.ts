@@ -249,6 +249,41 @@ describe('password sessions', () => {
     );
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
   });
+
+  it('ignores malformed CSRF cookie values on password mutations', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theme=dark; theia_csrf=%E0%A4%A',
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        authenticated: true,
+        user: {
+          id: 'user-1',
+          username: 'alice',
+          email: '',
+          display_name: '',
+          status: 'active',
+          must_change_password: false,
+          roles: [],
+          permissions: [],
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(changePassword({ current_password: 'old', new_password: 'new' })).resolves.toEqual(
+      expect.objectContaining({ authenticated: true }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/auth/password/change',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.not.objectContaining({ 'X-CSRF-Token': expect.any(String) }),
+      }),
+    );
+  });
 });
 
 describe('admin API', () => {
@@ -268,10 +303,14 @@ describe('admin API', () => {
           recent_audit_logs: [
             {
               id: 'audit-1',
-              actor_username: 'admin',
+              actor_user_id: 'admin-user-1',
               action: 'login',
-              target_type: 'user',
-              target_id: 'user-1',
+              target_user_id: 'user-1',
+              resource: 'user',
+              resource_id: 'user-1',
+              metadata: { source: 'session' },
+              ip_address: '192.0.2.1',
+              user_agent: 'Vitest',
               created_at: '2026-05-21T10:00:00Z',
               token_hash: 'must-not-leak',
             },
@@ -303,18 +342,37 @@ describe('admin API', () => {
               name: 'admin',
               description: 'Administrators',
               is_system_role: true,
-              permissions: ['admin:dashboard:read'],
+              permissions: [{ key: 'admin:dashboard:read', description: 'Dashboard access' }],
             },
           ],
         }),
       )
-      .mockResolvedValueOnce(mockResponse({ permissions: ['admin:dashboard:read'] }))
+      .mockResolvedValueOnce(
+        mockResponse({
+          permissions: [
+            {
+              id: 'permission-1',
+              key: 'admin:dashboard:read',
+              description: 'Dashboard access',
+              resource: 'admin',
+              action: 'dashboard:read',
+            },
+          ],
+        }),
+      )
       .mockResolvedValueOnce(
         mockResponse({
           audit_logs: [
             {
               id: 'audit-2',
+              actor_user_id: 'admin-user-1',
               action: 'user.create',
+              target_user_id: 'user-2',
+              resource: 'user',
+              resource_id: 'user-2',
+              metadata: { created_username: 'bob' },
+              ip_address: '192.0.2.2',
+              user_agent: 'Vitest',
               created_at: '2026-05-21T11:00:00Z',
             },
           ],
@@ -324,17 +382,43 @@ describe('admin API', () => {
 
     await expect(fetchAdminDashboard()).resolves.toMatchObject({
       stats: { total_users: 2 },
-      recent_audit_logs: [{ id: 'audit-1', action: 'login' }],
+      recent_audit_logs: [
+        {
+          id: 'audit-1',
+          actor_user_id: 'admin-user-1',
+          action: 'login',
+          target_user_id: 'user-1',
+          resource: 'user',
+          resource_id: 'user-1',
+          metadata: { source: 'session' },
+          ip_address: '192.0.2.1',
+          user_agent: 'Vitest',
+        },
+      ],
     });
     await expect(fetchAdminUsers()).resolves.toEqual([
       expect.objectContaining({ id: 'user-1', username: 'alice' }),
     ]);
     await expect(fetchAdminRoles()).resolves.toEqual([
-      expect.objectContaining({ id: 'role-1', name: 'admin' }),
+      expect.objectContaining({
+        id: 'role-1',
+        name: 'admin',
+        permissions: ['admin:dashboard:read'],
+      }),
     ]);
     await expect(fetchAdminPermissions()).resolves.toEqual(['admin:dashboard:read']);
     await expect(fetchAdminAuditLogs()).resolves.toEqual([
-      expect.objectContaining({ id: 'audit-2', action: 'user.create' }),
+      expect.objectContaining({
+        id: 'audit-2',
+        actor_user_id: 'admin-user-1',
+        action: 'user.create',
+        target_user_id: 'user-2',
+        resource: 'user',
+        resource_id: 'user-2',
+        metadata: { created_username: 'bob' },
+        ip_address: '192.0.2.2',
+        user_agent: 'Vitest',
+      }),
     ]);
   });
 

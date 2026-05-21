@@ -24,6 +24,8 @@ const deleteCanvasMapMock = vi.fn<(id: string) => Promise<void>>();
 const setCanvasMapPrimaryMock = vi.fn<(id: string) => Promise<CanvasMap>>();
 const useWebSocketMock = vi.fn();
 const watermarkPropsMock = vi.hoisted(() => vi.fn());
+const adminDashboardPropsMock = vi.hoisted(() => vi.fn());
+const hasPermissionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('./api/client', () => ({
   fetchAreas: () => fetchAreasMock(),
@@ -48,6 +50,19 @@ vi.mock('./contexts/ThemeContext', () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+vi.mock('./contexts/AuthContext', () => ({
+  useAuth: () => ({
+    status: 'authenticated',
+    user: null,
+    error: null,
+    refresh: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
+    changePassword: vi.fn(),
+    hasPermission: hasPermissionMock,
+  }),
+}));
+
 vi.mock('@xyflow/react', () => ({
   ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -69,11 +84,13 @@ vi.mock('./components/NavigationPill', () => ({
     onAreaSelect,
     onMapSelect,
     onManageMaps,
+    canViewAdmin,
   }: {
     areas: Area[];
     maps: CanvasMap[];
     selectedMapId: string | null;
     selectedMapName: string;
+    canViewAdmin: boolean;
     onViewChange: (view: 'hub' | 'canvas' | 'dashboard' | 'admin') => void;
     onAreaSelect: (areaId: string | null) => void;
     onMapSelect: (map: CanvasMap) => void;
@@ -88,6 +105,11 @@ vi.mock('./components/NavigationPill', () => ({
       <button type="button" onClick={() => onViewChange('dashboard')}>
         Dashboard
       </button>
+      {canViewAdmin && (
+        <button type="button" onClick={() => onViewChange('admin')}>
+          Admin
+        </button>
+      )}
       <button
         type="button"
         onClick={() =>
@@ -357,7 +379,10 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
 }));
 
 vi.mock('./components/AdminDashboard', () => ({
-  AdminDashboard: () => <div data-testid="admin-dashboard">Admin</div>,
+  AdminDashboard: (props: { visible?: boolean }) => {
+    adminDashboardPropsMock(props);
+    return <div data-testid="admin-dashboard">Admin</div>;
+  },
 }));
 
 vi.mock('./components/Dashboard', () => ({
@@ -427,6 +452,9 @@ describe('App', () => {
     setCanvasMapPrimaryMock.mockReset();
     useWebSocketMock.mockReset();
     watermarkPropsMock.mockClear();
+    adminDashboardPropsMock.mockClear();
+    hasPermissionMock.mockReset();
+    hasPermissionMock.mockReturnValue(false);
     fetchAreasMock.mockResolvedValue([mockArea()]);
     fetchCanvasMapsMock.mockResolvedValue([]);
     createCanvasMapMock.mockResolvedValue(mockMap());
@@ -442,6 +470,24 @@ describe('App', () => {
       alerts: [],
       reconnecting: false,
       prometheusStatus: null,
+    });
+  });
+
+  it('passes visibility state to the mounted admin dashboard', async () => {
+    hasPermissionMock.mockImplementation(
+      (permission: string) => permission === 'admin:dashboard:read',
+    );
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Admin' }));
+    await waitFor(() => {
+      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({ visible: true });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
+    await waitFor(() => {
+      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({ visible: false });
     });
   });
 

@@ -603,7 +603,7 @@ function App() {
             {...viewLayerStateProps(activeView === 'admin')}
             className={viewLayerClass(activeView === 'admin', 'overflow-y-auto')}
           >
-            <AdminDashboard />
+            <AdminDashboard visible={activeView === 'admin'} />
           </div>
         )}
         {enableSavedMaps && (

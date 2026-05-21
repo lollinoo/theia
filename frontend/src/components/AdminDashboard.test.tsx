@@ -50,6 +50,7 @@ const adminRole = {
 
 describe('AdminDashboard', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.mocked(fetchAdminDashboard).mockReset();
     vi.mocked(fetchAdminUsers).mockReset();
     vi.mocked(fetchAdminRoles).mockReset();
@@ -74,10 +75,10 @@ describe('AdminDashboard', () => {
       recent_audit_logs: [
         {
           id: 'audit-1',
-          actor_username: 'administrator',
+          actor_user_id: 'admin-user-1',
           action: 'auth.login',
-          target_type: 'user',
-          target_id: 'user-1',
+          resource: 'session',
+          resource_id: 'session-1',
           created_at: '2026-05-21T10:00:00Z',
         },
       ],
@@ -88,10 +89,11 @@ describe('AdminDashboard', () => {
     vi.mocked(fetchAdminAuditLogs).mockResolvedValue([
       {
         id: 'audit-2',
-        actor_username: 'administrator',
+        actor_user_id: 'admin-user-1',
         action: 'user.update',
-        target_type: 'user',
-        target_id: 'user-1',
+        target_user_id: 'user-1',
+        resource: 'user',
+        resource_id: 'user-1',
         created_at: '2026-05-21T11:00:00Z',
       },
     ]);
@@ -123,6 +125,8 @@ describe('AdminDashboard', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Audit Logs' }));
     expect(await screen.findByText('user.update')).toBeInTheDocument();
+    expect(screen.getByText('admin-user-1')).toBeInTheDocument();
+    expect(screen.getByText('user:user-1')).toBeInTheDocument();
   });
 
   it('searches users and confirms privilege-changing actions', async () => {
@@ -145,5 +149,52 @@ describe('AdminDashboard', () => {
 
     fireEvent.click(within(row).getByRole('button', { name: 'Reset password for alice' }));
     expect(await screen.findByText('reset-token-1')).toBeInTheDocument();
+  });
+
+  it('clears one-time reset tokens when leaving users, refreshing, dismissing, or hiding admin', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const { rerender } = render(<AdminDashboard visible />);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Users' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset password for alice' }));
+    expect(await screen.findByText('reset-token-1')).toBeInTheDocument();
+    expect(confirmSpy).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Roles' }));
+    expect(screen.queryByText('reset-token-1')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Users' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset password for alice' }));
+    expect(await screen.findByText('reset-token-1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss reset token' }));
+    expect(screen.queryByText('reset-token-1')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset password for alice' }));
+    expect(await screen.findByText('reset-token-1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(screen.queryByText('reset-token-1')).not.toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Reset password for alice' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset password for alice' }));
+    expect(await screen.findByText('reset-token-1')).toBeInTheDocument();
+    rerender(<AdminDashboard visible={false} />);
+    expect(screen.queryByText('reset-token-1')).not.toBeInTheDocument();
+  });
+
+  it('confirms enabling disabled users before changing status to active', async () => {
+    const disabledUser = { ...adminUser, status: 'disabled' };
+    vi.mocked(fetchAdminUsers).mockResolvedValue([disabledUser]);
+    vi.mocked(setAdminUserStatus).mockResolvedValue({ ...disabledUser, status: 'active' });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<AdminDashboard />);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Users' }));
+    const row = screen.getByRole('row', { name: /alice/i });
+    fireEvent.click(within(row).getByRole('button', { name: 'Enable user alice' }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith('Change alice status to active?');
+      expect(setAdminUserStatus).toHaveBeenCalledWith('user-1', 'active');
+    });
   });
 });

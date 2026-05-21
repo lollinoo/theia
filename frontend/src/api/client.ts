@@ -81,10 +81,11 @@ export interface AdminDashboardStats {
 export interface AdminAuditLog {
   id: string;
   actor_user_id?: string;
-  actor_username?: string;
   action: string;
-  target_type?: string;
-  target_id?: string;
+  target_user_id?: string;
+  resource?: string;
+  resource_id?: string;
+  metadata?: Record<string, unknown>;
   ip_address?: string;
   user_agent?: string;
   created_at: string;
@@ -134,6 +135,28 @@ function stringArray(value: unknown): string[] {
   return value.flatMap((item) => (typeof item === 'string' ? [item] : []));
 }
 
+function permissionKeysArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (typeof item === 'string') {
+      return [item];
+    }
+    if (typeof item === 'object' && item !== null) {
+      const key = (item as Record<string, unknown>).key;
+      return typeof key === 'string' ? [key] : [];
+    }
+    return [];
+  });
+}
+
+function recordField(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 function parseAuthUser(value: unknown): AuthUser {
   const record =
     typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
@@ -145,7 +168,7 @@ function parseAuthUser(value: unknown): AuthUser {
     status: stringField(record, 'status') || 'unknown',
     must_change_password: record.must_change_password === true,
     roles: stringArray(record.roles),
-    permissions: stringArray(record.permissions),
+    permissions: permissionKeysArray(record.permissions),
   };
 }
 
@@ -163,10 +186,11 @@ function parseAdminAuditLog(value: unknown): AdminAuditLog {
   return {
     id: stringField(record, 'id'),
     actor_user_id: stringField(record, 'actor_user_id') || undefined,
-    actor_username: stringField(record, 'actor_username') || undefined,
     action: stringField(record, 'action'),
-    target_type: stringField(record, 'target_type') || undefined,
-    target_id: stringField(record, 'target_id') || undefined,
+    target_user_id: stringField(record, 'target_user_id') || undefined,
+    resource: stringField(record, 'resource') || undefined,
+    resource_id: stringField(record, 'resource_id') || undefined,
+    metadata: recordField(record.metadata),
     ip_address: stringField(record, 'ip_address') || undefined,
     user_agent: stringField(record, 'user_agent') || undefined,
     created_at: stringField(record, 'created_at'),
@@ -205,7 +229,7 @@ function parseAdminRole(value: unknown): AdminRole {
     name: stringField(record, 'name'),
     description: stringField(record, 'description'),
     is_system_role: record.is_system_role === true,
-    permissions: stringArray(record.permissions),
+    permissions: permissionKeysArray(record.permissions),
   };
 }
 
@@ -220,7 +244,11 @@ function csrfTokenFromCookie(): string | null {
   if (!csrfCookie) {
     return null;
   }
-  return decodeURIComponent(csrfCookie.slice('theia_csrf='.length));
+  try {
+    return decodeURIComponent(csrfCookie.slice('theia_csrf='.length));
+  } catch {
+    return null;
+  }
 }
 
 function headersWithCsrf(headers: Record<string, string>): Record<string, string> {
@@ -296,7 +324,7 @@ export async function fetchAdminPermissions(): Promise<string[]> {
   const payload = await requestJSON('/api/v1/admin/permissions');
   const record =
     typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  return stringArray(record.permissions);
+  return permissionKeysArray(record.permissions);
 }
 
 export async function fetchAdminAuditLogs(): Promise<AdminAuditLog[]> {
