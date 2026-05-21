@@ -1,1 +1,0 @@
-ALTER TABLE devices ADD COLUMN polling_enabled INTEGER NOT NULL DEFAULT 1;
