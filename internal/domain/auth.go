@@ -169,6 +169,26 @@ type UserWithRolesAndPermissions struct {
 	Permissions []Permission
 }
 
+// HasRole returns true when the aggregate includes roleID.
+func (u UserWithRolesAndPermissions) HasRole(roleID string) bool {
+	for _, role := range u.Roles {
+		if role.ID == roleID || role.Name == roleID {
+			return true
+		}
+	}
+	return false
+}
+
+// HasPermission returns true when the aggregate includes permissionKey.
+func (u UserWithRolesAndPermissions) HasPermission(permissionKey string) bool {
+	for _, permission := range u.Permissions {
+		if permission.Key == permissionKey || permission.ID == permissionKey {
+			return true
+		}
+	}
+	return false
+}
+
 // AdminDashboardStats contains high-level auth administration counters.
 type AdminDashboardStats struct {
 	TotalUsers                int
