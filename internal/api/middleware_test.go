@@ -2,11 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/lollinoo/theia/internal/security"
 )
 
 func TestMaxBodySizeAllowed(t *testing.T) {
@@ -126,5 +129,129 @@ func TestWebSocketBypassesMaxBodySize(t *testing.T) {
 	}
 	if rec.Code == http.StatusRequestEntityTooLarge {
 		t.Fatal("WebSocket request was rejected with 413 -- MaxBodySize should not apply to /api/v1/ws")
+	}
+}
+
+func TestOperatorAuthRequiresBearerTokenWhenConfigured(t *testing.T) {
+	config := SecurityConfig{OperatorToken: "0123456789abcdef0123456789abcdef"}
+	served := false
+	handler := OperatorAuth(config)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if served {
+		t.Fatal("handler was called without operator auth")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestOperatorAuthAddsSubjectForBearerToken(t *testing.T) {
+	config := SecurityConfig{OperatorToken: "0123456789abcdef0123456789abcdef"}
+	handler := OperatorAuth(config)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subject := OperatorSubjectFromRequest(r)
+		if !subject.Authenticated || subject.Name != "alice" {
+			t.Fatalf("subject = %+v, want authenticated alice", subject)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	req.Header.Set("Authorization", "Bearer 0123456789abcdef0123456789abcdef")
+	req.Header.Set("X-Theia-Operator", "alice")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestRequireAuthenticatedOperatorRejectsAnonymousContext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/id/reveal", nil)
+	rec := httptest.NewRecorder()
+
+	if _, ok := requireAuthenticatedOperator(rec, req, "credential reveal"); ok {
+		t.Fatal("expected anonymous context to be rejected")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestRequireAuthenticatedOperatorAcceptsSubjectContext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/id/reveal", nil)
+	req = req.WithContext(security.WithOperatorSubject(context.Background(), security.OperatorSubject{Name: "alice", Authenticated: true}))
+	rec := httptest.NewRecorder()
+
+	subject, ok := requireAuthenticatedOperator(rec, req, "credential reveal")
+	if !ok {
+		t.Fatal("expected authenticated context to be accepted")
+	}
+	if subject.Name != "alice" {
+		t.Fatalf("subject = %+v, want alice", subject)
+	}
+}
+
+func TestCORSUsesExactAllowedOriginWithoutWildcard(t *testing.T) {
+	handler := CORSWithConfig(SecurityConfig{AllowedOrigins: []string{"https://ops.example"}})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	req.Host = "backend.example"
+	req.Header.Set("Origin", "https://ops.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://ops.example" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want exact origin", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want true", got)
+	}
+}
+
+func TestOriginGuardRejectsUnlistedOrigin(t *testing.T) {
+	handler := OriginGuard(SecurityConfig{AllowedOrigins: []string{"https://ops.example"}})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/bridge.secret", nil)
+	req.Host = "backend.example"
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestOriginGuardAllowsSameHostOrigin(t *testing.T) {
+	handler := OriginGuard(SecurityConfig{})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "https://backend.example/api/v1/settings/bridge.secret", nil)
+	req.Host = "backend.example"
+	req.Header.Set("Origin", "https://backend.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }

@@ -15,6 +15,20 @@ import (
 
 // NewRouter creates the HTTP handler with all /api/v1/ routes registered.
 // Uses standard net/http (no framework needed at this scale).
+type routerOptions struct {
+	security SecurityConfig
+}
+
+// RouterOption customizes router middleware behavior.
+type RouterOption func(*routerOptions)
+
+// WithSecurity configures operator authentication and browser origin policy.
+func WithSecurity(config SecurityConfig) RouterOption {
+	return func(options *routerOptions) {
+		options.security = config
+	}
+}
+
 func NewRouter(
 	db *sql.DB,
 	deviceService *service.DeviceService,
@@ -35,8 +49,17 @@ func NewRouter(
 	bridgeBinariesDir string,
 	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64),
 	wsHandler *ws.Handler,
+	opts ...RouterOption,
 ) http.Handler {
+	routerOpts := routerOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&routerOpts)
+		}
+	}
+
 	mux := http.NewServeMux()
+	sessionHandler := NewSessionHandler(routerOpts.security)
 
 	deviceHandler := NewDeviceHandler(
 		deviceService,
@@ -628,30 +651,36 @@ func NewRouter(
 		mux.Handle("/api/v1/ws", wsHandler)
 	}
 
-	// Apply middleware chain: CORS -> Logger -> MaxBodySize -> JSON Content-Type
-	var handler http.Handler = mux
-	handler = JSONContentType(handler)
-	handler = MaxBodySize(1 << 20)(handler) // 1 MB limit
-	handler = RequestLogger(handler)
-	handler = CORS(handler)
+	handler := applyMiddleware(mux, routerOpts.security, true, 1<<20)
+	downloadHandler := applyMiddleware(mux, routerOpts.security, false, 0)
+	publicSessionHandler := applyPublicMiddleware(sessionHandler, routerOpts.security, true, 16<<10)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/session" {
+			publicSessionHandler.ServeHTTP(w, r)
+			return
+		}
+
 		// WebSocket upgrades must bypass the JSON/logger middleware chain because
 		// the wrapped ResponseWriter does not expose the hijacker interface.
 		if wsHandler != nil && r.URL.Path == "/api/v1/ws" {
-			wsHandler.ServeHTTP(w, r)
+			authenticatedRequest, ok := AuthenticateOperatorRequest(w, r, routerOpts.security)
+			if !ok {
+				return
+			}
+			wsHandler.ServeHTTP(w, authenticatedRequest)
 			return
 		}
 
 		// File download bypasses JSON content-type middleware
 		if strings.HasSuffix(r.URL.Path, "/download") && strings.HasPrefix(r.URL.Path, "/api/v1/backup-files/") {
-			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			downloadHandler.ServeHTTP(w, r)
 			return
 		}
 
 		// Instance backup download bypasses JSON content-type and body size middleware
 		if strings.HasSuffix(r.URL.Path, "/download") && strings.HasPrefix(r.URL.Path, "/api/v1/instance-backups/") {
-			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			downloadHandler.ServeHTTP(w, r)
 			return
 		}
 
@@ -661,13 +690,13 @@ func NewRouter(
 			if instanceBackupService != nil {
 				restoreLimit = instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
 			}
-			CORS(RequestLogger(MaxBodySize(restoreLimit+restoreMultipartEnvelopeOverheadBytes)(mux))).ServeHTTP(w, r)
+			applyMiddleware(mux, routerOpts.security, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes).ServeHTTP(w, r)
 			return
 		}
 
 		// Bridge binary download bypasses JSON content-type and body size middleware
 		if strings.HasPrefix(r.URL.Path, "/api/v1/bridge/download/") && r.Method == http.MethodGet {
-			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			downloadHandler.ServeHTTP(w, r)
 			return
 		}
 

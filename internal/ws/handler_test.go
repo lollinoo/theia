@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -87,6 +88,37 @@ func TestHandlerServeHTTP_BootstrapIncludesAlertMessage(t *testing.T) {
 		t.Fatalf("bootstrap message order = %v, want %v", got, want)
 	}
 	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerServeHTTP_RejectsUnlistedOrigin(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			return EmptySnapshot(), 1
+		},
+		nil,
+		nil,
+		WithAllowedOrigins([]string{"https://ops.example"}),
+	))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	headers := make(http.Header)
+	headers.Set("Origin", "https://evil.example")
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, headers)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("expected websocket dial to fail for unlisted origin")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		if resp == nil {
+			t.Fatal("expected 403 response for rejected origin, got nil response")
+		}
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
 }
 
 func TestHandlerServeHTTP_BootstrapAlertIncludesVersionedPayload(t *testing.T) {

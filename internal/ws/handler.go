@@ -9,6 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/lollinoo/theia/internal/logging"
+	"github.com/lollinoo/theia/internal/security"
 )
 
 const bootstrapHelloWait = 500 * time.Millisecond
@@ -27,17 +28,34 @@ type Handler struct {
 	snapshotFunc   func() (*SnapshotPayload, uint64)
 	alertsFunc     func() AlertMessagePayload
 	promStatusFunc func() PrometheusStatusPayload
+	allowedOrigins []string
+}
+
+// HandlerOption customizes WebSocket handler behavior.
+type HandlerOption func(*Handler)
+
+// WithAllowedOrigins configures exact browser origins allowed to open WebSockets.
+func WithAllowedOrigins(origins []string) HandlerOption {
+	return func(h *Handler) {
+		h.allowedOrigins = security.NormalizedAllowedOrigins(origins)
+	}
 }
 
 // NewHandler creates a WebSocket handler that serves initial snapshots on connect.
 // promStatusFunc returns the current Prometheus integration status.
-func NewHandler(hub *Hub, snapshotFunc func() (*SnapshotPayload, uint64), alertsFunc func() AlertMessagePayload, promStatusFunc func() PrometheusStatusPayload) *Handler {
-	return &Handler{
+func NewHandler(hub *Hub, snapshotFunc func() (*SnapshotPayload, uint64), alertsFunc func() AlertMessagePayload, promStatusFunc func() PrometheusStatusPayload, opts ...HandlerOption) *Handler {
+	handler := &Handler{
 		hub:            hub,
 		snapshotFunc:   snapshotFunc,
 		alertsFunc:     alertsFunc,
 		promStatusFunc: promStatusFunc,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(handler)
+		}
+	}
+	return handler
 }
 
 // ServeHTTP upgrades the request, sends the bootstrap state, then registers the
@@ -46,6 +64,10 @@ func NewHandler(hub *Hub, snapshotFunc func() (*SnapshotPayload, uint64), alerts
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !security.OriginAllowed(r, h.allowedOrigins) {
+		http.Error(w, "websocket origin not allowed", http.StatusForbidden)
 		return
 	}
 
