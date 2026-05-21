@@ -85,12 +85,14 @@ vi.mock('./components/NavigationPill', () => ({
     onMapSelect,
     onManageMaps,
     canViewAdmin,
+    userLabel,
   }: {
     areas: Area[];
     maps: CanvasMap[];
     selectedMapId: string | null;
     selectedMapName: string;
     canViewAdmin: boolean;
+    userLabel: string;
     onViewChange: (view: 'hub' | 'canvas' | 'dashboard' | 'admin') => void;
     onAreaSelect: (areaId: string | null) => void;
     onMapSelect: (map: CanvasMap) => void;
@@ -99,6 +101,7 @@ vi.mock('./components/NavigationPill', () => ({
     <div data-testid="navigation-pill">
       <span>{`pill-map:${selectedMapId ?? 'default'}:${selectedMapName}:${maps.length}`}</span>
       <span>{`pill-areas:${areas.map((area) => area.name).join('|')}`}</span>
+      <span>{`pill-user:${userLabel}`}</span>
       <button type="button" onClick={() => onViewChange('hub')}>
         Hub
       </button>

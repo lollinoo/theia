@@ -14,6 +14,7 @@ interface NavigationPillProps {
   maps: CanvasMap[];
   areas: Area[];
   canViewAdmin?: boolean;
+  userLabel?: string;
   onViewChange: (view: ActiveView) => void;
   onAreaSelect: (areaId: string | null) => void;
   onMapSelect: (map: CanvasMap) => void;
@@ -29,6 +30,7 @@ function NavigationPill({
   maps,
   areas,
   canViewAdmin = false,
+  userLabel = 'User',
   onViewChange,
   onAreaSelect,
   onMapSelect,
@@ -45,6 +47,8 @@ function NavigationPill({
   });
   const [areaOverflowOpen, setAreaOverflowOpen] = useState(false);
   const areaOverflowRef = useRef<HTMLDivElement | null>(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
   const { resolvedTheme, setTheme } = useTheme();
 
   useEffect(() => {
@@ -60,6 +64,8 @@ function NavigationPill({
   const isAllAreas = isTopologyContextView && selectedAreaId === null;
   const isDashboard = activeView === 'dashboard';
   const isAdmin = activeView === 'admin';
+  const normalizedUserLabel = userLabel.trim() || 'User';
+  const userInitial = normalizedUserLabel[0]?.toUpperCase() ?? 'U';
   const maxInlineAreas = 3;
   const { inlineAreas, overflowAreas } = useMemo(
     () => ({
@@ -163,6 +169,45 @@ function NavigationPill({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [areaOverflowOpen]);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || !userMenuRef.current?.contains(target)) {
+        setUserMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setUserMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [userMenuOpen]);
+
+  const handleThemeMenuClick = () => {
+    toggleTheme();
+    setUserMenuOpen(false);
+  };
+
+  const handleAdminAreaMenuClick = () => {
+    if (!canViewAdmin) return;
+    setUserMenuOpen(false);
+    onViewChange('admin');
+  };
+
+  const handleLogoutMenuClick = () => {
+    setUserMenuOpen(false);
+    onLogout();
+  };
 
   return (
     <div className="topology-glass topology-floating-shadow fixed left-1/2 top-4 z-30 flex w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-2xl px-2 py-2 transition-colors dark:backdrop-blur-[16px] sm:w-auto sm:max-w-[calc(100vw-1.5rem)] sm:flex-nowrap sm:justify-start sm:rounded-full sm:px-3">
@@ -369,42 +414,75 @@ function NavigationPill({
         <MaterialIcon name="devices" size={20} />
       </button>
 
-      {canViewAdmin && (
+      <div ref={userMenuRef} className="relative">
         <button
           type="button"
-          onClick={() => onViewChange('admin')}
-          className={`flex items-center rounded-full border px-2 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-3 ${
+          aria-haspopup="menu"
+          aria-expanded={userMenuOpen}
+          aria-label={`User menu for ${normalizedUserLabel}`}
+          title="User menu"
+          onClick={() => setUserMenuOpen((current) => !current)}
+          className={`flex h-10 max-w-[11rem] items-center gap-2 rounded-full border px-2 transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-3 ${
             isAdmin
               ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
-              : 'border-transparent text-on-bg-secondary hover:bg-surface-container hover:text-on-bg'
+              : 'border-transparent text-on-bg-secondary'
           }`}
-          aria-label="Admin Dashboard"
-          title="Admin"
         >
-          <MaterialIcon name="admin_panel_settings" size={20} />
+          <span
+            aria-hidden="true"
+            className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-primary text-xs font-semibold text-on-primary"
+          >
+            {userInitial}
+          </span>
+          <span className="hidden min-w-0 truncate text-sm font-medium sm:block">
+            {normalizedUserLabel}
+          </span>
+          <MaterialIcon
+            name={userMenuOpen ? 'expand_less' : 'expand_more'}
+            className="text-[18px]"
+          />
         </button>
-      )}
-
-      {/* THEME TOGGLE */}
-      <button
-        type="button"
-        onClick={toggleTheme}
-        className="flex items-center rounded-full border border-transparent px-2 py-2 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-3"
-        aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-        title={resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}
-      >
-        <MaterialIcon name={resolvedTheme === 'dark' ? 'light_mode' : 'dark_mode'} size={20} />
-      </button>
-
-      <button
-        type="button"
-        onClick={onLogout}
-        className="flex items-center rounded-full border border-transparent px-2 py-2 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-3"
-        aria-label="Logout"
-        title="Logout"
-      >
-        <MaterialIcon name="logout" size={20} />
-      </button>
+        {userMenuOpen && (
+          <div className="topology-glass topology-floating-shadow absolute right-0 top-full mt-2 w-[min(14rem,calc(100vw-2rem))] overflow-hidden rounded-[16px] p-1.5">
+            <div role="menu" aria-label="User actions">
+              {canViewAdmin && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={handleAdminAreaMenuClick}
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-on-bg transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  <MaterialIcon name="admin_panel_settings" className="text-[18px]" />
+                  <span className="min-w-0 flex-1 truncate">Admin Area</span>
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={handleThemeMenuClick}
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-on-bg transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                <MaterialIcon
+                  name={resolvedTheme === 'dark' ? 'light_mode' : 'dark_mode'}
+                  className="text-[18px]"
+                />
+                <span className="min-w-0 flex-1 truncate">
+                  {resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'}
+                </span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={handleLogoutMenuClick}
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-on-bg transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                <MaterialIcon name="logout" className="text-[18px]" />
+                <span className="min-w-0 flex-1 truncate">Logout</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

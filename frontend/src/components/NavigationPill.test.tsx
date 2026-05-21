@@ -190,12 +190,49 @@ describe('NavigationPill', () => {
     expect(onMapSelect).toHaveBeenCalledWith(defaultProps.maps[1]);
   });
 
-  it('renders a logout action for every authenticated user', () => {
+  it('renders logout inside the user menu for every authenticated user', () => {
     const onLogout = vi.fn();
 
     render(<NavigationPill {...defaultProps} onLogout={onLogout} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Logout' }));
+    expect(screen.queryByRole('button', { name: 'Logout' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Logout' }));
+
+    expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it('groups Admin Area, theme toggle, and logout inside the user menu', () => {
+    const onViewChange = vi.fn();
+    const onLogout = vi.fn();
+
+    render(
+      <NavigationPill
+        {...defaultProps}
+        canViewAdmin={true}
+        userLabel="Alice Admin"
+        onViewChange={onViewChange}
+        onLogout={onLogout}
+      />,
+    );
+
+    expect(screen.queryByLabelText('Admin Dashboard')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Logout' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Switch to light theme')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for Alice Admin' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Admin Area' }));
+
+    expect(onViewChange).toHaveBeenCalledWith('admin');
+
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for Alice Admin' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Light mode' }));
+
+    expect(mockSetTheme).toHaveBeenCalledWith('light');
+
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for Alice Admin' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Logout' }));
 
     expect(onLogout).toHaveBeenCalledTimes(1);
   });
@@ -299,14 +336,20 @@ describe('NavigationPill', () => {
     expect(onViewChange).toHaveBeenCalledWith('dashboard');
   });
 
-  it('hides Admin without permission and shows it when allowed', () => {
+  it('hides Admin Area without permission and shows it in the user menu when allowed', () => {
     const onViewChange = vi.fn();
     const { rerender } = render(<NavigationPill {...defaultProps} onViewChange={onViewChange} />);
 
     expect(screen.queryByLabelText('Admin Dashboard')).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
+    expect(screen.queryByRole('menuitem', { name: 'Admin Area' })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+
     rerender(<NavigationPill {...defaultProps} canViewAdmin={true} onViewChange={onViewChange} />);
-    fireEvent.click(screen.getByLabelText('Admin Dashboard'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Admin Area' }));
 
     expect(onViewChange).toHaveBeenCalledWith('admin');
   });
@@ -323,7 +366,8 @@ describe('NavigationPill', () => {
     expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Backbone');
     expect(screen.getByTestId('desktop-area-selector').textContent).toContain('Distribution');
     expect(screen.getByLabelText('Devices Dashboard')).toBeInTheDocument();
-    expect(screen.getByLabelText('Switch to light theme')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
+    expect(screen.getByRole('menuitem', { name: 'Light mode' })).toBeInTheDocument();
     expect(container.firstElementChild?.className).toContain('topology-glass');
   });
 });

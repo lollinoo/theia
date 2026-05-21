@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 /**
  * COMP-03 NavBar (NavigationPill) behavioral tests.
  * The NavBar was implemented as NavigationPill in this project.
@@ -58,8 +58,9 @@ const defaultProps = {
 };
 
 describe('NavigationPill (COMP-03: NavBar requirements)', () => {
-  it('uses MaterialIcon for theme toggle — no inline SVGs', () => {
+  it('uses MaterialIcon for user menu actions — no inline SVGs', () => {
     const { container } = render(<NavigationPill {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
     // No raw SVG elements — MaterialIcon renders a span
     const svgElements = container.querySelectorAll('svg');
     expect(svgElements.length).toBe(0);
@@ -68,8 +69,9 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
     expect(iconSpans.length).toBeGreaterThan(0);
   });
 
-  it('theme toggle renders light_mode icon when resolvedTheme is dark', () => {
+  it('user menu theme action renders light_mode icon when resolvedTheme is dark', () => {
     const { container } = render(<NavigationPill {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
     // When dark, shows light_mode icon to switch to light
     // Find icon with text content "light_mode"
     const allIcons = Array.from(container.querySelectorAll('.material-symbols-rounded'));

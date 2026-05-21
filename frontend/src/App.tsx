@@ -120,10 +120,11 @@ function App() {
   const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
-  const { hasPermission, logout } = useAuth();
+  const { hasPermission, logout, user } = useAuth();
   const canViewAdmin = hasPermission('admin:dashboard:read');
   const canReadSettings = hasPermission('settings:read');
   const canUpdateSettings = hasPermission('settings:update');
+  const canOpenSettings = canViewAdmin && canReadSettings && canUpdateSettings;
 
   useEffect(() => {
     if (canvasInteractionActive) {
@@ -225,6 +226,13 @@ function App() {
     },
     [canViewAdmin, requestCanvasFitView],
   );
+
+  const handleOpenSettings = useCallback(() => {
+    if (!canOpenSettings) {
+      return;
+    }
+    setActiveView('admin');
+  }, [canOpenSettings]);
 
   useEffect(() => {
     if (activeView === 'admin' && !canViewAdmin) {
@@ -511,6 +519,7 @@ function App() {
           maps={canvasMaps}
           areas={navigationAreas}
           canViewAdmin={canViewAdmin}
+          userLabel={user?.display_name || user?.username || 'User'}
           onViewChange={handleViewChange}
           onAreaSelect={handleNavigationAreaSelect}
           onMapSelect={handleNavigationMapSelect}
@@ -547,12 +556,8 @@ function App() {
             onDuplicateMap={handleDuplicateMap}
             onDeleteMap={handleDeleteMap}
             onSetPrimaryMap={handleSetPrimaryMap}
-            canOpenSettings={canViewAdmin && canReadSettings && canUpdateSettings}
-            onOpenSettings={() => {
-              if (canViewAdmin && canReadSettings && canUpdateSettings) {
-                setActiveView('admin');
-              }
-            }}
+            canOpenSettings={canOpenSettings}
+            onOpenSettings={handleOpenSettings}
           />
         </div>
         <div
