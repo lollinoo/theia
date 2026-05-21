@@ -11,7 +11,7 @@ function Wait-ApiReady {
   Write-Output "Waiting for API at $ApiBase..."
   foreach ($attempt in 1..30) {
     try {
-      Invoke-WebRequest -Uri "$ApiBase/api/v1/health" -Headers (Get-TheiaApiHeaders) -UseBasicParsing -TimeoutSec 2 | Out-Null
+      Invoke-WebRequest -Uri "$ApiBase/api/v1/health" -Headers (Get-TheiaApiHeaders -ApiBase $ApiBase) -UseBasicParsing -TimeoutSec 2 | Out-Null
       Write-Output "API is ready."
       return
     }
@@ -40,7 +40,7 @@ function New-SeedDevice {
   }
 
   Write-Output "Adding $Label..."
-  $response = Invoke-RestMethod -Method Post -Uri "$ApiBase/api/v1/devices" -Headers (Get-TheiaApiHeaders) -ContentType "application/json" -Body $Payload
+  $response = Invoke-RestMethod -Method Post -Uri "$ApiBase/api/v1/devices" -Headers (Get-TheiaApiHeaders -ApiBase $ApiBase -Mutating) -ContentType "application/json" -Body $Payload
   $response | ConvertTo-Json -Depth 10
   Write-Output ""
 }

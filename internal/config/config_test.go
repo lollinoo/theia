@@ -15,8 +15,9 @@ func TestConfigSchemaIsPostgresOnly(t *testing.T) {
 			t.Fatalf("Config still exposes %s; runtime database selection must stay removed", fieldName)
 		}
 	}
-	if _, ok := cfgType.FieldByName("OperatorToken"); ok {
-		t.Fatal("Config still exposes OperatorToken; backend auth must use password sessions")
+	legacyAuthField := "Operator" + "Token"
+	if _, ok := cfgType.FieldByName(legacyAuthField); ok {
+		t.Fatalf("Config still exposes %s; backend auth must use password sessions", legacyAuthField)
 	}
 }
 

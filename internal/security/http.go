@@ -2,8 +2,6 @@ package security
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,7 +16,7 @@ type OperatorSubject struct {
 	Authenticated bool
 }
 
-// AnonymousSubject is used when local development auth is disabled.
+// AnonymousSubject is used when a request has no authenticated user.
 var AnonymousSubject = OperatorSubject{Name: "anonymous", Authenticated: false}
 
 // WithOperatorSubject stores the authenticated operator in a context.
@@ -33,47 +31,6 @@ func OperatorSubjectFromContext(ctx context.Context) OperatorSubject {
 		return AnonymousSubject
 	}
 	return subject
-}
-
-// AuthenticateRequest validates a bearer token or signed operator session.
-func AuthenticateRequest(r *http.Request, expectedToken string, sessions *SessionManager) (OperatorSubject, bool) {
-	expectedToken = strings.TrimSpace(expectedToken)
-	if expectedToken == "" {
-		return AnonymousSubject, true
-	}
-
-	if subject, ok := authenticateBearer(r, expectedToken); ok {
-		return subject, true
-	}
-	if subject, ok := sessions.SubjectFromRequest(r); ok {
-		return subject, true
-	}
-	return AnonymousSubject, false
-}
-
-// AuthenticateLoginToken validates the token submitted to the session endpoint.
-func AuthenticateLoginToken(gotToken, expectedToken, operatorName string) (OperatorSubject, bool) {
-	expectedToken = strings.TrimSpace(expectedToken)
-	if expectedToken == "" || !constantTimeTokenEqual(strings.TrimSpace(gotToken), expectedToken) {
-		return AnonymousSubject, false
-	}
-	subject := sanitizeSubject(operatorName)
-	if subject == "" {
-		subject = "operator"
-	}
-	return OperatorSubject{Name: subject, Authenticated: true}, true
-}
-
-func authenticateBearer(r *http.Request, expectedToken string) (OperatorSubject, bool) {
-	if !constantTimeTokenEqual(bearerToken(r.Header.Get("Authorization")), expectedToken) {
-		return AnonymousSubject, false
-	}
-
-	subject := sanitizeSubject(r.Header.Get("X-Theia-Operator"))
-	if subject == "" {
-		subject = "operator"
-	}
-	return OperatorSubject{Name: subject, Authenticated: true}, true
 }
 
 // OriginAllowed checks whether the request Origin is allowed by exact origin or same host.
@@ -116,27 +73,6 @@ func NormalizedAllowedOrigins(allowedOrigins []string) []string {
 		normalized = append(normalized, next)
 	}
 	return normalized
-}
-
-func bearerToken(header string) string {
-	header = strings.TrimSpace(header)
-	if header == "" {
-		return ""
-	}
-	const prefix = "bearer "
-	if !strings.HasPrefix(strings.ToLower(header), prefix) {
-		return ""
-	}
-	return strings.TrimSpace(header[len(prefix):])
-}
-
-func constantTimeTokenEqual(got, want string) bool {
-	if got == "" || want == "" {
-		return false
-	}
-	gotHash := sha256.Sum256([]byte(got))
-	wantHash := sha256.Sum256([]byte(want))
-	return subtle.ConstantTimeCompare(gotHash[:], wantHash[:]) == 1
 }
 
 func sanitizeSubject(value string) string {
@@ -188,4 +124,12 @@ func originMatchesHost(normalizedOrigin, host string) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Host, strings.TrimSpace(host))
+}
+
+// SecureCookieForRequest returns true when a browser cookie should be marked Secure.
+func SecureCookieForRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }

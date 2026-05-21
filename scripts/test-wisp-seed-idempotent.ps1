@@ -20,6 +20,7 @@ function Assert-True {
 }
 
 $script:restCalls = @()
+$script:loginAttempts = 0
 
 function Invoke-RestMethod {
   param(
@@ -30,6 +31,20 @@ function Invoke-RestMethod {
     [int]$TimeoutSec,
     [hashtable]$Headers
   )
+
+  if ($Uri -eq "http://unit.test/api/v1/auth/login" -and $Method -eq "Post") {
+    $script:loginAttempts += 1
+    $loginBody = $Body | ConvertFrom-Json
+    Assert-True ($loginBody.identifier -eq "administrator") "login must use configured API username"
+    Assert-True ($loginBody.password -eq "unit-test-password") "login must send configured API password"
+    return [pscustomobject]@{
+      authenticated = $true
+      user = [pscustomobject]@{
+        username = "administrator"
+        must_change_password = $false
+      }
+    }
+  }
 
   $script:restCalls += [pscustomobject]@{
     Method = $Method
@@ -66,22 +81,72 @@ function Invoke-RestMethod {
   throw "unexpected REST call: $Method $Uri"
 }
 
+$script:webRequestCalls = @()
+
+function Invoke-WebRequest {
+  param(
+    [string]$Uri,
+    [string]$Method,
+    [string]$ContentType,
+    [string]$Body,
+    [hashtable]$Headers,
+    [int]$TimeoutSec,
+    [switch]$UseBasicParsing,
+    [string]$SessionVariable,
+    [object]$WebSession
+  )
+
+  $script:webRequestCalls += [pscustomobject]@{
+    Method = $Method
+    Uri = $Uri
+    Body = $Body
+    Headers = $Headers
+  }
+
+  if ($Uri -eq "http://unit.test/api/v1/auth/login" -and $Method -eq "Post") {
+    $script:loginAttempts += 1
+    $loginBody = $Body | ConvertFrom-Json
+    Assert-True ($loginBody.identifier -eq "administrator") "login must use configured API username"
+    Assert-True ($loginBody.password -eq "unit-test-password") "login must send configured API password"
+
+    $session = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
+    $session.Cookies.Add([Uri]"http://unit.test", [System.Net.Cookie]::new("theia_session", "unit-session-token", "/", "unit.test"))
+    $session.Cookies.Add([Uri]"http://unit.test", [System.Net.Cookie]::new("theia_csrf", "unit-csrf-token", "/", "unit.test"))
+    Set-Variable -Scope Script -Name $SessionVariable -Value $session
+
+    return [pscustomobject]@{
+      Content = '{"authenticated":true,"user":{"username":"administrator","must_change_password":false}}'
+    }
+  }
+
+  throw "unexpected web request: $Method $Uri"
+}
+
 $script:postAttempts = 0
 $script:topologyDiscoveryAttempts = 0
-$previousOperatorToken = $env:THEIA_OPERATOR_TOKEN
-$env:THEIA_OPERATOR_TOKEN = "test-operator-token-not-secret-1234"
+$previousApiUsername = $env:THEIA_API_USERNAME
+$previousApiPassword = $env:THEIA_API_PASSWORD
+$env:THEIA_API_USERNAME = "administrator"
+$env:THEIA_API_PASSWORD = "unit-test-password"
 try {
   Add-DeviceToPrimaryMap -ApiBase "http://unit.test" -DeviceId "device-1"
   Invoke-TopologyDiscovery -ApiBase "http://unit.test" -DeviceId "device-1"
 }
 finally {
-  if ($null -eq $previousOperatorToken) {
-    Remove-Item Env:\THEIA_OPERATOR_TOKEN -ErrorAction SilentlyContinue
+  if ($null -eq $previousApiUsername) {
+    Remove-Item Env:\THEIA_API_USERNAME -ErrorAction SilentlyContinue
   }
   else {
-    $env:THEIA_OPERATOR_TOKEN = $previousOperatorToken
+    $env:THEIA_API_USERNAME = $previousApiUsername
+  }
+  if ($null -eq $previousApiPassword) {
+    Remove-Item Env:\THEIA_API_PASSWORD -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:THEIA_API_PASSWORD = $previousApiPassword
   }
 }
+Assert-True ($script:loginAttempts -eq 1) "seed helpers should login once and reuse the cookie session"
 Assert-True ($script:postAttempts -eq 1) "duplicate primary-map membership should be attempted once and treated as idempotent"
 Assert-True ($script:topologyDiscoveryAttempts -eq 1) "topology discovery should be triggered once for an existing WISP device"
 
@@ -98,8 +163,13 @@ for ($i = 0; $i -lt $script:restCalls.Count; $i++) {
 Assert-True ($membershipCallIndex -ge 0) "primary-map membership call should be captured"
 Assert-True ($discoveryCallIndex -ge 0) "topology discovery call should be captured"
 Assert-True ($discoveryCallIndex -gt $membershipCallIndex) "topology discovery should run after primary-map membership"
-Assert-True ($script:restCalls[$membershipCallIndex].Headers.Authorization -eq "Bearer test-operator-token-not-secret-1234") "primary-map membership calls must send the operator bearer token when configured"
-Assert-True ($script:restCalls[$discoveryCallIndex].Headers.Authorization -eq "Bearer test-operator-token-not-secret-1234") "topology discovery calls must send the operator bearer token when configured"
+Assert-True ($script:restCalls[$membershipCallIndex].Headers.Cookie -match "theia_session=unit-session-token") "primary-map membership calls must send the session cookie"
+Assert-True ($script:restCalls[$membershipCallIndex].Headers.Cookie -match "theia_csrf=unit-csrf-token") "primary-map membership calls must send the csrf cookie"
+Assert-True ($script:restCalls[$membershipCallIndex].Headers."X-CSRF-Token" -eq "unit-csrf-token") "primary-map membership calls must send the csrf header"
+Assert-True ($script:restCalls[$discoveryCallIndex].Headers.Cookie -match "theia_session=unit-session-token") "topology discovery calls must send the session cookie"
+Assert-True ($script:restCalls[$discoveryCallIndex].Headers."X-CSRF-Token" -eq "unit-csrf-token") "topology discovery calls must send the csrf header"
+Assert-True (-not $script:restCalls[$membershipCallIndex].Headers.ContainsKey("Authorization")) "primary-map membership calls must not send bearer Authorization"
+Assert-True (-not $script:restCalls[$discoveryCallIndex].Headers.ContainsKey("Authorization")) "topology discovery calls must not send bearer Authorization"
 
 $seedFiles = @(
   "scripts/seed.ps1",
@@ -114,10 +184,10 @@ foreach ($seedFile in $seedFiles) {
   $content = Get-Content -Raw -Path $seedFile
   Assert-True ($content -notmatch "Get-CreatedDeviceIdFromResponse|created_device_id_from_response") "$seedFile must not re-add newly created devices to the primary map"
   if ($seedFile.EndsWith(".ps1")) {
-    Assert-True ($content -match "Get-TheiaApiHeaders") "$seedFile must send configured operator bearer auth"
+    Assert-True ($content -match "Get-TheiaApiHeaders") "$seedFile must send configured session auth"
   }
   else {
-    Assert-True ($content -match "THEIA_CURL_AUTH_ARGS") "$seedFile must send configured operator bearer auth"
+    Assert-True ($content -match "THEIA_CURL_AUTH_ARGS") "$seedFile must send configured session auth"
   }
 }
 

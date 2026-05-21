@@ -52,20 +52,12 @@ The dev stack runs the application locally with hot-reload for both backend and 
 ```bash
 git clone <repo-url>
 cd theia
-export THEIA_OPERATOR_TOKEN="<local-operator-token>"
 make dev
 ```
 
 This builds all images and starts the full stack in the background. First build takes 2-4 minutes to compile Go and download npm packages.
 
-On PowerShell, set the token in the same terminal before starting the stack:
-
-```powershell
-$env:THEIA_OPERATOR_TOKEN = "<local-operator-token>"
-make dev
-```
-
-The dev Docker stack refuses to start without `THEIA_OPERATOR_TOKEN`. The browser login form uses that token, and local API scripts such as `make wisp-seed-all` read the same environment variable when they call authenticated endpoints.
+Open http://localhost:3000 and sign in as `administrator` with password `theia`. The first login requires changing that password before normal API and UI workflows continue.
 
 `config.yaml` is a local-only file and is ignored by git because it can contain a database DSN or other deployment-specific values. The dev stack works through environment variables without it. If you need a local config file, start from the template:
 
@@ -201,7 +193,7 @@ make wisp-seed
 ```
 
 The seed script defaults to `WISP_SEED_TARGET_MODE=auto`. With the Docker backend container running, it registers the routers at `172.31.250.21` through `172.31.250.30` and connects the backend to the lab network if needed. If no backend container is running, it falls back to host loopback targets `127.0.10.21` through `127.0.10.30`.
-Authenticated dev stacks require the same `THEIA_OPERATOR_TOKEN` environment variable in the shell that runs the seed target.
+Seed scripts prompt for Theia credentials and authenticate with the same cookie session flow as the browser. When run interactively against a fresh dev database, they can complete the first-login password change before seeding.
 
 ### Seed the radio access layer
 
@@ -271,7 +263,7 @@ Production startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=p
 Required operator inputs for the standard bundled PostgreSQL stack:
 
 - `THEIA_ENCRYPTION_KEY`
-- `THEIA_OPERATOR_TOKEN`
+- `THEIA_SESSION_SECRET`
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
 
@@ -302,9 +294,7 @@ Or with the metrics stack (Prometheus + SNMP exporter):
 make prod-metrics
 ```
 
-Open `http://localhost` in the browser. Use `http://localhost/api/v1/...` for API requests through the frontend proxy.
-
-The browser prompts for the operator token on first access and stores a signed HttpOnly session cookie. CLI/API callers can use the same token as a bearer credential.
+Open `http://localhost` in the browser. Use `http://localhost/api/v1/...` for API requests through the frontend proxy. Sign in as `administrator` with password `theia` on first start, then change the password when prompted.
 
 ### 3. Add your network devices
 
@@ -312,7 +302,8 @@ Via the UI Settings panel, or directly via the API:
 
 ```bash
 curl -X POST http://localhost/api/v1/devices \
-  -H "Authorization: Bearer $THEIA_OPERATOR_TOKEN" \
+  -b cookies.txt \
+  -H "X-CSRF-Token: <theia_csrf-cookie-value>" \
   -H "Content-Type: application/json" \
   -d '{
     "ip": "192.168.1.1",
@@ -366,7 +357,7 @@ Staging startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=stag
 Required operator inputs for the standard bundled PostgreSQL stack:
 
 - `THEIA_ENCRYPTION_KEY`
-- `THEIA_OPERATOR_TOKEN`
+- `THEIA_SESSION_SECRET`
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
 
@@ -420,14 +411,14 @@ Configuration is loaded from local `config.yaml` when present. The tracked `conf
 | `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
 | `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Optional directory containing pre-built bridge binaries; leave empty to disable bridge downloads |
-| `operator_token` | `THEIA_OPERATOR_TOKEN` | none | Operator login and API bearer token; required by bundled Docker stacks and for staging/production runtime startup |
-| `metrics_token` | `THEIA_METRICS_TOKEN` | none | Optional separate bearer token for `/metrics`; when empty, `/metrics` accepts the operator token |
+| `session_secret` | `THEIA_SESSION_SECRET` | none | Secret used to protect first-party password sessions; required for staging/production runtime startup |
+| `metrics_token` | `THEIA_METRICS_TOKEN` | none | Bearer token for `/metrics`; required for staging/production runtime startup |
 | `allowed_origins` | `THEIA_ALLOWED_ORIGINS` | none | Optional comma-separated exact browser origins for direct backend REST/WebSocket access; same-host proxy requests are allowed |
 | `log_level` | `THEIA_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 Runtime settings (poll interval, Prometheus URL, Grafana URL) are stored in the database and configurable via the Settings panel in the UI — no restart needed.
 
-When `operator_token` is set, all `/api/v1` routes except `/api/v1/session` require either a signed browser session cookie or `Authorization: Bearer <token>`. Credential reveal and WinBox bridge-token endpoints also require an authenticated operator identity for audit logging. `/metrics` uses `metrics_token` when configured, otherwise `operator_token`.
+All protected `/api/v1` routes use the first-party password session cookie `theia_session`. Mutating requests must also send the `X-CSRF-Token` header with the value from the readable `theia_csrf` cookie. `/metrics` uses `THEIA_METRICS_TOKEN`.
 
 ### Frontend (build-time)
 
@@ -445,7 +436,7 @@ Base path:
 - Production: `http://localhost/api/v1`
 - Staging: `http://localhost:3001/api/v1`
 
-Production and staging API examples must include `Authorization: Bearer $THEIA_OPERATOR_TOKEN` unless they run through a logged-in browser session.
+Programmatic API clients should first `POST /auth/login` with `{"identifier":"<username>","password":"<password>"}` and store the returned `theia_session` and `theia_csrf` cookies. Send the cookies on API requests; also send `X-CSRF-Token: <theia_csrf>` on POST, PUT, PATCH, and DELETE requests.
 
 | Method | Path | Description |
 |--------|------|-------------|

@@ -16,7 +16,7 @@ echo ""
 # Wait for API to be ready
 echo "Waiting for API at $API_BASE..."
 for i in $(seq 1 30); do
-  if curl -sf "${THEIA_CURL_AUTH_ARGS[@]}" "$API_BASE/api/v1/health" > /dev/null 2>&1; then
+  if curl -sf "$API_BASE/api/v1/auth/me" > /dev/null 2>&1; then
     echo "API is ready."
     break
   fi

@@ -47,7 +47,7 @@ func TestNewRouterRequiresUserSessionForProtectedSurface(t *testing.T) {
 	}
 }
 
-func TestNewRouterRejectsBearerOperatorToken(t *testing.T) {
+func TestNewRouterRejectsAuthorizationHeaderWithoutSession(t *testing.T) {
 	router := newAuthTestRouter(newFakeAPIAuthProvider())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
