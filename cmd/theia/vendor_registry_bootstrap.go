@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
@@ -30,7 +30,7 @@ func loadBootstrapVendorRegistry() (*vendor.Registry, string, error) {
 }
 
 // seedVendorConfigs seeds vendor configs into the DB from YAML if not already present.
-func seedVendorConfigs(yamlRegistry *vendor.Registry, repo *sqlite.VendorConfigRepo) {
+func seedVendorConfigs(yamlRegistry *vendor.Registry, repo *postgres.VendorConfigRepo) {
 	configs, err := yamlRegistry.ExportAllConfigs()
 	if err != nil {
 		log.Printf("Warning: failed to export YAML configs for seeding: %v", err)
@@ -121,7 +121,7 @@ func shouldSyncCPUOID(existing string, defaultOID string) bool {
 }
 
 // loadRegistryFromDB builds a vendor registry from DB records.
-func loadRegistryFromDB(repo *sqlite.VendorConfigRepo) (*vendor.Registry, error) {
+func loadRegistryFromDB(repo *postgres.VendorConfigRepo) (*vendor.Registry, error) {
 	records, err := repo.GetAll()
 	if err != nil {
 		return nil, err

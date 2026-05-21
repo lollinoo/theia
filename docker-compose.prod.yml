@@ -47,9 +47,6 @@ services:
       - theia-data:/data
     environment:
       - THEIA_DEPLOYMENT_ENV=production
-      - THEIA_DB_DRIVER=${THEIA_DB_DRIVER:-postgres}
-      - THEIA_ALLOW_SQLITE_SMALL_INSTALL=${THEIA_ALLOW_SQLITE_SMALL_INSTALL:-}
-      - THEIA_DB_PATH=${THEIA_DB_PATH:-/data/theia.db}
       - THEIA_DB_DSN=${THEIA_DB_DSN:?THEIA_DB_DSN must be set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       - THEIA_DATA_DIR=${THEIA_DATA_DIR:-/data}

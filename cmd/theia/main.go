@@ -19,19 +19,10 @@ import (
 	"github.com/lollinoo/theia/internal/worker"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "github.com/mattn/go-sqlite3"
 )
-
-type pendingRestoreCoordinator interface {
-	ApplyPendingRestore() (bool, error)
-}
 
 type deviceRuntimeResetter interface {
 	ResetDeviceRuntime(uuid.UUID)
-}
-
-var newRestoreCoordinator = func(dbPath, deviceBackupDir, knownHostsPath string) pendingRestoreCoordinator {
-	return service.NewRestoreCoordinator(dbPath, deviceBackupDir, knownHostsPath)
 }
 
 var newCollectorSNMPClient = func(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
@@ -47,20 +38,8 @@ func wireRuntimeResetter(deviceService *service.DeviceService, resetter deviceRu
 	deviceService.SetRuntimeResetter(resetter)
 }
 
-func applyPendingSQLiteRestore(dbPath, deviceBackupDir, knownHostsPath string) error {
-	applied, err := newRestoreCoordinator(dbPath, deviceBackupDir, knownHostsPath).ApplyPendingRestore()
-	if err != nil {
-		return fmt.Errorf("apply pending restore: %w", err)
-	}
-	if applied {
-		log.Println("Restore applied successfully, continuing with normal startup")
-	}
-
-	return nil
-}
-
-func applyPendingPostgresRestore(dbPath, dbDSN, deviceBackupDir, knownHostsPath string) error {
-	applied, err := service.NewRestoreCoordinatorWithDSN(dbPath, dbDSN, deviceBackupDir, knownHostsPath).ApplyPendingRestore()
+func applyPendingPostgresRestore(stateDir, dbDSN, deviceBackupDir, knownHostsPath string) error {
+	applied, err := service.NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath).ApplyPendingRestore()
 	if err != nil {
 		return fmt.Errorf("apply pending restore: %w", err)
 	}

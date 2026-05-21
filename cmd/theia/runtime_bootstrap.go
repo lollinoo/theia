@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,7 +23,7 @@ import (
 	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/observability"
-	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/ssh"
@@ -53,7 +52,7 @@ var loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
 	return config.Load(path)
 }
 
-var openPrimaryRuntimeDB = sqlite.OpenPrimaryDB
+var openPrimaryRuntimeDB = postgres.OpenPrimaryDB
 
 var knownSecretPlaceholders = map[string]struct{}{
 	"change-me":        {},
@@ -66,23 +65,12 @@ var knownSecretPlaceholders = map[string]struct{}{
 	"devkey1234567890": {},
 }
 
-func validateDatabasePolicy(cfg *runtimeConfig, dialect sqlite.Dialect) error {
-	switch dialect {
-	case sqlite.DialectSQLite:
-		if os.Getenv("THEIA_ALLOW_SQLITE_SMALL_INSTALL") == "true" {
-			return nil
-		}
+func validateDatabasePolicy(cfg *runtimeConfig) error {
+	if strings.TrimSpace(cfg.DBDSN) == "" {
 		return fmt.Errorf(
-			"sqlite is only supported for demo, lab, or small-install deployments; " +
-				"set THEIA_ALLOW_SQLITE_SMALL_INSTALL=true only if this instance stays within the documented small-install limits (up to 50 devices, one Theia process, one active admin)",
+			"postgres is the required database and needs db_dsn; " +
+				"set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable or start the standard dev stack with make dev",
 		)
-	case sqlite.DialectPostgres:
-		if strings.TrimSpace(cfg.DBDSN) == "" {
-			return fmt.Errorf(
-				"postgres is the default database driver and requires db_dsn; " +
-					"set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable, start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
-			)
-		}
 	}
 
 	return nil
@@ -102,14 +90,11 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 		return fmt.Errorf("%s deployment rejects example THEIA_ENCRYPTION_KEY values", deploymentEnv)
 	}
 
-	dialect, err := sqlite.NormalizeDialect(runtimeDBDriver(cfg.DBDriver))
-	if err == nil && dialect == sqlite.DialectPostgres {
-		if isPostgresDSNPasswordPlaceholder(cfg.DBDSN) {
-			return fmt.Errorf("%s deployment rejects example THEIA_DB_DSN password values", deploymentEnv)
-		}
-		if postgresPassword := os.Getenv("POSTGRES_PASSWORD"); isKnownSecretPlaceholder(postgresPassword) {
-			return fmt.Errorf("%s deployment rejects example POSTGRES_PASSWORD values", deploymentEnv)
-		}
+	if isPostgresDSNPasswordPlaceholder(cfg.DBDSN) {
+		return fmt.Errorf("%s deployment rejects example THEIA_DB_DSN password values", deploymentEnv)
+	}
+	if postgresPassword := os.Getenv("POSTGRES_PASSWORD"); isKnownSecretPlaceholder(postgresPassword) {
+		return fmt.Errorf("%s deployment rejects example POSTGRES_PASSWORD values", deploymentEnv)
 	}
 
 	return nil
@@ -231,7 +216,7 @@ func wrapPostgresConnectError(err error) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"connect to database: %w; set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable, start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
+		"connect to database: %w; set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable or start the standard dev stack with make dev",
 		err,
 	)
 }
@@ -241,16 +226,9 @@ func wrapPostgresOpenError(err error) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"open database: %w; set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable, start the standard dev stack with make dev, or migrate an existing SQLite dataset with make migrate-postgres",
+		"open database: %w; set THEIA_DB_DSN using postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable or start the standard dev stack with make dev",
 		err,
 	)
-}
-
-func runtimeDBDriver(driver string) string {
-	if strings.TrimSpace(driver) == "" {
-		return string(sqlite.DialectPostgres)
-	}
-	return driver
 }
 
 func (b *runtimeBootstrap) Run(configPath string) error {
@@ -260,42 +238,24 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 
 	logging.Configure(cfg.LogLevel)
-	logging.Infof("Config loaded: driver=%s listen=%s log_level=%s", cfg.DBDriver, cfg.ListenAddr, cfg.LogLevel)
+	logging.Infof("Config loaded: listen=%s log_level=%s", cfg.ListenAddr, cfg.LogLevel)
 
 	paths := resolveRuntimePaths(cfg)
-	runtimeDriver := runtimeDBDriver(cfg.DBDriver)
 
-	dialect, err := sqlite.NormalizeDialect(runtimeDriver)
-	if err != nil {
-		return fmt.Errorf("invalid database driver: %w", err)
-	}
 	if err := validateDeploymentSecretPolicy(cfg); err != nil {
 		return err
 	}
-	if err := validateDatabasePolicy(cfg, dialect); err != nil {
+	if err := validateDatabasePolicy(cfg); err != nil {
 		return err
 	}
 	if err := ensurePrivateDir(paths.backupDir); err != nil {
 		return fmt.Errorf("prepare backup directory %s: %w", paths.backupDir, err)
 	}
-	dbDir := filepath.Dir(cfg.DBPath)
-	if err := ensurePrivateDir(dbDir); err != nil {
-		return fmt.Errorf("prepare database directory %s: %w", dbDir, err)
-	}
-
-	switch dialect {
-	case sqlite.DialectSQLite:
-		if err := applyPendingSQLiteRestore(cfg.DBPath, paths.backupDir, paths.knownHostsPath); err != nil {
-			return fmt.Errorf("apply pending SQLite restore: %w", err)
-		}
-	case sqlite.DialectPostgres:
-		if err := applyPendingPostgresRestore(cfg.DBPath, cfg.DBDSN, paths.backupDir, paths.knownHostsPath); err != nil {
-			return fmt.Errorf("apply pending PostgreSQL restore: %w", err)
-		}
-	}
-
 	if err := ensurePrivateDir(paths.appDataDir); err != nil {
 		return fmt.Errorf("prepare application data directory %s: %w", paths.appDataDir, err)
+	}
+	if err := applyPendingPostgresRestore(paths.appDataDir, cfg.DBDSN, paths.backupDir, paths.knownHostsPath); err != nil {
+		return fmt.Errorf("apply pending PostgreSQL restore: %w", err)
 	}
 	if _, err := os.Stat(paths.knownHostsPath); err == nil {
 		if err := ensureFileMode(paths.knownHostsPath, privateFileMode); err != nil {
@@ -305,29 +265,17 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return fmt.Errorf("stat known_hosts file %s: %w", paths.knownHostsPath, err)
 	}
 
-	db, openedDialect, err := openPrimaryRuntimeDB(runtimeDriver, cfg.DBPath, cfg.DBDSN)
+	db, err := openPrimaryRuntimeDB(cfg.DBDSN)
 	if err != nil {
-		if dialect == sqlite.DialectPostgres {
-			return wrapPostgresOpenError(err)
-		}
-		return fmt.Errorf("open database: %w", err)
+		return wrapPostgresOpenError(err)
 	}
-	dialect = openedDialect
 	defer db.Close()
 
-	sqlite.ConfigureDB(db)
-	switch dialect {
-	case sqlite.DialectPostgres:
-		log.Printf("Database dialect: %s (production reference path)", dialect)
-	default:
-		log.Printf("Database dialect: %s (development/small-install path; PostgreSQL is the production reference)", dialect)
-	}
+	postgres.ConfigureDB(db)
+	log.Printf("Database dialect: %s", postgres.DialectPostgres)
 
 	if err := db.Ping(); err != nil {
-		if dialect == sqlite.DialectPostgres {
-			return wrapPostgresConnectError(err)
-		}
-		return fmt.Errorf("connect to database: %w", err)
+		return wrapPostgresConnectError(err)
 	}
 
 	encryptionKey, err := crypto.LoadEncryptionKey()
@@ -335,7 +283,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return fmt.Errorf("security configuration error: %w", err)
 	}
 
-	if err := sqlite.RunMigrations(db, encryptionKey); err != nil {
+	if err := postgres.RunMigrations(db, encryptionKey); err != nil {
 		return fmt.Errorf("run database migrations: %w", err)
 	}
 	log.Println("Database migrations completed")
@@ -353,7 +301,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		log.Printf("Vendor registry loaded: %d vendors (embedded)", yamlRegistry.VendorCount())
 	}
 
-	vendorConfigRepo := sqlite.NewVendorConfigRepo(db)
+	vendorConfigRepo := postgres.NewVendorConfigRepo(db)
 	seedVendorConfigs(yamlRegistry, vendorConfigRepo)
 
 	vendorRegistry, err := loadRegistryFromDB(vendorConfigRepo)
@@ -369,22 +317,22 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 	cacheInvalidate := make(chan struct{}, 1)
 
-	deviceRepo := sqlite.NewDeviceRepo(db, encryptionKey, cacheInvalidate)
-	linkRepo := sqlite.NewLinkRepo(db, cacheInvalidate)
-	topologyObservationRepo := sqlite.NewTopologyObservationRepo(db)
+	deviceRepo := postgres.NewDeviceRepo(db, encryptionKey, cacheInvalidate)
+	linkRepo := postgres.NewLinkRepo(db, cacheInvalidate)
+	topologyObservationRepo := postgres.NewTopologyObservationRepo(db)
 	deviceLinkCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, cacheInvalidate)
 	deviceChangeNotify := deviceRepo.SubscribeDeviceChanges(256)
 	linkChangeNotify := linkRepo.SubscribeLinkChanges(256)
-	positionRepo := sqlite.NewPositionRepo(db)
-	canvasMapRepo := sqlite.NewCanvasMapRepo(db)
-	canvasMapPositionRepo := sqlite.NewCanvasMapPositionRepo(db)
-	settingsRepo := sqlite.NewSettingsRepo(db)
+	positionRepo := postgres.NewPositionRepo(db)
+	canvasMapRepo := postgres.NewCanvasMapRepo(db)
+	canvasMapPositionRepo := postgres.NewCanvasMapPositionRepo(db)
+	settingsRepo := postgres.NewSettingsRepo(db)
 	logging.Debugf("runtime effective config %s", runtimeDebugSettingsSummary(cfg, settingsRepo))
-	snmpProfileRepo := sqlite.NewSNMPProfileRepo(db, encryptionKey)
-	credentialProfileRepo := sqlite.NewCredentialProfileRepo(db)
-	areaRepo := sqlite.NewAreaRepo(db)
-	backupJobRepo := sqlite.NewBackupJobRepo(db)
-	backupFileRepo := sqlite.NewBackupFileRepo(db)
+	snmpProfileRepo := postgres.NewSNMPProfileRepo(db, encryptionKey)
+	credentialProfileRepo := postgres.NewCredentialProfileRepo(db)
+	areaRepo := postgres.NewAreaRepo(db)
+	backupJobRepo := postgres.NewBackupJobRepo(db)
+	backupFileRepo := postgres.NewBackupFileRepo(db)
 
 	discoverFunc := newSNMPDiscoverFunc(settingsRepo, vendorRegistry)
 	topologyNotify := make(chan struct{}, 1)
@@ -409,7 +357,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 	var instanceBackupService *service.InstanceBackupService
 	var backupScheduler *worker.BackupScheduler
-	instanceBackupRepo := sqlite.NewInstanceBackupRepo(db)
+	instanceBackupRepo := postgres.NewInstanceBackupRepo(db)
 	if err := ensurePrivateDir(paths.instanceBackupDir); err != nil {
 		return fmt.Errorf("prepare instance backup directory %s: %w", paths.instanceBackupDir, err)
 	}
@@ -420,7 +368,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		paths.instanceBackupDir,
 		paths.backupDir,
 		paths.knownHostsPath,
-		cfg.DBPath,
+		paths.appDataDir,
 		cfg.DBDSN,
 		encryptionKey,
 	)
@@ -538,18 +486,15 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 func runtimeDebugSettingsSummary(cfg *runtimeConfig, settingsRepo domain.SettingsRepository) string {
 	cfgLogLevel := ""
-	cfgDBDriver := ""
 	cfgListen := ""
 	if cfg != nil {
 		cfgLogLevel = cfg.LogLevel
-		cfgDBDriver = cfg.DBDriver
 		cfgListen = cfg.ListenAddr
 	}
 	prometheusSetting := runtimeDebugSetting(settingsRepo, domain.SettingPrometheusURL)
 
 	parts := []string{
 		"log_level=" + debugSettingValue(cfgLogLevel),
-		"db_driver=" + debugSettingValue(cfgDBDriver),
 		"listen=" + debugSettingValue(cfgListen),
 		"polling_interval_seconds=" + runtimeDebugSetting(settingsRepo, domain.SettingPollingInterval),
 		"pool_performance=" + runtimeDebugSetting(settingsRepo, domain.SettingSNMPWorkerPoolPerformance),

@@ -16,7 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/repository/sqlite"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/service"
 )
 
@@ -24,7 +24,7 @@ import (
 type BridgeHandler struct {
 	binariesDir           string
 	backupSvc             *service.BackupService
-	credentialProfileRepo *sqlite.CredentialProfileRepo
+	credentialProfileRepo *postgres.CredentialProfileRepo
 	settingsRepo          domain.SettingsRepository
 }
 
@@ -42,7 +42,7 @@ func NewBridgeHandler(binariesDir string) *BridgeHandler {
 func NewBridgeHandlerWithCredentials(
 	binariesDir string,
 	backupSvc *service.BackupService,
-	credentialProfileRepo *sqlite.CredentialProfileRepo,
+	credentialProfileRepo *postgres.CredentialProfileRepo,
 	settingsRepo domain.SettingsRepository,
 ) *BridgeHandler {
 	return &BridgeHandler{
