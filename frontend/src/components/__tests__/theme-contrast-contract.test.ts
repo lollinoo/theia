@@ -74,6 +74,7 @@ function contrastRatio(foreground: string, background: string): number {
 
 const darkBlock = extractThemeBlock(':root,\n[data-theme="dark"]');
 const lightBlock = extractThemeBlock('[data-theme="light"]');
+const tailwindThemeBlock = extractThemeBlock('@theme inline');
 
 describe('enterprise NOC theme contrast contract', () => {
   it('resolves recursive same-block token aliases', () => {
@@ -202,6 +203,25 @@ describe('enterprise NOC theme contrast contract', () => {
           `${label} ${foreground} on ${background}`,
         ).toBeGreaterThanOrEqual(minimum);
       }
+    }
+  });
+
+  it('defines a readable on-primary token for primary controls', () => {
+    expect(declaration(tailwindThemeBlock, '--color-on-primary')).toBe('var(--nt-on-primary)');
+
+    const themedBlocks = [
+      ['dark', darkBlock],
+      ['light', lightBlock],
+    ] as const;
+
+    for (const [theme, block] of themedBlocks) {
+      const foreground = token(block, '--nt-on-primary');
+      const background = token(block, '--nt-primary');
+
+      expect(
+        contrastRatio(foreground, background),
+        `${theme} on-primary ${foreground} on ${background}`,
+      ).toBeGreaterThanOrEqual(4.5);
     }
   });
 

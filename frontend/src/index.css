@@ -26,6 +26,7 @@
   --nt-outline-subtle: var(--nt-outline);
 
   --nt-primary: #4fd0a3;
+  --nt-on-primary: #06150f;
   --nt-area-secondary: #6f9bff;
   --nt-area-tertiary: #ca8dff;
   --nt-secondary: var(--nt-area-secondary);
@@ -115,6 +116,7 @@
   --nt-outline-subtle: var(--nt-outline);
 
   --nt-primary: #08775a;
+  --nt-on-primary: #ffffff;
   --nt-area-secondary: #1d5fbf;
   --nt-area-tertiary: #7e2fa8;
   --nt-secondary: var(--nt-area-secondary);
@@ -207,6 +209,7 @@
   --color-outline-subtle: var(--nt-outline);
 
   --color-primary: var(--nt-primary);
+  --color-on-primary: var(--nt-on-primary);
   --color-area-secondary: var(--nt-area-secondary);
   --color-area-tertiary: var(--nt-area-tertiary);
   --color-status-ok: var(--nt-status-ok);
