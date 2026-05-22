@@ -41,8 +41,10 @@ func (l *bridgeRateLimiter) allow(key string) bool {
 	defer l.mu.Unlock()
 
 	now := l.now()
-	bucket := l.attempts[key]
-	if bucket.windowEnds.IsZero() || !now.Before(bucket.windowEnds) {
+	l.evictExpiredLocked(now)
+
+	bucket, ok := l.attempts[key]
+	if !ok {
 		l.attempts[key] = bridgeRateLimitBucket{count: 1, windowEnds: now.Add(l.window)}
 		return true
 	}
@@ -52,4 +54,12 @@ func (l *bridgeRateLimiter) allow(key string) bool {
 	bucket.count++
 	l.attempts[key] = bucket
 	return true
+}
+
+func (l *bridgeRateLimiter) evictExpiredLocked(now time.Time) {
+	for key, bucket := range l.attempts {
+		if bucket.windowEnds.IsZero() || !now.Before(bucket.windowEnds) {
+			delete(l.attempts, key)
+		}
+	}
 }

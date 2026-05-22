@@ -128,7 +128,7 @@ func (h *BridgeHandler) HandleConnectorLaunch(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusUnauthorized, "bridge secret required")
 		return
 	}
-	if h.limiter != nil && !h.limiter.allow(bridgeRateLimitKey(r, rawSecret)) {
+	if h.limiter != nil && !h.limiter.allow(bridgeRateLimitKey(r)) {
 		writeError(w, http.StatusTooManyRequests, "too many bridge authentication attempts")
 		return
 	}
@@ -150,12 +150,8 @@ func (h *BridgeHandler) HandleConnectorLaunch(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(result)
 }
 
-func bridgeRateLimitKey(r *http.Request, rawSecret string) string {
-	prefix, _, ok := strings.Cut(strings.TrimSpace(rawSecret), ".")
-	if !ok || prefix == "" {
-		prefix = "unknown"
-	}
-	return clientIPAddress(r) + "|" + prefix
+func bridgeRateLimitKey(r *http.Request) string {
+	return clientIPAddress(r)
 }
 
 func extractBridgeLaunchDeviceID(path string) (uuid.UUID, error) {

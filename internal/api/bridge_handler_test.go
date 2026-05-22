@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/service"
 )
 
 // setupBridgeTest creates a temp dir and optionally populates it with dummy bridge binaries.
@@ -245,6 +250,58 @@ func TestBridgeToken_DeprecatedReturnsGone(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "deprecated") {
 		t.Fatalf("expected deprecation message, got %s", w.Body.String())
 	}
+}
+
+func TestBridgeConnectorLaunchRateLimitUsesClientIPNotSecretPrefix(t *testing.T) {
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	fake := &fakeBridgeLaunchService{resolveErr: service.ErrBridgeSecretInvalid}
+	handler := NewBridgeHandlerWithService("", fake)
+	handler.limiter = newBridgeRateLimiter(2, time.Minute, func() time.Time { return now })
+
+	authHeaders := []string{
+		"Bridge attacker_one.invalid",
+		"Bridge attacker_two.invalid",
+		"Bridge attacker_three.invalid",
+	}
+	for i, auth := range authHeaders {
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/bridge/connector/launch",
+			strings.NewReader(`{"launch_token":"launch-token"}`),
+		)
+		req.Header.Set("Authorization", auth)
+		req.Header.Set("X-Forwarded-For", "192.0.2.10")
+		rec := httptest.NewRecorder()
+
+		handler.HandleConnectorLaunch(rec, req)
+
+		if i < 2 && rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d, want 401", i+1, rec.Code)
+		}
+		if i == 2 && rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("third attempt status = %d, want 429", rec.Code)
+		}
+	}
+	if fake.resolveCalls != 2 {
+		t.Fatalf("ResolveConnectorLaunch calls = %d, want 2", fake.resolveCalls)
+	}
+}
+
+type fakeBridgeLaunchService struct {
+	resolveCalls int
+	resolveErr   error
+}
+
+func (f *fakeBridgeLaunchService) CreateLaunchRequest(context.Context, *service.AuthenticatedUser, uuid.UUID) (*service.BridgeLaunchRequestResult, error) {
+	return nil, nil
+}
+
+func (f *fakeBridgeLaunchService) ResolveConnectorLaunch(context.Context, string, string, string, string) (*service.BridgeLaunchCredentials, error) {
+	f.resolveCalls++
+	if f.resolveErr != nil {
+		return nil, f.resolveErr
+	}
+	return &service.BridgeLaunchCredentials{}, nil
 }
 
 // testDeviceID is a valid UUID used in bridge token tests.
