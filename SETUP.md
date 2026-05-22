@@ -426,7 +426,17 @@ Every authenticated user can open **User Settings** from the account menu. The a
 
 Bridge Connector authentication is per-user. The legacy global `bridge_secret` runtime setting is deprecated and ignored by bridge authentication. Existing deployments should have each user generate a personal Bridge Secret from **User Settings -> Bridge Connector** and paste it into their local connector config.
 
-Connector config shape:
+The recommended setup flow is wizard-first:
+
+1. Generate a personal Bridge Secret from **User Settings -> Bridge Connector**.
+2. Download and start the Bridge Connector for your platform.
+3. Click **Configure Local Connector** in User Settings, or use the tray menu item **Setup Connector...**.
+4. In the local setup wizard, select the WinBox executable, paste the Bridge Secret, confirm the Theia URLs and bridge port, and optionally enable start-at-login.
+5. Save the wizard and restart the connector when the wizard reports that a restart is required.
+
+The setup wizard runs from the local connector at `http://localhost:<bridge-port>/setup`. Setup endpoints are limited to loopback requests and do not return the saved Bridge Secret. The connector still stores its local runtime settings in `config.json`, which remains available from the tray menu as an advanced fallback.
+
+Advanced connector config shape:
 
 ```json
 {
@@ -439,7 +449,7 @@ Connector config shape:
 }
 ```
 
-The Bridge Secret is shown only once after generation or rotation. If a user loses it, rotate the secret and update the connector; the previous secret stops working immediately. Connector downloads are served only to authenticated users and require `THEIA_BRIDGE_BINARIES_DIR` to point at a directory containing files named like `winbox-bridge-linux-amd64` or `winbox-bridge-windows-amd64.exe`.
+The Bridge Secret is shown only once after generation or rotation. If a user loses it, rotate the secret and update the connector through the setup wizard; the previous secret stops working immediately. Connector downloads are served only to authenticated users and require `THEIA_BRIDGE_BINARIES_DIR` to point at a directory containing files named like `winbox-bridge-linux-amd64` or `winbox-bridge-windows-amd64.exe`.
 
 For browser access through a LAN IP or alternate hostname, add the exact browser origin to `THEIA_ALLOWED_ORIGINS` before logging in. Example:
 
@@ -453,7 +463,7 @@ Bridge migration notes:
 
 - Run the new database migration before users configure connectors.
 - Do not copy the old global `bridge_secret` to users; each user must generate a unique personal secret.
-- Old connector configs that only relied on the global secret must be updated with `theia_base_url`, `theia_origin`, and the personal `bridge_secret`.
+- Old connector configs that only relied on the global secret must be updated with the local setup wizard or manually with `theia_base_url`, `theia_origin`, and the personal `bridge_secret`.
 - Use HTTPS for non-local deployments because the connector sends the Bridge Secret to Theia during launch resolution.
 
 ### Frontend (build-time)

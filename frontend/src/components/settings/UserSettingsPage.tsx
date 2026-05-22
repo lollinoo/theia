@@ -282,6 +282,11 @@ export function UserSettingsPage() {
     }
   }
 
+  function openLocalConnectorSetup() {
+    const url = `http://localhost:${settings?.preferences.bridge_port ?? 1337}/setup`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
   if (loading) {
     return (
       <main className="min-h-full px-4 pb-10 pt-24 text-on-bg sm:px-8">
@@ -669,6 +674,14 @@ export function UserSettingsPage() {
                 onClick={() => void loadConfigSnippet()}
               >
                 Show Config
+              </button>
+              <button
+                type="button"
+                className="theia-button-secondary"
+                onClick={openLocalConnectorSetup}
+              >
+                <MaterialIcon name="settings" className="text-[18px]" />
+                Configure Local Connector
               </button>
             </div>
 

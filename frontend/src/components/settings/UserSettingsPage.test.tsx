@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type UserSettingsResponse,
   fetchBridgeConnectorConfig,
@@ -44,7 +44,10 @@ const activeSettings: UserSettingsResponse = {
 };
 
 describe('UserSettingsPage', () => {
+  let openSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
+    openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     vi.mocked(fetchUserSettings).mockResolvedValue(activeSettings);
     vi.mocked(updateUserSettings).mockResolvedValue(activeSettings);
     vi.mocked(fetchBridgeConnectorConfig).mockResolvedValue({
@@ -76,6 +79,10 @@ describe('UserSettingsPage', () => {
         },
       ],
     });
+  });
+
+  afterEach(() => {
+    openSpy.mockRestore();
   });
 
   it('renders unavailable connector binaries as disabled buttons and includes macOS targets', async () => {
@@ -193,6 +200,44 @@ describe('UserSettingsPage', () => {
     expect(within(menu).getByRole('menuitem', { name: 'Download Windows x64' })).toHaveAttribute(
       'href',
       '/api/v1/settings/bridge/connector/download/windows/amd64',
+    );
+  });
+
+  it('opens the local connector setup wizard on the default bridge port', async () => {
+    render(<UserSettingsPage />);
+
+    await screen.findByRole('heading', { name: 'User Settings' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Configure Local Connector' }));
+
+    expect(openSpy).toHaveBeenCalledWith(
+      'http://localhost:1337/setup',
+      '_blank',
+      'noopener,noreferrer',
+    );
+  });
+
+  it('opens the local connector setup wizard on the effective bridge port', async () => {
+    vi.mocked(fetchUserSettings).mockResolvedValue({
+      ...activeSettings,
+      preferences: {
+        ...activeSettings.preferences,
+        bridge_port: 9000,
+        global_bridge_port: 1337,
+        bridge_port_override: 9000,
+      },
+    });
+
+    render(<UserSettingsPage />);
+
+    await screen.findByRole('heading', { name: 'User Settings' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Configure Local Connector' }));
+
+    expect(openSpy).toHaveBeenCalledWith(
+      'http://localhost:9000/setup',
+      '_blank',
+      'noopener,noreferrer',
     );
   });
 });

@@ -34,13 +34,13 @@ func TestTheiaClientResolveLaunchSendsBridgeAuthorization(t *testing.T) {
 		t.Fatalf("ResolveLaunch: %v", err)
 	}
 	if gotAuth != "Bridge theia_bridge_public.raw-secret" {
-		t.Fatalf("Authorization = %q", gotAuth)
+		t.Fatalf("Authorization header mismatch")
 	}
 	if gotToken != "launch-token" {
-		t.Fatalf("launch_token = %q", gotToken)
+		t.Fatalf("launch_token mismatch")
 	}
 	if creds.IP != "192.168.88.1" || creds.Username != "admin" || creds.Password != "secret" {
-		t.Fatalf("credentials = %+v", creds)
+		t.Fatalf("credentials mismatch")
 	}
 }
 
@@ -56,7 +56,7 @@ func TestTheiaClientResolveLaunchMapsBackendErrorsSafely(t *testing.T) {
 		t.Fatal("expected backend error")
 	}
 	if strings.Contains(err.Error(), client.Secret) {
-		t.Fatalf("error leaked bridge secret: %v", err)
+		t.Fatalf("error leaked bridge secret")
 	}
 	if !strings.Contains(err.Error(), "409") {
 		t.Fatalf("error = %v, want status code context", err)

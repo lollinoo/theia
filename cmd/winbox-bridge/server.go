@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ type ServerManager struct {
 	mu     sync.Mutex
 	server *http.Server
 	port   int // current listening port, for status display
+	cfg    Config
 }
 
 // Start creates and runs a new HTTP server with the given config.
@@ -28,9 +30,22 @@ func (m *ServerManager) Start(cfg Config) error {
 	if m.server != nil {
 		return nil // already running — no-op
 	}
+	return m.startLocked(cfg)
+}
+
+func (m *ServerManager) startLocked(cfg Config) error {
+	srv, listener, err := buildServer(cfg, m)
+	if err != nil {
+		return err
+	}
+	m.assignLocked(cfg, srv, listener)
+	return nil
+}
+
+func buildServer(cfg Config, mgr *ServerManager) (*http.Server, net.Listener, error) {
 	// T-29-01: reject invalid ports before binding — clearer error than net.Listen's OS message
 	if cfg.ListenPort < 1 || cfg.ListenPort > 65535 {
-		return fmt.Errorf("invalid port %d: must be 1-65535", cfg.ListenPort)
+		return nil, nil, fmt.Errorf("invalid port %d: must be 1-65535", cfg.ListenPort)
 	}
 	winboxPath := discoverWinBox(cfg.WinBoxPath)
 	expectedHost := fmt.Sprintf("localhost:%d", cfg.ListenPort)
@@ -38,21 +53,31 @@ func (m *ServerManager) Start(cfg Config) error {
 		BaseURL: cfg.TheiaBaseURL,
 		Secret:  cfg.BridgeSecret,
 	}
-	handler := buildMux(winboxPath, cfg.TheiaOrigin, expectedHost, client)
+	handler := buildMuxWithSetup(winboxPath, cfg.TheiaOrigin, expectedHost, client, setupOptions{
+		Restart: setupRestartFunc(mgr),
+	})
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.ListenPort),
 		Handler: handler,
 	}
+	listener, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen on port %d: %w", cfg.ListenPort, err)
+	}
+	return srv, listener, nil
+}
+
+func (m *ServerManager) assignLocked(cfg Config, srv *http.Server, listener net.Listener) {
 	m.server = srv
 	m.port = cfg.ListenPort
+	m.cfg = cfg
 	// Capture srv in the goroutine — not m.server — so Stop() setting m.server=nil
-	// does not cause a nil dereference inside ListenAndServe.
+	// does not cause a nil dereference inside Serve.
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Printf("winbox-bridge: server error: %v", err)
 		}
 	}()
-	return nil
 }
 
 // Stop gracefully shuts down the server with a 5-second timeout.
@@ -60,6 +85,10 @@ func (m *ServerManager) Start(cfg Config) error {
 func (m *ServerManager) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.stopLocked()
+}
+
+func (m *ServerManager) stopLocked() error {
 	if m.server == nil {
 		return nil // not running — no-op
 	}
@@ -69,6 +98,42 @@ func (m *ServerManager) Stop() error {
 	m.server = nil
 	m.port = 0
 	return err
+}
+
+// Restart reloads the HTTP server with cfg while preserving the previous server
+// if the new bind fails.
+func (m *ServerManager) Restart(cfg Config) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.server == nil {
+		return m.startLocked(cfg)
+	}
+
+	oldCfg := m.cfg
+	oldPort := m.port
+	if cfg.ListenPort != oldPort {
+		srv, listener, err := buildServer(cfg, m)
+		if err != nil {
+			return err
+		}
+		if err := m.stopLocked(); err != nil {
+			_ = listener.Close()
+			return err
+		}
+		m.assignLocked(cfg, srv, listener)
+		return nil
+	}
+
+	if err := m.stopLocked(); err != nil {
+		return err
+	}
+	if err := m.startLocked(cfg); err != nil {
+		if restoreErr := m.startLocked(oldCfg); restoreErr != nil {
+			return fmt.Errorf("restart failed: %w; restore failed: %v", err, restoreErr)
+		}
+		return err
+	}
+	return nil
 }
 
 // Running reports whether the server is currently started.

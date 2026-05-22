@@ -98,6 +98,44 @@ func TestServerManager_StartAlreadyRunningIsNoop(t *testing.T) {
 	}
 }
 
+func TestServerManager_StartInvalidPortReturnsErrorAndNotRunning(t *testing.T) {
+	cfg := freeCfg(t)
+	cfg.ListenPort = 0
+	mgr := &ServerManager{}
+
+	if err := mgr.Start(cfg); err == nil {
+		t.Fatal("expected Start to reject invalid port")
+	}
+	if mgr.Running() {
+		t.Fatal("expected Running()=false after failed Start")
+	}
+	if got := mgr.Port(); got != 0 {
+		t.Fatalf("expected Port()=0 after failed Start, got %d", got)
+	}
+}
+
+func TestServerManager_StartOccupiedPortReturnsErrorAndNotRunning(t *testing.T) {
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("listen occupied port: %v", err)
+	}
+	defer ln.Close()
+
+	cfg := freeCfg(t)
+	cfg.ListenPort = ln.Addr().(*net.TCPAddr).Port
+	mgr := &ServerManager{}
+
+	if err := mgr.Start(cfg); err == nil {
+		t.Fatal("expected Start to fail for occupied port")
+	}
+	if mgr.Running() {
+		t.Fatal("expected Running()=false after failed Start")
+	}
+	if got := mgr.Port(); got != 0 {
+		t.Fatalf("expected Port()=0 after failed Start, got %d", got)
+	}
+}
+
 func TestServerManager_StopWhenNotRunningIsNoop(t *testing.T) {
 	mgr := &ServerManager{}
 	// Stop before ever starting — must be a no-op
@@ -126,6 +164,37 @@ func TestServerManager_StopThenStartSucceeds(t *testing.T) {
 	if !mgr.Running() {
 		t.Error("expected Running()=true after re-Start()")
 	}
+}
+
+func TestServerManager_RestartOccupiedNewPortKeepsOldServerRunning(t *testing.T) {
+	oldCfg := freeCfg(t)
+	mgr := &ServerManager{}
+
+	if err := mgr.Start(oldCfg); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { mgr.Stop() })
+	waitForServer(t, oldCfg.ListenPort)
+
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("listen occupied restart port: %v", err)
+	}
+	defer ln.Close()
+
+	newCfg := oldCfg
+	newCfg.ListenPort = ln.Addr().(*net.TCPAddr).Port
+	if err := mgr.Restart(newCfg); err == nil {
+		t.Fatal("expected Restart to fail for occupied new port")
+	}
+
+	if !mgr.Running() {
+		t.Fatal("expected old server to remain running after failed Restart")
+	}
+	if got := mgr.Port(); got != oldCfg.ListenPort {
+		t.Fatalf("expected old port %d after failed Restart, got %d", oldCfg.ListenPort, got)
+	}
+	waitForServer(t, oldCfg.ListenPort)
 }
 
 func TestServerManager_RespondsToHealthAfterStart(t *testing.T) {

@@ -266,13 +266,13 @@ func TestLaunch_UsesLaunchTokenAndBackendBridgeSecret(t *testing.T) {
 		t.Fatalf("expected 200 got %d; body: %s", rr.Code, rr.Body.String())
 	}
 	if gotAuth != "Bridge theia_bridge_public.raw-secret" {
-		t.Fatalf("backend Authorization = %q", gotAuth)
+		t.Fatalf("backend Authorization header mismatch")
 	}
 	if gotToken != "launch-token" {
-		t.Fatalf("backend launch_token = %q", gotToken)
+		t.Fatalf("backend launch_token mismatch")
 	}
 	if strings.Join(launchedArgs, ",") != "192.168.88.1,admin,winbox-password" {
-		t.Fatalf("launched args = %#v", launchedArgs)
+		t.Fatalf("launched args mismatch")
 	}
 }
 
@@ -460,7 +460,7 @@ func assertJSONError(t *testing.T, rr *httptest.ResponseRecorder, substr string)
 		t.Fatalf("expected 'error' string field, got: %v", resp)
 	}
 	if !strings.Contains(errMsg, substr) {
-		t.Errorf("expected error to contain %q, got %q", substr, errMsg)
+		t.Errorf("JSON error did not contain expected text")
 	}
 }
 

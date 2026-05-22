@@ -314,10 +314,7 @@ func handleLaunch(winboxPath string, client *TheiaClient) http.HandlerFunc {
 // /health is public (no auth — any origin may poll bridge status).
 // /launch is protected by securityCheck (CSRF guard for sensitive launch action).
 func buildMux(winboxPath, allowedOrigin, expectedHost string, client *TheiaClient) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", handleHealth)
-	mux.Handle("/launch", securityCheck(allowedOrigin, expectedHost, handleLaunch(winboxPath, client)))
-	return mux
+	return buildMuxWithSetup(winboxPath, allowedOrigin, expectedHost, client, setupOptions{})
 }
 
 // --- Helpers ---
@@ -419,6 +416,7 @@ func main() {
 		path, cleanup := setupLogFile()
 		defer cleanup()
 		activeLogFile = path
+		currentLogFilePath = path
 		log.Printf("winbox-bridge: logging to file: %s", activeLogFile)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -81,7 +82,7 @@ func TestConfigRoundTrip_AllFieldsPreserved(t *testing.T) {
 	}
 
 	if loaded != original {
-		t.Errorf("round-trip mismatch:\n  want: %+v\n  got:  %+v", original, loaded)
+		t.Errorf("round-trip mismatch")
 	}
 }
 
@@ -122,6 +123,10 @@ func TestConfigLoadConfigFrom_CorruptJSONReturnsDefaults(t *testing.T) {
 // --- Config: file permissions ---
 
 func TestConfigSaveConfigTo_CreatesParentDirWith0700(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not report POSIX directory permission bits from os.Stat")
+	}
+
 	base := t.TempDir()
 	// Use a subdirectory that doesn't exist yet
 	subDir := filepath.Join(base, "newsubdir")
@@ -142,6 +147,10 @@ func TestConfigSaveConfigTo_CreatesParentDirWith0700(t *testing.T) {
 }
 
 func TestConfigSaveConfigTo_WritesFileWith0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not report POSIX file permission bits from os.Stat")
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
