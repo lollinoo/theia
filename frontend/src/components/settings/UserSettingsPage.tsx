@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import {
+  type BridgeConnectorDownload,
   type BridgeCredentialMetadata,
   type UserSettingsResponse,
   changePassword,
@@ -28,6 +29,37 @@ function credentialStatus(credential?: BridgeCredentialMetadata): string {
   return 'Active';
 }
 
+const defaultConnectorDownloads: BridgeConnectorDownload[] = [
+  {
+    label: 'Linux x64',
+    os: 'linux',
+    arch: 'amd64',
+    url: '/api/v1/settings/bridge/connector/download/linux/amd64',
+    available: false,
+  },
+  {
+    label: 'Windows x64',
+    os: 'windows',
+    arch: 'amd64',
+    url: '/api/v1/settings/bridge/connector/download/windows/amd64',
+    available: false,
+  },
+  {
+    label: 'macOS Intel',
+    os: 'darwin',
+    arch: 'amd64',
+    url: '/api/v1/settings/bridge/connector/download/darwin/amd64',
+    available: false,
+  },
+  {
+    label: 'macOS Apple Silicon',
+    os: 'darwin',
+    arch: 'arm64',
+    url: '/api/v1/settings/bridge/connector/download/darwin/arm64',
+    available: false,
+  },
+];
+
 export function UserSettingsPage() {
   const [settings, setSettings] = useState<UserSettingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,6 +68,7 @@ export function UserSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [configSnippet, setConfigSnippet] = useState('');
+  const [connectorDownloads, setConnectorDownloads] = useState<BridgeConnectorDownload[]>([]);
   const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '' });
 
   useEffect(() => {
@@ -45,6 +78,9 @@ export function UserSettingsPage() {
         setError(err instanceof Error ? err.message : 'Failed to load settings'),
       )
       .finally(() => setLoading(false));
+    fetchBridgeConnectorConfig()
+      .then((result) => setConnectorDownloads(result.downloads))
+      .catch(() => setConnectorDownloads([]));
   }, []);
 
   const profile = useMemo(() => {
@@ -135,6 +171,7 @@ export function UserSettingsPage() {
   async function loadConfigSnippet() {
     try {
       const result = await fetchBridgeConnectorConfig();
+      setConnectorDownloads(result.downloads);
       setConfigSnippet(JSON.stringify(result.config, null, 2));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load connector config');
@@ -152,9 +189,9 @@ export function UserSettingsPage() {
   const credential = settings?.bridge.credential;
   const configured = settings?.bridge.configured === true;
   const activeCredential = credentialStatus(credential) === 'Active';
-  const downloadClass = activeCredential
-    ? 'theia-button-secondary'
-    : 'theia-button-secondary pointer-events-none opacity-50';
+  const downloadTargets =
+    connectorDownloads.length > 0 ? connectorDownloads : defaultConnectorDownloads;
+  const disabledDownloadClass = 'theia-button-secondary pointer-events-none opacity-50';
 
   return (
     <main className="min-h-full overflow-y-auto px-4 pb-10 pt-24 text-on-bg sm:px-8">
@@ -337,28 +374,32 @@ export function UserSettingsPage() {
                 </button>
               </>
             )}
-            <a
-              className={downloadClass}
-              aria-disabled={!activeCredential}
-              href={
-                activeCredential
-                  ? '/api/v1/settings/bridge/connector/download/linux/amd64'
-                  : undefined
+            {downloadTargets.map((target) => {
+              const enabled = activeCredential && target.available;
+              const label = `Download ${target.label}`;
+              if (enabled) {
+                return (
+                  <a
+                    key={`${target.os}/${target.arch}`}
+                    className="theia-button-secondary"
+                    href={target.url}
+                  >
+                    {label}
+                  </a>
+                );
               }
-            >
-              Download Linux
-            </a>
-            <a
-              className={downloadClass}
-              aria-disabled={!activeCredential}
-              href={
-                activeCredential
-                  ? '/api/v1/settings/bridge/connector/download/windows/amd64'
-                  : undefined
-              }
-            >
-              Download Windows
-            </a>
+              return (
+                <button
+                  key={`${target.os}/${target.arch}`}
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  className={disabledDownloadClass}
+                >
+                  {label}
+                </button>
+              );
+            })}
             <button
               type="button"
               className="theia-button-secondary"

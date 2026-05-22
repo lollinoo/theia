@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +139,89 @@ func TestUserSettingsHandlerConnectorDownloadRequiresConfiguredBridgeSecret(t *t
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUserSettingsHandlerConnectorConfigUsesForwardedBrowserURL(t *testing.T) {
+	handler := NewUserSettingsHandler(&fakeUserSettingsService{}, "")
+	user := testAPIUser("alice", false, "account:manage")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/bridge/connector/config", nil)
+	req.Host = "backend:8080"
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set("X-Forwarded-Host", "localhost:3000")
+	req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+	rec := httptest.NewRecorder()
+
+	handler.HandleConnectorConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var parsed struct {
+		Config map[string]interface{} `json:"config"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&parsed); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := parsed.Config["theia_base_url"]; got != "http://localhost:3000" {
+		t.Fatalf("theia_base_url = %v, want http://localhost:3000", got)
+	}
+	if got := parsed.Config["theia_origin"]; got != "http://localhost:3000" {
+		t.Fatalf("theia_origin = %v, want http://localhost:3000", got)
+	}
+}
+
+func TestUserSettingsHandlerConnectorConfigListsDownloadAvailability(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "winbox-bridge-linux-amd64"), []byte("bridge"), 0o600); err != nil {
+		t.Fatalf("write bridge binary: %v", err)
+	}
+	handler := NewUserSettingsHandler(&fakeUserSettingsService{}, dir)
+	user := testAPIUser("alice", false, "account:manage")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/bridge/connector/config", nil)
+	req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+	rec := httptest.NewRecorder()
+
+	handler.HandleConnectorConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var parsed struct {
+		Downloads []struct {
+			Label     string `json:"label"`
+			OS        string `json:"os"`
+			Arch      string `json:"arch"`
+			URL       string `json:"url"`
+			Available bool   `json:"available"`
+		} `json:"downloads"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&parsed); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	downloads := make(map[string]struct {
+		label     string
+		url       string
+		available bool
+	})
+	for _, target := range parsed.Downloads {
+		downloads[target.OS+"/"+target.Arch] = struct {
+			label     string
+			url       string
+			available bool
+		}{label: target.Label, url: target.URL, available: target.Available}
+	}
+	linux := downloads["linux/amd64"]
+	if linux.label != "Linux x64" || linux.url != "/api/v1/settings/bridge/connector/download/linux/amd64" || !linux.available {
+		t.Fatalf("linux/amd64 download = %+v", linux)
+	}
+	windows := downloads["windows/amd64"]
+	if windows.label != "Windows x64" || windows.available {
+		t.Fatalf("windows/amd64 download = %+v, want unavailable Windows x64", windows)
+	}
+	mac := downloads["darwin/amd64"]
+	if mac.label != "macOS Intel" || mac.available {
+		t.Fatalf("darwin/amd64 download = %+v, want unavailable macOS Intel", mac)
 	}
 }
 

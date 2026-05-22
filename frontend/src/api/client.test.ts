@@ -23,6 +23,7 @@ import {
   fetchAdminUsers,
   fetchBackupFileContent,
   fetchBackupJobs,
+  fetchBridgeConnectorConfig,
   fetchCanvasBootstrap,
   fetchCanvasMapAreas,
   fetchCanvasMapBootstrap,
@@ -741,6 +742,57 @@ describe('fetchSettingsWithMetadata', () => {
     expect(result.secrets.external_token).toEqual({
       present: true,
       redacted: true,
+    });
+  });
+});
+
+describe('fetchBridgeConnectorConfig', () => {
+  it('parses connector config and available download targets', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        config: {
+          theia_base_url: 'http://localhost:3000',
+          theia_origin: 'http://localhost:3000',
+        },
+        downloads: [
+          {
+            label: 'Linux x64',
+            os: 'linux',
+            arch: 'amd64',
+            url: '/api/v1/settings/bridge/connector/download/linux/amd64',
+            available: true,
+          },
+          {
+            label: '',
+            os: 'broken',
+            arch: 'amd64',
+            url: '/api/v1/settings/bridge/connector/download/broken/amd64',
+            available: true,
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchBridgeConnectorConfig();
+
+    expect(result).toEqual({
+      config: {
+        theia_base_url: 'http://localhost:3000',
+        theia_origin: 'http://localhost:3000',
+      },
+      downloads: [
+        {
+          label: 'Linux x64',
+          os: 'linux',
+          arch: 'amd64',
+          url: '/api/v1/settings/bridge/connector/download/linux/amd64',
+          available: true,
+        },
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/settings/bridge/connector/config', {
+      headers: { Accept: 'application/json' },
     });
   });
 });

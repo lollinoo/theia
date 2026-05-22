@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -164,6 +165,7 @@ func (h *UserSettingsHandler) HandleConnectorConfig(w http.ResponseWriter, r *ht
 		return
 	}
 	baseURL := originBaseURL(r)
+	const downloadPrefix = "/api/v1/settings/bridge/connector/download/"
 	config := map[string]any{
 		"winbox_path":    "",
 		"listen_port":    result.Preferences.BridgePort,
@@ -172,7 +174,10 @@ func (h *UserSettingsHandler) HandleConnectorConfig(w http.ResponseWriter, r *ht
 		"bridge_secret":  "<paste-secret-shown-once>",
 		"log_level":      "info",
 	}
-	json.NewEncoder(w).Encode(map[string]any{"config": config})
+	json.NewEncoder(w).Encode(map[string]any{
+		"config":    config,
+		"downloads": bridgeConnectorDownloadTargets(h.binariesDir, downloadPrefix),
+	})
 }
 
 func (h *UserSettingsHandler) HandleConnectorDownload(w http.ResponseWriter, r *http.Request) {
@@ -300,12 +305,86 @@ func writeUserSettingsServiceError(w http.ResponseWriter, err error) {
 }
 
 func originBaseURL(r *http.Request) string {
-	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+	if origin := sanitizeRequestBaseURL(r.Header.Get("Origin")); origin != "" {
 		return origin
+	}
+	if forwarded := baseURLFromForwardedHeaders(r); forwarded != "" {
+		return forwarded
+	}
+	if referer := sanitizeRequestBaseURL(r.Header.Get("Referer")); referer != "" {
+		return referer
 	}
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	return scheme + "://" + r.Host
+	return baseURLFromSchemeHost(scheme, r.Host)
+}
+
+func baseURLFromForwardedHeaders(r *http.Request) string {
+	if baseURL := baseURLFromSchemeHost(
+		firstHeaderValue(r.Header.Get("X-Forwarded-Proto")),
+		firstHeaderValue(r.Header.Get("X-Forwarded-Host")),
+	); baseURL != "" {
+		return baseURL
+	}
+	return baseURLFromForwardedHeader(r.Header.Get("Forwarded"))
+}
+
+func baseURLFromForwardedHeader(value string) string {
+	first := firstHeaderValue(value)
+	if first == "" {
+		return ""
+	}
+	var proto, host string
+	for _, part := range strings.Split(first, ";") {
+		key, rawValue, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		cleanValue := strings.Trim(strings.TrimSpace(rawValue), `"`)
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "proto":
+			proto = cleanValue
+		case "host":
+			host = cleanValue
+		}
+	}
+	return baseURLFromSchemeHost(proto, host)
+}
+
+func baseURLFromSchemeHost(scheme, host string) string {
+	scheme = strings.ToLower(strings.TrimSpace(scheme))
+	host = strings.TrimSpace(host)
+	if scheme == "" {
+		scheme = "http"
+	}
+	if host == "" {
+		return ""
+	}
+	return sanitizeRequestBaseURL(scheme + "://" + host)
+}
+
+func firstHeaderValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	first, _, _ := strings.Cut(value, ",")
+	return strings.TrimSpace(first)
+}
+
+func sanitizeRequestBaseURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }

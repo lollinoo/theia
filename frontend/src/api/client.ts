@@ -113,6 +113,14 @@ export interface BridgeSecretResult {
   shown_once: boolean;
 }
 
+export interface BridgeConnectorDownload {
+  label: string;
+  os: string;
+  arch: string;
+  url: string;
+  available: boolean;
+}
+
 export interface UpdateUserSettingsPayload {
   display_name?: string;
   username?: string;
@@ -124,6 +132,7 @@ export interface UpdateUserSettingsPayload {
 
 export interface BridgeConnectorConfigResponse {
   config: Record<string, unknown>;
+  downloads: BridgeConnectorDownload[];
 }
 
 export interface ResetPasswordPayload {
@@ -283,6 +292,39 @@ function parseAdminDashboard(payload: unknown): AdminDashboardResponse {
   };
 }
 
+function parseBridgeConnectorDownload(value: unknown): BridgeConnectorDownload | null {
+  const record = recordField(value);
+  if (!record) {
+    return null;
+  }
+  const label = stringField(record, 'label');
+  const os = stringField(record, 'os');
+  const arch = stringField(record, 'arch');
+  const url = stringField(record, 'url');
+  if (!label || !os || !arch || !url) {
+    return null;
+  }
+  return {
+    label,
+    os,
+    arch,
+    url,
+    available: record.available === true,
+  };
+}
+
+function parseBridgeConnectorConfig(payload: unknown): BridgeConnectorConfigResponse {
+  const record = recordField(payload) ?? {};
+  const config = recordField(record.config) ?? {};
+  const downloads = Array.isArray(record.downloads)
+    ? record.downloads.flatMap((item) => {
+        const parsed = parseBridgeConnectorDownload(item);
+        return parsed ? [parsed] : [];
+      })
+    : [];
+  return { config, downloads };
+}
+
 function parseAdminRole(value: unknown): AdminRole {
   const record =
     typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
@@ -402,9 +444,7 @@ export async function revokeBridgeSecret(
 }
 
 export async function fetchBridgeConnectorConfig(): Promise<BridgeConnectorConfigResponse> {
-  return (await requestJSON(
-    '/api/v1/settings/bridge/connector/config',
-  )) as BridgeConnectorConfigResponse;
+  return parseBridgeConnectorConfig(await requestJSON('/api/v1/settings/bridge/connector/config'));
 }
 
 export async function fetchAdminDashboard(): Promise<AdminDashboardResponse> {

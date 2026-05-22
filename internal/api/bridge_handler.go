@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -71,11 +70,8 @@ func (h *BridgeHandler) HandleDownloadWithPrefix(w http.ResponseWriter, r *http.
 		return
 	}
 
-	filename := fmt.Sprintf("winbox-bridge-%s-%s", osName, arch)
-	if osName == "windows" {
-		filename += ".exe"
-	}
-	filePath := filepath.Join(h.binariesDir, filename)
+	filename := bridgeBinaryFilename(osName, arch)
+	filePath := bridgeBinaryFilePath(h.binariesDir, osName, arch)
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		writeError(w, http.StatusNotFound, "bridge binary not available for this platform")
 		return
