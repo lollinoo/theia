@@ -276,22 +276,37 @@ func (s *BridgeService) GenerateSecret(ctx context.Context, user *AuthenticatedU
 	} else if !errors.Is(err, domain.ErrBridgeCredentialNotFound) {
 		return nil, err
 	}
-	return s.createSecret(ctx, user.User.User.ID, nil, "")
+	rawSecret, credential, err := s.newBridgeSecretCredential(user.User.User.ID, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	log := s.newBridgeAuditLog(&user.User.User.ID, &user.User.User.ID, "bridge.secret_generated", "bridge_credential", credential.ID.String(), `{}`)
+	if err := s.bridgeRepo.CreateBridgeCredentialWithAudit(ctx, credential, log); err != nil {
+		return nil, err
+	}
+	return &BridgeSecretResult{
+		Credential: bridgeCredentialMetadata(credential),
+		Secret:     rawSecret,
+		ShownOnce:  true,
+	}, nil
 }
 
 func (s *BridgeService) RotateSecret(ctx context.Context, user *AuthenticatedUser, reason string) (*BridgeSecretResult, error) {
 	now := s.now()
-	if _, err := s.bridgeRepo.RevokeActiveBridgeCredentialForUser(ctx, user.User.User.ID, now, strings.TrimSpace(reason)); err != nil && !errors.Is(err, domain.ErrBridgeCredentialNotFound) {
-		return nil, err
-	}
-	result, err := s.createSecret(ctx, user.User.User.ID, &now, strings.TrimSpace(reason))
+	reason = strings.TrimSpace(reason)
+	rawSecret, credential, err := s.newBridgeSecretCredential(user.User.User.ID, &now, reason)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.appendAuditLog(ctx, &user.User.User.ID, &user.User.User.ID, "bridge.secret_rotated", "bridge_credential", result.Credential.ID.String(), `{}`); err != nil {
+	log := s.newBridgeAuditLog(&user.User.User.ID, &user.User.User.ID, "bridge.secret_rotated", "bridge_credential", credential.ID.String(), `{}`)
+	if err := s.bridgeRepo.RotateBridgeCredentialWithAudit(ctx, user.User.User.ID, credential, now, reason, log); err != nil {
 		return nil, err
 	}
-	return result, nil
+	return &BridgeSecretResult{
+		Credential: bridgeCredentialMetadata(credential),
+		Secret:     rawSecret,
+		ShownOnce:  true,
+	}, nil
 }
 
 func (s *BridgeService) RevokeSecret(ctx context.Context, user *AuthenticatedUser, reason string) (*BridgeCredentialMetadata, error) {
@@ -423,14 +438,14 @@ func (s *BridgeService) RecordConnectorDownload(ctx context.Context, user *Authe
 	return s.appendAuditLog(ctx, &user.User.User.ID, &user.User.User.ID, "bridge.connector_downloaded", "bridge_connector", platform, `{}`)
 }
 
-func (s *BridgeService) createSecret(ctx context.Context, userID uuid.UUID, rotatedAt *time.Time, reason string) (*BridgeSecretResult, error) {
+func (s *BridgeService) newBridgeSecretCredential(userID uuid.UUID, rotatedAt *time.Time, reason string) (string, *domain.BridgeCredential, error) {
 	rawSecret, prefix, err := security.GenerateBridgeSecret()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	hash, err := security.HashBridgeSecret(rawSecret)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	now := s.now()
 	credential := &domain.BridgeCredential{
@@ -444,19 +459,7 @@ func (s *BridgeService) createSecret(ctx context.Context, userID uuid.UUID, rota
 		CreatedByUserID: &userID,
 		RotationReason:  reason,
 	}
-	if err := s.bridgeRepo.CreateBridgeCredential(ctx, credential); err != nil {
-		return nil, err
-	}
-	if rotatedAt == nil {
-		if err := s.appendAuditLog(ctx, &userID, &userID, "bridge.secret_generated", "bridge_credential", credential.ID.String(), `{}`); err != nil {
-			return nil, err
-		}
-	}
-	return &BridgeSecretResult{
-		Credential: bridgeCredentialMetadata(credential),
-		Secret:     rawSecret,
-		ShownOnce:  true,
-	}, nil
+	return rawSecret, credential, nil
 }
 
 func (s *BridgeService) ensureIdentifierAvailable(ctx context.Context, normalized string, currentUserID uuid.UUID) error {
@@ -477,7 +480,15 @@ func (s *BridgeService) ensureIdentifierAvailable(ctx context.Context, normalize
 }
 
 func (s *BridgeService) appendAuditLog(ctx context.Context, actorUserID, targetUserID *uuid.UUID, action, resource, resourceID, metadataJSON string) error {
-	log := domain.AuditLog{
+	log := s.newBridgeAuditLog(actorUserID, targetUserID, action, resource, resourceID, metadataJSON)
+	if err := s.auditLogs.AppendAuditLog(ctx, log); err != nil {
+		return fmt.Errorf("writing bridge audit log: %w", err)
+	}
+	return nil
+}
+
+func (s *BridgeService) newBridgeAuditLog(actorUserID, targetUserID *uuid.UUID, action, resource, resourceID, metadataJSON string) *domain.AuditLog {
+	return &domain.AuditLog{
 		ID:           uuid.New(),
 		ActorUserID:  actorUserID,
 		TargetUserID: targetUserID,
@@ -487,10 +498,6 @@ func (s *BridgeService) appendAuditLog(ctx context.Context, actorUserID, targetU
 		MetadataJSON: metadataJSON,
 		CreatedAt:    s.now(),
 	}
-	if err := s.auditLogs.AppendAuditLog(ctx, &log); err != nil {
-		return fmt.Errorf("writing bridge audit log: %w", err)
-	}
-	return nil
 }
 
 func (s *BridgeService) buildUserSettingsResult(user *domain.User, preferences *domain.UserSettings, credential *domain.BridgeCredential) *UserSettingsResult {

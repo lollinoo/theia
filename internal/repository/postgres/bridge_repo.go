@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -113,6 +114,76 @@ func (r *BridgeRepo) GetBridgeCredentialByPrefix(ctx context.Context, prefix str
 }
 
 func (r *BridgeRepo) CreateBridgeCredential(ctx context.Context, credential *domain.BridgeCredential) error {
+	if err := normalizeBridgeCredential(credential); err != nil {
+		return err
+	}
+	if err := insertBridgeCredential(ctx, r.db.raw, credential); err != nil {
+		return fmt.Errorf("creating bridge credential: %w", err)
+	}
+	return nil
+}
+
+func (r *BridgeRepo) CreateBridgeCredentialWithAudit(ctx context.Context, credential *domain.BridgeCredential, log *domain.AuditLog) error {
+	tx, err := r.db.raw.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning bridge credential create: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := normalizeBridgeCredential(credential); err != nil {
+		return err
+	}
+	if err := insertBridgeCredential(ctx, tx, credential); err != nil {
+		return fmt.Errorf("creating bridge credential: %w", err)
+	}
+	if err := insertBridgeAuditLog(ctx, tx, log); err != nil {
+		return fmt.Errorf("writing bridge audit log: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing bridge credential create: %w", err)
+	}
+	return nil
+}
+
+func (r *BridgeRepo) RotateBridgeCredentialWithAudit(ctx context.Context, userID uuid.UUID, credential *domain.BridgeCredential, when time.Time, reason string, log *domain.AuditLog) error {
+	tx, err := r.db.raw.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning bridge credential rotate: %w", err)
+	}
+	defer tx.Rollback()
+
+	active, err := r.scanBridgeCredentialRow(tx.QueryRowContext(ctx, rebindQuery(bridgeCredentialSelectSQL()+` WHERE user_id = ? AND status = ? FOR UPDATE`), userID.String(), string(domain.BridgeCredentialStatusActive)))
+	if err != nil && !errors.Is(err, domain.ErrBridgeCredentialNotFound) {
+		return fmt.Errorf("getting active bridge credential for rotate: %w", err)
+	}
+	if active != nil {
+		if _, err := tx.ExecContext(ctx, rebindQuery(
+			`UPDATE bridge_credentials
+			 SET status = ?, revoked_at = ?, rotation_reason = ?
+			 WHERE id = ?`,
+		), string(domain.BridgeCredentialStatusRevoked), when, reason, active.ID.String()); err != nil {
+			return fmt.Errorf("revoking bridge credential for rotate: %w", err)
+		}
+	}
+	if err := normalizeBridgeCredential(credential); err != nil {
+		return err
+	}
+	if err := insertBridgeCredential(ctx, tx, credential); err != nil {
+		return fmt.Errorf("creating rotated bridge credential: %w", err)
+	}
+	if err := insertBridgeAuditLog(ctx, tx, log); err != nil {
+		return fmt.Errorf("writing bridge audit log: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing bridge credential rotate: %w", err)
+	}
+	return nil
+}
+
+func normalizeBridgeCredential(credential *domain.BridgeCredential) error {
+	if credential == nil {
+		return fmt.Errorf("bridge credential is required")
+	}
 	if credential.ID == uuid.Nil {
 		credential.ID = uuid.New()
 	}
@@ -122,11 +193,18 @@ func (r *BridgeRepo) CreateBridgeCredential(ctx context.Context, credential *dom
 	if credential.CreatedAt.IsZero() {
 		credential.CreatedAt = time.Now().UTC()
 	}
-	_, err := r.execContext(ctx,
+	return nil
+}
+
+func insertBridgeCredential(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+}, credential *domain.BridgeCredential) error {
+	_, err := execer.ExecContext(ctx, rebindQuery(
 		`INSERT INTO bridge_credentials (
 			id, user_id, secret_hash, secret_prefix, status, created_at, rotated_at,
 			revoked_at, last_used_at, expires_at, created_by_user_id, rotation_reason
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	),
 		credential.ID.String(),
 		credential.UserID.String(),
 		credential.SecretHash,
@@ -140,10 +218,42 @@ func (r *BridgeRepo) CreateBridgeCredential(ctx context.Context, credential *dom
 		uuidPtrString(credential.CreatedByUserID),
 		credential.RotationReason,
 	)
-	if err != nil {
-		return fmt.Errorf("creating bridge credential: %w", err)
+	return err
+}
+
+func insertBridgeAuditLog(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+}, log *domain.AuditLog) error {
+	if log == nil {
+		return fmt.Errorf("audit log is required")
 	}
-	return nil
+	if log.ID == uuid.Nil {
+		log.ID = uuid.New()
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	if log.MetadataJSON == "" {
+		log.MetadataJSON = "{}"
+	}
+	_, err := execer.ExecContext(ctx, rebindQuery(
+		`INSERT INTO audit_logs (
+			id, actor_user_id, target_user_id, action, resource, resource_id,
+			metadata_json, ip_address, user_agent, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	),
+		log.ID.String(),
+		uuidPtrString(log.ActorUserID),
+		uuidPtrString(log.TargetUserID),
+		log.Action,
+		log.Resource,
+		log.ResourceID,
+		log.MetadataJSON,
+		log.IPAddress,
+		log.UserAgent,
+		log.CreatedAt,
+	)
+	return err
 }
 
 func (r *BridgeRepo) RevokeActiveBridgeCredentialForUser(ctx context.Context, userID uuid.UUID, when time.Time, reason string) (*domain.BridgeCredential, error) {

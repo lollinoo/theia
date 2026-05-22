@@ -1196,6 +1196,7 @@ type fakeAuthStore struct {
 	resets         map[uuid.UUID]domain.PasswordResetToken
 	resetsByHash   map[string]uuid.UUID
 	audit          []domain.AuditLog
+	auditErr       error
 
 	protectedRoleRemovals int
 	protectedUserUpdates  int
@@ -1572,6 +1573,9 @@ func (s *fakeAuthStore) AppendAuditLog(_ context.Context, log *domain.AuditLog) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.auditErr != nil {
+		return s.auditErr
+	}
 	if log.ID == uuid.Nil {
 		log.ID = uuid.New()
 	}

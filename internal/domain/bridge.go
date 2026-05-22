@@ -72,6 +72,8 @@ type BridgeRepository interface {
 	GetActiveBridgeCredentialForUser(ctx context.Context, userID uuid.UUID) (*BridgeCredential, error)
 	GetBridgeCredentialByPrefix(ctx context.Context, prefix string) (*BridgeCredential, error)
 	CreateBridgeCredential(ctx context.Context, credential *BridgeCredential) error
+	CreateBridgeCredentialWithAudit(ctx context.Context, credential *BridgeCredential, log *AuditLog) error
+	RotateBridgeCredentialWithAudit(ctx context.Context, userID uuid.UUID, credential *BridgeCredential, when time.Time, reason string, log *AuditLog) error
 	RevokeActiveBridgeCredentialForUser(ctx context.Context, userID uuid.UUID, when time.Time, reason string) (*BridgeCredential, error)
 	TouchBridgeCredentialLastUsed(ctx context.Context, credentialID uuid.UUID, when time.Time) error
 	CreateBridgeLaunchRequest(ctx context.Context, request *BridgeLaunchRequest) error

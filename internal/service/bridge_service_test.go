@@ -181,6 +181,59 @@ func TestBridgeServiceSecretLifecycleHashesAndShowsRawOnlyForMutations(t *testin
 	}
 }
 
+func TestBridgeServiceGenerateSecretDoesNotPersistCredentialWhenAuditFails(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	user := h.addUser(t, "alice", "alice@example.test", testAuthPassword, domain.UserStatusActive)
+	bridgeSvc := newBridgeServiceTestHarness(t, h.store)
+	h.store.auditErr = errors.New("audit unavailable")
+
+	_, err := bridgeSvc.service.GenerateSecret(context.Background(), bridgeAuthUser(user))
+	if err == nil {
+		t.Fatal("GenerateSecret succeeded with failing audit log")
+	}
+	if _, err := bridgeSvc.bridgeRepo.GetActiveBridgeCredentialForUser(context.Background(), user.ID); !errors.Is(err, domain.ErrBridgeCredentialNotFound) {
+		t.Fatalf("active credential after failed audit = %v, want ErrBridgeCredentialNotFound", err)
+	}
+}
+
+func TestBridgeServiceRotateSecretKeepsOldCredentialWhenCreateFails(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	user := h.addUser(t, "alice", "alice@example.test", testAuthPassword, domain.UserStatusActive)
+	bridgeSvc := newBridgeServiceTestHarness(t, h.store)
+
+	generated, err := bridgeSvc.service.GenerateSecret(context.Background(), bridgeAuthUser(user))
+	if err != nil {
+		t.Fatalf("GenerateSecret: %v", err)
+	}
+	bridgeSvc.bridgeRepo.createCredentialErr = errors.New("create unavailable")
+
+	if _, err := bridgeSvc.service.RotateSecret(context.Background(), bridgeAuthUser(user), "lost"); err == nil {
+		t.Fatal("RotateSecret succeeded with failing credential creation")
+	}
+	if _, err := bridgeSvc.service.VerifyUserBridgeSecret(context.Background(), generated.Secret); err != nil {
+		t.Fatalf("old secret should still verify after failed rotate create: %v", err)
+	}
+}
+
+func TestBridgeServiceRotateSecretKeepsOldCredentialWhenAuditFails(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	user := h.addUser(t, "alice", "alice@example.test", testAuthPassword, domain.UserStatusActive)
+	bridgeSvc := newBridgeServiceTestHarness(t, h.store)
+
+	generated, err := bridgeSvc.service.GenerateSecret(context.Background(), bridgeAuthUser(user))
+	if err != nil {
+		t.Fatalf("GenerateSecret: %v", err)
+	}
+	h.store.auditErr = errors.New("audit unavailable")
+
+	if _, err := bridgeSvc.service.RotateSecret(context.Background(), bridgeAuthUser(user), "lost"); err == nil {
+		t.Fatal("RotateSecret succeeded with failing audit log")
+	}
+	if _, err := bridgeSvc.service.VerifyUserBridgeSecret(context.Background(), generated.Secret); err != nil {
+		t.Fatalf("old secret should still verify after failed rotate audit: %v", err)
+	}
+}
+
 func TestBridgeServiceConnectorLaunchRequiresMatchingUserAndOneTimeToken(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	alice := h.addUser(t, "alice", "alice@example.test", testAuthPassword, domain.UserStatusActive)
@@ -263,6 +316,7 @@ func newBridgeServiceTestHarness(t *testing.T, authStore *fakeAuthStore) *bridge
 		t.Fatalf("NewBridgeService: %v", err)
 	}
 	h.service = svc
+	h.bridgeRepo.auditLogs = authStore
 	return h
 }
 
@@ -294,6 +348,9 @@ type fakeBridgeRepo struct {
 	credentials map[uuid.UUID]domain.BridgeCredential
 	launches    map[string]domain.BridgeLaunchRequest
 	downloads   []domain.BridgeConnectorDownload
+	auditLogs   domain.AuditLogRepository
+
+	createCredentialErr error
 }
 
 func newFakeBridgeRepo() *fakeBridgeRepo {
@@ -350,6 +407,9 @@ func (r *fakeBridgeRepo) GetBridgeCredentialByPrefix(_ context.Context, prefix s
 func (r *fakeBridgeRepo) CreateBridgeCredential(_ context.Context, credential *domain.BridgeCredential) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.createCredentialErr != nil {
+		return r.createCredentialErr
+	}
 	for _, existing := range r.credentials {
 		if existing.UserID == credential.UserID && existing.Status == domain.BridgeCredentialStatusActive && credential.Status == domain.BridgeCredentialStatusActive {
 			return fmt.Errorf("active credential exists")
@@ -359,6 +419,56 @@ func (r *fakeBridgeRepo) CreateBridgeCredential(_ context.Context, credential *d
 		credential.ID = uuid.New()
 	}
 	r.credentials[credential.ID] = *credential
+	return nil
+}
+
+func (r *fakeBridgeRepo) CreateBridgeCredentialWithAudit(ctx context.Context, credential *domain.BridgeCredential, log *domain.AuditLog) error {
+	r.mu.Lock()
+	snapshot := r.copyCredentialsLocked()
+	r.mu.Unlock()
+
+	if err := r.CreateBridgeCredential(ctx, credential); err != nil {
+		return err
+	}
+	if r.auditLogs != nil {
+		if err := r.auditLogs.AppendAuditLog(ctx, log); err != nil {
+			r.mu.Lock()
+			r.credentials = snapshot
+			r.mu.Unlock()
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *fakeBridgeRepo) RotateBridgeCredentialWithAudit(ctx context.Context, userID uuid.UUID, credential *domain.BridgeCredential, when time.Time, reason string, log *domain.AuditLog) error {
+	r.mu.Lock()
+	snapshot := r.copyCredentialsLocked()
+	for id, existing := range r.credentials {
+		if existing.UserID == userID && existing.Status == domain.BridgeCredentialStatusActive {
+			existing.Status = domain.BridgeCredentialStatusRevoked
+			existing.RevokedAt = &when
+			existing.RotationReason = reason
+			r.credentials[id] = existing
+			break
+		}
+	}
+	r.mu.Unlock()
+
+	if err := r.CreateBridgeCredential(ctx, credential); err != nil {
+		r.mu.Lock()
+		r.credentials = snapshot
+		r.mu.Unlock()
+		return err
+	}
+	if r.auditLogs != nil {
+		if err := r.auditLogs.AppendAuditLog(ctx, log); err != nil {
+			r.mu.Lock()
+			r.credentials = snapshot
+			r.mu.Unlock()
+			return err
+		}
+	}
 	return nil
 }
 
@@ -430,6 +540,14 @@ func (r *fakeBridgeRepo) RecordBridgeConnectorDownload(_ context.Context, downlo
 	defer r.mu.Unlock()
 	r.downloads = append(r.downloads, *download)
 	return nil
+}
+
+func (r *fakeBridgeRepo) copyCredentialsLocked() map[uuid.UUID]domain.BridgeCredential {
+	copied := make(map[uuid.UUID]domain.BridgeCredential, len(r.credentials))
+	for id, credential := range r.credentials {
+		copied[id] = credential
+	}
+	return copied
 }
 
 func copyUserSettings(value domain.UserSettings) *domain.UserSettings {
