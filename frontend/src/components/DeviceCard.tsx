@@ -199,6 +199,7 @@ const DEVICE_NODE_SCALE_START_ZOOM = 0.9;
 const DEVICE_NODE_MIN_SCALE_ZOOM = 0.6;
 const DEVICE_NODE_MAX_READABILITY_SCALE = 1.12;
 const DEVICE_NODE_READABILITY_SCALE_CSS_VAR = 'var(--theia-device-node-readability-scale, 1)';
+const DEVICE_NODE_IDENTITY_SCALE_CSS_VAR = 'var(--theia-device-node-identity-scale, 1)';
 
 export function resolveDeviceNodeReadabilityScale(zoom: number): number {
   const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
@@ -217,6 +218,12 @@ export function resolveDeviceNodeReadabilityScale(zoom: number): number {
 function readableFontStyle(basePx: number): CSSProperties {
   return {
     fontSize: `calc(${basePx}px * ${DEVICE_NODE_READABILITY_SCALE_CSS_VAR})`,
+  };
+}
+
+function readableIdentityFontStyle(basePx: number): CSSProperties {
+  return {
+    fontSize: `calc(${basePx}px * ${DEVICE_NODE_READABILITY_SCALE_CSS_VAR} * ${DEVICE_NODE_IDENTITY_SCALE_CSS_VAR})`,
   };
 }
 
@@ -607,6 +614,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         <Handle type="target" position={Position.Top} className={universalHandleClassName} />
         <div
           data-testid="device-node-card"
+          data-topology-node-variant="ghost-device"
           className="topology-node-card topology-render-contained relative w-[132px] cursor-pointer rounded-2xl border border-dashed border-outline bg-surface/72 text-center transition-[border-color,background-color,color] duration-150 hover:bg-surface-container"
           style={{ ...ghostFrameStyle(firstColor), boxShadow: 'var(--nt-node-shadow)' }}
           onClick={() => data.onGhostClick?.(data.device.id)}
@@ -618,20 +626,16 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
             }
           }}
         >
-          <div
-            data-testid="semantic-overview-node"
-            role="img"
-            aria-label={`${ghostLabel} cross-area`}
-            className="topology-semantic-overview h-10 w-10 items-center justify-center rounded-2xl border border-dashed border-outline bg-surface-container text-on-bg-secondary"
-            style={ghostFrameStyle(firstColor)}
-          >
-            <span className="h-2.5 w-2.5 rounded-full border border-current" />
-          </div>
           <div data-testid="semantic-detail-node" className="topology-semantic-card px-3 py-2">
-            <p className="truncate text-[11px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
+            <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
               cross-area
             </p>
-            <p className="mt-1 truncate text-sm font-semibold text-on-bg">{ghostLabel}</p>
+            <p
+              className="topology-semantic-identity mt-1 text-sm font-semibold text-on-bg"
+              style={readableIdentityFontStyle(14)}
+            >
+              <span className="topology-semantic-identity-text block truncate">{ghostLabel}</span>
+            </p>
           </div>
         </div>
         <Handle type="source" position={Position.Bottom} className={universalHandleClassName} />
@@ -642,6 +646,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   return (
     <div
       data-testid="device-node-card"
+      data-topology-node-variant={renderVariant}
       className={`topology-node-card topology-render-contained group relative w-full border border-outline bg-surface transition-[border-color] duration-150 hover:border-outline-strong ${cardShapeClass} ${statusStyles.frameClass ?? ''}`}
       style={statusStyles.frameStyle}
       onContextMenu={(event) => {
@@ -711,25 +716,6 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       />
 
       <div
-        data-testid="semantic-overview-node"
-        role="img"
-        aria-label={`${label} ${headerState.label}`}
-        className={`topology-semantic-overview relative items-center justify-center overflow-hidden border ${isVirtual ? 'h-12 w-16 rounded-[18px]' : 'h-11 w-11 rounded-[14px]'} ${statusStyles.badgeClass}`}
-        style={
-          statusStyles.badgeStyle ?? areaTintStyle(data.visualColor ? [data.visualColor] : colors)
-        }
-      >
-        {areaAccent ? (
-          <span
-            className="absolute inset-y-1 left-1 w-1 rounded-full"
-            style={{ background: areaAccent }}
-          />
-        ) : null}
-        {isVirtual ? <MaterialIcon name="hub" size={16} /> : null}
-        <StatusDot status={headerState.dotStatus} />
-      </div>
-
-      <div
         data-testid="semantic-detail-node"
         className={
           isVirtual
@@ -751,20 +737,22 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
             className={`topology-physical-node-body flex-1 px-4 pb-3.5 pt-3 ${physicalStatusTone?.bodyClassName ?? ''}`}
             style={physicalStatusTone?.bodyStyle ?? areaTintStyle(colors)}
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
+            <div className="topology-semantic-header flex items-start justify-between gap-3">
+              <div className="topology-semantic-identity-frame min-w-0 flex-1">
                 <div
                   data-testid="physical-node-hostname"
                   className="topology-semantic-identity min-w-0 text-[15px] font-semibold leading-snug text-on-bg"
-                  style={readableFontStyle(15)}
+                  style={readableIdentityFontStyle(15)}
                 >
-                  <span className="line-clamp-2 break-words">{label}</span>
+                  <span className="topology-semantic-identity-text line-clamp-2 break-words">
+                    {label}
+                  </span>
                 </div>
               </div>
 
               <div
                 data-testid="physical-node-status-badge"
-                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyles.badgeClass}`}
+                className={`topology-semantic-status-badge inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyles.badgeClass}`}
                 style={mergeReadableFontStyle(statusStyles.badgeStyle, 11)}
               >
                 <StatusDot status={headerState.dotStatus} />
@@ -772,7 +760,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               </div>
             </div>
 
-            <div className="mt-3 flex items-center justify-between gap-3">
+            <div className="topology-semantic-summary-row mt-3 flex items-center justify-between gap-3">
               {addressState === 'address' ? (
                 <span
                   data-testid="physical-node-address"
@@ -880,9 +868,9 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               <MaterialIcon name="hub" size={24} />
             </div>
 
-            <div className="relative z-10 min-w-0 flex-1 text-left">
-              <div className="flex min-w-0 items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
+            <div className="topology-virtual-node-content relative z-10 min-w-0 flex-1 text-left">
+              <div className="topology-semantic-header flex min-w-0 items-start justify-between gap-2">
+                <div className="topology-semantic-identity-frame min-w-0 flex-1">
                   <div
                     data-testid="virtual-node-type-label"
                     className="topology-virtual-node-type-label truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
@@ -895,17 +883,17 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                   </div>
                   <div
                     data-testid="virtual-node-hostname"
-                    className="topology-semantic-identity mt-1 truncate text-[17px] font-semibold leading-tight text-on-bg"
-                    style={readableFontStyle(17)}
+                    className="topology-semantic-identity mt-1 text-[17px] font-semibold leading-tight text-on-bg"
+                    style={readableIdentityFontStyle(17)}
                   >
-                    {label}
+                    <span className="topology-semantic-identity-text block truncate">{label}</span>
                   </div>
                 </div>
 
                 {renderModel.showVirtualStatusBadge ? (
                   <div
                     data-testid="virtual-node-status-badge"
-                    className={`inline-flex max-w-[82px] shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
+                    className={`topology-semantic-status-badge inline-flex max-w-[82px] shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
                     style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
                   >
                     <StatusDot status={headerState.dotStatus} />
@@ -913,7 +901,16 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                       {headerState.label}
                     </span>
                   </div>
-                ) : null}
+                ) : (
+                  <div
+                    data-testid="virtual-node-low-zoom-status-badge"
+                    aria-label={headerState.label}
+                    className={`topology-semantic-low-zoom-only topology-semantic-status-badge shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
+                    style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
+                  >
+                    <StatusDot status={headerState.dotStatus} />
+                  </div>
+                )}
               </div>
 
               {renderModel.showVirtualAddressChip ? (

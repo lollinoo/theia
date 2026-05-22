@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNodeData } from './DeviceCard';
@@ -124,7 +124,7 @@ describe('DeviceCard zoom readability', () => {
 
     expect(screen.getByTestId('device-node-card').style.transform).toBe('');
     expect(screen.getByTestId('physical-node-hostname').style.fontSize).toBe(
-      'calc(15px * var(--theia-device-node-readability-scale, 1))',
+      'calc(15px * var(--theia-device-node-readability-scale, 1) * var(--theia-device-node-identity-scale, 1))',
     );
     expect(screen.getByTestId('physical-node-status-badge').style.fontSize).toBe(
       'calc(11px * var(--theia-device-node-readability-scale, 1))',
@@ -137,29 +137,30 @@ describe('DeviceCard zoom readability', () => {
     );
   });
 
-  it('marks detail-only sections while exposing a textless overview status glyph', () => {
+  it('marks zoom bands on secondary content while keeping the card as the overview surface', () => {
     renderDeviceCard({ metrics: mockMetrics() });
 
-    const overview = screen.getByTestId('semantic-overview-node');
     const detail = screen.getByTestId('semantic-detail-node');
 
-    expect(overview).toHaveAttribute('aria-label', 'router-01 Up');
-    expect(within(overview).queryByText('router-01')).not.toBeInTheDocument();
-    expect(within(overview).queryByText('10.0.0.1')).not.toBeInTheDocument();
-
+    expect(screen.queryByTestId('semantic-overview-node')).not.toBeInTheDocument();
     expect(detail).toHaveClass('topology-semantic-card');
-    expect(within(detail).getByText('IP 10.0.0.1')).toBeInTheDocument();
-    expect(within(detail).getByText('Fresh telemetry')).toBeInTheDocument();
-    expect(within(detail).getByText('CPU')).toBeInTheDocument();
-    expect(within(detail).getByText('MEM')).toBeInTheDocument();
-    expect(within(detail).getByText('Uptime')).toBeInTheDocument();
+    expect(screen.getByText('IP 10.0.0.1')).toBeInTheDocument();
+    expect(screen.getByText('Fresh telemetry')).toBeInTheDocument();
+    expect(screen.getByText('CPU')).toBeInTheDocument();
+    expect(screen.getByText('MEM')).toBeInTheDocument();
+    expect(screen.getByText('Uptime')).toBeInTheDocument();
 
     expect(screen.getByTestId('physical-node-hostname')).not.toHaveClass(
       'topology-semantic-detail-only',
     );
+    expect(screen.getByText('router-01')).toHaveClass('topology-semantic-identity-text');
     expect(screen.getByTestId('physical-node-status-badge')).not.toHaveClass(
       'topology-semantic-detail-only',
     );
+    expect(screen.getByTestId('physical-node-status-badge')).toHaveClass(
+      'topology-semantic-status-badge',
+    );
+    expect(screen.getByText('Up')).toHaveClass('topology-semantic-status-label');
     expect(screen.getByTestId('physical-node-address')).toHaveClass(
       'topology-semantic-summary-field',
     );
@@ -169,24 +170,100 @@ describe('DeviceCard zoom readability', () => {
     expect(screen.getByTestId('physical-runtime-readouts')).toHaveClass(
       'topology-semantic-detail-only',
     );
+    expect(screen.getByTestId('device-node-card')).toHaveAttribute(
+      'data-topology-node-variant',
+      'physical',
+    );
   });
 
-  it('keeps the node interaction surface intact while exposing overview status structure', () => {
+  it('uses the same low-zoom identity scale and wrap hook for virtual cards', () => {
+    const hostname = 'virtual-core-distribution-node-with-a-long-name';
+    renderDeviceCard({
+      device: mockDevice({
+        id: 'virtual-1',
+        device_type: 'virtual',
+        hostname,
+        sys_name: hostname,
+        ip: '172.16.0.1',
+      }),
+      isVirtual: true,
+      metrics: mockMetrics({ device_id: 'virtual-1' }),
+    });
+
+    expect(screen.getByTestId('virtual-node-hostname').style.fontSize).toBe(
+      'calc(17px * var(--theia-device-node-readability-scale, 1) * var(--theia-device-node-identity-scale, 1))',
+    );
+    expect(screen.getByText(hostname)).toHaveClass('topology-semantic-identity-text');
+    expect(screen.getByTestId('virtual-node-status-badge')).toHaveClass(
+      'topology-semantic-status-badge',
+    );
+    expect(screen.getByTestId('device-node-card')).toHaveAttribute(
+      'data-topology-node-variant',
+      'virtual-monitorable',
+    );
+  });
+
+  it('keeps a low-zoom status dot available for unmonitored virtual cards', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        id: 'virtual-unmonitored',
+        device_type: 'virtual',
+        hostname: 'cloud-edge',
+        sys_name: 'cloud-edge',
+        ip: '',
+      }),
+      isVirtual: true,
+      metrics: null,
+    });
+
+    const fallbackStatus = screen.getByTestId('virtual-node-low-zoom-status-badge');
+
+    expect(screen.getByTestId('device-node-card')).toHaveAttribute(
+      'data-topology-node-variant',
+      'virtual-unmonitored',
+    );
+    expect(screen.queryByTestId('virtual-node-status-badge')).not.toBeInTheDocument();
+    expect(fallbackStatus).toHaveClass(
+      'topology-semantic-low-zoom-only',
+      'topology-semantic-status-badge',
+    );
+    expect(fallbackStatus).toHaveAttribute('aria-label', 'Unmonitored');
+  });
+
+  it('keeps ghost cards on the same semantic identity path', () => {
+    renderDeviceCard({
+      kind: 'ghost-device',
+      isGhost: true,
+      device: mockDevice({
+        id: 'ghost-1',
+        hostname: 'remote-router',
+        sys_name: 'remote-router',
+        ip: '10.20.30.40',
+      }),
+    });
+
+    expect(screen.getByTestId('device-node-card')).toHaveAttribute(
+      'data-topology-node-variant',
+      'ghost-device',
+    );
+    expect(screen.getByText('cross-area')).toHaveClass('topology-semantic-detail-only');
+    expect(screen.getByText('remote-router')).toHaveClass('topology-semantic-identity-text');
+  });
+
+  it('keeps the node interaction surface intact across semantic zoom bands', () => {
     const onContextMenu = vi.fn();
     renderDeviceCard({ metrics: mockMetrics(), onContextMenu });
 
     const card = screen.getByTestId('device-node-card');
-    const overview = screen.getByTestId('semantic-overview-node');
 
-    expect(overview).toHaveAttribute('role', 'img');
-    expect(overview).toHaveClass('topology-semantic-overview');
+    expect(card).toHaveClass('topology-node-card', 'topology-render-contained');
 
     fireEvent.contextMenu(card);
 
     expect(onContextMenu).toHaveBeenCalledWith(expect.anything(), 'dev-1');
   });
 
-  it('keeps self-link annotations hidden in overview and uses stable CSS hooks', () => {
+  it('keeps self-link annotations hidden in overview without geometry overrides', () => {
     renderDeviceCard({
       metrics: mockMetrics(),
       selfLinks: [
@@ -208,9 +285,32 @@ describe('DeviceCard zoom readability', () => {
     expect(screen.getByRole('button', { name: /view details for self link/i })).toHaveClass(
       'topology-semantic-detail-only',
     );
+    expect(css).toContain('--theia-device-node-identity-scale: 1.8;');
+    expect(css).toContain('--theia-device-node-identity-scale: 1.45;');
+    expect(css).toContain('[data-topology-zoom-band="overview"] .topology-node-card');
+    expect(css).toContain('.topology-node-card[data-topology-node-variant="physical"]');
+    expect(css).toContain('.topology-node-card[data-topology-node-variant="virtual-monitorable"]');
+    expect(css).toContain('.topology-node-card[data-topology-node-variant="virtual-unmonitored"]');
+    expect(css).toContain('height: 140px;');
+    expect(css).toContain('height: 118px;');
+    expect(css).toContain('height: 92px;');
+    expect(css).toContain(
+      '[data-topology-zoom-band="overview"] .topology-node-card .topology-semantic-header',
+    );
     expect(css).toContain('[data-topology-zoom-band="overview"] .topology-semantic-detail-only');
-    expect(css).toContain('.topology-physical-node-body');
-    expect(css).toContain('.topology-virtual-node-capsule');
+    expect(css).toContain('[data-topology-zoom-band="overview"] .topology-semantic-summary-row');
+    expect(css).toContain('[data-topology-zoom-band="overview"] .topology-semantic-summary-field');
+    expect(css).toContain('[data-topology-zoom-band="overview"] .topology-semantic-status-label');
+    expect(css).toContain('.topology-semantic-low-zoom-only');
+    expect(css).toContain('clip: rect(0, 0, 0, 0);');
+    expect(css).toContain('overflow-wrap: anywhere;');
+    expect(css).toContain('-webkit-line-clamp: 2;');
+    expect(css).toContain('.topology-virtual-node-icon-shell');
+    expect(css).not.toContain('.topology-semantic-overview');
+    expect(css).not.toContain('width: max-content');
+    expect(css).not.toContain('max-width: 220px');
+    expect(css).not.toContain('max-width: 280px');
+    expect(css).not.toContain('min-height: 68px');
     expect(css).not.toContain('[data-testid=');
   });
 });
