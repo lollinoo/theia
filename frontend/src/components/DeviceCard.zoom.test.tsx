@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
@@ -131,5 +131,54 @@ describe('DeviceCard zoom readability', () => {
     expect(screen.getByTestId('physical-runtime-readouts').style.height).toBe(
       'calc(40px * var(--theia-device-node-readability-scale, 1))',
     );
+  });
+
+  it('marks detail-only sections while exposing a textless overview status glyph', () => {
+    renderDeviceCard({ metrics: mockMetrics() });
+
+    const overview = screen.getByTestId('semantic-overview-node');
+    const detail = screen.getByTestId('semantic-detail-node');
+
+    expect(overview).toHaveAttribute('aria-label', 'router-01 Up');
+    expect(within(overview).queryByText('router-01')).not.toBeInTheDocument();
+    expect(within(overview).queryByText('10.0.0.1')).not.toBeInTheDocument();
+
+    expect(detail).toHaveClass('topology-semantic-card');
+    expect(within(detail).getByText('IP 10.0.0.1')).toBeInTheDocument();
+    expect(within(detail).getByText('Fresh telemetry')).toBeInTheDocument();
+    expect(within(detail).getByText('CPU')).toBeInTheDocument();
+    expect(within(detail).getByText('MEM')).toBeInTheDocument();
+    expect(within(detail).getByText('Uptime')).toBeInTheDocument();
+
+    expect(screen.getByTestId('physical-node-hostname')).not.toHaveClass(
+      'topology-semantic-detail-only',
+    );
+    expect(screen.getByTestId('physical-node-status-badge')).not.toHaveClass(
+      'topology-semantic-detail-only',
+    );
+    expect(screen.getByTestId('physical-node-address')).toHaveClass(
+      'topology-semantic-summary-field',
+    );
+    expect(screen.getByTestId('physical-node-freshness')).toHaveClass(
+      'topology-semantic-detail-only',
+    );
+    expect(screen.getByTestId('physical-runtime-readouts')).toHaveClass(
+      'topology-semantic-detail-only',
+    );
+  });
+
+  it('keeps the node interaction surface intact while exposing overview status structure', () => {
+    const onContextMenu = vi.fn();
+    renderDeviceCard({ metrics: mockMetrics(), onContextMenu });
+
+    const card = screen.getByTestId('device-node-card');
+    const overview = screen.getByTestId('semantic-overview-node');
+
+    expect(overview).toHaveAttribute('role', 'img');
+    expect(overview).toHaveClass('topology-semantic-overview');
+
+    fireEvent.contextMenu(card);
+
+    expect(onContextMenu).toHaveBeenCalledWith(expect.anything(), 'dev-1');
   });
 });
