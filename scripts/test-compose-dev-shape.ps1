@@ -3,6 +3,7 @@ param()
 $ErrorActionPreference = "Stop"
 
 $composeJson = & docker compose --profile dev --profile test config --format json
+
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }
@@ -63,9 +64,26 @@ Assert-True ($backend.depends_on.PSObject.Properties.Name -notcontains "snmp-swi
 Assert-True ($backend.depends_on.PSObject.Properties.Name -notcontains "snmp-ap") "backend must not depend on snmp-ap"
 
 $backendEnvironment = Get-ServiceProperty $backend "environment"
+$legacyTokenName = "THEIA_" + "OPERATOR_TOKEN"
+$bearerHeaderText = "Authorization: " + "Bearer"
 Assert-True ($backendEnvironment.THEIA_DB_DSN -like "*@postgres:5432/theia*") "backend must reach PostgreSQL over the Compose network"
+Assert-True ($null -ne $backendEnvironment.THEIA_SESSION_SECRET) "backend must receive THEIA_SESSION_SECRET in dev/test Compose profiles"
+Assert-True ([string]::IsNullOrEmpty($backendEnvironment.$legacyTokenName)) "backend must not receive legacy auth token"
+
+$composeSource = Get-Content -Raw -Path "docker-compose.yml"
+Assert-True ($composeSource -notmatch $legacyTokenName) "docker-compose.yml must not reference legacy auth token"
+Assert-True ($composeSource -match 'THEIA_SESSION_SECRET=\$\{THEIA_SESSION_SECRET:-dev-session-secret-change-me-32bytes\}') "docker-compose.yml must provide THEIA_SESSION_SECRET to backend"
+Assert-True ($composeSource -match 'curl -sf http://localhost:8080/api/v1/auth/me') "backend healthcheck must use /api/v1/auth/me"
+Assert-True ($composeSource -notmatch $bearerHeaderText) "backend healthcheck must not use bearer Authorization"
 
 $frontendEnvironment = Get-ServiceProperty $frontend "environment"
 Assert-True ($frontendEnvironment.VITE_API_URL -eq "http://backend:8080") "frontend dev proxy must reach backend over the Compose network"
+
+foreach ($nginxPath in @("frontend/nginx.conf", "frontend/nginx.conf.template")) {
+  $nginxSource = Get-Content -Raw -Path $nginxPath
+  Assert-True ($nginxSource -notmatch 'proxy_set_header Host \$host;') "$nginxPath must preserve the browser Host header port with `$http_host"
+  $httpHostMatches = [regex]::Matches($nginxSource, 'proxy_set_header Host \$http_host;')
+  Assert-True ($httpHostMatches.Count -eq 3) "$nginxPath must set Host to `$http_host in all API proxy locations"
+}
 
 Write-Output "docker-compose.yml dev/test shape is valid"

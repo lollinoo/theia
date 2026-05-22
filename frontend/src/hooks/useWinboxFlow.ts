@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { fetchBridgeToken, fetchSettings } from '../api/client';
+import { createBridgeLaunchRequest, fetchUserSettings } from '../api/client';
 import { fetchBridgeWithTimeout, getBridgeLaunchErrorMessage } from '../utils/bridgeRequests';
 import { useBridgeHealth } from './useBridgeHealth';
 import { useDeviceWinboxAvailability } from './useDeviceWinboxAvailability';
@@ -26,9 +26,9 @@ export function useWinboxFlow(): {
     useDeviceWinboxAvailability();
 
   useEffect(() => {
-    settingsLoadPromiseRef.current = fetchSettings()
+    settingsLoadPromiseRef.current = fetchUserSettings()
       .then((settings) => {
-        const nextBridgePort = settings.bridge_port ?? '1337';
+        const nextBridgePort = String(settings.preferences.bridge_port ?? 1337);
         bridgePortRef.current = nextBridgePort;
         setBridgePort(nextBridgePort);
       })
@@ -72,9 +72,10 @@ export function useWinboxFlow(): {
       await settingsLoadPromiseRef.current;
     }
 
-    let token: string;
+    let launchToken: string;
     try {
-      token = await fetchBridgeToken(deviceId);
+      const launch = await createBridgeLaunchRequest(deviceId);
+      launchToken = launch.launch_token;
     } catch (error) {
       setWinboxError(error instanceof Error ? error.message : 'Failed to launch WinBox');
       return;
@@ -86,7 +87,7 @@ export function useWinboxFlow(): {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token }),
+          body: JSON.stringify({ launch_token: launchToken }),
         },
       );
 

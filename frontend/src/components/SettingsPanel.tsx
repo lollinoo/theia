@@ -213,9 +213,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [deviceBackupRetention, setDeviceBackupRetention] = useState('5');
   const [savedDeviceInterval, setSavedDeviceInterval] = useState(false);
   const [savedDeviceRetention, setSavedDeviceRetention] = useState(false);
-  const [bridgeSecret, setBridgeSecret] = useState('');
-  const [bridgeSecretConfigured, setBridgeSecretConfigured] = useState(false);
-  const [savedBridgeSecret, setSavedBridgeSecret] = useState(false);
   const [bridgePort, setBridgePort] = useState('1337');
   const [savedBridgePort, setSavedBridgePort] = useState(false);
   const [workerSectionOpen, setWorkerSectionOpen] = useState(false);
@@ -237,8 +234,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const deviceRetentionTimerRef = useRef<number | null>(null);
   const savedDeviceIntervalTimerRef = useRef<number | null>(null);
   const savedDeviceRetentionTimerRef = useRef<number | null>(null);
-  const bridgeSecretTimerRef = useRef<number | null>(null);
-  const savedBridgeSecretTimerRef = useRef<number | null>(null);
   const bridgePortTimerRef = useRef<number | null>(null);
   const savedBridgePortTimerRef = useRef<number | null>(null);
   const workerTimerRefs = useRef<Record<WorkerSettingKey, number | null>>(createWorkerTimerRefs());
@@ -248,7 +243,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
 
   useEffect(() => {
     fetchSettingsWithMetadata()
-      .then(({ data: settings, secrets }) => {
+      .then(({ data: settings }) => {
         const interval = settings['polling_interval_seconds'] ?? '60';
         if (PRESET_VALUES.has(interval)) {
           setPollingValue(interval);
@@ -265,8 +260,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         );
         setDeviceBackupInterval(settings['device_backup_interval_hours'] ?? '0');
         setDeviceBackupRetention(settings['device_backup_retention_count'] ?? '5');
-        setBridgeSecret('');
-        setBridgeSecretConfigured(secrets['bridge_secret']?.present === true);
         setBridgePort(settings['bridge_port'] ?? '1337');
         setWorkerSettings((prev) => {
           const next = { ...prev };
@@ -432,18 +425,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     if (hours >= 48) return '48 hours';
     if (hours >= 24) return '24 hours';
     return hours + ' hours';
-  }
-
-  function handleBridgeSecretChange(value: string) {
-    setBridgeSecret(value);
-    setBridgeSecretConfigured(false);
-    if (bridgeSecretTimerRef.current !== null) window.clearTimeout(bridgeSecretTimerRef.current);
-    bridgeSecretTimerRef.current = window.setTimeout(() => {
-      void updateSetting('bridge_secret', value).then(() => {
-        setBridgeSecretConfigured(value.trim() !== '');
-        showSaved(setSavedBridgeSecret, savedBridgeSecretTimerRef);
-      });
-    }, 500);
   }
 
   function handleBridgePortChange(value: string) {
@@ -706,31 +687,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           ))}
         </select>
         <p className="text-xs text-on-bg-secondary">Affects backup filenames and zip timestamps.</p>
-      </div>
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            WinBox Bridge Secret
-          </label>
-          <SavedIndicator visible={savedBridgeSecret} />
-        </div>
-        <input
-          type="text"
-          value={bridgeSecret}
-          placeholder={
-            bridgeSecretConfigured
-              ? 'Configured (redacted); paste a new key to replace'
-              : 'Paste 64-char hex key from config.json'
-          }
-          onChange={(e) => handleBridgeSecretChange(e.target.value)}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none font-mono"
-        />
-        <p className="text-xs text-on-bg-secondary">
-          Found in <span className="font-mono">~/.config/winbox-bridge/config.json</span> →{' '}
-          <span className="font-mono">bridge_secret</span> field. Required to launch WinBox from
-          Theia.
-        </p>
       </div>
 
       <div className="space-y-2">

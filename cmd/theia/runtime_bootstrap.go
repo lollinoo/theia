@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log"
@@ -95,6 +97,20 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 	}
 	if postgresPassword := os.Getenv("POSTGRES_PASSWORD"); isKnownSecretPlaceholder(postgresPassword) {
 		return fmt.Errorf("%s deployment rejects example POSTGRES_PASSWORD values", deploymentEnv)
+	}
+	sessionSecret := strings.TrimSpace(cfg.SessionSecret)
+	if sessionSecret == "" {
+		return fmt.Errorf("THEIA_SESSION_SECRET is required for %s deployment", deploymentEnv)
+	}
+	if isKnownSecretPlaceholder(sessionSecret) || len(sessionSecret) < 32 {
+		return fmt.Errorf("%s deployment rejects weak THEIA_SESSION_SECRET values", deploymentEnv)
+	}
+	metricsToken := strings.TrimSpace(cfg.MetricsToken)
+	if metricsToken == "" {
+		return fmt.Errorf("THEIA_METRICS_TOKEN is required for %s deployment", deploymentEnv)
+	}
+	if isKnownSecretPlaceholder(metricsToken) || len(metricsToken) < 32 {
+		return fmt.Errorf("%s deployment rejects weak THEIA_METRICS_TOKEN values", deploymentEnv)
 	}
 
 	return nil
@@ -288,6 +304,26 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	log.Println("Database migrations completed")
 
+	authRepo := postgres.NewAuthRepo(db)
+	authService, err := service.NewAuthService(service.AuthServiceConfig{
+		Users:            authRepo,
+		Roles:            authRepo,
+		Sessions:         authRepo,
+		PasswordResets:   authRepo,
+		AuditLogs:        authRepo,
+		SessionSecret:    []byte(strings.TrimSpace(cfg.SessionSecret)),
+		SessionTTL:       minutesToDuration(cfg.SessionTTLMinutes),
+		PasswordResetTTL: minutesToDuration(cfg.PasswordResetTTLMinutes),
+	})
+	if err != nil {
+		return fmt.Errorf("initialize auth service: %w", err)
+	}
+	if user, created, err := authService.EnsureBootstrapSuperAdmin(context.Background()); err != nil {
+		return fmt.Errorf("ensure bootstrap super admin: %w", err)
+	} else if created {
+		log.Printf("Bootstrap super admin created username=%q must_change_password=true", user.Username)
+	}
+
 	yamlRegistry, envVendors, err := loadBootstrapVendorRegistry()
 	if err != nil {
 		if envVendors != "" {
@@ -354,6 +390,19 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	log.Printf("SSH known hosts store: %s", paths.knownHostsPath)
 
 	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback())
+	bridgeRepo := postgres.NewBridgeRepo(db)
+	bridgeService, err := service.NewBridgeService(service.BridgeServiceConfig{
+		BridgeRepo:            bridgeRepo,
+		SettingsRepo:          settingsRepo,
+		Users:                 authRepo,
+		AuditLogs:             authRepo,
+		BackupService:         backupService,
+		CredentialProfileRepo: credentialProfileRepo,
+		SessionSecret:         []byte(strings.TrimSpace(cfg.SessionSecret)),
+	})
+	if err != nil {
+		return fmt.Errorf("initialize bridge service: %w", err)
+	}
 
 	var instanceBackupService *service.InstanceBackupService
 	var backupScheduler *worker.BackupScheduler
@@ -436,7 +485,16 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	deviceBackupScheduler.Start(ctx)
 
-	wsHandler := ws.NewHandler(hub, pipeline.GetOverviewSnapshot, pipeline.GetAlerts, pipeline.GetPrometheusStatus)
+	apiSecurity := api.SecurityConfig{
+		AllowedOrigins: cfg.AllowedOrigins,
+	}
+	wsHandler := ws.NewHandler(
+		hub,
+		pipeline.GetOverviewSnapshot,
+		pipeline.GetAlerts,
+		pipeline.GetPrometheusStatus,
+		ws.WithAllowedOrigins(cfg.AllowedOrigins),
+	)
 	children := runtimeChildren{pipeline}
 	if backupScheduler != nil {
 		children = append(children, backupScheduler)
@@ -461,12 +519,16 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler)
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService))
 	metricsHandler := observability.Handler()
+	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{
 		Addr: cfg.ListenAddr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/metrics" {
+				if !authenticateMetricsRequest(w, r, metricsToken) {
+					return
+				}
 				metricsHandler.ServeHTTP(w, r)
 				return
 			}
@@ -482,6 +544,47 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	log.Println("Server stopped")
 	return nil
+}
+
+func minutesToDuration(minutes int) time.Duration {
+	if minutes <= 0 {
+		return 0
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+func authenticateMetricsRequest(w http.ResponseWriter, r *http.Request, expectedToken string) bool {
+	expectedToken = strings.TrimSpace(expectedToken)
+	if expectedToken == "" {
+		return true
+	}
+	if constantTimeStringEqual(metricsBearerToken(r.Header.Get("Authorization")), expectedToken) {
+		return true
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer realm="theia-metrics"`)
+	http.Error(w, "metrics authentication required", http.StatusUnauthorized)
+	return false
+}
+
+func metricsBearerToken(header string) string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ""
+	}
+	const prefix = "bearer "
+	if !strings.HasPrefix(strings.ToLower(header), prefix) {
+		return ""
+	}
+	return strings.TrimSpace(header[len(prefix):])
+}
+
+func constantTimeStringEqual(got, want string) bool {
+	if got == "" || want == "" {
+		return false
+	}
+	gotHash := sha256.Sum256([]byte(got))
+	wantHash := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(gotHash[:], wantHash[:]) == 1
 }
 
 func runtimeDebugSettingsSummary(cfg *runtimeConfig, settingsRepo domain.SettingsRepository) string {

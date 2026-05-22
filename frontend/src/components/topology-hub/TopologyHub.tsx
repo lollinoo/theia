@@ -27,6 +27,7 @@ export interface TopologyHubProps {
   onDuplicateMap: (map: CanvasMap) => void;
   onDeleteMap: (map: CanvasMap) => void;
   onSetPrimaryMap?: (map: CanvasMap) => void;
+  canOpenSettings?: boolean;
   onOpenSettings: () => void;
 }
 
@@ -76,6 +77,7 @@ export function TopologyHub({
   onDuplicateMap,
   onDeleteMap,
   onSetPrimaryMap,
+  canOpenSettings = false,
   onOpenSettings,
 }: TopologyHubProps) {
   const model = buildTopologyHubModel({ devices, areas, links, snapshot, maps });
@@ -210,14 +212,16 @@ export function TopologyHub({
                   Map-local areas
                 </h3>
                 <p className="mt-2 text-sm font-medium text-on-bg">No areas</p>
-                <button
-                  type="button"
-                  onClick={onOpenSettings}
-                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-outline px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-                >
-                  <MaterialIcon name="settings" size={16} />
-                  Settings
-                </button>
+                {canOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={onOpenSettings}
+                    className="mt-3 inline-flex items-center gap-2 rounded-lg border border-outline px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                  >
+                    <MaterialIcon name="settings" size={16} />
+                    Settings
+                  </button>
+                )}
               </div>
             )}
           </section>

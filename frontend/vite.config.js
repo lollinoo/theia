@@ -37,11 +37,13 @@ export default defineConfig(function (_a) {
                 '/api/v1/ws': {
                     target: wsTarget,
                     changeOrigin: true,
+                    xfwd: true,
                     ws: true,
                 },
                 '/api': {
                     target: apiTarget,
                     changeOrigin: true,
+                    xfwd: true,
                     ws: true,
                 },
             },

@@ -16,7 +16,7 @@ echo ""
 # Wait for API to be ready
 echo "Waiting for API at $API_BASE..."
 for i in $(seq 1 30); do
-  if curl -sf "$API_BASE/api/v1/health" > /dev/null 2>&1; then
+  if curl -sf "$API_BASE/api/v1/auth/me" > /dev/null 2>&1; then
     echo "API is ready."
     break
   fi
@@ -45,6 +45,7 @@ create_seed_device() {
 
   echo "Adding ${label}..."
   response="$(curl -sf -X POST "$API_BASE/api/v1/devices" \
+    "${THEIA_CURL_AUTH_ARGS[@]}" \
     -H "Content-Type: application/json" \
     -d "$payload")"
   echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"

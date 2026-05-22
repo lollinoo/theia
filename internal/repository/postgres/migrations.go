@@ -56,6 +56,9 @@ func RunMigrations(db *sql.DB, encryptionKey ...[]byte) error {
 	if err := seedDefaultSettings(db); err != nil {
 		return fmt.Errorf("seeding default settings: %w", err)
 	}
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		return fmt.Errorf("seeding auth system roles and permissions: %w", err)
+	}
 
 	return nil
 }
@@ -1102,4 +1105,93 @@ func seedDefaultSettings(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
+	queryDB := wrapDB(db)
+	now := time.Now().UTC()
+
+	roleIDs := make(map[string]string, len(domain.SystemRoleNames()))
+	for _, roleName := range domain.SystemRoleNames() {
+		description := authSystemRoleDescription(roleName)
+		var roleID string
+		if err := queryDB.QueryRow(
+			`INSERT INTO roles (id, name, description, is_system_role, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(name) DO UPDATE SET
+				description = EXCLUDED.description,
+				is_system_role = TRUE,
+				updated_at = EXCLUDED.updated_at
+			 RETURNING id`,
+			roleName,
+			roleName,
+			description,
+			true,
+			now,
+			now,
+		).Scan(&roleID); err != nil {
+			return fmt.Errorf("seeding auth system role %q: %w", roleName, err)
+		}
+		roleIDs[roleName] = roleID
+	}
+
+	permissionIDs := make(map[string]string, len(domain.SystemPermissions()))
+	for _, permission := range domain.SystemPermissions() {
+		var permissionID string
+		if err := queryDB.QueryRow(
+			`INSERT INTO permissions (id, key, description, resource, action)
+			 VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(key) DO UPDATE SET
+				description = EXCLUDED.description,
+				resource = EXCLUDED.resource,
+				action = EXCLUDED.action
+			 RETURNING id`,
+			permission.Key,
+			permission.Key,
+			permission.Description,
+			permission.Resource,
+			permission.Action,
+		).Scan(&permissionID); err != nil {
+			return fmt.Errorf("seeding auth system permission %q: %w", permission.Key, err)
+		}
+		permissionIDs[permission.Key] = permissionID
+	}
+
+	for _, roleName := range domain.SystemRoleNames() {
+		roleID := roleIDs[roleName]
+		for _, permissionKey := range domain.SystemRolePermissionKeys(roleName) {
+			permissionID, ok := permissionIDs[permissionKey]
+			if !ok {
+				return fmt.Errorf("seeding auth role %q: unknown permission %q", roleName, permissionKey)
+			}
+			if _, err := queryDB.Exec(
+				`INSERT INTO role_permissions (role_id, permission_id)
+				 VALUES (?, ?)
+				 ON CONFLICT(role_id, permission_id) DO NOTHING`,
+				roleID,
+				permissionID,
+			); err != nil {
+				return fmt.Errorf("seeding auth role %q permission %q: %w", roleName, permissionKey, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func authSystemRoleDescription(roleName string) string {
+	switch roleName {
+	case domain.RoleSuperAdmin:
+		return "Full system administration access"
+	case domain.RoleAdmin:
+		return "Administrative access without destructive or credential reveal permissions"
+	case domain.RoleManager:
+		return "Operational management access"
+	case domain.RoleUser:
+		return "Standard operator access"
+	case domain.RoleViewer:
+		return "Read-only access"
+	default:
+		return ""
+	}
 }

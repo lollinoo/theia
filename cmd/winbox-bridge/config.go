@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,46 +13,65 @@ type Config struct {
 	WinBoxPath   string `json:"winbox_path"`
 	ListenPort   int    `json:"listen_port"`
 	TheiaOrigin  string `json:"theia_origin"`
-	BridgeSecret string `json:"bridge_secret"` // hex-encoded 32-byte secret shared with the Theia backend
-	LogLevel     string `json:"log_level"`     // "info" (default) or "debug"
+	TheiaBaseURL string `json:"theia_base_url"`
+	BridgeSecret string `json:"bridge_secret"`
+	LogLevel     string `json:"log_level"` // "info" (default) or "debug"
 }
 
 // DefaultConfig returns the config matching current CLI flag defaults.
-// BridgeSecret is intentionally left empty here; it is populated by
-// ensureBridgeSecret on first run so the caller can persist the updated config.
 func DefaultConfig() Config {
 	return Config{
 		WinBoxPath:   "",
 		ListenPort:   1337,
 		TheiaOrigin:  "http://localhost:3000",
+		TheiaBaseURL: "http://localhost:3000",
 		BridgeSecret: "",
 		LogLevel:     "info",
 	}
 }
 
-// ensureBridgeSecret generates and returns a new hex-encoded 32-byte random
-// secret if cfg.BridgeSecret is empty. The returned Config must be saved by
-// the caller; this function does not persist the config itself.
-func ensureBridgeSecret(cfg Config) (Config, error) {
-	if cfg.BridgeSecret != "" {
-		return cfg, nil
-	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return cfg, fmt.Errorf("generate bridge secret: %w", err)
-	}
-	cfg.BridgeSecret = hex.EncodeToString(key)
-	return cfg, nil
-}
-
-// configFilePath returns the platform-appropriate path for config.json.
+// legacyConfigFilePath returns the pre-installation config path.
 // Uses os.UserConfigDir(): Windows=%APPDATA%, Linux=~/.config, macOS=~/Library/Application Support.
-func configFilePath() (string, error) {
+func legacyConfigFilePath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("config dir: %w", err)
 	}
 	return filepath.Join(dir, "winbox-bridge", "config.json"), nil
+}
+
+// configFilePath returns the active config.json path. Before installation the
+// connector uses the legacy user config path; once installed it keeps config
+// beside the stable per-user executable so the installed app is self-contained.
+func configFilePath() (string, error) {
+	return configFilePathWithInstall(installedExecutablePath, legacyConfigFilePath, os.Executable)
+}
+
+func configFilePathWithInstall(
+	installedPath func() (string, error),
+	legacyPath func() (string, error),
+	currentExecutable func() (string, error),
+) (string, error) {
+	if installedPath != nil {
+		path, err := installedPath()
+		if err == nil {
+			configPath := installedConfigPathForExecutable(path)
+			if fileExists(configPath) {
+				return configPath, nil
+			}
+			if currentExecutable != nil {
+				current, err := currentExecutable()
+				if err == nil && sameFilePath(current, path) {
+					return configPath, nil
+				}
+			}
+		}
+	}
+	return legacyPath()
+}
+
+func installedConfigPathForExecutable(executablePath string) string {
+	return filepath.Join(filepath.Dir(executablePath), "config.json")
 }
 
 // loadConfigFrom reads config from the given path.
@@ -87,12 +104,19 @@ func saveConfigTo(cfg Config, path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("set config permissions: %w", err)
+	}
+	return nil
 }
 
 // loadConfig reads config from the platform-default config file path.
 // Returns DefaultConfig if the file does not exist or if the config dir is unavailable.
 func loadConfig() (Config, error) {
+	_ = migrateConfigToInstalledPath()
 	path, err := configFilePath()
 	if err != nil {
 		return DefaultConfig(), nil // degrade gracefully when no home dir

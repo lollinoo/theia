@@ -9,10 +9,12 @@ import {
   setCanvasMapPrimary,
   updateCanvasMap,
 } from './api/client';
+import { AdminDashboard } from './components/AdminDashboard';
 import Canvas from './components/Canvas';
 import { Dashboard } from './components/Dashboard';
 import NavigationPill from './components/NavigationPill';
 import { Watermark } from './components/Watermark';
+import UserSettingsPage from './components/settings/UserSettingsPage';
 import {
   CreateMapDialog,
   type CreateMapDialogSubmit,
@@ -27,11 +29,12 @@ import {
   type RenameMapDialogSubmit,
 } from './components/topology-hub/RenameMapDialog';
 import TopologyHub from './components/topology-hub/TopologyHub';
+import { useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useWebSocket } from './hooks/useWebSocket';
 import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api';
 
-export type ActiveView = 'hub' | 'canvas' | 'dashboard';
+export type ActiveView = 'hub' | 'canvas' | 'dashboard' | 'admin' | 'settings';
 
 const runtimeUpdatePauseIdleDelayMs = 1500;
 const enableSavedMaps = true;
@@ -44,7 +47,10 @@ function viewLayerClass(active: boolean, className = ''): string {
   return `${viewLayerBaseClass} ${activeClass} ${className}`.trim();
 }
 
-function viewLayerStateProps(active: boolean): { 'aria-hidden': boolean; inert?: '' } {
+function viewLayerStateProps(active: boolean): {
+  'aria-hidden': boolean;
+  inert?: '';
+} {
   return active ? { 'aria-hidden': false } : { 'aria-hidden': true, inert: '' };
 }
 
@@ -115,6 +121,12 @@ function App() {
   const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
+  const { hasPermission, logout, user } = useAuth();
+  const canViewAdmin = hasPermission('admin:dashboard:read');
+  const canReadSettings = hasPermission('settings:read');
+  const canUpdateSettings = hasPermission('settings:update');
+  const canOpenSettings = canViewAdmin && canReadSettings && canUpdateSettings;
+  const canOpenUserSettings = hasPermission('account:manage');
 
   useEffect(() => {
     if (canvasInteractionActive) {
@@ -206,13 +218,35 @@ function App() {
 
   const handleViewChange = useCallback(
     (view: ActiveView) => {
+      if (view === 'admin' && !canViewAdmin) {
+        return;
+      }
+      if (view === 'settings' && !canOpenUserSettings) {
+        return;
+      }
       setActiveView(view);
       if (view === 'canvas') {
         requestCanvasFitView();
       }
     },
-    [requestCanvasFitView],
+    [canOpenUserSettings, canViewAdmin, requestCanvasFitView],
   );
+
+  const handleOpenSettings = useCallback(() => {
+    if (!canOpenSettings) {
+      return;
+    }
+    setActiveView('admin');
+  }, [canOpenSettings]);
+
+  useEffect(() => {
+    if (activeView === 'admin' && !canViewAdmin) {
+      setActiveView('canvas');
+    }
+    if (activeView === 'settings' && !canOpenUserSettings) {
+      setActiveView('canvas');
+    }
+  }, [activeView, canOpenUserSettings, canViewAdmin]);
 
   const handleSelectMapContext = useCallback(
     (map: CanvasMap) => {
@@ -492,11 +526,17 @@ function App() {
           selectedMapName={selectedMapName}
           maps={canvasMaps}
           areas={navigationAreas}
+          canViewAdmin={canViewAdmin}
+          canViewSettings={canOpenUserSettings}
+          userLabel={user?.display_name || user?.username || 'User'}
           onViewChange={handleViewChange}
           onAreaSelect={handleNavigationAreaSelect}
           onMapSelect={handleNavigationMapSelect}
           onManageMaps={() => {
             setActiveView('hub');
+          }}
+          onLogout={() => {
+            void logout();
           }}
         />
         {/* All views stay mounted; inactive ones keep dimensions for React Flow. */}
@@ -525,9 +565,8 @@ function App() {
             onDuplicateMap={handleDuplicateMap}
             onDeleteMap={handleDeleteMap}
             onSetPrimaryMap={handleSetPrimaryMap}
-            onOpenSettings={() => {
-              setActiveView('canvas');
-            }}
+            canOpenSettings={canOpenSettings}
+            onOpenSettings={handleOpenSettings}
           />
         </div>
         <div
@@ -581,6 +620,22 @@ function App() {
             loading={canvasTopologyLoading}
           />
         </div>
+        {canViewAdmin && (
+          <div
+            {...viewLayerStateProps(activeView === 'admin')}
+            className={viewLayerClass(activeView === 'admin', 'overflow-y-auto')}
+          >
+            <AdminDashboard visible={activeView === 'admin'} />
+          </div>
+        )}
+        {canOpenUserSettings && (
+          <div
+            {...viewLayerStateProps(activeView === 'settings')}
+            className={viewLayerClass(activeView === 'settings', 'overflow-y-auto')}
+          >
+            <UserSettingsPage />
+          </div>
+        )}
         {enableSavedMaps && (
           <>
             <CreateMapDialog

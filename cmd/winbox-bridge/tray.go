@@ -26,7 +26,9 @@ func setupTray(mgr *ServerManager, initialCfg Config, activeLogFile string) {
 	mStart := systray.AddMenuItem("Start Server", "Start the WinBox bridge HTTP server")
 	mStop := systray.AddMenuItem("Stop Server", "Stop the WinBox bridge HTTP server")
 	mStop.Disable() // initially stopped, so Stop is disabled
+	mRestart := systray.AddMenuItem("Restart Server", "Reload config and restart the WinBox bridge HTTP server")
 	systray.AddSeparator()
+	mSetup := systray.AddMenuItem("Setup Connector...", "Open the local WinBox bridge setup wizard")
 	mConfig := systray.AddMenuItem("Open Config File", "Open config.json in default editor")
 
 	// "Open Log File" is only shown when --log-level debug is active and the log
@@ -88,6 +90,29 @@ func setupTray(mgr *ServerManager, initialCfg Config, activeLogFile string) {
 					log.Printf("winbox-bridge: stop error: %v", err)
 				}
 				updateState()
+			case <-mRestart.ClickedCh:
+				reloaded, err := loadConfig()
+				if err != nil {
+					log.Printf("winbox-bridge: config reload error: %v (using previous config)", err)
+				} else {
+					cfg = reloaded
+				}
+				if err := mgr.Restart(cfg); err != nil {
+					log.Printf("winbox-bridge: restart error: %v", err)
+				}
+				updateState()
+			case <-mSetup.ClickedCh:
+				reloaded, err := loadConfig()
+				if err == nil {
+					cfg = reloaded
+				}
+				port := mgr.Port()
+				if port == 0 {
+					port = cfg.ListenPort
+				}
+				if err := openURL(fmt.Sprintf("http://localhost:%d/setup", port)); err != nil {
+					log.Printf("winbox-bridge: open setup error: %v", err)
+				}
 			case <-mConfig.ClickedCh:
 				path, err := configFilePath()
 				if err != nil {
@@ -133,6 +158,20 @@ func openFileInEditor(path string) error {
 		cmd = exec.Command("open", path) //nolint:gosec
 	default:
 		cmd = exec.Command("xdg-open", path) //nolint:gosec
+	}
+	return cmd.Start()
+}
+
+// openURL opens a URL in the OS default browser.
+func openURL(rawURL string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", rawURL) //nolint:gosec
+	case "darwin":
+		cmd = exec.Command("open", rawURL) //nolint:gosec
+	default:
+		cmd = exec.Command("xdg-open", rawURL) //nolint:gosec
 	}
 	return cmd.Start()
 }

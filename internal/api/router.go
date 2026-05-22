@@ -15,6 +15,41 @@ import (
 
 // NewRouter creates the HTTP handler with all /api/v1/ routes registered.
 // Uses standard net/http (no framework needed at this scale).
+type routerOptions struct {
+	security      SecurityConfig
+	auth          authProvider
+	bridgeService *service.BridgeService
+}
+
+// RouterOption customizes router middleware behavior.
+type RouterOption func(*routerOptions)
+
+// WithSecurity configures operator authentication and browser origin policy.
+func WithSecurity(config SecurityConfig) RouterOption {
+	return func(options *routerOptions) {
+		options.security = config
+	}
+}
+
+// WithAuthService configures password-session authentication and RBAC.
+func WithAuthService(authService *service.AuthService) RouterOption {
+	return func(options *routerOptions) {
+		options.auth = authService
+	}
+}
+
+func WithBridgeService(bridgeService *service.BridgeService) RouterOption {
+	return func(options *routerOptions) {
+		options.bridgeService = bridgeService
+	}
+}
+
+func withAuthProvider(auth authProvider) RouterOption {
+	return func(options *routerOptions) {
+		options.auth = auth
+	}
+}
+
 func NewRouter(
 	db *sql.DB,
 	deviceService *service.DeviceService,
@@ -35,8 +70,19 @@ func NewRouter(
 	bridgeBinariesDir string,
 	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64),
 	wsHandler *ws.Handler,
+	opts ...RouterOption,
 ) http.Handler {
+	routerOpts := routerOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&routerOpts)
+		}
+	}
+
 	mux := http.NewServeMux()
+	authHandler := NewAuthHandler(routerOpts.auth)
+	adminAuth, _ := routerOpts.auth.(adminProvider)
+	adminHandler := NewAdminHandler(adminAuth)
 
 	deviceHandler := NewDeviceHandler(
 		deviceService,
@@ -74,7 +120,10 @@ func NewRouter(
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(instanceBackupService, restoreRestarter)
-	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo, settingsRepo)
+	bridgeHandler := NewBridgeHandlerWithService(bridgeBinariesDir, routerOpts.bridgeService)
+	userSettingsHandler := NewUserSettingsHandler(routerOpts.bridgeService, bridgeBinariesDir)
+
+	mux.Handle("/api/v1/admin/", adminHandler)
 
 	// Canvas topology read model route
 	mux.HandleFunc("/api/v1/topology/canvas", func(w http.ResponseWriter, r *http.Request) {
@@ -381,6 +430,34 @@ func NewRouter(
 		settingsHandler.HandleGetAll(w, r)
 	})
 
+	mux.HandleFunc("/api/v1/settings/me", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleMe(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleBridge(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/secret", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleBridgeSecret(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/secret/rotate", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleBridgeSecret(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/secret/revoke", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleBridgeSecretRevoke(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/connector/config", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleConnectorConfig(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/connector/download/", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleConnectorDownload(w, r)
+	})
+
 	mux.HandleFunc("/api/v1/settings/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -605,7 +682,15 @@ func NewRouter(
 		bridgeHandler.HandleDownload(w, r)
 	})
 
-	// Bridge credential token — encrypts WinBox credentials with the bridge's own secret
+	mux.HandleFunc("/api/v1/bridge/launch-requests/", func(w http.ResponseWriter, r *http.Request) {
+		bridgeHandler.HandleCreateLaunchRequest(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/bridge/connector/launch", func(w http.ResponseWriter, r *http.Request) {
+		bridgeHandler.HandleConnectorLaunch(w, r)
+	})
+
+	// Legacy bridge credential token endpoint.
 	mux.HandleFunc("/api/v1/bridge/token/", func(w http.ResponseWriter, r *http.Request) {
 		bridgeHandler.HandleBridgeToken(w, r)
 	})
@@ -628,30 +713,48 @@ func NewRouter(
 		mux.Handle("/api/v1/ws", wsHandler)
 	}
 
-	// Apply middleware chain: CORS -> Logger -> MaxBodySize -> JSON Content-Type
-	var handler http.Handler = mux
-	handler = JSONContentType(handler)
-	handler = MaxBodySize(1 << 20)(handler) // 1 MB limit
-	handler = RequestLogger(handler)
-	handler = CORS(handler)
+	handler := applyMiddleware(mux, routerOpts.security, routerOpts.auth, true, 1<<20)
+	downloadHandler := applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, 0)
+	publicAuthHandler := applyPublicMiddleware(authHandler, routerOpts.security, true, 16<<10)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAuthRoute(r.URL.Path) {
+			publicAuthHandler.ServeHTTP(w, r)
+			return
+		}
+
+		if r.URL.Path == "/api/v1/bridge/connector/launch" {
+			applyPublicMiddleware(http.HandlerFunc(bridgeHandler.HandleConnectorLaunch), routerOpts.security, true, 16<<10).ServeHTTP(w, r)
+			return
+		}
+
 		// WebSocket upgrades must bypass the JSON/logger middleware chain because
 		// the wrapped ResponseWriter does not expose the hijacker interface.
 		if wsHandler != nil && r.URL.Path == "/api/v1/ws" {
-			wsHandler.ServeHTTP(w, r)
+			authenticatedRequest, user, _, ok := AuthenticateUserRequest(w, r, routerOpts.auth)
+			if !ok {
+				return
+			}
+			if user.User.User.MustChangePassword {
+				writeAuthCodeError(w, http.StatusForbidden, "password_change_required", "password change required")
+				return
+			}
+			if !requireAnyPermission(w, routerOpts.auth, user, []string{domain.PermissionTopologyRead}) {
+				return
+			}
+			wsHandler.ServeHTTP(w, authenticatedRequest)
 			return
 		}
 
 		// File download bypasses JSON content-type middleware
 		if strings.HasSuffix(r.URL.Path, "/download") && strings.HasPrefix(r.URL.Path, "/api/v1/backup-files/") {
-			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			downloadHandler.ServeHTTP(w, r)
 			return
 		}
 
 		// Instance backup download bypasses JSON content-type and body size middleware
 		if strings.HasSuffix(r.URL.Path, "/download") && strings.HasPrefix(r.URL.Path, "/api/v1/instance-backups/") {
-			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			downloadHandler.ServeHTTP(w, r)
 			return
 		}
 
@@ -661,18 +764,32 @@ func NewRouter(
 			if instanceBackupService != nil {
 				restoreLimit = instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
 			}
-			CORS(RequestLogger(MaxBodySize(restoreLimit+restoreMultipartEnvelopeOverheadBytes)(mux))).ServeHTTP(w, r)
+			applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes).ServeHTTP(w, r)
 			return
 		}
 
 		// Bridge binary download bypasses JSON content-type and body size middleware
 		if strings.HasPrefix(r.URL.Path, "/api/v1/bridge/download/") && r.Method == http.MethodGet {
-			CORS(RequestLogger(mux)).ServeHTTP(w, r)
+			downloadHandler.ServeHTTP(w, r)
 			return
 		}
 
 		handler.ServeHTTP(w, r)
 	})
+}
+
+func isAuthRoute(path string) bool {
+	switch path {
+	case "/api/v1/auth/login",
+		"/api/v1/auth/logout",
+		"/api/v1/auth/me",
+		"/api/v1/auth/password/change",
+		"/api/v1/auth/password/reset",
+		"/api/v1/session":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseCanvasMapRoute(path string) (uuid.UUID, string, bool) {

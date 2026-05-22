@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 func TestMaxBodySizeAllowed(t *testing.T) {
@@ -126,5 +128,170 @@ func TestWebSocketBypassesMaxBodySize(t *testing.T) {
 	}
 	if rec.Code == http.StatusRequestEntityTooLarge {
 		t.Fatal("WebSocket request was rejected with 413 -- MaxBodySize should not apply to /api/v1/ws")
+	}
+}
+
+func TestUserAuthRequiresSession(t *testing.T) {
+	served := false
+	handler := UserAuth(newFakeAPIAuthProvider())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if served {
+		t.Fatal("handler was called without operator auth")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestUserAuthDeviceDeleteRejectsUpdateWithoutDelete(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(
+		testSessionToken,
+		testCSRFToken,
+		testAPIUser("alice", false, domain.PermissionDevicesUpdate),
+	)
+	served := false
+	handler := UserAuth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/devices/device-1", nil)
+	addSessionCookie(req, testSessionToken)
+	addCSRFCookieAndHeader(req, testCSRFToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if served {
+		t.Fatal("handler was called without devices:delete permission")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestPermissionsForMethodDeleteRequiresExplicitDeletePermission(t *testing.T) {
+	permissions := permissionsForMethod(
+		http.MethodDelete,
+		domain.PermissionDevicesRead,
+		domain.PermissionDevicesCreate,
+		domain.PermissionDevicesUpdate,
+		domain.PermissionDevicesDelete,
+	)
+
+	if len(permissions) != 1 || permissions[0] != domain.PermissionDevicesDelete {
+		t.Fatalf("permissions = %#v, want only %q", permissions, domain.PermissionDevicesDelete)
+	}
+}
+
+func TestUserAuthAddsAuthenticatedUserContext(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, domain.PermissionSettingsRead))
+	handler := UserAuth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := AuthenticatedUserFromRequest(r)
+		if !ok || user.User.User.Username != "alice" {
+			t.Fatalf("user = %+v ok=%t, want authenticated alice", user, ok)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	addSessionCookie(req, testSessionToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestRequireAuthenticatedOperatorRejectsAnonymousContext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/id/reveal", nil)
+	rec := httptest.NewRecorder()
+
+	if _, ok := requireAuthenticatedOperator(rec, req, "credential reveal"); ok {
+		t.Fatal("expected anonymous context to be rejected")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestRequireAuthenticatedOperatorAcceptsSubjectContext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/id/reveal", nil)
+	req = withTestOperator(req)
+	rec := httptest.NewRecorder()
+
+	subject, ok := requireAuthenticatedOperator(rec, req, "credential reveal")
+	if !ok {
+		t.Fatal("expected authenticated context to be accepted")
+	}
+	if subject.Name != "test-operator" {
+		t.Fatalf("subject = %+v, want test-operator", subject)
+	}
+}
+
+func TestCORSUsesExactAllowedOriginWithoutWildcard(t *testing.T) {
+	handler := CORSWithConfig(SecurityConfig{AllowedOrigins: []string{"https://ops.example"}})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	req.Host = "backend.example"
+	req.Header.Set("Origin", "https://ops.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://ops.example" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want exact origin", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want true", got)
+	}
+}
+
+func TestOriginGuardRejectsUnlistedOrigin(t *testing.T) {
+	handler := OriginGuard(SecurityConfig{AllowedOrigins: []string{"https://ops.example"}})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/bridge.secret", nil)
+	req.Host = "backend.example"
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestOriginGuardAllowsSameHostOrigin(t *testing.T) {
+	handler := OriginGuard(SecurityConfig{})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "https://backend.example/api/v1/settings/bridge.secret", nil)
+	req.Host = "backend.example"
+	req.Header.Set("Origin", "https://backend.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }

@@ -55,7 +55,9 @@ cd theia
 make dev
 ```
 
-This builds all images and starts the full stack in the background. First build takes 2–4 minutes to compile Go and download npm packages.
+This builds all images and starts the full stack in the background. First build takes 2-4 minutes to compile Go and download npm packages.
+
+Open http://localhost:3000 and sign in as `administrator` with password `theia`. The first login requires changing that password before normal API and UI workflows continue.
 
 `config.yaml` is a local-only file and is ignored by git because it can contain a database DSN or other deployment-specific values. The dev stack works through environment variables without it. If you need a local config file, start from the template:
 
@@ -191,6 +193,7 @@ make wisp-seed
 ```
 
 The seed script defaults to `WISP_SEED_TARGET_MODE=auto`. With the Docker backend container running, it registers the routers at `172.31.250.21` through `172.31.250.30` and connects the backend to the lab network if needed. If no backend container is running, it falls back to host loopback targets `127.0.10.21` through `127.0.10.30`.
+Seed scripts prompt for Theia credentials and authenticate with the same cookie session flow as the browser. When run interactively against a fresh dev database, they can complete the first-login password change before seeding.
 
 ### Seed the radio access layer
 
@@ -260,6 +263,8 @@ Production startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=p
 Required operator inputs for the standard bundled PostgreSQL stack:
 
 - `THEIA_ENCRYPTION_KEY`
+- `THEIA_SESSION_SECRET`
+- `THEIA_METRICS_TOKEN`
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
 
@@ -290,7 +295,7 @@ Or with the metrics stack (Prometheus + SNMP exporter):
 make prod-metrics
 ```
 
-Open `http://localhost` in the browser. Use `http://localhost/api/v1/...` for API requests through the frontend proxy.
+Open `http://localhost` in the browser. Use `http://localhost/api/v1/...` for API requests through the frontend proxy. Sign in as `administrator` with password `theia` on first start, then change the password when prompted.
 
 ### 3. Add your network devices
 
@@ -298,6 +303,8 @@ Via the UI Settings panel, or directly via the API:
 
 ```bash
 curl -X POST http://localhost/api/v1/devices \
+  -b cookies.txt \
+  -H "X-CSRF-Token: <theia_csrf-cookie-value>" \
   -H "Content-Type: application/json" \
   -d '{
     "ip": "192.168.1.1",
@@ -351,6 +358,8 @@ Staging startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=stag
 Required operator inputs for the standard bundled PostgreSQL stack:
 
 - `THEIA_ENCRYPTION_KEY`
+- `THEIA_SESSION_SECRET`
+- `THEIA_METRICS_TOKEN`
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
 
@@ -404,9 +413,68 @@ Configuration is loaded from local `config.yaml` when present. The tracked `conf
 | `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
 | `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Optional directory containing pre-built bridge binaries; leave empty to disable bridge downloads |
+| `session_secret` | `THEIA_SESSION_SECRET` | none | Secret used to protect first-party password sessions; Required whenever the backend initializes first-party password auth |
+| `metrics_token` | `THEIA_METRICS_TOKEN` | none | Bearer token for `/metrics`; required for staging and production runtime startup |
+| `allowed_origins` | `THEIA_ALLOWED_ORIGINS` | none | Optional comma-separated exact browser origins for direct backend REST/WebSocket access; same-host proxy requests are allowed |
 | `log_level` | `THEIA_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 Runtime settings (poll interval, Prometheus URL, Grafana URL) are stored in the database and configurable via the Settings panel in the UI — no restart needed.
+
+All protected `/api/v1` routes use the first-party password session cookie `theia_session`. Mutating requests must also send the `X-CSRF-Token` header with the value from the readable `theia_csrf` cookie. `/metrics` uses `THEIA_METRICS_TOKEN`.
+
+### User Settings and Bridge Connector
+
+Every authenticated user can open **User Settings** from the account menu. The account section allows safe self-service profile updates; privileged user fields such as roles, status, and admin flags remain server-controlled.
+
+Bridge Connector authentication is per-user. The legacy global `bridge_secret` runtime setting is deprecated and ignored by bridge authentication. Existing deployments should have each user generate a personal Bridge Secret from **User Settings -> Bridge Connector** and paste it into their local connector config.
+
+The recommended setup flow is wizard-first:
+
+1. Generate a personal Bridge Secret from **User Settings -> Bridge Connector**.
+2. Download and start the Bridge Connector for your platform.
+3. Click **Configure Local Connector** in User Settings, or use the tray menu item **Setup Connector...**.
+4. In the local setup wizard, select the WinBox executable, paste the Bridge Secret, confirm the Theia URLs and bridge port, and optionally click **Install / Repair Connector** before enabling start-at-login.
+5. Save the wizard and restart the connector when the wizard reports that a restart is required.
+
+The setup wizard runs from the local connector at `http://localhost:<bridge-port>/setup`. Setup endpoints are limited to loopback requests and do not return the saved Bridge Secret. When start-at-login is enabled, the wizard first installs or repairs a copy of the connector in a stable per-user location and points the OS autostart entry to that installed copy. If the original downloaded executable is later deleted, autostart continues to use the installed copy; if that installed copy is missing, the wizard reports autostart as needing repair.
+
+Stable connector install paths:
+
+- Windows: `%LOCALAPPDATA%\Theia\WinBoxBridge\winbox-bridge.exe`
+- macOS: `~/Library/Application Support/Theia/WinBoxBridge/winbox-bridge`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/theia/winbox-bridge/winbox-bridge`
+
+The connector still stores its local runtime settings in `config.json`, which remains available from the tray menu as an advanced fallback.
+
+Advanced connector config shape:
+
+```json
+{
+  "winbox_path": "",
+  "listen_port": 1337,
+  "theia_origin": "http://localhost:3000",
+  "theia_base_url": "http://localhost:3000",
+  "bridge_secret": "<paste-secret-shown-once>",
+  "log_level": "info"
+}
+```
+
+The Bridge Secret is shown only once after generation or rotation. If a user loses it, rotate the secret and update the connector through the setup wizard; the previous secret stops working immediately. Connector downloads are served only to authenticated users and require `THEIA_BRIDGE_BINARIES_DIR` to point at a directory containing files named like `winbox-bridge-linux-amd64` or `winbox-bridge-windows-amd64.exe`.
+
+For browser access through a LAN IP or alternate hostname, add the exact browser origin to `THEIA_ALLOWED_ORIGINS` before logging in. Example:
+
+```bash
+THEIA_ALLOWED_ORIGINS=http://localhost:3000,http://192.168.1.30:3000
+```
+
+Same-host frontend proxy requests do not need this setting, but direct cross-origin REST/WebSocket requests do.
+
+Bridge migration notes:
+
+- Run the new database migration before users configure connectors.
+- Do not copy the old global `bridge_secret` to users; each user must generate a unique personal secret.
+- Old connector configs that only relied on the global secret must be updated with the local setup wizard or manually with `theia_base_url`, `theia_origin`, and the personal `bridge_secret`.
+- Use HTTPS for non-local deployments because the connector sends the Bridge Secret to Theia during launch resolution.
 
 ### Frontend (build-time)
 
@@ -424,8 +492,14 @@ Base path:
 - Production: `http://localhost/api/v1`
 - Staging: `http://localhost:3001/api/v1`
 
+Programmatic API clients should first `POST /auth/login` with `{"identifier":"<username>","password":"<password>"}` and store the returned `theia_session` and `theia_csrf` cookies. Send the cookies on API requests; also send `X-CSRF-Token: <theia_csrf>` on POST, PUT, PATCH, and DELETE requests. One-time admin reset tokens are redeemed through public `POST /auth/password/reset` with `{"token":"<token>","new_password":"<new password>"}`.
+
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/auth/login` | Start a password session |
+| GET | `/auth/me` | Get the current password session |
+| POST | `/auth/password/change` | Change password for the current session |
+| POST | `/auth/password/reset` | Complete a one-time password reset token |
 | GET | `/health` | Health check |
 | GET | `/devices` | List all devices |
 | POST | `/devices` | Add a device |

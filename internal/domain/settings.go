@@ -28,10 +28,8 @@ const (
 	SettingInstanceBackupRetentionCount  = "instance_backup_retention_count"
 	SettingDeviceBackupIntervalHours     = "device_backup_interval_hours"
 	SettingDeviceBackupRetentionCount    = "device_backup_retention_count"
-	// SettingBridgeSecret holds the hex-encoded 32-byte key copied from the bridge's
-	// config.json (bridge_secret field).  The backend uses it only to encrypt a
-	// per-request credential token — it is never stored in plaintext in the DB beyond
-	// whatever the SettingsRepository already encrypts.
+	// SettingBridgeSecret is the deprecated legacy global bridge secret key.
+	// Runtime bridge authentication uses per-user bridge_credentials instead.
 	SettingBridgeSecret = "bridge_secret"
 	// SettingBridgePort holds the TCP port the WinBox bridge listens on.
 	// Defaults to "1337" to match the bridge's default ListenPort.

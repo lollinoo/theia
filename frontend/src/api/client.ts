@@ -43,6 +43,329 @@ type ErrorPayload = {
   error?: string;
 };
 
+export interface AuthUser {
+  id: string;
+  username: string;
+  email: string;
+  display_name: string;
+  status: string;
+  must_change_password: boolean;
+  roles: string[];
+  permissions: string[];
+}
+
+export interface AuthSession {
+  authenticated: boolean;
+  user?: AuthUser;
+}
+
+export interface LoginPayload {
+  identifier: string;
+  password: string;
+}
+
+export interface ChangePasswordPayload {
+  current_password: string;
+  new_password: string;
+}
+
+export interface BridgeLaunchRequestResponse {
+  launch_token: string;
+  expires_at?: string;
+}
+
+export interface UserSettingsResponse {
+  user: {
+    id: string;
+    username: string;
+    email: string;
+    display_name: string;
+    last_login_at?: string;
+    password_changed_at?: string;
+  };
+  preferences: {
+    timezone: string;
+    locale: string;
+    bridge_port: number;
+    global_bridge_port: number;
+    bridge_port_override: number | null;
+  };
+  bridge: BridgeSettingsState;
+}
+
+export interface BridgeCredentialMetadata {
+  id: string;
+  secret_prefix: string;
+  status: string;
+  created_at: string;
+  rotated_at?: string;
+  revoked_at?: string;
+  last_used_at?: string;
+  expires_at?: string;
+}
+
+export interface BridgeSettingsState {
+  configured: boolean;
+  credential?: BridgeCredentialMetadata;
+}
+
+export interface BridgeSecretResult {
+  credential: BridgeCredentialMetadata;
+  secret: string;
+  shown_once: boolean;
+}
+
+export interface BridgeConnectorDownload {
+  label: string;
+  os: string;
+  arch: string;
+  url: string;
+  available: boolean;
+}
+
+export interface UpdateUserSettingsPayload {
+  display_name?: string;
+  username?: string;
+  email?: string;
+  timezone?: string;
+  locale?: string;
+  bridge_port?: number;
+  bridge_port_override?: number | null;
+}
+
+export interface BridgeConnectorConfigResponse {
+  config: Record<string, unknown>;
+  downloads: BridgeConnectorDownload[];
+}
+
+export interface ResetPasswordPayload {
+  token: string;
+  new_password: string;
+}
+
+export interface AdminDashboardStats {
+  total_users: number;
+  active_users: number;
+  disabled_users: number;
+  locked_users: number;
+  recent_logins: number;
+  recent_failed_login_attempts: number;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  actor_user_id?: string;
+  action: string;
+  target_user_id?: string;
+  resource?: string;
+  resource_id?: string;
+  metadata?: Record<string, unknown>;
+  ip_address?: string;
+  user_agent?: string;
+  created_at: string;
+}
+
+export interface AdminDashboardResponse {
+  stats: AdminDashboardStats;
+  recent_audit_logs: AdminAuditLog[];
+}
+
+export interface AdminRole {
+  id: string;
+  name: string;
+  description: string;
+  is_system_role: boolean;
+  permissions: string[];
+}
+
+export interface CreateAdminUserPayload {
+  username: string;
+  password: string;
+  email?: string;
+  display_name?: string;
+  must_change_password?: boolean;
+  role_ids?: string[];
+}
+
+export interface UpdateAdminUserPayload {
+  username?: string;
+  email?: string;
+  display_name?: string;
+  must_change_password?: boolean;
+}
+
+export interface AdminPasswordResetResponse {
+  reset_token: string;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  return typeof record[key] === 'string' ? record[key] : '';
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => (typeof item === 'string' ? [item] : []));
+}
+
+function permissionKeysArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (typeof item === 'string') {
+      return [item];
+    }
+    if (typeof item === 'object' && item !== null) {
+      const key = (item as Record<string, unknown>).key;
+      return typeof key === 'string' ? [key] : [];
+    }
+    return [];
+  });
+}
+
+function recordField(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function parseAuthUser(value: unknown): AuthUser {
+  const record =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  return {
+    id: stringField(record, 'id'),
+    username: stringField(record, 'username'),
+    email: stringField(record, 'email'),
+    display_name: stringField(record, 'display_name'),
+    status: stringField(record, 'status') || 'unknown',
+    must_change_password: record.must_change_password === true,
+    roles: stringArray(record.roles),
+    permissions: permissionKeysArray(record.permissions),
+  };
+}
+
+function parseAuthSession(payload: unknown): AuthSession {
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const authenticated = record.authenticated === true;
+  const user = authenticated && record.user !== undefined ? parseAuthUser(record.user) : undefined;
+  return user ? { authenticated, user } : { authenticated };
+}
+
+function parseAdminAuditLog(value: unknown): AdminAuditLog {
+  const record =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  return {
+    id: stringField(record, 'id'),
+    actor_user_id: stringField(record, 'actor_user_id') || undefined,
+    action: stringField(record, 'action'),
+    target_user_id: stringField(record, 'target_user_id') || undefined,
+    resource: stringField(record, 'resource') || undefined,
+    resource_id: stringField(record, 'resource_id') || undefined,
+    metadata: recordField(record.metadata),
+    ip_address: stringField(record, 'ip_address') || undefined,
+    user_agent: stringField(record, 'user_agent') || undefined,
+    created_at: stringField(record, 'created_at'),
+  };
+}
+
+function parseAdminDashboard(payload: unknown): AdminDashboardResponse {
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const stats =
+    typeof record.stats === 'object' && record.stats !== null
+      ? (record.stats as Record<string, unknown>)
+      : {};
+  const logs = Array.isArray(record.recent_audit_logs) ? record.recent_audit_logs : [];
+  return {
+    stats: {
+      total_users: typeof stats.total_users === 'number' ? stats.total_users : 0,
+      active_users: typeof stats.active_users === 'number' ? stats.active_users : 0,
+      disabled_users: typeof stats.disabled_users === 'number' ? stats.disabled_users : 0,
+      locked_users: typeof stats.locked_users === 'number' ? stats.locked_users : 0,
+      recent_logins: typeof stats.recent_logins === 'number' ? stats.recent_logins : 0,
+      recent_failed_login_attempts:
+        typeof stats.recent_failed_login_attempts === 'number'
+          ? stats.recent_failed_login_attempts
+          : 0,
+    },
+    recent_audit_logs: logs.map(parseAdminAuditLog),
+  };
+}
+
+function parseBridgeConnectorDownload(value: unknown): BridgeConnectorDownload | null {
+  const record = recordField(value);
+  if (!record) {
+    return null;
+  }
+  const label = stringField(record, 'label');
+  const os = stringField(record, 'os');
+  const arch = stringField(record, 'arch');
+  const url = stringField(record, 'url');
+  if (!label || !os || !arch || !url) {
+    return null;
+  }
+  return {
+    label,
+    os,
+    arch,
+    url,
+    available: record.available === true,
+  };
+}
+
+function parseBridgeConnectorConfig(payload: unknown): BridgeConnectorConfigResponse {
+  const record = recordField(payload) ?? {};
+  const config = recordField(record.config) ?? {};
+  const downloads = Array.isArray(record.downloads)
+    ? record.downloads.flatMap((item) => {
+        const parsed = parseBridgeConnectorDownload(item);
+        return parsed ? [parsed] : [];
+      })
+    : [];
+  return { config, downloads };
+}
+
+function parseAdminRole(value: unknown): AdminRole {
+  const record =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  return {
+    id: stringField(record, 'id'),
+    name: stringField(record, 'name'),
+    description: stringField(record, 'description'),
+    is_system_role: record.is_system_role === true,
+    permissions: permissionKeysArray(record.permissions),
+  };
+}
+
+function csrfTokenFromCookie(): string | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  const csrfCookie = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('theia_csrf='));
+  if (!csrfCookie) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(csrfCookie.slice('theia_csrf='.length));
+  } catch {
+    return null;
+  }
+}
+
+function headersWithCsrf(headers: Record<string, string>): Record<string, string> {
+  const csrfToken = csrfTokenFromCookie();
+  if (!csrfToken) {
+    return headers;
+  }
+  return { ...headers, 'X-CSRF-Token': csrfToken };
+}
+
 async function requestJSON(path: string): Promise<unknown> {
   const response = await fetch(path, {
     headers: {
@@ -64,6 +387,162 @@ async function requestJSON(path: string): Promise<unknown> {
   }
 
   return payload;
+}
+
+export async function fetchCurrentUser(): Promise<AuthSession> {
+  return parseAuthSession(await requestJSON('/api/v1/auth/me'));
+}
+
+export async function loginUser(payload: LoginPayload): Promise<AuthSession> {
+  return parseAuthSession(await requestJSONWithBody('/api/v1/auth/login', 'POST', payload));
+}
+
+export async function logoutUser(): Promise<AuthSession> {
+  return parseAuthSession(await requestJSONWithBody('/api/v1/auth/logout', 'POST'));
+}
+
+export async function changePassword(payload: ChangePasswordPayload): Promise<AuthSession> {
+  return parseAuthSession(
+    await requestJSONWithBody('/api/v1/auth/password/change', 'POST', payload),
+  );
+}
+
+export async function resetPasswordWithToken(payload: ResetPasswordPayload): Promise<void> {
+  await requestJSONWithBody('/api/v1/auth/password/reset', 'POST', payload);
+}
+
+export async function fetchUserSettings(): Promise<UserSettingsResponse> {
+  return (await requestJSON('/api/v1/settings/me')) as UserSettingsResponse;
+}
+
+export async function updateUserSettings(
+  payload: UpdateUserSettingsPayload,
+): Promise<UserSettingsResponse> {
+  return (await requestJSONWithBody(
+    '/api/v1/settings/me',
+    'PATCH',
+    payload,
+  )) as UserSettingsResponse;
+}
+
+export async function generateBridgeSecret(): Promise<BridgeSecretResult> {
+  return (await requestJSONWithBody(
+    '/api/v1/settings/bridge/secret',
+    'POST',
+  )) as BridgeSecretResult;
+}
+
+export async function rotateBridgeSecret(reason = 'rotated by user'): Promise<BridgeSecretResult> {
+  return (await requestJSONWithBody('/api/v1/settings/bridge/secret/rotate', 'POST', {
+    reason,
+  })) as BridgeSecretResult;
+}
+
+export async function revokeBridgeSecret(
+  reason = 'revoked by user',
+): Promise<BridgeCredentialMetadata> {
+  return (await requestJSONWithBody('/api/v1/settings/bridge/secret/revoke', 'POST', {
+    reason,
+  })) as BridgeCredentialMetadata;
+}
+
+export async function fetchBridgeConnectorConfig(): Promise<BridgeConnectorConfigResponse> {
+  return parseBridgeConnectorConfig(await requestJSON('/api/v1/settings/bridge/connector/config'));
+}
+
+export async function fetchAdminDashboard(): Promise<AdminDashboardResponse> {
+  return parseAdminDashboard(await requestJSON('/api/v1/admin/dashboard'));
+}
+
+export async function fetchAdminUsers(): Promise<AuthUser[]> {
+  const payload = await requestJSON('/api/v1/admin/users');
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const users = Array.isArray(record.users) ? record.users : [];
+  return users.map(parseAuthUser);
+}
+
+export async function fetchAdminRoles(): Promise<AdminRole[]> {
+  const payload = await requestJSON('/api/v1/admin/roles');
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const roles = Array.isArray(record.roles) ? record.roles : [];
+  return roles.map(parseAdminRole);
+}
+
+export async function fetchAdminPermissions(): Promise<string[]> {
+  const payload = await requestJSON('/api/v1/admin/permissions');
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  return permissionKeysArray(record.permissions);
+}
+
+export async function fetchAdminAuditLogs(): Promise<AdminAuditLog[]> {
+  const payload = await requestJSON('/api/v1/admin/audit-logs');
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const logs = Array.isArray(record.audit_logs) ? record.audit_logs : [];
+  return logs.map(parseAdminAuditLog);
+}
+
+function parseAdminUserEnvelope(payload: unknown): AuthUser {
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  return parseAuthUser(record.user);
+}
+
+export async function createAdminUser(payload: CreateAdminUserPayload): Promise<AuthUser> {
+  return parseAdminUserEnvelope(await requestJSONWithBody('/api/v1/admin/users', 'POST', payload));
+}
+
+export async function updateAdminUser(
+  id: string,
+  payload: UpdateAdminUserPayload,
+): Promise<AuthUser> {
+  return parseAdminUserEnvelope(
+    await requestJSONWithBody(`/api/v1/admin/users/${encodeURIComponent(id)}`, 'PATCH', payload),
+  );
+}
+
+export async function setAdminUserStatus(id: string, status: string): Promise<AuthUser> {
+  return parseAdminUserEnvelope(
+    await requestJSONWithBody(`/api/v1/admin/users/${encodeURIComponent(id)}/status`, 'PATCH', {
+      status,
+    }),
+  );
+}
+
+export async function assignAdminUserRole(userId: string, roleId: string): Promise<AuthUser> {
+  return parseAdminUserEnvelope(
+    await requestJSONWithBody(`/api/v1/admin/users/${encodeURIComponent(userId)}/roles`, 'POST', {
+      role_id: roleId,
+    }),
+  );
+}
+
+export async function removeAdminUserRole(userId: string, roleId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/admin/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleId)}`,
+    'DELETE',
+  );
+}
+
+export async function createAdminPasswordReset(
+  userId: string,
+): Promise<AdminPasswordResetResponse> {
+  const payload = await requestJSONWithBody(
+    `/api/v1/admin/users/${encodeURIComponent(userId)}/password-reset`,
+    'POST',
+  );
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const resetToken =
+    typeof record.reset_token === 'string'
+      ? record.reset_token
+      : typeof record.token === 'string'
+        ? record.token
+        : '';
+  return { reset_token: resetToken };
 }
 
 export class CanvasTopologyFetchError extends Error {
@@ -444,10 +923,10 @@ export async function fetchLinks(): Promise<Link[]> {
 async function requestJSONWithBody(path: string, method: string, body?: unknown): Promise<unknown> {
   const response = await fetch(path, {
     method,
-    headers: {
+    headers: headersWithCsrf({
       Accept: 'application/json',
       'Content-Type': 'application/json',
-    },
+    }),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -899,19 +1378,21 @@ export async function revealSNMPProfile(id: string, reason: string): Promise<SNM
   );
 }
 
-// fetchBridgeToken requests an AES-GCM encrypted credential token from the backend.
-// The backend reads the stored bridge secret server-side, so the browser never receives or replays
-// that shared secret. The plaintext credentials only appear inside the encrypted local bridge token.
-export async function fetchBridgeToken(deviceId: string): Promise<string> {
+export async function createBridgeLaunchRequest(
+  deviceId: string,
+): Promise<BridgeLaunchRequestResponse> {
   const payload = await requestJSONWithBody(
-    `/api/v1/bridge/token/${encodeURIComponent(deviceId)}`,
+    `/api/v1/bridge/launch-requests/${encodeURIComponent(deviceId)}`,
     'POST',
   );
   const p = payload as Record<string, unknown>;
-  if (typeof p?.token !== 'string' || p.token === '') {
-    throw new Error('invalid bridge token response');
+  if (typeof p?.launch_token !== 'string' || p.launch_token === '') {
+    throw new Error('invalid bridge launch response');
   }
-  return p.token;
+  return {
+    launch_token: p.launch_token,
+    expires_at: typeof p.expires_at === 'string' ? p.expires_at : undefined,
+  };
 }
 
 export async function testSSHConnection(
@@ -1067,7 +1548,7 @@ export function bulkDownloadUrl(_deviceIds: string[]): string {
 export async function triggerBulkDownload(deviceIds: string[]): Promise<void> {
   const response = await fetch('/api/v1/backups/bulk-download', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headersWithCsrf({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ device_ids: deviceIds }),
   });
   if (!response.ok) {
@@ -1210,6 +1691,7 @@ export async function restoreInstanceBackup(file: File, dryRun: boolean): Promis
 
   const response = await fetch(url, {
     method: 'POST',
+    headers: headersWithCsrf({}),
     body: formData,
     // Do NOT set Content-Type — browser sets multipart boundary automatically
   });

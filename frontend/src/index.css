@@ -26,6 +26,7 @@
   --nt-outline-subtle: var(--nt-outline);
 
   --nt-primary: #4fd0a3;
+  --nt-on-primary: #06150f;
   --nt-area-secondary: #6f9bff;
   --nt-area-tertiary: #ca8dff;
   --nt-secondary: var(--nt-area-secondary);
@@ -115,6 +116,7 @@
   --nt-outline-subtle: var(--nt-outline);
 
   --nt-primary: #08775a;
+  --nt-on-primary: #ffffff;
   --nt-area-secondary: #1d5fbf;
   --nt-area-tertiary: #7e2fa8;
   --nt-secondary: var(--nt-area-secondary);
@@ -207,6 +209,7 @@
   --color-outline-subtle: var(--nt-outline);
 
   --color-primary: var(--nt-primary);
+  --color-on-primary: var(--nt-on-primary);
   --color-area-secondary: var(--nt-area-secondary);
   --color-area-tertiary: var(--nt-area-tertiary);
   --color-status-ok: var(--nt-status-ok);
@@ -289,6 +292,24 @@
 
   * {
     box-sizing: border-box;
+  }
+}
+
+@layer components {
+  .theia-input {
+    @apply h-10 w-full rounded-lg border border-outline-subtle bg-surface-container-high px-3 text-sm text-on-bg outline-none transition-colors focus:border-outline-strong focus:ring-2 focus:ring-focus-ring;
+  }
+
+  .theia-button-primary {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-primary/50 bg-primary px-4 text-sm font-semibold text-on-primary transition-colors hover:brightness-105 disabled:pointer-events-none disabled:opacity-60;
+  }
+
+  .theia-button-secondary {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-outline-subtle bg-surface-container-high px-4 text-sm font-semibold text-on-bg transition-colors hover:bg-surface-container disabled:pointer-events-none disabled:opacity-60;
+  }
+
+  .theia-button-danger {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-critical/50 bg-critical/10 px-4 text-sm font-semibold text-critical transition-colors hover:bg-critical/15 disabled:pointer-events-none disabled:opacity-60;
   }
 }
 

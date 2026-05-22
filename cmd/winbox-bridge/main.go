@@ -1,9 +1,6 @@
 package main
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,8 +15,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
-	"time"
 
 	"fyne.io/systray"
 )
@@ -27,11 +24,9 @@ import (
 // --- Request / response types ---
 
 // launchRequest is the POST /launch request body.
-// Accepts an AES-GCM encrypted token (hex-encoded) produced by the Theia backend.
-// The token decrypts to a JSON object: {"ip":"...","username":"...","password":"..."}.
-// Plaintext credential fields are no longer accepted — the bridge secret must match.
+// Accepts a one-time launch token produced by the Theia backend.
 type launchRequest struct {
-	Token string `json:"token"`
+	LaunchToken string `json:"launch_token"`
 }
 
 // launchCredentials is the plaintext payload embedded inside the encrypted token.
@@ -40,58 +35,6 @@ type launchCredentials struct {
 	Username  string `json:"username"`
 	Password  string `json:"password"`
 	ExpiresAt string `json:"expires_at"`
-}
-
-// --- Crypto helpers ---
-
-// decryptLaunchToken decrypts a hex-encoded AES-GCM ciphertext produced by the
-// Theia backend using the bridge's shared secret (32-byte hex key in config).
-// Returns the plaintext launchCredentials or an error if decryption fails.
-func decryptLaunchToken(tokenHex, secretHex string) (launchCredentials, error) {
-	var creds launchCredentials
-
-	key, err := hex.DecodeString(secretHex)
-	if err != nil || len(key) != 32 {
-		return creds, fmt.Errorf("invalid bridge secret")
-	}
-
-	ciphertext, err := hex.DecodeString(tokenHex)
-	if err != nil {
-		return creds, fmt.Errorf("invalid token encoding")
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return creds, fmt.Errorf("create cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return creds, fmt.Errorf("create GCM: %w", err)
-	}
-	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return creds, fmt.Errorf("token too short")
-	}
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return creds, fmt.Errorf("decrypt: %w", err)
-	}
-
-	if err := json.Unmarshal(plaintext, &creds); err != nil {
-		return creds, fmt.Errorf("decode credentials: %w", err)
-	}
-	if creds.ExpiresAt == "" {
-		return creds, fmt.Errorf("token missing expiration")
-	}
-	expiresAt, err := time.Parse(time.RFC3339, creds.ExpiresAt)
-	if err != nil {
-		return creds, fmt.Errorf("invalid token expiration")
-	}
-	if !time.Now().Before(expiresAt) {
-		return creds, fmt.Errorf("token expired")
-	}
-	return creds, nil
 }
 
 // --- Process injection (for testability) ---
@@ -307,12 +250,9 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleLaunch returns an http.HandlerFunc for POST /launch (D-08, D-09, D-10, D-11).
+// handleLaunch returns an http.HandlerFunc for POST /launch.
 // winboxPath is the resolved WinBox executable path (may be "").
-// bridgeSecret is the hex-encoded 32-byte AES key shared with the Theia backend.
-// The request body must be {"token":"<hex>"} — an AES-GCM ciphertext that decodes
-// to {"ip":"...","username":"...","password":"..."}.
-func handleLaunch(winboxPath, bridgeSecret string) http.HandlerFunc {
+func handleLaunch(winboxPath string, client *TheiaClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -324,26 +264,14 @@ func handleLaunch(winboxPath, bridgeSecret string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if req.Token == "" {
-			writeError(w, http.StatusBadRequest, "token is required")
+		if req.LaunchToken == "" {
+			writeError(w, http.StatusBadRequest, "launch_token is required")
 			return
 		}
 
-		if bridgeSecret == "" {
+		if client == nil || strings.TrimSpace(client.Secret) == "" {
 			writeError(w, http.StatusServiceUnavailable,
-				"bridge secret not configured — restart the bridge to generate one")
-			return
-		}
-
-		creds, err := decryptLaunchToken(req.Token, bridgeSecret)
-		if err != nil {
-			log.Printf("winbox-bridge: token decrypt failed: %v", err)
-			writeError(w, http.StatusBadRequest, "invalid or tampered token")
-			return
-		}
-
-		if creds.IP == "" || creds.Username == "" || creds.Password == "" {
-			writeError(w, http.StatusBadRequest, "decrypted token missing required fields")
+				"bridge secret not configured — generate one in Theia Settings and paste it into config.json")
 			return
 		}
 
@@ -351,6 +279,18 @@ func handleLaunch(winboxPath, bridgeSecret string) http.HandlerFunc {
 			log.Printf("winbox-bridge: /launch: WinBox not found — set \"winbox_path\" in config.json")
 			writeError(w, http.StatusServiceUnavailable,
 				"winbox executable not found — set winbox_path in config.json")
+			return
+		}
+
+		creds, err := client.ResolveLaunch(r.Context(), req.LaunchToken)
+		if err != nil {
+			log.Printf("winbox-bridge: launch resolve failed: %v", err)
+			writeError(w, http.StatusBadGateway, "failed to resolve launch token with Theia")
+			return
+		}
+
+		if creds.IP == "" || creds.Username == "" || creds.Password == "" {
+			writeError(w, http.StatusBadRequest, "launch response missing required fields")
 			return
 		}
 
@@ -373,12 +313,8 @@ func handleLaunch(winboxPath, bridgeSecret string) http.HandlerFunc {
 // buildMux creates the http.Handler with per-route security:
 // /health is public (no auth — any origin may poll bridge status).
 // /launch is protected by securityCheck (CSRF guard for sensitive launch action).
-// bridgeSecret is the hex-encoded 32-byte AES key used to decrypt launch tokens.
-func buildMux(winboxPath, allowedOrigin, expectedHost, bridgeSecret string) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", handleHealth)
-	mux.Handle("/launch", securityCheck(allowedOrigin, expectedHost, handleLaunch(winboxPath, bridgeSecret)))
-	return mux
+func buildMux(winboxPath, allowedOrigin, expectedHost string, client *TheiaClient) http.Handler {
+	return buildMuxWithSetup(winboxPath, allowedOrigin, expectedHost, client, setupOptions{})
 }
 
 // --- Helpers ---
@@ -434,6 +370,8 @@ func main() {
 	// CLI flags — still supported for headless/scripted use and backward compatibility.
 	theiaOriginFlag := flag.String("theia-origin", "",
 		"Accepted Theia frontend origin (overrides config file)")
+	theiaBaseURLFlag := flag.String("theia-base-url", "",
+		"Theia backend base URL used by the connector (overrides config file)")
 	winboxPathFlag := flag.String("winbox-path", "",
 		"Path to WinBox executable (overrides config file and auto-discovery)")
 	listenFlag := flag.String("listen", "",
@@ -478,20 +416,16 @@ func main() {
 		path, cleanup := setupLogFile()
 		defer cleanup()
 		activeLogFile = path
+		currentLogFilePath = path
 		log.Printf("winbox-bridge: logging to file: %s", activeLogFile)
-	}
-
-	// Ensure a bridge secret exists — generate one on first run and persist it.
-	cfg, err = ensureBridgeSecret(cfg)
-	if err != nil {
-		log.Printf("winbox-bridge: failed to generate bridge secret: %v", err)
-	} else if err := saveConfig(cfg); err != nil {
-		log.Printf("winbox-bridge: failed to persist bridge secret: %v", err)
 	}
 
 	// CLI flag overrides — flags set to non-empty values win over config file.
 	if *theiaOriginFlag != "" {
 		cfg.TheiaOrigin = *theiaOriginFlag
+	}
+	if *theiaBaseURLFlag != "" {
+		cfg.TheiaBaseURL = *theiaBaseURLFlag
 	}
 	if *winboxPathFlag != "" {
 		cfg.WinBoxPath = *winboxPathFlag

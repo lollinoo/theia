@@ -560,6 +560,7 @@ func TestSNMPProfileHandlerReveal_ReturnsCredentialSecretsWithNoStore(t *testing
 	h := NewSNMPProfileHandler(repo)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+id.String()+"/reveal", strings.NewReader(`{"reason":"apply profile to device"}`))
+	req = withTestOperator(req)
 	req.Header.Set("User-Agent", "theia-test")
 	rec := httptest.NewRecorder()
 
@@ -595,6 +596,7 @@ func TestSNMPProfileHandlerReveal_RequiresReason(t *testing.T) {
 	h := NewSNMPProfileHandler(repo)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+id.String()+"/reveal", strings.NewReader(`{"reason":"   "}`))
+	req = withTestOperator(req)
 	rec := httptest.NewRecorder()
 
 	h.HandleReveal(rec, req)
@@ -604,11 +606,27 @@ func TestSNMPProfileHandlerReveal_RequiresReason(t *testing.T) {
 	}
 }
 
+func TestSNMPProfileHandlerReveal_RequiresAuthenticatedOperator(t *testing.T) {
+	repo := newMockSNMPProfileRepo()
+	id := seedV2cProfile(t, repo)
+	h := NewSNMPProfileHandler(repo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+id.String()+"/reveal", strings.NewReader(`{"reason":"apply profile to device"}`))
+	rec := httptest.NewRecorder()
+
+	h.HandleReveal(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSNMPProfileHandlerReveal_NotFound(t *testing.T) {
 	repo := newMockSNMPProfileRepo()
 	h := NewSNMPProfileHandler(repo)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+uuid.New().String()+"/reveal", strings.NewReader(`{"reason":"apply profile to device"}`))
+	req = withTestOperator(req)
 	rec := httptest.NewRecorder()
 
 	h.HandleReveal(rec, req)
@@ -624,6 +642,7 @@ func TestSNMPProfileHandlerReveal_RejectsExtraPathSegments(t *testing.T) {
 	h := NewSNMPProfileHandler(repo)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/snmp-profiles/"+id.String()+"/extra/reveal", strings.NewReader(`{"reason":"apply profile to device"}`))
+	req = withTestOperator(req)
 	rec := httptest.NewRecorder()
 
 	h.HandleReveal(rec, req)

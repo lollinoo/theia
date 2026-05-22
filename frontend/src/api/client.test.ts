@@ -3,7 +3,12 @@ import {
   type CreateDevicePayload,
   ValidationError,
   addDeviceToCanvasMap,
+  assignAdminUserRole,
   cancelInstanceBackup,
+  changePassword,
+  createAdminPasswordReset,
+  createAdminUser,
+  createBridgeLaunchRequest,
   createCanvasMap,
   createCanvasMapArea,
   createDevice,
@@ -11,27 +16,40 @@ import {
   deleteCanvasMapArea,
   deleteDevice,
   duplicateCanvasMap,
+  fetchAdminAuditLogs,
+  fetchAdminDashboard,
+  fetchAdminPermissions,
+  fetchAdminRoles,
+  fetchAdminUsers,
   fetchBackupFileContent,
   fetchBackupJobs,
-  fetchBridgeToken,
+  fetchBridgeConnectorConfig,
   fetchCanvasBootstrap,
   fetchCanvasMapAreas,
   fetchCanvasMapBootstrap,
   fetchCanvasMapTopology,
   fetchCanvasMaps,
   fetchCanvasTopology,
+  fetchCurrentUser,
   fetchDevices,
   fetchInstanceBackups,
   fetchLinks,
   fetchOrphanDevices,
   fetchSettings,
   fetchSettingsWithMetadata,
+  loginUser,
+  logoutUser,
+  removeAdminUserRole,
   removeDeviceFromCanvasMap,
   resetCanvasBootstrapRequestCache,
+  resetPasswordWithToken,
   restoreInstanceBackup,
   revealSNMPProfile,
   runTopologyDiscovery,
+  setAdminUserStatus,
   setCanvasMapPrimary,
+  triggerBulkDownload,
+  updateAdminUser,
   updateCanvasMap,
   updateCanvasMapArea,
   updateCanvasMapDeviceAreas,
@@ -111,9 +129,374 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('password sessions', () => {
+  it('fetches the current password session without bearer authorization', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        authenticated: true,
+        user: {
+          id: 'user-1',
+          username: 'alice',
+          email: 'alice@example.test',
+          display_name: 'Alice',
+          status: 'active',
+          must_change_password: false,
+          roles: ['operator'],
+          permissions: ['topology:read'],
+          password_hash: 'must-not-leak',
+          token_hash: 'must-not-leak',
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchCurrentUser();
+
+    expect(result).toEqual({
+      authenticated: true,
+      user: {
+        id: 'user-1',
+        username: 'alice',
+        email: 'alice@example.test',
+        display_name: 'Alice',
+        status: 'active',
+        must_change_password: false,
+        roles: ['operator'],
+        permissions: ['topology:read'],
+      },
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/auth/me');
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
+  });
+
+  it('logs in with identifier and password without exposing credentials in the URL', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        authenticated: true,
+        user: {
+          id: 'user-1',
+          username: 'alice',
+          email: '',
+          display_name: '',
+          status: 'active',
+          must_change_password: false,
+          roles: [],
+          permissions: [],
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await loginUser({
+      identifier: 'alice',
+      password: 'secret-password',
+    });
+
+    expect(result.authenticated).toBe(true);
+    expect(result.user?.username).toBe('alice');
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/auth/login');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({
+        identifier: 'alice',
+        password: 'secret-password',
+      }),
+    });
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
+  });
+
+  it('sends the CSRF cookie value on password mutations and logout', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theme=dark; theia_csrf=csrf-token-123',
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({
+          authenticated: true,
+          user: {
+            id: 'user-1',
+            username: 'alice',
+            email: '',
+            display_name: '',
+            status: 'active',
+            must_change_password: false,
+            roles: [],
+            permissions: [],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(mockResponse({ authenticated: false }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await changePassword({ current_password: 'old', new_password: 'new' });
+    await logoutUser();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/auth/password/change',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token-123' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/auth/logout',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token-123' }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
+  });
+
+  it('ignores malformed CSRF cookie values on password mutations', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theme=dark; theia_csrf=%E0%A4%A',
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        authenticated: true,
+        user: {
+          id: 'user-1',
+          username: 'alice',
+          email: '',
+          display_name: '',
+          status: 'active',
+          must_change_password: false,
+          roles: [],
+          permissions: [],
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(changePassword({ current_password: 'old', new_password: 'new' })).resolves.toEqual(
+      expect.objectContaining({ authenticated: true }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/auth/password/change',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.not.objectContaining({ 'X-CSRF-Token': expect.any(String) }),
+      }),
+    );
+  });
+
+  it('completes password reset with token without bearer authorization', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await resetPasswordWithToken({
+      token: 'one-time-reset-token',
+      new_password: 'Correct Horse Battery Staple Reset 2026!',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/auth/password/reset',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          token: 'one-time-reset-token',
+          new_password: 'Correct Horse Battery Staple Reset 2026!',
+        }),
+        headers: expect.not.objectContaining({ Authorization: expect.any(String) }),
+      }),
+    );
+  });
+});
+
+describe('admin API', () => {
+  it('fetches dashboard, users, roles, permissions, and audit logs defensively', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({
+          stats: {
+            total_users: 2,
+            active_users: 1,
+            disabled_users: 1,
+            locked_users: 0,
+            recent_logins: 4,
+            recent_failed_login_attempts: 1,
+          },
+          recent_audit_logs: [
+            {
+              id: 'audit-1',
+              actor_user_id: 'admin-user-1',
+              action: 'login',
+              target_user_id: 'user-1',
+              resource: 'user',
+              resource_id: 'user-1',
+              metadata: { source: 'session' },
+              ip_address: '192.0.2.1',
+              user_agent: 'Vitest',
+              created_at: '2026-05-21T10:00:00Z',
+              token_hash: 'must-not-leak',
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({
+          users: [
+            {
+              id: 'user-1',
+              username: 'alice',
+              email: 'alice@example.test',
+              display_name: 'Alice',
+              status: 'active',
+              must_change_password: false,
+              roles: ['admin'],
+              permissions: ['admin:dashboard:read'],
+              password_hash: 'must-not-leak',
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({
+          roles: [
+            {
+              id: 'role-1',
+              name: 'admin',
+              description: 'Administrators',
+              is_system_role: true,
+              permissions: [{ key: 'admin:dashboard:read', description: 'Dashboard access' }],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({
+          permissions: [
+            {
+              id: 'permission-1',
+              key: 'admin:dashboard:read',
+              description: 'Dashboard access',
+              resource: 'admin',
+              action: 'dashboard:read',
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockResponse({
+          audit_logs: [
+            {
+              id: 'audit-2',
+              actor_user_id: 'admin-user-1',
+              action: 'user.create',
+              target_user_id: 'user-2',
+              resource: 'user',
+              resource_id: 'user-2',
+              metadata: { created_username: 'bob' },
+              ip_address: '192.0.2.2',
+              user_agent: 'Vitest',
+              created_at: '2026-05-21T11:00:00Z',
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchAdminDashboard()).resolves.toMatchObject({
+      stats: { total_users: 2 },
+      recent_audit_logs: [
+        {
+          id: 'audit-1',
+          actor_user_id: 'admin-user-1',
+          action: 'login',
+          target_user_id: 'user-1',
+          resource: 'user',
+          resource_id: 'user-1',
+          metadata: { source: 'session' },
+          ip_address: '192.0.2.1',
+          user_agent: 'Vitest',
+        },
+      ],
+    });
+    await expect(fetchAdminUsers()).resolves.toEqual([
+      expect.objectContaining({ id: 'user-1', username: 'alice' }),
+    ]);
+    await expect(fetchAdminRoles()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'role-1',
+        name: 'admin',
+        permissions: ['admin:dashboard:read'],
+      }),
+    ]);
+    await expect(fetchAdminPermissions()).resolves.toEqual(['admin:dashboard:read']);
+    await expect(fetchAdminAuditLogs()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'audit-2',
+        actor_user_id: 'admin-user-1',
+        action: 'user.create',
+        target_user_id: 'user-2',
+        resource: 'user',
+        resource_id: 'user-2',
+        metadata: { created_username: 'bob' },
+        ip_address: '192.0.2.2',
+        user_agent: 'Vitest',
+      }),
+    ]);
+  });
+
+  it('sends CSRF on admin mutations and parses one-time reset tokens', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=admin-csrf',
+    });
+    const userPayload = {
+      user: {
+        id: 'user-1',
+        username: 'alice',
+        email: '',
+        display_name: '',
+        status: 'active',
+        must_change_password: true,
+        roles: [],
+        permissions: [],
+      },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse(userPayload))
+      .mockResolvedValueOnce(mockResponse(userPayload))
+      .mockResolvedValueOnce(mockResponse(userPayload))
+      .mockResolvedValueOnce(mockResponse(userPayload))
+      .mockResolvedValueOnce(
+        mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }),
+      )
+      .mockResolvedValueOnce(mockResponse({ reset_token: 'one-time-token' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createAdminUser({ username: 'alice', password: 'initial-password' });
+    await updateAdminUser('user-1', { display_name: 'Alice Admin' });
+    await setAdminUserStatus('user-1', 'disabled');
+    await assignAdminUserRole('user-1', 'role-1');
+    await removeAdminUserRole('user-1', 'role-1');
+    const reset = await createAdminPasswordReset('user-1');
+
+    expect(reset.reset_token).toBe('one-time-token');
+    for (const [, options] of fetchMock.mock.calls) {
+      expect(options?.headers).toEqual(expect.objectContaining({ 'X-CSRF-Token': 'admin-csrf' }));
+      expect(options?.headers).not.toHaveProperty('Authorization');
+    }
+  });
+});
+
 describe('fetchDevices', () => {
   it('parses valid device list response', async () => {
-    const payload = { data: [deviceResource('uuid-1', 'router-01', '10.0.0.1')] };
+    const payload = {
+      data: [deviceResource('uuid-1', 'router-01', '10.0.0.1')],
+    };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(payload)));
 
     const result = await fetchDevices();
@@ -202,7 +585,9 @@ describe('fetchDevices', () => {
 
 describe('fetchOrphanDevices', () => {
   it('fetches and parses orphan device list response', async () => {
-    const payload = { data: [deviceResource('uuid-orphan', 'orphan-01', '10.0.0.32')] };
+    const payload = {
+      data: [deviceResource('uuid-orphan', 'orphan-01', '10.0.0.32')],
+    };
     const fetchMock = vi.fn().mockResolvedValue(mockResponse(payload));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -242,11 +627,11 @@ describe('createDevice', () => {
   it('sends POST with correct body', async () => {
     // createDevice uses requestJSONWithBody which calls fetch with method+body
     // The response has { data: { id, attributes, ... } } (single resource, not array)
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        mockResponse({ data: deviceResource('uuid-2', 'new-router', '10.0.0.2') }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-2', 'new-router', '10.0.0.2'),
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     await createDevice(payload);
@@ -344,7 +729,7 @@ describe('fetchSettingsWithMetadata', () => {
       },
       meta: {
         secrets: {
-          bridge_secret: { present: true, redacted: true },
+          external_token: { present: true, redacted: true },
         },
       },
     };
@@ -353,26 +738,81 @@ describe('fetchSettingsWithMetadata', () => {
     const result = await fetchSettingsWithMetadata();
 
     expect(result.data.bridge_port).toBe('1337');
-    expect(result.data.bridge_secret).toBeUndefined();
-    expect(result.secrets.bridge_secret).toEqual({ present: true, redacted: true });
+    expect(result.data.external_token).toBeUndefined();
+    expect(result.secrets.external_token).toEqual({
+      present: true,
+      redacted: true,
+    });
   });
 });
 
-describe('fetchBridgeToken', () => {
-  it('requests a server-side bridge token without sending bridge_secret in the body', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        mockResponse({ token: 'encrypted-token', expires_at: '2026-05-04T19:15:00Z' }),
-      );
+describe('fetchBridgeConnectorConfig', () => {
+  it('parses connector config and available download targets', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        config: {
+          theia_base_url: 'http://localhost:3000',
+          theia_origin: 'http://localhost:3000',
+        },
+        downloads: [
+          {
+            label: 'Linux x64',
+            os: 'linux',
+            arch: 'amd64',
+            url: '/api/v1/settings/bridge/connector/download/linux/amd64',
+            available: true,
+          },
+          {
+            label: '',
+            os: 'broken',
+            arch: 'amd64',
+            url: '/api/v1/settings/bridge/connector/download/broken/amd64',
+            available: true,
+          },
+        ],
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
-    const token = await fetchBridgeToken('device-1');
+    const result = await fetchBridgeConnectorConfig();
 
-    expect(token).toBe('encrypted-token');
+    expect(result).toEqual({
+      config: {
+        theia_base_url: 'http://localhost:3000',
+        theia_origin: 'http://localhost:3000',
+      },
+      downloads: [
+        {
+          label: 'Linux x64',
+          os: 'linux',
+          arch: 'amd64',
+          url: '/api/v1/settings/bridge/connector/download/linux/amd64',
+          available: true,
+        },
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/settings/bridge/connector/config', {
+      headers: { Accept: 'application/json' },
+    });
+  });
+});
+
+describe('createBridgeLaunchRequest', () => {
+  it('requests a user-scoped launch token without sending connector secrets in the body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        launch_token: 'launch-token',
+        expires_at: '2026-05-04T19:15:00Z',
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await createBridgeLaunchRequest('device-1');
+
+    expect(result.launch_token).toBe('launch-token');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe('/api/v1/bridge/token/device-1');
+    expect(url).toBe('/api/v1/bridge/launch-requests/device-1');
     expect(options.method).toBe('POST');
     expect(options.body).toBeUndefined();
   });
@@ -707,10 +1147,16 @@ describe('canvas map client', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        mockResponse({ ...emptyTopologyPayload(), topology_version: 'default-bootstrap' }),
+        mockResponse({
+          ...emptyTopologyPayload(),
+          topology_version: 'default-bootstrap',
+        }),
       )
       .mockResolvedValueOnce(
-        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-bootstrap' }),
+        mockResponse({
+          ...emptyTopologyPayload(),
+          topology_version: 'map-bootstrap',
+        }),
       );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -763,10 +1209,16 @@ describe('canvas map client', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-initial' }),
+        mockResponse({
+          ...emptyTopologyPayload(),
+          topology_version: 'map-1-initial',
+        }),
       )
       .mockResolvedValueOnce(
-        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-forced' }),
+        mockResponse({
+          ...emptyTopologyPayload(),
+          topology_version: 'map-1-forced',
+        }),
       );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -782,10 +1234,16 @@ describe('canvas map client', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-before-reset' }),
+        mockResponse({
+          ...emptyTopologyPayload(),
+          topology_version: 'map-1-before-reset',
+        }),
       )
       .mockResolvedValueOnce(
-        mockResponse({ ...emptyTopologyPayload(), topology_version: 'map-1-after-reset' }),
+        mockResponse({
+          ...emptyTopologyPayload(),
+          topology_version: 'map-1-after-reset',
+        }),
       );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -831,9 +1289,13 @@ describe('canvas map client', () => {
   it('deletes canvas maps through the map endpoint', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' })),
+      vi.fn().mockResolvedValue(
+        mockResponse(null, {
+          ok: true,
+          status: 204,
+          statusText: 'No Content',
+        }),
+      ),
     );
 
     await deleteCanvasMap('map-1');
@@ -871,9 +1333,13 @@ describe('canvas map client', () => {
   it('removes a device from a canvas map without calling the global device endpoint', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' })),
+      vi.fn().mockResolvedValue(
+        mockResponse(null, {
+          ok: true,
+          status: 204,
+          statusText: 'No Content',
+        }),
+      ),
     );
 
     await removeDeviceFromCanvasMap('map/a', 'device 1');
@@ -949,7 +1415,10 @@ describe('canvas map client', () => {
       '/api/v1/canvas/maps/map%2Fa/device-areas',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ device_ids: ['device 1', 'device 2'], area_ids: ['area 1'] }),
+        body: JSON.stringify({
+          device_ids: ['device 1', 'device 2'],
+          area_ids: ['area 1'],
+        }),
       }),
     );
     expect(fetch).not.toHaveBeenCalledWith('/api/v1/devices/device%201', expect.anything());
@@ -1034,7 +1503,11 @@ describe('canvas map client', () => {
       '/api/v1/canvas/maps/map%2Fa/areas',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ name: 'Backbone', description: 'Core', color: '#2979FF' }),
+        body: JSON.stringify({
+          name: 'Backbone',
+          description: 'Core',
+          color: '#2979FF',
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -1042,7 +1515,11 @@ describe('canvas map client', () => {
       '/api/v1/canvas/maps/map%2Fa/areas/area%201',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ name: 'Backbone', description: 'Core', color: '#2979FF' }),
+        body: JSON.stringify({
+          name: 'Backbone',
+          description: 'Core',
+          color: '#2979FF',
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -1071,9 +1548,11 @@ describe('deleteDevice', () => {
 
 describe('updateDevice', () => {
   it('sends null poll_interval_override unchanged', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { poll_interval_override: null });
@@ -1086,9 +1565,11 @@ describe('updateDevice', () => {
   });
 
   it('sends numeric poll_interval_override unchanged', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { poll_interval_override: 30 });
@@ -1099,9 +1580,11 @@ describe('updateDevice', () => {
   });
 
   it('sends boolean polling_enabled unchanged', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { polling_enabled: false });
@@ -1111,24 +1594,30 @@ describe('updateDevice', () => {
   });
 
   it('sends nullable notes unchanged', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { notes: null });
     await updateDevice('uuid-1', { notes: 'Needs maintenance window' });
 
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ notes: null });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      notes: null,
+    });
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
       notes: 'Needs maintenance window',
     });
   });
 
   it('passes topology discovery mode through unchanged', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(mockResponse({ data: deviceResource('uuid-1', 'router-01', '10.0.0.1') }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     await updateDevice('uuid-1', { topology_discovery_mode: 'bootstrap_once' });
@@ -1244,6 +1733,56 @@ describe('fetchBackupFileContent', () => {
       size_bytes: 0,
       max_inline_size_bytes: 0,
     });
+  });
+});
+
+describe('triggerBulkDownload', () => {
+  it('sends the CSRF token without bearer authorization', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=download-csrf',
+    });
+    const clickMock = vi.fn();
+    const appendChild = vi.spyOn(document.body, 'appendChild');
+    const removeChild = vi.spyOn(document.body, 'removeChild');
+    const createElement = vi.spyOn(document, 'createElement');
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:download'),
+      revokeObjectURL: vi.fn(),
+    });
+    createElement.mockImplementation((tagName: string) => {
+      const element = document.createElementNS('http://www.w3.org/1999/xhtml', tagName);
+      if (tagName === 'a') {
+        Object.defineProperty(element, 'click', {
+          configurable: true,
+          value: clickMock,
+        });
+      }
+      return element as HTMLElement;
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ...mockResponse(null),
+      headers: new Headers({
+        'Content-Disposition': 'attachment; filename="backups.zip"',
+      }),
+      blob: () => Promise.resolve(new Blob(['zip'])),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await triggerBulkDownload(['dev-1']);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/backups/bulk-download',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'download-csrf' }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
+    expect(clickMock).toHaveBeenCalled();
+    appendChild.mockRestore();
+    removeChild.mockRestore();
+    createElement.mockRestore();
   });
 });
 
@@ -1419,12 +1958,25 @@ describe('restoreInstanceBackup', () => {
   });
 
   it('returns parsed RestoreReport on 200 success', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse(mockRestoreReportPayload)));
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=restore-csrf',
+    });
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(mockRestoreReportPayload));
+    vi.stubGlobal('fetch', fetchMock);
     const file = new File(['test'], 'backup.tar.gz');
     const result = await restoreInstanceBackup(file, true);
     expect(result.valid).toBe(true);
     expect(result.app_version).toBe('1.4.0');
     expect(result.migration_version).toBe(5);
     expect(result.backup_file_count).toBe(3);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/instance-backups/restore?dry_run=true',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'restore-csrf' }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
   });
 });

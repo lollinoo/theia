@@ -877,7 +877,6 @@ export default function Canvas({
         onAddDevice={() => setPanelContent({ type: 'addDevice' })}
         onCreateLink={() => setPanelContent({ type: 'create-link' })}
         onAlerts={() => setPanelContent({ type: 'alerts' })}
-        onSettings={() => setPanelContent({ type: 'settings' })}
         onToggleEditMode={() => setEditMode((m) => !m)}
         editMode={editMode}
         alertCount={runtimeSummary.alertCount}

@@ -15,6 +15,10 @@ func TestConfigSchemaIsPostgresOnly(t *testing.T) {
 			t.Fatalf("Config still exposes %s; runtime database selection must stay removed", fieldName)
 		}
 	}
+	legacyAuthField := "Operator" + "Token"
+	if _, ok := cfgType.FieldByName(legacyAuthField); ok {
+		t.Fatalf("Config still exposes %s; backend auth must use password sessions", legacyAuthField)
+	}
 }
 
 func TestLoad_DefaultsToPostgresDSNConfiguration(t *testing.T) {
@@ -35,6 +39,11 @@ func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 	t.Setenv("THEIA_DB_DSN", "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable")
 	t.Setenv("THEIA_DATA_DIR", "/tmp/theia-data")
 	t.Setenv("THEIA_DEPLOYMENT_ENV", "production")
+	t.Setenv("THEIA_SESSION_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("THEIA_SESSION_TTL_MINUTES", "90")
+	t.Setenv("THEIA_PASSWORD_RESET_TTL_MINUTES", "45")
+	t.Setenv("THEIA_METRICS_TOKEN", "abcdef0123456789abcdef0123456789")
+	t.Setenv("THEIA_ALLOWED_ORIGINS", "https://theia.example.com,http://localhost:3000")
 
 	cfg, err := Load("/nonexistent-config.yaml")
 	if err != nil {
@@ -50,6 +59,21 @@ func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 	if cfg.DeploymentEnv != "production" {
 		t.Fatalf("DeploymentEnv = %q, want production", cfg.DeploymentEnv)
 	}
+	if cfg.SessionSecret == "" {
+		t.Fatal("SessionSecret should be populated from env")
+	}
+	if cfg.SessionTTLMinutes != 90 {
+		t.Fatalf("SessionTTLMinutes = %d, want 90", cfg.SessionTTLMinutes)
+	}
+	if cfg.PasswordResetTTLMinutes != 45 {
+		t.Fatalf("PasswordResetTTLMinutes = %d, want 45", cfg.PasswordResetTTLMinutes)
+	}
+	if cfg.MetricsToken == "" {
+		t.Fatal("MetricsToken should be populated from env")
+	}
+	if got, want := cfg.AllowedOrigins, []string{"https://theia.example.com", "http://localhost:3000"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("AllowedOrigins = %#v, want %#v", got, want)
+	}
 }
 
 func TestLoad_FileHandling(t *testing.T) {
@@ -61,7 +85,7 @@ func TestLoad_FileHandling(t *testing.T) {
 	}{
 		{
 			name:     "loads values from yaml file",
-			contents: "listen_addr: \":9090\"\ndb_dsn: postgres://user:pass@db:5432/theia?sslmode=disable\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\ndeployment_env: staging\n",
+			contents: "listen_addr: \":9090\"\ndb_dsn: postgres://user:pass@db:5432/theia?sslmode=disable\ndata_dir: ./custom-data\nbridge_binaries_dir: ./bridges\ndeployment_env: staging\nsession_secret: yaml-session-secret\nsession_ttl_minutes: 120\npassword_reset_ttl_minutes: 60\nmetrics_token: yaml-metrics\nallowed_origins:\n  - https://theia.example.com\n",
 			assert: func(t *testing.T, cfg *Config, err error) {
 				t.Helper()
 				if err != nil {
@@ -81,6 +105,21 @@ func TestLoad_FileHandling(t *testing.T) {
 				}
 				if cfg.DeploymentEnv != "staging" {
 					t.Fatalf("DeploymentEnv = %q, want staging", cfg.DeploymentEnv)
+				}
+				if cfg.SessionSecret != "yaml-session-secret" {
+					t.Fatalf("SessionSecret = %q, want yaml-session-secret", cfg.SessionSecret)
+				}
+				if cfg.SessionTTLMinutes != 120 {
+					t.Fatalf("SessionTTLMinutes = %d, want 120", cfg.SessionTTLMinutes)
+				}
+				if cfg.PasswordResetTTLMinutes != 60 {
+					t.Fatalf("PasswordResetTTLMinutes = %d, want 60", cfg.PasswordResetTTLMinutes)
+				}
+				if cfg.MetricsToken != "yaml-metrics" {
+					t.Fatalf("MetricsToken = %q, want yaml-metrics", cfg.MetricsToken)
+				}
+				if got, want := cfg.AllowedOrigins, []string{"https://theia.example.com"}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("AllowedOrigins = %#v, want %#v", got, want)
 				}
 			},
 		},
@@ -136,6 +175,24 @@ func TestLoad_FileHandling(t *testing.T) {
 
 			cfg, err := Load(path)
 			tt.assert(t, cfg, err)
+		})
+	}
+}
+
+func TestLoad_RejectsInvalidAuthTTLOverrides(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "session ttl", key: "THEIA_SESSION_TTL_MINUTES"},
+		{name: "password reset ttl", key: "THEIA_PASSWORD_RESET_TTL_MINUTES"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.key, "not-an-integer")
+			if _, err := Load("/nonexistent-config.yaml"); err == nil {
+				t.Fatalf("Load() error = nil, want invalid %s rejection", tt.key)
+			}
 		})
 	}
 }

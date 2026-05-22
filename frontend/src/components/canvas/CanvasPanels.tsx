@@ -12,7 +12,6 @@ import { DeviceDetailsPanel } from '../DeviceDetailsPanel';
 import { LinkCreatePanel } from '../LinkCreatePanel';
 import { LinkDetailsPanel } from '../LinkDetailsPanel';
 import type { LinkEdgeType } from '../LinkEdge';
-import { SettingsPanel } from '../SettingsPanel';
 import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
@@ -116,7 +115,6 @@ export function CanvasPanels({
             />
           );
         })()}
-      {panelContent?.type === 'settings' && <SettingsPanel onSettingsChange={onSettingsChange} />}
       {panelContent?.type === 'addDevice' && (
         <AddDevicePanel
           areas={topologyAreas}

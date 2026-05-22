@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -30,19 +31,123 @@ func TestConfigDefaultConfig_TheiaOrigin(t *testing.T) {
 	}
 }
 
+func TestConfigDefaultConfig_TheiaBaseURL(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.TheiaBaseURL != "http://localhost:3000" {
+		t.Errorf("expected TheiaBaseURL='http://localhost:3000', got %q", cfg.TheiaBaseURL)
+	}
+	if cfg.BridgeSecret != "" {
+		t.Fatalf("DefaultConfig should not auto-generate BridgeSecret, got %q", cfg.BridgeSecret)
+	}
+}
+
 // --- Config: configFilePath ---
 
-func TestConfigFilePath_EndsWithExpectedSuffix(t *testing.T) {
+func TestConfigFilePath_IsAbsoluteConfigJSONPath(t *testing.T) {
 	path, err := configFilePath()
 	if err != nil {
 		t.Skipf("configFilePath() error (may not have home dir in CI): %v", err)
 	}
-	suffix := filepath.Join("winbox-bridge", "config.json")
 	if !filepath.IsAbs(path) {
 		t.Errorf("expected absolute path, got %q", path)
 	}
-	if len(path) < len(suffix) || path[len(path)-len(suffix):] != suffix {
-		t.Errorf("expected path ending in %q, got %q", suffix, path)
+	if filepath.Base(path) != "config.json" {
+		t.Errorf("expected config.json file, got %q", path)
+	}
+}
+
+func TestConfigFilePathUsesInstalledDirectoryWhenConnectorIsInstalled(t *testing.T) {
+	dir := t.TempDir()
+	installedExe := filepath.Join(dir, "Theia", "WinBoxBridge", "winbox-bridge")
+	installedConfig := filepath.Join(filepath.Dir(installedExe), "config.json")
+	legacyConfig := filepath.Join(dir, "config", "winbox-bridge", "config.json")
+	if err := os.MkdirAll(filepath.Dir(installedExe), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(installedExe, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write installed exe: %v", err)
+	}
+	if err := os.WriteFile(installedConfig, []byte(`{"listen_port":1444}`), 0o600); err != nil {
+		t.Fatalf("write installed config: %v", err)
+	}
+
+	got, err := configFilePathWithInstall(
+		func() (string, error) { return installedExe, nil },
+		func() (string, error) { return legacyConfig, nil },
+		func() (string, error) { return filepath.Join(dir, "Downloads", "winbox-bridge"), nil },
+	)
+	if err != nil {
+		t.Fatalf("configFilePathWithInstall returned error: %v", err)
+	}
+	if got != installedConfig {
+		t.Fatalf("config path = %q, want %q", got, installedConfig)
+	}
+}
+
+func TestConfigFilePathUsesLegacyDirectoryBeforeConnectorIsInstalled(t *testing.T) {
+	dir := t.TempDir()
+	installedExe := filepath.Join(dir, "Theia", "WinBoxBridge", "winbox-bridge")
+	legacyConfig := filepath.Join(dir, "config", "winbox-bridge", "config.json")
+
+	got, err := configFilePathWithInstall(
+		func() (string, error) { return installedExe, nil },
+		func() (string, error) { return legacyConfig, nil },
+		func() (string, error) { return filepath.Join(dir, "Downloads", "winbox-bridge"), nil },
+	)
+	if err != nil {
+		t.Fatalf("configFilePathWithInstall returned error: %v", err)
+	}
+	if got != legacyConfig {
+		t.Fatalf("config path = %q, want %q", got, legacyConfig)
+	}
+}
+
+func TestConfigFilePathKeepsLegacyWhenInstalledConfigIsMissingFromDownloadedRun(t *testing.T) {
+	dir := t.TempDir()
+	installedExe := filepath.Join(dir, "Theia", "WinBoxBridge", "winbox-bridge")
+	legacyConfig := filepath.Join(dir, "config", "winbox-bridge", "config.json")
+	if err := os.MkdirAll(filepath.Dir(installedExe), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(installedExe, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write installed exe: %v", err)
+	}
+
+	got, err := configFilePathWithInstall(
+		func() (string, error) { return installedExe, nil },
+		func() (string, error) { return legacyConfig, nil },
+		func() (string, error) { return filepath.Join(dir, "Downloads", "winbox-bridge"), nil },
+	)
+	if err != nil {
+		t.Fatalf("configFilePathWithInstall returned error: %v", err)
+	}
+	if got != legacyConfig {
+		t.Fatalf("config path = %q, want %q", got, legacyConfig)
+	}
+}
+
+func TestConfigFilePathUsesInstalledDirectoryWhenRunningInstalledExecutable(t *testing.T) {
+	dir := t.TempDir()
+	installedExe := filepath.Join(dir, "Theia", "WinBoxBridge", "winbox-bridge")
+	legacyConfig := filepath.Join(dir, "config", "winbox-bridge", "config.json")
+	if err := os.MkdirAll(filepath.Dir(installedExe), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(installedExe, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write installed exe: %v", err)
+	}
+
+	got, err := configFilePathWithInstall(
+		func() (string, error) { return installedExe, nil },
+		func() (string, error) { return legacyConfig, nil },
+		func() (string, error) { return installedExe, nil },
+	)
+	if err != nil {
+		t.Fatalf("configFilePathWithInstall returned error: %v", err)
+	}
+	want := filepath.Join(filepath.Dir(installedExe), "config.json")
+	if got != want {
+		t.Fatalf("config path = %q, want %q", got, want)
 	}
 }
 
@@ -56,6 +161,7 @@ func TestConfigRoundTrip_AllFieldsPreserved(t *testing.T) {
 		WinBoxPath:   "/usr/bin/winbox",
 		ListenPort:   9999,
 		TheiaOrigin:  "http://theia.example.com:8080",
+		TheiaBaseURL: "http://theia.example.com:8080",
 		BridgeSecret: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
 		LogLevel:     "debug",
 	}
@@ -70,7 +176,7 @@ func TestConfigRoundTrip_AllFieldsPreserved(t *testing.T) {
 	}
 
 	if loaded != original {
-		t.Errorf("round-trip mismatch:\n  want: %+v\n  got:  %+v", original, loaded)
+		t.Errorf("round-trip mismatch")
 	}
 }
 
@@ -111,6 +217,10 @@ func TestConfigLoadConfigFrom_CorruptJSONReturnsDefaults(t *testing.T) {
 // --- Config: file permissions ---
 
 func TestConfigSaveConfigTo_CreatesParentDirWith0700(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not report POSIX directory permission bits from os.Stat")
+	}
+
 	base := t.TempDir()
 	// Use a subdirectory that doesn't exist yet
 	subDir := filepath.Join(base, "newsubdir")
@@ -131,6 +241,10 @@ func TestConfigSaveConfigTo_CreatesParentDirWith0700(t *testing.T) {
 }
 
 func TestConfigSaveConfigTo_WritesFileWith0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not report POSIX file permission bits from os.Stat")
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
@@ -148,6 +262,31 @@ func TestConfigSaveConfigTo_WritesFileWith0600(t *testing.T) {
 	}
 }
 
+func TestConfigSaveConfigTo_TightensExistingLooseSecretConfigTo0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not report POSIX file permission bits from os.Stat")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"bridge_secret":"old"}`), 0o644); err != nil {
+		t.Fatalf("setup loose config: %v", err)
+	}
+
+	if err := saveConfigTo(DefaultConfig(), path); err != nil {
+		t.Fatalf("saveConfigTo: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	got := info.Mode().Perm()
+	if got != 0o600 {
+		t.Errorf("expected existing file perm tightened to 0o600, got %04o", got)
+	}
+}
+
 // --- Config: JSON field names ---
 
 func TestConfigJSONFieldNames(t *testing.T) {
@@ -155,6 +294,7 @@ func TestConfigJSONFieldNames(t *testing.T) {
 		WinBoxPath:   "/some/path",
 		ListenPort:   1234,
 		TheiaOrigin:  "http://test.local",
+		TheiaBaseURL: "http://test.local",
 		BridgeSecret: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 	}
 
@@ -168,7 +308,7 @@ func TestConfigJSONFieldNames(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	for _, key := range []string{"winbox_path", "listen_port", "theia_origin", "bridge_secret", "log_level"} {
+	for _, key := range []string{"winbox_path", "listen_port", "theia_origin", "theia_base_url", "bridge_secret", "log_level"} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("expected JSON key %q not found in marshaled output", key)
 		}
@@ -196,51 +336,7 @@ func TestConfigLoadConfigFrom_MissingLogLevelUsesDefault(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("expected LogLevel=%q for missing log_level field, got %q", "info", cfg.LogLevel)
 	}
-}
-
-// --- Config: ensureBridgeSecret ---
-
-func TestEnsureBridgeSecret_GeneratesWhenEmpty(t *testing.T) {
-	cfg := DefaultConfig()
-	if cfg.BridgeSecret != "" {
-		t.Fatal("DefaultConfig should have empty BridgeSecret")
-	}
-	updated, err := ensureBridgeSecret(cfg)
-	if err != nil {
-		t.Fatalf("ensureBridgeSecret: %v", err)
-	}
-	if updated.BridgeSecret == "" {
-		t.Error("expected BridgeSecret to be generated, got empty string")
-	}
-	// Must be 64 hex chars (32 bytes)
-	if len(updated.BridgeSecret) != 64 {
-		t.Errorf("expected 64-char hex secret, got length %d", len(updated.BridgeSecret))
-	}
-}
-
-func TestEnsureBridgeSecret_PreservesExistingSecret(t *testing.T) {
-	existing := "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
-	cfg := Config{BridgeSecret: existing}
-	updated, err := ensureBridgeSecret(cfg)
-	if err != nil {
-		t.Fatalf("ensureBridgeSecret: %v", err)
-	}
-	if updated.BridgeSecret != existing {
-		t.Errorf("expected existing secret preserved, got %q", updated.BridgeSecret)
-	}
-}
-
-func TestEnsureBridgeSecret_GeneratesUniqueSecrets(t *testing.T) {
-	cfg := DefaultConfig()
-	a, err := ensureBridgeSecret(cfg)
-	if err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-	b, err := ensureBridgeSecret(cfg)
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if a.BridgeSecret == b.BridgeSecret {
-		t.Error("expected unique secrets on each call with empty config, got identical values")
+	if cfg.TheiaBaseURL != "http://localhost:3000" {
+		t.Errorf("expected TheiaBaseURL default for old config, got %q", cfg.TheiaBaseURL)
 	}
 }

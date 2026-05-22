@@ -1,9 +1,7 @@
 package api
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/service"
 )
 
 // setupBridgeTest creates a temp dir and optionally populates it with dummy bridge binaries.
@@ -235,119 +237,72 @@ func TestBridgeDownload_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// --- Bridge token endpoint ---
-
-// TestBridgeToken_NilRepoReturns503 verifies that when the handler was created
-// without credential dependencies, the token endpoint returns 503.
-func TestBridgeToken_NilRepoReturns503(t *testing.T) {
-	// NewBridgeHandler (not WithCredentials) leaves svc/repo nil
+func TestBridgeToken_DeprecatedReturnsGone(t *testing.T) {
 	handler := NewBridgeHandler("")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+testDeviceID, strings.NewReader(`{"bridge_secret":"`+testBridgeSecret+`"}`))
-	req.Header.Set("Content-Type", "application/json")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+testDeviceID, nil)
 	w := httptest.NewRecorder()
 	handler.HandleBridgeToken(w, req)
 
-	resp := w.Result()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", resp.StatusCode)
+	if w.Result().StatusCode != http.StatusGone {
+		t.Fatalf("expected 410, got %d", w.Result().StatusCode)
+	}
+	if !strings.Contains(w.Body.String(), "deprecated") {
+		t.Fatalf("expected deprecation message, got %s", w.Body.String())
 	}
 }
 
-// TestBridgeToken_GetMethodReturns405 verifies that GET /bridge/token returns 405.
-func TestBridgeToken_GetMethodReturns405(t *testing.T) {
-	handler := NewBridgeHandler("")
+func TestBridgeConnectorLaunchRateLimitUsesClientIPNotSecretPrefix(t *testing.T) {
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+	fake := &fakeBridgeLaunchService{resolveErr: service.ErrBridgeSecretInvalid}
+	handler := NewBridgeHandlerWithService("", fake)
+	handler.limiter = newBridgeRateLimiter(2, time.Minute, func() time.Time { return now })
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/bridge/token/"+testDeviceID, nil)
-	w := httptest.NewRecorder()
-	handler.HandleBridgeToken(w, req)
+	authHeaders := []string{
+		"Bridge attacker_one.invalid",
+		"Bridge attacker_two.invalid",
+		"Bridge attacker_three.invalid",
+	}
+	for i, auth := range authHeaders {
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/bridge/connector/launch",
+			strings.NewReader(`{"launch_token":"launch-token"}`),
+		)
+		req.Header.Set("Authorization", auth)
+		req.Header.Set("X-Forwarded-For", "192.0.2.10")
+		rec := httptest.NewRecorder()
 
-	resp := w.Result()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", resp.StatusCode)
+		handler.HandleConnectorLaunch(rec, req)
+
+		if i < 2 && rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d, want 401", i+1, rec.Code)
+		}
+		if i == 2 && rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("third attempt status = %d, want 429", rec.Code)
+		}
+	}
+	if fake.resolveCalls != 2 {
+		t.Fatalf("ResolveConnectorLaunch calls = %d, want 2", fake.resolveCalls)
 	}
 }
 
-// TestBridgeToken_MissingSecretReturns400 verifies that omitting bridge_secret returns 400.
-func TestBridgeToken_MissingSecretReturns400(t *testing.T) {
-	handler := NewBridgeHandlerWithCredentials("", nil, nil, nil)
-	// Override nil check: use a handler where backupSvc check won't trigger —
-	// we need to reach the bridge_secret validation. Use a non-nil handler by
-	// testing through request body validation using NewBridgeHandler directly
-	// but the nil check returns 503 first. So test the secret length validation
-	// via a custom test that directly exercises the validation path after the
-	// nil guard by calling with a populated (but still-nil-internally) handler
-	// that would be configured in production.
-	//
-	// Since we can't easily mock CredentialProfileRepo (concrete type, not interface),
-	// we verify the nil-guard 503 takes precedence, and that an empty secret body
-	// would return 400 if the guard were bypassed. We test the actual 400 path
-	// via direct JSON body validation independent of the guard.
-
-	// Calling with nil svc/repo → 503 takes precedence over body validation.
-	// Confirm 503 is returned before body is even parsed.
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/bridge/token/"+testDeviceID, strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	handler.HandleBridgeToken(w, req)
-	if w.Result().StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 for nil dependencies, got %d", w.Result().StatusCode)
-	}
+type fakeBridgeLaunchService struct {
+	resolveCalls int
+	resolveErr   error
 }
 
-// TestBridgeToken_ShortSecretReturns400 verifies that a secret shorter than 64 hex chars returns 400.
-// This tests the hex decode + length check path. Since we can't easily mock the concrete repo type,
-// we verify the path via the handler with nil deps (503 guard) — and test the key length validation
-// directly via its internal logic in an isolated call.
-func TestBridgeToken_ShortSecretReturns400(t *testing.T) {
-	// Test the hex/length validation directly via encryptToken logic path:
-	// hex.DecodeString("aabbcc") succeeds (3 bytes) but len != 32, so bridge rejects.
-	// Verify the check by importing the same logic used in the handler.
-	keyBytes, err := hex.DecodeString("aabbcc")
-	if err != nil {
-		t.Fatalf("hex decode: %v", err)
-	}
-	if len(keyBytes) == 32 {
-		t.Error("expected key shorter than 32 bytes")
-	}
-	// The handler would return 400 for this — the guard is: len(keyBytes) != 32
+func (f *fakeBridgeLaunchService) CreateLaunchRequest(context.Context, *service.AuthenticatedUser, uuid.UUID) (*service.BridgeLaunchRequestResult, error) {
+	return nil, nil
 }
 
-func decryptBridgeTokenPayload(t *testing.T, tokenHex, secretHex string) map[string]string {
-	t.Helper()
-	key, err := hex.DecodeString(secretHex)
-	if err != nil {
-		t.Fatalf("decode key: %v", err)
+func (f *fakeBridgeLaunchService) ResolveConnectorLaunch(context.Context, string, string, string, string) (*service.BridgeLaunchCredentials, error) {
+	f.resolveCalls++
+	if f.resolveErr != nil {
+		return nil, f.resolveErr
 	}
-	ciphertext, err := hex.DecodeString(tokenHex)
-	if err != nil {
-		t.Fatalf("decode token: %v", err)
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("new cipher: %v", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("new gcm: %v", err)
-	}
-	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		t.Fatalf("token too short")
-	}
-	plaintext, err := gcm.Open(nil, ciphertext[:nonceSize], ciphertext[nonceSize:], nil)
-	if err != nil {
-		t.Fatalf("decrypt token: %v", err)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal(plaintext, &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	return payload
+	return &service.BridgeLaunchCredentials{}, nil
 }
 
 // testDeviceID is a valid UUID used in bridge token tests.
 const testDeviceID = "11111111-1111-1111-1111-111111111111"
-
-// testBridgeSecret is a valid 64-hex-char (32-byte) secret for bridge token tests.
-const testBridgeSecret = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"

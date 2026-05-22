@@ -83,7 +83,6 @@ describe('THEME-05 Component smoke tests', () => {
           onAddDevice={vi.fn()}
           onCreateLink={vi.fn()}
           onAlerts={vi.fn()}
-          onSettings={vi.fn()}
           onToggleEditMode={vi.fn()}
           editMode={false}
           alertCount={0}

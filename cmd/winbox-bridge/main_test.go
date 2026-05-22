@@ -2,12 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -48,49 +43,26 @@ func makeRequest(t *testing.T, method, path string, body interface{}, origin, ho
 // buildHandler constructs the full handler chain for testing.
 // /health is public; /launch is protected by securityCheck.
 func buildHandler(theiaOrigin string, winboxPath string, expectedHost string) http.Handler {
-	return buildMux(winboxPath, theiaOrigin, expectedHost, testSecret)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(launchCredentials{
+			IP:        "192.168.1.1",
+			Username:  "admin",
+			Password:  "pass123",
+			ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+		})
+	}))
+	return buildMux(winboxPath, theiaOrigin, expectedHost, &TheiaClient{
+		BaseURL:    backend.URL,
+		Secret:     testSecret,
+		HTTPClient: backend.Client(),
+	})
 }
 
-// testSecret is a fixed 32-byte hex secret used in all tests.
-const testSecret = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+const testSecret = "theia_bridge_public.raw-secret"
 
-// encryptToken encrypts a launchCredentials payload using the given hex key and
-// returns the hex-encoded AES-GCM ciphertext. Used in tests to build valid tokens.
-func encryptToken(t *testing.T, creds launchCredentials, secretHex string) string {
-	t.Helper()
-	key, err := hex.DecodeString(secretHex)
-	if err != nil || len(key) != 32 {
-		t.Fatalf("encryptToken: invalid key: %v", err)
-	}
-	plaintext, err := json.Marshal(creds)
-	if err != nil {
-		t.Fatalf("encryptToken: marshal: %v", err)
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("encryptToken: new cipher: %v", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("encryptToken: new GCM: %v", err)
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		t.Fatalf("encryptToken: nonce: %v", err)
-	}
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
-	return hex.EncodeToString(ciphertext)
-}
-
-// validToken builds a valid encrypted token for standard test credentials using testSecret.
 func validToken(t *testing.T) string {
 	t.Helper()
-	return encryptToken(t, launchCredentials{
-		IP:        "192.168.1.1",
-		Username:  "admin",
-		Password:  "pass123",
-		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
-	}, testSecret)
+	return "launch-token"
 }
 
 // --- Security: Origin validation ---
@@ -131,7 +103,7 @@ func TestOriginValidation_EvilOriginOnLaunchReturns403(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": validToken(t)},
+		map[string]string{"launch_token": validToken(t)},
 		"http://evil.com", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
@@ -149,7 +121,7 @@ func TestOriginValidation_IPOriginOnLaunchPassesWithDefaultLocalhostConfig(t *te
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": validToken(t)},
+		map[string]string{"launch_token": validToken(t)},
 		"http://10.10.0.35:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -167,7 +139,7 @@ func TestHostValidation_EvilHostOnLaunchReturns403(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": validToken(t)},
+		map[string]string{"launch_token": validToken(t)},
 		"http://localhost:3000", "evil.com:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
@@ -190,7 +162,7 @@ func TestHostValidation_IPHostOnLaunchReturns403(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": validToken(t)},
+		map[string]string{"launch_token": validToken(t)},
 		"http://localhost:3000", "127.0.0.1:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
@@ -240,7 +212,7 @@ func TestLaunch_ValidTokenReturns200(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": validToken(t)},
+		map[string]string{"launch_token": validToken(t)},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -255,57 +227,86 @@ func TestLaunch_ValidTokenReturns200(t *testing.T) {
 	}
 }
 
+func TestLaunch_UsesLaunchTokenAndBackendBridgeSecret(t *testing.T) {
+	original := startProcess
+	t.Cleanup(func() { startProcess = original })
+	var launchedArgs []string
+	startProcess = func(name string, args []string) error {
+		launchedArgs = append([]string(nil), args...)
+		return nil
+	}
+
+	var gotAuth string
+	var gotToken string
+	theia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		var req map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode backend request: %v", err)
+		}
+		gotToken = req["launch_token"]
+		_ = json.NewEncoder(w).Encode(launchCredentials{
+			IP:        "192.168.88.1",
+			Username:  "admin",
+			Password:  "winbox-password",
+			ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+		})
+	}))
+	defer theia.Close()
+
+	client := &TheiaClient{BaseURL: theia.URL, Secret: "theia_bridge_public.raw-secret", HTTPClient: theia.Client()}
+	h := buildMux("/fake/winbox", "http://localhost:3000", "localhost:1337", client)
+	rr := httptest.NewRecorder()
+	req := makeRequest(t, http.MethodPost, "/launch",
+		map[string]string{"launch_token": "launch-token"},
+		"http://localhost:3000", "localhost:1337")
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 got %d; body: %s", rr.Code, rr.Body.String())
+	}
+	if gotAuth != "Bridge theia_bridge_public.raw-secret" {
+		t.Fatalf("backend Authorization header mismatch")
+	}
+	if gotToken != "launch-token" {
+		t.Fatalf("backend launch_token mismatch")
+	}
+	if strings.Join(launchedArgs, ",") != "192.168.88.1,admin,winbox-password" {
+		t.Fatalf("launched args mismatch")
+	}
+}
+
+func TestLaunch_MissingBridgeSecretReturns503(t *testing.T) {
+	client := &TheiaClient{BaseURL: "http://theia.test", Secret: ""}
+	h := buildMux("/fake/winbox", "http://localhost:3000", "localhost:1337", client)
+	rr := httptest.NewRecorder()
+	req := makeRequest(t, http.MethodPost, "/launch",
+		map[string]string{"launch_token": "launch-token"},
+		"http://localhost:3000", "localhost:1337")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 got %d; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestLaunch_MissingTokenReturns400(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": ""},
+		map[string]string{"launch_token": ""},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 got %d", rr.Code)
 	}
-}
-
-func TestLaunch_InvalidTokenReturns400(t *testing.T) {
-	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
-	rr := httptest.NewRecorder()
-	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": "deadbeef01020304"},
-		"http://localhost:3000", "localhost:1337")
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 got %d", rr.Code)
-	}
-}
-
-func TestLaunch_TokenWrongSecretReturns400(t *testing.T) {
-	// Encrypt with a different secret — bridge should reject it
-	otherSecret := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-	token := encryptToken(t, launchCredentials{
-		IP:        "10.0.0.1",
-		Username:  "admin",
-		Password:  "x",
-		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
-	}, otherSecret)
-	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
-	rr := httptest.NewRecorder()
-	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": token},
-		"http://localhost:3000", "localhost:1337")
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for wrong-secret token, got %d", rr.Code)
-	}
-	assertJSONError(t, rr, "invalid or tampered token")
 }
 
 func TestLaunch_WinBoxNotFoundReturns503(t *testing.T) {
 	// winboxPath is empty — WinBox not found
-	h := buildMux("", "http://localhost:3000", "localhost:1337", testSecret)
+	h := buildMux("", "http://localhost:3000", "localhost:1337", &TheiaClient{BaseURL: "http://theia.test", Secret: testSecret})
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": validToken(t)},
+		map[string]string{"launch_token": validToken(t)},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusServiceUnavailable {
@@ -324,7 +325,7 @@ func TestLaunch_StartProcessFailReturns500(t *testing.T) {
 	h := buildHandler("http://localhost:3000", "/fake/winbox", "localhost:1337")
 	rr := httptest.NewRecorder()
 	req := makeRequest(t, http.MethodPost, "/launch",
-		map[string]string{"token": validToken(t)},
+		map[string]string{"launch_token": validToken(t)},
 		"http://localhost:3000", "localhost:1337")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusInternalServerError {
@@ -357,86 +358,9 @@ func TestLaunch_PlaintextFieldsInBodyAreRejected(t *testing.T) {
 	req.Host = "localhost:1337"
 	h.ServeHTTP(rr, req)
 
-	// Old plaintext format has no "token" field — bridge must return 400
+	// Old plaintext format has no "launch_token" field — bridge must return 400
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for plaintext credentials (no token), got %d", rr.Code)
-	}
-}
-
-// --- decryptLaunchToken unit tests ---
-
-func TestDecryptLaunchToken_RoundTrip(t *testing.T) {
-	creds := launchCredentials{
-		IP:        "10.1.2.3",
-		Username:  "user",
-		Password:  "pass-value",
-		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
-	}
-	token := encryptToken(t, creds, testSecret)
-	got, err := decryptLaunchToken(token, testSecret)
-	if err != nil {
-		t.Fatalf("decryptLaunchToken: %v", err)
-	}
-	if got != creds {
-		t.Errorf("round-trip mismatch: want %+v, got %+v", creds, got)
-	}
-}
-
-func TestDecryptLaunchToken_WrongKey(t *testing.T) {
-	token := encryptToken(t, launchCredentials{
-		IP:        "1.2.3.4",
-		Username:  "u",
-		Password:  "p",
-		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
-	}, testSecret)
-	otherKey := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	_, err := decryptLaunchToken(token, otherKey)
-	if err == nil {
-		t.Error("expected error for wrong key, got nil")
-	}
-}
-
-func TestDecryptLaunchToken_TamperedToken(t *testing.T) {
-	token := encryptToken(t, launchCredentials{
-		IP:        "1.2.3.4",
-		Username:  "u",
-		Password:  "p",
-		ExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
-	}, testSecret)
-	// Flip one byte in the middle
-	b, _ := hex.DecodeString(token)
-	b[len(b)/2] ^= 0xff
-	tampered := hex.EncodeToString(b)
-	_, err := decryptLaunchToken(tampered, testSecret)
-	if err == nil {
-		t.Error("expected error for tampered token, got nil")
-	}
-}
-
-func TestDecryptLaunchToken_InvalidHex(t *testing.T) {
-	_, err := decryptLaunchToken("not-hex!", testSecret)
-	if err == nil {
-		t.Error("expected error for invalid hex, got nil")
-	}
-}
-
-func TestDecryptLaunchToken_InvalidSecret(t *testing.T) {
-	_, err := decryptLaunchToken("aabbcc", "not-a-hex-key")
-	if err == nil {
-		t.Error("expected error for invalid secret, got nil")
-	}
-}
-
-func TestDecryptLaunchToken_ExpiredToken(t *testing.T) {
-	token := encryptToken(t, launchCredentials{
-		IP:        "1.2.3.4",
-		Username:  "u",
-		Password:  "p",
-		ExpiresAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
-	}, testSecret)
-	_, err := decryptLaunchToken(token, testSecret)
-	if err == nil {
-		t.Error("expected error for expired token, got nil")
 	}
 }
 
@@ -536,7 +460,7 @@ func assertJSONError(t *testing.T, rr *httptest.ResponseRecorder, substr string)
 		t.Fatalf("expected 'error' string field, got: %v", resp)
 	}
 	if !strings.Contains(errMsg, substr) {
-		t.Errorf("expected error to contain %q, got %q", substr, errMsg)
+		t.Errorf("JSON error did not contain expected text")
 	}
 }
 

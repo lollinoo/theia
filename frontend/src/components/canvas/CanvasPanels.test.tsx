@@ -348,6 +348,32 @@ describe('CanvasPanels', () => {
     expect(screen.getByText('Device config areas:Map Local Area')).toBeInTheDocument();
   });
 
+  it('does not host the global settings panel inside canvas side panels', () => {
+    const runtimeState = buildRuntimeState({
+      devices: [],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'settings' }}
+        setPanelContent={vi.fn()}
+        devices={[]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+      />,
+    );
+
+    expect(screen.queryByText('Polling Interval')).not.toBeInTheDocument();
+  });
+
   it('clears node metrics immediately when a device config update changes the IP', () => {
     const device = mockDevice();
     const runtimeState = buildRuntimeState({

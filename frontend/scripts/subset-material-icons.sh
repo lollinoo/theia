@@ -16,7 +16,9 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 ICON_NAMES=(
   add
   add_location_alt
+  admin_panel_settings
   backup
+  block
   build
   check
   check_circle
@@ -28,6 +30,7 @@ ICON_NAMES=(
   description
   devices
   dns
+  download
   edit
   expand_less
   expand_more
@@ -38,14 +41,21 @@ ICON_NAMES=(
   language
   light_mode
   link
+  lock
+  lock_reset
+  logout
   map
   notifications
   open_in_full
   open_in_new
+  more_vert
+  person
   public
+  refresh
   remove
   search
   settings
+  sync
   terminal
   zoom_in
   zoom_out

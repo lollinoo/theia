@@ -64,6 +64,7 @@ dev: ## Start full dev stack (backend + frontend + PostgreSQL + Prometheus)
 	@Write-Output "  Prometheus: http://localhost:9090"
 	@Write-Output "  SNMP exporter: http://localhost:9116"
 	@Write-Output ""
+	@Write-Output "Login with administrator / theia, then change the password when prompted."
 	@Write-Output "Run 'make wisp-lab' and 'make wisp-seed-all' to add lab devices"
 	@Write-Output "Run 'make logs' to follow backend logs"
 else
@@ -79,6 +80,7 @@ dev: ## Start full dev stack (backend + frontend + PostgreSQL + Prometheus)
 	@echo "  Prometheus: http://localhost:9090"
 	@echo "  SNMP exporter: http://localhost:9116"
 	@echo ""
+	@echo "Login with administrator / theia, then change the password when prompted."
 	@echo "Run 'make wisp-lab' and 'make wisp-seed-all' to add lab devices"
 	@echo "Run 'make logs' to follow backend logs"
 endif
@@ -420,7 +422,7 @@ BRIDGE_TARGETS_NOCGO := windows/amd64 windows/arm64 linux/amd64 linux/arm64
 
 ifeq ($(IS_WINDOWS),1)
 bridge-build-all: ## Cross-compile winbox-bridge for Windows + Linux (macOS requires native Mac - use CI)
-	@& ./scripts/build-winbox-bridge.ps1 "$(BRIDGE_OUT)" "$(BRIDGE_SRC)" $(BRIDGE_TARGETS_NOCGO)
+	@& ./scripts/build-winbox-bridge.ps1 -OutDir "$(BRIDGE_OUT)" -Source "$(BRIDGE_SRC)" -Targets @('windows/amd64','windows/arm64','linux/amd64','linux/arm64')
 else
 bridge-build-all: ## Cross-compile winbox-bridge for Windows + Linux (macOS requires native Mac - use CI)
 	@rm -rf $(BRIDGE_OUT)

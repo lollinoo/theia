@@ -195,6 +195,10 @@ func (h *SNMPProfileHandler) HandleReveal(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	subject, ok := requireAuthenticatedOperator(w, r, "credential reveal")
+	if !ok {
+		return
+	}
 
 	id, err := extractRevealSNMPProfileID(r.URL.Path)
 	if err != nil {
@@ -221,18 +225,18 @@ func (h *SNMPProfileHandler) HandleReveal(w http.ResponseWriter, r *http.Request
 	profile, err := h.repo.GetByID(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			log.Printf("snmp profile reveal profile_id=%s reason=%q remote_addr=%q user_agent=%q outcome=not_found", id, reason, r.RemoteAddr, r.UserAgent())
+			log.Printf("snmp profile reveal subject=%q profile_id=%s reason=%q remote_addr=%q user_agent=%q outcome=not_found", subject.Name, id, reason, r.RemoteAddr, r.UserAgent())
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		log.Printf("snmp profile reveal profile_id=%s reason=%q remote_addr=%q user_agent=%q outcome=error", id, reason, r.RemoteAddr, r.UserAgent())
+		log.Printf("snmp profile reveal subject=%q profile_id=%s reason=%q remote_addr=%q user_agent=%q outcome=error", subject.Name, id, reason, r.RemoteAddr, r.UserAgent())
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	log.Printf("snmp profile reveal profile_id=%s reason=%q remote_addr=%q user_agent=%q outcome=success", id, reason, r.RemoteAddr, r.UserAgent())
+	log.Printf("snmp profile reveal subject=%q profile_id=%s reason=%q remote_addr=%q user_agent=%q outcome=success", subject.Name, id, reason, r.RemoteAddr, r.UserAgent())
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": profileToRevealResponse(profile)})
 }
 

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 /**
  * COMP-03 NavBar (NavigationPill) behavioral tests.
  * The NavBar was implemented as NavigationPill in this project.
@@ -10,9 +10,11 @@ import NavigationPill from './NavigationPill';
 
 // Mock API client
 vi.mock('../api/client', () => ({
-  fetchHealthVersion: vi
-    .fn()
-    .mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
+  fetchHealthVersion: vi.fn().mockResolvedValue({
+    version: '1.3.0',
+    git_commit: 'abc',
+    build_date: '2026-01-01',
+  }),
 }));
 
 // Mock ThemeContext - resolvedTheme=dark to check light_mode icon
@@ -47,15 +49,18 @@ const defaultProps = {
     } satisfies CanvasMap,
   ],
   areas: [],
+  canViewAdmin: false,
   onViewChange: vi.fn(),
   onAreaSelect: vi.fn(),
   onMapSelect: vi.fn(),
   onManageMaps: vi.fn(),
+  onLogout: vi.fn(),
 };
 
 describe('NavigationPill (COMP-03: NavBar requirements)', () => {
-  it('uses MaterialIcon for theme toggle — no inline SVGs', () => {
+  it('uses MaterialIcon for user menu actions — no inline SVGs', () => {
     const { container } = render(<NavigationPill {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
     // No raw SVG elements — MaterialIcon renders a span
     const svgElements = container.querySelectorAll('svg');
     expect(svgElements.length).toBe(0);
@@ -64,8 +69,9 @@ describe('NavigationPill (COMP-03: NavBar requirements)', () => {
     expect(iconSpans.length).toBeGreaterThan(0);
   });
 
-  it('theme toggle renders light_mode icon when resolvedTheme is dark', () => {
+  it('user menu theme action renders light_mode icon when resolvedTheme is dark', () => {
     const { container } = render(<NavigationPill {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
     // When dark, shows light_mode icon to switch to light
     // Find icon with text content "light_mode"
     const allIcons = Array.from(container.querySelectorAll('.material-symbols-rounded'));
