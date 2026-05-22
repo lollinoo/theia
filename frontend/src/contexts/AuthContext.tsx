@@ -98,13 +98,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    setError(null);
     try {
-      await logoutUser();
-    } finally {
-      setUser(null);
-      setStatus('unauthenticated');
+      const session = await logoutUser();
+      applySession(session);
+    } catch (logoutError) {
+      setError('Unable to log out. Check your connection and try again.');
+      throw logoutError;
     }
-  }, []);
+  }, [applySession]);
 
   const changePassword = useCallback(
     async (payload: ChangePasswordPayload) => {
