@@ -16,6 +16,7 @@ import {
 import { AdminDashboard } from './AdminDashboard';
 
 const settingsPanelPropsMock = vi.hoisted(() => vi.fn());
+const authState = vi.hoisted(() => ({ permissions: new Set<string>() }));
 
 vi.mock('../api/client', () => ({
   fetchAdminDashboard: vi.fn(),
@@ -37,6 +38,26 @@ vi.mock('./SettingsPanel', () => ({
     return <div data-testid="global-settings-panel">Global settings</div>;
   },
 }));
+
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    status: 'authenticated',
+    user: { permissions: [...authState.permissions] },
+    error: null,
+    refresh: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
+    changePassword: vi.fn(),
+    hasPermission: (permission: string) => authState.permissions.has(permission),
+  }),
+}));
+
+function grantPermissions(...permissions: string[]) {
+  authState.permissions.clear();
+  for (const permission of permissions) {
+    authState.permissions.add(permission);
+  }
+}
 
 const adminUser = {
   id: 'user-1',
@@ -72,6 +93,18 @@ describe('AdminDashboard', () => {
     vi.mocked(removeAdminUserRole).mockReset();
     vi.mocked(createAdminPasswordReset).mockReset();
     settingsPanelPropsMock.mockClear();
+    grantPermissions(
+      'admin:dashboard:read',
+      'users:read',
+      'users:create',
+      'users:update',
+      'users:disable',
+      'roles:read',
+      'roles:assign',
+      'audit_logs:read',
+      'settings:read',
+      'settings:update',
+    );
 
     vi.mocked(fetchAdminDashboard).mockResolvedValue({
       stats: {
@@ -139,13 +172,20 @@ describe('AdminDashboard', () => {
     expect(screen.getByText('user:user-1')).toBeInTheDocument();
   });
 
-  it('exposes global settings inside admin only when the user can read and update settings', async () => {
-    vi.mocked(fetchAdminPermissions).mockResolvedValue([
-      'admin:dashboard:read',
-      'settings:read',
-      'settings:update',
-    ]);
+  it('loads overview without requesting admin sections the user cannot read', async () => {
+    grantPermissions('admin:dashboard:read');
 
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('Total users')).toBeInTheDocument();
+    expect(fetchAdminUsers).not.toHaveBeenCalled();
+    expect(fetchAdminRoles).not.toHaveBeenCalled();
+    expect(fetchAdminPermissions).not.toHaveBeenCalled();
+    expect(fetchAdminAuditLogs).not.toHaveBeenCalled();
+    expect(screen.queryByRole('tab', { name: 'Users' })).not.toBeInTheDocument();
+  });
+
+  it('exposes global settings inside admin only when the user can read and update settings', async () => {
     render(<AdminDashboard />);
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Settings' }));
@@ -155,12 +195,41 @@ describe('AdminDashboard', () => {
   });
 
   it('hides global settings from admin users without settings update permission', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read');
     vi.mocked(fetchAdminPermissions).mockResolvedValue(['admin:dashboard:read']);
 
     render(<AdminDashboard />);
 
     expect(await screen.findByText('Total users')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Settings' })).not.toBeInTheDocument();
+  });
+
+  it('does not expose settings from the system permission catalog alone', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read');
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['settings:read', 'settings:update']);
+
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('Total users')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Settings' })).not.toBeInTheDocument();
+  });
+
+  it('hides user mutation controls from users with read-only user access', async () => {
+    grantPermissions('admin:dashboard:read', 'users:read');
+
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Users' }));
+
+    const row = screen.getByRole('row', { name: /alice/i });
+    expect(screen.queryByRole('button', { name: 'Create user' })).not.toBeInTheDocument();
+    expect(
+      within(row).queryByRole('button', { name: 'Disable user alice' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(row).queryByRole('button', { name: 'Reset password for alice' }),
+    ).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /Remove operator/ })).not.toBeInTheDocument();
+    expect(within(row).queryByLabelText('Role to assign to alice')).not.toBeInTheDocument();
   });
 
   it('searches users and confirms privilege-changing actions', async () => {

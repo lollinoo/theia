@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   type AdminAuditLog,
   type AdminDashboardResponse,
@@ -16,18 +16,16 @@ import {
   setAdminUserStatus,
   updateAdminUser,
 } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import { MaterialIcon } from './MaterialIcon';
 import { SettingsPanel } from './SettingsPanel';
 
 type AdminTab = 'overview' | 'users' | 'roles' | 'audit' | 'settings';
 
-const tabs: Array<{ id: AdminTab; label: string }> = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'users', label: 'Users' },
-  { id: 'roles', label: 'Roles' },
-  { id: 'audit', label: 'Audit Logs' },
-];
-
+const overviewTab = { id: 'overview', label: 'Overview' } as const;
+const usersTab = { id: 'users', label: 'Users' } as const;
+const rolesTab = { id: 'roles', label: 'Roles' } as const;
+const auditTab = { id: 'audit', label: 'Audit Logs' } as const;
 const settingsTab = { id: 'settings', label: 'Settings' } as const;
 
 const emptyDashboard: AdminDashboardResponse = {
@@ -64,6 +62,7 @@ interface AdminDashboardProps {
 }
 
 export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
+  const { hasPermission } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [dashboard, setDashboard] = useState<AdminDashboardResponse>(emptyDashboard);
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -89,7 +88,33 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
     token: string;
   } | null>(null);
 
-  const load = async () => {
+  const canReadUsers = hasPermission('users:read');
+  const canCreateUsers = hasPermission('users:create');
+  const canUpdateUsers = hasPermission('users:update');
+  const canDisableUsers = hasPermission('users:disable');
+  const canReadRoles = hasPermission('roles:read');
+  const canAssignRoles = hasPermission('roles:assign');
+  const canReadAuditLogs = hasPermission('audit_logs:read');
+  const canManageSettings = hasPermission('settings:read') && hasPermission('settings:update');
+
+  const visibleTabs = useMemo(() => {
+    const nextTabs: Array<{ id: AdminTab; label: string }> = [overviewTab];
+    if (canReadUsers) {
+      nextTabs.push(usersTab);
+    }
+    if (canReadRoles) {
+      nextTabs.push(rolesTab);
+    }
+    if (canReadAuditLogs) {
+      nextTabs.push(auditTab);
+    }
+    if (canManageSettings) {
+      nextTabs.push(settingsTab);
+    }
+    return nextTabs;
+  }, [canManageSettings, canReadAuditLogs, canReadRoles, canReadUsers]);
+
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     setResetToken(null);
@@ -97,10 +122,10 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
       const [nextDashboard, nextUsers, nextRoles, nextPermissions, nextAuditLogs] =
         await Promise.all([
           fetchAdminDashboard(),
-          fetchAdminUsers(),
-          fetchAdminRoles(),
-          fetchAdminPermissions(),
-          fetchAdminAuditLogs(),
+          canReadUsers ? fetchAdminUsers() : Promise.resolve<AuthUser[]>([]),
+          canReadRoles ? fetchAdminRoles() : Promise.resolve<AdminRole[]>([]),
+          canReadRoles ? fetchAdminPermissions() : Promise.resolve<string[]>([]),
+          canReadAuditLogs ? fetchAdminAuditLogs() : Promise.resolve<AdminAuditLog[]>([]),
         ]);
       setDashboard(nextDashboard);
       setUsers(nextUsers);
@@ -112,11 +137,11 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [canReadAuditLogs, canReadRoles, canReadUsers]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   useEffect(() => {
     if (!visible) {
@@ -130,15 +155,11 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
     }
   }, [activeTab]);
 
-  const canManageSettings =
-    permissions.includes('settings:read') && permissions.includes('settings:update');
-  const visibleTabs = canManageSettings ? [...tabs, settingsTab] : tabs;
-
   useEffect(() => {
-    if (activeTab === 'settings' && !canManageSettings) {
+    if (!visibleTabs.some((tab) => tab.id === activeTab)) {
       setActiveTab('overview');
     }
-  }, [activeTab, canManageSettings]);
+  }, [activeTab, visibleTabs]);
 
   const filteredUsers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -151,6 +172,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
 
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canCreateUsers) {
+      return;
+    }
     setCreatingUser(true);
     setError(null);
     try {
@@ -178,6 +202,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   }
 
   async function patchUser(user: AuthUser, payload: { display_name?: string; email?: string }) {
+    if (!canUpdateUsers) {
+      return;
+    }
     setSavingUserId(user.id);
     setError(null);
     try {
@@ -193,6 +220,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   }
 
   async function changeStatus(user: AuthUser, status: string) {
+    if (!canUpdateUsers || ((status === 'disabled' || status === 'locked') && !canDisableUsers)) {
+      return;
+    }
     if (status === user.status) {
       return;
     }
@@ -214,6 +244,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   }
 
   async function assignRole(user: AuthUser) {
+    if (!canAssignRoles) {
+      return;
+    }
     const roleId = selectedRoleByUser[user.id];
     if (!roleId) {
       return;
@@ -237,6 +270,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   }
 
   async function removeRole(user: AuthUser, roleName: string) {
+    if (!canAssignRoles) {
+      return;
+    }
     const role = roles.find(
       (candidate) => candidate.name === roleName || candidate.id === roleName,
     );
@@ -265,6 +301,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   }
 
   async function resetPassword(user: AuthUser) {
+    if (!canUpdateUsers) {
+      return;
+    }
     if (!window.confirm(`Create a one-time password reset token for ${user.username}?`)) {
       return;
     }
@@ -374,80 +413,82 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
 
             {activeTab === 'users' && (
               <section className="flex flex-col gap-4">
-                <form
-                  className="grid gap-3 rounded-lg border border-outline-subtle bg-surface p-4 md:grid-cols-6"
-                  onSubmit={handleCreateUser}
-                >
-                  <input
-                    aria-label="New username"
-                    className="rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-                    placeholder="Username"
-                    value={newUser.username}
-                    onChange={(event) =>
-                      setNewUser((current) => ({
-                        ...current,
-                        username: event.target.value,
-                      }))
-                    }
-                  />
-                  <input
-                    aria-label="New email"
-                    className="rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-                    placeholder="Email"
-                    value={newUser.email}
-                    onChange={(event) =>
-                      setNewUser((current) => ({
-                        ...current,
-                        email: event.target.value,
-                      }))
-                    }
-                  />
-                  <input
-                    aria-label="New display name"
-                    className="rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-                    placeholder="Display name"
-                    value={newUser.display_name}
-                    onChange={(event) =>
-                      setNewUser((current) => ({
-                        ...current,
-                        display_name: event.target.value,
-                      }))
-                    }
-                  />
-                  <input
-                    aria-label="Initial password"
-                    className="rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-                    placeholder="Initial password"
-                    type="password"
-                    value={newUser.password}
-                    onChange={(event) =>
-                      setNewUser((current) => ({
-                        ...current,
-                        password: event.target.value,
-                      }))
-                    }
-                  />
-                  <label className="flex items-center gap-2 text-sm text-on-bg-secondary">
+                {canCreateUsers && (
+                  <form
+                    className="grid gap-3 rounded-lg border border-outline-subtle bg-surface p-4 md:grid-cols-6"
+                    onSubmit={handleCreateUser}
+                  >
                     <input
-                      type="checkbox"
-                      checked={newUser.must_change_password}
+                      aria-label="New username"
+                      className="rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
+                      placeholder="Username"
+                      value={newUser.username}
                       onChange={(event) =>
                         setNewUser((current) => ({
                           ...current,
-                          must_change_password: event.target.checked,
+                          username: event.target.value,
                         }))
                       }
                     />
-                    Require change
-                  </label>
-                  <button
-                    type="submit"
-                    disabled={creatingUser || !newUser.username.trim() || !newUser.password}
-                    className="rounded-md bg-primary px-3 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Create user
-                  </button>
-                </form>
+                    <input
+                      aria-label="New email"
+                      className="rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
+                      placeholder="Email"
+                      value={newUser.email}
+                      onChange={(event) =>
+                        setNewUser((current) => ({
+                          ...current,
+                          email: event.target.value,
+                        }))
+                      }
+                    />
+                    <input
+                      aria-label="New display name"
+                      className="rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
+                      placeholder="Display name"
+                      value={newUser.display_name}
+                      onChange={(event) =>
+                        setNewUser((current) => ({
+                          ...current,
+                          display_name: event.target.value,
+                        }))
+                      }
+                    />
+                    <input
+                      aria-label="Initial password"
+                      className="rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
+                      placeholder="Initial password"
+                      type="password"
+                      value={newUser.password}
+                      onChange={(event) =>
+                        setNewUser((current) => ({
+                          ...current,
+                          password: event.target.value,
+                        }))
+                      }
+                    />
+                    <label className="flex items-center gap-2 text-sm text-on-bg-secondary">
+                      <input
+                        type="checkbox"
+                        checked={newUser.must_change_password}
+                        onChange={(event) =>
+                          setNewUser((current) => ({
+                            ...current,
+                            must_change_password: event.target.checked,
+                          }))
+                        }
+                      />
+                      Require change
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={creatingUser || !newUser.username.trim() || !newUser.password}
+                      className="rounded-md bg-primary px-3 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Create user
+                    </button>
+                  </form>
+                )}
 
                 <div className="flex flex-wrap gap-2">
                   <input
@@ -486,6 +527,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
                   onAssignRole={assignRole}
                   onRemoveRole={removeRole}
                   onResetPassword={resetPassword}
+                  canUpdateUsers={canUpdateUsers}
+                  canDisableUsers={canDisableUsers}
+                  canAssignRoles={canAssignRoles}
                 />
               </section>
             )}
@@ -515,6 +559,9 @@ function UserTable({
   onAssignRole,
   onRemoveRole,
   onResetPassword,
+  canUpdateUsers,
+  canDisableUsers,
+  canAssignRoles,
 }: {
   users: AuthUser[];
   roles: AdminRole[];
@@ -526,6 +573,9 @@ function UserTable({
   onAssignRole: (user: AuthUser) => void;
   onRemoveRole: (user: AuthUser, roleName: string) => void;
   onResetPassword: (user: AuthUser) => void;
+  canUpdateUsers: boolean;
+  canDisableUsers: boolean;
+  canAssignRoles: boolean;
 }) {
   if (users.length === 0) {
     return (
@@ -557,43 +607,58 @@ function UserTable({
                   <div className="text-xs text-on-bg-secondary">{user.id}</div>
                 </td>
                 <td className="px-3 py-3 align-top">
-                  <div className="flex min-w-64 flex-col gap-2">
-                    <input
-                      aria-label={`Display name for ${user.username}`}
-                      defaultValue={user.display_name}
-                      className="rounded-md border border-outline-subtle bg-bg px-2 py-1.5 outline-none focus:border-primary"
-                      onBlur={(event) =>
-                        event.target.value !== user.display_name
-                          ? onPatchUser(user, {
-                              display_name: event.target.value,
-                            })
-                          : undefined
-                      }
-                    />
-                    <input
-                      aria-label={`Email for ${user.username}`}
-                      defaultValue={user.email}
-                      className="rounded-md border border-outline-subtle bg-bg px-2 py-1.5 outline-none focus:border-primary"
-                      onBlur={(event) =>
-                        event.target.value !== user.email
-                          ? onPatchUser(user, { email: event.target.value })
-                          : undefined
-                      }
-                    />
-                  </div>
+                  {canUpdateUsers ? (
+                    <div className="flex min-w-64 flex-col gap-2">
+                      <input
+                        aria-label={`Display name for ${user.username}`}
+                        defaultValue={user.display_name}
+                        className="rounded-md border border-outline-subtle bg-bg px-2 py-1.5 outline-none focus:border-primary"
+                        onBlur={(event) =>
+                          event.target.value !== user.display_name
+                            ? onPatchUser(user, {
+                                display_name: event.target.value,
+                              })
+                            : undefined
+                        }
+                      />
+                      <input
+                        aria-label={`Email for ${user.username}`}
+                        defaultValue={user.email}
+                        className="rounded-md border border-outline-subtle bg-bg px-2 py-1.5 outline-none focus:border-primary"
+                        onBlur={(event) =>
+                          event.target.value !== user.email
+                            ? onPatchUser(user, { email: event.target.value })
+                            : undefined
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <div className="min-w-64 text-sm text-on-bg">
+                      <div>{user.display_name}</div>
+                      <div className="text-on-bg-secondary">{user.email}</div>
+                    </div>
+                  )}
                 </td>
                 <td className="px-3 py-3 align-top">
-                  <select
-                    aria-label={`Status for ${user.username}`}
-                    className="rounded-md border border-outline-subtle bg-bg px-2 py-1.5 outline-none focus:border-primary"
-                    value={user.status}
-                    disabled={disabled}
-                    onChange={(event) => onChangeStatus(user, event.target.value)}
-                  >
-                    <option value="active">Active</option>
-                    <option value="disabled">Disabled</option>
-                    <option value="locked">Locked</option>
-                  </select>
+                  {canUpdateUsers ? (
+                    <select
+                      aria-label={`Status for ${user.username}`}
+                      className="rounded-md border border-outline-subtle bg-bg px-2 py-1.5 outline-none focus:border-primary"
+                      value={user.status}
+                      disabled={disabled}
+                      onChange={(event) => onChangeStatus(user, event.target.value)}
+                    >
+                      <option value="active">Active</option>
+                      <option value="disabled" disabled={!canDisableUsers}>
+                        Disabled
+                      </option>
+                      <option value="locked" disabled={!canDisableUsers}>
+                        Locked
+                      </option>
+                    </select>
+                  ) : (
+                    <span className="text-on-bg">{user.status}</span>
+                  )}
                   {user.must_change_password && (
                     <div className="mt-1 text-xs text-warning">Password change pending</div>
                   )}
@@ -604,75 +669,87 @@ function UserTable({
                       <span className="text-on-bg-secondary">No roles</span>
                     ) : (
                       user.roles.map((roleName) => (
-                        <button
+                        <span
                           key={roleName}
-                          type="button"
-                          disabled={disabled}
-                          onClick={() => onRemoveRole(user, roleName)}
-                          className="inline-flex items-center gap-1 rounded-md border border-outline-subtle bg-surface-container px-2 py-1 text-xs text-on-bg hover:bg-surface-container-high disabled:opacity-60"
-                          aria-label={`Remove ${roleName} from ${user.username}`}
-                          title={`Remove ${roleName}`}
+                          className="inline-flex items-center gap-1 rounded-md border border-outline-subtle bg-surface-container px-2 py-1 text-xs text-on-bg"
                         >
                           {roleName}
-                          <MaterialIcon name="close" size={14} />
-                        </button>
+                          {canAssignRoles && (
+                            <button
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => onRemoveRole(user, roleName)}
+                              className="inline-flex items-center text-on-bg-secondary hover:text-on-bg disabled:opacity-60"
+                              aria-label={`Remove ${roleName} from ${user.username}`}
+                              title={`Remove ${roleName}`}
+                            >
+                              <MaterialIcon name="close" size={14} />
+                            </button>
+                          )}
+                        </span>
                       ))
                     )}
                   </div>
-                  <div className="mt-2 flex gap-2">
-                    <select
-                      aria-label={`Role to assign to ${user.username}`}
-                      className="max-w-40 rounded-md border border-outline-subtle bg-bg px-2 py-1.5 outline-none focus:border-primary"
-                      value={selectedRoleByUser[user.id] ?? ''}
-                      onChange={(event) => onSelectedRoleChange(user.id, event.target.value)}
-                    >
-                      <option value="">Assign role</option>
-                      {roles.map((role) => (
-                        <option key={role.id} value={role.id}>
-                          {role.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      disabled={disabled || !selectedRoleByUser[user.id]}
-                      onClick={() => onAssignRole(user)}
-                      className="rounded-md border border-outline-subtle bg-surface-container px-2 py-1.5 text-xs text-on-bg disabled:opacity-60"
-                    >
-                      Assign
-                    </button>
-                  </div>
+                  {canAssignRoles && (
+                    <div className="mt-2 flex gap-2">
+                      <select
+                        aria-label={`Role to assign to ${user.username}`}
+                        className="max-w-40 rounded-md border border-outline-subtle bg-bg px-2 py-1.5 outline-none focus:border-primary"
+                        value={selectedRoleByUser[user.id] ?? ''}
+                        onChange={(event) => onSelectedRoleChange(user.id, event.target.value)}
+                      >
+                        <option value="">Assign role</option>
+                        {roles.map((role) => (
+                          <option key={role.id} value={role.id}>
+                            {role.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={disabled || !selectedRoleByUser[user.id]}
+                        onClick={() => onAssignRole(user)}
+                        className="rounded-md border border-outline-subtle bg-surface-container px-2 py-1.5 text-xs text-on-bg disabled:opacity-60"
+                      >
+                        Assign
+                      </button>
+                    </div>
+                  )}
                   <div className="mt-1 text-xs text-on-bg-secondary">{rolesLabel(user)}</div>
                 </td>
                 <td className="px-3 py-3 align-top">
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() =>
-                        onChangeStatus(user, user.status === 'active' ? 'disabled' : 'active')
-                      }
-                      className="inline-flex items-center gap-1 rounded-md border border-outline-subtle bg-surface-container px-2 py-1.5 text-xs text-on-bg disabled:opacity-60"
-                      aria-label={`${user.status === 'active' ? 'Disable' : 'Enable'} user ${
-                        user.username
-                      }`}
-                    >
-                      <MaterialIcon
-                        name={user.status === 'active' ? 'block' : 'check_circle'}
-                        size={16}
-                      />
-                      {user.status === 'active' ? 'Disable' : 'Enable'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => onResetPassword(user)}
-                      className="inline-flex items-center gap-1 rounded-md border border-outline-subtle bg-surface-container px-2 py-1.5 text-xs text-on-bg disabled:opacity-60"
-                      aria-label={`Reset password for ${user.username}`}
-                    >
-                      <MaterialIcon name="key" size={16} />
-                      Reset
-                    </button>
+                    {canUpdateUsers && (user.status !== 'active' || canDisableUsers) && (
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() =>
+                          onChangeStatus(user, user.status === 'active' ? 'disabled' : 'active')
+                        }
+                        className="inline-flex items-center gap-1 rounded-md border border-outline-subtle bg-surface-container px-2 py-1.5 text-xs text-on-bg disabled:opacity-60"
+                        aria-label={`${user.status === 'active' ? 'Disable' : 'Enable'} user ${
+                          user.username
+                        }`}
+                      >
+                        <MaterialIcon
+                          name={user.status === 'active' ? 'block' : 'check_circle'}
+                          size={16}
+                        />
+                        {user.status === 'active' ? 'Disable' : 'Enable'}
+                      </button>
+                    )}
+                    {canUpdateUsers && (
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => onResetPassword(user)}
+                        className="inline-flex items-center gap-1 rounded-md border border-outline-subtle bg-surface-container px-2 py-1.5 text-xs text-on-bg disabled:opacity-60"
+                        aria-label={`Reset password for ${user.username}`}
+                      >
+                        <MaterialIcon name="key" size={16} />
+                        Reset
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
