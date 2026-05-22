@@ -14,6 +14,7 @@ interface NavigationPillProps {
   maps: CanvasMap[];
   areas: Area[];
   canViewAdmin?: boolean;
+  canViewSettings?: boolean;
   userLabel?: string;
   onViewChange: (view: ActiveView) => void;
   onAreaSelect: (areaId: string | null) => void;
@@ -30,6 +31,7 @@ function NavigationPill({
   maps,
   areas,
   canViewAdmin = false,
+  canViewSettings = false,
   userLabel = 'User',
   onViewChange,
   onAreaSelect,
@@ -64,6 +66,7 @@ function NavigationPill({
   const isAllAreas = isTopologyContextView && selectedAreaId === null;
   const isDashboard = activeView === 'dashboard';
   const isAdmin = activeView === 'admin';
+  const isSettings = activeView === 'settings';
   const normalizedUserLabel = userLabel.trim() || 'User';
   const userInitial = normalizedUserLabel[0]?.toUpperCase() ?? 'U';
   const maxInlineAreas = 3;
@@ -202,6 +205,12 @@ function NavigationPill({
     if (!canViewAdmin) return;
     setUserMenuOpen(false);
     onViewChange('admin');
+  };
+
+  const handleSettingsMenuClick = () => {
+    if (!canViewSettings) return;
+    setUserMenuOpen(false);
+    onViewChange('settings');
   };
 
   const handleLogoutMenuClick = () => {
@@ -423,7 +432,7 @@ function NavigationPill({
           title="User menu"
           onClick={() => setUserMenuOpen((current) => !current)}
           className={`flex h-10 max-w-[11rem] items-center gap-2 rounded-full border px-2 transition-colors hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-3 ${
-            isAdmin
+            isAdmin || isSettings
               ? 'border-outline-strong bg-surface-container-high font-semibold text-on-bg shadow-pill'
               : 'border-transparent text-on-bg-secondary'
           }`}
@@ -454,6 +463,17 @@ function NavigationPill({
                 >
                   <MaterialIcon name="admin_panel_settings" className="text-[18px]" />
                   <span className="min-w-0 flex-1 truncate">Admin Area</span>
+                </button>
+              )}
+              {canViewSettings && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={handleSettingsMenuClick}
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-on-bg transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  <MaterialIcon name="settings" className="text-[18px]" />
+                  <span className="min-w-0 flex-1 truncate">Settings</span>
                 </button>
               )}
               <button

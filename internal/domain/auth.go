@@ -39,6 +39,7 @@ const (
 	PermissionAuditLogsRead     = "audit_logs:read"
 	PermissionSettingsRead      = "settings:read"
 	PermissionSettingsUpdate    = "settings:update"
+	PermissionAccountManage     = "account:manage"
 	PermissionTopologyRead      = "topology:read"
 	PermissionTopologyUpdate    = "topology:update"
 	PermissionDevicesRead       = "devices:read"
@@ -295,6 +296,7 @@ func SystemPermissions() []SystemPermission {
 		{Key: PermissionAuditLogsRead, Description: "Read audit logs", Resource: "audit_logs", Action: "read"},
 		{Key: PermissionSettingsRead, Description: "Read settings", Resource: "settings", Action: "read"},
 		{Key: PermissionSettingsUpdate, Description: "Update settings", Resource: "settings", Action: "update"},
+		{Key: PermissionAccountManage, Description: "Manage own account settings", Resource: "account", Action: "manage"},
 		{Key: PermissionTopologyRead, Description: "Read topology", Resource: "topology", Action: "read"},
 		{Key: PermissionTopologyUpdate, Description: "Update topology", Resource: "topology", Action: "update"},
 		{Key: PermissionDevicesRead, Description: "Read devices", Resource: "devices", Action: "read"},
@@ -327,6 +329,7 @@ func SystemRolePermissionKeys(roleName string) []string {
 			PermissionAuditLogsRead,
 			PermissionSettingsRead,
 			PermissionSettingsUpdate,
+			PermissionAccountManage,
 			PermissionTopologyRead,
 			PermissionTopologyUpdate,
 			PermissionDevicesRead,
@@ -342,6 +345,7 @@ func SystemRolePermissionKeys(roleName string) []string {
 	case RoleManager:
 		return []string{
 			PermissionAdminDashboard,
+			PermissionAccountManage,
 			PermissionSettingsRead,
 			PermissionTopologyRead,
 			PermissionTopologyUpdate,
@@ -354,6 +358,7 @@ func SystemRolePermissionKeys(roleName string) []string {
 		}
 	case RoleUser:
 		return []string{
+			PermissionAccountManage,
 			PermissionSettingsRead,
 			PermissionTopologyRead,
 			PermissionTopologyUpdate,
@@ -363,6 +368,7 @@ func SystemRolePermissionKeys(roleName string) []string {
 		}
 	case RoleViewer:
 		return []string{
+			PermissionAccountManage,
 			PermissionSettingsRead,
 			PermissionTopologyRead,
 			PermissionDevicesRead,

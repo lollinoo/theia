@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,36 +13,21 @@ type Config struct {
 	WinBoxPath   string `json:"winbox_path"`
 	ListenPort   int    `json:"listen_port"`
 	TheiaOrigin  string `json:"theia_origin"`
-	BridgeSecret string `json:"bridge_secret"` // hex-encoded 32-byte secret shared with the Theia backend
-	LogLevel     string `json:"log_level"`     // "info" (default) or "debug"
+	TheiaBaseURL string `json:"theia_base_url"`
+	BridgeSecret string `json:"bridge_secret"`
+	LogLevel     string `json:"log_level"` // "info" (default) or "debug"
 }
 
 // DefaultConfig returns the config matching current CLI flag defaults.
-// BridgeSecret is intentionally left empty here; it is populated by
-// ensureBridgeSecret on first run so the caller can persist the updated config.
 func DefaultConfig() Config {
 	return Config{
 		WinBoxPath:   "",
 		ListenPort:   1337,
 		TheiaOrigin:  "http://localhost:3000",
+		TheiaBaseURL: "http://localhost:3000",
 		BridgeSecret: "",
 		LogLevel:     "info",
 	}
-}
-
-// ensureBridgeSecret generates and returns a new hex-encoded 32-byte random
-// secret if cfg.BridgeSecret is empty. The returned Config must be saved by
-// the caller; this function does not persist the config itself.
-func ensureBridgeSecret(cfg Config) (Config, error) {
-	if cfg.BridgeSecret != "" {
-		return cfg, nil
-	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return cfg, fmt.Errorf("generate bridge secret: %w", err)
-	}
-	cfg.BridgeSecret = hex.EncodeToString(key)
-	return cfg, nil
 }
 
 // configFilePath returns the platform-appropriate path for config.json.

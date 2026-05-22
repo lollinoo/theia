@@ -11,7 +11,7 @@ import { useWinboxFlow } from './useWinboxFlow';
 const apiMocks = vi.hoisted(() => ({
   fetchSettings: vi.fn(),
   fetchDeviceCredentialProfiles: vi.fn(),
-  fetchBridgeToken: vi.fn(),
+  createBridgeLaunchRequest: vi.fn(),
 }));
 
 vi.mock('../api/client', () => apiMocks);
@@ -31,9 +31,9 @@ describe('useWinboxFlow', () => {
     vi.unstubAllGlobals();
   });
 
-  it('launches with a server-side bridge token without reading bridge_secret from settings', async () => {
+  it('launches with a user-scoped bridge launch token without reading connector secrets from settings', async () => {
     apiMocks.fetchSettings.mockResolvedValue({ bridge_port: '1337' });
-    apiMocks.fetchBridgeToken.mockResolvedValue('bridge-token');
+    apiMocks.createBridgeLaunchRequest.mockResolvedValue({ launch_token: 'launch-token' });
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 
     const { result } = renderHook(() => useWinboxFlow());
@@ -47,7 +47,11 @@ describe('useWinboxFlow', () => {
     });
 
     expect(result.current.winboxError).toBeNull();
-    expect(apiMocks.fetchBridgeToken).toHaveBeenCalledWith('dev-1');
+    expect(apiMocks.createBridgeLaunchRequest).toHaveBeenCalledWith('dev-1');
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://localhost:1337/launch',
+      expect.objectContaining({ body: JSON.stringify({ launch_token: 'launch-token' }) }),
+    );
   });
 
   it('refreshes a stale false WinBox cache when reopening the same device menu', async () => {
@@ -74,7 +78,7 @@ describe('useWinboxFlow', () => {
   });
 
   it('maps bridge launch timeout failures into the WinBox error toast', async () => {
-    apiMocks.fetchBridgeToken.mockResolvedValue('bridge-token');
+    apiMocks.createBridgeLaunchRequest.mockResolvedValue({ launch_token: 'launch-token' });
     (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}));
 
     const { result } = renderHook(() => useWinboxFlow());
@@ -102,14 +106,14 @@ describe('useWinboxFlow', () => {
           resolveSettings = resolve;
         }),
     );
-    apiMocks.fetchBridgeToken.mockResolvedValue('bridge-token');
+    apiMocks.createBridgeLaunchRequest.mockResolvedValue({ launch_token: 'launch-token' });
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 
     const { result } = renderHook(() => useWinboxFlow());
 
     const launchPromise = result.current.launchWinbox('dev-1');
 
-    expect(apiMocks.fetchBridgeToken).not.toHaveBeenCalled();
+    expect(apiMocks.createBridgeLaunchRequest).not.toHaveBeenCalled();
     expect(result.current.winboxError).toBeNull();
 
     await act(async () => {
@@ -117,7 +121,7 @@ describe('useWinboxFlow', () => {
       await launchPromise;
     });
 
-    expect(apiMocks.fetchBridgeToken).toHaveBeenCalledWith('dev-1');
+    expect(apiMocks.createBridgeLaunchRequest).toHaveBeenCalledWith('dev-1');
     expect(result.current.winboxError).toBeNull();
   });
 

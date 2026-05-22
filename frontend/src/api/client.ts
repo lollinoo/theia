@@ -69,6 +69,63 @@ export interface ChangePasswordPayload {
   new_password: string;
 }
 
+export interface BridgeLaunchRequestResponse {
+  launch_token: string;
+  expires_at?: string;
+}
+
+export interface UserSettingsResponse {
+  user: {
+    id: string;
+    username: string;
+    email: string;
+    display_name: string;
+    last_login_at?: string;
+    password_changed_at?: string;
+  };
+  preferences: {
+    timezone: string;
+    locale: string;
+    bridge_port: number;
+  };
+  bridge: BridgeSettingsState;
+}
+
+export interface BridgeCredentialMetadata {
+  id: string;
+  secret_prefix: string;
+  status: string;
+  created_at: string;
+  rotated_at?: string;
+  revoked_at?: string;
+  last_used_at?: string;
+  expires_at?: string;
+}
+
+export interface BridgeSettingsState {
+  configured: boolean;
+  credential?: BridgeCredentialMetadata;
+}
+
+export interface BridgeSecretResult {
+  credential: BridgeCredentialMetadata;
+  secret: string;
+  shown_once: boolean;
+}
+
+export interface UpdateUserSettingsPayload {
+  display_name?: string;
+  username?: string;
+  email?: string;
+  timezone?: string;
+  locale?: string;
+  bridge_port?: number;
+}
+
+export interface BridgeConnectorConfigResponse {
+  config: Record<string, unknown>;
+}
+
 export interface ResetPasswordPayload {
   token: string;
   new_password: string;
@@ -307,6 +364,47 @@ export async function changePassword(payload: ChangePasswordPayload): Promise<Au
 
 export async function resetPasswordWithToken(payload: ResetPasswordPayload): Promise<void> {
   await requestJSONWithBody('/api/v1/auth/password/reset', 'POST', payload);
+}
+
+export async function fetchUserSettings(): Promise<UserSettingsResponse> {
+  return (await requestJSON('/api/v1/settings/me')) as UserSettingsResponse;
+}
+
+export async function updateUserSettings(
+  payload: UpdateUserSettingsPayload,
+): Promise<UserSettingsResponse> {
+  return (await requestJSONWithBody(
+    '/api/v1/settings/me',
+    'PATCH',
+    payload,
+  )) as UserSettingsResponse;
+}
+
+export async function generateBridgeSecret(): Promise<BridgeSecretResult> {
+  return (await requestJSONWithBody(
+    '/api/v1/settings/bridge/secret',
+    'POST',
+  )) as BridgeSecretResult;
+}
+
+export async function rotateBridgeSecret(reason = 'rotated by user'): Promise<BridgeSecretResult> {
+  return (await requestJSONWithBody('/api/v1/settings/bridge/secret/rotate', 'POST', {
+    reason,
+  })) as BridgeSecretResult;
+}
+
+export async function revokeBridgeSecret(
+  reason = 'revoked by user',
+): Promise<BridgeCredentialMetadata> {
+  return (await requestJSONWithBody('/api/v1/settings/bridge/secret/revoke', 'POST', {
+    reason,
+  })) as BridgeCredentialMetadata;
+}
+
+export async function fetchBridgeConnectorConfig(): Promise<BridgeConnectorConfigResponse> {
+  return (await requestJSON(
+    '/api/v1/settings/bridge/connector/config',
+  )) as BridgeConnectorConfigResponse;
 }
 
 export async function fetchAdminDashboard(): Promise<AdminDashboardResponse> {
@@ -1237,19 +1335,21 @@ export async function revealSNMPProfile(id: string, reason: string): Promise<SNM
   );
 }
 
-// fetchBridgeToken requests an AES-GCM encrypted credential token from the backend.
-// The backend reads the stored bridge secret server-side, so the browser never receives or replays
-// that shared secret. The plaintext credentials only appear inside the encrypted local bridge token.
-export async function fetchBridgeToken(deviceId: string): Promise<string> {
+export async function createBridgeLaunchRequest(
+  deviceId: string,
+): Promise<BridgeLaunchRequestResponse> {
   const payload = await requestJSONWithBody(
-    `/api/v1/bridge/token/${encodeURIComponent(deviceId)}`,
+    `/api/v1/bridge/launch-requests/${encodeURIComponent(deviceId)}`,
     'POST',
   );
   const p = payload as Record<string, unknown>;
-  if (typeof p?.token !== 'string' || p.token === '') {
-    throw new Error('invalid bridge token response');
+  if (typeof p?.launch_token !== 'string' || p.launch_token === '') {
+    throw new Error('invalid bridge launch response');
   }
-  return p.token;
+  return {
+    launch_token: p.launch_token,
+    expires_at: typeof p.expires_at === 'string' ? p.expires_at : undefined,
+  };
 }
 
 export async function testSSHConnection(

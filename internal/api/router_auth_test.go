@@ -29,7 +29,9 @@ func TestNewRouterRequiresUserSessionForProtectedSurface(t *testing.T) {
 		path   string
 	}{
 		{name: "settings", method: http.MethodGet, path: "/api/v1/settings"},
+		{name: "user settings", method: http.MethodGet, path: "/api/v1/settings/me"},
 		{name: "bridge token", method: http.MethodPost, path: "/api/v1/bridge/token/00000000-0000-0000-0000-000000000001"},
+		{name: "bridge launch request", method: http.MethodPost, path: "/api/v1/bridge/launch-requests/00000000-0000-0000-0000-000000000001"},
 		{name: "health", method: http.MethodGet, path: "/api/v1/health"},
 		{name: "websocket", method: http.MethodGet, path: "/api/v1/ws"},
 		{name: "admin users", method: http.MethodGet, path: "/api/v1/admin/users"},
@@ -44,6 +46,21 @@ func TestNewRouterRequiresUserSessionForProtectedSurface(t *testing.T) {
 				t.Fatalf("status = %d, want 401", rec.Code)
 			}
 		})
+	}
+}
+
+func TestUserSettingsRequiresAccountManagePermission(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, domain.PermissionSettingsRead))
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/me", nil)
+	addSessionCookie(req, testSessionToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

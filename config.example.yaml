@@ -24,8 +24,8 @@ db_dsn: ""
 # Default: "./data"
 data_dir: "./data"
 
-# Optional directory containing pre-built bridge binaries.
-# Leave empty to disable bridge downloads.
+# Optional directory containing pre-built Bridge Connector binaries.
+# Leave empty to disable connector downloads from User Settings.
 bridge_binaries_dir: ""
 
 # Set to production or staging to require secret validation.
@@ -45,8 +45,9 @@ password_reset_ttl_minutes: 0
 metrics_token: ""
 
 # Optional exact browser origins allowed to reach REST/WebSocket endpoints.
-# Same-host requests are always allowed. Use env form:
-# THEIA_ALLOWED_ORIGINS=http://localhost:3000,https://theia.example.com
+# Same-host requests are always allowed. Include LAN/IP origins used by browsers.
+# Env form example:
+# THEIA_ALLOWED_ORIGINS=http://localhost:3000,http://192.168.1.30:3000,https://theia.example.com
 allowed_origins: []
 
 # Log verbosity: debug, info, warn, error

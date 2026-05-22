@@ -420,6 +420,42 @@ Runtime settings (poll interval, Prometheus URL, Grafana URL) are stored in the 
 
 All protected `/api/v1` routes use the first-party password session cookie `theia_session`. Mutating requests must also send the `X-CSRF-Token` header with the value from the readable `theia_csrf` cookie. `/metrics` uses `THEIA_METRICS_TOKEN`.
 
+### User Settings and Bridge Connector
+
+Every authenticated user can open **User Settings** from the account menu. The account section allows safe self-service profile updates; privileged user fields such as roles, status, and admin flags remain server-controlled.
+
+Bridge Connector authentication is per-user. The legacy global `bridge_secret` runtime setting is deprecated and ignored by bridge authentication. Existing deployments should have each user generate a personal Bridge Secret from **User Settings -> Bridge Connector** and paste it into their local connector config.
+
+Connector config shape:
+
+```json
+{
+  "winbox_path": "",
+  "listen_port": 1337,
+  "theia_origin": "http://localhost:3000",
+  "theia_base_url": "http://localhost:3000",
+  "bridge_secret": "<paste-secret-shown-once>",
+  "log_level": "info"
+}
+```
+
+The Bridge Secret is shown only once after generation or rotation. If a user loses it, rotate the secret and update the connector; the previous secret stops working immediately. Connector downloads are served only to authenticated users and require `THEIA_BRIDGE_BINARIES_DIR` to point at a directory containing files named like `winbox-bridge-linux-amd64` or `winbox-bridge-windows-amd64.exe`.
+
+For browser access through a LAN IP or alternate hostname, add the exact browser origin to `THEIA_ALLOWED_ORIGINS` before logging in. Example:
+
+```bash
+THEIA_ALLOWED_ORIGINS=http://localhost:3000,http://192.168.1.30:3000
+```
+
+Same-host frontend proxy requests do not need this setting, but direct cross-origin REST/WebSocket requests do.
+
+Bridge migration notes:
+
+- Run the new database migration before users configure connectors.
+- Do not copy the old global `bridge_secret` to users; each user must generate a unique personal secret.
+- Old connector configs that only relied on the global secret must be updated with `theia_base_url`, `theia_origin`, and the personal `bridge_secret`.
+- Use HTTPS for non-local deployments because the connector sends the Bridge Secret to Theia during launch resolution.
+
 ### Frontend (build-time)
 
 | Variable | Default | Description |

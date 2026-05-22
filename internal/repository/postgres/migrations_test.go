@@ -102,6 +102,38 @@ func TestPostgresMigrationsDeclareAuthRBACSchemaAndIndexes(t *testing.T) {
 	}
 }
 
+func TestPostgresMigrationsDeclarePerUserBridgeSchemaAndIndexes(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000017_per_user_bridge_credentials.up.sql")
+	if err != nil {
+		t.Fatalf("reading per-user bridge migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"CREATE TABLE IF NOT EXISTS user_settings",
+		"CREATE TABLE IF NOT EXISTS bridge_credentials",
+		"CREATE TABLE IF NOT EXISTS bridge_launch_requests",
+		"CREATE TABLE IF NOT EXISTS bridge_connector_downloads",
+		"idx_bridge_credentials_user_id",
+		"idx_bridge_credentials_secret_prefix",
+		"idx_bridge_credentials_status",
+		"idx_bridge_credentials_last_used_at",
+		"idx_bridge_credentials_one_active_per_user",
+		"idx_bridge_launch_requests_user_id",
+		"idx_bridge_launch_requests_device_id",
+		"idx_bridge_launch_requests_expires_at",
+		"idx_bridge_connector_downloads_user_id",
+		"idx_bridge_connector_downloads_downloaded_at",
+		"DELETE FROM settings WHERE key = 'bridge_secret'",
+		"CHECK (bridge_port BETWEEN 1 AND 65535)",
+		"CHECK (status IN ('active', 'revoked'))",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("per-user bridge migration missing %q", expected)
+		}
+	}
+}
+
 func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing.T) {
 	managerPermissions := domain.SystemRolePermissionKeys(domain.RoleManager)
 	for _, disallowed := range []string{
@@ -116,6 +148,7 @@ func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing
 	}
 	for _, expected := range []string{
 		domain.PermissionAdminDashboard,
+		domain.PermissionAccountManage,
 		domain.PermissionSettingsRead,
 		domain.PermissionTopologyRead,
 		domain.PermissionTopologyUpdate,
@@ -136,6 +169,7 @@ func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing
 		t.Fatal("user role unexpectedly includes bridge token creation")
 	}
 	for _, expected := range []string{
+		domain.PermissionAccountManage,
 		domain.PermissionSettingsRead,
 		domain.PermissionTopologyRead,
 		domain.PermissionTopologyUpdate,

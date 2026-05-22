@@ -390,6 +390,18 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	log.Printf("SSH known hosts store: %s", paths.knownHostsPath)
 
 	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback())
+	bridgeRepo := postgres.NewBridgeRepo(db)
+	bridgeService, err := service.NewBridgeService(service.BridgeServiceConfig{
+		BridgeRepo:            bridgeRepo,
+		Users:                 authRepo,
+		AuditLogs:             authRepo,
+		BackupService:         backupService,
+		CredentialProfileRepo: credentialProfileRepo,
+		SessionSecret:         []byte(strings.TrimSpace(cfg.SessionSecret)),
+	})
+	if err != nil {
+		return fmt.Errorf("initialize bridge service: %w", err)
+	}
 
 	var instanceBackupService *service.InstanceBackupService
 	var backupScheduler *worker.BackupScheduler
@@ -506,7 +518,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService))
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService))
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{

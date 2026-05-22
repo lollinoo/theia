@@ -30,6 +30,16 @@ func TestConfigDefaultConfig_TheiaOrigin(t *testing.T) {
 	}
 }
 
+func TestConfigDefaultConfig_TheiaBaseURL(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.TheiaBaseURL != "http://localhost:3000" {
+		t.Errorf("expected TheiaBaseURL='http://localhost:3000', got %q", cfg.TheiaBaseURL)
+	}
+	if cfg.BridgeSecret != "" {
+		t.Fatalf("DefaultConfig should not auto-generate BridgeSecret, got %q", cfg.BridgeSecret)
+	}
+}
+
 // --- Config: configFilePath ---
 
 func TestConfigFilePath_EndsWithExpectedSuffix(t *testing.T) {
@@ -56,6 +66,7 @@ func TestConfigRoundTrip_AllFieldsPreserved(t *testing.T) {
 		WinBoxPath:   "/usr/bin/winbox",
 		ListenPort:   9999,
 		TheiaOrigin:  "http://theia.example.com:8080",
+		TheiaBaseURL: "http://theia.example.com:8080",
 		BridgeSecret: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
 		LogLevel:     "debug",
 	}
@@ -155,6 +166,7 @@ func TestConfigJSONFieldNames(t *testing.T) {
 		WinBoxPath:   "/some/path",
 		ListenPort:   1234,
 		TheiaOrigin:  "http://test.local",
+		TheiaBaseURL: "http://test.local",
 		BridgeSecret: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 	}
 
@@ -168,7 +180,7 @@ func TestConfigJSONFieldNames(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	for _, key := range []string{"winbox_path", "listen_port", "theia_origin", "bridge_secret", "log_level"} {
+	for _, key := range []string{"winbox_path", "listen_port", "theia_origin", "theia_base_url", "bridge_secret", "log_level"} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("expected JSON key %q not found in marshaled output", key)
 		}
@@ -196,51 +208,7 @@ func TestConfigLoadConfigFrom_MissingLogLevelUsesDefault(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("expected LogLevel=%q for missing log_level field, got %q", "info", cfg.LogLevel)
 	}
-}
-
-// --- Config: ensureBridgeSecret ---
-
-func TestEnsureBridgeSecret_GeneratesWhenEmpty(t *testing.T) {
-	cfg := DefaultConfig()
-	if cfg.BridgeSecret != "" {
-		t.Fatal("DefaultConfig should have empty BridgeSecret")
-	}
-	updated, err := ensureBridgeSecret(cfg)
-	if err != nil {
-		t.Fatalf("ensureBridgeSecret: %v", err)
-	}
-	if updated.BridgeSecret == "" {
-		t.Error("expected BridgeSecret to be generated, got empty string")
-	}
-	// Must be 64 hex chars (32 bytes)
-	if len(updated.BridgeSecret) != 64 {
-		t.Errorf("expected 64-char hex secret, got length %d", len(updated.BridgeSecret))
-	}
-}
-
-func TestEnsureBridgeSecret_PreservesExistingSecret(t *testing.T) {
-	existing := "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
-	cfg := Config{BridgeSecret: existing}
-	updated, err := ensureBridgeSecret(cfg)
-	if err != nil {
-		t.Fatalf("ensureBridgeSecret: %v", err)
-	}
-	if updated.BridgeSecret != existing {
-		t.Errorf("expected existing secret preserved, got %q", updated.BridgeSecret)
-	}
-}
-
-func TestEnsureBridgeSecret_GeneratesUniqueSecrets(t *testing.T) {
-	cfg := DefaultConfig()
-	a, err := ensureBridgeSecret(cfg)
-	if err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-	b, err := ensureBridgeSecret(cfg)
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if a.BridgeSecret == b.BridgeSecret {
-		t.Error("expected unique secrets on each call with empty config, got identical values")
+	if cfg.TheiaBaseURL != "http://localhost:3000" {
+		t.Errorf("expected TheiaBaseURL default for old config, got %q", cfg.TheiaBaseURL)
 	}
 }

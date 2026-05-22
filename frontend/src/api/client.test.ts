@@ -6,6 +6,7 @@ import {
   assignAdminUserRole,
   cancelInstanceBackup,
   changePassword,
+  createBridgeLaunchRequest,
   createAdminPasswordReset,
   createAdminUser,
   createCanvasMap,
@@ -22,7 +23,6 @@ import {
   fetchAdminUsers,
   fetchBackupFileContent,
   fetchBackupJobs,
-  fetchBridgeToken,
   fetchCanvasBootstrap,
   fetchCanvasMapAreas,
   fetchCanvasMapBootstrap,
@@ -728,7 +728,7 @@ describe('fetchSettingsWithMetadata', () => {
       },
       meta: {
         secrets: {
-          bridge_secret: { present: true, redacted: true },
+          external_token: { present: true, redacted: true },
         },
       },
     };
@@ -737,30 +737,30 @@ describe('fetchSettingsWithMetadata', () => {
     const result = await fetchSettingsWithMetadata();
 
     expect(result.data.bridge_port).toBe('1337');
-    expect(result.data.bridge_secret).toBeUndefined();
-    expect(result.secrets.bridge_secret).toEqual({
+    expect(result.data.external_token).toBeUndefined();
+    expect(result.secrets.external_token).toEqual({
       present: true,
       redacted: true,
     });
   });
 });
 
-describe('fetchBridgeToken', () => {
-  it('requests a server-side bridge token without sending bridge_secret in the body', async () => {
+describe('createBridgeLaunchRequest', () => {
+  it('requests a user-scoped launch token without sending connector secrets in the body', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockResponse({
-        token: 'encrypted-token',
+        launch_token: 'launch-token',
         expires_at: '2026-05-04T19:15:00Z',
       }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    const token = await fetchBridgeToken('device-1');
+    const result = await createBridgeLaunchRequest('device-1');
 
-    expect(token).toBe('encrypted-token');
+    expect(result.launch_token).toBe('launch-token');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe('/api/v1/bridge/token/device-1');
+    expect(url).toBe('/api/v1/bridge/launch-requests/device-1');
     expect(options.method).toBe('POST');
     expect(options.body).toBeUndefined();
   });

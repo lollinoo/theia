@@ -16,8 +16,9 @@ import (
 // NewRouter creates the HTTP handler with all /api/v1/ routes registered.
 // Uses standard net/http (no framework needed at this scale).
 type routerOptions struct {
-	security SecurityConfig
-	auth     authProvider
+	security      SecurityConfig
+	auth          authProvider
+	bridgeService *service.BridgeService
 }
 
 // RouterOption customizes router middleware behavior.
@@ -34,6 +35,12 @@ func WithSecurity(config SecurityConfig) RouterOption {
 func WithAuthService(authService *service.AuthService) RouterOption {
 	return func(options *routerOptions) {
 		options.auth = authService
+	}
+}
+
+func WithBridgeService(bridgeService *service.BridgeService) RouterOption {
+	return func(options *routerOptions) {
+		options.bridgeService = bridgeService
 	}
 }
 
@@ -113,7 +120,8 @@ func NewRouter(
 	healthHandler := NewHealthHandler(db, poller)
 	prometheusHandler := NewPrometheusHandler(settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(instanceBackupService, restoreRestarter)
-	bridgeHandler := NewBridgeHandlerWithCredentials(bridgeBinariesDir, backupService, credentialProfileRepo, settingsRepo)
+	bridgeHandler := NewBridgeHandlerWithService(bridgeBinariesDir, routerOpts.bridgeService)
+	userSettingsHandler := NewUserSettingsHandler(routerOpts.bridgeService, bridgeBinariesDir)
 
 	mux.Handle("/api/v1/admin/", adminHandler)
 
@@ -422,6 +430,34 @@ func NewRouter(
 		settingsHandler.HandleGetAll(w, r)
 	})
 
+	mux.HandleFunc("/api/v1/settings/me", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleMe(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleBridge(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/secret", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleBridgeSecret(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/secret/rotate", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleBridgeSecret(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/secret/revoke", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleBridgeSecretRevoke(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/connector/config", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleConnectorConfig(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/settings/bridge/connector/download/", func(w http.ResponseWriter, r *http.Request) {
+		userSettingsHandler.HandleConnectorDownload(w, r)
+	})
+
 	mux.HandleFunc("/api/v1/settings/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -646,7 +682,15 @@ func NewRouter(
 		bridgeHandler.HandleDownload(w, r)
 	})
 
-	// Bridge credential token — encrypts WinBox credentials with the bridge's own secret
+	mux.HandleFunc("/api/v1/bridge/launch-requests/", func(w http.ResponseWriter, r *http.Request) {
+		bridgeHandler.HandleCreateLaunchRequest(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/bridge/connector/launch", func(w http.ResponseWriter, r *http.Request) {
+		bridgeHandler.HandleConnectorLaunch(w, r)
+	})
+
+	// Legacy bridge credential token endpoint.
 	mux.HandleFunc("/api/v1/bridge/token/", func(w http.ResponseWriter, r *http.Request) {
 		bridgeHandler.HandleBridgeToken(w, r)
 	})
@@ -676,6 +720,11 @@ func NewRouter(
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isAuthRoute(r.URL.Path) {
 			publicAuthHandler.ServeHTTP(w, r)
+			return
+		}
+
+		if r.URL.Path == "/api/v1/bridge/connector/launch" {
+			applyPublicMiddleware(http.HandlerFunc(bridgeHandler.HandleConnectorLaunch), routerOpts.security, true, 16<<10).ServeHTTP(w, r)
 			return
 		}
 

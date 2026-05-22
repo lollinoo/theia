@@ -66,7 +66,6 @@ var validSettingKeys = map[string]bool{
 	domain.SettingInstanceBackupRetentionCount:  true,
 	domain.SettingDeviceBackupIntervalHours:     true,
 	domain.SettingDeviceBackupRetentionCount:    true,
-	domain.SettingBridgeSecret:                  true,
 	domain.SettingBridgePort:                    true,
 }
 
@@ -254,6 +253,9 @@ func buildSettingsResponse(settings map[string]string) settingsResponse {
 	data := make(map[string]string, len(settings))
 	secrets := make(map[string]settingSecretState)
 	for key, value := range settings {
+		if !validSettingKeys[key] {
+			continue
+		}
 		if settingResponseSensitive(key) {
 			secrets[key] = settingSecretState{
 				Present:  strings.TrimSpace(value) != "",
@@ -274,7 +276,7 @@ func buildSettingsResponse(settings map[string]string) settingsResponse {
 }
 
 func settingResponseSensitive(key string) bool {
-	return key == domain.SettingBridgeSecret
+	return false
 }
 
 func debugSettingValue(key string, value string, err error) string {
@@ -296,7 +298,7 @@ func debugSettingValue(key string, value string, err error) string {
 
 func debugSettingSensitive(key string) bool {
 	switch key {
-	case domain.SettingPrometheusURL, domain.SettingGrafanaURL, domain.SettingBridgeSecret:
+	case domain.SettingPrometheusURL, domain.SettingGrafanaURL:
 		return true
 	default:
 		return false
@@ -316,7 +318,7 @@ func debugSettingAffects(key string) string {
 		domain.SettingDeviceBackupIntervalHours,
 		domain.SettingDeviceBackupRetentionCount:
 		return "backup"
-	case domain.SettingBridgeSecret, domain.SettingBridgePort:
+	case domain.SettingBridgePort:
 		return "bridge"
 	case domain.SettingPollingInterval,
 		domain.SettingSNMPWorkerPoolSize,

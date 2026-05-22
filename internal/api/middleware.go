@@ -300,6 +300,9 @@ func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 	if path == "/api/v1/health" || path == "/api/v1/prometheus/health" {
 		return []string{domain.PermissionSettingsRead}, true
 	}
+	if path == "/api/v1/settings/me" || strings.HasPrefix(path, "/api/v1/settings/bridge") {
+		return []string{domain.PermissionAccountManage}, true
+	}
 	if strings.HasPrefix(path, "/api/v1/settings") {
 		return permissionsForMethod(method, domain.PermissionSettingsRead, "", domain.PermissionSettingsUpdate, ""), true
 	}
@@ -335,6 +338,9 @@ func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 		return backupRoutePermissions(method), true
 	}
 	if strings.HasPrefix(path, "/api/v1/bridge/token/") {
+		return []string{domain.PermissionBridgeTokenCreate}, true
+	}
+	if strings.HasPrefix(path, "/api/v1/bridge/launch-requests/") {
 		return []string{domain.PermissionBridgeTokenCreate}, true
 	}
 	if strings.HasPrefix(path, "/api/v1/bridge/download/") {

@@ -331,25 +331,22 @@ describe('SettingsPanel — Device Backups values loaded from fetchSettings on m
   });
 });
 
-describe('SettingsPanel — redacted secret state', () => {
-  it('shows an already configured bridge secret as redacted instead of blank', async () => {
+describe('SettingsPanel — bridge secret migration', () => {
+  it('does not render the legacy global bridge secret control', async () => {
     const { fetchSettingsWithMetadata } = await import('../api/client');
     (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: {
         bridge_port: '1337',
       },
-      secrets: {
-        bridge_secret: { present: true, redacted: true },
-      },
+      secrets: {},
     });
 
     render(<SettingsPanel />);
 
-    const bridgeSecretInput = await screen.findByPlaceholderText(
-      'Configured (redacted); paste a new key to replace',
-    );
-
-    expect(bridgeSecretInput).toHaveValue('');
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('1337')).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText('WinBox Bridge Secret')).not.toBeInTheDocument();
   });
 });
 

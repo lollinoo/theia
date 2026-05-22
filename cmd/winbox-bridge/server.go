@@ -34,7 +34,11 @@ func (m *ServerManager) Start(cfg Config) error {
 	}
 	winboxPath := discoverWinBox(cfg.WinBoxPath)
 	expectedHost := fmt.Sprintf("localhost:%d", cfg.ListenPort)
-	handler := buildMux(winboxPath, cfg.TheiaOrigin, expectedHost, cfg.BridgeSecret)
+	client := &TheiaClient{
+		BaseURL: cfg.TheiaBaseURL,
+		Secret:  cfg.BridgeSecret,
+	}
+	handler := buildMux(winboxPath, cfg.TheiaOrigin, expectedHost, client)
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.ListenPort),
 		Handler: handler,
