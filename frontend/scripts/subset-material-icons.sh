@@ -30,6 +30,7 @@ ICON_NAMES=(
   description
   devices
   dns
+  download
   edit
   expand_less
   expand_more
@@ -40,17 +41,21 @@ ICON_NAMES=(
   language
   light_mode
   link
+  lock
   lock_reset
   logout
   map
   notifications
   open_in_full
   open_in_new
+  more_vert
+  person
   public
   refresh
   remove
   search
   settings
+  sync
   terminal
   zoom_in
   zoom_out

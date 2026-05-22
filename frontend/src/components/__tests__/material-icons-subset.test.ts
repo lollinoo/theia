@@ -1,5 +1,5 @@
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const subsetScript = readFileSync(
@@ -26,6 +26,8 @@ const REQUIRED_AUTH_ADMIN_ICONS = [
   'logout',
   'refresh',
 ] as const;
+
+const REQUIRED_USER_SETTINGS_ICONS = ['download', 'lock', 'more_vert', 'person', 'sync'] as const;
 
 function iconNamesFromScript(): Set<string> {
   const match = subsetScript.match(/ICON_NAMES=\(\r?\n(?<body>[\s\S]*?)\r?\n\)/);
@@ -59,6 +61,14 @@ describe('Material Symbols subset contract', () => {
     const iconNames = iconNamesFromScript();
 
     for (const iconName of REQUIRED_AUTH_ADMIN_ICONS) {
+      expect(iconNames.has(iconName), iconName).toBe(true);
+    }
+  });
+
+  it('declares every User Settings icon in the generated subset inputs', () => {
+    const iconNames = iconNamesFromScript();
+
+    for (const iconName of REQUIRED_USER_SETTINGS_ICONS) {
       expect(iconNames.has(iconName), iconName).toBe(true);
     }
   });

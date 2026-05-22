@@ -198,7 +198,9 @@ describe('NavigationPill', () => {
     expect(screen.queryByRole('button', { name: 'Logout' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'User menu for User' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Logout' }));
+    const logoutItem = screen.getByRole('menuitem', { name: 'Logout' });
+    expect(logoutItem).toHaveClass('text-critical');
+    fireEvent.click(logoutItem);
 
     expect(onLogout).toHaveBeenCalledTimes(1);
   });

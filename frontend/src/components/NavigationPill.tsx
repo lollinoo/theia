@@ -494,7 +494,7 @@ function NavigationPill({
                 type="button"
                 role="menuitem"
                 onClick={handleLogoutMenuClick}
-                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-on-bg transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-critical transition-colors hover:bg-critical/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
               >
                 <MaterialIcon name="logout" className="text-[18px]" />
                 <span className="min-w-0 flex-1 truncate">Logout</span>
