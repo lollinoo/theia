@@ -14,10 +14,11 @@ import (
 // Start and Stop can be called from any goroutine (mutex-protected).
 // This satisfies T-29-02: mutex prevents concurrent Start/Stop races.
 type ServerManager struct {
-	mu     sync.Mutex
-	server *http.Server
-	port   int // current listening port, for status display
-	cfg    Config
+	mu       sync.Mutex
+	server   *http.Server
+	listener net.Listener
+	port     int // current listening port, for status display
+	cfg      Config
 }
 
 // Start creates and runs a new HTTP server with the given config.
@@ -69,6 +70,7 @@ func buildServer(cfg Config, mgr *ServerManager) (*http.Server, net.Listener, er
 
 func (m *ServerManager) assignLocked(cfg Config, srv *http.Server, listener net.Listener) {
 	m.server = srv
+	m.listener = listener
 	m.port = cfg.ListenPort
 	m.cfg = cfg
 	// Capture srv in the goroutine — not m.server — so Stop() setting m.server=nil
@@ -94,8 +96,12 @@ func (m *ServerManager) stopLocked() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if m.listener != nil {
+		_ = m.listener.Close()
+	}
 	err := m.server.Shutdown(ctx)
 	m.server = nil
+	m.listener = nil
 	m.port = 0
 	return err
 }
