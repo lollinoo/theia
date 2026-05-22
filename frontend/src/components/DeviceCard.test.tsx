@@ -606,9 +606,9 @@ describe('DeviceCard', () => {
     const capsule = screen.getByTestId('virtual-node-capsule');
 
     expect(card).toHaveClass('rounded-[24px]');
-    expect(card.className).toContain('min-w-[232px]');
+    expect(card.className).toContain('w-[232px]');
     expect(card.className).toContain('min-h-[92px]');
-    expect(card.className).toContain('max-w-[310px]');
+    expect(card.className).not.toContain('max-w-');
     expect(capsule).toHaveClass('rounded-[23px]', 'gap-3', 'py-2.5', 'pl-3.5', 'pr-3.5');
     expect(screen.getByTestId('virtual-node-area-accent')).toHaveClass(
       'inset-y-0',
@@ -869,9 +869,9 @@ describe('DeviceCard', () => {
     });
 
     const unmonitoredCard = unmonitored.container.querySelector('.group');
-    expect(unmonitoredCard?.className).toContain('min-w-[232px]');
+    expect(unmonitoredCard?.className).toContain('w-[232px]');
     expect(unmonitoredCard?.className).toContain('min-h-[92px]');
-    expect(unmonitoredCard?.className).toContain('max-w-[310px]');
+    expect(unmonitoredCard?.className).not.toContain('max-w-');
     expect(unmonitoredCard?.className).not.toContain('max-h-[235px]');
 
     unmonitored.unmount();
@@ -885,9 +885,9 @@ describe('DeviceCard', () => {
     });
 
     const monitorableCard = monitorable.container.querySelector('.group');
-    expect(monitorableCard?.className).toContain('min-w-[292px]');
+    expect(monitorableCard?.className).toContain('w-[292px]');
     expect(monitorableCard?.className).toContain('min-h-[118px]');
-    expect(monitorableCard?.className).toContain('max-w-[390px]');
+    expect(monitorableCard?.className).not.toContain('max-w-');
     expect(monitorableCard?.className).not.toContain('max-h-[235px]');
   });
 
