@@ -52,7 +52,7 @@ import {
 } from './canvas/canvasRenderProjection';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
-import { resolveTopologyZoomBand, type TopologyZoomBand } from './canvas/topologyZoom';
+import { type TopologyZoomBand, resolveTopologyZoomBand } from './canvas/topologyZoom';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';

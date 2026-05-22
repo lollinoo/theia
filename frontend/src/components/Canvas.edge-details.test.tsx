@@ -71,7 +71,9 @@ const testState = vi.hoisted(() => ({
 }));
 
 const apiMocks = vi.hoisted(() => ({
+  createBridgeLaunchRequest: vi.fn(),
   fetchSettings: vi.fn(),
+  fetchUserSettings: vi.fn(),
 }));
 
 vi.mock('@xyflow/react', async () => {
@@ -251,6 +253,9 @@ describe('Canvas link details edge clicks', () => {
   beforeEach(() => {
     apiMocks.fetchSettings.mockReset();
     apiMocks.fetchSettings.mockResolvedValue({});
+    apiMocks.fetchUserSettings.mockReset();
+    apiMocks.fetchUserSettings.mockResolvedValue({ preferences: { bridge_port: 1337 } });
+    apiMocks.createBridgeLaunchRequest.mockReset();
   });
 
   it('opens link details when an edge is clicked in view mode', () => {
