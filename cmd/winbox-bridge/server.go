@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -76,7 +77,8 @@ func (m *ServerManager) assignLocked(cfg Config, srv *http.Server, listener net.
 	// Capture srv in the goroutine — not m.server — so Stop() setting m.server=nil
 	// does not cause a nil dereference inside Serve.
 	go func() {
-		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil &&
+			err != http.ErrServerClosed && !errors.Is(err, net.ErrClosed) {
 			log.Printf("winbox-bridge: server error: %v", err)
 		}
 	}()
@@ -100,6 +102,9 @@ func (m *ServerManager) stopLocked() error {
 		_ = m.listener.Close()
 	}
 	err := m.server.Shutdown(ctx)
+	if err == http.ErrServerClosed || errors.Is(err, net.ErrClosed) {
+		err = nil
+	}
 	m.server = nil
 	m.listener = nil
 	m.port = 0

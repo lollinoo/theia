@@ -58,6 +58,8 @@ type fakeConnectorInstaller struct {
 	status      installStatus
 	statusErr   error
 	ensureErr   error
+	ensureBlock <-chan struct{}
+	ensureReady chan<- struct{}
 	ensureCalls int
 }
 
@@ -71,10 +73,26 @@ func (i *fakeConnectorInstaller) EnsureInstalled() (installStatus, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.ensureCalls++
+	if i.ensureReady != nil {
+		select {
+		case i.ensureReady <- struct{}{}:
+		default:
+		}
+	}
+	if i.ensureBlock != nil {
+		i.mu.Unlock()
+		<-i.ensureBlock
+		i.mu.Lock()
+	}
 	if i.ensureErr != nil {
 		return installStatus{}, i.ensureErr
 	}
 	i.status.Installed = true
+	i.status.InstalledExecutableValid = true
+	i.status.InstalledConfigPath = filepath.Join(filepath.Dir(i.status.InstalledPath), "config.json")
+	i.status.InstalledConfigExists = true
+	i.status.InstalledConfigValid = true
+	i.status.InstallHealthy = true
 	return i.status, nil
 }
 
@@ -188,7 +206,12 @@ func TestSetupStatusReportsInstalledPathAndAutostartHealth(t *testing.T) {
 	oldDownloadPath := filepath.Join(t.TempDir(), "Downloads", "winbox-bridge")
 	installer := &fakeConnectorInstaller{status: installStatus{
 		InstalledPath:            installedPath,
+		InstalledConfigPath:      filepath.Join(filepath.Dir(installedPath), "config.json"),
 		Installed:                false,
+		InstalledExecutableValid: false,
+		InstalledConfigExists:    false,
+		InstalledConfigValid:     false,
+		InstallHealthy:           false,
 		RunningFromInstalledPath: false,
 	}}
 	autostart := &fakeAutostartProvider{
@@ -214,6 +237,21 @@ func TestSetupStatusReportsInstalledPathAndAutostartHealth(t *testing.T) {
 	}
 	if got["installed"] != false {
 		t.Fatalf("installed = %v, want false", got["installed"])
+	}
+	if got["installed_config_path"] != filepath.Join(filepath.Dir(installedPath), "config.json") {
+		t.Fatalf("installed_config_path = %v", got["installed_config_path"])
+	}
+	if got["installed_executable_valid"] != false {
+		t.Fatalf("installed_executable_valid = %v, want false", got["installed_executable_valid"])
+	}
+	if got["installed_config_exists"] != false {
+		t.Fatalf("installed_config_exists = %v, want false", got["installed_config_exists"])
+	}
+	if got["installed_config_valid"] != false {
+		t.Fatalf("installed_config_valid = %v, want false", got["installed_config_valid"])
+	}
+	if got["install_healthy"] != false {
+		t.Fatalf("install_healthy = %v, want false", got["install_healthy"])
 	}
 	if got["running_from_installed_path"] != false {
 		t.Fatalf("running_from_installed_path = %v, want false", got["running_from_installed_path"])
@@ -254,6 +292,44 @@ func TestSetupInstallEndpointUsesConnectorInstaller(t *testing.T) {
 	}
 	if !got.Installed || got.InstalledPath != installer.status.InstalledPath {
 		t.Fatalf("install response = %#v", got)
+	}
+}
+
+func TestSetupInstallRejectsConcurrentOperation(t *testing.T) {
+	cfg := DefaultConfig()
+	ready := make(chan struct{}, 1)
+	release := make(chan struct{})
+	installer := &fakeConnectorInstaller{
+		status: installStatus{
+			InstalledPath: filepath.Join(t.TempDir(), "winbox-bridge"),
+			Installed:     false,
+		},
+		ensureReady: ready,
+		ensureBlock: release,
+	}
+	h, _ := setupTestHandler(t, cfg, setupOptions{Installer: installer})
+	token := setupToken(t, h)
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		firstDone <- setupRequest(t, h, http.MethodPost, "/setup/install", nil, token)
+	}()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("first install did not enter EnsureInstalled")
+	}
+
+	second := setupRequest(t, h, http.MethodPost, "/setup/install", nil, token)
+	if second.Code != http.StatusConflict {
+		t.Fatalf("concurrent install status = %d; body: %s", second.Code, second.Body.String())
+	}
+	if installer.ensureCallCount() != 1 {
+		t.Fatalf("EnsureInstalled calls = %d, want 1 while first request is active", installer.ensureCallCount())
+	}
+	close(release)
+	first := <-firstDone
+	if first.Code != http.StatusOK {
+		t.Fatalf("first install status = %d; body: %s", first.Code, first.Body.String())
 	}
 }
 
@@ -521,6 +597,45 @@ func TestSetupAutostartEnableInstallsBeforeWritingTarget(t *testing.T) {
 	}
 }
 
+func TestSetupAutostartEnableRejectsConcurrentInstallOperation(t *testing.T) {
+	cfg := DefaultConfig()
+	ready := make(chan struct{}, 1)
+	release := make(chan struct{})
+	installedPath := filepath.Join(t.TempDir(), "winbox-bridge")
+	installer := &fakeConnectorInstaller{
+		status: installStatus{
+			InstalledPath: installedPath,
+			Installed:     false,
+		},
+		ensureReady: ready,
+		ensureBlock: release,
+	}
+	autostart := &fakeAutostartProvider{}
+	h, _ := setupTestHandler(t, cfg, setupOptions{Autostart: autostart, Installer: installer})
+	token := setupToken(t, h)
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		firstDone <- setupRequest(t, h, http.MethodPost, "/setup/install", nil, token)
+	}()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("install did not enter EnsureInstalled")
+	}
+
+	second := setupRequest(t, h, http.MethodPost, "/setup/autostart", map[string]bool{"enabled": true}, token)
+	if second.Code != http.StatusConflict {
+		t.Fatalf("concurrent autostart enable status = %d; body: %s", second.Code, second.Body.String())
+	}
+	if calls := autostart.setCalls(); len(calls) != 0 {
+		t.Fatalf("SetEnabled calls = %#v, want none", calls)
+	}
+	close(release)
+	if first := <-firstDone; first.Code != http.StatusOK {
+		t.Fatalf("first install status = %d; body: %s", first.Code, first.Body.String())
+	}
+}
+
 func TestSetupHTMLContainsFieldsAndDoesNotLeakSavedSecret(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.BridgeSecret = "theia_bridge_public.saved-secret"
@@ -540,8 +655,11 @@ func TestSetupHTMLContainsFieldsAndDoesNotLeakSavedSecret(t *testing.T) {
 		"log_level",
 		"autostart_enabled",
 		"installed_path",
+		"installed_config_path",
+		"install_health",
 		"install_connector",
 		"autostart_health",
+		"setBusy",
 	} {
 		if !strings.Contains(html, field) {
 			t.Fatalf("HTML missing field/control name %q", field)
@@ -756,5 +874,33 @@ func TestSetupRestartSchedulesInjectedRestartAfterResponse(t *testing.T) {
 	case <-restarted:
 	case <-time.After(time.Second):
 		t.Fatal("restart was not scheduled")
+	}
+}
+
+func TestSetupRestartRejectsRepeatedRequests(t *testing.T) {
+	cfg := DefaultConfig()
+	restarted := make(chan struct{}, 2)
+	h, _ := setupTestHandler(t, cfg, setupOptions{
+		Restart: func() { restarted <- struct{}{} },
+	})
+	token := setupToken(t, h)
+
+	first := setupRequest(t, h, http.MethodPost, "/setup/restart", nil, token)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first restart status = %d; body: %s", first.Code, first.Body.String())
+	}
+	second := setupRequest(t, h, http.MethodPost, "/setup/restart", nil, token)
+	if second.Code != http.StatusConflict {
+		t.Fatalf("second restart status = %d; body: %s", second.Code, second.Body.String())
+	}
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart was not scheduled")
+	}
+	select {
+	case <-restarted:
+		t.Fatal("second restart was scheduled")
+	case <-time.After(200 * time.Millisecond):
 	}
 }

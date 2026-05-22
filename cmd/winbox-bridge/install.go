@@ -11,7 +11,12 @@ import (
 
 type installStatus struct {
 	InstalledPath            string `json:"installed_path"`
+	InstalledConfigPath      string `json:"installed_config_path"`
 	Installed                bool   `json:"installed"`
+	InstalledExecutableValid bool   `json:"installed_executable_valid"`
+	InstalledConfigExists    bool   `json:"installed_config_exists"`
+	InstalledConfigValid     bool   `json:"installed_config_valid"`
+	InstallHealthy           bool   `json:"install_healthy"`
 	RunningFromInstalledPath bool   `json:"running_from_installed_path"`
 }
 
@@ -24,6 +29,7 @@ type systemConnectorInstaller struct {
 	currentExecutable func() (string, error)
 	installedPath     func() (string, error)
 	legacyConfigPath  func() (string, error)
+	currentConfig     func() (Config, error)
 }
 
 func (i systemConnectorInstaller) Status() (installStatus, error) {
@@ -35,9 +41,19 @@ func (i systemConnectorInstaller) Status() (installStatus, error) {
 	if err != nil {
 		return installStatus{}, err
 	}
+	configPath := installedConfigPathForExecutable(target)
+	installed := fileExists(target)
+	configExists := fileExists(configPath)
+	executableValid := executableFileValid(target)
+	configValid := configExists && configFileValid(configPath)
 	return installStatus{
 		InstalledPath:            target,
-		Installed:                fileExists(target),
+		InstalledConfigPath:      configPath,
+		Installed:                installed,
+		InstalledExecutableValid: executableValid,
+		InstalledConfigExists:    configExists,
+		InstalledConfigValid:     configValid,
+		InstallHealthy:           installed && executableValid && configExists && configValid,
 		RunningFromInstalledPath: sameFilePath(current, target),
 	}, nil
 }
@@ -87,12 +103,26 @@ func (i systemConnectorInstaller) configPath() (string, error) {
 	return legacyConfigFilePath()
 }
 
+func (i systemConnectorInstaller) loadCurrentConfig() (Config, error) {
+	if i.currentConfig != nil {
+		return i.currentConfig()
+	}
+	return loadConfig()
+}
+
 func (i systemConnectorInstaller) ensureInstalledConfig(installedExecutable string) error {
 	legacyConfig, err := i.configPath()
-	if err != nil {
+	if err == nil {
+		if err := moveConfigFileIfNeeded(legacyConfig, installedConfigPathForExecutable(installedExecutable)); err != nil {
+			return fmt.Errorf("install config: %w", err)
+		}
+	}
+	targetConfig := installedConfigPathForExecutable(installedExecutable)
+	if configFileValid(targetConfig) {
 		return nil
 	}
-	if err := moveConfigFileIfNeeded(legacyConfig, installedConfigPathForExecutable(installedExecutable)); err != nil {
+	cfg, _ := i.loadCurrentConfig()
+	if err := saveConfigTo(cfg, targetConfig); err != nil {
 		return fmt.Errorf("install config: %w", err)
 	}
 	return nil
@@ -236,6 +266,25 @@ func moveConfigFileIfNeeded(source, target string) error {
 		return err
 	}
 	return nil
+}
+
+func executableFileValid(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() || !info.Mode().IsRegular() || info.Size() <= 0 {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode().Perm()&0o111 != 0
+}
+
+func configFileValid(path string) bool {
+	if !fileExists(path) {
+		return false
+	}
+	_, err := loadConfigFrom(path)
+	return err == nil
 }
 
 func fileExists(path string) bool {

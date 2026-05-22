@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -35,6 +36,7 @@ type setupOptions struct {
 	Installer      connectorInstaller
 	Restart        func()
 	NewSetupToken  func() (string, error)
+	Guards         *setupGuards
 }
 
 type autostartStatus struct {
@@ -54,24 +56,61 @@ type setupConfigRequest struct {
 }
 
 type setupStatusResponse struct {
-	ConfigPath             string `json:"config_path"`
-	LogPath                string `json:"log_path,omitempty"`
-	WinBoxPath             string `json:"winbox_path"`
-	ListenPort             int    `json:"listen_port"`
-	TheiaOrigin            string `json:"theia_origin"`
-	TheiaBaseURL           string `json:"theia_base_url"`
-	LogLevel               string `json:"log_level"`
-	BridgeSecretConfigured bool   `json:"bridge_secret_configured"`
-	AutostartEnabled       bool   `json:"autostart_enabled"`
-	AutostartTargetPath    string `json:"autostart_target_path,omitempty"`
-	AutostartTargetExists  bool   `json:"autostart_target_exists"`
-	AutostartHealthy       bool   `json:"autostart_healthy"`
-	InstalledPath          string `json:"installed_path"`
-	Installed              bool   `json:"installed"`
-	RunningFromInstalled   bool   `json:"running_from_installed_path"`
+	ConfigPath               string `json:"config_path"`
+	LogPath                  string `json:"log_path,omitempty"`
+	WinBoxPath               string `json:"winbox_path"`
+	ListenPort               int    `json:"listen_port"`
+	TheiaOrigin              string `json:"theia_origin"`
+	TheiaBaseURL             string `json:"theia_base_url"`
+	LogLevel                 string `json:"log_level"`
+	BridgeSecretConfigured   bool   `json:"bridge_secret_configured"`
+	AutostartEnabled         bool   `json:"autostart_enabled"`
+	AutostartTargetPath      string `json:"autostart_target_path,omitempty"`
+	AutostartTargetExists    bool   `json:"autostart_target_exists"`
+	AutostartHealthy         bool   `json:"autostart_healthy"`
+	InstalledPath            string `json:"installed_path"`
+	InstalledConfigPath      string `json:"installed_config_path"`
+	Installed                bool   `json:"installed"`
+	InstalledExecutableValid bool   `json:"installed_executable_valid"`
+	InstalledConfigExists    bool   `json:"installed_config_exists"`
+	InstalledConfigValid     bool   `json:"installed_config_valid"`
+	InstallHealthy           bool   `json:"install_healthy"`
+	RunningFromInstalled     bool   `json:"running_from_installed_path"`
 }
 
 var currentLogFilePath string
+
+type setupGuards struct {
+	mu               sync.Mutex
+	operationActive  bool
+	restartRequested bool
+}
+
+func (g *setupGuards) tryBeginOperation() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.operationActive {
+		return false
+	}
+	g.operationActive = true
+	return true
+}
+
+func (g *setupGuards) endOperation() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.operationActive = false
+}
+
+func (g *setupGuards) tryRequestRestart() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.restartRequested {
+		return false
+	}
+	g.restartRequested = true
+	return true
+}
 
 func defaultSetupOptions() setupOptions {
 	return setupOptions{
@@ -111,6 +150,9 @@ func (opts setupOptions) withDefaults() setupOptions {
 	}
 	if opts.NewSetupToken == nil {
 		opts.NewSetupToken = defaults.NewSetupToken
+	}
+	if opts.Guards == nil {
+		opts.Guards = &setupGuards{}
 	}
 	return opts
 }
@@ -258,6 +300,10 @@ func handleSetupAPI(token string, opts setupOptions) http.Handler {
 			if !requireSetupToken(w, r, token) {
 				return
 			}
+			if !opts.Guards.tryRequestRestart() {
+				writeError(w, http.StatusConflict, "restart already requested")
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 			if opts.Restart != nil {
 				go func() {
@@ -289,21 +335,26 @@ func handleSetupStatus(w http.ResponseWriter, opts setupOptions) {
 		return
 	}
 	writeJSON(w, http.StatusOK, setupStatusResponse{
-		ConfigPath:             configPath,
-		LogPath:                opts.LogPath(),
-		WinBoxPath:             cfg.WinBoxPath,
-		ListenPort:             cfg.ListenPort,
-		TheiaOrigin:            cfg.TheiaOrigin,
-		TheiaBaseURL:           cfg.TheiaBaseURL,
-		LogLevel:               cfg.LogLevel,
-		BridgeSecretConfigured: strings.TrimSpace(cfg.BridgeSecret) != "",
-		AutostartEnabled:       autostartStatus.Enabled,
-		AutostartTargetPath:    autostartStatus.TargetPath,
-		AutostartTargetExists:  autostartStatus.TargetExists,
-		AutostartHealthy:       autostartStatus.Healthy,
-		InstalledPath:          installStatus.InstalledPath,
-		Installed:              installStatus.Installed,
-		RunningFromInstalled:   installStatus.RunningFromInstalledPath,
+		ConfigPath:               configPath,
+		LogPath:                  opts.LogPath(),
+		WinBoxPath:               cfg.WinBoxPath,
+		ListenPort:               cfg.ListenPort,
+		TheiaOrigin:              cfg.TheiaOrigin,
+		TheiaBaseURL:             cfg.TheiaBaseURL,
+		LogLevel:                 cfg.LogLevel,
+		BridgeSecretConfigured:   strings.TrimSpace(cfg.BridgeSecret) != "",
+		AutostartEnabled:         autostartStatus.Enabled,
+		AutostartTargetPath:      autostartStatus.TargetPath,
+		AutostartTargetExists:    autostartStatus.TargetExists,
+		AutostartHealthy:         autostartStatus.Healthy,
+		InstalledPath:            installStatus.InstalledPath,
+		InstalledConfigPath:      installStatus.InstalledConfigPath,
+		Installed:                installStatus.Installed,
+		InstalledExecutableValid: installStatus.InstalledExecutableValid,
+		InstalledConfigExists:    installStatus.InstalledConfigExists,
+		InstalledConfigValid:     installStatus.InstalledConfigValid,
+		InstallHealthy:           installStatus.InstallHealthy,
+		RunningFromInstalled:     installStatus.RunningFromInstalledPath,
 	})
 }
 
@@ -355,6 +406,11 @@ func handleSetupWinBoxSelect(w http.ResponseWriter, opts setupOptions) {
 }
 
 func handleSetupInstall(w http.ResponseWriter, opts setupOptions) {
+	if !opts.Guards.tryBeginOperation() {
+		writeError(w, http.StatusConflict, "setup operation already in progress")
+		return
+	}
+	defer opts.Guards.endOperation()
 	status, err := opts.Installer.EnsureInstalled()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to install connector")
@@ -387,6 +443,13 @@ func handleSetupAutostart(w http.ResponseWriter, r *http.Request, token string, 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
+		}
+		if req.Enabled {
+			if !opts.Guards.tryBeginOperation() {
+				writeError(w, http.StatusConflict, "setup operation already in progress")
+				return
+			}
+			defer opts.Guards.endOperation()
 		}
 		installStatus, err := opts.Installer.Status()
 		if err != nil {
@@ -465,6 +528,8 @@ func setupHTML(token string) string {
     <div class="install">
       <strong>Installed connector</strong>
       <div id="installed_path" class="meta">Not installed</div>
+      <div id="installed_config_path" class="meta">Config: Not installed</div>
+      <div id="install_health" class="meta">Connector health unknown.</div>
       <div id="autostart_health" class="meta">Autostart is disabled.</div>
       <button type="button" id="install_connector">Install / Repair Connector</button>
     </div>
@@ -480,8 +545,19 @@ func setupHTML(token string) string {
     const setupToken = %s;
     const statusEl = document.getElementById("status");
     const installedPathEl = document.getElementById("installed_path");
+    const installedConfigPathEl = document.getElementById("installed_config_path");
+    const installHealthEl = document.getElementById("install_health");
     const autostartHealthEl = document.getElementById("autostart_health");
+    const controls = Array.from(document.querySelectorAll("button, input, select"));
+    let busy = false;
+    let restartRequested = false;
     const setStatus = (text) => { statusEl.textContent = text; };
+    function setBusy(next) {
+      busy = next;
+      for (const control of controls) {
+        control.disabled = next || (restartRequested && control.id === "restart_server");
+      }
+    }
     async function api(path, options = {}) {
       const headers = options.headers || {};
       if (options.method && options.method !== "GET") headers["X-Setup-Token"] = setupToken;
@@ -491,8 +567,19 @@ func setupHTML(token string) string {
     }
     function renderInstallStatus(status) {
       installedPathEl.textContent = status.installed
-        ? status.installed_path
+        ? "Executable: " + status.installed_path
         : "Not installed. Use Install / Repair before enabling autostart.";
+      installedConfigPathEl.textContent = status.installed_config_path
+        ? "Config: " + status.installed_config_path
+        : "Config: Not available";
+      const installIssues = [];
+      if (!status.installed) installIssues.push("missing executable");
+      else if (!status.installed_executable_valid) installIssues.push("invalid executable");
+      if (!status.installed_config_exists) installIssues.push("missing config");
+      else if (!status.installed_config_valid) installIssues.push("invalid config");
+      installHealthEl.textContent = status.install_healthy
+        ? "Connector files are healthy."
+        : "Repair required: " + (installIssues.join(", ") || "unknown issue") + ".";
       if (!status.autostart_enabled) {
         autostartHealthEl.textContent = "Autostart is disabled.";
       } else if (status.autostart_healthy) {
@@ -516,22 +603,30 @@ func setupHTML(token string) string {
       }
     }
     document.getElementById("select_winbox").addEventListener("click", async () => {
+      if (busy) return;
+      setBusy(true);
       try {
         const selected = await api("/setup/winbox/select", { method: "POST" });
         document.querySelector("[name=winbox_path]").value = selected.winbox_path || "";
       } catch (err) { setStatus("WinBox selection failed."); }
+      finally { setBusy(false); }
     });
     document.getElementById("install_connector").addEventListener("click", async () => {
+      if (busy) return;
+      setBusy(true);
       try {
         await api("/setup/install", { method: "POST" });
         await loadStatus(false);
         setStatus("Connector installed.");
       } catch (err) { setStatus("Connector install failed."); }
+      finally { setBusy(false); }
     });
     document.getElementById("setup_form").addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (busy) return;
       const data = Object.fromEntries(new FormData(event.currentTarget).entries());
       data.listen_port = Number(data.listen_port);
+      setBusy(true);
       try {
         const result = await api("/setup/config", {
           method: "POST",
@@ -546,10 +641,18 @@ func setupHTML(token string) string {
         await loadStatus(false);
         setStatus(result.restart_required ? "Saved. Restart required." : "Saved.");
       } catch (err) { setStatus("Save failed."); }
+      finally { setBusy(false); }
     });
     document.getElementById("restart_server").addEventListener("click", async () => {
-      try { await api("/setup/restart", { method: "POST" }); setStatus("Restart requested."); }
+      if (busy || restartRequested) return;
+      setBusy(true);
+      try {
+        await api("/setup/restart", { method: "POST" });
+        restartRequested = true;
+        setStatus("Restart requested.");
+      }
       catch (err) { setStatus("Restart failed."); }
+      finally { setBusy(false); }
     });
     loadStatus().catch(() => setStatus("Could not load setup status."));
   </script>

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -128,6 +130,115 @@ func TestSystemConnectorInstallerEnsureInstalledMovesConfigBesideInstalledExecut
 	}
 	if _, err := os.Stat(legacyConfig); !os.IsNotExist(err) {
 		t.Fatalf("legacy config still exists or returned unexpected error: %v", err)
+	}
+}
+
+func TestSystemConnectorInstallerEnsureInstalledCreatesStableConfigWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "downloaded-bridge")
+	target := filepath.Join(dir, "stable", "winbox-bridge")
+	if err := os.WriteFile(source, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	installer := systemConnectorInstaller{
+		currentExecutable: func() (string, error) { return source, nil },
+		installedPath:     func() (string, error) { return target, nil },
+		legacyConfigPath:  func() (string, error) { return filepath.Join(dir, "missing", "config.json"), nil },
+		currentConfig: func() (Config, error) {
+			cfg := DefaultConfig()
+			cfg.ListenPort = 1555
+			cfg.TheiaBaseURL = "http://localhost:8080"
+			return cfg, nil
+		},
+	}
+
+	status, err := installer.EnsureInstalled()
+	if err != nil {
+		t.Fatalf("EnsureInstalled returned error: %v", err)
+	}
+	if !status.InstalledConfigExists || !status.InstalledConfigValid || !status.InstallHealthy {
+		t.Fatalf("status = %#v", status)
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(target), "config.json"))
+	if err != nil {
+		t.Fatalf("read stable config: %v", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parse stable config: %v", err)
+	}
+	if cfg.ListenPort != 1555 || cfg.TheiaBaseURL != "http://localhost:8080" {
+		t.Fatalf("stable config was not written from current config: %+v", cfg)
+	}
+}
+
+func TestSystemConnectorInstallerStatusReportsExecutableAndConfigHealth(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "downloaded-bridge")
+	target := filepath.Join(dir, "stable", "winbox-bridge")
+	if err := os.WriteFile(source, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := saveConfigTo(DefaultConfig(), filepath.Join(filepath.Dir(target), "config.json")); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	installer := systemConnectorInstaller{
+		currentExecutable: func() (string, error) { return source, nil },
+		installedPath:     func() (string, error) { return target, nil },
+	}
+
+	status, err := installer.Status()
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if status.InstalledConfigPath != filepath.Join(filepath.Dir(target), "config.json") {
+		t.Fatalf("InstalledConfigPath = %q", status.InstalledConfigPath)
+	}
+	if !status.Installed || !status.InstalledExecutableValid ||
+		!status.InstalledConfigExists || !status.InstalledConfigValid || !status.InstallHealthy {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestSystemConnectorInstallerStatusRejectsInvalidStableFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX executable bits")
+	}
+	dir := t.TempDir()
+	source := filepath.Join(dir, "downloaded-bridge")
+	target := filepath.Join(dir, "stable", "winbox-bridge")
+	if err := os.WriteFile(source, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(target, []byte(""), 0o600); err != nil {
+		t.Fatalf("write invalid target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(target), "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("write invalid config: %v", err)
+	}
+	installer := systemConnectorInstaller{
+		currentExecutable: func() (string, error) { return source, nil },
+		installedPath:     func() (string, error) { return target, nil },
+	}
+
+	status, err := installer.Status()
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if !status.Installed || !status.InstalledConfigExists {
+		t.Fatalf("expected files to exist, got status = %#v", status)
+	}
+	if status.InstalledExecutableValid || status.InstalledConfigValid || status.InstallHealthy {
+		t.Fatalf("invalid files reported healthy: %#v", status)
 	}
 }
 
