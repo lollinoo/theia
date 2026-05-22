@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import {
+  type BridgeCredentialMetadata,
+  type UserSettingsResponse,
   changePassword,
   fetchBridgeConnectorConfig,
   fetchUserSettings,
@@ -7,8 +9,6 @@ import {
   revokeBridgeSecret,
   rotateBridgeSecret,
   updateUserSettings,
-  type BridgeCredentialMetadata,
-  type UserSettingsResponse,
 } from '../../api/client';
 import { MaterialIcon } from '../MaterialIcon';
 
