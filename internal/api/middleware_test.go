@@ -150,6 +150,47 @@ func TestUserAuthRequiresSession(t *testing.T) {
 	}
 }
 
+func TestUserAuthDeviceDeleteRejectsUpdateWithoutDelete(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(
+		testSessionToken,
+		testCSRFToken,
+		testAPIUser("alice", false, domain.PermissionDevicesUpdate),
+	)
+	served := false
+	handler := UserAuth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/devices/device-1", nil)
+	addSessionCookie(req, testSessionToken)
+	addCSRFCookieAndHeader(req, testCSRFToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if served {
+		t.Fatal("handler was called without devices:delete permission")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestPermissionsForMethodDeleteRequiresExplicitDeletePermission(t *testing.T) {
+	permissions := permissionsForMethod(
+		http.MethodDelete,
+		domain.PermissionDevicesRead,
+		domain.PermissionDevicesCreate,
+		domain.PermissionDevicesUpdate,
+		domain.PermissionDevicesDelete,
+	)
+
+	if len(permissions) != 1 || permissions[0] != domain.PermissionDevicesDelete {
+		t.Fatalf("permissions = %#v, want only %q", permissions, domain.PermissionDevicesDelete)
+	}
+}
+
 func TestUserAuthAddsAuthenticatedUserContext(t *testing.T) {
 	auth := newFakeAPIAuthProvider()
 	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, domain.PermissionSettingsRead))

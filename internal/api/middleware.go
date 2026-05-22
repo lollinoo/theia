@@ -425,7 +425,7 @@ func permissionsForMethod(method, read, create, update, deletePermission string)
 	case http.MethodPut, http.MethodPatch:
 		return nonEmptyPermissions(update)
 	case http.MethodDelete:
-		return nonEmptyPermissions(deletePermission, update)
+		return nonEmptyPermissions(deletePermission)
 	default:
 		return nil
 	}
