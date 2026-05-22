@@ -393,6 +393,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	bridgeRepo := postgres.NewBridgeRepo(db)
 	bridgeService, err := service.NewBridgeService(service.BridgeServiceConfig{
 		BridgeRepo:            bridgeRepo,
+		SettingsRepo:          settingsRepo,
 		Users:                 authRepo,
 		AuditLogs:             authRepo,
 		BackupService:         backupService,

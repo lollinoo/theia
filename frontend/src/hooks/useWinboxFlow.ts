@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { createBridgeLaunchRequest, fetchSettings } from '../api/client';
+import { createBridgeLaunchRequest, fetchUserSettings } from '../api/client';
 import { fetchBridgeWithTimeout, getBridgeLaunchErrorMessage } from '../utils/bridgeRequests';
 import { useBridgeHealth } from './useBridgeHealth';
 import { useDeviceWinboxAvailability } from './useDeviceWinboxAvailability';
@@ -26,9 +26,9 @@ export function useWinboxFlow(): {
     useDeviceWinboxAvailability();
 
   useEffect(() => {
-    settingsLoadPromiseRef.current = fetchSettings()
+    settingsLoadPromiseRef.current = fetchUserSettings()
       .then((settings) => {
-        const nextBridgePort = settings.bridge_port ?? '1337';
+        const nextBridgePort = String(settings.preferences.bridge_port ?? 1337);
         bridgePortRef.current = nextBridgePort;
         setBridgePort(nextBridgePort);
       })

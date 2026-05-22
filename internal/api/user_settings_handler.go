@@ -275,14 +275,27 @@ func decodeUserSettingsPatch(w http.ResponseWriter, r *http.Request) (service.Up
 			writeError(w, http.StatusBadRequest, "bridge_port must be an integer")
 			return input, false
 		}
-		input.BridgePort = &parsed
+		input.BridgePortOverride = &parsed
+	}
+	if value, ok := raw["bridge_port_override"]; ok {
+		if string(value) == "null" {
+			input.ClearBridgePortOverride = true
+		} else {
+			var parsed int
+			if err := json.Unmarshal(value, &parsed); err != nil {
+				writeError(w, http.StatusBadRequest, "bridge_port_override must be an integer or null")
+				return input, false
+			}
+			input.BridgePortOverride = &parsed
+			input.ClearBridgePortOverride = false
+		}
 	}
 	return input, true
 }
 
 func allowedUserSettingsPatchField(key string) bool {
 	switch key {
-	case "display_name", "username", "email", "timezone", "locale", "bridge_port":
+	case "display_name", "username", "email", "timezone", "locale", "bridge_port", "bridge_port_override":
 		return true
 	default:
 		return false

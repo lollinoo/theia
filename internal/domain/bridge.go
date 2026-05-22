@@ -22,11 +22,12 @@ var (
 )
 
 type UserSettings struct {
-	UserID     uuid.UUID
-	Timezone   string
-	Locale     string
-	BridgePort int
-	UpdatedAt  time.Time
+	UserID             uuid.UUID
+	Timezone           string
+	Locale             string
+	BridgePort         int
+	BridgePortOverride *int
+	UpdatedAt          time.Time
 }
 
 type BridgeCredential struct {

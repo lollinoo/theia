@@ -87,6 +87,8 @@ export interface UserSettingsResponse {
     timezone: string;
     locale: string;
     bridge_port: number;
+    global_bridge_port: number;
+    bridge_port_override: number | null;
   };
   bridge: BridgeSettingsState;
 }
@@ -128,6 +130,7 @@ export interface UpdateUserSettingsPayload {
   timezone?: string;
   locale?: string;
   bridge_port?: number;
+  bridge_port_override?: number | null;
 }
 
 export interface BridgeConnectorConfigResponse {

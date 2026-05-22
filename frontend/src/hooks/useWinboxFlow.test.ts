@@ -9,7 +9,7 @@ import {
 import { useWinboxFlow } from './useWinboxFlow';
 
 const apiMocks = vi.hoisted(() => ({
-  fetchSettings: vi.fn(),
+  fetchUserSettings: vi.fn(),
   fetchDeviceCredentialProfiles: vi.fn(),
   createBridgeLaunchRequest: vi.fn(),
 }));
@@ -21,8 +21,8 @@ describe('useWinboxFlow', () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     vi.stubGlobal('fetch', vi.fn());
-    apiMocks.fetchSettings.mockResolvedValue({
-      bridge_port: '1337',
+    apiMocks.fetchUserSettings.mockResolvedValue({
+      preferences: { bridge_port: 1337 },
     });
   });
 
@@ -32,7 +32,7 @@ describe('useWinboxFlow', () => {
   });
 
   it('launches with a user-scoped bridge launch token without reading connector secrets from settings', async () => {
-    apiMocks.fetchSettings.mockResolvedValue({ bridge_port: '1337' });
+    apiMocks.fetchUserSettings.mockResolvedValue({ preferences: { bridge_port: 1337 } });
     apiMocks.createBridgeLaunchRequest.mockResolvedValue({ launch_token: 'launch-token' });
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 
@@ -99,8 +99,8 @@ describe('useWinboxFlow', () => {
   });
 
   it('waits for settings to load before deciding the bridge secret is missing', async () => {
-    let resolveSettings: ((value: { bridge_port: string }) => void) | null = null;
-    apiMocks.fetchSettings.mockImplementation(
+    let resolveSettings: ((value: { preferences: { bridge_port: number } }) => void) | null = null;
+    apiMocks.fetchUserSettings.mockImplementation(
       () =>
         new Promise((resolve) => {
           resolveSettings = resolve;
@@ -117,7 +117,7 @@ describe('useWinboxFlow', () => {
     expect(result.current.winboxError).toBeNull();
 
     await act(async () => {
-      resolveSettings?.({ bridge_port: '1337' });
+      resolveSettings?.({ preferences: { bridge_port: 1337 } });
       await launchPromise;
     });
 
@@ -126,8 +126,8 @@ describe('useWinboxFlow', () => {
   });
 
   it('waits for settings before the first bridge health check on a non-default port', async () => {
-    let resolveSettings: ((value: { bridge_port: string }) => void) | null = null;
-    apiMocks.fetchSettings.mockImplementation(
+    let resolveSettings: ((value: { preferences: { bridge_port: number } }) => void) | null = null;
+    apiMocks.fetchUserSettings.mockImplementation(
       () =>
         new Promise((resolve) => {
           resolveSettings = resolve;
@@ -147,7 +147,7 @@ describe('useWinboxFlow', () => {
     expect(global.fetch).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveSettings?.({ bridge_port: '9000' });
+      resolveSettings?.({ preferences: { bridge_port: 9000 } });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -159,8 +159,8 @@ describe('useWinboxFlow', () => {
   });
 
   it('refreshes device WinBox availability immediately before settings resolve', async () => {
-    let resolveSettings: ((value: { bridge_port: string }) => void) | null = null;
-    apiMocks.fetchSettings.mockImplementation(
+    let resolveSettings: ((value: { preferences: { bridge_port: number } }) => void) | null = null;
+    apiMocks.fetchUserSettings.mockImplementation(
       () =>
         new Promise((resolve) => {
           resolveSettings = resolve;
@@ -182,7 +182,7 @@ describe('useWinboxFlow', () => {
     expect(global.fetch).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveSettings?.({ bridge_port: '9000' });
+      resolveSettings?.({ preferences: { bridge_port: 9000 } });
       await Promise.resolve();
       await Promise.resolve();
     });

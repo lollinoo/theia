@@ -31,11 +31,12 @@ func (r *BridgeRepo) GetUserSettings(ctx context.Context, userID uuid.UUID) (*do
 
 	var settings domain.UserSettings
 	var userIDStr string
+	var bridgePortOverride sql.NullInt64
 	if err := r.queryRowContext(ctx,
-		`SELECT user_id, timezone, locale, bridge_port, updated_at
+		`SELECT user_id, timezone, locale, bridge_port, bridge_port_override, updated_at
 		 FROM user_settings WHERE user_id = ?`,
 		userID.String(),
-	).Scan(&userIDStr, &settings.Timezone, &settings.Locale, &settings.BridgePort, &settings.UpdatedAt); err != nil {
+	).Scan(&userIDStr, &settings.Timezone, &settings.Locale, &settings.BridgePort, &bridgePortOverride, &settings.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("getting user settings: %w", err)
 	}
 	parsed, err := uuid.Parse(userIDStr)
@@ -43,6 +44,7 @@ func (r *BridgeRepo) GetUserSettings(ctx context.Context, userID uuid.UUID) (*do
 		return nil, fmt.Errorf("parsing user settings user_id: %w", err)
 	}
 	settings.UserID = parsed
+	settings.BridgePortOverride = nullIntPtr(bridgePortOverride)
 	return &settings, nil
 }
 
@@ -50,8 +52,8 @@ func (r *BridgeRepo) UpsertUserSettings(ctx context.Context, settings *domain.Us
 	if settings == nil {
 		return fmt.Errorf("user settings is required")
 	}
-	if settings.BridgePort < 1 || settings.BridgePort > 65535 {
-		return fmt.Errorf("bridge_port must be between 1 and 65535")
+	if settings.BridgePortOverride != nil && (*settings.BridgePortOverride < 1 || *settings.BridgePortOverride > 65535) {
+		return fmt.Errorf("bridge_port_override must be between 1 and 65535")
 	}
 	if settings.Timezone == "" {
 		settings.Timezone = "UTC"
@@ -62,18 +64,24 @@ func (r *BridgeRepo) UpsertUserSettings(ctx context.Context, settings *domain.Us
 	if settings.UpdatedAt.IsZero() {
 		settings.UpdatedAt = time.Now().UTC()
 	}
+	legacyBridgePort := 1337
+	if settings.BridgePortOverride != nil {
+		legacyBridgePort = *settings.BridgePortOverride
+	}
 	_, err := r.execContext(ctx,
-		`INSERT INTO user_settings (user_id, timezone, locale, bridge_port, updated_at)
-		 VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO user_settings (user_id, timezone, locale, bridge_port, bridge_port_override, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (user_id) DO UPDATE SET
 		   timezone = EXCLUDED.timezone,
 		   locale = EXCLUDED.locale,
 		   bridge_port = EXCLUDED.bridge_port,
+		   bridge_port_override = EXCLUDED.bridge_port_override,
 		   updated_at = EXCLUDED.updated_at`,
 		settings.UserID.String(),
 		settings.Timezone,
 		settings.Locale,
-		settings.BridgePort,
+		legacyBridgePort,
+		nullableIntValue(settings.BridgePortOverride),
 		settings.UpdatedAt,
 	)
 	if err != nil {
@@ -391,4 +399,19 @@ func nullTimePtr(value sql.NullTime) *time.Time {
 	}
 	v := value.Time
 	return &v
+}
+
+func nullIntPtr(value sql.NullInt64) *int {
+	if !value.Valid {
+		return nil
+	}
+	v := int(value.Int64)
+	return &v
+}
+
+func nullableIntValue(value *int) interface{} {
+	if value == nil {
+		return nil
+	}
+	return *value
 }

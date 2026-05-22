@@ -128,6 +128,24 @@ func TestUserSettingsHandlerDuplicateIdentifierReturnsConflict(t *testing.T) {
 	}
 }
 
+func TestUserSettingsHandlerPatchClearsBridgePortOverride(t *testing.T) {
+	fake := &fakeUserSettingsService{}
+	handler := NewUserSettingsHandler(fake, "")
+	user := testAPIUser("alice", false, "account:manage")
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/settings/me", strings.NewReader(`{"bridge_port_override":null}`))
+	req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+	rec := httptest.NewRecorder()
+
+	handler.HandleMe(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !fake.lastUpdate.ClearBridgePortOverride || fake.lastUpdate.BridgePortOverride != nil {
+		t.Fatalf("update input = %+v, want cleared bridge port override", fake.lastUpdate)
+	}
+}
+
 func TestUserSettingsHandlerConnectorDownloadRequiresConfiguredBridgeSecret(t *testing.T) {
 	handler := NewUserSettingsHandler(&fakeUserSettingsService{}, "")
 	user := testAPIUser("alice", false, "account:manage")
@@ -226,9 +244,10 @@ func TestUserSettingsHandlerConnectorConfigListsDownloadAvailability(t *testing.
 }
 
 type fakeUserSettingsService struct {
-	settings  *service.UserSettingsResult
-	secret    *service.BridgeSecretResult
-	updateErr error
+	settings   *service.UserSettingsResult
+	secret     *service.BridgeSecretResult
+	updateErr  error
+	lastUpdate service.UpdateUserSettingsInput
 }
 
 func (f *fakeUserSettingsService) GetSettings(context.Context, *service.AuthenticatedUser) (*service.UserSettingsResult, error) {
@@ -241,7 +260,8 @@ func (f *fakeUserSettingsService) GetSettings(context.Context, *service.Authenti
 	return f.settings, nil
 }
 
-func (f *fakeUserSettingsService) UpdateSettings(context.Context, *service.AuthenticatedUser, service.UpdateUserSettingsInput) (*service.UserSettingsResult, error) {
+func (f *fakeUserSettingsService) UpdateSettings(_ context.Context, _ *service.AuthenticatedUser, input service.UpdateUserSettingsInput) (*service.UserSettingsResult, error) {
+	f.lastUpdate = input
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}

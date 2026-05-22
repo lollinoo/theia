@@ -107,6 +107,8 @@ export function UserSettingsPage() {
   const [connectorDownloads, setConnectorDownloads] = useState<BridgeConnectorDownload[]>([]);
   const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '' });
   const [bridgeMenuOpen, setBridgeMenuOpen] = useState(false);
+  const [useGlobalBridgePort, setUseGlobalBridgePort] = useState(true);
+  const [bridgePortDraft, setBridgePortDraft] = useState('1337');
   const bridgeMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -151,7 +153,15 @@ export function UserSettingsPage() {
       timezone: settings?.preferences.timezone ?? 'UTC',
       locale: settings?.preferences.locale ?? 'en-US',
       bridge_port: settings?.preferences.bridge_port ?? 1337,
+      global_bridge_port: settings?.preferences.global_bridge_port ?? 1337,
     };
+  }, [settings]);
+
+  useEffect(() => {
+    if (!settings) return;
+    const override = settings.preferences.bridge_port_override;
+    setUseGlobalBridgePort(override == null);
+    setBridgePortDraft(String(override ?? settings.preferences.bridge_port ?? 1337));
   }, [settings]);
 
   const timezoneSelectOptions = useMemo(
@@ -182,7 +192,6 @@ export function UserSettingsPage() {
         email: String(form.get('email') ?? ''),
         timezone: String(form.get('timezone') ?? ''),
         locale: String(form.get('locale') ?? ''),
-        bridge_port: Number(form.get('bridge_port') ?? 1337),
       });
       setSettings(next);
       setMessage('Settings saved');
@@ -195,13 +204,19 @@ export function UserSettingsPage() {
 
   async function saveBridgePort(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
     setSaving(true);
     setError(null);
     setMessage(null);
     try {
+      const parsedBridgePort = Number.parseInt(bridgePortDraft, 10);
+      const invalidBridgePort =
+        Number.isNaN(parsedBridgePort) || parsedBridgePort < 1 || parsedBridgePort > 65535;
+      if (!useGlobalBridgePort && invalidBridgePort) {
+        setError('Bridge port must be between 1 and 65535');
+        return;
+      }
       const next = await updateUserSettings({
-        bridge_port: Number(form.get('bridge_port') ?? profile.bridge_port),
+        bridge_port_override: useGlobalBridgePort ? null : parsedBridgePort,
       });
       setSettings(next);
       setMessage('Bridge port saved');
@@ -483,14 +498,35 @@ export function UserSettingsPage() {
             </div>
 
             <form className="mt-5 border-t border-outline-subtle pt-4" onSubmit={saveBridgePort}>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-outline-subtle bg-surface-container-high px-3 py-2 text-sm">
+                <label className="inline-flex items-center gap-2 text-on-bg">
+                  <input
+                    type="checkbox"
+                    checked={useGlobalBridgePort}
+                    className="h-4 w-4 accent-primary"
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setUseGlobalBridgePort(checked);
+                      if (checked) {
+                        setBridgePortDraft(String(profile.global_bridge_port));
+                      }
+                    }}
+                  />
+                  <span>Use global bridge port</span>
+                </label>
+                <span className="font-mono text-xs text-on-bg-muted">
+                  global {profile.global_bridge_port}
+                </span>
+              </div>
               <label className="grid gap-1 text-sm">
                 <span className="text-on-bg-secondary">Bridge port</span>
                 <input
-                  name="bridge_port"
                   type="number"
                   min={1}
                   max={65535}
-                  defaultValue={profile.bridge_port}
+                  value={bridgePortDraft}
+                  disabled={useGlobalBridgePort}
+                  onChange={(event) => setBridgePortDraft(event.target.value)}
                   className="theia-input font-mono"
                 />
               </label>

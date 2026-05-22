@@ -134,6 +134,25 @@ func TestPostgresMigrationsDeclarePerUserBridgeSchemaAndIndexes(t *testing.T) {
 	}
 }
 
+func TestPostgresMigrationsDeclareUserBridgePortOverride(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000018_user_bridge_port_override.up.sql")
+	if err != nil {
+		t.Fatalf("reading user bridge port override migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"ADD COLUMN bridge_port_override INTEGER NULL",
+		"bridge_port_override IS NULL OR bridge_port_override BETWEEN 1 AND 65535",
+		"SET bridge_port_override = bridge_port",
+		"WHERE bridge_port <> 1337",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("user bridge port override migration missing %q", expected)
+		}
+	}
+}
+
 func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing.T) {
 	managerPermissions := domain.SystemRolePermissionKeys(domain.RoleManager)
 	for _, disallowed := range []string{

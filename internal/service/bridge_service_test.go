@@ -22,12 +22,12 @@ func TestBridgeServiceUpdateSettingsOnlyChangesSafeSelfServiceFields(t *testing.
 	bridgeSvc := newBridgeServiceTestHarness(t, h.store)
 
 	result, err := bridgeSvc.service.UpdateSettings(context.Background(), bridgeAuthUser(user), UpdateUserSettingsInput{
-		DisplayName: stringPtr("Alice Smith"),
-		Username:    stringPtr("AliceNew"),
-		Email:       stringPtr("AliceNew@example.test"),
-		Timezone:    stringPtr("Europe/Rome"),
-		Locale:      stringPtr("it-IT"),
-		BridgePort:  bridgeIntPtr(1444),
+		DisplayName:        stringPtr("Alice Smith"),
+		Username:           stringPtr("AliceNew"),
+		Email:              stringPtr("AliceNew@example.test"),
+		Timezone:           stringPtr("Europe/Rome"),
+		Locale:             stringPtr("it-IT"),
+		BridgePortOverride: bridgeIntPtr(1444),
 	})
 	if err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
@@ -39,7 +39,7 @@ func TestBridgeServiceUpdateSettingsOnlyChangesSafeSelfServiceFields(t *testing.
 	if stored.Status != domain.UserStatusActive || stored.PasswordHash == "" || stored.MustChangePassword {
 		t.Fatalf("unsafe account fields changed: %+v", stored)
 	}
-	if result.Preferences.Timezone != "Europe/Rome" || result.Preferences.Locale != "it-IT" || result.Preferences.BridgePort != 1444 {
+	if result.Preferences.Timezone != "Europe/Rome" || result.Preferences.Locale != "it-IT" || result.Preferences.BridgePort != 1444 || result.Preferences.BridgePortOverride == nil || *result.Preferences.BridgePortOverride != 1444 {
 		t.Fatalf("updated preferences = %+v", result.Preferences)
 	}
 
@@ -72,7 +72,7 @@ func TestBridgeServiceUpdateSettingsRejectsInvalidSelfServiceFields(t *testing.T
 		{name: "blank username", input: UpdateUserSettingsInput{Username: stringPtr(" ")}},
 		{name: "invalid email", input: UpdateUserSettingsInput{Email: stringPtr("not-an-email")}},
 		{name: "invalid timezone", input: UpdateUserSettingsInput{Timezone: stringPtr("Mars/Base")}},
-		{name: "invalid bridge port", input: UpdateUserSettingsInput{BridgePort: bridgeIntPtr(70000)}},
+		{name: "invalid bridge port override", input: UpdateUserSettingsInput{BridgePortOverride: bridgeIntPtr(70000)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -81,6 +81,43 @@ func TestBridgeServiceUpdateSettingsRejectsInvalidSelfServiceFields(t *testing.T
 				t.Fatalf("UpdateSettings error = %v, want ErrInvalidUserSettings", err)
 			}
 		})
+	}
+}
+
+func TestBridgeServiceGetSettingsResolvesBridgePortFromGlobalDefaultAndUserOverride(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	user := h.addUser(t, "alice", "alice@example.test", testAuthPassword, domain.UserStatusActive)
+	bridgeSvc := newBridgeServiceTestHarness(t, h.store)
+	if err := bridgeSvc.settingsRepo.Set(domain.SettingBridgePort, "1555"); err != nil {
+		t.Fatalf("Set global bridge port: %v", err)
+	}
+
+	result, err := bridgeSvc.service.GetSettings(context.Background(), bridgeAuthUser(user))
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if result.Preferences.GlobalBridgePort != 1555 || result.Preferences.BridgePort != 1555 || result.Preferences.BridgePortOverride != nil {
+		t.Fatalf("preferences without override = %+v", result.Preferences)
+	}
+
+	updated, err := bridgeSvc.service.UpdateSettings(context.Background(), bridgeAuthUser(user), UpdateUserSettingsInput{
+		BridgePortOverride: bridgeIntPtr(1666),
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings override: %v", err)
+	}
+	if updated.Preferences.GlobalBridgePort != 1555 || updated.Preferences.BridgePort != 1666 || updated.Preferences.BridgePortOverride == nil || *updated.Preferences.BridgePortOverride != 1666 {
+		t.Fatalf("preferences with override = %+v", updated.Preferences)
+	}
+
+	cleared, err := bridgeSvc.service.UpdateSettings(context.Background(), bridgeAuthUser(user), UpdateUserSettingsInput{
+		ClearBridgePortOverride: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings clear override: %v", err)
+	}
+	if cleared.Preferences.GlobalBridgePort != 1555 || cleared.Preferences.BridgePort != 1555 || cleared.Preferences.BridgePortOverride != nil {
+		t.Fatalf("preferences after clearing override = %+v", cleared.Preferences)
 	}
 }
 
@@ -193,23 +230,26 @@ func TestBridgeServiceConnectorLaunchRequiresMatchingUserAndOneTimeToken(t *test
 }
 
 type bridgeServiceTestHarness struct {
-	service     *BridgeService
-	bridgeRepo  *fakeBridgeRepo
-	audit       *fakeAuthStore
-	profileRepo *fakeWinboxAssignmentRepo
-	credentials *fakeWinboxCredentialProvider
+	service      *BridgeService
+	bridgeRepo   *fakeBridgeRepo
+	settingsRepo *fakeSettingsRepo
+	audit        *fakeAuthStore
+	profileRepo  *fakeWinboxAssignmentRepo
+	credentials  *fakeWinboxCredentialProvider
 }
 
 func newBridgeServiceTestHarness(t *testing.T, authStore *fakeAuthStore) *bridgeServiceTestHarness {
 	t.Helper()
 	h := &bridgeServiceTestHarness{
-		bridgeRepo:  newFakeBridgeRepo(),
-		audit:       authStore,
-		profileRepo: &fakeWinboxAssignmentRepo{},
-		credentials: &fakeWinboxCredentialProvider{},
+		bridgeRepo:   newFakeBridgeRepo(),
+		settingsRepo: newFakeSettingsRepo(map[string]string{domain.SettingBridgePort: "1337"}),
+		audit:        authStore,
+		profileRepo:  &fakeWinboxAssignmentRepo{},
+		credentials:  &fakeWinboxCredentialProvider{},
 	}
 	svc, err := NewBridgeService(BridgeServiceConfig{
 		BridgeRepo:               h.bridgeRepo,
+		SettingsRepo:             h.settingsRepo,
 		Users:                    authStore,
 		AuditLogs:                authStore,
 		WinboxCredentialProvider: h.credentials,
@@ -269,7 +309,7 @@ func (r *fakeBridgeRepo) GetUserSettings(_ context.Context, userID uuid.UUID) (*
 	defer r.mu.Unlock()
 	settings, ok := r.settings[userID]
 	if !ok {
-		settings = domain.UserSettings{UserID: userID, Timezone: "UTC", Locale: "en-US", BridgePort: 1337}
+		settings = domain.UserSettings{UserID: userID, Timezone: "UTC", Locale: "en-US"}
 		r.settings[userID] = settings
 	}
 	return copyUserSettings(settings), nil
@@ -278,7 +318,7 @@ func (r *fakeBridgeRepo) GetUserSettings(_ context.Context, userID uuid.UUID) (*
 func (r *fakeBridgeRepo) UpsertUserSettings(_ context.Context, settings *domain.UserSettings) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if settings.BridgePort < 1 || settings.BridgePort > 65535 {
+	if settings.BridgePortOverride != nil && (*settings.BridgePortOverride < 1 || *settings.BridgePortOverride > 65535) {
 		return fmt.Errorf("invalid bridge port")
 	}
 	r.settings[settings.UserID] = *settings
@@ -405,6 +445,46 @@ func copyBridgeCredential(value domain.BridgeCredential) *domain.BridgeCredentia
 func copyBridgeLaunchRequest(value domain.BridgeLaunchRequest) *domain.BridgeLaunchRequest {
 	copied := value
 	return &copied
+}
+
+type fakeSettingsRepo struct {
+	mu     sync.Mutex
+	values map[string]string
+}
+
+func newFakeSettingsRepo(values map[string]string) *fakeSettingsRepo {
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return &fakeSettingsRepo{values: copied}
+}
+
+func (r *fakeSettingsRepo) Get(key string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	value, ok := r.values[key]
+	if !ok {
+		return "", fmt.Errorf("setting not found: %s", key)
+	}
+	return value, nil
+}
+
+func (r *fakeSettingsRepo) Set(key, value string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values[key] = value
+	return nil
+}
+
+func (r *fakeSettingsRepo) GetAll() (map[string]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	copied := make(map[string]string, len(r.values))
+	for key, value := range r.values {
+		copied[key] = value
+	}
+	return copied, nil
 }
 
 type fakeWinboxAssignmentRepo struct {

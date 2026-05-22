@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,7 @@ type WinboxAssignmentProvider interface {
 
 type BridgeServiceConfig struct {
 	BridgeRepo               domain.BridgeRepository
+	SettingsRepo             domain.SettingsRepository
 	Users                    domain.UserRepository
 	AuditLogs                domain.AuditLogRepository
 	BackupService            *BackupService
@@ -51,6 +53,7 @@ type BridgeServiceConfig struct {
 
 type BridgeService struct {
 	bridgeRepo            domain.BridgeRepository
+	settingsRepo          domain.SettingsRepository
 	users                 domain.UserRepository
 	auditLogs             domain.AuditLogRepository
 	winboxCredentials     WinboxCredentialProvider
@@ -75,9 +78,11 @@ type UserSettingsUser struct {
 }
 
 type UserSettingsPreferences struct {
-	Timezone   string `json:"timezone"`
-	Locale     string `json:"locale"`
-	BridgePort int    `json:"bridge_port"`
+	Timezone           string `json:"timezone"`
+	Locale             string `json:"locale"`
+	BridgePort         int    `json:"bridge_port"`
+	GlobalBridgePort   int    `json:"global_bridge_port"`
+	BridgePortOverride *int   `json:"bridge_port_override"`
 }
 
 type UserSettingsBridge struct {
@@ -97,12 +102,13 @@ type BridgeCredentialMetadata struct {
 }
 
 type UpdateUserSettingsInput struct {
-	DisplayName *string
-	Username    *string
-	Email       *string
-	Timezone    *string
-	Locale      *string
-	BridgePort  *int
+	DisplayName             *string
+	Username                *string
+	Email                   *string
+	Timezone                *string
+	Locale                  *string
+	BridgePortOverride      *int
+	ClearBridgePortOverride bool
 }
 
 type BridgeSecretResult struct {
@@ -126,6 +132,9 @@ type BridgeLaunchCredentials struct {
 func NewBridgeService(config BridgeServiceConfig) (*BridgeService, error) {
 	if config.BridgeRepo == nil {
 		return nil, errors.New("bridge service repository is required")
+	}
+	if config.SettingsRepo == nil {
+		return nil, errors.New("bridge service settings repository is required")
 	}
 	if config.Users == nil {
 		return nil, errors.New("bridge service users repository is required")
@@ -152,6 +161,7 @@ func NewBridgeService(config BridgeServiceConfig) (*BridgeService, error) {
 	}
 	return &BridgeService{
 		bridgeRepo:            config.BridgeRepo,
+		settingsRepo:          config.SettingsRepo,
 		users:                 config.Users,
 		auditLogs:             config.AuditLogs,
 		winboxCredentials:     winboxCredentials,
@@ -174,7 +184,7 @@ func (s *BridgeService) GetSettings(ctx context.Context, user *AuthenticatedUser
 	if err != nil && !errors.Is(err, domain.ErrBridgeCredentialNotFound) {
 		return nil, err
 	}
-	return buildUserSettingsResult(current, preferences, credential), nil
+	return s.buildUserSettingsResult(current, preferences, credential), nil
 }
 
 func (s *BridgeService) UpdateSettings(ctx context.Context, user *AuthenticatedUser, input UpdateUserSettingsInput) (*UserSettingsResult, error) {
@@ -196,7 +206,7 @@ func (s *BridgeService) UpdateSettings(ctx context.Context, user *AuthenticatedU
 			return nil, fmt.Errorf("%w: locale is too long", ErrInvalidUserSettings)
 		}
 	}
-	if input.BridgePort != nil && (*input.BridgePort < 1 || *input.BridgePort > 65535) {
+	if input.BridgePortOverride != nil && (*input.BridgePortOverride < 1 || *input.BridgePortOverride > 65535) {
 		return nil, fmt.Errorf("%w: bridge port must be between 1 and 65535", ErrInvalidUserSettings)
 	}
 	if input.DisplayName != nil {
@@ -245,8 +255,10 @@ func (s *BridgeService) UpdateSettings(ctx context.Context, user *AuthenticatedU
 	if input.Locale != nil {
 		preferences.Locale = strings.TrimSpace(*input.Locale)
 	}
-	if input.BridgePort != nil {
-		preferences.BridgePort = *input.BridgePort
+	if input.ClearBridgePortOverride {
+		preferences.BridgePortOverride = nil
+	} else if input.BridgePortOverride != nil {
+		preferences.BridgePortOverride = input.BridgePortOverride
 	}
 	preferences.UpdatedAt = now
 	if err := s.bridgeRepo.UpsertUserSettings(ctx, preferences); err != nil {
@@ -481,7 +493,12 @@ func (s *BridgeService) appendAuditLog(ctx context.Context, actorUserID, targetU
 	return nil
 }
 
-func buildUserSettingsResult(user *domain.User, preferences *domain.UserSettings, credential *domain.BridgeCredential) *UserSettingsResult {
+func (s *BridgeService) buildUserSettingsResult(user *domain.User, preferences *domain.UserSettings, credential *domain.BridgeCredential) *UserSettingsResult {
+	globalBridgePort := s.globalBridgePort()
+	effectiveBridgePort := globalBridgePort
+	if preferences.BridgePortOverride != nil {
+		effectiveBridgePort = *preferences.BridgePortOverride
+	}
 	result := &UserSettingsResult{
 		User: UserSettingsUser{
 			ID:                user.ID,
@@ -492,9 +509,11 @@ func buildUserSettingsResult(user *domain.User, preferences *domain.UserSettings
 			PasswordChangedAt: user.PasswordChangedAt,
 		},
 		Preferences: UserSettingsPreferences{
-			Timezone:   preferences.Timezone,
-			Locale:     preferences.Locale,
-			BridgePort: preferences.BridgePort,
+			Timezone:           preferences.Timezone,
+			Locale:             preferences.Locale,
+			BridgePort:         effectiveBridgePort,
+			GlobalBridgePort:   globalBridgePort,
+			BridgePortOverride: cloneIntPtr(preferences.BridgePortOverride),
 		},
 	}
 	if credential != nil {
@@ -503,6 +522,27 @@ func buildUserSettingsResult(user *domain.User, preferences *domain.UserSettings
 		result.Bridge.Credential = &metadata
 	}
 	return result
+}
+
+func (s *BridgeService) globalBridgePort() int {
+	const defaultBridgePort = 1337
+	value, err := s.settingsRepo.Get(domain.SettingBridgePort)
+	if err != nil {
+		return defaultBridgePort
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed < 1 || parsed > 65535 {
+		return defaultBridgePort
+	}
+	return parsed
+}
+
+func cloneIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func bridgeCredentialMetadata(credential *domain.BridgeCredential) BridgeCredentialMetadata {

@@ -21,13 +21,13 @@ func TestBridgeRepoUserSettingsDefaultsAndUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserSettings: %v", err)
 	}
-	if settings.UserID != userID || settings.Timezone != "UTC" || settings.Locale != "en-US" || settings.BridgePort != 1337 {
-		t.Fatalf("default settings = %+v, want UTC/en-US/1337 for user", settings)
+	if settings.UserID != userID || settings.Timezone != "UTC" || settings.Locale != "en-US" || settings.BridgePortOverride != nil {
+		t.Fatalf("default settings = %+v, want UTC/en-US/no bridge port override for user", settings)
 	}
 
 	settings.Timezone = "Europe/Rome"
 	settings.Locale = "it-IT"
-	settings.BridgePort = 1444
+	settings.BridgePortOverride = bridgeRepoIntPtr(1444)
 	if err := repo.UpsertUserSettings(context.Background(), settings); err != nil {
 		t.Fatalf("UpsertUserSettings: %v", err)
 	}
@@ -35,13 +35,13 @@ func TestBridgeRepoUserSettingsDefaultsAndUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserSettings updated: %v", err)
 	}
-	if updated.Timezone != "Europe/Rome" || updated.Locale != "it-IT" || updated.BridgePort != 1444 {
+	if updated.Timezone != "Europe/Rome" || updated.Locale != "it-IT" || updated.BridgePortOverride == nil || *updated.BridgePortOverride != 1444 {
 		t.Fatalf("updated settings = %+v", updated)
 	}
 
-	updated.BridgePort = 70000
+	updated.BridgePortOverride = bridgeRepoIntPtr(70000)
 	if err := repo.UpsertUserSettings(context.Background(), updated); err == nil {
-		t.Fatal("UpsertUserSettings accepted invalid bridge port")
+		t.Fatal("UpsertUserSettings accepted invalid bridge port override")
 	}
 }
 
@@ -92,6 +92,8 @@ func TestBridgeRepoCredentialLifecycle(t *testing.T) {
 		t.Fatalf("GetActiveBridgeCredentialForUser after revoke error = %v, want ErrBridgeCredentialNotFound", err)
 	}
 }
+
+func bridgeRepoIntPtr(value int) *int { return &value }
 
 func TestBridgeRepoLaunchRequestCanBeConsumedOnlyOnce(t *testing.T) {
 	db := setupTestDB(t)

@@ -29,6 +29,8 @@ const activeSettings: UserSettingsResponse = {
     timezone: 'UTC',
     locale: 'en-US',
     bridge_port: 1337,
+    global_bridge_port: 1337,
+    bridge_port_override: null,
   },
   bridge: {
     configured: true,
@@ -114,9 +116,12 @@ describe('UserSettingsPage', () => {
         }),
       );
     });
+    const payload = vi.mocked(updateUserSettings).mock.calls[0]?.[0] ?? {};
+    expect(payload).not.toHaveProperty('bridge_port');
+    expect(payload).not.toHaveProperty('bridge_port_override');
   });
 
-  it('moves bridge port editing into the bridge connector section', async () => {
+  it('moves bridge port editing into the bridge connector section as an optional user override', async () => {
     render(<UserSettingsPage />);
 
     await screen.findByRole('heading', { name: 'User Settings' });
@@ -128,14 +133,43 @@ describe('UserSettingsPage', () => {
     expect(within(bridgeConnector).getByRole('spinbutton', { name: 'Bridge port' })).toHaveValue(
       1337,
     );
+    expect(within(bridgeConnector).getByLabelText('Use global bridge port')).toBeChecked();
+    expect(within(bridgeConnector).getByRole('spinbutton', { name: 'Bridge port' })).toBeDisabled();
 
+    fireEvent.click(within(bridgeConnector).getByLabelText('Use global bridge port'));
     fireEvent.change(within(bridgeConnector).getByRole('spinbutton', { name: 'Bridge port' }), {
       target: { value: '1444' },
     });
     fireEvent.click(within(bridgeConnector).getByRole('button', { name: 'Save Bridge Port' }));
 
     await waitFor(() => {
-      expect(updateUserSettings).toHaveBeenCalledWith({ bridge_port: 1444 });
+      expect(updateUserSettings).toHaveBeenCalledWith({ bridge_port_override: 1444 });
+    });
+  });
+
+  it('clears the user bridge port override when the global bridge port is selected', async () => {
+    vi.mocked(fetchUserSettings).mockResolvedValue({
+      ...activeSettings,
+      preferences: {
+        ...activeSettings.preferences,
+        bridge_port: 1444,
+        global_bridge_port: 1337,
+        bridge_port_override: 1444,
+      },
+    });
+
+    render(<UserSettingsPage />);
+
+    await screen.findByRole('heading', { name: 'User Settings' });
+
+    const bridgeConnector = screen.getByRole('region', { name: 'Bridge Connector' });
+    expect(within(bridgeConnector).getByLabelText('Use global bridge port')).not.toBeChecked();
+
+    fireEvent.click(within(bridgeConnector).getByLabelText('Use global bridge port'));
+    fireEvent.click(within(bridgeConnector).getByRole('button', { name: 'Save Bridge Port' }));
+
+    await waitFor(() => {
+      expect(updateUserSettings).toHaveBeenCalledWith({ bridge_port_override: null });
     });
   });
 
