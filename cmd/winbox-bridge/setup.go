@@ -19,8 +19,8 @@ import (
 )
 
 type autostartProvider interface {
-	Enabled() (bool, error)
-	SetEnabled(bool) error
+	Status(expectedTarget string) (autostartStatus, error)
+	SetEnabled(enabled bool, targetPath string) error
 }
 
 type commandRunner func(name string, args ...string) ([]byte, error)
@@ -32,8 +32,16 @@ type setupOptions struct {
 	LogPath        func() string
 	PickWinBoxPath func() (string, error)
 	Autostart      autostartProvider
+	Installer      connectorInstaller
 	Restart        func()
 	NewSetupToken  func() (string, error)
+}
+
+type autostartStatus struct {
+	Enabled      bool   `json:"enabled"`
+	TargetPath   string `json:"target_path,omitempty"`
+	TargetExists bool   `json:"target_exists"`
+	Healthy      bool   `json:"healthy"`
 }
 
 type setupConfigRequest struct {
@@ -55,6 +63,12 @@ type setupStatusResponse struct {
 	LogLevel               string `json:"log_level"`
 	BridgeSecretConfigured bool   `json:"bridge_secret_configured"`
 	AutostartEnabled       bool   `json:"autostart_enabled"`
+	AutostartTargetPath    string `json:"autostart_target_path,omitempty"`
+	AutostartTargetExists  bool   `json:"autostart_target_exists"`
+	AutostartHealthy       bool   `json:"autostart_healthy"`
+	InstalledPath          string `json:"installed_path"`
+	Installed              bool   `json:"installed"`
+	RunningFromInstalled   bool   `json:"running_from_installed_path"`
 }
 
 var currentLogFilePath string
@@ -67,6 +81,7 @@ func defaultSetupOptions() setupOptions {
 		LogPath:        func() string { return currentLogFilePath },
 		PickWinBoxPath: pickWinBoxPath,
 		Autostart:      systemAutostartProvider{},
+		Installer:      systemConnectorInstaller{},
 		NewSetupToken:  generateSetupToken,
 	}
 }
@@ -90,6 +105,9 @@ func (opts setupOptions) withDefaults() setupOptions {
 	}
 	if opts.Autostart == nil {
 		opts.Autostart = defaults.Autostart
+	}
+	if opts.Installer == nil {
+		opts.Installer = defaults.Installer
 	}
 	if opts.NewSetupToken == nil {
 		opts.NewSetupToken = defaults.NewSetupToken
@@ -223,6 +241,15 @@ func handleSetupAPI(token string, opts setupOptions) http.Handler {
 			handleSetupWinBoxSelect(w, opts)
 		case "/setup/autostart":
 			handleSetupAutostart(w, r, token, opts)
+		case "/setup/install":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if !requireSetupToken(w, r, token) {
+				return
+			}
+			handleSetupInstall(w, opts)
 		case "/setup/restart":
 			if r.Method != http.MethodPost {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -251,7 +278,12 @@ func handleSetupStatus(w http.ResponseWriter, opts setupOptions) {
 		writeError(w, http.StatusInternalServerError, "failed to locate config")
 		return
 	}
-	autostartEnabled, err := opts.Autostart.Enabled()
+	installStatus, err := opts.Installer.Status()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read install status")
+		return
+	}
+	autostartStatus, err := opts.Autostart.Status(installStatus.InstalledPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read autostart")
 		return
@@ -265,7 +297,13 @@ func handleSetupStatus(w http.ResponseWriter, opts setupOptions) {
 		TheiaBaseURL:           cfg.TheiaBaseURL,
 		LogLevel:               cfg.LogLevel,
 		BridgeSecretConfigured: strings.TrimSpace(cfg.BridgeSecret) != "",
-		AutostartEnabled:       autostartEnabled,
+		AutostartEnabled:       autostartStatus.Enabled,
+		AutostartTargetPath:    autostartStatus.TargetPath,
+		AutostartTargetExists:  autostartStatus.TargetExists,
+		AutostartHealthy:       autostartStatus.Healthy,
+		InstalledPath:          installStatus.InstalledPath,
+		Installed:              installStatus.Installed,
+		RunningFromInstalled:   installStatus.RunningFromInstalledPath,
 	})
 }
 
@@ -316,15 +354,29 @@ func handleSetupWinBoxSelect(w http.ResponseWriter, opts setupOptions) {
 	writeJSON(w, http.StatusOK, map[string]string{"winbox_path": path})
 }
 
+func handleSetupInstall(w http.ResponseWriter, opts setupOptions) {
+	status, err := opts.Installer.EnsureInstalled()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to install connector")
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 func handleSetupAutostart(w http.ResponseWriter, r *http.Request, token string, opts setupOptions) {
 	switch r.Method {
 	case http.MethodGet:
-		enabled, err := opts.Autostart.Enabled()
+		installStatus, err := opts.Installer.Status()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read install status")
+			return
+		}
+		status, err := opts.Autostart.Status(installStatus.InstalledPath)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read autostart")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]bool{"enabled": enabled})
+		writeJSON(w, http.StatusOK, status)
 	case http.MethodPost:
 		if !requireSetupToken(w, r, token) {
 			return
@@ -336,11 +388,28 @@ func handleSetupAutostart(w http.ResponseWriter, r *http.Request, token string, 
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if err := opts.Autostart.SetEnabled(req.Enabled); err != nil {
+		installStatus, err := opts.Installer.Status()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read install status")
+			return
+		}
+		if req.Enabled {
+			installStatus, err = opts.Installer.EnsureInstalled()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to install connector")
+				return
+			}
+		}
+		if err := opts.Autostart.SetEnabled(req.Enabled, installStatus.InstalledPath); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update autostart")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
+		status, err := opts.Autostart.Status(installStatus.InstalledPath)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read autostart")
+			return
+		}
+		writeJSON(w, http.StatusOK, status)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -361,6 +430,8 @@ func setupHTML(token string) string {
     button { margin-top: 1rem; padding: .6rem .8rem; }
     .row { display: flex; gap: .75rem; align-items: end; }
     .row > label { flex: 1; }
+    .install { margin-top: 1rem; padding: .75rem; border: 1px solid #ccd6e0; border-radius: .35rem; }
+    .meta { margin-top: .35rem; color: #4c5f73; font-size: .9rem; overflow-wrap: anywhere; }
     .status { margin-top: 1rem; min-height: 1.5rem; }
   </style>
 </head>
@@ -391,6 +462,12 @@ func setupHTML(token string) string {
         <option value="debug">debug</option>
       </select>
     </label>
+    <div class="install">
+      <strong>Installed connector</strong>
+      <div id="installed_path" class="meta">Not installed</div>
+      <div id="autostart_health" class="meta">Autostart is disabled.</div>
+      <button type="button" id="install_connector">Install / Repair Connector</button>
+    </div>
     <label>
       <input name="autostart_enabled" id="autostart_enabled" type="checkbox" style="width:auto">
       Start automatically when I sign in
@@ -402,6 +479,8 @@ func setupHTML(token string) string {
   <script>
     const setupToken = %s;
     const statusEl = document.getElementById("status");
+    const installedPathEl = document.getElementById("installed_path");
+    const autostartHealthEl = document.getElementById("autostart_health");
     const setStatus = (text) => { statusEl.textContent = text; };
     async function api(path, options = {}) {
       const headers = options.headers || {};
@@ -410,20 +489,44 @@ func setupHTML(token string) string {
       if (!response.ok) throw new Error(await response.text());
       return response.json();
     }
-    async function loadStatus() {
+    function renderInstallStatus(status) {
+      installedPathEl.textContent = status.installed
+        ? status.installed_path
+        : "Not installed. Use Install / Repair before enabling autostart.";
+      if (!status.autostart_enabled) {
+        autostartHealthEl.textContent = "Autostart is disabled.";
+      } else if (status.autostart_healthy) {
+        autostartHealthEl.textContent = "Autostart points to the installed connector.";
+      } else if (!status.autostart_target_exists) {
+        autostartHealthEl.textContent = "Autostart needs repair because its target is missing.";
+      } else {
+        autostartHealthEl.textContent = "Autostart needs repair because it points to another path.";
+      }
+    }
+    async function loadStatus(updateMessage = true) {
       const status = await api("/setup/status");
       for (const name of ["winbox_path", "theia_base_url", "theia_origin", "listen_port", "log_level"]) {
         const el = document.querySelector("[name=" + name + "]");
         if (el && status[name] !== undefined) el.value = status[name];
       }
       document.querySelector("[name=autostart_enabled]").checked = !!status.autostart_enabled;
-      setStatus(status.bridge_secret_configured ? "Bridge secret is configured." : "Bridge secret is not configured.");
+      renderInstallStatus(status);
+      if (updateMessage) {
+        setStatus(status.bridge_secret_configured ? "Bridge secret is configured." : "Bridge secret is not configured.");
+      }
     }
     document.getElementById("select_winbox").addEventListener("click", async () => {
       try {
         const selected = await api("/setup/winbox/select", { method: "POST" });
         document.querySelector("[name=winbox_path]").value = selected.winbox_path || "";
       } catch (err) { setStatus("WinBox selection failed."); }
+    });
+    document.getElementById("install_connector").addEventListener("click", async () => {
+      try {
+        await api("/setup/install", { method: "POST" });
+        await loadStatus(false);
+        setStatus("Connector installed.");
+      } catch (err) { setStatus("Connector install failed."); }
     });
     document.getElementById("setup_form").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -440,6 +543,7 @@ func setupHTML(token string) string {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled: document.querySelector("[name=autostart_enabled]").checked }),
         });
+        await loadStatus(false);
         setStatus(result.restart_required ? "Saved. Restart required." : "Saved.");
       } catch (err) { setStatus("Save failed."); }
     });
@@ -487,48 +591,45 @@ func runCommand(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).CombinedOutput() //nolint:gosec
 }
 
-func (systemAutostartProvider) Enabled() (bool, error) {
+func (systemAutostartProvider) Status(expectedTarget string) (autostartStatus, error) {
 	switch runtime.GOOS {
 	case "windows":
-		_, err := runCommand("reg.exe", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "Theia WinBox Bridge")
-		return err == nil, nil
+		output, err := runCommand("reg.exe", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "Theia WinBox Bridge")
+		if err != nil {
+			return buildAutostartStatus(false, "", expectedTarget), nil
+		}
+		target := windowsAutostartTarget(output)
+		return buildAutostartStatus(target != "", target, expectedTarget), nil
 	case "darwin":
 		path, err := launchAgentPath()
 		if err != nil {
-			return false, err
+			return autostartStatus{}, err
 		}
-		_, err = os.Stat(path)
+		target, enabled, err := launchAgentTarget(path)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return false, nil
-			}
-			return false, err
+			return autostartStatus{}, err
 		}
-		return true, nil
+		return buildAutostartStatus(enabled, target, expectedTarget), nil
 	default:
 		path, err := linuxAutostartPath()
 		if err != nil {
-			return false, err
+			return autostartStatus{}, err
 		}
-		_, err = os.Stat(path)
+		target, enabled, err := linuxAutostartTarget(path)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return false, nil
-			}
-			return false, err
+			return autostartStatus{}, err
 		}
-		return true, nil
+		return buildAutostartStatus(enabled, target, expectedTarget), nil
 	}
 }
 
-func (systemAutostartProvider) SetEnabled(enabled bool) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("executable path: %w", err)
+func (systemAutostartProvider) SetEnabled(enabled bool, targetPath string) error {
+	if enabled && strings.TrimSpace(targetPath) == "" {
+		return fmt.Errorf("autostart target path is required")
 	}
 	switch runtime.GOOS {
 	case "windows":
-		return setWindowsAutostart(enabled, exe, runCommand)
+		return setWindowsAutostart(enabled, targetPath, runCommand)
 	case "darwin":
 		path, err := launchAgentPath()
 		if err != nil {
@@ -537,7 +638,7 @@ func (systemAutostartProvider) SetEnabled(enabled bool) error {
 		if !enabled {
 			return removeIfExists(path)
 		}
-		return writeLaunchAgent(path, exe)
+		return writeLaunchAgent(path, targetPath)
 	default:
 		path, err := linuxAutostartPath()
 		if err != nil {
@@ -546,7 +647,17 @@ func (systemAutostartProvider) SetEnabled(enabled bool) error {
 		if !enabled {
 			return removeIfExists(path)
 		}
-		return writeLinuxAutostart(path, exe)
+		return writeLinuxAutostart(path, targetPath)
+	}
+}
+
+func buildAutostartStatus(enabled bool, targetPath string, expectedTarget string) autostartStatus {
+	targetExists := fileExists(targetPath)
+	return autostartStatus{
+		Enabled:      enabled,
+		TargetPath:   targetPath,
+		TargetExists: targetExists,
+		Healthy:      enabled && targetExists && sameFilePath(targetPath, expectedTarget),
 	}
 }
 
@@ -598,6 +709,50 @@ func writeLinuxAutostart(path string, exe string) error {
 	return os.WriteFile(path, []byte(contents), 0o600)
 }
 
+func launchAgentTarget(path string) (string, bool, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	text := string(contents)
+	marker := "<key>ProgramArguments</key>"
+	markerIndex := strings.Index(text, marker)
+	if markerIndex < 0 {
+		return "", true, nil
+	}
+	rest := text[markerIndex+len(marker):]
+	start := strings.Index(rest, "<string>")
+	if start < 0 {
+		return "", true, nil
+	}
+	rest = rest[start+len("<string>"):]
+	end := strings.Index(rest, "</string>")
+	if end < 0 {
+		return "", true, nil
+	}
+	return html.UnescapeString(rest[:end]), true, nil
+}
+
+func linuxAutostartTarget(path string) (string, bool, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	for _, line := range strings.Split(string(contents), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Exec=") {
+			return linuxDesktopExecTarget(strings.TrimPrefix(line, "Exec=")), true, nil
+		}
+	}
+	return "", true, nil
+}
+
 func setWindowsAutostart(enabled bool, exe string, run commandRunner) error {
 	if !enabled {
 		output, err := run("reg.exe", "delete", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "Theia WinBox Bridge", "/f")
@@ -617,8 +772,45 @@ func windowsRegistryValueMissing(output []byte) bool {
 		strings.Contains(text, "not found")
 }
 
+func windowsAutostartTarget(output []byte) string {
+	const valueName = "Theia WinBox Bridge"
+	for _, line := range strings.Split(string(output), "\n") {
+		index := strings.Index(line, valueName)
+		if index < 0 {
+			continue
+		}
+		value := strings.TrimSpace(line[index+len(valueName):])
+		fields := strings.Fields(value)
+		if len(fields) < 2 || !strings.HasPrefix(fields[0], "REG_") {
+			return ""
+		}
+		return windowsRunCommandTarget(strings.TrimSpace(strings.TrimPrefix(value, fields[0])))
+	}
+	return ""
+}
+
 func windowsRunCommandValue(exe string) string {
 	return `"` + strings.Trim(exe, `"`) + `"`
+}
+
+func windowsRunCommandTarget(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, `"`) {
+		fields := strings.Fields(value)
+		if len(fields) == 0 {
+			return ""
+		}
+		return fields[0]
+	}
+	rest := strings.TrimPrefix(value, `"`)
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return rest
+	}
+	return rest[:end]
 }
 
 func linuxDesktopExecValue(exe string) string {
@@ -630,6 +822,42 @@ func linuxDesktopExecValue(exe string) string {
 		"%", "%%",
 	)
 	return `"` + replacer.Replace(exe) + `"`
+}
+
+func linuxDesktopExecTarget(value string) string {
+	return strings.ReplaceAll(autostartCommandPath(value), "%%", "%")
+}
+
+func autostartCommandPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, `"`) {
+		fields := strings.Fields(value)
+		if len(fields) == 0 {
+			return ""
+		}
+		return fields[0]
+	}
+	var builder strings.Builder
+	escaped := false
+	for _, char := range strings.TrimPrefix(value, `"`) {
+		if escaped {
+			builder.WriteRune(char)
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		if char == '"' {
+			break
+		}
+		builder.WriteRune(char)
+	}
+	return builder.String()
 }
 
 func setupRestartFunc(mgr *ServerManager) func() {

@@ -14,29 +14,74 @@ import (
 )
 
 type fakeAutostartProvider struct {
-	mu      sync.Mutex
-	enabled bool
-	set     []bool
+	mu           sync.Mutex
+	enabled      bool
+	targetPath   string
+	targetExists bool
+	set          []autostartSetCall
 }
 
-func (p *fakeAutostartProvider) Enabled() (bool, error) {
+type autostartSetCall struct {
+	enabled    bool
+	targetPath string
+}
+
+func (p *fakeAutostartProvider) Status(expectedTarget string) (autostartStatus, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.enabled, nil
+	return autostartStatus{
+		Enabled:      p.enabled,
+		TargetPath:   p.targetPath,
+		TargetExists: p.targetExists,
+		Healthy:      p.enabled && p.targetExists && sameFilePath(p.targetPath, expectedTarget),
+	}, nil
 }
 
-func (p *fakeAutostartProvider) SetEnabled(enabled bool) error {
+func (p *fakeAutostartProvider) SetEnabled(enabled bool, targetPath string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.enabled = enabled
-	p.set = append(p.set, enabled)
+	p.targetPath = targetPath
+	p.targetExists = enabled
+	p.set = append(p.set, autostartSetCall{enabled: enabled, targetPath: targetPath})
 	return nil
 }
 
-func (p *fakeAutostartProvider) setCalls() []bool {
+func (p *fakeAutostartProvider) setCalls() []autostartSetCall {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]bool(nil), p.set...)
+	return append([]autostartSetCall(nil), p.set...)
+}
+
+type fakeConnectorInstaller struct {
+	mu          sync.Mutex
+	status      installStatus
+	statusErr   error
+	ensureErr   error
+	ensureCalls int
+}
+
+func (i *fakeConnectorInstaller) Status() (installStatus, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.status, i.statusErr
+}
+
+func (i *fakeConnectorInstaller) EnsureInstalled() (installStatus, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.ensureCalls++
+	if i.ensureErr != nil {
+		return installStatus{}, i.ensureErr
+	}
+	i.status.Installed = true
+	return i.status, nil
+}
+
+func (i *fakeConnectorInstaller) ensureCallCount() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.ensureCalls
 }
 
 func setupTestHandler(t *testing.T, cfg Config, opts setupOptions) (http.Handler, *Config) {
@@ -58,6 +103,14 @@ func setupTestHandler(t *testing.T, cfg Config, opts setupOptions) (http.Handler
 	}
 	if opts.Autostart == nil {
 		opts.Autostart = &fakeAutostartProvider{}
+	}
+	if opts.Installer == nil {
+		opts.Installer = &fakeConnectorInstaller{
+			status: installStatus{
+				InstalledPath: filepath.Join(t.TempDir(), "winbox-bridge"),
+				Installed:     true,
+			},
+		}
 	}
 	if opts.PickWinBoxPath == nil {
 		opts.PickWinBoxPath = func() (string, error) { return `C:\WinBox\winbox64.exe`, nil }
@@ -129,20 +182,113 @@ func TestSetupStatusRedactsBridgeSecret(t *testing.T) {
 	}
 }
 
+func TestSetupStatusReportsInstalledPathAndAutostartHealth(t *testing.T) {
+	cfg := DefaultConfig()
+	installedPath := filepath.Join(t.TempDir(), "Theia", "WinBoxBridge", "winbox-bridge")
+	oldDownloadPath := filepath.Join(t.TempDir(), "Downloads", "winbox-bridge")
+	installer := &fakeConnectorInstaller{status: installStatus{
+		InstalledPath:            installedPath,
+		Installed:                false,
+		RunningFromInstalledPath: false,
+	}}
+	autostart := &fakeAutostartProvider{
+		enabled:      true,
+		targetPath:   oldDownloadPath,
+		targetExists: false,
+	}
+	h, _ := setupTestHandler(t, cfg, setupOptions{
+		Autostart: autostart,
+		Installer: installer,
+	})
+
+	rr := setupRequest(t, h, http.MethodGet, "/setup/status", nil, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /setup/status status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var got map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got["installed_path"] != installedPath {
+		t.Fatalf("installed_path = %v, want %q", got["installed_path"], installedPath)
+	}
+	if got["installed"] != false {
+		t.Fatalf("installed = %v, want false", got["installed"])
+	}
+	if got["running_from_installed_path"] != false {
+		t.Fatalf("running_from_installed_path = %v, want false", got["running_from_installed_path"])
+	}
+	if got["autostart_enabled"] != true {
+		t.Fatalf("autostart_enabled = %v, want true", got["autostart_enabled"])
+	}
+	if got["autostart_target_path"] != oldDownloadPath {
+		t.Fatalf("autostart_target_path = %v, want %q", got["autostart_target_path"], oldDownloadPath)
+	}
+	if got["autostart_target_exists"] != false {
+		t.Fatalf("autostart_target_exists = %v, want false", got["autostart_target_exists"])
+	}
+	if got["autostart_healthy"] != false {
+		t.Fatalf("autostart_healthy = %v, want false", got["autostart_healthy"])
+	}
+}
+
+func TestSetupInstallEndpointUsesConnectorInstaller(t *testing.T) {
+	cfg := DefaultConfig()
+	installer := &fakeConnectorInstaller{status: installStatus{
+		InstalledPath: filepath.Join(t.TempDir(), "winbox-bridge"),
+		Installed:     false,
+	}}
+	h, _ := setupTestHandler(t, cfg, setupOptions{Installer: installer})
+	token := setupToken(t, h)
+
+	rr := setupRequest(t, h, http.MethodPost, "/setup/install", nil, token)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /setup/install status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	if installer.ensureCallCount() != 1 {
+		t.Fatalf("EnsureInstalled calls = %d, want 1", installer.ensureCallCount())
+	}
+	var got installStatus
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode install response: %v", err)
+	}
+	if !got.Installed || got.InstalledPath != installer.status.InstalledPath {
+		t.Fatalf("install response = %#v", got)
+	}
+}
+
 func TestSetupMutationsRequireToken(t *testing.T) {
 	cfg := DefaultConfig()
 	h, _ := setupTestHandler(t, cfg, setupOptions{})
 
-	rr := setupRequest(t, h, http.MethodPost, "/setup/config", map[string]interface{}{
-		"winbox_path":    "/tmp/winbox",
-		"listen_port":    1777,
-		"theia_origin":   "http://localhost:3000",
-		"theia_base_url": "http://localhost:3000",
-		"bridge_secret":  "secret",
-		"log_level":      "debug",
-	}, "")
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("POST /setup/config without token status = %d; body: %s", rr.Code, rr.Body.String())
+	tests := []struct {
+		path string
+		body interface{}
+	}{
+		{
+			path: "/setup/config",
+			body: map[string]interface{}{
+				"winbox_path":    "/tmp/winbox",
+				"listen_port":    1777,
+				"theia_origin":   "http://localhost:3000",
+				"theia_base_url": "http://localhost:3000",
+				"bridge_secret":  "secret",
+				"log_level":      "debug",
+			},
+		},
+		{path: "/setup/winbox/select"},
+		{path: "/setup/autostart", body: map[string]bool{"enabled": true}},
+		{path: "/setup/install"},
+		{path: "/setup/restart"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			rr := setupRequest(t, h, http.MethodPost, tt.path, tt.body, "")
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("POST %s without token status = %d; body: %s", tt.path, rr.Code, rr.Body.String())
+			}
+		})
 	}
 }
 
@@ -310,19 +456,28 @@ func TestSetupWinBoxSelectUsesInjectedPicker(t *testing.T) {
 
 func TestSetupAutostartEndpointsUseInjectedProvider(t *testing.T) {
 	cfg := DefaultConfig()
-	autostart := &fakeAutostartProvider{enabled: true}
-	h, _ := setupTestHandler(t, cfg, setupOptions{Autostart: autostart})
+	installedPath := filepath.Join(t.TempDir(), "winbox-bridge")
+	installer := &fakeConnectorInstaller{status: installStatus{
+		InstalledPath: installedPath,
+		Installed:     true,
+	}}
+	autostart := &fakeAutostartProvider{
+		enabled:      true,
+		targetPath:   installedPath,
+		targetExists: true,
+	}
+	h, _ := setupTestHandler(t, cfg, setupOptions{Autostart: autostart, Installer: installer})
 
 	rr := setupRequest(t, h, http.MethodGet, "/setup/autostart", nil, "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /setup/autostart status = %d; body: %s", rr.Code, rr.Body.String())
 	}
-	var getResp map[string]bool
+	var getResp autostartStatus
 	if err := json.NewDecoder(rr.Body).Decode(&getResp); err != nil {
 		t.Fatalf("decode get response: %v", err)
 	}
-	if !getResp["enabled"] {
-		t.Fatalf("enabled = false, want true")
+	if !getResp.Enabled || !getResp.Healthy || getResp.TargetPath != installedPath {
+		t.Fatalf("autostart response = %#v", getResp)
 	}
 
 	token := setupToken(t, h)
@@ -330,8 +485,39 @@ func TestSetupAutostartEndpointsUseInjectedProvider(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST /setup/autostart status = %d; body: %s", rr.Code, rr.Body.String())
 	}
-	if calls := autostart.setCalls(); len(calls) != 1 || calls[0] {
+	if calls := autostart.setCalls(); len(calls) != 1 || calls[0].enabled {
 		t.Fatalf("SetEnabled calls = %#v", calls)
+	}
+}
+
+func TestSetupAutostartEnableInstallsBeforeWritingTarget(t *testing.T) {
+	cfg := DefaultConfig()
+	installedPath := filepath.Join(t.TempDir(), "winbox-bridge")
+	installer := &fakeConnectorInstaller{status: installStatus{
+		InstalledPath: installedPath,
+		Installed:     false,
+	}}
+	autostart := &fakeAutostartProvider{}
+	h, _ := setupTestHandler(t, cfg, setupOptions{Autostart: autostart, Installer: installer})
+	token := setupToken(t, h)
+
+	rr := setupRequest(t, h, http.MethodPost, "/setup/autostart", map[string]bool{"enabled": true}, token)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /setup/autostart status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	if installer.ensureCallCount() != 1 {
+		t.Fatalf("EnsureInstalled calls = %d, want 1", installer.ensureCallCount())
+	}
+	calls := autostart.setCalls()
+	if len(calls) != 1 || !calls[0].enabled || calls[0].targetPath != installedPath {
+		t.Fatalf("SetEnabled calls = %#v", calls)
+	}
+	var got autostartStatus
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !got.Enabled || !got.Healthy || got.TargetPath != installedPath {
+		t.Fatalf("autostart response = %#v", got)
 	}
 }
 
@@ -353,6 +539,9 @@ func TestSetupHTMLContainsFieldsAndDoesNotLeakSavedSecret(t *testing.T) {
 		"listen_port",
 		"log_level",
 		"autostart_enabled",
+		"installed_path",
+		"install_connector",
+		"autostart_health",
 	} {
 		if !strings.Contains(html, field) {
 			t.Fatalf("HTML missing field/control name %q", field)
@@ -516,11 +705,31 @@ func TestAutostartWindowsEnableQuotesRunCommand(t *testing.T) {
 	t.Fatalf("Run command value argument not found")
 }
 
+func TestAutostartWindowsStatusParsesQuotedRunCommand(t *testing.T) {
+	output := []byte(`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
+    Theia WinBox Bridge    REG_SZ    "C:\Program Files\Theia\WinBoxBridge\winbox-bridge.exe"
+`)
+
+	got := windowsAutostartTarget(output)
+	want := `C:\Program Files\Theia\WinBoxBridge\winbox-bridge.exe`
+	if got != want {
+		t.Fatalf("target = %q, want %q", got, want)
+	}
+}
+
 func TestLinuxAutostartExecEscapesSpacesAndPercents(t *testing.T) {
 	got := linuxDesktopExecValue(`/opt/Theia Bridge/winbox%bridge`)
 	want := `"/opt/Theia Bridge/winbox%%bridge"`
 	if got != want {
 		t.Fatalf("escaped Exec value mismatch")
+	}
+}
+
+func TestLinuxAutostartTargetUnescapesExecValue(t *testing.T) {
+	got := linuxDesktopExecTarget(`"/opt/Theia Bridge/winbox%%bridge"`)
+	want := `/opt/Theia Bridge/winbox%bridge`
+	if got != want {
+		t.Fatalf("target = %q, want %q", got, want)
 	}
 }
 

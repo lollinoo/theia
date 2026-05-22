@@ -1,0 +1,179 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+)
+
+type installStatus struct {
+	InstalledPath            string `json:"installed_path"`
+	Installed                bool   `json:"installed"`
+	RunningFromInstalledPath bool   `json:"running_from_installed_path"`
+}
+
+type connectorInstaller interface {
+	Status() (installStatus, error)
+	EnsureInstalled() (installStatus, error)
+}
+
+type systemConnectorInstaller struct {
+	currentExecutable func() (string, error)
+	installedPath     func() (string, error)
+}
+
+func (i systemConnectorInstaller) Status() (installStatus, error) {
+	current, err := i.executablePath()
+	if err != nil {
+		return installStatus{}, err
+	}
+	target, err := i.targetPath()
+	if err != nil {
+		return installStatus{}, err
+	}
+	return installStatus{
+		InstalledPath:            target,
+		Installed:                fileExists(target),
+		RunningFromInstalledPath: sameFilePath(current, target),
+	}, nil
+}
+
+func (i systemConnectorInstaller) EnsureInstalled() (installStatus, error) {
+	status, err := i.Status()
+	if err != nil {
+		return installStatus{}, err
+	}
+	if status.RunningFromInstalledPath && status.Installed {
+		return status, nil
+	}
+	current, err := i.executablePath()
+	if err != nil {
+		return installStatus{}, err
+	}
+	if err := copyExecutableFile(current, status.InstalledPath); err != nil {
+		return installStatus{}, fmt.Errorf("install connector: %w", err)
+	}
+	return i.Status()
+}
+
+func (i systemConnectorInstaller) executablePath() (string, error) {
+	if i.currentExecutable != nil {
+		return i.currentExecutable()
+	}
+	return os.Executable()
+}
+
+func (i systemConnectorInstaller) targetPath() (string, error) {
+	if i.installedPath != nil {
+		return i.installedPath()
+	}
+	return installedExecutablePath()
+}
+
+func installedExecutablePath() (string, error) {
+	homeDir, _ := os.UserHomeDir()
+	return installedExecutablePathFor(
+		runtime.GOOS,
+		homeDir,
+		os.Getenv("LOCALAPPDATA"),
+		os.Getenv("XDG_DATA_HOME"),
+	)
+}
+
+func installedExecutablePathFor(goos, homeDir, localAppData, xdgDataHome string) (string, error) {
+	switch goos {
+	case "windows":
+		base := strings.TrimSpace(localAppData)
+		if base == "" && strings.TrimSpace(homeDir) != "" {
+			base = filepath.Join(homeDir, "AppData", "Local")
+		}
+		if base == "" {
+			return "", fmt.Errorf("LOCALAPPDATA is not available")
+		}
+		return filepath.Join(base, "Theia", "WinBoxBridge", "winbox-bridge.exe"), nil
+	case "darwin":
+		home := strings.TrimSpace(homeDir)
+		if home == "" {
+			return "", fmt.Errorf("home directory is not available")
+		}
+		return filepath.Join(
+			home, "Library", "Application Support", "Theia", "WinBoxBridge", "winbox-bridge",
+		), nil
+	default:
+		base := strings.TrimSpace(xdgDataHome)
+		if base == "" {
+			home := strings.TrimSpace(homeDir)
+			if home == "" {
+				return "", fmt.Errorf("home directory is not available")
+			}
+			base = filepath.Join(home, ".local", "share")
+		}
+		return filepath.Join(base, "theia", "winbox-bridge", "winbox-bridge"), nil
+	}
+}
+
+func copyExecutableFile(source, target string) error {
+	if sameFilePath(source, target) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	src, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".winbox-bridge-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := io.Copy(tmp, src); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o700); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(tmpPath, target)
+}
+
+func fileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func sameFilePath(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+	absA, errA := filepath.Abs(a)
+	if errA != nil {
+		absA = filepath.Clean(a)
+	}
+	absB, errB := filepath.Abs(b)
+	if errB != nil {
+		absB = filepath.Clean(b)
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(absA, absB)
+	}
+	return absA == absB
+}

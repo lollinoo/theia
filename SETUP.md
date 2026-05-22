@@ -431,10 +431,18 @@ The recommended setup flow is wizard-first:
 1. Generate a personal Bridge Secret from **User Settings -> Bridge Connector**.
 2. Download and start the Bridge Connector for your platform.
 3. Click **Configure Local Connector** in User Settings, or use the tray menu item **Setup Connector...**.
-4. In the local setup wizard, select the WinBox executable, paste the Bridge Secret, confirm the Theia URLs and bridge port, and optionally enable start-at-login.
+4. In the local setup wizard, select the WinBox executable, paste the Bridge Secret, confirm the Theia URLs and bridge port, and optionally click **Install / Repair Connector** before enabling start-at-login.
 5. Save the wizard and restart the connector when the wizard reports that a restart is required.
 
-The setup wizard runs from the local connector at `http://localhost:<bridge-port>/setup`. Setup endpoints are limited to loopback requests and do not return the saved Bridge Secret. The connector still stores its local runtime settings in `config.json`, which remains available from the tray menu as an advanced fallback.
+The setup wizard runs from the local connector at `http://localhost:<bridge-port>/setup`. Setup endpoints are limited to loopback requests and do not return the saved Bridge Secret. When start-at-login is enabled, the wizard first installs or repairs a copy of the connector in a stable per-user location and points the OS autostart entry to that installed copy. If the original downloaded executable is later deleted, autostart continues to use the installed copy; if that installed copy is missing, the wizard reports autostart as needing repair.
+
+Stable connector install paths:
+
+- Windows: `%LOCALAPPDATA%\Theia\WinBoxBridge\winbox-bridge.exe`
+- macOS: `~/Library/Application Support/Theia/WinBoxBridge/winbox-bridge`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/theia/winbox-bridge/winbox-bridge`
+
+The connector still stores its local runtime settings in `config.json`, which remains available from the tray menu as an advanced fallback.
 
 Advanced connector config shape:
 
