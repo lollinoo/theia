@@ -94,6 +94,43 @@ func TestSystemConnectorInstallerEnsureInstalledCopiesCurrentExecutableToStableP
 	}
 }
 
+func TestSystemConnectorInstallerEnsureInstalledMovesConfigBesideInstalledExecutable(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "downloaded-bridge")
+	target := filepath.Join(dir, "stable", "winbox-bridge")
+	legacyConfig := filepath.Join(dir, "legacy", "winbox-bridge", "config.json")
+	if err := os.WriteFile(source, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyConfig), 0o700); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(legacyConfig, []byte(`{"listen_port":1444}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	installer := systemConnectorInstaller{
+		currentExecutable: func() (string, error) { return source, nil },
+		installedPath:     func() (string, error) { return target, nil },
+		legacyConfigPath:  func() (string, error) { return legacyConfig, nil },
+	}
+
+	if _, err := installer.EnsureInstalled(); err != nil {
+		t.Fatalf("EnsureInstalled returned error: %v", err)
+	}
+
+	installedConfig := filepath.Join(filepath.Dir(target), "config.json")
+	got, err := os.ReadFile(installedConfig)
+	if err != nil {
+		t.Fatalf("read installed config: %v", err)
+	}
+	if string(got) != `{"listen_port":1444}` {
+		t.Fatalf("installed config content = %q", got)
+	}
+	if _, err := os.Stat(legacyConfig); !os.IsNotExist(err) {
+		t.Fatalf("legacy config still exists or returned unexpected error: %v", err)
+	}
+}
+
 func TestSystemConnectorInstallerStatusReportsMissingTarget(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "downloaded-bridge")

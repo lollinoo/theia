@@ -43,17 +43,111 @@ func TestConfigDefaultConfig_TheiaBaseURL(t *testing.T) {
 
 // --- Config: configFilePath ---
 
-func TestConfigFilePath_EndsWithExpectedSuffix(t *testing.T) {
+func TestConfigFilePath_IsAbsoluteConfigJSONPath(t *testing.T) {
 	path, err := configFilePath()
 	if err != nil {
 		t.Skipf("configFilePath() error (may not have home dir in CI): %v", err)
 	}
-	suffix := filepath.Join("winbox-bridge", "config.json")
 	if !filepath.IsAbs(path) {
 		t.Errorf("expected absolute path, got %q", path)
 	}
-	if len(path) < len(suffix) || path[len(path)-len(suffix):] != suffix {
-		t.Errorf("expected path ending in %q, got %q", suffix, path)
+	if filepath.Base(path) != "config.json" {
+		t.Errorf("expected config.json file, got %q", path)
+	}
+}
+
+func TestConfigFilePathUsesInstalledDirectoryWhenConnectorIsInstalled(t *testing.T) {
+	dir := t.TempDir()
+	installedExe := filepath.Join(dir, "Theia", "WinBoxBridge", "winbox-bridge")
+	installedConfig := filepath.Join(filepath.Dir(installedExe), "config.json")
+	legacyConfig := filepath.Join(dir, "config", "winbox-bridge", "config.json")
+	if err := os.MkdirAll(filepath.Dir(installedExe), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(installedExe, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write installed exe: %v", err)
+	}
+	if err := os.WriteFile(installedConfig, []byte(`{"listen_port":1444}`), 0o600); err != nil {
+		t.Fatalf("write installed config: %v", err)
+	}
+
+	got, err := configFilePathWithInstall(
+		func() (string, error) { return installedExe, nil },
+		func() (string, error) { return legacyConfig, nil },
+		func() (string, error) { return filepath.Join(dir, "Downloads", "winbox-bridge"), nil },
+	)
+	if err != nil {
+		t.Fatalf("configFilePathWithInstall returned error: %v", err)
+	}
+	if got != installedConfig {
+		t.Fatalf("config path = %q, want %q", got, installedConfig)
+	}
+}
+
+func TestConfigFilePathUsesLegacyDirectoryBeforeConnectorIsInstalled(t *testing.T) {
+	dir := t.TempDir()
+	installedExe := filepath.Join(dir, "Theia", "WinBoxBridge", "winbox-bridge")
+	legacyConfig := filepath.Join(dir, "config", "winbox-bridge", "config.json")
+
+	got, err := configFilePathWithInstall(
+		func() (string, error) { return installedExe, nil },
+		func() (string, error) { return legacyConfig, nil },
+		func() (string, error) { return filepath.Join(dir, "Downloads", "winbox-bridge"), nil },
+	)
+	if err != nil {
+		t.Fatalf("configFilePathWithInstall returned error: %v", err)
+	}
+	if got != legacyConfig {
+		t.Fatalf("config path = %q, want %q", got, legacyConfig)
+	}
+}
+
+func TestConfigFilePathKeepsLegacyWhenInstalledConfigIsMissingFromDownloadedRun(t *testing.T) {
+	dir := t.TempDir()
+	installedExe := filepath.Join(dir, "Theia", "WinBoxBridge", "winbox-bridge")
+	legacyConfig := filepath.Join(dir, "config", "winbox-bridge", "config.json")
+	if err := os.MkdirAll(filepath.Dir(installedExe), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(installedExe, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write installed exe: %v", err)
+	}
+
+	got, err := configFilePathWithInstall(
+		func() (string, error) { return installedExe, nil },
+		func() (string, error) { return legacyConfig, nil },
+		func() (string, error) { return filepath.Join(dir, "Downloads", "winbox-bridge"), nil },
+	)
+	if err != nil {
+		t.Fatalf("configFilePathWithInstall returned error: %v", err)
+	}
+	if got != legacyConfig {
+		t.Fatalf("config path = %q, want %q", got, legacyConfig)
+	}
+}
+
+func TestConfigFilePathUsesInstalledDirectoryWhenRunningInstalledExecutable(t *testing.T) {
+	dir := t.TempDir()
+	installedExe := filepath.Join(dir, "Theia", "WinBoxBridge", "winbox-bridge")
+	legacyConfig := filepath.Join(dir, "config", "winbox-bridge", "config.json")
+	if err := os.MkdirAll(filepath.Dir(installedExe), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(installedExe, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write installed exe: %v", err)
+	}
+
+	got, err := configFilePathWithInstall(
+		func() (string, error) { return installedExe, nil },
+		func() (string, error) { return legacyConfig, nil },
+		func() (string, error) { return installedExe, nil },
+	)
+	if err != nil {
+		t.Fatalf("configFilePathWithInstall returned error: %v", err)
+	}
+	want := filepath.Join(filepath.Dir(installedExe), "config.json")
+	if got != want {
+		t.Fatalf("config path = %q, want %q", got, want)
 	}
 }
 

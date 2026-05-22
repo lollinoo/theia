@@ -23,6 +23,7 @@ type connectorInstaller interface {
 type systemConnectorInstaller struct {
 	currentExecutable func() (string, error)
 	installedPath     func() (string, error)
+	legacyConfigPath  func() (string, error)
 }
 
 func (i systemConnectorInstaller) Status() (installStatus, error) {
@@ -47,7 +48,10 @@ func (i systemConnectorInstaller) EnsureInstalled() (installStatus, error) {
 		return installStatus{}, err
 	}
 	if status.RunningFromInstalledPath && status.Installed {
-		return status, nil
+		if err := i.ensureInstalledConfig(status.InstalledPath); err != nil {
+			return installStatus{}, err
+		}
+		return i.Status()
 	}
 	current, err := i.executablePath()
 	if err != nil {
@@ -55,6 +59,9 @@ func (i systemConnectorInstaller) EnsureInstalled() (installStatus, error) {
 	}
 	if err := copyExecutableFile(current, status.InstalledPath); err != nil {
 		return installStatus{}, fmt.Errorf("install connector: %w", err)
+	}
+	if err := i.ensureInstalledConfig(status.InstalledPath); err != nil {
+		return installStatus{}, err
 	}
 	return i.Status()
 }
@@ -71,6 +78,40 @@ func (i systemConnectorInstaller) targetPath() (string, error) {
 		return i.installedPath()
 	}
 	return installedExecutablePath()
+}
+
+func (i systemConnectorInstaller) configPath() (string, error) {
+	if i.legacyConfigPath != nil {
+		return i.legacyConfigPath()
+	}
+	return legacyConfigFilePath()
+}
+
+func (i systemConnectorInstaller) ensureInstalledConfig(installedExecutable string) error {
+	legacyConfig, err := i.configPath()
+	if err != nil {
+		return nil
+	}
+	if err := moveConfigFileIfNeeded(legacyConfig, installedConfigPathForExecutable(installedExecutable)); err != nil {
+		return fmt.Errorf("install config: %w", err)
+	}
+	return nil
+}
+
+func migrateConfigToInstalledPath() error {
+	installedExecutable, err := installedExecutablePath()
+	if err != nil || !fileExists(installedExecutable) {
+		return nil
+	}
+	currentExecutable, err := os.Executable()
+	if err != nil || !sameFilePath(currentExecutable, installedExecutable) {
+		return nil
+	}
+	legacyConfig, err := legacyConfigFilePath()
+	if err != nil {
+		return nil
+	}
+	return moveConfigFileIfNeeded(legacyConfig, installedConfigPathForExecutable(installedExecutable))
 }
 
 func installedExecutablePath() (string, error) {
@@ -150,6 +191,51 @@ func copyExecutableFile(source, target string) error {
 		return err
 	}
 	return os.Rename(tmpPath, target)
+}
+
+func moveConfigFileIfNeeded(source, target string) error {
+	if sameFilePath(source, target) || !fileExists(source) || fileExists(target) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	src, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".config-*")
+	if err != nil {
+		_ = src.Close()
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := io.Copy(tmp, src); err != nil {
+		_ = src.Close()
+		_ = tmp.Close()
+		return err
+	}
+	if err := src.Close(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		return err
+	}
+	if err := os.Remove(source); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func fileExists(path string) bool {

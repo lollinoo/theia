@@ -30,14 +30,48 @@ func DefaultConfig() Config {
 	}
 }
 
-// configFilePath returns the platform-appropriate path for config.json.
+// legacyConfigFilePath returns the pre-installation config path.
 // Uses os.UserConfigDir(): Windows=%APPDATA%, Linux=~/.config, macOS=~/Library/Application Support.
-func configFilePath() (string, error) {
+func legacyConfigFilePath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("config dir: %w", err)
 	}
 	return filepath.Join(dir, "winbox-bridge", "config.json"), nil
+}
+
+// configFilePath returns the active config.json path. Before installation the
+// connector uses the legacy user config path; once installed it keeps config
+// beside the stable per-user executable so the installed app is self-contained.
+func configFilePath() (string, error) {
+	return configFilePathWithInstall(installedExecutablePath, legacyConfigFilePath, os.Executable)
+}
+
+func configFilePathWithInstall(
+	installedPath func() (string, error),
+	legacyPath func() (string, error),
+	currentExecutable func() (string, error),
+) (string, error) {
+	if installedPath != nil {
+		path, err := installedPath()
+		if err == nil {
+			configPath := installedConfigPathForExecutable(path)
+			if fileExists(configPath) {
+				return configPath, nil
+			}
+			if currentExecutable != nil {
+				current, err := currentExecutable()
+				if err == nil && sameFilePath(current, path) {
+					return configPath, nil
+				}
+			}
+		}
+	}
+	return legacyPath()
+}
+
+func installedConfigPathForExecutable(executablePath string) string {
+	return filepath.Join(filepath.Dir(executablePath), "config.json")
 }
 
 // loadConfigFrom reads config from the given path.
@@ -76,6 +110,7 @@ func saveConfigTo(cfg Config, path string) error {
 // loadConfig reads config from the platform-default config file path.
 // Returns DefaultConfig if the file does not exist or if the config dir is unavailable.
 func loadConfig() (Config, error) {
+	_ = migrateConfigToInstalledPath()
 	path, err := configFilePath()
 	if err != nil {
 		return DefaultConfig(), nil // degrade gracefully when no home dir
