@@ -5,23 +5,25 @@ theia_seed_interactive() {
 theia_login_payload() {
   local username="$1"
   local password="$2"
-  python3 - "$username" "$password" <<'PY'
+  printf '%s\0%s' "$username" "$password" | python3 -c '
 import json
 import sys
 
-print(json.dumps({"identifier": sys.argv[1], "password": sys.argv[2]}))
-PY
+username, password = sys.stdin.buffer.read().decode().split("\0", 1)
+print(json.dumps({"identifier": username, "password": password}))
+'
 }
 
 theia_password_change_payload() {
   local current_password="$1"
   local new_password="$2"
-  python3 - "$current_password" "$new_password" <<'PY'
+  printf '%s\0%s' "$current_password" "$new_password" | python3 -c '
 import json
 import sys
 
-print(json.dumps({"current_password": sys.argv[1], "new_password": sys.argv[2]}))
-PY
+current_password, new_password = sys.stdin.buffer.read().decode().split("\0", 1)
+print(json.dumps({"current_password": current_password, "new_password": new_password}))
+'
 }
 
 theia_cookie_value() {
