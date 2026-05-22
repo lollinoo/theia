@@ -262,6 +262,31 @@ func TestConfigSaveConfigTo_WritesFileWith0600(t *testing.T) {
 	}
 }
 
+func TestConfigSaveConfigTo_TightensExistingLooseSecretConfigTo0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not report POSIX file permission bits from os.Stat")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"bridge_secret":"old"}`), 0o644); err != nil {
+		t.Fatalf("setup loose config: %v", err)
+	}
+
+	if err := saveConfigTo(DefaultConfig(), path); err != nil {
+		t.Fatalf("saveConfigTo: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	got := info.Mode().Perm()
+	if got != 0o600 {
+		t.Errorf("expected existing file perm tightened to 0o600, got %04o", got)
+	}
+}
+
 // --- Config: JSON field names ---
 
 func TestConfigJSONFieldNames(t *testing.T) {

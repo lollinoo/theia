@@ -104,7 +104,13 @@ func saveConfigTo(cfg Config, path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("set config permissions: %w", err)
+	}
+	return nil
 }
 
 // loadConfig reads config from the platform-default config file path.
