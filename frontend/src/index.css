@@ -457,6 +457,13 @@
     max-width: 280px;
   }
 
+  [data-topology-zoom-band="overview"]
+    .topology-link-badge-stack[data-link-badge-priority="normal"],
+  [data-topology-zoom-band="compact"]
+    .topology-link-badge-stack[data-link-badge-priority="normal"] {
+    display: none;
+  }
+
   .topology-interacting .topology-node-card,
   .topology-interacting .topology-link-badge,
   .topology-interacting .topology-render-contained {

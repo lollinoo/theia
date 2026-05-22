@@ -17,6 +17,7 @@ export type LinkNegotiationState =
   | 'not_applicable';
 export type LinkBadgeKind = 'rate' | 'throughput';
 export type LinkBadgeZoomBand = 'low' | 'medium' | 'high';
+export type LinkBadgeSemanticPriority = 'normal' | 'active' | 'alert';
 type DeviceEndpointHealth = DeviceMetricsDTO['health'];
 type DeviceEndpointPrimaryHealth = DeviceMetricsDTO['primary_health'];
 type DeviceEndpointReachability = DeviceMetricsDTO['reachability'];
@@ -95,6 +96,8 @@ export interface LinkBadgePresentation {
   opacity: number;
   scale: number;
   visibility: LinkBadgeVisibility;
+  semanticState: EdgeSemanticState;
+  semanticPriority: LinkBadgeSemanticPriority;
 }
 
 interface LinkTelemetryInput {
@@ -624,6 +627,26 @@ function buildStackedLinkBadgeItems(
   });
 }
 
+function resolveLinkBadgeSemanticPriority({
+  semanticState,
+  isActive,
+  isConnected,
+}: {
+  semanticState: EdgeSemanticState;
+  isActive: boolean;
+  isConnected: boolean;
+}): LinkBadgeSemanticPriority {
+  if (semanticState === 'warning' || semanticState === 'critical') {
+    return 'alert';
+  }
+
+  if (isActive || isConnected) {
+    return 'active';
+  }
+
+  return 'normal';
+}
+
 export function resolveLinkBadgePresentation({
   data,
   zoom,
@@ -656,5 +679,11 @@ export function resolveLinkBadgePresentation({
     opacity: isMuted ? 0.5 : isConnected ? 1 : isActive ? 0.96 : 0.9,
     scale: resolveLinkBadgeScale(zoom),
     visibility,
+    semanticState: edgeTone.semanticState,
+    semanticPriority: resolveLinkBadgeSemanticPriority({
+      semanticState: edgeTone.semanticState,
+      isActive,
+      isConnected,
+    }),
   };
 }

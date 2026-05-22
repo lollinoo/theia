@@ -396,6 +396,60 @@ describe('linkSemantics', () => {
     expect(presentation.items.map((item) => item.key)).toEqual(['rate', 'throughput']);
   });
 
+  it('marks normal, active, and alert semantic priorities for zoom label gating', () => {
+    const upTone = resolveEdgeTone({
+      sourceDeviceStatus: 'up',
+      targetDeviceStatus: 'up',
+      sourceIfStatus: 'up',
+      targetIfStatus: 'up',
+      negotiationState: 'matched',
+    });
+    const warningTone = resolveEdgeTone({
+      sourceDeviceStatus: 'up',
+      targetDeviceStatus: 'up',
+      sourceIfStatus: 'up',
+      targetIfStatus: 'down',
+    });
+
+    const normal = resolveLinkBadgePresentation({
+      data: { bandwidthLabel: '1 Gbps' },
+      zoom: 1,
+      path: 'M0 0 C0 0 200 0 200 0',
+      fallbackX: 100,
+      fallbackY: 0,
+      edgeTone: upTone,
+      isActive: false,
+      isConnected: false,
+      isMuted: false,
+    });
+    const active = resolveLinkBadgePresentation({
+      data: { bandwidthLabel: '1 Gbps' },
+      zoom: 1,
+      path: 'M0 0 C0 0 200 0 200 0',
+      fallbackX: 100,
+      fallbackY: 0,
+      edgeTone: upTone,
+      isActive: true,
+      isConnected: false,
+      isMuted: false,
+    });
+    const alert = resolveLinkBadgePresentation({
+      data: { bandwidthLabel: '1 Gbps' },
+      zoom: 1,
+      path: 'M0 0 C0 0 200 0 200 0',
+      fallbackX: 100,
+      fallbackY: 0,
+      edgeTone: warningTone,
+      isActive: false,
+      isConnected: false,
+      isMuted: false,
+    });
+
+    expect(normal).toMatchObject({ semanticState: 'up', semanticPriority: 'normal' });
+    expect(active).toMatchObject({ semanticState: 'up', semanticPriority: 'active' });
+    expect(alert).toMatchObject({ semanticState: 'warning', semanticPriority: 'alert' });
+  });
+
   it('uses enterprise NOC stroke widths with another two pixels of link weight', () => {
     expect(resolveEdgeTone(undefined)).toMatchObject({
       semanticState: 'neutral',
