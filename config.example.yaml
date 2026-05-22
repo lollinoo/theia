@@ -31,7 +31,7 @@ bridge_binaries_dir: ""
 # Set to production or staging to require secret validation.
 deployment_env: ""
 
-# Password-session signing and token hashing secret. Required for staging and production.
+# Password-session signing and token hashing secret. Required whenever the backend initializes first-party password auth.
 # Keep this blank in tracked files and provide it through local env or secrets.
 session_secret: ""
 
@@ -41,7 +41,7 @@ session_ttl_minutes: 0
 # Password reset token TTL in minutes. Zero uses the application default.
 password_reset_ttl_minutes: 0
 
-# Dedicated bearer token for /metrics. Required for staging and production.
+# Dedicated bearer token for /metrics. Staging and production require this token.
 metrics_token: ""
 
 # Optional exact browser origins allowed to reach REST/WebSocket endpoints.

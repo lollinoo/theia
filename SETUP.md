@@ -264,6 +264,7 @@ Required operator inputs for the standard bundled PostgreSQL stack:
 
 - `THEIA_ENCRYPTION_KEY`
 - `THEIA_SESSION_SECRET`
+- `THEIA_METRICS_TOKEN`
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
 
@@ -358,6 +359,7 @@ Required operator inputs for the standard bundled PostgreSQL stack:
 
 - `THEIA_ENCRYPTION_KEY`
 - `THEIA_SESSION_SECRET`
+- `THEIA_METRICS_TOKEN`
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
 
@@ -411,8 +413,8 @@ Configuration is loaded from local `config.yaml` when present. The tracked `conf
 | `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
 | `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Optional directory containing pre-built bridge binaries; leave empty to disable bridge downloads |
-| `session_secret` | `THEIA_SESSION_SECRET` | none | Secret used to protect first-party password sessions; required for staging/production runtime startup |
-| `metrics_token` | `THEIA_METRICS_TOKEN` | none | Bearer token for `/metrics`; required for staging/production runtime startup |
+| `session_secret` | `THEIA_SESSION_SECRET` | none | Secret used to protect first-party password sessions; Required whenever the backend initializes first-party password auth |
+| `metrics_token` | `THEIA_METRICS_TOKEN` | none | Bearer token for `/metrics`; required for staging and production runtime startup |
 | `allowed_origins` | `THEIA_ALLOWED_ORIGINS` | none | Optional comma-separated exact browser origins for direct backend REST/WebSocket access; same-host proxy requests are allowed |
 | `log_level` | `THEIA_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 

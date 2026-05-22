@@ -208,6 +208,74 @@ func TestProductionStagingConfigSurfacesDoNotShipSecretDefaults(t *testing.T) {
 	}
 }
 
+func TestSessionSecretDocumentationMatchesRuntimeRequirement(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	docs := []string{"config.example.yaml", "SETUP.md"}
+	stalePhrases := []string{
+		"Required for staging and production",
+		"required for staging/production runtime startup",
+	}
+	wantPhrase := "Required whenever the backend initializes first-party password auth"
+
+	for _, doc := range docs {
+		t.Run(doc, func(t *testing.T) {
+			contentBytes, err := os.ReadFile(filepath.Join(repoRoot, doc))
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", doc, err)
+			}
+			content := string(contentBytes)
+			for _, stale := range stalePhrases {
+				if strings.Contains(content, stale) {
+					t.Fatalf("%s contains stale session_secret requirement wording %q", doc, stale)
+				}
+			}
+			if !strings.Contains(content, wantPhrase) {
+				t.Fatalf("%s must document session_secret as a runtime auth requirement", doc)
+			}
+		})
+	}
+}
+
+func TestSetupRequiredOperatorInputsIncludeMetricsToken(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	contentBytes, err := os.ReadFile(filepath.Join(repoRoot, "SETUP.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(SETUP.md): %v", err)
+	}
+	content := string(contentBytes)
+	requiredKeys := []string{
+		"THEIA_ENCRYPTION_KEY",
+		"THEIA_SESSION_SECRET",
+		"THEIA_METRICS_TOKEN",
+		"THEIA_DB_DSN",
+		"POSTGRES_PASSWORD",
+	}
+
+	for _, heading := range []string{"## Production Environment", "## Staging Environment"} {
+		t.Run(heading, func(t *testing.T) {
+			block := markdownBlockBetween(content, heading, "For bundled PostgreSQL")
+			for _, key := range requiredKeys {
+				if !strings.Contains(block, "- `"+key) {
+					t.Errorf("SETUP.md %s required operator inputs missing %s", heading, key)
+				}
+			}
+		})
+	}
+}
+
+func markdownBlockBetween(content, start, end string) string {
+	startIndex := strings.Index(content, start)
+	if startIndex < 0 {
+		return ""
+	}
+	block := content[startIndex:]
+	endIndex := strings.Index(block, end)
+	if endIndex < 0 {
+		return block
+	}
+	return block[:endIndex]
+}
+
 func gitPathIsTracked(repoRoot, path string) (bool, error) {
 	cmd := exec.Command("git", "ls-files", "--error-unmatch", path)
 	cmd.Dir = repoRoot
