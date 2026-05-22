@@ -52,6 +52,7 @@ import {
 } from './canvas/canvasRenderProjection';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
+import { resolveTopologyZoomBand, type TopologyZoomBand } from './canvas/topologyZoom';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
@@ -74,6 +75,7 @@ const canvasDiagnosticsStorageKey = 'theia.canvas.diagnostics';
 const canvasInteractionIdleDelayMs = 140;
 const deviceNodeReadabilityScaleProperty = '--theia-device-node-readability-scale';
 const linkBadgeReadabilityScaleProperty = '--theia-link-badge-readability-scale';
+const topologyZoomBandAttribute = 'data-topology-zoom-band';
 
 function topologyMinimapNodeColor(node: DeviceNode): string {
   const data = node.data;
@@ -188,6 +190,7 @@ export default function Canvas({
   const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const deviceNodeReadabilityScaleRef = useRef('1');
   const linkBadgeReadabilityScaleRef = useRef('1');
+  const topologyZoomBandRef = useRef<TopologyZoomBand>('detail');
   const highlightTimerRef = useRef<number | null>(null);
   const highlightedDeviceIdRef = useRef<string | null>(null);
   const interactionIdleTimerRef = useRef<number | null>(null);
@@ -296,6 +299,16 @@ export default function Canvas({
     canvasRootRef.current?.style.setProperty(linkBadgeReadabilityScaleProperty, nextScale);
   }, []);
 
+  const setTopologyZoomBand = useCallback((zoom: number) => {
+    const nextBand = resolveTopologyZoomBand(zoom);
+    if (topologyZoomBandRef.current === nextBand) {
+      return;
+    }
+
+    topologyZoomBandRef.current = nextBand;
+    canvasRootRef.current?.setAttribute(topologyZoomBandAttribute, nextBand);
+  }, []);
+
   useEffect(() => {
     canvasRootRef.current?.style.setProperty(
       deviceNodeReadabilityScaleProperty,
@@ -305,6 +318,7 @@ export default function Canvas({
       linkBadgeReadabilityScaleProperty,
       linkBadgeReadabilityScaleRef.current,
     );
+    canvasRootRef.current?.setAttribute(topologyZoomBandAttribute, topologyZoomBandRef.current);
   }, []);
 
   useEffect(() => {
@@ -335,8 +349,9 @@ export default function Canvas({
     (_event, viewport) => {
       setDeviceNodeReadabilityScale(viewport.zoom);
       setLinkBadgeReadabilityScale(viewport.zoom);
+      setTopologyZoomBand(viewport.zoom);
     },
-    [setDeviceNodeReadabilityScale, setLinkBadgeReadabilityScale],
+    [setDeviceNodeReadabilityScale, setLinkBadgeReadabilityScale, setTopologyZoomBand],
   );
 
   const handleSelectionChange = useCallback(
@@ -869,6 +884,7 @@ export default function Canvas({
     <div
       ref={canvasRootRef}
       data-testid="topology-canvas-root"
+      data-topology-zoom-band={topologyZoomBandRef.current}
       className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
     >
       {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
