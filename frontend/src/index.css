@@ -410,6 +410,7 @@
     display: flex;
   }
 
+  [data-topology-zoom-band="overview"] .topology-semantic-detail-only,
   [data-topology-zoom-band="compact"] .topology-semantic-detail-only,
   [data-topology-zoom-band="summary"] .topology-semantic-detail-only {
     display: none;
@@ -434,22 +435,22 @@
     max-width: 220px;
   }
 
-  [data-topology-zoom-band="compact"] .topology-node-card [data-testid="physical-node-body"] {
+  [data-topology-zoom-band="compact"] .topology-node-card .topology-physical-node-body {
     padding: 10px 12px;
   }
 
-  [data-topology-zoom-band="compact"] .topology-node-card [data-testid="virtual-node-capsule"] {
+  [data-topology-zoom-band="compact"] .topology-node-card .topology-virtual-node-capsule {
     min-height: 68px;
     padding: 10px 12px;
   }
 
-  [data-topology-zoom-band="compact"] .topology-node-card [data-testid="virtual-node-icon-shell"] {
+  [data-topology-zoom-band="compact"] .topology-node-card .topology-virtual-node-icon-shell {
     height: 34px;
     width: 34px;
     border-radius: 12px;
   }
 
-  [data-topology-zoom-band="compact"] .topology-node-card [data-testid="virtual-node-type-label"] {
+  [data-topology-zoom-band="compact"] .topology-node-card .topology-virtual-node-type-label {
     display: none;
   }
 

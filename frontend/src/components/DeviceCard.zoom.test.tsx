@@ -1,9 +1,13 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNodeData } from './DeviceCard';
 import { resolveDeviceMonitoringState } from './deviceVisualState';
+
+const css = readFileSync(join(__dirname, '../index.css'), 'utf-8').replace(/\r\n/g, '\n');
 
 vi.mock('@xyflow/react', () => ({
   Handle: ({ id }: { id?: string }) => <span data-testid={`handle-${id ?? 'default'}`} />,
@@ -180,5 +184,33 @@ describe('DeviceCard zoom readability', () => {
     fireEvent.contextMenu(card);
 
     expect(onContextMenu).toHaveBeenCalledWith(expect.anything(), 'dev-1');
+  });
+
+  it('keeps self-link annotations hidden in overview and uses stable CSS hooks', () => {
+    renderDeviceCard({
+      metrics: mockMetrics(),
+      selfLinks: [
+        {
+          id: 'self-link-1',
+          source_device_id: 'dev-1',
+          source_if_name: 'ether1',
+          target_device_id: 'dev-1',
+          target_if_name: 'ether9',
+          discovery_protocol: 'lldp',
+          source_if_speed: 0,
+          source_if_oper_status: 'up',
+          target_if_speed: 0,
+          target_if_oper_status: 'up',
+        },
+      ],
+    });
+
+    expect(screen.getByRole('button', { name: /view details for self link/i })).toHaveClass(
+      'topology-semantic-detail-only',
+    );
+    expect(css).toContain('[data-topology-zoom-band="overview"] .topology-semantic-detail-only');
+    expect(css).toContain('.topology-physical-node-body');
+    expect(css).toContain('.topology-virtual-node-capsule');
+    expect(css).not.toContain('[data-testid=');
   });
 });

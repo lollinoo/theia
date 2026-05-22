@@ -748,7 +748,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         {renderModel.variant === 'physical' ? (
           <div
             data-testid="physical-node-body"
-            className={`flex-1 px-4 pb-3.5 pt-3 ${physicalStatusTone?.bodyClassName ?? ''}`}
+            className={`topology-physical-node-body flex-1 px-4 pb-3.5 pt-3 ${physicalStatusTone?.bodyClassName ?? ''}`}
             style={physicalStatusTone?.bodyStyle ?? areaTintStyle(colors)}
           >
             <div className="flex items-start justify-between gap-3">
@@ -858,7 +858,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         ) : (
           <div
             data-testid="virtual-node-capsule"
-            className={`relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass} ${virtualStatusTone?.capsuleClassName ?? ''}`}
+            className={`topology-virtual-node-capsule relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass} ${virtualStatusTone?.capsuleClassName ?? ''}`}
             style={
               virtualStatusTone?.capsuleStyle ??
               areaTintStyle(data.visualColor ? [data.visualColor] : colors)
@@ -874,7 +874,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
             <div
               data-testid="virtual-node-icon-shell"
-              className="relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10 text-primary"
+              className="topology-virtual-node-icon-shell relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10 text-primary"
               style={virtualStatusTone?.markerStyle ?? virtualAreaMarkerStyle(virtualToneColor)}
             >
               <MaterialIcon name="hub" size={24} />
@@ -885,7 +885,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="min-w-0 flex-1">
                   <div
                     data-testid="virtual-node-type-label"
-                    className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
+                    className="topology-virtual-node-type-label truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
                     style={{
                       ...readableFontStyle(10),
                       ...(virtualStatusTone?.textStyle ?? virtualAreaTextStyle(virtualToneColor)),
