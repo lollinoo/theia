@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type UserSettingsResponse,
   fetchBridgeConnectorConfig,
   fetchUserSettings,
+  updateUserSettings,
 } from '../../api/client';
 import { UserSettingsPage } from './UserSettingsPage';
 
@@ -40,9 +41,10 @@ const activeSettings: UserSettingsResponse = {
   },
 };
 
-describe('UserSettingsPage bridge connector downloads', () => {
+describe('UserSettingsPage', () => {
   beforeEach(() => {
     vi.mocked(fetchUserSettings).mockResolvedValue(activeSettings);
+    vi.mocked(updateUserSettings).mockResolvedValue(activeSettings);
     vi.mocked(fetchBridgeConnectorConfig).mockResolvedValue({
       config: {
         theia_base_url: 'http://localhost:3000',
@@ -79,13 +81,84 @@ describe('UserSettingsPage bridge connector downloads', () => {
 
     await screen.findByRole('heading', { name: 'User Settings' });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Bridge connector actions' }));
+
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Download Linux x64' })).toBeDisabled();
+      expect(screen.getByRole('menuitem', { name: 'Download Linux x64' })).toBeDisabled();
     });
-    expect(screen.getByRole('link', { name: 'Download Windows x64' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: 'Download Windows x64' })).toHaveAttribute(
       'href',
       '/api/v1/settings/bridge/connector/download/windows/amd64',
     );
-    expect(screen.getByRole('button', { name: 'Download macOS Intel' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Download macOS Intel' })).toBeDisabled();
+  });
+
+  it('uses comboboxes for timezone and locale selections', async () => {
+    render(<UserSettingsPage />);
+
+    const timezone = await screen.findByRole('combobox', { name: 'Timezone' });
+    const locale = screen.getByRole('combobox', { name: 'Locale' });
+
+    expect(timezone).toHaveValue('UTC');
+    expect(locale).toHaveValue('en-US');
+
+    fireEvent.change(timezone, { target: { value: 'Europe/Rome' } });
+    fireEvent.change(locale, { target: { value: 'it-IT' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Profile' }));
+
+    await waitFor(() => {
+      expect(updateUserSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timezone: 'Europe/Rome',
+          locale: 'it-IT',
+        }),
+      );
+    });
+  });
+
+  it('moves bridge port editing into the bridge connector section', async () => {
+    render(<UserSettingsPage />);
+
+    await screen.findByRole('heading', { name: 'User Settings' });
+
+    const accountProfile = screen.getByRole('region', { name: 'Account Profile' });
+    const bridgeConnector = screen.getByRole('region', { name: 'Bridge Connector' });
+
+    expect(within(accountProfile).queryByRole('spinbutton', { name: 'Bridge port' })).toBeNull();
+    expect(within(bridgeConnector).getByRole('spinbutton', { name: 'Bridge port' })).toHaveValue(
+      1337,
+    );
+
+    fireEvent.change(within(bridgeConnector).getByRole('spinbutton', { name: 'Bridge port' }), {
+      target: { value: '1444' },
+    });
+    fireEvent.click(within(bridgeConnector).getByRole('button', { name: 'Save Bridge Port' }));
+
+    await waitFor(() => {
+      expect(updateUserSettings).toHaveBeenCalledWith({ bridge_port: 1444 });
+    });
+  });
+
+  it('groups bridge connector secret and download actions in a menu', async () => {
+    render(<UserSettingsPage />);
+
+    await screen.findByRole('heading', { name: 'User Settings' });
+
+    expect(screen.queryByRole('button', { name: 'Rotate Secret' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Revoke Secret' })).toBeNull();
+
+    const menuButton = screen.getByRole('button', { name: 'Bridge connector actions' });
+    expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(menuButton);
+
+    expect(menuButton).toHaveAttribute('aria-expanded', 'true');
+    const menu = screen.getByRole('menu', { name: 'Bridge connector actions' });
+    expect(within(menu).getByRole('menuitem', { name: 'Rotate Secret' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'Revoke Secret' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'Download Windows x64' })).toHaveAttribute(
+      'href',
+      '/api/v1/settings/bridge/connector/download/windows/amd64',
+    );
   });
 });
