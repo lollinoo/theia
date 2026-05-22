@@ -59,7 +59,7 @@ func buildServer(cfg Config, mgr *ServerManager) (*http.Server, net.Listener, er
 		Restart: setupRestartFunc(mgr),
 	})
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.ListenPort),
+		Addr:    fmt.Sprintf("localhost:%d", cfg.ListenPort),
 		Handler: handler,
 	}
 	listener, err := net.Listen("tcp", srv.Addr)

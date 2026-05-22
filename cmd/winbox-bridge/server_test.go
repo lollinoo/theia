@@ -9,11 +9,11 @@ import (
 )
 
 // freeCfg returns a Config whose ListenPort is a free TCP port.
-// Uses net.Listen(":0") to let the OS pick an available port, then closes that
-// listener so ServerManager can bind it.
+// Uses net.Listen("localhost:0") to let the OS pick an available loopback port,
+// then closes that listener so ServerManager can bind it.
 func freeCfg(t *testing.T) Config {
 	t.Helper()
-	ln, err := net.Listen("tcp", ":0")
+	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatalf("freeCfg: find free port: %v", err)
 	}
@@ -60,6 +60,26 @@ func TestServerManager_StartRunningTrue(t *testing.T) {
 
 	if !mgr.Running() {
 		t.Error("expected Running()=true after Start()")
+	}
+}
+
+func TestBuildServerBindsLoopbackOnly(t *testing.T) {
+	cfg := freeCfg(t)
+	mgr := &ServerManager{}
+
+	srv, listener, err := buildServer(cfg, mgr)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	t.Cleanup(func() { srv.Close() })
+
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener addr type = %T, want *net.TCPAddr", listener.Addr())
+	}
+	if !addr.IP.IsLoopback() {
+		t.Fatalf("listener address = %s, want loopback-only bind", listener.Addr())
 	}
 }
 
@@ -115,7 +135,7 @@ func TestServerManager_StartInvalidPortReturnsErrorAndNotRunning(t *testing.T) {
 }
 
 func TestServerManager_StartOccupiedPortReturnsErrorAndNotRunning(t *testing.T) {
-	ln, err := net.Listen("tcp", ":0")
+	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatalf("listen occupied port: %v", err)
 	}
@@ -176,7 +196,7 @@ func TestServerManager_RestartOccupiedNewPortKeepsOldServerRunning(t *testing.T)
 	t.Cleanup(func() { mgr.Stop() })
 	waitForServer(t, oldCfg.ListenPort)
 
-	ln, err := net.Listen("tcp", ":0")
+	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatalf("listen occupied restart port: %v", err)
 	}
