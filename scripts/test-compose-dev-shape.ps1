@@ -79,4 +79,11 @@ Assert-True ($composeSource -notmatch $bearerHeaderText) "backend healthcheck mu
 $frontendEnvironment = Get-ServiceProperty $frontend "environment"
 Assert-True ($frontendEnvironment.VITE_API_URL -eq "http://backend:8080") "frontend dev proxy must reach backend over the Compose network"
 
+foreach ($nginxPath in @("frontend/nginx.conf", "frontend/nginx.conf.template")) {
+  $nginxSource = Get-Content -Raw -Path $nginxPath
+  Assert-True ($nginxSource -notmatch 'proxy_set_header Host \$host;') "$nginxPath must preserve the browser Host header port with `$http_host"
+  $httpHostMatches = [regex]::Matches($nginxSource, 'proxy_set_header Host \$http_host;')
+  Assert-True ($httpHostMatches.Count -eq 3) "$nginxPath must set Host to `$http_host in all API proxy locations"
+}
+
 Write-Output "docker-compose.yml dev/test shape is valid"
