@@ -422,7 +422,7 @@ BRIDGE_TARGETS_NOCGO := windows/amd64 windows/arm64 linux/amd64 linux/arm64
 
 ifeq ($(IS_WINDOWS),1)
 bridge-build-all: ## Cross-compile winbox-bridge for Windows + Linux (macOS requires native Mac - use CI)
-	@& ./scripts/build-winbox-bridge.ps1 "$(BRIDGE_OUT)" "$(BRIDGE_SRC)" $(BRIDGE_TARGETS_NOCGO)
+	@& ./scripts/build-winbox-bridge.ps1 -OutDir "$(BRIDGE_OUT)" -Source "$(BRIDGE_SRC)" -Targets @('windows/amd64','windows/arm64','linux/amd64','linux/arm64')
 else
 bridge-build-all: ## Cross-compile winbox-bridge for Windows + Linux (macOS requires native Mac - use CI)
 	@rm -rf $(BRIDGE_OUT)

@@ -37,6 +37,7 @@ services:
     environment:
       - THEIA_DB_DSN=${THEIA_DB_DSN:-postgres://theia:theia@postgres:5432/theia?sslmode=disable}
       - THEIA_DATA_DIR=/app/data
+      - THEIA_BRIDGE_BINARIES_DIR=${THEIA_BRIDGE_BINARIES_DIR:-/app/bridge_binaries}
       - THEIA_LISTEN_ADDR=:8080
       - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-devkey1234567890}
       - THEIA_SESSION_SECRET=${THEIA_SESSION_SECRET:-dev-session-secret-change-me-32bytes}
