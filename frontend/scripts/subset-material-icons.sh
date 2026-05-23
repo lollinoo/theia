@@ -14,15 +14,18 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # from the downloaded Material Symbols font because Google can move ligatures
 # between releases.
 ICON_NAMES=(
+  account_tree
   add
   add_location_alt
   admin_panel_settings
   backup
+  badge
   block
   build
   check
   check_circle
   close
+  close_fullscreen
   cloud
   content_copy
   dark_mode
@@ -37,6 +40,7 @@ ICON_NAMES=(
   fit_screen
   history
   hub
+  info
   key
   language
   light_mode
@@ -55,6 +59,8 @@ ICON_NAMES=(
   remove
   search
   settings
+  settings_ethernet
+  speed
   sync
   terminal
   zoom_in

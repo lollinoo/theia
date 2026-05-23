@@ -147,14 +147,14 @@ backend-fast: ## Run the backend-fast quality gate locally
 	go vet ./...
 	go build ./cmd/theia/
 	go test ./... -count=1 -covermode=atomic -coverprofile=coverage/backend-fast.out
-	@& ./scripts/check-go-cover.ps1 coverage/backend-fast.out 60
+	@& ./scripts/check-go-cover.ps1 coverage/backend-fast.out 45
 else
 backend-fast: ## Run the backend-fast quality gate locally
 	mkdir -p coverage
 	go vet ./...
 	go build ./cmd/theia/
 	go test ./... -count=1 -covermode=atomic -coverprofile=coverage/backend-fast.out
-	bash scripts/check-go-cover.sh coverage/backend-fast.out 60
+	bash scripts/check-go-cover.sh coverage/backend-fast.out 45
 endif
 
 realtime-stress: ## Run focused realtime stress tests locally

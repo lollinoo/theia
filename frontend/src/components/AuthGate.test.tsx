@@ -89,6 +89,14 @@ describe('AuthGate', () => {
     expect(await screen.findByText('secured app')).toBeInTheDocument();
   });
 
+  it('does not prefill the sign-in identifier', async () => {
+    vi.mocked(fetchCurrentUser).mockResolvedValue({ authenticated: false });
+
+    renderGate();
+
+    expect(await screen.findByLabelText('Username or email')).toHaveValue('');
+  });
+
   it('blocks the app until a required password change completes', async () => {
     vi.mocked(fetchCurrentUser).mockResolvedValue({
       authenticated: true,

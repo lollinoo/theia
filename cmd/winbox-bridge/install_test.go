@@ -133,6 +133,61 @@ func TestSystemConnectorInstallerEnsureInstalledMovesConfigBesideInstalledExecut
 	}
 }
 
+func TestSystemConnectorInstallerEnsureInstalledRepairsInvalidInstalledConfigFromLegacyConfig(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "downloaded-bridge")
+	target := filepath.Join(dir, "stable", "winbox-bridge")
+	legacyConfig := filepath.Join(dir, "legacy", "winbox-bridge", "config.json")
+	installedConfig := filepath.Join(filepath.Dir(target), "config.json")
+	if err := os.WriteFile(source, []byte("bridge binary"), 0o700); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyConfig), 0o700); err != nil {
+		t.Fatalf("create legacy config dir: %v", err)
+	}
+	saved := DefaultConfig()
+	saved.WinBoxPath = "/opt/winbox"
+	saved.ListenPort = 1444
+	saved.TheiaOrigin = "http://theia.local:3000"
+	saved.TheiaBaseURL = "http://theia.local:8080"
+	saved.BridgeSecret = "theia_bridge_public.saved-secret"
+	saved.LogLevel = "debug"
+	if err := saveConfigTo(saved, legacyConfig); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(installedConfig), 0o700); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
+	if err := os.WriteFile(installedConfig, []byte("{"), 0o600); err != nil {
+		t.Fatalf("write invalid installed config: %v", err)
+	}
+	installer := systemConnectorInstaller{
+		currentExecutable: func() (string, error) { return source, nil },
+		installedPath:     func() (string, error) { return target, nil },
+		legacyConfigPath:  func() (string, error) { return legacyConfig, nil },
+		currentConfig:     func() (Config, error) { return DefaultConfig(), nil },
+	}
+
+	if _, err := installer.EnsureInstalled(); err != nil {
+		t.Fatalf("EnsureInstalled returned error: %v", err)
+	}
+
+	var got Config
+	data, err := os.ReadFile(installedConfig)
+	if err != nil {
+		t.Fatalf("read installed config: %v", err)
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse installed config: %v", err)
+	}
+	if got != saved {
+		t.Fatalf("installed config = %+v, want saved config %+v", got, saved)
+	}
+	if _, err := os.Stat(legacyConfig); !os.IsNotExist(err) {
+		t.Fatalf("legacy config still exists or returned unexpected error: %v", err)
+	}
+}
+
 func TestSystemConnectorInstallerEnsureInstalledCreatesStableConfigWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "downloaded-bridge")

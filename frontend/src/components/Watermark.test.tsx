@@ -22,6 +22,21 @@ describe('Watermark', () => {
     expect(screen.getByText('GLOBAL TOPOLOGY')).toBeDefined();
   });
 
+  it('renders the current map name as italic secondary context', () => {
+    render(
+      <Watermark
+        activeView="canvas"
+        selectedAreaId={null}
+        areas={[mockArea()]}
+        mapName="Backbone map"
+      />,
+    );
+
+    const mapLabel = screen.getByText('Backbone map');
+    expect(mapLabel).toBeDefined();
+    expect(mapLabel.className).toContain('italic');
+  });
+
   it('renders area name uppercase when selectedAreaId matches an area', () => {
     const areas = [mockArea(), mockArea({ id: 'area-2', name: 'Distribution' })];
     render(<Watermark activeView="canvas" selectedAreaId="area-2" areas={areas} />);
@@ -58,7 +73,7 @@ describe('Watermark', () => {
     expect(wrapper.getAttribute('aria-hidden')).toBe('true');
   });
 
-  it('uses canvas-relative positioning classes near minimap', () => {
+  it('uses canvas-relative positioning classes near minimap by default', () => {
     const { container } = render(
       <Watermark activeView="canvas" selectedAreaId={null} areas={[]} />,
     );
@@ -67,6 +82,19 @@ describe('Watermark', () => {
     expect(wrapper.className).not.toContain('fixed');
     expect(wrapper.className).toContain('bottom-[calc(15.5rem+env(safe-area-inset-bottom))]');
     expect(wrapper.className).toContain('sm:bottom-[184px]');
+    expect(wrapper.className).toContain('right-4');
+  });
+
+  it('moves to the lower-right corner in compact canvas chrome mode', () => {
+    const { container } = render(
+      <Watermark activeView="canvas" selectedAreaId={null} areas={[]} compact />,
+    );
+    const wrapper = container.firstChild as HTMLElement;
+    expect(wrapper.className).toContain('absolute');
+    expect(wrapper.className).not.toContain('fixed');
+    expect(wrapper.className).toContain('bottom-[calc(1rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).not.toContain('bottom-[calc(15.5rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).not.toContain('sm:bottom-[184px]');
     expect(wrapper.className).toContain('right-4');
   });
 });

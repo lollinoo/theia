@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { headersWithCsrf } from '../api/client';
 import {
   recordCanvasDiagnosticEvent,
   updateCanvasDiagnosticsState,
@@ -122,10 +123,10 @@ export function usePositions(mapId: string | null) {
 
       const response = await fetch(endpoint, {
         method: 'PUT',
-        headers: {
+        headers: headersWithCsrf({
           'Content-Type': 'application/json',
           Accept: 'application/json',
-        },
+        }),
         body: JSON.stringify({ positions: nextPositions }),
       });
 

@@ -49,6 +49,31 @@ describe('usePositions diagnostics', () => {
     );
   });
 
+  it('sends the CSRF cookie value when saving positions', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theme=dark; theia_csrf=position-csrf-token',
+    });
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({}),
+    } as unknown as Response);
+    const { result } = renderHook(() => usePositions(null));
+
+    await act(async () => {
+      await result.current.savePositions([{ device_id: 'dev-1', x: 10, y: 20, pinned: true }]);
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/positions',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'position-csrf-token' }),
+      }),
+    );
+  });
+
   it('records failed position saves without throwing from the debounced flush', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: false,

@@ -537,6 +537,7 @@ func setupHTML(token string) string {
       <input name="autostart_enabled" id="autostart_enabled" type="checkbox" style="width:auto">
       Start automatically when I sign in
     </label>
+    <div class="meta">Enabling this installs or repairs the connector at the installed path shown above. Autostart runs that installed copy, not the downloaded file you launched.</div>
     <button type="submit">Save</button>
     <button type="button" id="restart_server">Restart Server</button>
   </form>

@@ -17,6 +17,7 @@ import {
 } from '../utils/validation';
 import { CredentialProfileManager } from './CredentialProfileManager';
 import { InstanceBackupManager } from './InstanceBackupManager';
+import { MaterialIcon } from './MaterialIcon';
 import { SNMPProfileManager } from './SNMPProfileManager';
 
 const TIMEZONES = [
@@ -186,6 +187,78 @@ function SavedIndicator({ visible }: SavedIndicatorProps) {
     >
       Saved
     </span>
+  );
+}
+
+const fieldLabelClass = 'text-sm font-medium text-on-bg-secondary';
+const inputClass =
+  'theia-input focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
+const compactInputClass =
+  'w-full rounded-lg border border-outline-subtle bg-surface-container-high px-3 py-2 text-sm text-on-bg outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/30';
+const invalidInputClass = 'border-status-down focus:border-status-down focus:ring-status-down/25';
+
+function controlClass(hasError?: boolean, extra = ''): string {
+  return `${inputClass}${hasError ? ` ${invalidInputClass}` : ''}${extra ? ` ${extra}` : ''}`;
+}
+
+function compactControlClass(hasError?: boolean, extra = ''): string {
+  return `${compactInputClass}${hasError ? ` ${invalidInputClass}` : ''}${extra ? ` ${extra}` : ''}`;
+}
+
+interface SettingsSectionProps {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  accent?: 'primary' | 'secondary' | 'warning' | 'status-up';
+  aside?: React.ReactNode;
+  className?: string;
+  children: React.ReactNode;
+}
+
+function SettingsSection({
+  id,
+  title,
+  description,
+  icon,
+  accent = 'primary',
+  aside,
+  className = '',
+  children,
+}: SettingsSectionProps) {
+  const accentClass = {
+    primary: 'bg-primary/15 text-primary',
+    secondary: 'bg-area-secondary/15 text-area-secondary',
+    warning: 'bg-warning/15 text-warning',
+    'status-up': 'bg-status-up/15 text-status-up',
+  }[accent];
+
+  return (
+    <section
+      aria-labelledby={id}
+      className={`flex h-[22rem] self-start flex-col rounded-lg border border-outline-subtle bg-surface-container/80 p-5 shadow-panel ${className}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            aria-hidden="true"
+            className={`flex h-10 w-10 flex-none items-center justify-center rounded-lg ${accentClass}`}
+          >
+            <MaterialIcon name={icon} className="text-[20px]" />
+          </span>
+          <div className="min-w-0">
+            <h2 id={id} className="text-lg font-semibold text-on-bg">
+              {title}
+            </h2>
+            <p className="text-sm text-on-bg-secondary">{description}</p>
+          </div>
+        </div>
+        {aside}
+      </div>
+      <div data-testid="settings-section-body" className="mt-5 min-h-0 flex-1 overflow-y-auto pr-1">
+        {children}
+      </div>
+    </section>
   );
 }
 
@@ -455,11 +528,11 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     return (
       <div key={setting.key} className="space-y-1">
         <div className="flex items-center justify-between gap-3">
-          <label htmlFor={inputId} className="text-[11px] font-medium text-on-bg-secondary">
+          <label htmlFor={inputId} className={fieldLabelClass}>
             {setting.label}
           </label>
           {savedWorkerSettings[setting.key] && (
-            <span className="text-[10px] text-status-up font-medium">Saved</span>
+            <span className="text-xs font-medium text-status-up">Saved</span>
           )}
         </div>
         <input
@@ -472,7 +545,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           onBlur={() =>
             setFieldError(setting.key, validatePositiveInteger(workerSettings[setting.key]))
           }
-          className={`w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors[setting.key] ? ' border-status-down' : ' border-outline-subtle'}`}
+          className={controlClass(Boolean(fieldErrors[setting.key]))}
         />
         <p className="break-all font-mono text-[10px] leading-relaxed text-on-bg-muted">
           {setting.key}
@@ -485,383 +558,452 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   }
 
   return (
-    <div className="space-y-6 p-4 transition-colors duration-200">
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Polling Interval
-          </label>
-          <SavedIndicator visible={savedPolling} />
-        </div>
-        <select
-          value={pollingValue}
-          onChange={(e) => handlePollingPresetChange(e.target.value)}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+    <div
+      data-testid="settings-panel-layout"
+      className="grid items-start gap-6 p-4 transition-colors duration-200 lg:grid-cols-2"
+    >
+      <div data-testid="settings-panel-left-column" className="grid content-start gap-6">
+        <SettingsSection
+          id="settings-polling-heading"
+          title="Polling"
+          description="Global collection cadence and worker capacity."
+          icon="speed"
+          accent="primary"
         >
-          {POLLING_PRESETS.map((preset) => (
-            <option key={preset.value} value={preset.value}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-        {pollingValue === 'custom' && (
-          <div className="flex items-center gap-2">
-            <div className="w-full">
-              <input
-                type="number"
-                min={5}
-                max={3600}
-                value={customPolling}
-                placeholder="Seconds (5–3600)"
-                onChange={(e) => {
-                  setCustomPolling(e.target.value);
-                  setFieldError('customPolling', null);
-                  schedulePollingUpdate(e.target.value);
-                }}
-                onBlur={() => {
-                  const num = parseInt(customPolling, 10);
-                  if (!Number.isFinite(num) || num < 5 || num > 3600) {
-                    setFieldError(
-                      'customPolling',
-                      'Polling interval must be between 5 and 3600 seconds',
-                    );
-                  } else {
-                    setFieldError('customPolling', null);
-                  }
-                }}
-                className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.customPolling ? ' border-status-down' : ' border-outline-subtle'}`}
-              />
-              {fieldErrors.customPolling && (
-                <p className="mt-1 text-xs text-status-down">{fieldErrors.customPolling}</p>
+          <div className="grid gap-4">
+            <label className="grid gap-1 text-sm">
+              <span className="flex items-center justify-between gap-3">
+                <span className={fieldLabelClass}>Polling Interval</span>
+                <SavedIndicator visible={savedPolling} />
+              </span>
+              <select
+                value={pollingValue}
+                onChange={(e) => handlePollingPresetChange(e.target.value)}
+                className={controlClass()}
+              >
+                {POLLING_PRESETS.map((preset) => (
+                  <option key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {pollingValue === 'custom' && (
+              <div className="grid gap-1 text-sm">
+                <label htmlFor="custom-polling-seconds" className={fieldLabelClass}>
+                  Custom interval
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <input
+                      id="custom-polling-seconds"
+                      type="number"
+                      min={5}
+                      max={3600}
+                      value={customPolling}
+                      placeholder="Seconds (5-3600)"
+                      onChange={(e) => {
+                        setCustomPolling(e.target.value);
+                        setFieldError('customPolling', null);
+                        schedulePollingUpdate(e.target.value);
+                      }}
+                      onBlur={() => {
+                        const num = parseInt(customPolling, 10);
+                        if (!Number.isFinite(num) || num < 5 || num > 3600) {
+                          setFieldError(
+                            'customPolling',
+                            'Polling interval must be between 5 and 3600 seconds',
+                          );
+                        } else {
+                          setFieldError('customPolling', null);
+                        }
+                      }}
+                      className={controlClass(Boolean(fieldErrors.customPolling))}
+                    />
+                    {fieldErrors.customPolling && (
+                      <p className="mt-1 text-xs text-status-down">{fieldErrors.customPolling}</p>
+                    )}
+                  </div>
+                  <span className="text-xs text-on-bg-secondary">sec</span>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-lg bg-surface-container-high p-3">
+              <button
+                type="button"
+                aria-expanded={workerSectionOpen}
+                onClick={() => setWorkerSectionOpen((prev) => !prev)}
+                className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left transition-colors hover:text-on-bg"
+              >
+                <span>
+                  <span className="block text-sm font-semibold text-on-bg">Polling Workers</span>
+                  <span className="block text-xs text-on-bg-secondary">
+                    Tune pool sizes and isolation limits.
+                  </span>
+                </span>
+                <MaterialIcon
+                  name={workerSectionOpen ? 'expand_less' : 'expand_more'}
+                  className="text-on-bg-secondary"
+                />
+              </button>
+              {workerSectionOpen && (
+                <div className="mt-4 grid gap-4">
+                  {WORKER_SETTING_GROUPS.map((group) => (
+                    <div key={group.title} className="grid gap-3">
+                      <h3 className="text-xs font-semibold uppercase text-on-bg-muted">
+                        {group.title}
+                      </h3>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {group.settings.map((setting) => renderWorkerSettingField(setting))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-            <span className="text-xs text-on-bg-secondary">sec</span>
           </div>
-        )}
-      </div>
+        </SettingsSection>
 
-      <div className="mt-6">
-        <button
-          type="button"
-          onClick={() => setWorkerSectionOpen((prev) => !prev)}
-          className="flex w-full items-center justify-between rounded-lg bg-surface-high px-3 py-2.5 text-left transition-colors hover:bg-elevated/50"
+        <SettingsSection
+          id="settings-topology-heading"
+          title="Topology"
+          description="Default discovery behavior for devices that inherit global policy."
+          icon="account_tree"
+          accent="secondary"
         >
-          <span className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Polling Workers
-          </span>
-          <svg
-            className={`w-4 h-4 text-on-bg-secondary transition-transform duration-200 ${workerSectionOpen ? 'rotate-180' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        {workerSectionOpen && (
-          <div className="mt-2 space-y-3 transition-colors duration-200">
-            {WORKER_SETTING_GROUPS.map((group) => (
-              <div key={group.title} className="rounded-lg bg-surface-high p-3 space-y-3">
-                <h3 className="text-[11px] font-medium uppercase tracking-widest text-on-bg-secondary">
-                  {group.title}
-                </h3>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {group.settings.map((setting) => renderWorkerSettingField(setting))}
-                </div>
-              </div>
-            ))}
+          <label className="grid gap-1 text-sm" htmlFor="topology-discovery-default">
+            <span className="flex items-center justify-between gap-3">
+              <span className={fieldLabelClass}>Topology Discovery Default</span>
+              <SavedIndicator visible={savedTopologyDiscovery} />
+            </span>
+            <select
+              id="topology-discovery-default"
+              aria-label="Topology Discovery Default"
+              value={topologyDiscoveryDefaultMode}
+              onChange={(e) => {
+                const nextValue = e.target.value as TopologyDiscoveryMode;
+                setTopologyDiscoveryDefaultMode(nextValue);
+                void updateSetting('topology_discovery_default_mode', nextValue).then(() => {
+                  showSaved(setSavedTopologyDiscovery, savedTopologyDiscoveryTimerRef);
+                  onSettingsChange?.();
+                });
+              }}
+              className={controlClass()}
+            >
+              {TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="mt-2 text-xs text-on-bg-secondary">
+            Applies to devices using the per-device{' '}
+            <span className="font-medium">Use global default</span> mode. Current default:{' '}
+            <span className="font-medium">
+              {formatTopologyDiscoveryMode(topologyDiscoveryDefaultMode)}
+            </span>
+            .
+          </p>
+        </SettingsSection>
+
+        <SettingsSection
+          id="settings-integrations-heading"
+          title="Integrations"
+          description="External observability endpoints used by dashboard links."
+          icon="hub"
+          accent="primary"
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="grid gap-1 text-sm">
+              <span className="flex items-center justify-between gap-3">
+                <span className={fieldLabelClass}>Grafana URL</span>
+                <SavedIndicator visible={savedGrafana} />
+              </span>
+              <input
+                type="url"
+                value={grafanaUrl}
+                placeholder="http://localhost:3001"
+                onChange={(e) => {
+                  setGrafanaUrl(e.target.value);
+                  setFieldError('grafanaUrl', null);
+                  scheduleGrafanaUpdate(e.target.value);
+                }}
+                onBlur={() => setFieldError('grafanaUrl', validateURL(grafanaUrl, 'Grafana URL'))}
+                className={controlClass(Boolean(fieldErrors.grafanaUrl))}
+              />
+              {fieldErrors.grafanaUrl && (
+                <span className="text-xs text-status-down">{fieldErrors.grafanaUrl}</span>
+              )}
+            </label>
+            <label className="grid gap-1 text-sm">
+              <span className="flex items-center justify-between gap-3">
+                <span className={fieldLabelClass}>Prometheus URL</span>
+                <SavedIndicator visible={savedPrometheus} />
+              </span>
+              <input
+                type="url"
+                value={prometheusUrl}
+                placeholder="http://localhost:9090"
+                onChange={(e) => {
+                  setPrometheusUrl(e.target.value);
+                  setFieldError('prometheusUrl', null);
+                  schedulePrometheusUpdate(e.target.value);
+                }}
+                onBlur={() =>
+                  setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'))
+                }
+                className={controlClass(Boolean(fieldErrors.prometheusUrl))}
+              />
+              {fieldErrors.prometheusUrl && (
+                <span className="text-xs text-status-down">{fieldErrors.prometheusUrl}</span>
+              )}
+            </label>
           </div>
-        )}
+        </SettingsSection>
       </div>
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label
-            htmlFor="topology-discovery-default"
-            className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
-          >
-            Topology Discovery Default
-          </label>
-          <SavedIndicator visible={savedTopologyDiscovery} />
-        </div>
-        <select
-          id="topology-discovery-default"
-          value={topologyDiscoveryDefaultMode}
-          onChange={(e) => {
-            const nextValue = e.target.value as TopologyDiscoveryMode;
-            setTopologyDiscoveryDefaultMode(nextValue);
-            void updateSetting('topology_discovery_default_mode', nextValue).then(() => {
-              showSaved(setSavedTopologyDiscovery, savedTopologyDiscoveryTimerRef);
-              onSettingsChange?.();
-            });
-          }}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+      <div data-testid="settings-panel-right-column" className="grid content-start gap-6">
+        <SettingsSection
+          id="settings-bridge-heading"
+          title="Bridge"
+          description="Local WinBox bridge listener and timestamp preferences."
+          icon="settings_ethernet"
+          accent="warning"
         >
-          {TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <p className="text-xs text-on-bg-secondary">
-          Applies to devices using the per-device{' '}
-          <span className="font-medium">Use global default</span> mode. Current default:{' '}
-          <span className="font-medium">
-            {formatTopologyDiscoveryMode(topologyDiscoveryDefaultMode)}
-          </span>
-          .
-        </p>
-      </div>
+          <div className="grid gap-4">
+            <label className="grid gap-1 text-sm">
+              <span className="flex items-center justify-between gap-3">
+                <span className={fieldLabelClass}>Timezone</span>
+                <SavedIndicator visible={savedTimezone} />
+              </span>
+              <select
+                value={timezone}
+                onChange={(e) => {
+                  setTimezone(e.target.value);
+                  void updateSetting('timezone', e.target.value).then(() =>
+                    showSaved(setSavedTimezone, savedTimezoneTimerRef),
+                  );
+                }}
+                className={controlClass()}
+              >
+                {TIMEZONES.map((tz) => (
+                  <option key={tz.value} value={tz.value}>
+                    {tz.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-on-bg-secondary">
+                Affects backup filenames and zip timestamps.
+              </span>
+            </label>
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Grafana URL
-          </label>
-          <SavedIndicator visible={savedGrafana} />
-        </div>
-        <input
-          type="url"
-          value={grafanaUrl}
-          placeholder="http://localhost:3001"
-          onChange={(e) => {
-            setGrafanaUrl(e.target.value);
-            setFieldError('grafanaUrl', null);
-            scheduleGrafanaUpdate(e.target.value);
-          }}
-          onBlur={() => setFieldError('grafanaUrl', validateURL(grafanaUrl, 'Grafana URL'))}
-          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.grafanaUrl ? ' border-status-down' : ' border-outline-subtle'}`}
-        />
-        {fieldErrors.grafanaUrl && (
-          <p className="mt-1 text-xs text-status-down">{fieldErrors.grafanaUrl}</p>
-        )}
-      </div>
+            <label className="grid gap-1 text-sm">
+              <span className="flex items-center justify-between gap-3">
+                <span className={fieldLabelClass}>WinBox Bridge Port</span>
+                <SavedIndicator visible={savedBridgePort} />
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                value={bridgePort}
+                placeholder="1337"
+                onChange={(e) => handleBridgePortChange(e.target.value)}
+                onBlur={() => {
+                  const num = parseInt(bridgePort, 10);
+                  if (!Number.isFinite(num) || num < 1 || num > 65535) {
+                    setFieldError(
+                      'bridgePort',
+                      'Bridge port must be an integer between 1 and 65535',
+                    );
+                  } else {
+                    setFieldError('bridgePort', null);
+                  }
+                }}
+                className={controlClass(Boolean(fieldErrors.bridgePort), 'font-mono')}
+              />
+              {fieldErrors.bridgePort && (
+                <span className="text-xs text-status-down">{fieldErrors.bridgePort}</span>
+              )}
+              <span className="text-xs text-on-bg-secondary">
+                Default is <span className="font-mono">1337</span>. Must match{' '}
+                <span className="font-mono">ListenPort</span> in the bridge config.
+              </span>
+            </label>
+          </div>
+        </SettingsSection>
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Prometheus URL
-          </label>
-          <SavedIndicator visible={savedPrometheus} />
-        </div>
-        <input
-          type="url"
-          value={prometheusUrl}
-          placeholder="http://localhost:9090"
-          onChange={(e) => {
-            setPrometheusUrl(e.target.value);
-            setFieldError('prometheusUrl', null);
-            schedulePrometheusUpdate(e.target.value);
-          }}
-          onBlur={() =>
-            setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'))
-          }
-          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.prometheusUrl ? ' border-status-down' : ' border-outline-subtle'}`}
-        />
-        {fieldErrors.prometheusUrl && (
-          <p className="mt-1 text-xs text-status-down">{fieldErrors.prometheusUrl}</p>
-        )}
-      </div>
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Timezone
-          </label>
-          <SavedIndicator visible={savedTimezone} />
-        </div>
-        <select
-          value={timezone}
-          onChange={(e) => {
-            setTimezone(e.target.value);
-            void updateSetting('timezone', e.target.value).then(() =>
-              showSaved(setSavedTimezone, savedTimezoneTimerRef),
-            );
-          }}
-          className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+        <SettingsSection
+          id="settings-profiles-heading"
+          title="Profiles"
+          description="Credential and SNMP profiles available to managed devices."
+          icon="badge"
+          accent="primary"
         >
-          {TIMEZONES.map((tz) => (
-            <option key={tz.value} value={tz.value}>
-              {tz.label}
-            </option>
-          ))}
-        </select>
-        <p className="text-xs text-on-bg-secondary">Affects backup filenames and zip timestamps.</p>
-      </div>
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            WinBox Bridge Port
-          </label>
-          <SavedIndicator visible={savedBridgePort} />
-        </div>
-        <input
-          type="number"
-          min={1}
-          max={65535}
-          value={bridgePort}
-          placeholder="1337"
-          onChange={(e) => handleBridgePortChange(e.target.value)}
-          onBlur={() => {
-            const num = parseInt(bridgePort, 10);
-            if (!Number.isFinite(num) || num < 1 || num > 65535) {
-              setFieldError('bridgePort', 'Bridge port must be an integer between 1 and 65535');
-            } else {
-              setFieldError('bridgePort', null);
-            }
-          }}
-          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none font-mono${fieldErrors.bridgePort ? ' border-status-down' : ' border-outline-subtle'}`}
-        />
-        {fieldErrors.bridgePort && (
-          <p className="mt-1 text-xs text-status-down">{fieldErrors.bridgePort}</p>
-        )}
-        <p className="text-xs text-on-bg-secondary">
-          TCP port the WinBox bridge listens on. Default is <span className="font-mono">1337</span>.
-          Must match <span className="font-mono">ListenPort</span> in the bridge&apos;s config.json.
-        </p>
-      </div>
-
-      <div className="mt-6">
-        <SNMPProfileManager />
-      </div>
-
-      <div className="mt-6">
-        <CredentialProfileManager />
-      </div>
-
-      {/* Device Backup section (collapsible, collapsed by default) */}
-      <div className="mt-6">
-        <button
-          type="button"
-          onClick={() => setDeviceBackupSectionOpen((prev) => !prev)}
-          className="flex w-full items-center justify-between rounded-lg bg-surface-high px-3 py-2.5 text-left transition-colors hover:bg-elevated/50"
-        >
-          <span className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Device Backups
-          </span>
-          <svg
-            className={`w-4 h-4 text-on-bg-secondary transition-transform duration-200 ${deviceBackupSectionOpen ? 'rotate-180' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        {deviceBackupSectionOpen && (
-          <div className="mt-2 space-y-3 transition-colors duration-200">
-            {/* Schedule & Retention Settings */}
-            <div className="rounded-lg bg-surface-high p-3 space-y-3">
-              {/* Schedule Interval Dropdown */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-medium text-on-bg-secondary">
-                    Automatic Backup Schedule
-                  </label>
-                  {savedDeviceInterval && (
-                    <span className="text-[10px] text-status-up font-medium">Saved</span>
-                  )}
-                </div>
-                <select
-                  value={deviceBackupInterval}
-                  onChange={(e) => handleDeviceIntervalChange(e.target.value)}
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-2.5 py-1.5 text-xs text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                >
-                  <option value="0">Disabled</option>
-                  <option value="6">Every 6 hours</option>
-                  <option value="12">Every 12 hours</option>
-                  <option value="24">Every 24 hours</option>
-                  <option value="48">Every 48 hours</option>
-                  <option value="168">Every 7 days</option>
-                </select>
-                {/* Next backup helper text (per D-08) */}
-                <p className="text-[10px] text-on-bg-muted">{computeDeviceNextBackupText()}</p>
-              </div>
-
-              {/* Retention Count Input (per D-04, D-05) */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-medium text-on-bg-secondary">
-                    Keep last N backups per device
-                  </label>
-                  {savedDeviceRetention && (
-                    <span className="text-[10px] text-status-up font-medium">Saved</span>
-                  )}
-                </div>
-                <input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={deviceBackupRetention}
-                  onChange={(e) => handleDeviceRetentionChange(e.target.value)}
-                  className={`w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.deviceBackupRetention ? ' border-status-down' : ' border-outline-subtle'}`}
-                />
-                {fieldErrors.deviceBackupRetention && (
-                  <p className="mt-0.5 text-[10px] text-status-down">
-                    {fieldErrors.deviceBackupRetention}
-                  </p>
-                )}
-              </div>
+          <div className="grid gap-5">
+            <div
+              data-testid="snmp-profile-well"
+              className="rounded-lg bg-surface-container-high p-3"
+            >
+              <SNMPProfileManager />
+            </div>
+            <div
+              data-testid="credential-profile-well"
+              className="rounded-lg bg-surface-container-high p-3"
+            >
+              <CredentialProfileManager />
             </div>
           </div>
-        )}
-      </div>
+        </SettingsSection>
 
-      {/* Instance Backup section (collapsible, collapsed by default) */}
-      <div className="mt-6">
-        <button
-          type="button"
-          onClick={() => setBackupSectionOpen((prev) => !prev)}
-          className="flex w-full items-center justify-between rounded-lg bg-surface-high px-3 py-2.5 text-left transition-colors hover:bg-elevated/50"
+        <SettingsSection
+          id="settings-backups-heading"
+          title="Backups"
+          description="Device configuration retention and full instance backup tools."
+          icon="backup"
+          accent="secondary"
         >
-          <span className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            Instance Backups
-          </span>
-          <svg
-            className={`w-4 h-4 text-on-bg-secondary transition-transform duration-200 ${backupSectionOpen ? 'rotate-180' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        {backupSectionOpen && (
-          <div className="mt-2">
-            <InstanceBackupManager />
-          </div>
-        )}
-      </div>
+          <div className="grid gap-3">
+            <div className="rounded-lg bg-surface-container-high p-3">
+              <button
+                type="button"
+                aria-expanded={deviceBackupSectionOpen}
+                onClick={() => setDeviceBackupSectionOpen((prev) => !prev)}
+                className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left transition-colors hover:text-on-bg"
+              >
+                <span>
+                  <span className="block text-sm font-semibold text-on-bg">Device Backups</span>
+                  <span className="block text-xs text-on-bg-secondary">
+                    Schedule automatic config snapshots.
+                  </span>
+                </span>
+                <MaterialIcon
+                  name={deviceBackupSectionOpen ? 'expand_less' : 'expand_more'}
+                  className="text-on-bg-secondary"
+                />
+              </button>
+              {deviceBackupSectionOpen && (
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm">
+                    <span
+                      data-testid="device-backup-schedule-label-row"
+                      className="flex min-h-10 items-start justify-between gap-3"
+                    >
+                      <span className={fieldLabelClass}>Automatic Backup Schedule</span>
+                      {savedDeviceInterval && (
+                        <span className="text-xs font-medium text-status-up">Saved</span>
+                      )}
+                    </span>
+                    <select
+                      value={deviceBackupInterval}
+                      onChange={(e) => handleDeviceIntervalChange(e.target.value)}
+                      className={compactControlClass()}
+                    >
+                      <option value="0">Disabled</option>
+                      <option value="6">Every 6 hours</option>
+                      <option value="12">Every 12 hours</option>
+                      <option value="24">Every 24 hours</option>
+                      <option value="48">Every 48 hours</option>
+                      <option value="168">Every 7 days</option>
+                    </select>
+                    <span className="text-xs text-on-bg-muted">
+                      {computeDeviceNextBackupText()}
+                    </span>
+                  </label>
 
-      {versionInfo && (
-        <div className="mt-6 space-y-2">
-          <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-            About
-          </label>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-on-bg font-medium">Theia v{versionInfo.version}</span>
-            <span
-              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                import.meta.env.DEV
-                  ? 'bg-warning/15 text-warning'
-                  : 'bg-status-up/15 text-status-up'
-              }`}
-            >
-              {import.meta.env.DEV ? 'dev' : 'production'}
-            </span>
+                  <label className="grid gap-1 text-sm">
+                    <span
+                      data-testid="device-backup-retention-label-row"
+                      className="flex min-h-10 items-start justify-between gap-3"
+                    >
+                      <span className={fieldLabelClass}>Keep last N backups per device</span>
+                      {savedDeviceRetention && (
+                        <span className="text-xs font-medium text-status-up">Saved</span>
+                      )}
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={deviceBackupRetention}
+                      onChange={(e) => handleDeviceRetentionChange(e.target.value)}
+                      className={compactControlClass(Boolean(fieldErrors.deviceBackupRetention))}
+                    />
+                    {fieldErrors.deviceBackupRetention && (
+                      <span className="text-xs text-status-down">
+                        {fieldErrors.deviceBackupRetention}
+                      </span>
+                    )}
+                  </label>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg bg-surface-container-high p-3">
+              <button
+                type="button"
+                aria-expanded={backupSectionOpen}
+                onClick={() => setBackupSectionOpen((prev) => !prev)}
+                className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left transition-colors hover:text-on-bg"
+              >
+                <span>
+                  <span className="block text-sm font-semibold text-on-bg">Instance Backups</span>
+                  <span className="block text-xs text-on-bg-secondary">
+                    Export and restore application-level backup archives.
+                  </span>
+                </span>
+                <MaterialIcon
+                  name={backupSectionOpen ? 'expand_less' : 'expand_more'}
+                  className="text-on-bg-secondary"
+                />
+              </button>
+              {backupSectionOpen && (
+                <div className="mt-4">
+                  <InstanceBackupManager />
+                </div>
+              )}
+            </div>
           </div>
-          <div className="space-y-0.5 text-xs text-on-bg-secondary">
-            <p>Commit: {versionInfo.git_commit}</p>
-            <p>
-              Built:{' '}
-              {versionInfo.build_date === 'unknown'
-                ? 'unknown'
-                : new Date(versionInfo.build_date).toLocaleString()}
-            </p>
-          </div>
-        </div>
-      )}
+        </SettingsSection>
+
+        <SettingsSection
+          id="settings-about-heading"
+          title="About"
+          description="Installed application version and build metadata."
+          icon="info"
+          accent={import.meta.env.DEV ? 'warning' : 'status-up'}
+        >
+          {versionInfo ? (
+            <div className="grid gap-3 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-on-bg">Theia v{versionInfo.version}</span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                    import.meta.env.DEV
+                      ? 'bg-warning/15 text-warning'
+                      : 'bg-status-up/15 text-status-up'
+                  }`}
+                >
+                  {import.meta.env.DEV ? 'dev' : 'production'}
+                </span>
+              </div>
+              <div className="grid gap-1 text-xs text-on-bg-secondary">
+                <p className="break-all">Commit: {versionInfo.git_commit}</p>
+                <p>
+                  Built:{' '}
+                  {versionInfo.build_date === 'unknown'
+                    ? 'unknown'
+                    : new Date(versionInfo.build_date).toLocaleString()}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-on-bg-secondary">Loading version information</p>
+          )}
+        </SettingsSection>
+      </div>
     </div>
   );
 }

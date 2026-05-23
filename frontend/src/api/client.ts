@@ -358,7 +358,7 @@ function csrfTokenFromCookie(): string | null {
   }
 }
 
-function headersWithCsrf(headers: Record<string, string>): Record<string, string> {
+export function headersWithCsrf(headers: Record<string, string>): Record<string, string> {
   const csrfToken = csrfTokenFromCookie();
   if (!csrfToken) {
     return headers;

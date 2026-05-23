@@ -384,9 +384,9 @@ function readableVirtualAreaTone(color: string): string | null {
   return rgbToCss(mixRgb(rgb, whiteRgb, 0.8));
 }
 
-function areaTintStyle(colors: string[] | undefined): CSSProperties | undefined {
+function areaTintStyle(colors: string[] | undefined, alpha = 0.1): CSSProperties | undefined {
   const tintColors = (colors ?? [])
-    .map((color) => hexToRgba(color, 0.1))
+    .map((color) => hexToRgba(color, alpha))
     .filter((color): color is string => !!color);
 
   if (tintColors.length === 0) return undefined;
@@ -425,7 +425,7 @@ function virtualPrimaryStatusTone(status: DeviceVisualStatus): VirtualStatusTone
   switch (status) {
     case 'down':
       return {
-        capsuleClassName: 'topology-virtual-node-status-pulse',
+        capsuleClassName: 'topology-node-down-pulse',
         capsuleStyle: {
           '--theia-virtual-node-status-bg': 'var(--nt-node-down-card-bg)',
           '--theia-virtual-node-status-pulse-bg': 'var(--nt-node-down-card-pulse-bg)',
@@ -464,7 +464,7 @@ function physicalPrimaryStatusTone(status: DeviceVisualStatus): PhysicalStatusTo
   switch (status) {
     case 'down':
       return {
-        bodyClassName: 'topology-node-status-pulse',
+        bodyClassName: 'topology-node-down-pulse',
         bodyStyle: {
           '--theia-node-status-bg': 'var(--nt-node-down-card-bg)',
           '--theia-node-status-pulse-bg': 'var(--nt-node-down-card-pulse-bg)',
@@ -735,7 +735,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           <div
             data-testid="physical-node-body"
             className={`topology-physical-node-body flex-1 px-4 pb-3.5 pt-3 ${physicalStatusTone?.bodyClassName ?? ''}`}
-            style={physicalStatusTone?.bodyStyle ?? areaTintStyle(colors)}
+            style={physicalStatusTone?.bodyStyle ?? areaTintStyle(colors, 0.18)}
           >
             <div className="topology-semantic-header flex items-start justify-between gap-3">
               <div className="topology-semantic-identity-frame min-w-0 flex-1">
@@ -849,7 +849,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
             className={`topology-virtual-node-capsule relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass} ${virtualStatusTone?.capsuleClassName ?? ''}`}
             style={
               virtualStatusTone?.capsuleStyle ??
-              areaTintStyle(data.visualColor ? [data.visualColor] : colors)
+              areaTintStyle(data.visualColor ? [data.visualColor] : colors, 0.18)
             }
           >
             {hasArea && areaAccent ? (

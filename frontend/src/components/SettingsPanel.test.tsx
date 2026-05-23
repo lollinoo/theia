@@ -30,6 +30,101 @@ vi.mock('./InstanceBackupManager', () => ({
 }));
 
 describe('SettingsPanel (COMP-05)', () => {
+  it('renders settings in UserSettingsPage-style section cards', () => {
+    render(<SettingsPanel />);
+
+    for (const heading of [
+      'Polling',
+      'Topology',
+      'Integrations',
+      'Bridge',
+      'Profiles',
+      'Backups',
+      'About',
+    ]) {
+      const title = screen.getByRole('heading', { name: heading });
+      const section = title.closest('section');
+      expect(section?.className).toContain('shadow-panel');
+    }
+  });
+
+  it('uses independent desktop columns so expanded sections do not push the opposite column', () => {
+    render(<SettingsPanel />);
+
+    const layout = screen.getByTestId('settings-panel-layout');
+    expect(layout.className).toContain('lg:grid-cols-2');
+    expect(Array.from(layout.children).filter((child) => child.tagName === 'SECTION')).toHaveLength(
+      0,
+    );
+    expect(screen.getByTestId('settings-panel-left-column').className).toContain('content-start');
+    expect(screen.getByTestId('settings-panel-right-column').className).toContain('content-start');
+    expect(
+      Array.from(screen.getByTestId('settings-panel-left-column').children).filter(
+        (child) => child.tagName === 'SECTION',
+      ),
+    ).toHaveLength(3);
+    expect(
+      Array.from(screen.getByTestId('settings-panel-right-column').children).filter(
+        (child) => child.tagName === 'SECTION',
+      ),
+    ).toHaveLength(4);
+  });
+
+  it('keeps section cards from stretching when a neighboring section expands', () => {
+    render(<SettingsPanel />);
+
+    const layout = screen.getByTestId('settings-panel-layout');
+    expect(layout.className).toContain('items-start');
+
+    for (const column of Array.from(layout.children)) {
+      for (const section of Array.from(column.children)) {
+        expect(section.className).toContain('self-start');
+      }
+    }
+  });
+
+  it('uses fixed-height cards with internal scrolling so columns remain aligned', () => {
+    render(<SettingsPanel />);
+
+    for (const heading of [
+      'Polling',
+      'Topology',
+      'Integrations',
+      'Bridge',
+      'Profiles',
+      'Backups',
+      'About',
+    ]) {
+      const section = screen.getByRole('heading', { name: heading }).closest('section');
+      expect(section?.className).toContain('h-[22rem]');
+      expect(section?.querySelector('[data-testid="settings-section-body"]')?.className).toContain(
+        'overflow-y-auto',
+      );
+    }
+  });
+
+  it('gives profile managers a surfaced well inside the Profiles section', () => {
+    render(<SettingsPanel />);
+
+    expect(screen.getByTestId('snmp-profile-well').className).toContain(
+      'bg-surface-container-high',
+    );
+    expect(screen.getByTestId('credential-profile-well').className).toContain(
+      'bg-surface-container-high',
+    );
+  });
+
+  it('uses stable label rows for device backup fields', async () => {
+    render(<SettingsPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /device backups/i }));
+    });
+
+    expect(screen.getByTestId('device-backup-schedule-label-row').className).toContain('min-h-10');
+    expect(screen.getByTestId('device-backup-retention-label-row').className).toContain('min-h-10');
+  });
+
   it('form inputs use border-outline-subtle (not border-outline)', () => {
     const { container } = render(<SettingsPanel />);
     const inputs = Array.from(container.querySelectorAll('input, select'));

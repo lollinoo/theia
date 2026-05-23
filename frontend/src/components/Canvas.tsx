@@ -23,6 +23,7 @@ import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
+import { MaterialIcon } from './MaterialIcon';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
@@ -76,6 +77,7 @@ const canvasInteractionIdleDelayMs = 140;
 const deviceNodeReadabilityScaleProperty = '--theia-device-node-readability-scale';
 const linkBadgeReadabilityScaleProperty = '--theia-link-badge-readability-scale';
 const topologyZoomBandAttribute = 'data-topology-zoom-band';
+const topologyCleanViewFitPadding = 0.02;
 
 function topologyMinimapNodeColor(node: DeviceNode): string {
   const data = node.data;
@@ -153,6 +155,8 @@ interface CanvasProps {
   onTopologyLoadingChange?: (loading: boolean) => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
   onInteractionActiveChange?: (active: boolean) => void;
+  chromeHidden?: boolean;
+  onChromeHiddenChange?: (hidden: boolean) => void;
 }
 
 export default function Canvas({
@@ -173,6 +177,8 @@ export default function Canvas({
   onTopologyLoadingChange,
   onDetailDeviceChange,
   onInteractionActiveChange,
+  chromeHidden,
+  onChromeHiddenChange,
 }: CanvasProps) {
   const {
     nodes,
@@ -187,6 +193,7 @@ export default function Canvas({
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
+  const [internalChromeHidden, setInternalChromeHidden] = useState(false);
   const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const deviceNodeReadabilityScaleRef = useRef('1');
   const linkBadgeReadabilityScaleRef = useRef('1');
@@ -229,6 +236,12 @@ export default function Canvas({
     getPanelTitle,
   } = useCanvasMenus({ reactFlow });
   const selectedMapKey = mapId ?? '__default__';
+  const effectiveChromeHidden = chromeHidden ?? internalChromeHidden;
+  const currentTopologyFitViewPadding = effectiveChromeHidden
+    ? topologyCleanViewFitPadding
+    : topologyFitViewPadding;
+  const shouldApplyInitialChromeHiddenFitRef = useRef(effectiveChromeHidden);
+  const initialChromeHiddenFitAppliedRef = useRef(false);
   const previousMapKeyRef = useRef<string | null>(null);
   const previousFitViewRevisionRef = useRef(fitViewRevision);
   const previousTopologyRefreshRevisionRef = useRef(topologyRefreshRevision);
@@ -238,6 +251,23 @@ export default function Canvas({
   }, [panelContent, onDetailDeviceChange]);
 
   useEffect(() => () => onDetailDeviceChange?.(null), [onDetailDeviceChange]);
+
+  useEffect(() => {
+    if (!effectiveChromeHidden) return;
+
+    setPanelContent(null);
+    setDeviceMenu(null);
+    setEdgeMenu(null);
+    setShowSearch(false);
+    setShowShortcuts(false);
+  }, [
+    effectiveChromeHidden,
+    setDeviceMenu,
+    setEdgeMenu,
+    setPanelContent,
+    setShowSearch,
+    setShowShortcuts,
+  ]);
 
   useEffect(() => {
     if (previousMapKeyRef.current === null) {
@@ -672,7 +702,7 @@ export default function Canvas({
           return;
         }
         prevAreaRef.current = effectiveAreaId;
-        reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+        reactFlow.fitView({ padding: currentTopologyFitViewPadding, duration: 280 });
         recordCanvasDiagnosticEvent({
           level: 'debug',
           source: 'reactflow',
@@ -690,7 +720,13 @@ export default function Canvas({
       };
     }
     return undefined;
-  }, [canFitVisibleTopology, effectiveAreaId, displayNodes.length, reactFlow]);
+  }, [
+    canFitVisibleTopology,
+    currentTopologyFitViewPadding,
+    effectiveAreaId,
+    displayNodes.length,
+    reactFlow,
+  ]);
 
   useEffect(() => {
     if (fitViewRevision === undefined) {
@@ -709,7 +745,7 @@ export default function Canvas({
         return;
       }
       previousFitViewRevisionRef.current = fitViewRevision;
-      reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+      reactFlow.fitView({ padding: currentTopologyFitViewPadding, duration: 280 });
       recordCanvasDiagnosticEvent({
         level: 'debug',
         source: 'reactflow',
@@ -730,10 +766,54 @@ export default function Canvas({
     canFitVisibleTopology,
     displayNodes.length,
     effectiveAreaId,
+    currentTopologyFitViewPadding,
     fitViewRevision,
     mapId,
     reactFlow,
   ]);
+
+  useEffect(() => {
+    if (
+      !shouldApplyInitialChromeHiddenFitRef.current ||
+      initialChromeHiddenFitAppliedRef.current ||
+      !effectiveChromeHidden ||
+      !canFitVisibleTopology
+    ) {
+      return undefined;
+    }
+
+    let canceled = false;
+    const applyFitView = () => {
+      if (canceled) {
+        return;
+      }
+      initialChromeHiddenFitAppliedRef.current = true;
+      reactFlow.fitView({ padding: topologyCleanViewFitPadding, duration: 280 });
+      recordCanvasDiagnosticEvent({
+        level: 'debug',
+        source: 'reactflow',
+        event: 'reactflow.fit_view',
+        message: 'React Flow fitView requested after initial hidden canvas chrome restore',
+        metadata: {
+          mapId: mapId ?? 'default',
+          displayedNodeCount: displayNodes.length,
+        },
+      });
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      const frameId = window.requestAnimationFrame(applyFitView);
+      return () => {
+        canceled = true;
+        window.cancelAnimationFrame(frameId);
+      };
+    }
+
+    applyFitView();
+    return () => {
+      canceled = true;
+    };
+  }, [canFitVisibleTopology, displayNodes.length, effectiveChromeHidden, mapId, reactFlow]);
 
   useEffect(() => {
     setNodes((prev) => patchEditMode(prev, editMode));
@@ -844,6 +924,60 @@ export default function Canvas({
     return grafanaUrlRef.current;
   }
 
+  const fitTopologyView = useCallback(
+    (padding = currentTopologyFitViewPadding) => {
+      void reactFlow.fitView({
+        padding,
+        duration: 280,
+      });
+    },
+    [currentTopologyFitViewPadding, reactFlow],
+  );
+
+  const handleToggleChrome = useCallback(() => {
+    const nextHidden = !effectiveChromeHidden;
+    setInternalChromeHidden(nextHidden);
+    onChromeHiddenChange?.(nextHidden);
+
+    if (nextHidden) {
+      setPanelContent(null);
+      setDeviceMenu(null);
+      setEdgeMenu(null);
+      setShowSearch(false);
+      setShowShortcuts(false);
+    }
+
+    const fitAfterLayout = () => {
+      fitTopologyView(nextHidden ? topologyCleanViewFitPadding : topologyFitViewPadding);
+      recordCanvasDiagnosticEvent({
+        level: 'debug',
+        source: 'reactflow',
+        event: 'reactflow.fit_view',
+        message: 'React Flow fitView requested after canvas chrome toggle',
+        metadata: {
+          chromeHidden: nextHidden,
+          mapId: mapId ?? 'default',
+        },
+      });
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(fitAfterLayout);
+    } else {
+      fitAfterLayout();
+    }
+  }, [
+    effectiveChromeHidden,
+    fitTopologyView,
+    mapId,
+    onChromeHiddenChange,
+    setDeviceMenu,
+    setEdgeMenu,
+    setPanelContent,
+    setShowSearch,
+    setShowShortcuts,
+  ]);
+
   if (loading) {
     return (
       <div className="topology-backdrop flex h-full items-center justify-center bg-bg">
@@ -887,16 +1021,30 @@ export default function Canvas({
       data-topology-zoom-band={topologyZoomBandRef.current}
       className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
     >
-      {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
-      <Toolbar
-        onSearch={() => setShowSearch((s) => !s)}
-        onAddDevice={() => setPanelContent({ type: 'addDevice' })}
-        onCreateLink={() => setPanelContent({ type: 'create-link' })}
-        onAlerts={() => setPanelContent({ type: 'alerts' })}
-        onToggleEditMode={() => setEditMode((m) => !m)}
-        editMode={editMode}
-        alertCount={runtimeSummary.alertCount}
-      />
+      <button
+        type="button"
+        aria-label={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
+        title={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
+        aria-pressed={effectiveChromeHidden}
+        onClick={handleToggleChrome}
+        className="topology-glass topology-floating-shadow absolute right-4 top-4 z-[70] flex h-11 w-11 items-center justify-center rounded-[16px] text-on-bg-secondary transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      >
+        <MaterialIcon name={effectiveChromeHidden ? 'close_fullscreen' : 'open_in_full'} />
+      </button>
+      {!effectiveChromeHidden && showSearch && (
+        <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />
+      )}
+      {!effectiveChromeHidden && (
+        <Toolbar
+          onSearch={() => setShowSearch((s) => !s)}
+          onAddDevice={() => setPanelContent({ type: 'addDevice' })}
+          onCreateLink={() => setPanelContent({ type: 'create-link' })}
+          onAlerts={() => setPanelContent({ type: 'alerts' })}
+          onToggleEditMode={() => setEditMode((m) => !m)}
+          editMode={editMode}
+          alertCount={runtimeSummary.alertCount}
+        />
+      )}
       {deviceMenu &&
         (() => {
           const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
@@ -992,7 +1140,7 @@ export default function Canvas({
         })()}
 
       <SidePanel
-        open={!!panelContent}
+        open={!effectiveChromeHidden && !!panelContent}
         onClose={() => setPanelContent(null)}
         title={getPanelTitle()}
         testId={getCanvasDetailDeviceId(panelContent) !== null ? 'device-detail-panel' : undefined}
@@ -1020,7 +1168,10 @@ export default function Canvas({
         />
       </SidePanel>
 
-      <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+      <ShortcutHelp
+        open={!effectiveChromeHidden && showShortcuts}
+        onClose={() => setShowShortcuts(false)}
+      />
       <CanvasOverlays
         editMode={editMode}
         reconnecting={reconnecting}
@@ -1053,26 +1204,25 @@ export default function Canvas({
         </div>
       )}
 
-      <ZoomControls
-        onZoomIn={() => {
-          void reactFlow.zoomIn({ duration: 200 });
-        }}
-        onZoomOut={() => {
-          void reactFlow.zoomOut({ duration: 200 });
-        }}
-        onFitView={() => {
-          void reactFlow.fitView({
-            padding: topologyFitViewPadding,
-            duration: 280,
-          });
-          recordCanvasDiagnosticEvent({
-            level: 'debug',
-            source: 'reactflow',
-            event: 'reactflow.fit_view',
-            message: 'React Flow fitView requested from zoom controls',
-          });
-        }}
-      />
+      {!effectiveChromeHidden && (
+        <ZoomControls
+          onZoomIn={() => {
+            void reactFlow.zoomIn({ duration: 200 });
+          }}
+          onZoomOut={() => {
+            void reactFlow.zoomOut({ duration: 200 });
+          }}
+          onFitView={() => {
+            fitTopologyView();
+            recordCanvasDiagnosticEvent({
+              level: 'debug',
+              source: 'reactflow',
+              event: 'reactflow.fit_view',
+              message: 'React Flow fitView requested from zoom controls',
+            });
+          }}
+        />
+      )}
       <CanvasDiagnosticsPanel
         open={diagnosticsVisible}
         onClose={() => {
@@ -1082,7 +1232,7 @@ export default function Canvas({
         onForceRefresh={() => window.__THEIA_CANVAS_FORCE_REFRESH__?.()}
         onFitView={() => {
           void reactFlow.fitView({
-            padding: topologyFitViewPadding,
+            padding: currentTopologyFitViewPadding,
             duration: 280,
           });
           recordCanvasDiagnosticEvent({
@@ -1155,19 +1305,19 @@ export default function Canvas({
         minZoom={0.1}
         maxZoom={2}
         fitView
-        fitViewOptions={{ padding: topologyFitViewPadding }}
+        fitViewOptions={{ padding: currentTopologyFitViewPadding }}
         onlyRenderVisibleElements
         nodesDraggable={editMode}
         panOnDrag
         zoomOnScroll
         zoomOnDoubleClick={false}
         connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 10 }}
-        proOptions={{ hideAttribution: false }}
+        proOptions={{ hideAttribution: true }}
         className="bg-transparent"
       >
         <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
         <LinkLabelLayer />
-        <TopologyMiniMap />
+        {!effectiveChromeHidden && <TopologyMiniMap />}
       </ReactFlow>
     </div>
   );

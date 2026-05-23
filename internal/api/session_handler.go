@@ -57,7 +57,7 @@ type safeUserResponse struct {
 	Permissions        []string `json:"permissions"`
 }
 
-// ServeHTTP handles /api/v1/auth/* and the read-only legacy /api/v1/session alias.
+// ServeHTTP handles /api/v1/auth/* and read-only legacy session aliases.
 func (h *AuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/v1/auth/login":
@@ -73,6 +73,12 @@ func (h *AuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleLogout(w, r)
 	case "/api/v1/auth/me":
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleMe(w, r)
+	case "/api/v1/me":
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return

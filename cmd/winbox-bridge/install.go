@@ -111,19 +111,35 @@ func (i systemConnectorInstaller) loadCurrentConfig() (Config, error) {
 }
 
 func (i systemConnectorInstaller) ensureInstalledConfig(installedExecutable string) error {
+	targetConfig := installedConfigPathForExecutable(installedExecutable)
 	legacyConfig, err := i.configPath()
 	if err == nil {
-		if err := moveConfigFileIfNeeded(legacyConfig, installedConfigPathForExecutable(installedExecutable)); err != nil {
+		if err := installConfigFromLegacy(legacyConfig, targetConfig); err != nil {
 			return fmt.Errorf("install config: %w", err)
 		}
 	}
-	targetConfig := installedConfigPathForExecutable(installedExecutable)
 	if configFileValid(targetConfig) {
 		return nil
 	}
-	cfg, _ := i.loadCurrentConfig()
+	cfg, err := i.loadCurrentConfig()
+	if err != nil {
+		return fmt.Errorf("install config: load current config: %w", err)
+	}
 	if err := saveConfigTo(cfg, targetConfig); err != nil {
 		return fmt.Errorf("install config: %w", err)
+	}
+	return nil
+}
+
+func installConfigFromLegacy(source, target string) error {
+	if sameFilePath(source, target) || !fileExists(source) {
+		return nil
+	}
+	if !fileExists(target) {
+		return moveConfigFileIfNeeded(source, target)
+	}
+	if !configFileValid(target) && configFileValid(source) {
+		return replaceConfigFile(source, target)
 	}
 	return nil
 }
@@ -257,6 +273,54 @@ func moveConfigFileIfNeeded(source, target string) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		return err
+	}
+	if err := os.Remove(source); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func replaceConfigFile(source, target string) error {
+	if sameFilePath(source, target) || !fileExists(source) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	src, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".config-*")
+	if err != nil {
+		_ = src.Close()
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := io.Copy(tmp, src); err != nil {
+		_ = src.Close()
+		_ = tmp.Close()
+		return err
+	}
+	if err := src.Close(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if err := os.Rename(tmpPath, target); err != nil {
