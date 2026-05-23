@@ -450,10 +450,10 @@ describe('linkSemantics', () => {
     expect(alert).toMatchObject({ semanticState: 'warning', semanticPriority: 'alert' });
   });
 
-  it('uses enterprise NOC stroke widths with another two pixels of link weight', () => {
+  it('uses enterprise NOC stroke widths with another four pixels of link weight', () => {
     expect(resolveEdgeTone(undefined)).toMatchObject({
       semanticState: 'neutral',
-      width: 5.8,
+      width: 9.8,
     });
 
     expect(
@@ -465,7 +465,7 @@ describe('linkSemantics', () => {
       }),
     ).toMatchObject({
       semanticState: 'up',
-      width: 6.05,
+      width: 10.05,
     });
 
     expect(
@@ -477,7 +477,7 @@ describe('linkSemantics', () => {
       }),
     ).toMatchObject({
       semanticState: 'warning',
-      width: 6.35,
+      width: 10.35,
     });
 
     expect(
@@ -488,7 +488,7 @@ describe('linkSemantics', () => {
       }),
     ).toMatchObject({
       semanticState: 'critical',
-      width: 6.7,
+      width: 10.7,
     });
   });
 });

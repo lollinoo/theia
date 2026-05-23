@@ -247,7 +247,7 @@
 .react-flow {
   --xy-background-pattern-dots-color-default: var(--nt-edge-muted);
   --xy-edge-stroke-default: var(--nt-edge-default);
-  --xy-edge-stroke-width-default: 4;
+  --xy-edge-stroke-width-default: 8;
   --xy-node-background-color-default: var(--nt-surface);
   --xy-node-border-default: 1px solid var(--nt-outline);
   --xy-node-color-default: var(--nt-text-primary);

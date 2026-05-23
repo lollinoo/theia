@@ -444,7 +444,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   ) {
     return {
       color: 'var(--color-edge-critical)',
-      width: 6.7,
+      width: 10.7,
       haloColor: 'var(--color-edge-critical)',
       labelClassName: 'border-status-down/35 text-status-down',
       semanticState: 'critical',
@@ -465,7 +465,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   ) {
     return {
       color: 'var(--color-edge-warning)',
-      width: 6.35,
+      width: 10.35,
       haloColor: 'var(--color-edge-warning)',
       labelClassName: 'border-warning/35 text-warning',
       semanticState: 'warning',
@@ -475,7 +475,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   if (healthyPhysicalLink || healthyInertVirtualLink) {
     return {
       color: 'var(--color-status-up)',
-      width: 6.05,
+      width: 10.05,
       haloColor: data?.areaColor ?? 'var(--color-edge-active)',
       labelClassName: 'border-status-up/35 text-status-up',
       semanticState: 'up',
@@ -485,7 +485,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   if (inertVirtualLink && utilization !== null) {
     return {
       color: 'var(--color-status-up)',
-      width: 6.05,
+      width: 10.05,
       haloColor: data?.areaColor ?? 'var(--color-edge-active)',
       labelClassName: 'border-status-up/35 text-status-up',
       semanticState: 'up',
@@ -494,7 +494,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
 
   return {
     color: 'var(--color-edge-default)',
-    width: 5.8,
+    width: 9.8,
     haloColor: data?.areaColor ?? 'var(--color-edge-active)',
     labelClassName: 'border-outline text-on-bg-secondary',
     semanticState: 'neutral',
