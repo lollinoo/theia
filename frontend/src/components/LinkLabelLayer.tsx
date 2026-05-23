@@ -14,7 +14,9 @@ function LinkLabelStack({ label }: { label: RegisteredLinkLabel }) {
   return (
     <div
       data-testid={`${label.edgeId}-badge-stack`}
-      className={`topology-render-contained pointer-events-none absolute top-0 left-0 z-10 flex flex-col items-center gap-1.5 ${
+      data-link-edge-state={presentation.semanticState}
+      data-link-badge-priority={presentation.semanticPriority}
+      className={`topology-link-badge-stack topology-render-contained pointer-events-none absolute top-0 left-0 z-10 flex flex-col items-center gap-1.5 ${
         label.interactive ? 'transition-none' : 'transition-[opacity,transform] duration-150'
       }`}
       style={{
@@ -33,7 +35,7 @@ function LinkLabelStack({ label }: { label: RegisteredLinkLabel }) {
           } ${badge.className}`}
           style={badge.style}
         >
-          <span>{badge.text}</span>
+          <span data-testid={`${edgeId}-badge-${badge.key}-text`}>{badge.text}</span>
           {badge.warningIndicator ? (
             <span
               data-testid={`${edgeId}-badge-${badge.key}-warning`}

@@ -35,6 +35,8 @@ describe('LinkLabelLayer', () => {
             showRate: true,
             showThroughput: true,
           },
+          semanticState: 'up',
+          semanticPriority: 'normal',
           items: [
             {
               key: 'rate',
@@ -77,6 +79,8 @@ describe('LinkLabelLayer', () => {
             showRate: true,
             showThroughput: false,
           },
+          semanticState: 'warning',
+          semanticPriority: 'alert',
           items: [
             {
               key: 'rate',
@@ -117,6 +121,8 @@ describe('LinkLabelLayer', () => {
             showRate: true,
             showThroughput: false,
           },
+          semanticState: 'neutral',
+          semanticPriority: 'normal',
           items: [
             {
               key: 'rate',
@@ -135,5 +141,100 @@ describe('LinkLabelLayer', () => {
     });
 
     expect(screen.queryByTestId('edge-removed-badge-stack')).not.toBeInTheDocument();
+  });
+
+  it('renders semantic zoom gating attributes and hideable badge text spans', () => {
+    render(<LinkLabelLayer />);
+
+    act(() => {
+      registerLinkLabel({
+        edgeId: 'edge-semantic',
+        interactive: false,
+        presentation: {
+          anchor: { x: 8, y: 16 },
+          opacity: 1,
+          scale: 1,
+          visibility: {
+            zoomBand: 'medium',
+            showRate: true,
+            showThroughput: false,
+          },
+          semanticState: 'critical',
+          semanticPriority: 'alert',
+          items: [
+            {
+              key: 'rate',
+              text: '100 Mbps',
+              className: 'border-status-down/35 text-status-down',
+              warningIndicator: {
+                text: '!',
+                title: 'Endpoint down',
+                className: 'border-warning/45 bg-warning/12 text-warning',
+              },
+            },
+          ],
+        },
+      });
+    });
+
+    const stack = screen.getByTestId('edge-semantic-badge-stack');
+    expect(stack).toHaveClass('topology-link-badge-stack');
+    expect(stack).toHaveAttribute('data-link-edge-state', 'critical');
+    expect(stack).toHaveAttribute('data-link-badge-priority', 'alert');
+    expect(screen.getByTestId('edge-semantic-badge-rate-text')).toHaveTextContent('100 Mbps');
+    expect(screen.getByTestId('edge-semantic-badge-rate-warning')).toHaveTextContent('!');
+  });
+
+  it('updates badge gating attributes when only semantic priority changes', () => {
+    const presentation = {
+      anchor: { x: 8, y: 16 },
+      opacity: 0.5,
+      scale: 1,
+      visibility: {
+        zoomBand: 'medium' as const,
+        showRate: true,
+        showThroughput: false,
+      },
+      semanticState: 'up' as const,
+      semanticPriority: 'normal' as const,
+      items: [
+        {
+          key: 'rate',
+          text: '1 Gbps',
+          className: 'border-status-up/35 text-status-up',
+        },
+      ],
+    };
+
+    render(<LinkLabelLayer />);
+
+    act(() => {
+      registerLinkLabel({
+        edgeId: 'edge-priority',
+        interactive: false,
+        presentation,
+      });
+    });
+
+    expect(screen.getByTestId('edge-priority-badge-stack')).toHaveAttribute(
+      'data-link-badge-priority',
+      'normal',
+    );
+
+    act(() => {
+      registerLinkLabel({
+        edgeId: 'edge-priority',
+        interactive: false,
+        presentation: {
+          ...presentation,
+          semanticPriority: 'active',
+        },
+      });
+    });
+
+    expect(screen.getByTestId('edge-priority-badge-stack')).toHaveAttribute(
+      'data-link-badge-priority',
+      'active',
+    );
   });
 });

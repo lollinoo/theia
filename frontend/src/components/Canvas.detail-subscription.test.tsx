@@ -39,7 +39,9 @@ const testState = vi.hoisted(() => ({
 }));
 
 const apiMocks = vi.hoisted(() => ({
+  createBridgeLaunchRequest: vi.fn(),
   fetchSettings: vi.fn(),
+  fetchUserSettings: vi.fn(),
 }));
 
 const xyflowMocks = vi.hoisted(() => ({
@@ -164,6 +166,9 @@ describe('Canvas detail subscription', () => {
   beforeEach(() => {
     apiMocks.fetchSettings.mockReset();
     apiMocks.fetchSettings.mockResolvedValue({});
+    apiMocks.fetchUserSettings.mockReset();
+    apiMocks.fetchUserSettings.mockResolvedValue({ preferences: { bridge_port: 1337 } });
+    apiMocks.createBridgeLaunchRequest.mockReset();
     xyflowMocks.MiniMap.mockClear();
   });
 

@@ -1,4 +1,4 @@
-import { type APIRequestContext, expect, test } from '@playwright/test';
+import { type APIRequestContext, type Page, expect, test } from '@playwright/test';
 
 const TEST_MAP_NAME = 'Backbone e2e';
 const DUPLICATE_TEST_MAP_NAME = `Copy of ${TEST_MAP_NAME}`;
@@ -20,23 +20,36 @@ async function getTestMaps(request: APIRequestContext) {
   );
 }
 
-async function cleanupTestMaps(request: APIRequestContext) {
-  const maps = await getTestMaps(request);
+async function csrfHeaders(page: Page) {
+  const cookies = await page.context().cookies('http://127.0.0.1');
+  const csrfCookie = cookies.find((cookie) => cookie.name === 'theia_csrf');
+  expect(csrfCookie?.value).toBeTruthy();
+  return { 'X-CSRF-Token': csrfCookie?.value ?? '' };
+}
+
+async function cleanupTestMaps(page: Page) {
+  const maps = await getTestMaps(page.request);
+  const headers = await csrfHeaders(page);
 
   for (const map of maps) {
-    const response = await request.delete(`/api/v1/canvas/maps/${encodeURIComponent(map.id)}`);
+    const response = await page.request.delete(
+      `/api/v1/canvas/maps/${encodeURIComponent(map.id)}`,
+      {
+        headers,
+      },
+    );
     expect(response.ok()).toBeTruthy();
   }
 
-  await expect.poll(async () => getTestMaps(request)).toEqual([]);
+  await expect.poll(async () => getTestMaps(page.request)).toEqual([]);
 }
 
 test.beforeEach(async ({ page }) => {
-  await cleanupTestMaps(page.request);
+  await cleanupTestMaps(page);
 });
 
 test.afterEach(async ({ page }) => {
-  await cleanupTestMaps(page.request);
+  await cleanupTestMaps(page);
 });
 
 test('creates, opens, duplicates, and deletes a saved map', async ({ page }) => {

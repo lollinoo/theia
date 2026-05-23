@@ -22,6 +22,8 @@ function serializeLabel(label: RegisteredLinkLabel): string {
     opacity: label.presentation.opacity,
     scale: label.presentation.scale,
     visibility: label.presentation.visibility,
+    semanticState: label.presentation.semanticState,
+    semanticPriority: label.presentation.semanticPriority,
     items: label.presentation.items,
   });
 }

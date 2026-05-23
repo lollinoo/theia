@@ -108,6 +108,7 @@ const testState = vi.hoisted(() => ({
   canvasDataParams: null as null | { mapId: string | null; mapName?: string },
   canvasPanelsProps: {} as Record<string, unknown>,
   reactFlowProps: {} as Record<string, unknown>,
+  reactFlowRenderCount: 0,
 }));
 
 vi.mock('@xyflow/react', () => ({
@@ -138,6 +139,7 @@ vi.mock('@xyflow/react', () => ({
     onNodeDragStop?: (event: unknown, node: DeviceNode) => void;
     onNodesChange?: (changes: unknown[]) => void;
   }) => {
+    testState.reactFlowRenderCount += 1;
     testState.displayedNodes = nodes;
     testState.reactFlowProps = {
       onlyRenderVisibleElements,
@@ -151,8 +153,17 @@ vi.mock('@xyflow/react', () => ({
         <button type="button" onClick={() => onMoveEnd?.()}>
           End pan
         </button>
-        <button type="button" onClick={() => onMove?.({}, { zoom: 0.6 })}>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 0.3 })}>
           Move low zoom
+        </button>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 0.2 })}>
+          Move overview zoom
+        </button>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 0.45 })}>
+          Move summary zoom
+        </button>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 1 })}>
+          Move detail zoom
         </button>
         <button type="button" onClick={() => onConnectStart?.()}>
           Start connect
@@ -365,6 +376,7 @@ describe('Canvas drag state ownership', () => {
     testState.canvasDataParams = null;
     testState.canvasPanelsProps = {};
     testState.reactFlowProps = {};
+    testState.reactFlowRenderCount = 0;
   });
 
   it('keeps React Flow internals mounted while the canvas is hidden', () => {
@@ -553,6 +565,64 @@ describe('Canvas drag state ownership', () => {
 
     expect(root.style.getPropertyValue('--theia-device-node-readability-scale')).toBe('1.12');
     expect(root.style.getPropertyValue('--theia-link-badge-readability-scale')).toBe('1.2');
+  });
+
+  it('stores the current semantic zoom band on the canvas root from viewport changes', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[
+          { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+          { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+        ]}
+      />,
+    );
+
+    const root = screen.getByTestId('topology-canvas-root');
+
+    expect(root).toHaveAttribute('data-topology-zoom-band', 'detail');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move overview zoom' }));
+    expect(root).toHaveAttribute('data-topology-zoom-band', 'overview');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move low zoom' }));
+    expect(root).toHaveAttribute('data-topology-zoom-band', 'compact');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move summary zoom' }));
+    expect(root).toHaveAttribute('data-topology-zoom-band', 'summary');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move detail zoom' }));
+    expect(root).toHaveAttribute('data-topology-zoom-band', 'detail');
+  });
+
+  it('updates semantic zoom DOM state without forcing React Flow to render again', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[
+          { id: 'area-1', name: 'Area 1', color: '#00aaff' },
+          { id: 'area-2', name: 'Area 2', color: '#ffaa00' },
+        ]}
+      />,
+    );
+
+    const root = screen.getByTestId('topology-canvas-root');
+    const renderCount = testState.reactFlowRenderCount;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move overview zoom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move low zoom' }));
+
+    expect(root).toHaveAttribute('data-topology-zoom-band', 'compact');
+    expect(root.style.getPropertyValue('--theia-device-node-readability-scale')).toBe('1.12');
+    expect(testState.reactFlowRenderCount).toBe(renderCount);
   });
 
   it('preserves unchanged area-colored display node references when one canonical node changes', () => {
