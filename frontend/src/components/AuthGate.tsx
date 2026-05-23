@@ -14,7 +14,7 @@ function messageFromError(error: unknown, fallback: string): string {
 export function AuthGate({ children }: AuthGateProps) {
   const { status, user, error: sessionError, login, changePassword } = useAuth();
   const [mode, setMode] = useState<'login' | 'reset'>('login');
-  const [identifier, setIdentifier] = useState('administrator');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
