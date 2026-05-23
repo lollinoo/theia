@@ -5,15 +5,15 @@ export function resolveTopologyZoomBand(zoom: number): TopologyZoomBand {
     return 'detail';
   }
 
-  if (zoom < 0.45) {
+  if (zoom < 0.25) {
     return 'overview';
   }
 
-  if (zoom < 0.65) {
+  if (zoom < 0.35) {
     return 'compact';
   }
 
-  if (zoom < 0.85) {
+  if (zoom < 0.55) {
     return 'summary';
   }
 

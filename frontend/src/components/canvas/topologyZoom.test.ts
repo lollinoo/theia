@@ -4,12 +4,12 @@ import { resolveTopologyZoomBand } from './topologyZoom';
 describe('topologyZoom', () => {
   it('resolves semantic zoom bands at the configured thresholds', () => {
     expect(resolveTopologyZoomBand(0.1)).toBe('overview');
-    expect(resolveTopologyZoomBand(0.44)).toBe('overview');
-    expect(resolveTopologyZoomBand(0.45)).toBe('compact');
-    expect(resolveTopologyZoomBand(0.64)).toBe('compact');
-    expect(resolveTopologyZoomBand(0.65)).toBe('summary');
-    expect(resolveTopologyZoomBand(0.84)).toBe('summary');
-    expect(resolveTopologyZoomBand(0.85)).toBe('detail');
+    expect(resolveTopologyZoomBand(0.24)).toBe('overview');
+    expect(resolveTopologyZoomBand(0.25)).toBe('compact');
+    expect(resolveTopologyZoomBand(0.34)).toBe('compact');
+    expect(resolveTopologyZoomBand(0.35)).toBe('summary');
+    expect(resolveTopologyZoomBand(0.54)).toBe('summary');
+    expect(resolveTopologyZoomBand(0.55)).toBe('detail');
     expect(resolveTopologyZoomBand(1.5)).toBe('detail');
   });
 

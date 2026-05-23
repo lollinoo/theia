@@ -153,13 +153,13 @@ vi.mock('@xyflow/react', () => ({
         <button type="button" onClick={() => onMoveEnd?.()}>
           End pan
         </button>
-        <button type="button" onClick={() => onMove?.({}, { zoom: 0.6 })}>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 0.3 })}>
           Move low zoom
         </button>
-        <button type="button" onClick={() => onMove?.({}, { zoom: 0.3 })}>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 0.2 })}>
           Move overview zoom
         </button>
-        <button type="button" onClick={() => onMove?.({}, { zoom: 0.8 })}>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 0.45 })}>
           Move summary zoom
         </button>
         <button type="button" onClick={() => onMove?.({}, { zoom: 1 })}>
