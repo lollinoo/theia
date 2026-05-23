@@ -174,7 +174,7 @@ describe('DeviceCard zoom readability', () => {
       'data-topology-node-variant',
       'physical',
     );
-    expect(screen.getByTestId('device-node-card')).toHaveClass('min-w-[268px]', 'max-w-[340px]');
+    expect(screen.getByTestId('device-node-card')).toHaveClass('min-w-[268px]', 'max-w-[355px]');
   });
 
   it('uses the same low-zoom identity scale and wrap hook for virtual cards', () => {
@@ -202,7 +202,7 @@ describe('DeviceCard zoom readability', () => {
       'data-topology-node-variant',
       'virtual-monitorable',
     );
-    expect(screen.getByTestId('device-node-card')).toHaveClass('min-w-[292px]', 'max-w-[400px]');
+    expect(screen.getByTestId('device-node-card')).toHaveClass('min-w-[292px]', 'max-w-[415px]');
   });
 
   it('keeps a low-zoom status dot available for unmonitored virtual cards', () => {
@@ -224,7 +224,7 @@ describe('DeviceCard zoom readability', () => {
       'data-topology-node-variant',
       'virtual-unmonitored',
     );
-    expect(screen.getByTestId('device-node-card')).toHaveClass('min-w-[242px]', 'max-w-[320px]');
+    expect(screen.getByTestId('device-node-card')).toHaveClass('min-w-[242px]', 'max-w-[335px]');
     expect(screen.queryByTestId('virtual-node-status-badge')).not.toBeInTheDocument();
     expect(fallbackStatus).toHaveClass(
       'topology-semantic-low-zoom-only',
@@ -295,8 +295,8 @@ describe('DeviceCard zoom readability', () => {
     expect(css).toContain('.topology-node-card[data-topology-node-variant="virtual-monitorable"]');
     expect(css).toContain('.topology-node-card[data-topology-node-variant="virtual-unmonitored"]');
     expect(css).toContain('height: 140px;');
-    expect(css).toContain('height: 118px;');
-    expect(css).toContain('height: 92px;');
+    expect(css).toContain('height: 128px;');
+    expect(css).toContain('height: 102px;');
     expect(css).toContain(
       '[data-topology-zoom-band="overview"] .topology-node-card .topology-semantic-header',
     );

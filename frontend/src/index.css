@@ -416,7 +416,7 @@
     .topology-node-card[data-topology-node-variant="virtual-monitorable"],
   [data-topology-zoom-band="compact"]
     .topology-node-card[data-topology-node-variant="virtual-monitorable"] {
-    height: 118px;
+    height: 128px;
     overflow: hidden;
   }
 
@@ -424,7 +424,7 @@
     .topology-node-card[data-topology-node-variant="virtual-unmonitored"],
   [data-topology-zoom-band="compact"]
     .topology-node-card[data-topology-node-variant="virtual-unmonitored"] {
-    height: 92px;
+    height: 102px;
     overflow: hidden;
   }
 

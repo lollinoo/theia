@@ -579,11 +579,11 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       ? resolveDeviceOperationalReadouts(runtimeDevice, metrics, monitoringState)
       : null;
   const cardShapeClass = !isVirtual
-    ? 'min-h-[140px] min-w-[268px] max-w-[340px] rounded-[20px]'
+    ? 'min-h-[140px] min-w-[268px] max-w-[355px] rounded-[20px]'
     : isVirtualMonitorable
-      ? 'min-h-[118px] min-w-[292px] max-w-[400px] rounded-[24px]'
-      : 'min-h-[92px] min-w-[242px] max-w-[320px] rounded-[24px]';
-  const virtualCapsuleHeightClass = isVirtualMonitorable ? 'min-h-[116px]' : 'min-h-[90px]';
+      ? 'min-h-[128px] min-w-[292px] max-w-[415px] rounded-[24px]'
+      : 'min-h-[102px] min-w-[242px] max-w-[335px] rounded-[24px]';
+  const virtualCapsuleHeightClass = isVirtualMonitorable ? 'min-h-[126px]' : 'min-h-[100px]';
   const virtualCapsulePaddingClass = isVirtualMonitorable
     ? 'py-3 pl-3.5 pr-4'
     : 'py-2.5 pl-3.5 pr-3.5';
