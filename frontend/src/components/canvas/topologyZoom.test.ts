@@ -6,10 +6,10 @@ describe('topologyZoom', () => {
     expect(resolveTopologyZoomBand(0.1)).toBe('overview');
     expect(resolveTopologyZoomBand(0.44)).toBe('overview');
     expect(resolveTopologyZoomBand(0.45)).toBe('compact');
-    expect(resolveTopologyZoomBand(0.74)).toBe('compact');
-    expect(resolveTopologyZoomBand(0.75)).toBe('summary');
-    expect(resolveTopologyZoomBand(0.94)).toBe('summary');
-    expect(resolveTopologyZoomBand(0.95)).toBe('detail');
+    expect(resolveTopologyZoomBand(0.64)).toBe('compact');
+    expect(resolveTopologyZoomBand(0.65)).toBe('summary');
+    expect(resolveTopologyZoomBand(0.84)).toBe('summary');
+    expect(resolveTopologyZoomBand(0.85)).toBe('detail');
     expect(resolveTopologyZoomBand(1.5)).toBe('detail');
   });
 
