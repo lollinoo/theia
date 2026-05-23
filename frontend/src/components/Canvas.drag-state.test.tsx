@@ -157,7 +157,10 @@ vi.mock('@xyflow/react', () => ({
           End pan
         </button>
         <button type="button" onClick={() => onMove?.({}, { zoom: 0.3 })}>
-          Move low zoom
+          Move fit overview zoom
+        </button>
+        <button type="button" onClick={() => onMove?.({}, { zoom: 0.4 })}>
+          Move compact zoom
         </button>
         <button type="button" onClick={() => onMove?.({}, { zoom: 0.2 })}>
           Move overview zoom
@@ -579,7 +582,7 @@ describe('Canvas drag state ownership', () => {
     expect(root.style.getPropertyValue('--theia-device-node-readability-scale')).toBe('1');
     expect(root.style.getPropertyValue('--theia-link-badge-readability-scale')).toBe('1');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Move low zoom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move fit overview zoom' }));
 
     expect(root.style.getPropertyValue('--theia-device-node-readability-scale')).toBe('1.12');
     expect(root.style.getPropertyValue('--theia-link-badge-readability-scale')).toBe('1.2');
@@ -607,7 +610,10 @@ describe('Canvas drag state ownership', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move overview zoom' }));
     expect(root).toHaveAttribute('data-topology-zoom-band', 'overview');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Move low zoom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move fit overview zoom' }));
+    expect(root).toHaveAttribute('data-topology-zoom-band', 'overview');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move compact zoom' }));
     expect(root).toHaveAttribute('data-topology-zoom-band', 'compact');
 
     fireEvent.click(screen.getByRole('button', { name: 'Move summary zoom' }));
@@ -636,7 +642,7 @@ describe('Canvas drag state ownership', () => {
     const renderCount = testState.reactFlowRenderCount;
 
     fireEvent.click(screen.getByRole('button', { name: 'Move overview zoom' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Move low zoom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move compact zoom' }));
 
     expect(root).toHaveAttribute('data-topology-zoom-band', 'compact');
     expect(root.style.getPropertyValue('--theia-device-node-readability-scale')).toBe('1.12');
