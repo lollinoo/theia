@@ -783,6 +783,7 @@ func isAuthRoute(path string) bool {
 	case "/api/v1/auth/login",
 		"/api/v1/auth/logout",
 		"/api/v1/auth/me",
+		"/api/v1/me",
 		"/api/v1/auth/password/change",
 		"/api/v1/auth/password/reset",
 		"/api/v1/session":

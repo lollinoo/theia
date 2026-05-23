@@ -490,6 +490,27 @@ func TestAuthMeReturnsUnauthenticatedWithoutSession(t *testing.T) {
 	}
 }
 
+func TestLegacyAuthMeAliasReturnsUnauthenticatedWithoutSession(t *testing.T) {
+	router := newAuthTestRouter(newFakeAPIAuthProvider())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Authenticated {
+		t.Fatalf("authenticated = true, want false")
+	}
+}
+
 func TestCSRFRequiredForMutatingProtectedRequests(t *testing.T) {
 	auth := newFakeAPIAuthProvider()
 	auth.setSession(
