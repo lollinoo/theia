@@ -39,6 +39,11 @@ export type ActiveView = 'hub' | 'canvas' | 'dashboard' | 'admin' | 'settings';
 const runtimeUpdatePauseIdleDelayMs = 1500;
 const enableSavedMaps = true;
 const viewLayerBaseClass = 'absolute inset-0 h-full w-full';
+const canvasChromeHiddenStorageKey = 'theia.canvas.chromeHidden';
+
+function initialCanvasChromeHidden(): boolean {
+  return window.localStorage.getItem(canvasChromeHiddenStorageKey) === 'true';
+}
 
 function viewLayerClass(active: boolean, className = ''): string {
   const activeClass = active
@@ -120,6 +125,7 @@ function App() {
   const [fitViewRevision, setFitViewRevision] = useState(0);
   const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
+  const [canvasChromeHidden, setCanvasChromeHidden] = useState(initialCanvasChromeHidden);
   const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
   const { hasPermission, logout, user } = useAuth();
   const canViewAdmin = hasPermission('admin:dashboard:read');
@@ -209,6 +215,11 @@ function App() {
 
   const requestCanvasFitView = useCallback(() => {
     setFitViewRevision((revision) => revision + 1);
+  }, []);
+
+  const handleCanvasChromeHiddenChange = useCallback((hidden: boolean) => {
+    setCanvasChromeHidden(hidden);
+    window.localStorage.setItem(canvasChromeHiddenStorageKey, String(hidden));
   }, []);
 
   const openCanvasView = useCallback(() => {
@@ -519,26 +530,28 @@ function App() {
   return (
     <ThemeProvider>
       <div className="relative h-screen w-screen overflow-hidden bg-bg text-on-bg">
-        <NavigationPill
-          activeView={activeView}
-          selectedAreaId={selectedAreaId}
-          selectedMapId={selectedMapId}
-          selectedMapName={selectedMapName}
-          maps={canvasMaps}
-          areas={navigationAreas}
-          canViewAdmin={canViewAdmin}
-          canViewSettings={canOpenUserSettings}
-          userLabel={user?.display_name || user?.username || 'User'}
-          onViewChange={handleViewChange}
-          onAreaSelect={handleNavigationAreaSelect}
-          onMapSelect={handleNavigationMapSelect}
-          onManageMaps={() => {
-            setActiveView('hub');
-          }}
-          onLogout={() => {
-            void logout();
-          }}
-        />
+        {!(activeView === 'canvas' && canvasChromeHidden) && (
+          <NavigationPill
+            activeView={activeView}
+            selectedAreaId={selectedAreaId}
+            selectedMapId={selectedMapId}
+            selectedMapName={selectedMapName}
+            maps={canvasMaps}
+            areas={navigationAreas}
+            canViewAdmin={canViewAdmin}
+            canViewSettings={canOpenUserSettings}
+            userLabel={user?.display_name || user?.username || 'User'}
+            onViewChange={handleViewChange}
+            onAreaSelect={handleNavigationAreaSelect}
+            onMapSelect={handleNavigationMapSelect}
+            onManageMaps={() => {
+              setActiveView('hub');
+            }}
+            onLogout={() => {
+              void logout();
+            }}
+          />
+        )}
         {/* All views stay mounted; inactive ones keep dimensions for React Flow. */}
         <div
           {...viewLayerStateProps(activeView === 'hub')}
@@ -577,6 +590,7 @@ function App() {
             activeView={activeView}
             selectedAreaId={selectedAreaId}
             areas={navigationAreas}
+            compact={canvasChromeHidden}
           />
           {savedMapContextResolved ? (
             <ReactFlowProvider>
@@ -591,6 +605,7 @@ function App() {
                 visible={activeView === 'canvas'}
                 fitViewRevision={fitViewRevision}
                 topologyRefreshRevision={topologyRefreshRevision}
+                chromeHidden={canvasChromeHidden}
                 onDevicesChange={handleCanvasDevicesChange}
                 onLinksChange={handleCanvasLinksChange}
                 onAreaSelect={handleAreaFilterSelect}
@@ -598,6 +613,7 @@ function App() {
                 onTopologyLoadingChange={setCanvasTopologyLoading}
                 onDetailDeviceChange={setDetailDeviceId}
                 onInteractionActiveChange={setCanvasInteractionActive}
+                onChromeHiddenChange={handleCanvasChromeHiddenChange}
               />
             </ReactFlowProvider>
           ) : (

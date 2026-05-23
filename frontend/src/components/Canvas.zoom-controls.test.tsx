@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,16 +17,19 @@ const xyflowMocks = vi.hoisted(() => ({
   zoomIn: vi.fn(),
   zoomOut: vi.fn(),
   loadTopology: vi.fn(),
+  nodes: [] as unknown[],
+  devices: [] as unknown[],
+  MiniMap: vi.fn(() => <div data-testid="topology-minimap" />),
 }));
 
 vi.mock('@xyflow/react', () => ({
   ConnectionMode: { Loose: 'loose' },
   SelectionMode: { Partial: 'partial' },
   Background: () => null,
-  MiniMap: () => null,
+  MiniMap: xyflowMocks.MiniMap,
   ReactFlow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   applyEdgeChanges: (_changes: unknown, current: unknown) => current,
-  useNodesState: () => [[], vi.fn(), vi.fn()],
+  useNodesState: () => [xyflowMocks.nodes, vi.fn(), vi.fn()],
   useReactFlow: () => ({
     fitView: xyflowMocks.fitView,
     zoomIn: xyflowMocks.zoomIn,
@@ -45,25 +48,28 @@ vi.mock('./SearchOverlay', () => ({ default: () => null }));
 vi.mock('./ContextMenu', () => ({ ContextMenu: () => null }));
 vi.mock('./SidePanel', () => ({ SidePanel: () => null }));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
-vi.mock('./Toolbar', () => ({ Toolbar: () => null }));
+vi.mock('./Toolbar', () => ({ Toolbar: () => <div data-testid="topology-toolbar" /> }));
 vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
 vi.mock('./canvas/CanvasPanels', () => ({ CanvasPanels: () => null }));
-vi.mock('./canvas/CanvasOverlays', () => ({ CanvasOverlays: () => null }));
+vi.mock('./canvas/CanvasOverlays', () => ({
+  CanvasOverlays: () => <div data-testid="canvas-overlays" />,
+}));
 vi.mock('./canvas/detailSubscription', () => ({ getCanvasDetailDeviceId: () => null }));
 vi.mock('./canvas/useAreaFilteredTopology', () => ({
   useAreaFilteredTopology: () => ({
-    filteredDevices: [],
+    filteredDevices: xyflowMocks.devices,
     filteredLinks: [],
     ghostDevices: [],
   }),
 }));
 vi.mock('./canvas/useCanvasData', () => ({
   useCanvasData: () => ({
-    devices: [],
+    devices: xyflowMocks.devices,
     setDevices: vi.fn(),
     topologyLinks: [],
     loading: false,
     error: null,
+    renderedMapKey: 'default:',
     loadTopology: xyflowMocks.loadTopology,
     runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
     grafanaUrlRef: { current: '' },
@@ -96,11 +102,15 @@ vi.mock('../contexts/ThemeContext', () => ({
 describe('Canvas zoom controls', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    xyflowMocks.nodes = [];
+    xyflowMocks.devices = [];
+    xyflowMocks.fitView.mockClear();
+    xyflowMocks.MiniMap.mockClear();
     xyflowMocks.loadTopology.mockReset();
     xyflowMocks.loadTopology.mockResolvedValue(undefined);
   });
 
-  it('fits the topology with a tight viewport padding from the bottom-left control', () => {
+  it('fits the topology with a tight viewport padding from the bottom-left control', async () => {
     xyflowMocks.fitView.mockClear();
 
     render(
@@ -114,13 +124,14 @@ describe('Canvas zoom controls', () => {
       />,
     );
 
-    const fitButton = screen.getAllByRole('button')[2];
-    fireEvent.click(fitButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Fit view' }));
 
-    expect(xyflowMocks.fitView).toHaveBeenCalledWith({
-      padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
-      duration: 280,
-    });
+    await waitFor(() =>
+      expect(xyflowMocks.fitView).toHaveBeenCalledWith({
+        padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      }),
+    );
   });
 
   it('opens diagnostics with the physical D key even when Ctrl+Alt changes event.key', () => {
@@ -175,5 +186,55 @@ describe('Canvas zoom controls', () => {
     );
 
     expect(xyflowMocks.loadTopology).toHaveBeenCalledWith(true);
+  });
+
+  it('hides canvas chrome and fits the viewport from the focus toggle', async () => {
+    const onChromeHiddenChange = vi.fn();
+
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        chromeHidden={false}
+        onChromeHiddenChange={onChromeHiddenChange}
+      />,
+    );
+
+    expect(screen.getByTestId('topology-toolbar')).toBeInTheDocument();
+    expect(screen.getByTestId('canvas-overlays')).toBeInTheDocument();
+    expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /hide canvas controls/i }));
+
+    expect(onChromeHiddenChange).toHaveBeenCalledWith(true);
+    await waitFor(() =>
+      expect(xyflowMocks.fitView).toHaveBeenCalledWith({
+        padding: 0.02,
+        duration: 280,
+      }),
+    );
+  });
+
+  it('keeps the focus toggle visible when canvas chrome is hidden', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        chromeHidden
+      />,
+    );
+
+    expect(screen.queryByTestId('topology-toolbar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-overlays')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /show canvas controls/i })).toBeInTheDocument();
   });
 });

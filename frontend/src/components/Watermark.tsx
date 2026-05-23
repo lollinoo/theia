@@ -5,11 +5,18 @@ interface WatermarkProps {
   activeView: ActiveView;
   selectedAreaId: string | null;
   areas: Area[];
+  compact?: boolean;
   hidden?: boolean;
 }
 
 /** Canvas-relative atmospheric watermark with contextual text. Only visible on canvas view. */
-export function Watermark({ activeView, selectedAreaId, areas, hidden = false }: WatermarkProps) {
+export function Watermark({
+  activeView,
+  selectedAreaId,
+  areas,
+  compact = false,
+  hidden = false,
+}: WatermarkProps) {
   if (hidden || activeView !== 'canvas') return null;
 
   const text = selectedAreaId
@@ -18,7 +25,11 @@ export function Watermark({ activeView, selectedAreaId, areas, hidden = false }:
 
   return (
     <div
-      className="absolute bottom-[calc(15.5rem+env(safe-area-inset-bottom))] right-4 z-10 pointer-events-none select-none sm:bottom-[184px]"
+      className={`absolute right-4 z-10 pointer-events-none select-none ${
+        compact
+          ? 'bottom-[calc(1rem+env(safe-area-inset-bottom))]'
+          : 'bottom-[calc(15.5rem+env(safe-area-inset-bottom))] sm:bottom-[184px]'
+      }`}
       aria-hidden="true"
     >
       <span

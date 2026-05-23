@@ -10,6 +10,7 @@ const subsetScript = readFileSync(
 const REQUIRED_TOPOLOGY_HUB_ICONS = [
   'add_location_alt',
   'check',
+  'close_fullscreen',
   'content_copy',
   'expand_less',
   'map',

@@ -68,9 +68,15 @@ vi.mock('@xyflow/react', () => ({
 }));
 
 vi.mock('./components/Watermark', () => ({
-  Watermark: (props: { hidden?: boolean }) => {
+  Watermark: (props: { compact?: boolean; hidden?: boolean }) => {
     watermarkPropsMock(props);
-    return <div data-testid="watermark" data-hidden={String(props.hidden ?? false)} />;
+    return (
+      <div
+        data-testid="watermark"
+        data-compact={String(props.compact ?? false)}
+        data-hidden={String(props.hidden ?? false)}
+      />
+    );
   },
 }));
 
@@ -153,6 +159,8 @@ vi.mock('./components/Canvas', () => ({
     selectedAreaId,
     fitViewRevision,
     topologyRefreshRevision,
+    chromeHidden,
+    onChromeHiddenChange,
     onDevicesChange,
     onLinksChange,
     onTopologyAreasChange,
@@ -163,6 +171,8 @@ vi.mock('./components/Canvas', () => ({
     selectedAreaId: string | null;
     fitViewRevision?: number;
     topologyRefreshRevision?: number;
+    chromeHidden?: boolean;
+    onChromeHiddenChange?: (hidden: boolean) => void;
     onDevicesChange: (devices: Device[]) => void;
     onLinksChange: (links: Link[]) => void;
     onTopologyAreasChange: (areas: Area[]) => void;
@@ -256,6 +266,10 @@ vi.mock('./components/Canvas', () => ({
         <span>{`area:${selectedAreaId ?? 'all'}`}</span>
         <span>{`fit:${fitViewRevision ?? 0}`}</span>
         <span>{`refresh:${topologyRefreshRevision ?? 0}`}</span>
+        <span>{`chrome:${chromeHidden ? 'hidden' : 'visible'}`}</span>
+        <button type="button" onClick={() => onChromeHiddenChange?.(!chromeHidden)}>
+          Toggle canvas chrome
+        </button>
         <button type="button" onClick={() => onInteractionActiveChange(true)}>
           Start interaction
         </button>
@@ -446,6 +460,7 @@ function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
 
 describe('App', () => {
   beforeEach(() => {
+    window.localStorage.clear();
     fetchAreasMock.mockReset();
     fetchCanvasMapsMock.mockReset();
     createCanvasMapMock.mockReset();
@@ -512,6 +527,28 @@ describe('App', () => {
       ),
     );
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:default-map-id:Default');
+  });
+
+  it('lets the canvas hide and restore the navigation pill while keeping a visible restore control', async () => {
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId('canvas')).toBeInTheDocument());
+
+    expect(screen.getByTestId('navigation-pill')).toBeInTheDocument();
+    expect(screen.getByTestId('canvas')).toHaveTextContent('chrome:visible');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle canvas chrome' }));
+
+    expect(screen.queryByTestId('navigation-pill')).not.toBeInTheDocument();
+    expect(screen.getByTestId('canvas')).toHaveTextContent('chrome:hidden');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('fit:0');
+    expect(screen.getByTestId('watermark')).toHaveAttribute('data-compact', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle canvas chrome' }));
+
+    expect(screen.getByTestId('navigation-pill')).toBeInTheDocument();
+    expect(screen.getByTestId('canvas')).toHaveTextContent('chrome:visible');
+    expect(screen.getByTestId('watermark')).toHaveAttribute('data-compact', 'false');
   });
 
   it('does not mount the legacy global canvas before saved maps resolve', async () => {

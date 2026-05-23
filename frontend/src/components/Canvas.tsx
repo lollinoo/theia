@@ -23,6 +23,7 @@ import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
+import { MaterialIcon } from './MaterialIcon';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
@@ -76,6 +77,7 @@ const canvasInteractionIdleDelayMs = 140;
 const deviceNodeReadabilityScaleProperty = '--theia-device-node-readability-scale';
 const linkBadgeReadabilityScaleProperty = '--theia-link-badge-readability-scale';
 const topologyZoomBandAttribute = 'data-topology-zoom-band';
+const topologyCleanViewFitPadding = 0.02;
 
 function topologyMinimapNodeColor(node: DeviceNode): string {
   const data = node.data;
@@ -153,6 +155,8 @@ interface CanvasProps {
   onTopologyLoadingChange?: (loading: boolean) => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
   onInteractionActiveChange?: (active: boolean) => void;
+  chromeHidden?: boolean;
+  onChromeHiddenChange?: (hidden: boolean) => void;
 }
 
 export default function Canvas({
@@ -173,6 +177,8 @@ export default function Canvas({
   onTopologyLoadingChange,
   onDetailDeviceChange,
   onInteractionActiveChange,
+  chromeHidden,
+  onChromeHiddenChange,
 }: CanvasProps) {
   const {
     nodes,
@@ -187,6 +193,7 @@ export default function Canvas({
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
+  const [internalChromeHidden, setInternalChromeHidden] = useState(false);
   const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const deviceNodeReadabilityScaleRef = useRef('1');
   const linkBadgeReadabilityScaleRef = useRef('1');
@@ -229,6 +236,7 @@ export default function Canvas({
     getPanelTitle,
   } = useCanvasMenus({ reactFlow });
   const selectedMapKey = mapId ?? '__default__';
+  const effectiveChromeHidden = chromeHidden ?? internalChromeHidden;
   const previousMapKeyRef = useRef<string | null>(null);
   const previousFitViewRevisionRef = useRef(fitViewRevision);
   const previousTopologyRefreshRevisionRef = useRef(topologyRefreshRevision);
@@ -238,6 +246,23 @@ export default function Canvas({
   }, [panelContent, onDetailDeviceChange]);
 
   useEffect(() => () => onDetailDeviceChange?.(null), [onDetailDeviceChange]);
+
+  useEffect(() => {
+    if (!effectiveChromeHidden) return;
+
+    setPanelContent(null);
+    setDeviceMenu(null);
+    setEdgeMenu(null);
+    setShowSearch(false);
+    setShowShortcuts(false);
+  }, [
+    effectiveChromeHidden,
+    setDeviceMenu,
+    setEdgeMenu,
+    setPanelContent,
+    setShowSearch,
+    setShowShortcuts,
+  ]);
 
   useEffect(() => {
     if (previousMapKeyRef.current === null) {
@@ -844,6 +869,60 @@ export default function Canvas({
     return grafanaUrlRef.current;
   }
 
+  const fitTopologyView = useCallback(
+    (padding = topologyFitViewPadding) => {
+      void reactFlow.fitView({
+        padding,
+        duration: 280,
+      });
+    },
+    [reactFlow],
+  );
+
+  const handleToggleChrome = useCallback(() => {
+    const nextHidden = !effectiveChromeHidden;
+    setInternalChromeHidden(nextHidden);
+    onChromeHiddenChange?.(nextHidden);
+
+    if (nextHidden) {
+      setPanelContent(null);
+      setDeviceMenu(null);
+      setEdgeMenu(null);
+      setShowSearch(false);
+      setShowShortcuts(false);
+    }
+
+    const fitAfterLayout = () => {
+      fitTopologyView(nextHidden ? topologyCleanViewFitPadding : topologyFitViewPadding);
+      recordCanvasDiagnosticEvent({
+        level: 'debug',
+        source: 'reactflow',
+        event: 'reactflow.fit_view',
+        message: 'React Flow fitView requested after canvas chrome toggle',
+        metadata: {
+          chromeHidden: nextHidden,
+          mapId: mapId ?? 'default',
+        },
+      });
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(fitAfterLayout);
+    } else {
+      fitAfterLayout();
+    }
+  }, [
+    effectiveChromeHidden,
+    fitTopologyView,
+    mapId,
+    onChromeHiddenChange,
+    setDeviceMenu,
+    setEdgeMenu,
+    setPanelContent,
+    setShowSearch,
+    setShowShortcuts,
+  ]);
+
   if (loading) {
     return (
       <div className="topology-backdrop flex h-full items-center justify-center bg-bg">
@@ -887,17 +966,32 @@ export default function Canvas({
       data-topology-zoom-band={topologyZoomBandRef.current}
       className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
     >
-      {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
-      <Toolbar
-        onSearch={() => setShowSearch((s) => !s)}
-        onAddDevice={() => setPanelContent({ type: 'addDevice' })}
-        onCreateLink={() => setPanelContent({ type: 'create-link' })}
-        onAlerts={() => setPanelContent({ type: 'alerts' })}
-        onToggleEditMode={() => setEditMode((m) => !m)}
-        editMode={editMode}
-        alertCount={runtimeSummary.alertCount}
-      />
-      {deviceMenu &&
+      <button
+        type="button"
+        aria-label={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
+        title={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
+        aria-pressed={effectiveChromeHidden}
+        onClick={handleToggleChrome}
+        className="topology-glass topology-floating-shadow absolute right-4 top-4 z-[70] flex h-11 w-11 items-center justify-center rounded-[16px] text-on-bg-secondary transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      >
+        <MaterialIcon name={effectiveChromeHidden ? 'close_fullscreen' : 'open_in_full'} />
+      </button>
+      {!effectiveChromeHidden && showSearch && (
+        <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />
+      )}
+      {!effectiveChromeHidden && (
+        <Toolbar
+          onSearch={() => setShowSearch((s) => !s)}
+          onAddDevice={() => setPanelContent({ type: 'addDevice' })}
+          onCreateLink={() => setPanelContent({ type: 'create-link' })}
+          onAlerts={() => setPanelContent({ type: 'alerts' })}
+          onToggleEditMode={() => setEditMode((m) => !m)}
+          editMode={editMode}
+          alertCount={runtimeSummary.alertCount}
+        />
+      )}
+      {!effectiveChromeHidden &&
+        deviceMenu &&
         (() => {
           const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
           const gUrl = grafanaUrl(d?.id);
@@ -941,7 +1035,8 @@ export default function Canvas({
           );
         })()}
 
-      {edgeMenu &&
+      {!effectiveChromeHidden &&
+        edgeMenu &&
         (() => {
           const me = edges.find((e) => e.id === edgeMenu.edgeID);
           const ml = me?.data?.link;
@@ -992,7 +1087,7 @@ export default function Canvas({
         })()}
 
       <SidePanel
-        open={!!panelContent}
+        open={!effectiveChromeHidden && !!panelContent}
         onClose={() => setPanelContent(null)}
         title={getPanelTitle()}
         testId={getCanvasDetailDeviceId(panelContent) !== null ? 'device-detail-panel' : undefined}
@@ -1020,28 +1115,33 @@ export default function Canvas({
         />
       </SidePanel>
 
-      <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
-      <CanvasOverlays
-        editMode={editMode}
-        reconnecting={reconnecting}
-        topologyRecoveryNotice={topologyRecoveryNotice}
-        dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
-        retryTopologyRefresh={retryTopologyRefresh}
-        selectedNodeCount={selectedNodeCount}
-        prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
-        onBulkEditClick={() => {
-          if (!editMode) return;
-          const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
-          if (selectedNodes.length > 1) {
-            setPanelContent({
-              type: 'bulkEdit',
-              data: { deviceIds: selectedNodes.map((n) => n.id) },
-            });
-          }
-        }}
+      <ShortcutHelp
+        open={!effectiveChromeHidden && showShortcuts}
+        onClose={() => setShowShortcuts(false)}
       />
+      {!effectiveChromeHidden && (
+        <CanvasOverlays
+          editMode={editMode}
+          reconnecting={reconnecting}
+          topologyRecoveryNotice={topologyRecoveryNotice}
+          dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
+          retryTopologyRefresh={retryTopologyRefresh}
+          selectedNodeCount={selectedNodeCount}
+          prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
+          onBulkEditClick={() => {
+            if (!editMode) return;
+            const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
+            if (selectedNodes.length > 1) {
+              setPanelContent({
+                type: 'bulkEdit',
+                data: { deviceIds: selectedNodes.map((n) => n.id) },
+              });
+            }
+          }}
+        />
+      )}
       {/* WinBox launch error toast */}
-      {winboxError && (
+      {!effectiveChromeHidden && winboxError && (
         <div
           data-testid="winbox-error-toast"
           className="absolute top-20 bottom-auto left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-status-down/35 bg-surface-container-high px-4 py-2.5 text-xs text-status-down shadow-floating sm:top-auto sm:bottom-16"
@@ -1053,26 +1153,25 @@ export default function Canvas({
         </div>
       )}
 
-      <ZoomControls
-        onZoomIn={() => {
-          void reactFlow.zoomIn({ duration: 200 });
-        }}
-        onZoomOut={() => {
-          void reactFlow.zoomOut({ duration: 200 });
-        }}
-        onFitView={() => {
-          void reactFlow.fitView({
-            padding: topologyFitViewPadding,
-            duration: 280,
-          });
-          recordCanvasDiagnosticEvent({
-            level: 'debug',
-            source: 'reactflow',
-            event: 'reactflow.fit_view',
-            message: 'React Flow fitView requested from zoom controls',
-          });
-        }}
-      />
+      {!effectiveChromeHidden && (
+        <ZoomControls
+          onZoomIn={() => {
+            void reactFlow.zoomIn({ duration: 200 });
+          }}
+          onZoomOut={() => {
+            void reactFlow.zoomOut({ duration: 200 });
+          }}
+          onFitView={() => {
+            fitTopologyView();
+            recordCanvasDiagnosticEvent({
+              level: 'debug',
+              source: 'reactflow',
+              event: 'reactflow.fit_view',
+              message: 'React Flow fitView requested from zoom controls',
+            });
+          }}
+        />
+      )}
       <CanvasDiagnosticsPanel
         open={diagnosticsVisible}
         onClose={() => {
@@ -1167,7 +1266,7 @@ export default function Canvas({
       >
         <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
         <LinkLabelLayer />
-        <TopologyMiniMap />
+        {!effectiveChromeHidden && <TopologyMiniMap />}
       </ReactFlow>
     </div>
   );

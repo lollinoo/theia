@@ -25,6 +25,7 @@ ICON_NAMES=(
   check
   check_circle
   close
+  close_fullscreen
   cloud
   content_copy
   dark_mode
