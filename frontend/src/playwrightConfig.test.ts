@@ -7,6 +7,13 @@ describe('playwright backend webServer', () => {
     const backendServer = config.webServer?.[0];
 
     expect(backendServer?.command).toContain('THEIA_DB_DSN=');
+    expect(backendServer?.command).toContain(
+      'postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable',
+    );
     expect(backendServer?.command).toContain('THEIA_DATA_DIR=');
+    expect(backendServer?.command).toContain('THEIA_SESSION_SECRET=');
+    expect(backendServer?.command).toContain('THEIA_ALLOWED_ORIGINS=http://127.0.0.1:3300');
+    expect(backendServer?.url).toContain('/api/v1/auth/me');
+    expect(config.use?.storageState).toBe('/tmp/theia-playwright-auth.json');
   });
 });
