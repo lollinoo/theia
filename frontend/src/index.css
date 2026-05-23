@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import "@fontsource-variable/outfit";
+@import "@fontsource-variable/inter";
 @import "@fontsource-variable/jetbrains-mono";
 @import "@xyflow/react/dist/style.css" layer(base);
 
@@ -231,9 +231,9 @@
   --color-glass-bg: var(--nt-glass-bg);
   --color-glass-border: var(--nt-glass-border);
 
-  --font-display: "Outfit Variable", "Outfit", system-ui, sans-serif;
+  --font-display: "Inter Variable", "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
-  --font-sans: "Outfit Variable", "Outfit", system-ui, sans-serif;
+  --font-sans: "Inter Variable", "Inter", system-ui, sans-serif;
 
   --shadow-panel: var(--nt-shadow-panel);
   --shadow-floating: var(--nt-shadow-floating);
