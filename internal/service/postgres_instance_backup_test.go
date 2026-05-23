@@ -533,6 +533,40 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 	}
 }
 
+func TestInstanceBackupServiceValidateAndStageRestore_RejectsLegacySQLiteArchiveWithActionableError(t *testing.T) {
+	ts := setupPostgresServiceTest(t)
+
+	dbData := []byte("sqlite-database-data")
+	dbHash := sha256.Sum256(dbData)
+	archivePath := filepath.Join(t.TempDir(), "sqlite-backup.tar.gz")
+	manifest := backupManifest{
+		Version:           1,
+		AppVersion:        "1.7.0",
+		GitCommit:         "test",
+		DBEntryName:       "theia.db",
+		MigrationVersion:  manifestMigrationVersion(t, ts.db),
+		CreatedAt:         "2026-04-23T00:00:00Z",
+		DBSHA256:          hex.EncodeToString(dbHash[:]),
+		BackupFileCount:   0,
+		TotalSizeBytes:    int64(len(dbData)),
+		EncryptionKeyHash: manifestKeyHash(ts.encryptionKey),
+	}
+	writePostgresArchive(t, archivePath, manifest, map[string][]byte{
+		"theia.db": dbData,
+	})
+
+	_, err := ts.svc.ValidateAndStageRestore(archivePath, true)
+	if err == nil {
+		t.Fatal("ValidateAndStageRestore() error = nil, want legacy SQLite archive error")
+	}
+	if !strings.Contains(err.Error(), "legacy SQLite instance backup") {
+		t.Fatalf("ValidateAndStageRestore() error = %v, want legacy SQLite compatibility guidance", err)
+	}
+	if strings.Contains(err.Error(), "disallowed restore archive entry") {
+		t.Fatalf("ValidateAndStageRestore() error = %v, want actionable legacy archive error", err)
+	}
+}
+
 func TestInstanceBackupServiceValidateAndStageRestore_PostgresRejectsUnsupportedPgRestoreVersion(t *testing.T) {
 	ts := setupPostgresServiceTest(t)
 	listExecuted := false

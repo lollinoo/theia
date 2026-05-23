@@ -57,7 +57,8 @@ type backupManifest struct {
 }
 
 const (
-	postgresArchiveDBEntry = "database.dump"
+	legacySQLiteArchiveDBEntry = "theia.db"
+	postgresArchiveDBEntry     = "database.dump"
 )
 
 // RestoreArchiveLimits defines defensive quotas for uploaded restore archives.
@@ -919,6 +920,9 @@ func manifestDatabaseEntryName(manifest backupManifest) (string, error) {
 		if entry == postgresArchiveDBEntry {
 			return entry, nil
 		}
+		if entry == legacySQLiteArchiveDBEntry {
+			return "", legacySQLiteRestoreArchiveError()
+		}
 		return "", fmt.Errorf("unsupported database entry %q in manifest", entry)
 	}
 	return postgresArchiveDBEntry, nil
@@ -1388,6 +1392,9 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 		}
 
 		// Security: regular files outside the restore archive contract are rejected.
+		if isLegacySQLiteRestoreArchiveFile(cleanName) {
+			return legacySQLiteRestoreArchiveError()
+		}
 		if !isAllowedRestoreArchiveFile(cleanName) {
 			return fmt.Errorf("disallowed restore archive entry: %s", cleanName)
 		}
@@ -1420,6 +1427,14 @@ func archiveEntryHasTraversal(name string) bool {
 		}
 	}
 	return false
+}
+
+func legacySQLiteRestoreArchiveError() error {
+	return fmt.Errorf("legacy SQLite instance backup archives containing %s cannot be restored by this PostgreSQL-only runtime; matching THEIA_ENCRYPTION_KEY is not sufficient. Restore a PostgreSQL instance backup containing %s, or restore/migrate the SQLite backup with a 1.7.x build before upgrading", legacySQLiteArchiveDBEntry, postgresArchiveDBEntry)
+}
+
+func isLegacySQLiteRestoreArchiveFile(name string) bool {
+	return strings.ReplaceAll(name, "\\", "/") == legacySQLiteArchiveDBEntry
 }
 
 // isAllowedRestoreArchiveFile checks if a regular file entry matches the restore archive contract.
