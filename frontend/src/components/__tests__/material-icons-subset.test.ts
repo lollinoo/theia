@@ -29,6 +29,14 @@ const REQUIRED_AUTH_ADMIN_ICONS = [
 
 const REQUIRED_USER_SETTINGS_ICONS = ['download', 'lock', 'more_vert', 'person', 'sync'] as const;
 
+const REQUIRED_ADMIN_SETTINGS_ICONS = [
+  'account_tree',
+  'badge',
+  'info',
+  'settings_ethernet',
+  'speed',
+] as const;
+
 function iconNamesFromScript(): Set<string> {
   const match = subsetScript.match(/ICON_NAMES=\(\r?\n(?<body>[\s\S]*?)\r?\n\)/);
   if (!match?.groups?.body) {
@@ -69,6 +77,14 @@ describe('Material Symbols subset contract', () => {
     const iconNames = iconNamesFromScript();
 
     for (const iconName of REQUIRED_USER_SETTINGS_ICONS) {
+      expect(iconNames.has(iconName), iconName).toBe(true);
+    }
+  });
+
+  it('declares every Admin Settings panel icon in the generated subset inputs', () => {
+    const iconNames = iconNamesFromScript();
+
+    for (const iconName of REQUIRED_ADMIN_SETTINGS_ICONS) {
       expect(iconNames.has(iconName), iconName).toBe(true);
     }
   });
