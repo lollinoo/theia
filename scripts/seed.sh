@@ -28,13 +28,15 @@ for i in $(seq 1 30); do
 done
 
 echo ""
+ensure_theia_api_session
+echo ""
 
 create_seed_device() {
   local ip="$1"
   local label="$2"
   local payload="$3"
   local existing_id
-  existing_id="$(device_id_by_ip "$ip" || true)"
+  existing_id="$(device_id_by_ip "$ip")"
 
   if [ -n "$existing_id" ]; then
     echo "Skipping ${label} - already present; ensuring primary map membership"

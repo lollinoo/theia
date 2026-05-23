@@ -128,12 +128,6 @@ wisp_seed_target_prefix() {
       printf '%s' "$WISP_HOST_TARGET_PREFIX"
       ;;
     auto)
-      if wisp_api_base_host_is_local "$api_base"; then
-        echo "Using WISP host loopback targets ${WISP_HOST_TARGET_PREFIX}21-${WISP_HOST_TARGET_PREFIX}42 (auto: API host '$api_base_host' is local)" >&2
-        printf '%s' "$WISP_HOST_TARGET_PREFIX"
-        return 0
-      fi
-
       if wisp_backend_running && wisp_connect_backend_to_lab_network; then
         echo "Using WISP Docker management targets ${WISP_DOCKER_TARGET_PREFIX}21-${WISP_DOCKER_TARGET_PREFIX}42 (auto: backend container is running and connected)" >&2
         printf '%s' "$WISP_DOCKER_TARGET_PREFIX"

@@ -69,9 +69,15 @@ run_wisp_seed_target_prefix() {
 
 reset_wisp_seed_target_test_state
 run_wisp_seed_target_prefix "auto" "http://localhost:8080"
-assert_eq "127.0.10." "$LAST_PREFIX" "auto mode should use host loopback targets for localhost API base."
-assert_eq "0" "$CONNECT_ATTEMPTS" "auto mode should not connect the backend container for localhost API base."
-assert_contains "auto: API host 'localhost' is local" "$LAST_LOG" "auto mode should log the local API-base decision."
+assert_eq "172.31.250." "$LAST_PREFIX" "auto mode should use Docker management targets for localhost API base when the backend container is running."
+assert_eq "1" "$CONNECT_ATTEMPTS" "auto mode should connect the backend container before selecting Docker targets for localhost API base."
+assert_contains "auto: backend container is running and connected" "$LAST_LOG" "auto mode should log the Docker decision for localhost API base."
+
+reset_wisp_seed_target_test_state 0 0
+run_wisp_seed_target_prefix "auto" "http://localhost:8080"
+assert_eq "127.0.10." "$LAST_PREFIX" "auto mode should fall back to host loopback targets for localhost API base when Docker backend is unavailable."
+assert_eq "0" "$CONNECT_ATTEMPTS" "auto mode should not attempt Docker connect when the backend container is not running."
+assert_contains "auto: Docker backend unavailable for API host 'localhost'" "$LAST_LOG" "auto mode should log the localhost fallback decision."
 
 reset_wisp_seed_target_test_state
 run_wisp_seed_target_prefix "docker" "http://localhost:8080"

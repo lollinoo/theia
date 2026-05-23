@@ -178,11 +178,6 @@ function Get-WispSeedTargetPrefix {
       return $script:WispHostTargetPrefix
     }
     "auto" {
-      if (Test-WispApiBaseHostIsLocal -ApiBase $ApiBase) {
-        Write-Host "Using WISP host loopback targets ${script:WispHostTargetPrefix}21-${script:WispHostTargetPrefix}42 (auto: API host '$apiBaseHost' is local)"
-        return $script:WispHostTargetPrefix
-      }
-
       if (Test-WispBackendRunning) {
         if (Connect-WispBackendToLabNetwork) {
           Write-Host "Using WISP Docker management targets ${script:WispDockerTargetPrefix}21-${script:WispDockerTargetPrefix}42 (auto: backend container is running and connected)"
