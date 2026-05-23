@@ -127,7 +127,7 @@
   --nt-status-critical: #a43645;
   --nt-status-unknown: #536176;
   --nt-status-up: var(--nt-status-ok);
-  --nt-status-down: #c91f17;
+  --nt-status-down: #b91c1c;
   --nt-status-probing: var(--nt-status-warning);
   --nt-warning: var(--nt-status-warning);
   --nt-critical: var(--nt-status-critical);
@@ -136,15 +136,15 @@
   --nt-node-critical-badge-bg: rgba(184, 66, 82, 0.1);
   --nt-node-critical-panel-border: rgba(184, 66, 82, 0.22);
   --nt-node-critical-panel-bg: rgba(184, 66, 82, 0.07);
-  --nt-node-down-border: rgba(201, 31, 23, 0.94);
-  --nt-node-down-badge-border: rgba(201, 31, 23, 0.52);
-  --nt-node-down-badge-bg: rgba(201, 31, 23, 0.18);
+  --nt-node-down-border: rgba(185, 28, 28, 0.94);
+  --nt-node-down-badge-border: rgba(185, 28, 28, 0.52);
+  --nt-node-down-badge-bg: rgba(185, 28, 28, 0.18);
   --nt-node-down-card-bg: #ffd8d2;
   --nt-node-down-card-pulse-bg: #ffb8ad;
-  --nt-node-down-panel-border: rgba(201, 31, 23, 0.38);
-  --nt-node-down-panel-bg: rgba(201, 31, 23, 0.1);
-  --nt-node-down-ring: rgba(201, 31, 23, 0.12);
-  --nt-node-down-glow: rgba(201, 31, 23, 0.28);
+  --nt-node-down-panel-border: rgba(185, 28, 28, 0.38);
+  --nt-node-down-panel-bg: rgba(185, 28, 28, 0.1);
+  --nt-node-down-ring: rgba(185, 28, 28, 0.12);
+  --nt-node-down-glow: rgba(185, 28, 28, 0.28);
   --nt-node-probing-border: rgba(132, 84, 10, 0.8);
   --nt-node-probing-badge-bg: rgba(132, 84, 10, 0.14);
   --nt-node-probing-card-bg: #f6ebd4;
@@ -184,7 +184,7 @@
   --nt-glow-status-ok: 0 0 0 1px rgba(23, 126, 93, 0.14), 0 0 8px rgba(23, 126, 93, 0.12);
   --nt-glow-status-warning: 0 0 0 1px rgba(165, 110, 24, 0.16), 0 0 10px rgba(165, 110, 24, 0.12);
   --nt-glow-status-critical: 0 0 0 1px rgba(184, 66, 82, 0.18), 0 0 10px rgba(184, 66, 82, 0.14);
-  --nt-glow-status-down: 0 0 0 1px rgba(201, 31, 23, 0.24), 0 0 14px rgba(201, 31, 23, 0.22);
+  --nt-glow-status-down: 0 0 0 1px rgba(185, 28, 28, 0.24), 0 0 14px rgba(185, 28, 28, 0.22);
   --nt-glow-status-unknown: 0 0 0 1px rgba(103, 116, 135, 0.16), 0 0 6px rgba(103, 116, 135, 0.1);
   color-scheme: light;
 }

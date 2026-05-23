@@ -233,7 +233,7 @@ describe('Canvas zoom controls', () => {
     );
 
     expect(screen.queryByTestId('topology-toolbar')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('canvas-overlays')).not.toBeInTheDocument();
+    expect(screen.getByTestId('canvas-overlays')).toBeInTheDocument();
     expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /show canvas controls/i })).toBeInTheDocument();
   });
