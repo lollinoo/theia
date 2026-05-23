@@ -53,7 +53,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base="${{ github.event.pull_request.base.sha }}"
             head="${{ github.event.pull_request.head.sha }}"
-          elif [[ "${{ github.ref }}" == "refs/heads/master" || "${{ github.ref }}" == refs/tags/v* ]]; then
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             backend=true
             frontend=true
             browser_e2e=true
@@ -184,8 +184,8 @@ jobs:
 
   branch-images:
     name: Branch Images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    needs: [backend-fast, frontend-fast, browser-e2e]
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/master' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [changes, backend-fast, frontend-fast, browser-e2e]
     runs-on: ubuntu-latest
     concurrency:
       group: branch-images-${{ github.ref }}
