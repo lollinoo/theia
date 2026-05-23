@@ -420,7 +420,7 @@ describe('DeviceCard', () => {
     const body = screen.getByTestId('physical-node-body');
     const areaAccent = screen.getByTestId('physical-node-area-accent');
 
-    expect(body.style.backgroundColor).toBe('rgba(37, 99, 235, 0.1)');
+    expect(body.style.backgroundColor).toBe('rgba(37, 99, 235, 0.18)');
     expect(body.style.background).not.toContain('linear-gradient');
     expect(body).not.toHaveClass('topology-node-status-pulse');
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
@@ -437,9 +437,9 @@ describe('DeviceCard', () => {
     const areaAccent = screen.getByTestId('physical-node-area-accent');
 
     expect(body.style.background).toContain('linear-gradient');
-    expect(body.style.background).toContain('rgba(37, 99, 235, 0.1)');
-    expect(body.style.background).toContain('rgba(255, 87, 34, 0.1)');
-    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(body.style.background).toContain('rgba(37, 99, 235, 0.18)');
+    expect(body.style.background).toContain('rgba(255, 87, 34, 0.18)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
     expect(areaAccent.style.background).toContain('rgb(255, 87, 34)');
   });
@@ -460,7 +460,8 @@ describe('DeviceCard', () => {
     const statusBadge = screen.getByTestId('physical-node-status-badge');
 
     expect(screen.getByText('Down')).toBeInTheDocument();
-    expect(body).toHaveClass('topology-node-status-pulse');
+    expect(body).toHaveClass('topology-node-down-pulse');
+    expect(body).not.toHaveClass('topology-node-status-pulse');
     expect(body.getAttribute('style')).toContain(
       '--theia-node-status-bg: var(--nt-node-down-card-bg)',
     );
@@ -468,7 +469,7 @@ describe('DeviceCard', () => {
       '--theia-node-status-pulse-bg: var(--nt-node-down-card-pulse-bg)',
     );
     expect(body.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
-    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
     expect(statusBadge.style.borderColor).toBe('var(--nt-node-down-badge-border)');
     expect(statusBadge.style.backgroundColor).toBe('var(--nt-node-down-badge-bg)');
@@ -496,7 +497,7 @@ describe('DeviceCard', () => {
       '--theia-node-status-pulse-bg: var(--nt-node-probing-card-pulse-bg)',
     );
     expect(body.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
-    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(statusBadge.style.borderColor).toBe('var(--nt-node-probing-border)');
     expect(statusBadge.style.backgroundColor).toBe('var(--nt-node-probing-badge-bg)');
   });
@@ -626,7 +627,7 @@ describe('DeviceCard', () => {
     expect(iconShell.style.borderColor).toBe('rgba(37, 99, 235, 0.32)');
     expect(iconShell.style.backgroundColor).toBe('rgba(37, 99, 235, 0.14)');
     expect(typeLabel.style.color).toBe('rgb(89, 136, 240)');
-    expect(capsule.style.backgroundColor).toBe('rgba(37, 99, 235, 0.1)');
+    expect(capsule.style.backgroundColor).toBe('rgba(37, 99, 235, 0.18)');
     expect(capsule.style.background).not.toContain('linear-gradient');
     expect(capsule.style.background).not.toContain('transparent');
     expect(screen.getByText('AWS Cloud')).toBeInTheDocument();
@@ -660,7 +661,7 @@ describe('DeviceCard', () => {
     const iconShell = screen.getByTestId('virtual-node-icon-shell');
     const areaAccent = screen.getByTestId('virtual-node-area-accent');
 
-    expect(capsule.style.backgroundColor).toBe('rgba(255, 51, 102, 0.1)');
+    expect(capsule.style.backgroundColor).toBe('rgba(255, 51, 102, 0.18)');
     expect(iconShell.style.borderColor).toBe('rgba(255, 51, 102, 0.32)');
     expect(iconShell.style.backgroundColor).toBe('rgba(255, 51, 102, 0.14)');
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
@@ -684,9 +685,9 @@ describe('DeviceCard', () => {
     const areaAccent = screen.getByTestId('virtual-node-area-accent');
 
     expect(capsule.style.background).toContain('linear-gradient');
-    expect(capsule.style.background).toContain('rgba(37, 99, 235, 0.1)');
-    expect(capsule.style.background).toContain('rgba(255, 87, 34, 0.1)');
-    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(capsule.style.background).toContain('rgba(37, 99, 235, 0.18)');
+    expect(capsule.style.background).toContain('rgba(255, 87, 34, 0.18)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
     expect(areaAccent.style.background).toContain('rgb(255, 87, 34)');
   });
@@ -751,7 +752,8 @@ describe('DeviceCard', () => {
     const iconShell = screen.getByTestId('virtual-node-icon-shell');
     const typeLabel = screen.getByTestId('virtual-node-type-label');
 
-    expect(capsule).toHaveClass('pr-4', 'py-3', 'topology-virtual-node-status-pulse');
+    expect(capsule).toHaveClass('pr-4', 'py-3', 'topology-node-down-pulse');
+    expect(capsule).not.toHaveClass('topology-virtual-node-status-pulse');
     expect(capsule.getAttribute('style')).toContain(
       '--theia-virtual-node-status-bg: var(--nt-node-down-card-bg)',
     );
@@ -759,7 +761,7 @@ describe('DeviceCard', () => {
       '--theia-virtual-node-status-pulse-bg: var(--nt-node-down-card-pulse-bg)',
     );
     expect(capsule.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
-    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(iconShell.style.color).toBe('var(--nt-status-down)');
     expect(iconShell.style.borderColor).toBe('var(--nt-node-down-border)');
     expect(iconShell.style.backgroundColor).toBe('var(--nt-node-down-badge-bg)');
@@ -802,7 +804,7 @@ describe('DeviceCard', () => {
       '--theia-virtual-node-status-pulse-bg: var(--nt-node-probing-card-pulse-bg)',
     );
     expect(capsule.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
-    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.1)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(iconShell.style.color).toBe('var(--nt-status-probing)');
     expect(iconShell.style.borderColor).toBe('var(--nt-node-probing-border)');
     expect(iconShell.style.backgroundColor).toBe('var(--nt-node-probing-badge-bg)');
@@ -833,7 +835,7 @@ describe('DeviceCard', () => {
 
     expect(screen.getByText('Down')).toBeInTheDocument();
     expect(capsule.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
-    expect(capsule.style.backgroundColor).not.toBe('rgba(255, 51, 102, 0.1)');
+    expect(capsule.style.backgroundColor).not.toBe('rgba(255, 51, 102, 0.18)');
     expect(iconShell.style.color).toBe('var(--nt-status-down)');
   });
 
