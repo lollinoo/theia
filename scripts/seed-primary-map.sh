@@ -151,7 +151,7 @@ for item in payload.get("data", []):
     if attributes.get("ip") == target_ip:
         print(item.get("id", ""))
         raise SystemExit(0)
-raise SystemExit(1)' "$ip"
+' "$ip"
 }
 
 THEIA_CURL_AUTH_ARGS=()
@@ -163,7 +163,7 @@ add_device_to_primary_map() {
   local body
   local status
 
-  map_id="$(primary_map_id || true)"
+  map_id="$(primary_map_id)"
   if [ -z "$map_id" ] || [ -z "$device_id" ]; then
     return
   fi

@@ -91,10 +91,16 @@ $localApiBases = @(
 foreach ($apiBase in $localApiBases) {
   Reset-WispSeedTargetTestState
   $prefix = Get-WispSeedTargetPrefix -TargetMode "auto" -ApiBase $apiBase
-  Assert-Equal "127.0.10." $prefix "auto mode should use host loopback targets for local API base $apiBase."
-  Assert-Equal 0 $script:connectAttempts "auto mode should not connect the backend container for local API base $apiBase."
-  Assert-Match "auto: API host '.+' is local" (Get-WispSeedTargetLog) "auto mode should log the local API-base decision for $apiBase."
+  Assert-Equal "172.31.250." $prefix "auto mode should use Docker management targets for local API base $apiBase when the backend container is running."
+  Assert-Equal 1 $script:connectAttempts "auto mode should connect the backend container before selecting Docker targets for local API base $apiBase."
+  Assert-Match "auto: backend container is running and connected" (Get-WispSeedTargetLog) "auto mode should log the Docker decision for $apiBase."
 }
+
+Reset-WispSeedTargetTestState -BackendRunning $false -ConnectSucceeds $false
+$prefix = Get-WispSeedTargetPrefix -TargetMode "auto" -ApiBase "http://localhost:8080"
+Assert-Equal "127.0.10." $prefix "auto mode should fall back to host loopback targets for localhost API base when Docker backend is unavailable."
+Assert-Equal 0 $script:connectAttempts "auto mode should not attempt Docker connect when the backend container is not running."
+Assert-Match "auto: Docker backend unavailable for API host 'localhost'" (Get-WispSeedTargetLog) "auto mode should log the localhost fallback decision."
 
 Reset-WispSeedTargetTestState
 $prefix = Get-WispSeedTargetPrefix -TargetMode "host" -ApiBase "http://localhost:8080"

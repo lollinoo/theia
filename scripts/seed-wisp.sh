@@ -21,6 +21,7 @@ for i in $(seq 1 30); do
 done
 
 TARGET_PREFIX="$(wisp_seed_target_prefix "$TARGET_MODE" "$API_BASE")"
+ensure_theia_api_session
 
 create_router() {
   local ip="$1"
@@ -29,7 +30,7 @@ create_router() {
   local site="$4"
   local ospf_area="$5"
   local existing_id
-  existing_id="$(device_id_by_ip "$ip" || true)"
+  existing_id="$(device_id_by_ip "$ip")"
 
   if [ -n "$existing_id" ]; then
     echo "Skipping ${hostname} (${ip}) - already present; ensuring primary map membership and rerunning topology discovery"
