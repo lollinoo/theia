@@ -590,6 +590,7 @@ function App() {
             activeView={activeView}
             selectedAreaId={selectedAreaId}
             areas={navigationAreas}
+            mapName={selectedMapName}
             compact={canvasChromeHidden}
           />
           {savedMapContextResolved ? (

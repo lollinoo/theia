@@ -22,6 +22,21 @@ describe('Watermark', () => {
     expect(screen.getByText('GLOBAL TOPOLOGY')).toBeDefined();
   });
 
+  it('renders the current map name as italic secondary context', () => {
+    render(
+      <Watermark
+        activeView="canvas"
+        selectedAreaId={null}
+        areas={[mockArea()]}
+        mapName="Backbone map"
+      />,
+    );
+
+    const mapLabel = screen.getByText('Backbone map');
+    expect(mapLabel).toBeDefined();
+    expect(mapLabel.className).toContain('italic');
+  });
+
   it('renders area name uppercase when selectedAreaId matches an area', () => {
     const areas = [mockArea(), mockArea({ id: 'area-2', name: 'Distribution' })];
     render(<Watermark activeView="canvas" selectedAreaId="area-2" areas={areas} />);

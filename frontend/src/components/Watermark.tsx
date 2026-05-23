@@ -5,6 +5,7 @@ interface WatermarkProps {
   activeView: ActiveView;
   selectedAreaId: string | null;
   areas: Area[];
+  mapName?: string;
   compact?: boolean;
   hidden?: boolean;
 }
@@ -14,6 +15,7 @@ export function Watermark({
   activeView,
   selectedAreaId,
   areas,
+  mapName,
   compact = false,
   hidden = false,
 }: WatermarkProps) {
@@ -32,13 +34,23 @@ export function Watermark({
       }`}
       aria-hidden="true"
     >
-      <span
-        className="font-sans font-semibold text-xs tracking-[0.2em] uppercase
-                   text-on-bg-muted opacity-30 dark:opacity-40
-                   transition-opacity duration-150"
-      >
-        {text}
-      </span>
+      <div className="flex flex-col items-end gap-0.5">
+        <span
+          className="font-sans font-semibold text-xs tracking-[0.2em] uppercase
+                     text-on-bg-muted opacity-30 dark:opacity-40
+                     transition-opacity duration-150"
+        >
+          {text}
+        </span>
+        {mapName && (
+          <span
+            className="font-sans text-[11px] italic tracking-[0.08em]
+                       text-on-bg-muted opacity-25 dark:opacity-35"
+          >
+            {mapName}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

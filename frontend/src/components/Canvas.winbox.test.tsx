@@ -272,6 +272,24 @@ describe('Canvas WinBox gating', () => {
     expect(await screen.findByRole('button', { name: 'Open in WinBox' })).not.toBeDisabled();
   });
 
+  it('keeps the node context menu visible while canvas chrome is hidden', async () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        chromeHidden
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open device menu' }));
+
+    expect(await screen.findByRole('button', { name: 'Open in WinBox' })).toBeInTheDocument();
+  });
+
   it('keeps WinBox enabled when the bridge health check reports unavailable', async () => {
     testState.bridgeChecked = true;
     testState.bridgeRunning = false;
@@ -317,6 +335,26 @@ describe('Canvas WinBox gating', () => {
     expect(toast.className).toContain('bottom-auto');
     expect(toast.className).toContain('sm:bottom-16');
     expect(toast.className).toContain('sm:top-auto');
+  });
+
+  it('keeps the WinBox error toast visible while canvas chrome is hidden', async () => {
+    testState.winboxError = BRIDGE_HEALTH_TIMEOUT_MESSAGE;
+
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        chromeHidden
+      />,
+    );
+
+    expect(await screen.findByTestId('winbox-error-toast')).toHaveTextContent(
+      BRIDGE_HEALTH_TIMEOUT_MESSAGE,
+    );
   });
 
   it('launches WinBox through the flow hook from the menu action', async () => {

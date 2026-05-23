@@ -120,6 +120,7 @@ vi.mock('@xyflow/react', () => ({
     children,
     nodes,
     onlyRenderVisibleElements,
+    proOptions,
     onMoveStart,
     onMoveEnd,
     onMove,
@@ -131,6 +132,7 @@ vi.mock('@xyflow/react', () => ({
     children: React.ReactNode;
     nodes: DeviceNode[];
     onlyRenderVisibleElements?: boolean;
+    proOptions?: { hideAttribution?: boolean };
     onMoveStart?: () => void;
     onMoveEnd?: () => void;
     onMove?: (event: unknown, viewport: { zoom: number }) => void;
@@ -143,6 +145,7 @@ vi.mock('@xyflow/react', () => ({
     testState.displayedNodes = nodes;
     testState.reactFlowProps = {
       onlyRenderVisibleElements,
+      proOptions,
     };
     const draggedNode = nodes.find((node) => node.id === 'dev-a');
     return (
@@ -395,6 +398,21 @@ describe('Canvas drag state ownership', () => {
     expect(screen.getByRole('button', { name: 'Start pan' })).toBeInTheDocument();
     expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
     expect(testState.displayedNodes.map((node) => node.id)).toEqual(['dev-a', 'dev-b', 'dev-c']);
+  });
+
+  it('hides the React Flow attribution watermark', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.reactFlowProps.proOptions).toEqual({ hideAttribution: true });
   });
 
   it('patches the dragged real node without replacing canonical nodes with the area projection', () => {
@@ -745,6 +763,102 @@ describe('Canvas drag state ownership', () => {
 
       expect(testState.fitView).toHaveBeenCalledWith({
         padding: { top: '96px', right: 0.08, bottom: 0.08, left: 0.08 },
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('uses compact padding for external fit view requests while canvas chrome is hidden', () => {
+    const CanvasWithFitRevision = Canvas as React.ComponentType<
+      React.ComponentProps<typeof Canvas> & { fitViewRevision: number }
+    >;
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      const { rerender } = render(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          chromeHidden
+          fitViewRevision={0}
+        />,
+      );
+
+      frameCallbacks.length = 0;
+      testState.fitView.mockClear();
+
+      rerender(
+        <CanvasWithFitRevision
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          chromeHidden
+          fitViewRevision={1}
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: 0.02,
+        duration: 280,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalRequestAnimationFrame) {
+        window.requestAnimationFrame = originalRequestAnimationFrame;
+      }
+    }
+  });
+
+  it('re-applies compact fit view when the canvas starts with chrome hidden', () => {
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    try {
+      render(
+        <Canvas
+          {...defaultCanvasProps}
+          snapshot={null}
+          reconnecting={false}
+          prometheusStatus={null}
+          selectedAreaId={null}
+          areas={[]}
+          chromeHidden
+        />,
+      );
+
+      const callbackCount = frameCallbacks.length;
+      for (let index = 0; index < callbackCount; index += 1) {
+        frameCallbacks[index]?.(0);
+      }
+
+      expect(testState.fitView).toHaveBeenCalledWith({
+        padding: 0.02,
         duration: 280,
       });
     } finally {

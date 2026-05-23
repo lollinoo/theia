@@ -65,7 +65,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
   return (
     <div
       ref={menuRef}
-      className={`fixed z-30 dark:rounded-[6px] rounded-[10px] border border-glass-border bg-glass-bg py-2 shadow-pill dark:backdrop-blur-[16px] transition-colors duration-200 ${
+      className={`fixed z-[80] dark:rounded-[6px] rounded-[10px] border border-glass-border bg-glass-bg py-2 shadow-pill dark:backdrop-blur-[16px] transition-colors duration-200 ${
         isMeasuring ? 'opacity-0' : 'opacity-100'
       }`}
       style={{

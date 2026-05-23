@@ -237,6 +237,11 @@ export default function Canvas({
   } = useCanvasMenus({ reactFlow });
   const selectedMapKey = mapId ?? '__default__';
   const effectiveChromeHidden = chromeHidden ?? internalChromeHidden;
+  const currentTopologyFitViewPadding = effectiveChromeHidden
+    ? topologyCleanViewFitPadding
+    : topologyFitViewPadding;
+  const shouldApplyInitialChromeHiddenFitRef = useRef(effectiveChromeHidden);
+  const initialChromeHiddenFitAppliedRef = useRef(false);
   const previousMapKeyRef = useRef<string | null>(null);
   const previousFitViewRevisionRef = useRef(fitViewRevision);
   const previousTopologyRefreshRevisionRef = useRef(topologyRefreshRevision);
@@ -697,7 +702,7 @@ export default function Canvas({
           return;
         }
         prevAreaRef.current = effectiveAreaId;
-        reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+        reactFlow.fitView({ padding: currentTopologyFitViewPadding, duration: 280 });
         recordCanvasDiagnosticEvent({
           level: 'debug',
           source: 'reactflow',
@@ -715,7 +720,13 @@ export default function Canvas({
       };
     }
     return undefined;
-  }, [canFitVisibleTopology, effectiveAreaId, displayNodes.length, reactFlow]);
+  }, [
+    canFitVisibleTopology,
+    currentTopologyFitViewPadding,
+    effectiveAreaId,
+    displayNodes.length,
+    reactFlow,
+  ]);
 
   useEffect(() => {
     if (fitViewRevision === undefined) {
@@ -734,7 +745,7 @@ export default function Canvas({
         return;
       }
       previousFitViewRevisionRef.current = fitViewRevision;
-      reactFlow.fitView({ padding: topologyFitViewPadding, duration: 280 });
+      reactFlow.fitView({ padding: currentTopologyFitViewPadding, duration: 280 });
       recordCanvasDiagnosticEvent({
         level: 'debug',
         source: 'reactflow',
@@ -755,10 +766,54 @@ export default function Canvas({
     canFitVisibleTopology,
     displayNodes.length,
     effectiveAreaId,
+    currentTopologyFitViewPadding,
     fitViewRevision,
     mapId,
     reactFlow,
   ]);
+
+  useEffect(() => {
+    if (
+      !shouldApplyInitialChromeHiddenFitRef.current ||
+      initialChromeHiddenFitAppliedRef.current ||
+      !effectiveChromeHidden ||
+      !canFitVisibleTopology
+    ) {
+      return undefined;
+    }
+
+    let canceled = false;
+    const applyFitView = () => {
+      if (canceled) {
+        return;
+      }
+      initialChromeHiddenFitAppliedRef.current = true;
+      reactFlow.fitView({ padding: topologyCleanViewFitPadding, duration: 280 });
+      recordCanvasDiagnosticEvent({
+        level: 'debug',
+        source: 'reactflow',
+        event: 'reactflow.fit_view',
+        message: 'React Flow fitView requested after initial hidden canvas chrome restore',
+        metadata: {
+          mapId: mapId ?? 'default',
+          displayedNodeCount: displayNodes.length,
+        },
+      });
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+      const frameId = window.requestAnimationFrame(applyFitView);
+      return () => {
+        canceled = true;
+        window.cancelAnimationFrame(frameId);
+      };
+    }
+
+    applyFitView();
+    return () => {
+      canceled = true;
+    };
+  }, [canFitVisibleTopology, displayNodes.length, effectiveChromeHidden, mapId, reactFlow]);
 
   useEffect(() => {
     setNodes((prev) => patchEditMode(prev, editMode));
@@ -870,13 +925,13 @@ export default function Canvas({
   }
 
   const fitTopologyView = useCallback(
-    (padding = topologyFitViewPadding) => {
+    (padding = currentTopologyFitViewPadding) => {
       void reactFlow.fitView({
         padding,
         duration: 280,
       });
     },
-    [reactFlow],
+    [currentTopologyFitViewPadding, reactFlow],
   );
 
   const handleToggleChrome = useCallback(() => {
@@ -990,8 +1045,7 @@ export default function Canvas({
           alertCount={runtimeSummary.alertCount}
         />
       )}
-      {!effectiveChromeHidden &&
-        deviceMenu &&
+      {deviceMenu &&
         (() => {
           const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
           const gUrl = grafanaUrl(d?.id);
@@ -1035,8 +1089,7 @@ export default function Canvas({
           );
         })()}
 
-      {!effectiveChromeHidden &&
-        edgeMenu &&
+      {edgeMenu &&
         (() => {
           const me = edges.find((e) => e.id === edgeMenu.edgeID);
           const ml = me?.data?.link;
@@ -1119,29 +1172,27 @@ export default function Canvas({
         open={!effectiveChromeHidden && showShortcuts}
         onClose={() => setShowShortcuts(false)}
       />
-      {!effectiveChromeHidden && (
-        <CanvasOverlays
-          editMode={editMode}
-          reconnecting={reconnecting}
-          topologyRecoveryNotice={topologyRecoveryNotice}
-          dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
-          retryTopologyRefresh={retryTopologyRefresh}
-          selectedNodeCount={selectedNodeCount}
-          prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
-          onBulkEditClick={() => {
-            if (!editMode) return;
-            const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
-            if (selectedNodes.length > 1) {
-              setPanelContent({
-                type: 'bulkEdit',
-                data: { deviceIds: selectedNodes.map((n) => n.id) },
-              });
-            }
-          }}
-        />
-      )}
+      <CanvasOverlays
+        editMode={editMode}
+        reconnecting={reconnecting}
+        topologyRecoveryNotice={topologyRecoveryNotice}
+        dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
+        retryTopologyRefresh={retryTopologyRefresh}
+        selectedNodeCount={selectedNodeCount}
+        prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
+        onBulkEditClick={() => {
+          if (!editMode) return;
+          const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
+          if (selectedNodes.length > 1) {
+            setPanelContent({
+              type: 'bulkEdit',
+              data: { deviceIds: selectedNodes.map((n) => n.id) },
+            });
+          }
+        }}
+      />
       {/* WinBox launch error toast */}
-      {!effectiveChromeHidden && winboxError && (
+      {winboxError && (
         <div
           data-testid="winbox-error-toast"
           className="absolute top-20 bottom-auto left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-status-down/35 bg-surface-container-high px-4 py-2.5 text-xs text-status-down shadow-floating sm:top-auto sm:bottom-16"
@@ -1181,7 +1232,7 @@ export default function Canvas({
         onForceRefresh={() => window.__THEIA_CANVAS_FORCE_REFRESH__?.()}
         onFitView={() => {
           void reactFlow.fitView({
-            padding: topologyFitViewPadding,
+            padding: currentTopologyFitViewPadding,
             duration: 280,
           });
           recordCanvasDiagnosticEvent({
@@ -1254,14 +1305,14 @@ export default function Canvas({
         minZoom={0.1}
         maxZoom={2}
         fitView
-        fitViewOptions={{ padding: topologyFitViewPadding }}
+        fitViewOptions={{ padding: currentTopologyFitViewPadding }}
         onlyRenderVisibleElements
         nodesDraggable={editMode}
         panOnDrag
         zoomOnScroll
         zoomOnDoubleClick={false}
         connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 10 }}
-        proOptions={{ hideAttribution: false }}
+        proOptions={{ hideAttribution: true }}
         className="bg-transparent"
       >
         <Background color="var(--color-edge-muted)" gap={30} size={1.1} />

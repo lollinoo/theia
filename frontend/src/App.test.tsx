@@ -68,13 +68,14 @@ vi.mock('@xyflow/react', () => ({
 }));
 
 vi.mock('./components/Watermark', () => ({
-  Watermark: (props: { compact?: boolean; hidden?: boolean }) => {
+  Watermark: (props: { compact?: boolean; hidden?: boolean; mapName?: string }) => {
     watermarkPropsMock(props);
     return (
       <div
         data-testid="watermark"
         data-compact={String(props.compact ?? false)}
         data-hidden={String(props.hidden ?? false)}
+        data-map-name={props.mapName ?? ''}
       />
     );
   },
@@ -549,6 +550,24 @@ describe('App', () => {
     expect(screen.getByTestId('navigation-pill')).toBeInTheDocument();
     expect(screen.getByTestId('canvas')).toHaveTextContent('chrome:visible');
     expect(screen.getByTestId('watermark')).toHaveAttribute('data-compact', 'false');
+  });
+
+  it('passes the selected map name to the canvas watermark', async () => {
+    fetchCanvasMapsMock.mockResolvedValue([
+      mockMap({
+        id: 'default-map-id',
+        name: 'Primary Ops',
+        source_area_id: null,
+        filter: {},
+        is_default: true,
+      }),
+    ]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('watermark')).toHaveAttribute('data-map-name', 'Primary Ops'),
+    );
   });
 
   it('does not mount the legacy global canvas before saved maps resolve', async () => {
