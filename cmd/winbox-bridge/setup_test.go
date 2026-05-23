@@ -670,6 +670,25 @@ func TestSetupHTMLContainsFieldsAndDoesNotLeakSavedSecret(t *testing.T) {
 	}
 }
 
+func TestSetupHTMLExplainsAutostartInstallsStableConnectorPath(t *testing.T) {
+	cfg := DefaultConfig()
+	h, _ := setupTestHandler(t, cfg, setupOptions{})
+
+	rr := setupRequest(t, h, http.MethodGet, "/setup", nil, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /setup status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	html := rr.Body.String()
+	for _, text := range []string{
+		"Enabling this installs or repairs the connector at the installed path shown above.",
+		"Autostart runs that installed copy, not the downloaded file you launched.",
+	} {
+		if !strings.Contains(html, text) {
+			t.Fatalf("HTML missing autostart explanation %q", text)
+		}
+	}
+}
+
 func TestSetupHTMLSetsAntiFramingHeaders(t *testing.T) {
 	cfg := DefaultConfig()
 	h, _ := setupTestHandler(t, cfg, setupOptions{})
