@@ -184,4 +184,57 @@ describe('LinkLabelLayer', () => {
     expect(screen.getByTestId('edge-semantic-badge-rate-text')).toHaveTextContent('100 Mbps');
     expect(screen.getByTestId('edge-semantic-badge-rate-warning')).toHaveTextContent('!');
   });
+
+  it('updates badge gating attributes when only semantic priority changes', () => {
+    const presentation = {
+      anchor: { x: 8, y: 16 },
+      opacity: 0.5,
+      scale: 1,
+      visibility: {
+        zoomBand: 'medium' as const,
+        showRate: true,
+        showThroughput: false,
+      },
+      semanticState: 'up' as const,
+      semanticPriority: 'normal' as const,
+      items: [
+        {
+          key: 'rate',
+          text: '1 Gbps',
+          className: 'border-status-up/35 text-status-up',
+        },
+      ],
+    };
+
+    render(<LinkLabelLayer />);
+
+    act(() => {
+      registerLinkLabel({
+        edgeId: 'edge-priority',
+        interactive: false,
+        presentation,
+      });
+    });
+
+    expect(screen.getByTestId('edge-priority-badge-stack')).toHaveAttribute(
+      'data-link-badge-priority',
+      'normal',
+    );
+
+    act(() => {
+      registerLinkLabel({
+        edgeId: 'edge-priority',
+        interactive: false,
+        presentation: {
+          ...presentation,
+          semanticPriority: 'active',
+        },
+      });
+    });
+
+    expect(screen.getByTestId('edge-priority-badge-stack')).toHaveAttribute(
+      'data-link-badge-priority',
+      'active',
+    );
+  });
 });
