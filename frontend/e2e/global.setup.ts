@@ -1,3 +1,10 @@
+import { request, type APIRequestContext } from '@playwright/test';
+
+const backendBaseURL = 'http://127.0.0.1:38080';
+const authStorageStatePath = '/tmp/theia-playwright-auth.json';
+const bootstrapPassword = 'theia';
+const e2ePassword = 'Correct Horse Battery Staple 2026!';
+
 const deviceSeedPayload = {
   hostname: 'router-a',
   ip: '127.0.10.21',
@@ -29,6 +36,13 @@ type APIDataResponse<T> = {
   data?: T;
 };
 
+type AuthSession = {
+  authenticated?: boolean;
+  user?: {
+    must_change_password?: boolean;
+  };
+};
+
 type SeedDevice = {
   id: string;
   hostname?: string;
@@ -56,12 +70,17 @@ type SeedCanvasMap = {
   is_default?: boolean;
 };
 
+type AuthenticatedAPI = {
+  api: APIRequestContext;
+  csrfHeaders: Record<string, string>;
+};
+
 async function waitForBackend(): Promise<void> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < 60_000) {
     try {
-      const response = await fetch('http://127.0.0.1:38080/api/v1/health');
+      const response = await fetch(`${backendBaseURL}/api/v1/auth/me`);
       if (response.ok) {
         return;
       }
@@ -72,13 +91,68 @@ async function waitForBackend(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  throw new Error('Backend did not become healthy within 60 seconds');
+  throw new Error('Backend did not become ready within 60 seconds');
 }
 
-async function fetchSeededDevice(): Promise<SeedDevice | null> {
-  const devicesResponse = await fetch('http://127.0.0.1:38080/api/v1/devices');
-  if (!devicesResponse.ok) {
-    throw new Error(`Failed to fetch devices: ${devicesResponse.status}`);
+async function createAuthenticatedAPI(): Promise<AuthenticatedAPI> {
+  const api = await request.newContext({ baseURL: backendBaseURL });
+
+  let session = await login(api, bootstrapPassword);
+  if (!session) {
+    session = await login(api, e2ePassword);
+  }
+  if (!session?.authenticated) {
+    throw new Error('Unable to authenticate the e2e administrator account');
+  }
+
+  let csrfHeaders = await readCSRFHeaders(api);
+  if (session.user?.must_change_password) {
+    const changeResponse = await api.post('/api/v1/auth/password/change', {
+      headers: csrfHeaders,
+      data: {
+        current_password: bootstrapPassword,
+        new_password: e2ePassword,
+      },
+    });
+    if (!changeResponse.ok()) {
+      throw new Error(`Failed to set e2e administrator password: ${changeResponse.status()}`);
+    }
+    csrfHeaders = await readCSRFHeaders(api);
+  }
+
+  await api.storageState({ path: authStorageStatePath });
+  return { api, csrfHeaders };
+}
+
+async function login(api: APIRequestContext, password: string): Promise<AuthSession | null> {
+  const response = await api.post('/api/v1/auth/login', {
+    data: {
+      identifier: 'administrator',
+      password,
+    },
+  });
+  if (response.status() === 401 || response.status() === 403) {
+    return null;
+  }
+  if (!response.ok()) {
+    throw new Error(`Failed to login e2e administrator: ${response.status()}`);
+  }
+  return (await response.json()) as AuthSession;
+}
+
+async function readCSRFHeaders(api: APIRequestContext): Promise<Record<string, string>> {
+  const state = await api.storageState();
+  const csrfCookie = state.cookies.find((cookie) => cookie.name === 'theia_csrf');
+  if (!csrfCookie?.value) {
+    throw new Error('Authenticated e2e session did not receive a CSRF cookie');
+  }
+  return { 'X-CSRF-Token': csrfCookie.value };
+}
+
+async function fetchSeededDevice(api: APIRequestContext): Promise<SeedDevice | null> {
+  const devicesResponse = await api.get('/api/v1/devices');
+  if (!devicesResponse.ok()) {
+    throw new Error(`Failed to fetch devices: ${devicesResponse.status()}`);
   }
 
   const devicesPayload = (await devicesResponse.json()) as APIListResponse<DeviceResource>;
@@ -97,84 +171,73 @@ async function fetchSeededDevice(): Promise<SeedDevice | null> {
   };
 }
 
-async function seedRouter(): Promise<SeedDevice> {
-  const existingDevice = await fetchSeededDevice();
+async function seedRouter({ api, csrfHeaders }: AuthenticatedAPI): Promise<SeedDevice> {
+  const existingDevice = await fetchSeededDevice(api);
   if (existingDevice) {
     return existingDevice;
   }
 
-  const createResponse = await fetch('http://127.0.0.1:38080/api/v1/devices', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(deviceSeedPayload),
+  const createResponse = await api.post('/api/v1/devices', {
+    headers: csrfHeaders,
+    data: deviceSeedPayload,
   });
 
-  if (createResponse.ok) {
-    const seededDevice = await fetchSeededDevice();
+  if (createResponse.ok()) {
+    const seededDevice = await fetchSeededDevice(api);
     if (seededDevice) {
       return seededDevice;
     }
     throw new Error('Seeded router-a was not returned by the devices API');
   }
 
-  if (createResponse.status !== 400) {
-    throw new Error(`Failed to seed router-a: ${createResponse.status}`);
+  if (createResponse.status() !== 400) {
+    throw new Error(`Failed to seed router-a: ${createResponse.status()}`);
   }
 
-  const legacyCreateResponse = await fetch('http://127.0.0.1:38080/api/v1/devices', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(legacyDeviceSeedPayload),
+  const legacyCreateResponse = await api.post('/api/v1/devices', {
+    headers: csrfHeaders,
+    data: legacyDeviceSeedPayload,
   });
 
-  if (!legacyCreateResponse.ok) {
+  if (!legacyCreateResponse.ok()) {
     throw new Error(
-      `Failed to seed router-a with legacy SNMP version: ${legacyCreateResponse.status}`,
+      `Failed to seed router-a with legacy SNMP version: ${legacyCreateResponse.status()}`,
     );
   }
 
-  const seededDevice = await fetchSeededDevice();
+  const seededDevice = await fetchSeededDevice(api);
   if (!seededDevice) {
     throw new Error('Seeded router-a was not returned by the devices API');
   }
   return seededDevice;
 }
 
-async function seedArea(): Promise<void> {
-  const areasResponse = await fetch('http://127.0.0.1:38080/api/v1/areas');
-  if (!areasResponse.ok) {
-    throw new Error(`Failed to fetch areas: ${areasResponse.status}`);
+async function seedArea({ api, csrfHeaders }: AuthenticatedAPI): Promise<void> {
+  const areasResponse = await api.get('/api/v1/areas');
+  if (!areasResponse.ok()) {
+    throw new Error(`Failed to fetch areas: ${areasResponse.status()}`);
   }
 
   const areasPayload = (await areasResponse.json()) as APIListResponse<{ name?: string }>;
-  const alreadySeeded = (areasPayload.data ?? []).some((area) =>
-    area.name === areaSeedPayload.name,
-  );
+  const alreadySeeded = (areasPayload.data ?? []).some((area) => area.name === areaSeedPayload.name);
   if (alreadySeeded) {
     return;
   }
 
-  const createResponse = await fetch('http://127.0.0.1:38080/api/v1/areas', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(areaSeedPayload),
+  const createResponse = await api.post('/api/v1/areas', {
+    headers: csrfHeaders,
+    data: areaSeedPayload,
   });
 
-  if (!createResponse.ok && createResponse.status !== 409) {
-    throw new Error(`Failed to seed Backbone area: ${createResponse.status}`);
+  if (!createResponse.ok() && createResponse.status() !== 409) {
+    throw new Error(`Failed to seed Backbone area: ${createResponse.status()}`);
   }
 }
 
-async function getPrimaryMap(): Promise<SeedCanvasMap> {
-  const mapsResponse = await fetch('http://127.0.0.1:38080/api/v1/canvas/maps');
-  if (!mapsResponse.ok) {
-    throw new Error(`Failed to fetch canvas maps: ${mapsResponse.status}`);
+async function getPrimaryMap(api: APIRequestContext): Promise<SeedCanvasMap> {
+  const mapsResponse = await api.get('/api/v1/canvas/maps');
+  if (!mapsResponse.ok()) {
+    throw new Error(`Failed to fetch canvas maps: ${mapsResponse.status()}`);
   }
 
   const mapsPayload = (await mapsResponse.json()) as APIListResponse<SeedCanvasMap>;
@@ -185,29 +248,33 @@ async function getPrimaryMap(): Promise<SeedCanvasMap> {
   return primaryMap;
 }
 
-async function seedDeviceIntoPrimaryMap(map: SeedCanvasMap, device: SeedDevice): Promise<void> {
-  const response = await fetch(
-    `http://127.0.0.1:38080/api/v1/canvas/maps/${encodeURIComponent(map.id)}/devices/${encodeURIComponent(device.id)}`,
+async function seedDeviceIntoPrimaryMap(
+  { api, csrfHeaders }: AuthenticatedAPI,
+  map: SeedCanvasMap,
+  device: SeedDevice,
+): Promise<void> {
+  const response = await api.post(
+    `/api/v1/canvas/maps/${encodeURIComponent(map.id)}/devices/${encodeURIComponent(device.id)}`,
     {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ include_connected_links: true }),
+      headers: csrfHeaders,
+      data: { include_connected_links: true },
     },
   );
 
-  if (!response.ok && response.status !== 409) {
-    throw new Error(`Failed to add router-a to primary map: ${response.status}`);
+  if (!response.ok() && response.status() !== 409) {
+    throw new Error(`Failed to add router-a to primary map: ${response.status()}`);
   }
 }
 
-async function seedPrimaryMapArea(map: SeedCanvasMap): Promise<SeedArea> {
-  const areasResponse = await fetch(
-    `http://127.0.0.1:38080/api/v1/canvas/maps/${encodeURIComponent(map.id)}/areas`,
+async function seedPrimaryMapArea(
+  { api, csrfHeaders }: AuthenticatedAPI,
+  map: SeedCanvasMap,
+): Promise<SeedArea> {
+  const areasResponse = await api.get(
+    `/api/v1/canvas/maps/${encodeURIComponent(map.id)}/areas`,
   );
-  if (!areasResponse.ok) {
-    throw new Error(`Failed to fetch primary map areas: ${areasResponse.status}`);
+  if (!areasResponse.ok()) {
+    throw new Error(`Failed to fetch primary map areas: ${areasResponse.status()}`);
   }
 
   const areasPayload = (await areasResponse.json()) as APIListResponse<SeedArea>;
@@ -216,19 +283,13 @@ async function seedPrimaryMapArea(map: SeedCanvasMap): Promise<SeedArea> {
     return existingArea;
   }
 
-  const createResponse = await fetch(
-    `http://127.0.0.1:38080/api/v1/canvas/maps/${encodeURIComponent(map.id)}/areas`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(areaSeedPayload),
-    },
-  );
+  const createResponse = await api.post(`/api/v1/canvas/maps/${encodeURIComponent(map.id)}/areas`, {
+    headers: csrfHeaders,
+    data: areaSeedPayload,
+  });
 
-  if (!createResponse.ok) {
-    throw new Error(`Failed to seed primary map Backbone area: ${createResponse.status}`);
+  if (!createResponse.ok()) {
+    throw new Error(`Failed to seed primary map Backbone area: ${createResponse.status()}`);
   }
 
   const createPayload = (await createResponse.json()) as APIDataResponse<SeedArea>;
@@ -239,40 +300,38 @@ async function seedPrimaryMapArea(map: SeedCanvasMap): Promise<SeedArea> {
 }
 
 async function assignDeviceToPrimaryMapArea(
+  { api, csrfHeaders }: AuthenticatedAPI,
   map: SeedCanvasMap,
   device: SeedDevice,
   area: SeedArea,
 ): Promise<void> {
-  const response = await fetch(
-    `http://127.0.0.1:38080/api/v1/canvas/maps/${encodeURIComponent(map.id)}/device-areas`,
+  const response = await api.put(
+    `/api/v1/canvas/maps/${encodeURIComponent(map.id)}/device-areas`,
     {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ device_ids: [device.id], area_ids: [area.id] }),
+      headers: csrfHeaders,
+      data: { device_ids: [device.id], area_ids: [area.id] },
     },
   );
 
-  if (!response.ok) {
-    throw new Error(`Failed to assign router-a to primary map Backbone area: ${response.status}`);
+  if (!response.ok()) {
+    throw new Error(`Failed to assign router-a to primary map Backbone area: ${response.status()}`);
   }
 }
 
-async function seedPrimaryMap(device: SeedDevice): Promise<void> {
-  const primaryMap = await getPrimaryMap();
-  await seedDeviceIntoPrimaryMap(primaryMap, device);
-  const primaryArea = await seedPrimaryMapArea(primaryMap);
-  await assignDeviceToPrimaryMapArea(primaryMap, device, primaryArea);
+async function seedPrimaryMap(authenticatedAPI: AuthenticatedAPI, device: SeedDevice): Promise<void> {
+  const primaryMap = await getPrimaryMap(authenticatedAPI.api);
+  await seedDeviceIntoPrimaryMap(authenticatedAPI, primaryMap, device);
+  const primaryArea = await seedPrimaryMapArea(authenticatedAPI, primaryMap);
+  await assignDeviceToPrimaryMapArea(authenticatedAPI, primaryMap, device, primaryArea);
 }
 
-async function assertSeededPrimaryMap(device: SeedDevice): Promise<void> {
-  const primaryMap = await getPrimaryMap();
-  const topologyResponse = await fetch(
-    `http://127.0.0.1:38080/api/v1/canvas/maps/${encodeURIComponent(primaryMap.id)}/topology`,
+async function assertSeededPrimaryMap(api: APIRequestContext, device: SeedDevice): Promise<void> {
+  const primaryMap = await getPrimaryMap(api);
+  const topologyResponse = await api.get(
+    `/api/v1/canvas/maps/${encodeURIComponent(primaryMap.id)}/topology`,
   );
-  if (!topologyResponse.ok) {
-    throw new Error(`Failed to fetch seeded primary topology: ${topologyResponse.status}`);
+  if (!topologyResponse.ok()) {
+    throw new Error(`Failed to fetch seeded primary topology: ${topologyResponse.status()}`);
   }
 
   const topologyPayload = (await topologyResponse.json()) as {
@@ -292,8 +351,13 @@ async function assertSeededPrimaryMap(device: SeedDevice): Promise<void> {
 
 export default async function globalSetup(): Promise<void> {
   await waitForBackend();
-  const device = await seedRouter();
-  await seedArea();
-  await seedPrimaryMap(device);
-  await assertSeededPrimaryMap(device);
+  const authenticatedAPI = await createAuthenticatedAPI();
+  try {
+    const device = await seedRouter(authenticatedAPI);
+    await seedArea(authenticatedAPI);
+    await seedPrimaryMap(authenticatedAPI, device);
+    await assertSeededPrimaryMap(authenticatedAPI.api, device);
+  } finally {
+    await authenticatedAPI.api.dispose();
+  }
 }

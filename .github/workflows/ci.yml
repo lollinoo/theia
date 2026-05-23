@@ -28,8 +28,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      browser_e2e: ${{ steps.filter.outputs.browser_e2e }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed areas
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          backend=false
+          frontend=false
+          browser_e2e=false
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          elif [[ "${{ github.ref }}" == "refs/heads/master" || "${{ github.ref }}" == refs/tags/v* ]]; then
+            backend=true
+            frontend=true
+            browser_e2e=true
+            {
+              echo "backend=$backend"
+              echo "frontend=$frontend"
+              echo "browser_e2e=$browser_e2e"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            if [[ "$base" == "0000000000000000000000000000000000000000" ]]; then
+              base="$(git merge-base origin/master "$head")"
+            fi
+          fi
+
+          git diff --name-only "$base" "$head" > /tmp/theia-changed-files
+
+          while IFS= read -r path; do
+            case "$path" in
+              cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1)
+                backend=true
+                browser_e2e=true
+                ;;
+            esac
+
+            case "$path" in
+              frontend/*)
+                frontend=true
+                browser_e2e=true
+                ;;
+            esac
+
+            case "$path" in
+              .github/workflows/ci.yml)
+                browser_e2e=true
+                ;;
+            esac
+          done < /tmp/theia-changed-files
+
+          {
+            echo "backend=$backend"
+            echo "frontend=$frontend"
+            echo "browser_e2e=$browser_e2e"
+          } >> "$GITHUB_OUTPUT"
+
   backend-fast:
     name: backend-fast
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: 1
@@ -45,6 +120,8 @@ jobs:
 
   frontend-fast:
     name: frontend-fast
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,8 +137,25 @@ jobs:
 
   browser-e2e:
     name: browser-e2e
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    needs: changes
+    if: needs.changes.outputs.browser_e2e == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: theia
+          POSTGRES_PASSWORD: theia
+          POSTGRES_DB: theia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U theia -d theia"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      THEIA_E2E_DB_DSN: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
