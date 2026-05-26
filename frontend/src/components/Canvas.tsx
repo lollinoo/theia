@@ -19,6 +19,7 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
 import type { Area, CanvasMap, Device, Link } from '../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
+import { resolveGrafanaDashboardUrl } from '../utils/grafanaDashboard';
 import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
@@ -452,7 +453,7 @@ export default function Canvas({
     loadTopology,
     runtimeSummary,
     grafanaUrlRef,
-    deviceGrafanaUrlsRef,
+    grafanaDashboardConfigRef,
     refreshSettings,
     topologyRecoveryNotice,
     dismissTopologyRecoveryNotice,
@@ -919,8 +920,15 @@ export default function Canvas({
   }
 
   // Resolve Grafana URL for a device (per-device override or global)
-  function grafanaUrl(deviceId?: string): string {
-    if (deviceId) return deviceGrafanaUrlsRef.current.get(deviceId) || grafanaUrlRef.current;
+  function grafanaUrl(device?: Device): string {
+    if (device) {
+      return resolveGrafanaDashboardUrl(
+        grafanaDashboardConfigRef.current,
+        device,
+        { mapId, mapName },
+        grafanaUrlRef.current,
+      );
+    }
     return grafanaUrlRef.current;
   }
 
@@ -1080,7 +1088,7 @@ export default function Canvas({
       {deviceMenu &&
         (() => {
           const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
-          const gUrl = grafanaUrl(d?.id);
+          const gUrl = grafanaUrl(d);
           const isVirtual = d?.device_type === 'virtual';
           const hasWinboxProfile = deviceWinboxState[deviceMenu.deviceId];
           const winboxDisabled = hasWinboxProfile === false;
@@ -1127,7 +1135,7 @@ export default function Canvas({
           const ml = me?.data?.link;
           const dMap = new Map(devices.map((d) => [d.id, d]));
           const sd = ml ? dMap.get(ml.source_device_id) : undefined;
-          const gUrl = grafanaUrl(sd?.id);
+          const gUrl = grafanaUrl(sd);
           return (
             <ContextMenu
               position={{ x: edgeMenu.x, y: edgeMenu.y }}

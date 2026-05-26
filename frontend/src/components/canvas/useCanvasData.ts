@@ -8,12 +8,13 @@ import {
   fetchCanvasMapTopology,
   fetchCanvasTopology,
   fetchDevices,
+  fetchGrafanaDashboardConfig,
   fetchLinks,
   fetchSettings,
 } from '../../api/client';
 import { publishCanvasRuntimeBootstrap } from '../../hooks/canvasRuntimeBootstrap';
 import { type PositionState, usePositions } from '../../hooks/usePositions';
-import type { Area, Device, DevicePosition, Link } from '../../types/api';
+import type { Area, Device, DevicePosition, GrafanaDashboardConfig, Link } from '../../types/api';
 import {
   type AlertDTO,
   type PrometheusStatusPayload,
@@ -99,7 +100,7 @@ interface UseCanvasDataReturn {
     trigger?: CanvasMeasurementTrigger,
   ) => Promise<void>;
   grafanaUrlRef: React.MutableRefObject<string>;
-  deviceGrafanaUrlsRef: React.MutableRefObject<Map<string, string>>;
+  grafanaDashboardConfigRef: React.MutableRefObject<GrafanaDashboardConfig | null>;
   refreshSettings: () => void;
   topologyRecoveryNotice: TopologyRecoveryNotice | null;
   dismissTopologyRecoveryNotice: () => void;
@@ -557,7 +558,7 @@ export function useCanvasData({
   const topologyCompositionCacheRef = useRef(createCanvasTopologyCompositionCache());
   const skippedSavedMapManualEdgeMigrationRef = useRef<Set<string>>(new Set());
   const grafanaUrlRef = useRef<string>('');
-  const deviceGrafanaUrlsRef = useRef<Map<string, string>>(new Map());
+  const grafanaDashboardConfigRef = useRef<GrafanaDashboardConfig | null>(null);
   const { fetchPositions, savePositions } = usePositions(mapId);
 
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
@@ -1296,18 +1297,16 @@ export function useCanvasData({
     fetchSettings()
       .then((settings) => {
         grafanaUrlRef.current = settings['grafana_url'] ?? '';
-        // Parse per-device Grafana dashboard URLs stored as grafana_dashboard_url:<device_id>
-        const perDeviceUrls = new Map<string, string>();
-        for (const [key, value] of Object.entries(settings)) {
-          if (key.startsWith('grafana_dashboard_url:') && value) {
-            const deviceId = key.slice('grafana_dashboard_url:'.length);
-            perDeviceUrls.set(deviceId, value);
-          }
-        }
-        deviceGrafanaUrlsRef.current = perDeviceUrls;
       })
       .catch(() => {
         // Settings fetch failure is non-fatal; Grafana links will be disabled.
+      });
+    fetchGrafanaDashboardConfig()
+      .then((config) => {
+        grafanaDashboardConfigRef.current = config;
+      })
+      .catch(() => {
+        grafanaDashboardConfigRef.current = null;
       });
   }, []);
 
@@ -1439,7 +1438,7 @@ export function useCanvasData({
     renderedMapKey,
     loadTopology: loadTopologyForConsumer,
     grafanaUrlRef,
-    deviceGrafanaUrlsRef,
+    grafanaDashboardConfigRef,
     refreshSettings,
     topologyRecoveryNotice,
     dismissTopologyRecoveryNotice,
