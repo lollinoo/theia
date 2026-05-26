@@ -21,9 +21,11 @@ vi.mock('../api/client', () => ({
 vi.mock('./dashboard/DeviceTable', () => ({
   DeviceTable: ({
     rows,
+    onSSHCredentials,
     onDeletePermanently,
   }: {
     rows: RuntimeDeviceRow[];
+    onSSHCredentials?: (device: Device) => void;
     onDeletePermanently?: (device: Device) => void;
   }) => (
     <table data-testid="device-table">
@@ -33,6 +35,17 @@ vi.mock('./dashboard/DeviceTable', () => ({
             <td>{row.hostname}</td>
             <td>{row.ip}</td>
             <td>{row.statusState.label}</td>
+            {onSSHCredentials && (
+              <td>
+                <button
+                  type="button"
+                  aria-label={`SSH credentials ${row.hostname}`}
+                  onClick={() => onSSHCredentials(row.device)}
+                >
+                  SSH credentials
+                </button>
+              </td>
+            )}
             {onDeletePermanently && (
               <td>
                 <button
@@ -92,7 +105,9 @@ vi.mock('../contexts/ThemeContext', () => ({
 }));
 
 vi.mock('./dashboard/SSHCredentialForm', () => ({
-  SSHCredentialForm: () => <div data-testid="ssh-form" />,
+  SSHCredentialForm: ({ currentProfileId }: { currentProfileId?: string }) => (
+    <div data-testid="ssh-form" data-current-profile-id={currentProfileId ?? ''} />
+  ),
 }));
 
 vi.mock('./dashboard/BackupPanel', () => ({
@@ -297,6 +312,24 @@ describe('Dashboard', () => {
     render(<Dashboard devices={[mockDevice()]} areas={[]} snapshot={null} />);
 
     expect(screen.getByTestId('device-table')).toBeInTheDocument();
+  });
+
+  it('shows the assigned SSH profile in the credentials panel even when it is WinBox-only', async () => {
+    apiMocks.fetchDeviceCredentialProfiles.mockResolvedValue([
+      { profile_id: 'profile-winbox', name: 'WinBox Admin', role: 'Admin', is_winbox: true },
+    ]);
+
+    render(<Dashboard devices={[mockDevice()]} areas={[]} snapshot={null} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'SSH credentials router-01' }));
+
+    expect(screen.getByTestId('ssh-form')).toHaveAttribute('data-current-profile-id', '');
+    await waitFor(() =>
+      expect(screen.getByTestId('ssh-form')).toHaveAttribute(
+        'data-current-profile-id',
+        'profile-winbox',
+      ),
+    );
   });
 
   it('filter bar does not render with border-b class (no-line rule)', () => {

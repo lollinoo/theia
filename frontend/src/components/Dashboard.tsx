@@ -366,10 +366,8 @@ export function Dashboard({
                         current?.kind === 'ssh-credentials' &&
                         current.device.id === targetDeviceId
                       ) {
-                        // Use first non-WinBox profile as the "current" SSH profile, matching
-                        // GetBackupProfileForDevice ordering (is_winbox ASC).
                         const nonWinbox = profiles.find((p) => !p.is_winbox);
-                        setSSHPanelProfileId(nonWinbox?.profile_id);
+                        setSSHPanelProfileId((nonWinbox ?? profiles[0])?.profile_id);
                       }
                       return current;
                     });

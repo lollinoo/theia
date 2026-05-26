@@ -44,7 +44,9 @@ vi.mock('@xyflow/react', () => ({
 
 vi.mock('./DeviceCard', () => ({ default: () => null }));
 vi.mock('./LinkEdge', () => ({ default: () => null }));
-vi.mock('./SearchOverlay', () => ({ default: () => null }));
+vi.mock('./SearchOverlay', () => ({
+  default: () => <div data-testid="search-overlay" />,
+}));
 vi.mock('./ContextMenu', () => ({ ContextMenu: () => null }));
 vi.mock('./SidePanel', () => ({ SidePanel: () => null }));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
@@ -236,5 +238,48 @@ describe('Canvas zoom controls', () => {
     expect(screen.getByTestId('canvas-overlays')).toBeInTheDocument();
     expect(screen.queryByTestId('topology-minimap')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /show canvas controls/i })).toBeInTheDocument();
+  });
+
+  it('keeps a fit-view button next to the focus toggle when canvas chrome is hidden', async () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        chromeHidden
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fit view' }));
+
+    await waitFor(() =>
+      expect(xyflowMocks.fitView).toHaveBeenCalledWith({
+        padding: 0.02,
+        duration: 280,
+      }),
+    );
+  });
+
+  it('keeps a search button next to the hidden-chrome controls', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        chromeHidden
+      />,
+    );
+
+    expect(screen.queryByTestId('search-overlay')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search devices' }));
+
+    expect(screen.getByTestId('search-overlay')).toBeInTheDocument();
   });
 });
