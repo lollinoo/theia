@@ -2,12 +2,12 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
@@ -40,7 +40,7 @@ func (m *mockBackupJobRepo) DeleteFailedOlderThan(cutoff time.Time) (int, error)
 	return m.deleteFailedCount, nil
 }
 
-func (m *mockBackupJobRepo) Create(job *domain.BackupJob) error            { return nil }
+func (m *mockBackupJobRepo) Create(job *domain.BackupJob) error              { return nil }
 func (m *mockBackupJobRepo) GetByID(id uuid.UUID) (*domain.BackupJob, error) { return nil, nil }
 func (m *mockBackupJobRepo) GetByDeviceID(deviceID uuid.UUID) ([]domain.BackupJob, error) {
 	return nil, nil
@@ -48,8 +48,8 @@ func (m *mockBackupJobRepo) GetByDeviceID(deviceID uuid.UUID) ([]domain.BackupJo
 func (m *mockBackupJobRepo) GetLatestByDeviceID(deviceID uuid.UUID) (*domain.BackupJob, error) {
 	return nil, nil
 }
-func (m *mockBackupJobRepo) Update(job *domain.BackupJob) error   { return nil }
-func (m *mockBackupJobRepo) Delete(id uuid.UUID) error            { return nil }
+func (m *mockBackupJobRepo) Update(job *domain.BackupJob) error        { return nil }
+func (m *mockBackupJobRepo) Delete(id uuid.UUID) error                 { return nil }
 func (m *mockBackupJobRepo) DeleteByDeviceID(deviceID uuid.UUID) error { return nil }
 
 type mockRetentionBackupService struct {
@@ -57,6 +57,47 @@ type mockRetentionBackupService struct {
 }
 
 func (m *mockRetentionBackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error {
+	m.deleteCalls.Add(1)
+	return nil
+}
+
+func (m *mockRetentionBackupService) GetLatestBulkBackupRun(ctx context.Context) (*domain.BulkBackupRun, error) {
+	return nil, nil
+}
+
+func (m *mockRetentionBackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceIDs []uuid.UUID, createdBy string) (*domain.BulkBackupRun, error) {
+	return nil, nil
+}
+
+type mockScheduledBackupService struct {
+	startCalls         atomic.Int64
+	deleteCalls        atomic.Int64
+	requestedDeviceIDs []uuid.UUID
+	createdBy          string
+	startErr           error
+	latestRun          *domain.BulkBackupRun
+	latestErr          error
+}
+
+func (m *mockScheduledBackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceIDs []uuid.UUID, createdBy string) (*domain.BulkBackupRun, error) {
+	m.startCalls.Add(1)
+	m.requestedDeviceIDs = append([]uuid.UUID(nil), requestedDeviceIDs...)
+	m.createdBy = createdBy
+	if m.startErr != nil {
+		return &domain.BulkBackupRun{ID: uuid.New(), Status: domain.BulkBackupRunStatusRunning}, m.startErr
+	}
+	return &domain.BulkBackupRun{
+		ID:         uuid.New(),
+		Status:     domain.BulkBackupRunStatusRunning,
+		TotalCount: 250,
+	}, nil
+}
+
+func (m *mockScheduledBackupService) GetLatestBulkBackupRun(ctx context.Context) (*domain.BulkBackupRun, error) {
+	return m.latestRun, m.latestErr
+}
+
+func (m *mockScheduledBackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error {
 	m.deleteCalls.Add(1)
 	return nil
 }
@@ -82,14 +123,10 @@ func TestRunRetention_BatchesDevices(t *testing.T) {
 
 	svc := &mockRetentionBackupService{}
 	scheduler := &DeviceBackupScheduler{
-		backupService: nil, // not used directly — we mock DeleteBackupJob
+		backupService: svc,
 		jobRepo:       jobRepo,
 		settingsRepo:  settingsRepo,
 	}
-	// Inject mock service via the unexported field workaround: use the method directly
-	// We need to test runRetention which calls s.backupService.DeleteBackupJob
-	// Since no deletions are expected (all within retention), this works
-	_ = svc
 
 	scheduler.runRetention(context.Background())
 
@@ -101,6 +138,45 @@ func TestRunRetention_BatchesDevices(t *testing.T) {
 	// Verify failed cleanup ran
 	if !jobRepo.deleteFailedCalled.Load() {
 		t.Error("DeleteFailedOlderThan was not called — failed cleanup must always run")
+	}
+}
+
+func TestRunScheduledBulkBackupStartsPersistentRun(t *testing.T) {
+	svc := &mockScheduledBackupService{}
+	scheduler := &DeviceBackupScheduler{backupService: svc}
+
+	scheduler.runScheduledBulkBackup(context.Background())
+
+	if got := svc.startCalls.Load(); got != 1 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 1", got)
+	}
+	if svc.requestedDeviceIDs != nil {
+		t.Fatalf("requestedDeviceIDs = %#v, want nil for all devices", svc.requestedDeviceIDs)
+	}
+	if svc.createdBy != "scheduler" {
+		t.Fatalf("createdBy = %q, want scheduler", svc.createdBy)
+	}
+}
+
+func TestRunScheduledBulkBackupIgnoresExistingActivePersistentRun(t *testing.T) {
+	svc := &mockScheduledBackupService{startErr: service.ErrBulkBackupRunAlreadyActive}
+	scheduler := &DeviceBackupScheduler{backupService: svc}
+
+	scheduler.runScheduledBulkBackup(context.Background())
+
+	if got := svc.startCalls.Load(); got != 1 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 1", got)
+	}
+}
+
+func TestRunScheduledBulkBackupHandlesGenericStartError(t *testing.T) {
+	svc := &mockScheduledBackupService{startErr: errors.New("bulk backup run repository is not configured")}
+	scheduler := &DeviceBackupScheduler{backupService: svc}
+
+	scheduler.runScheduledBulkBackup(context.Background())
+
+	if got := svc.startCalls.Load(); got != 1 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 1", got)
 	}
 }
 
@@ -335,7 +411,7 @@ func TestGetDeviceBackupRetentionCount(t *testing.T) {
 // checkBulkJobRepo is a controllable BackupJobRepository for checkAndRunBulkBackup tests.
 // It lets tests specify device IDs and per-device latest jobs independently.
 type checkBulkJobRepo struct {
-	deviceIDs     []uuid.UUID
+	deviceIDs      []uuid.UUID
 	latestByDevice map[uuid.UUID]*domain.BackupJob
 }
 
@@ -354,7 +430,7 @@ func (r *checkBulkJobRepo) GetLatestByDeviceID(deviceID uuid.UUID) (*domain.Back
 func (r *checkBulkJobRepo) ListSuccessfulByDeviceOldest(deviceID uuid.UUID) ([]domain.BackupJob, error) {
 	return nil, nil
 }
-func (r *checkBulkJobRepo) DeleteFailedOlderThan(_ time.Time) (int, error) { return 0, nil }
+func (r *checkBulkJobRepo) DeleteFailedOlderThan(_ time.Time) (int, error)  { return 0, nil }
 func (r *checkBulkJobRepo) Create(job *domain.BackupJob) error              { return nil }
 func (r *checkBulkJobRepo) GetByID(id uuid.UUID) (*domain.BackupJob, error) { return nil, nil }
 func (r *checkBulkJobRepo) GetByDeviceID(deviceID uuid.UUID) ([]domain.BackupJob, error) {
@@ -364,54 +440,6 @@ func (r *checkBulkJobRepo) Update(job *domain.BackupJob) error        { return n
 func (r *checkBulkJobRepo) Delete(id uuid.UUID) error                 { return nil }
 func (r *checkBulkJobRepo) DeleteByDeviceID(deviceID uuid.UUID) error { return nil }
 
-// stubDeviceRepo returns an empty device list so TriggerBulkBackup exits immediately.
-type stubDeviceRepo struct{}
-
-func (r *stubDeviceRepo) GetAll() ([]domain.Device, error)                      { return []domain.Device{}, nil }
-func (r *stubDeviceRepo) Create(device *domain.Device) error                    { return nil }
-func (r *stubDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error)          { return nil, nil }
-func (r *stubDeviceRepo) GetByIP(ip string) (*domain.Device, error)             { return nil, nil }
-func (r *stubDeviceRepo) GetBySysName(sysName string) (*domain.Device, error)   { return nil, nil }
-func (r *stubDeviceRepo) Update(device *domain.Device) error                    { return nil }
-func (r *stubDeviceRepo) Delete(id uuid.UUID) error                             { return nil }
-
-// stubFileRepo satisfies domain.BackupFileRepository with no-op methods.
-type stubFileRepo struct{}
-
-func (r *stubFileRepo) Create(file *domain.BackupFile) error                       { return nil }
-func (r *stubFileRepo) GetByJobID(jobID uuid.UUID) ([]domain.BackupFile, error)    { return nil, nil }
-func (r *stubFileRepo) GetByID(id uuid.UUID) (*domain.BackupFile, error)           { return nil, nil }
-func (r *stubFileRepo) DeleteByJobID(jobID uuid.UUID) error                        { return nil }
-
-// stubCredentialProfileRepo satisfies domain.CredentialProfileRepository with no-op methods.
-type stubCredentialProfileRepo struct{}
-
-func (r *stubCredentialProfileRepo) Create(profile *domain.CredentialProfile) error                                    { return nil }
-func (r *stubCredentialProfileRepo) GetByID(id uuid.UUID) (*domain.CredentialProfile, error)                          { return nil, nil }
-func (r *stubCredentialProfileRepo) GetAll() ([]domain.CredentialProfile, error)                                       { return nil, nil }
-func (r *stubCredentialProfileRepo) Update(profile *domain.CredentialProfile) error                                    { return nil }
-func (r *stubCredentialProfileRepo) Delete(id uuid.UUID) error                                                         { return nil }
-func (r *stubCredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error)  { return nil, nil }
-
-// newTestDeviceBackupService creates a real BackupService whose TriggerBulkBackup
-// returns immediately with an empty result when deviceRepo.GetAll returns no devices.
-// All heavy dependencies (SSH dialer, vendor registry) are nil since they are never
-// reached when there are no devices.
-func newTestDeviceBackupService(jobRepo domain.BackupJobRepository) *service.BackupService {
-	return service.NewBackupService(
-		jobRepo,
-		&stubFileRepo{},
-		&stubCredentialProfileRepo{},
-		&stubDeviceRepo{},
-		newMockWorkerSettingsRepo(),
-		nil, // vendor registry — not reached with empty device list
-		nil, // SSH dialer — not reached with empty device list
-		[]byte{},
-		"",
-		gossh.InsecureIgnoreHostKey(),
-	)
-}
-
 // TestCheckAndRunBulkBackup_NoBackupJobsExist verifies that the first scheduled backup
 // is triggered immediately when no backup jobs exist at all (no prior runs).
 func TestCheckAndRunBulkBackup_NoBackupJobsExist(t *testing.T) {
@@ -420,7 +448,7 @@ func TestCheckAndRunBulkBackup_NoBackupJobsExist(t *testing.T) {
 		latestByDevice: map[uuid.UUID]*domain.BackupJob{},
 	}
 
-	svc := newTestDeviceBackupService(jobRepo)
+	svc := &mockScheduledBackupService{}
 	settingsRepo := newMockWorkerSettingsRepo()
 	settingsRepo.Set(domain.SettingDeviceBackupIntervalHours, "24")
 
@@ -430,12 +458,11 @@ func TestCheckAndRunBulkBackup_NoBackupJobsExist(t *testing.T) {
 		settingsRepo:  settingsRepo,
 	}
 
-	// checkAndRunBulkBackup should call runScheduledBulkBackup when no device IDs exist.
-	// With a real BackupService backed by stubDeviceRepo (returns no devices),
-	// TriggerBulkBackup returns immediately without error. No panic = backup was triggered.
 	interval := 24 * time.Hour
 	scheduler.checkAndRunBulkBackup(context.Background(), interval)
-	// If we reach here without panic, the trigger path executed successfully.
+	if got := svc.startCalls.Load(); got != 1 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 1", got)
+	}
 }
 
 // TestCheckAndRunBulkBackup_IntervalElapsed verifies that a bulk backup is triggered
@@ -454,7 +481,7 @@ func TestCheckAndRunBulkBackup_IntervalElapsed(t *testing.T) {
 		latestByDevice: map[uuid.UUID]*domain.BackupJob{deviceID: oldJob},
 	}
 
-	svc := newTestDeviceBackupService(jobRepo)
+	svc := &mockScheduledBackupService{}
 	settingsRepo := newMockWorkerSettingsRepo()
 
 	scheduler := &DeviceBackupScheduler{
@@ -464,9 +491,94 @@ func TestCheckAndRunBulkBackup_IntervalElapsed(t *testing.T) {
 	}
 
 	interval := 24 * time.Hour
-	// With last backup 25h ago and interval=24h, the elapsed time >= interval → triggers backup.
-	// TriggerBulkBackup returns immediately (stubDeviceRepo returns no devices). No panic = triggered.
 	scheduler.checkAndRunBulkBackup(context.Background(), interval)
+	if got := svc.startCalls.Load(); got != 1 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 1", got)
+	}
+}
+
+func TestCheckAndRunBulkBackup_NoSuccessfulJobsStartsPersistentRun(t *testing.T) {
+	deviceID := uuid.New()
+	jobRepo := &checkBulkJobRepo{
+		deviceIDs:      []uuid.UUID{deviceID},
+		latestByDevice: map[uuid.UUID]*domain.BackupJob{},
+	}
+
+	svc := &mockScheduledBackupService{}
+	scheduler := &DeviceBackupScheduler{
+		backupService: svc,
+		jobRepo:       jobRepo,
+		settingsRepo:  newMockWorkerSettingsRepo(),
+	}
+
+	scheduler.checkAndRunBulkBackup(context.Background(), 24*time.Hour)
+	if got := svc.startCalls.Load(); got != 1 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 1", got)
+	}
+}
+
+func TestCheckAndRunBulkBackup_ActivePersistentRunSkipsStart(t *testing.T) {
+	svc := &mockScheduledBackupService{
+		latestRun: &domain.BulkBackupRun{
+			ID:        uuid.New(),
+			Status:    domain.BulkBackupRunStatusRunning,
+			CreatedAt: time.Now().Add(-25 * time.Hour),
+		},
+	}
+	scheduler := &DeviceBackupScheduler{
+		backupService: svc,
+		jobRepo:       &checkBulkJobRepo{},
+		settingsRepo:  newMockWorkerSettingsRepo(),
+	}
+
+	scheduler.checkAndRunBulkBackup(context.Background(), 24*time.Hour)
+	if got := svc.startCalls.Load(); got != 0 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 0", got)
+	}
+}
+
+func TestCheckAndRunBulkBackup_RecentPersistentRunSkipsStart(t *testing.T) {
+	completedAt := time.Now().Add(-1 * time.Hour)
+	svc := &mockScheduledBackupService{
+		latestRun: &domain.BulkBackupRun{
+			ID:          uuid.New(),
+			Status:      domain.BulkBackupRunStatusPartial,
+			CreatedAt:   time.Now().Add(-2 * time.Hour),
+			CompletedAt: &completedAt,
+		},
+	}
+	scheduler := &DeviceBackupScheduler{
+		backupService: svc,
+		jobRepo:       &checkBulkJobRepo{},
+		settingsRepo:  newMockWorkerSettingsRepo(),
+	}
+
+	scheduler.checkAndRunBulkBackup(context.Background(), 24*time.Hour)
+	if got := svc.startCalls.Load(); got != 0 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 0", got)
+	}
+}
+
+func TestCheckAndRunBulkBackup_OldPersistentRunStartsNewRun(t *testing.T) {
+	completedAt := time.Now().Add(-25 * time.Hour)
+	svc := &mockScheduledBackupService{
+		latestRun: &domain.BulkBackupRun{
+			ID:          uuid.New(),
+			Status:      domain.BulkBackupRunStatusPartial,
+			CreatedAt:   time.Now().Add(-26 * time.Hour),
+			CompletedAt: &completedAt,
+		},
+	}
+	scheduler := &DeviceBackupScheduler{
+		backupService: svc,
+		jobRepo:       &checkBulkJobRepo{},
+		settingsRepo:  newMockWorkerSettingsRepo(),
+	}
+
+	scheduler.checkAndRunBulkBackup(context.Background(), 24*time.Hour)
+	if got := svc.startCalls.Load(); got != 1 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 1", got)
+	}
 }
 
 // TestCheckAndRunBulkBackup_IntervalNotElapsed verifies that no backup is triggered
@@ -480,20 +592,13 @@ func TestCheckAndRunBulkBackup_IntervalNotElapsed(t *testing.T) {
 		CreatedAt: time.Now().Add(-1 * time.Hour), // 1h ago, interval is 24h
 	}
 
-	// Track whether TriggerBulkBackup is called by recording whether the DeviceRepo is hit.
-	// We use a counting device repo to detect if TriggerBulkBackup was called.
-	type countingDeviceRepo struct {
-		stubDeviceRepo
-		callCount atomic.Int64
-	}
-
 	jobRepo := &checkBulkJobRepo{
 		deviceIDs:      []uuid.UUID{deviceID},
 		latestByDevice: map[uuid.UUID]*domain.BackupJob{deviceID: recentJob},
 	}
 
 	settingsRepo := newMockWorkerSettingsRepo()
-	svc := newTestDeviceBackupService(jobRepo)
+	svc := &mockScheduledBackupService{}
 
 	scheduler := &DeviceBackupScheduler{
 		backupService: svc,
@@ -502,26 +607,15 @@ func TestCheckAndRunBulkBackup_IntervalNotElapsed(t *testing.T) {
 	}
 
 	interval := 24 * time.Hour
-	// With last backup only 1h ago and interval=24h, elapsed time < interval → no backup triggered.
-	// We verify this by ensuring no panic and relying on the implementation's time.Since check.
-	// The only observable side-effect of triggering is calling TriggerBulkBackup, which would
-	// call deviceRepo.GetAll. Since the job is recent, that path is NOT taken.
 	scheduler.checkAndRunBulkBackup(context.Background(), interval)
-	// Test passes if no panic — the scheduler correctly skipped the backup.
+	if got := svc.startCalls.Load(); got != 0 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 0", got)
+	}
 }
 
 // TestCheckAndRunBulkBackup_IntervalZeroDisabled verifies that tick() skips
 // checkAndRunBulkBackup entirely when the interval is 0 (scheduling disabled).
 func TestCheckAndRunBulkBackup_IntervalZeroDisabled(t *testing.T) {
-	// A jobRepo that panics if ListAllDeviceIDs is called — proves checkAndRunBulkBackup
-	// was never invoked when interval=0.
-	type panicOnCallRepo struct {
-		checkBulkJobRepo
-	}
-	panicRepo := &panicOnCallRepo{}
-	panicRepo.deviceIDs = nil
-	// Override ListAllDeviceIDs to record if called
-	called := false
 	jobRepo := &checkBulkJobRepo{
 		deviceIDs:      nil,
 		latestByDevice: map[uuid.UUID]*domain.BackupJob{},
@@ -529,16 +623,16 @@ func TestCheckAndRunBulkBackup_IntervalZeroDisabled(t *testing.T) {
 
 	settingsRepo := newMockWorkerSettingsRepo()
 	settingsRepo.Set(domain.SettingDeviceBackupIntervalHours, "0")
-	_ = called
+	svc := &mockScheduledBackupService{}
 
 	scheduler := &DeviceBackupScheduler{
-		backupService: nil, // should never be reached when interval=0
+		backupService: svc,
 		jobRepo:       jobRepo,
 		settingsRepo:  settingsRepo,
 	}
 
-	// tick() reads the interval setting and skips checkAndRunBulkBackup when interval=0.
-	// runRetention will be called (reads from jobRepo but returns immediately — no devices).
-	// We must not panic, which proves the disabled-interval path is respected.
 	scheduler.tick(context.Background())
+	if got := svc.startCalls.Load(); got != 0 {
+		t.Fatalf("StartBulkBackupRun calls = %d, want 0", got)
+	}
 }
