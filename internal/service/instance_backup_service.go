@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -161,6 +162,11 @@ func NewInstanceBackupService(
 
 // SetRestoreArchiveLimitsForTest overrides restore archive quotas in focused tests.
 func (s *InstanceBackupService) SetRestoreArchiveLimitsForTest(limits RestoreArchiveLimits) {
+	s.SetRestoreArchiveLimits(limits)
+}
+
+// SetRestoreArchiveLimits overrides restore archive quotas.
+func (s *InstanceBackupService) SetRestoreArchiveLimits(limits RestoreArchiveLimits) {
 	s.restoreLimits = normalizeRestoreArchiveLimits(limits)
 }
 
@@ -171,6 +177,11 @@ func (s *InstanceBackupService) RestoreArchiveLimits() RestoreArchiveLimits {
 
 // SetBackupArchiveLimitsForTest overrides backup archive quotas in focused tests.
 func (s *InstanceBackupService) SetBackupArchiveLimitsForTest(limits BackupArchiveLimits) {
+	s.SetBackupArchiveLimits(limits)
+}
+
+// SetBackupArchiveLimits overrides backup archive creation quotas.
+func (s *InstanceBackupService) SetBackupArchiveLimits(limits BackupArchiveLimits) {
 	s.backupLimits = normalizeBackupArchiveLimits(limits)
 }
 
@@ -383,13 +394,26 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		cleanupOnError(fmt.Sprintf("marshaling manifest: %v", err), err)
 		return nil, fmt.Errorf("marshaling manifest: %w", err)
 	}
-	manifest.TotalSizeBytes = totalSourceBytes + int64(len(manifestJSON))
+	estimatedManifestTotal, err := checkedArchiveByteTotal(
+		totalSourceBytes,
+		int64(len(manifestJSON)),
+		limits.MaxTotalBytes,
+	)
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
+		return nil, err
+	}
+	manifest.TotalSizeBytes = estimatedManifestTotal
 	manifestJSON, err = json.MarshalIndent(&manifest, "", "  ")
 	if err != nil {
 		cleanupOnError(fmt.Sprintf("marshaling manifest: %v", err), err)
 		return nil, fmt.Errorf("marshaling manifest: %w", err)
 	}
-	totalArchiveBytes := totalSourceBytes + int64(len(manifestJSON))
+	totalArchiveBytes, err := checkedArchiveByteTotal(totalSourceBytes, int64(len(manifestJSON)), limits.MaxTotalBytes)
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
+		return nil, err
+	}
 	manifest.TotalSizeBytes = totalArchiveBytes
 	if err := checkBackupArchiveTotals(totalArchiveBytes, archiveFileEntries+1, limits); err != nil {
 		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
@@ -666,6 +690,19 @@ func checkBackupArchiveTotals(totalBytes int64, fileEntries int, limits BackupAr
 	return nil
 }
 
+func checkedArchiveByteTotal(current int64, increment int64, maxTotal int64) (int64, error) {
+	if increment < 0 {
+		return 0, fmt.Errorf("archive byte increment must be non-negative")
+	}
+	if current < 0 {
+		return 0, fmt.Errorf("archive byte total must be non-negative")
+	}
+	if current > maxTotal || increment > maxTotal-current {
+		return 0, newRestoreLimitError("backup archive exceeds expanded backup limit: current %d bytes plus %d bytes exceeds %d bytes", current, increment, maxTotal)
+	}
+	return current + increment, nil
+}
+
 func isArchiveQuotaError(err error) bool {
 	var limitErr *RestoreLimitError
 	return errors.As(err, &limitErr)
@@ -715,7 +752,10 @@ func (s *InstanceBackupService) collectArchiveSourceFiles(ctx context.Context, l
 			if err := checkBackupArchiveEntryQuota(archiveName, info.Size(), limits); err != nil {
 				return err
 			}
-			totalBytes += info.Size()
+			totalBytes, err = checkedArchiveByteTotal(totalBytes, info.Size(), limits.MaxTotalBytes)
+			if err != nil {
+				return err
+			}
 			fileEntries++
 			if err := checkBackupArchiveTotals(totalBytes, fileEntries, limits); err != nil {
 				return err
@@ -741,7 +781,10 @@ func (s *InstanceBackupService) collectArchiveSourceFiles(ctx context.Context, l
 		if err := checkBackupArchiveEntryQuota("known_hosts", info.Size(), limits); err != nil {
 			return nil, 0, nil, 0, 0, err
 		}
-		totalBytes += info.Size()
+		totalBytes, err = checkedArchiveByteTotal(totalBytes, info.Size(), limits.MaxTotalBytes)
+		if err != nil {
+			return nil, 0, nil, 0, 0, err
+		}
 		fileEntries++
 		if err := checkBackupArchiveTotals(totalBytes, fileEntries, limits); err != nil {
 			return nil, 0, nil, 0, 0, err
@@ -1350,18 +1393,12 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 			return fmt.Errorf("unsupported restore archive entry type %c: %s", header.Typeflag, header.Name)
 		}
 
-		entryName := strings.TrimPrefix(header.Name, "./")
-
-		// Security: validate path has no traversal (T-17-01)
-		if archiveEntryHasTraversal(entryName) {
-			return fmt.Errorf("archive contains path traversal: %s", header.Name)
-		}
-		cleanName := filepath.Clean(entryName)
-		if filepath.IsAbs(cleanName) {
-			return fmt.Errorf("archive contains absolute path: %s", header.Name)
+		cleanName, err := cleanRestoreArchiveEntryName(header.Name)
+		if err != nil {
+			return err
 		}
 
-		targetPath := filepath.Join(destDir, cleanName)
+		targetPath := filepath.Join(destDir, filepath.FromSlash(cleanName))
 		archiveEntries++
 		if archiveEntries > limits.MaxFileEntries {
 			return newRestoreLimitError(
@@ -1417,6 +1454,25 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 	}
 
 	return nil
+}
+
+func cleanRestoreArchiveEntryName(name string) (string, error) {
+	entryName := strings.ReplaceAll(name, "\\", "/")
+	for strings.HasPrefix(entryName, "./") {
+		entryName = strings.TrimPrefix(entryName, "./")
+	}
+
+	if archiveEntryHasTraversal(entryName) {
+		return "", fmt.Errorf("archive contains path traversal: %s", name)
+	}
+	cleanName := path.Clean(entryName)
+	if cleanName == "." {
+		return "", fmt.Errorf("disallowed restore archive entry: %s", name)
+	}
+	if strings.HasPrefix(cleanName, "/") {
+		return "", fmt.Errorf("archive contains absolute path: %s", name)
+	}
+	return cleanName, nil
 }
 
 func archiveEntryHasTraversal(name string) bool {

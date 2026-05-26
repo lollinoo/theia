@@ -421,6 +421,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		cfg.DBDSN,
 		encryptionKey,
 	)
+	configureInstanceBackupArchiveLimits(instanceBackupService, cfg)
 	log.Printf("Instance backup directory: %s", paths.instanceBackupDir)
 	instanceBackupService.FailStaleRunning()
 	backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
@@ -544,6 +545,24 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	log.Println("Server stopped")
 	return nil
+}
+
+func configureInstanceBackupArchiveLimits(instanceBackupService *service.InstanceBackupService, cfg *runtimeConfig) {
+	if instanceBackupService == nil || cfg == nil {
+		return
+	}
+	instanceBackupService.SetRestoreArchiveLimits(service.RestoreArchiveLimits{
+		MaxCompressedBytes: cfg.RestoreArchiveLimits.MaxCompressedBytes,
+		MaxTotalBytes:      cfg.RestoreArchiveLimits.MaxTotalBytes,
+		MaxEntryBytes:      cfg.RestoreArchiveLimits.MaxEntryBytes,
+		MaxFileEntries:     cfg.RestoreArchiveLimits.MaxFileEntries,
+	})
+	instanceBackupService.SetBackupArchiveLimits(service.BackupArchiveLimits{
+		MaxTotalBytes:  cfg.InstanceBackupArchiveLimits.MaxTotalBytes,
+		MaxEntryBytes:  cfg.InstanceBackupArchiveLimits.MaxEntryBytes,
+		MaxFileEntries: cfg.InstanceBackupArchiveLimits.MaxFileEntries,
+		MaxDuration:    time.Duration(cfg.InstanceBackupArchiveLimits.MaxDurationSeconds) * time.Second,
+	})
 }
 
 func minutesToDuration(minutes int) time.Duration {
