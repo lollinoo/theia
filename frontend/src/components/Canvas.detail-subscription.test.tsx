@@ -59,15 +59,40 @@ vi.mock('@xyflow/react', async () => {
     ReactFlow: ({
       children,
       onNodeClick,
+      onEdgeClick,
       onPaneClick,
     }: {
       children: React.ReactNode;
       onNodeClick?: (event: unknown, node: { id: string; data: Record<string, never> }) => void;
+      onEdgeClick?: (event: unknown, edge: { id: string; data: Record<string, unknown> }) => void;
       onPaneClick?: () => void;
     }) => (
       <div>
         <button type="button" onClick={() => onNodeClick?.({}, { id: 'dev-1', data: {} })}>
           Trigger node click
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            onEdgeClick?.(
+              {},
+              {
+                id: 'link-1',
+                data: {
+                  link: {
+                    id: 'link-1',
+                    source_device_id: 'dev-1',
+                    target_device_id: 'dev-2',
+                    source_if_name: 'ether1',
+                    target_if_name: 'ether1',
+                    discovery_protocol: 'lldp',
+                  },
+                },
+              },
+            )
+          }
+        >
+          Trigger edge click
         </button>
         <button type="button" onClick={() => onPaneClick?.()}>
           Trigger pane click
@@ -197,6 +222,26 @@ describe('Canvas detail subscription', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open alerts' }));
     expect(onDetailDeviceChange.mock.calls).toEqual([[null]]);
+  });
+
+  it('opens node and link detail panels while canvas chrome is hidden', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+        chromeHidden
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger node click' }));
+    expect(screen.getByTestId('panel-state')).toHaveTextContent('deviceDetails');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger edge click' }));
+    expect(screen.getByTestId('panel-state')).toHaveTextContent('link-details');
   });
 
   it('does not re-render the minimap for runtime-only snapshot prop changes', () => {

@@ -56,7 +56,10 @@ export default function SearchOverlay({ devices, onSelectDevice }: SearchOverlay
   }
 
   return (
-    <div className="pointer-events-none fixed left-5 top-14 z-20 w-[min(420px,calc(100vw-2.5rem))]">
+    <div
+      data-testid="search-overlay"
+      className="pointer-events-none fixed left-5 top-20 z-20 w-[min(420px,calc(100vw-2.5rem))]"
+    >
       <div className="pointer-events-auto rounded-2xl border border-glass-border bg-glass-bg p-3 shadow-canvas dark:backdrop-blur-[16px] transition-colors duration-200">
         <label className="flex items-center gap-3 rounded-xl bg-elevated px-4 py-3">
           <MaterialIcon name="search" size={16} className="text-on-bg-secondary" />

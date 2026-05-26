@@ -933,6 +933,8 @@ export default function Canvas({
     },
     [currentTopologyFitViewPadding, reactFlow],
   );
+  const canvasChromeButtonClassName =
+    'topology-glass topology-floating-shadow flex h-11 w-11 items-center justify-center rounded-[16px] text-on-bg-secondary transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
 
   const handleToggleChrome = useCallback(() => {
     const nextHidden = !effectiveChromeHidden;
@@ -1021,19 +1023,49 @@ export default function Canvas({
       data-topology-zoom-band={topologyZoomBandRef.current}
       className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
     >
-      <button
-        type="button"
-        aria-label={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
-        title={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
-        aria-pressed={effectiveChromeHidden}
-        onClick={handleToggleChrome}
-        className="topology-glass topology-floating-shadow absolute right-4 top-4 z-[70] flex h-11 w-11 items-center justify-center rounded-[16px] text-on-bg-secondary transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-      >
-        <MaterialIcon name={effectiveChromeHidden ? 'close_fullscreen' : 'open_in_full'} />
-      </button>
-      {!effectiveChromeHidden && showSearch && (
-        <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />
-      )}
+      <div className="absolute right-4 top-4 z-[70] flex items-center gap-2">
+        {effectiveChromeHidden && (
+          <>
+            <button
+              type="button"
+              aria-label="Search devices"
+              title="Search devices"
+              onClick={() => setShowSearch((current) => !current)}
+              className={canvasChromeButtonClassName}
+            >
+              <MaterialIcon name="search" />
+            </button>
+            <button
+              type="button"
+              aria-label="Fit view"
+              title="Fit view"
+              onClick={() => {
+                fitTopologyView(topologyCleanViewFitPadding);
+                recordCanvasDiagnosticEvent({
+                  level: 'debug',
+                  source: 'reactflow',
+                  event: 'reactflow.fit_view',
+                  message: 'React Flow fitView requested from hidden chrome controls',
+                });
+              }}
+              className={canvasChromeButtonClassName}
+            >
+              <MaterialIcon name="fit_screen" />
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          aria-label={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
+          title={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
+          aria-pressed={effectiveChromeHidden}
+          onClick={handleToggleChrome}
+          className={canvasChromeButtonClassName}
+        >
+          <MaterialIcon name={effectiveChromeHidden ? 'close_fullscreen' : 'open_in_full'} />
+        </button>
+      </div>
+      {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
       {!effectiveChromeHidden && (
         <Toolbar
           onSearch={() => setShowSearch((s) => !s)}
@@ -1140,7 +1172,7 @@ export default function Canvas({
         })()}
 
       <SidePanel
-        open={!effectiveChromeHidden && !!panelContent}
+        open={!!panelContent}
         onClose={() => setPanelContent(null)}
         title={getPanelTitle()}
         testId={getCanvasDetailDeviceId(panelContent) !== null ? 'device-detail-panel' : undefined}
