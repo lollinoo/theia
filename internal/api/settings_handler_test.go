@@ -104,6 +104,27 @@ func TestSettingsHandlerUpdate_HappyPath(t *testing.T) {
 	}
 }
 
+func TestSettingsHandlerUpdate_PerDeviceGrafanaDashboardURLAllowed(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+	deviceID := "550e8400-e29b-41d4-a716-446655440000"
+	key := "grafana_dashboard_url:" + deviceID
+
+	body := `{"value":"https://grafana.example/d/router?var-device=edge-01"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+key, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ := repo.Get(key)
+	if got != "https://grafana.example/d/router?var-device=edge-01" {
+		t.Fatalf("expected legacy per-device grafana URL to persist, got %q", got)
+	}
+}
+
 func TestSettingsHandlerGet_LegacyBridgeSecretRejected(t *testing.T) {
 	repo := newMockSettingsRepo()
 	h := NewSettingsHandler(repo)

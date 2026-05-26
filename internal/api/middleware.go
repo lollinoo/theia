@@ -306,6 +306,11 @@ func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 	if strings.HasPrefix(path, "/api/v1/settings") {
 		return permissionsForMethod(method, domain.PermissionSettingsRead, "", domain.PermissionSettingsUpdate, ""), true
 	}
+	if path == "/api/v1/grafana/dashboard-profiles" ||
+		strings.HasPrefix(path, "/api/v1/grafana/dashboard-profiles/") ||
+		strings.HasPrefix(path, "/api/v1/grafana/device-overrides/") {
+		return permissionsForMethod(method, domain.PermissionSettingsRead, domain.PermissionSettingsUpdate, domain.PermissionSettingsUpdate, domain.PermissionSettingsUpdate), true
+	}
 	if path == "/api/v1/topology/canvas" || path == "/api/v1/canvas" {
 		return []string{domain.PermissionTopologyRead}, true
 	}
