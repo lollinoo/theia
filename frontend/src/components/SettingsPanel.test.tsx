@@ -121,6 +121,14 @@ describe('SettingsPanel (COMP-05)', () => {
     );
   });
 
+  it('does not render the legacy Grafana URL field in Integrations', () => {
+    render(<SettingsPanel />);
+
+    expect(screen.queryByLabelText('Grafana URL')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('http://localhost:3001')).not.toBeInTheDocument();
+    expect(screen.getByTestId('grafana-profile-manager')).toBeInTheDocument();
+  });
+
   it('uses stable label rows for device backup fields', async () => {
     render(<SettingsPanel />);
 
@@ -199,52 +207,6 @@ describe('SettingsPanel (COMP-05)', () => {
   });
 });
 
-// --- Gap 7: SettingsPanel URL validation on blur ---
-
-describe('SettingsPanel — Grafana URL validation on blur', () => {
-  it('shows error text when Grafana URL is blurred with an invalid value', async () => {
-    render(<SettingsPanel />);
-
-    const grafanaInput = screen.getByPlaceholderText('http://localhost:3001');
-    fireEvent.change(grafanaInput, { target: { value: 'not-a-url' } });
-    fireEvent.blur(grafanaInput);
-
-    await waitFor(() => {
-      expect(screen.getByText('URL must start with http:// or https://')).toBeInTheDocument();
-    });
-  });
-
-  it('applies border-status-down class to Grafana URL input on invalid blur', async () => {
-    render(<SettingsPanel />);
-
-    const grafanaInput = screen.getByPlaceholderText('http://localhost:3001');
-    fireEvent.change(grafanaInput, { target: { value: 'ftp://invalid' } });
-    fireEvent.blur(grafanaInput);
-
-    await waitFor(() => {
-      expect(grafanaInput.className).toContain('border-status-down');
-    });
-  });
-
-  it('clears Grafana URL error when user edits the field', async () => {
-    render(<SettingsPanel />);
-
-    const grafanaInput = screen.getByPlaceholderText('http://localhost:3001');
-    fireEvent.change(grafanaInput, { target: { value: 'not-a-url' } });
-    fireEvent.blur(grafanaInput);
-
-    await waitFor(() => {
-      expect(screen.getByText('URL must start with http:// or https://')).toBeInTheDocument();
-    });
-
-    fireEvent.change(grafanaInput, { target: { value: 'http://grafana.local' } });
-
-    await waitFor(() => {
-      expect(screen.queryByText('URL must start with http:// or https://')).not.toBeInTheDocument();
-    });
-  });
-});
-
 describe('SettingsPanel — Prometheus URL validation on blur', () => {
   it('shows error text when Prometheus URL is blurred with an invalid value', async () => {
     render(<SettingsPanel />);
@@ -262,22 +224,6 @@ describe('SettingsPanel — Prometheus URL validation on blur', () => {
 // --- Gap 8: SettingsPanel auto-save gated on validation ---
 
 describe('SettingsPanel — invalid URL prevents updateSetting call', () => {
-  it('does not call updateSetting for grafana_url when URL is invalid', async () => {
-    const { updateSetting } = await import('../api/client');
-    render(<SettingsPanel />);
-
-    const grafanaInput = screen.getByPlaceholderText('http://localhost:3001');
-    fireEvent.change(grafanaInput, { target: { value: 'not-a-url' } });
-
-    // scheduleGrafanaUpdate is called on change — but it gates on validateURL
-    // Give it a moment to check if updateSetting was called
-    await waitFor(() => {
-      const calls = (updateSetting as ReturnType<typeof vi.fn>).mock.calls;
-      const grafanaCalls = calls.filter(([key]: [string]) => key === 'grafana_url');
-      expect(grafanaCalls).toHaveLength(0);
-    });
-  });
-
   it('does not call updateSetting for prometheus_url when URL is invalid', async () => {
     const { updateSetting } = await import('../api/client');
     render(<SettingsPanel />);

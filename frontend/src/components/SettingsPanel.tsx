@@ -273,13 +273,11 @@ interface SettingsPanelProps {
 export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
-  const [grafanaUrl, setGrafanaUrl] = useState('');
   const [prometheusUrl, setPrometheusUrl] = useState('');
   const [timezone, setTimezone] = useState('UTC');
   const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] =
     useState<TopologyDiscoveryMode>('lldp_cdp');
   const [savedPolling, setSavedPolling] = useState(false);
-  const [savedGrafana, setSavedGrafana] = useState(false);
   const [savedPrometheus, setSavedPrometheus] = useState(false);
   const [savedTimezone, setSavedTimezone] = useState(false);
   const [savedTopologyDiscovery, setSavedTopologyDiscovery] = useState(false);
@@ -300,10 +298,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const pollingTimerRef = useRef<number | null>(null);
-  const grafanaTimerRef = useRef<number | null>(null);
   const prometheusTimerRef = useRef<number | null>(null);
   const savedPollingTimerRef = useRef<number | null>(null);
-  const savedGrafanaTimerRef = useRef<number | null>(null);
   const savedPrometheusTimerRef = useRef<number | null>(null);
   const savedTimezoneTimerRef = useRef<number | null>(null);
   const savedTopologyDiscoveryTimerRef = useRef<number | null>(null);
@@ -328,7 +324,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           setPollingValue('custom');
           setCustomPolling(interval);
         }
-        setGrafanaUrl(settings['grafana_url'] ?? '');
         setPrometheusUrl(settings['prometheus_url'] ?? '');
         setTimezone(settings['timezone'] || 'UTC');
         setTopologyDiscoveryDefaultMode(
@@ -416,24 +411,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
       void updateSetting('polling_interval_seconds', String(numVal)).then(() =>
         showSaved(setSavedPolling, savedPollingTimerRef),
       );
-    }, 500);
-  }
-
-  function scheduleGrafanaUpdate(value: string) {
-    if (grafanaTimerRef.current !== null) window.clearTimeout(grafanaTimerRef.current);
-    // Gate auto-save: if value is non-empty and fails URL validation, set error and skip save
-    if (value.trim() !== '') {
-      const err = validateURL(value, 'Grafana URL');
-      if (err) {
-        setFieldError('grafanaUrl', err);
-        return;
-      }
-    }
-    grafanaTimerRef.current = window.setTimeout(() => {
-      void updateSetting('grafana_url', value).then(() => {
-        showSaved(setSavedGrafana, savedGrafanaTimerRef);
-        onSettingsChange?.();
-      });
     }, 500);
   }
 
@@ -715,32 +692,11 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         <SettingsSection
           id="settings-integrations-heading"
           title="Integrations"
-          description="External observability endpoints used by dashboard links."
+          description="External observability endpoints used by metrics integrations."
           icon="hub"
           accent="primary"
         >
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>Grafana URL</span>
-                <SavedIndicator visible={savedGrafana} />
-              </span>
-              <input
-                type="url"
-                value={grafanaUrl}
-                placeholder="http://localhost:3001"
-                onChange={(e) => {
-                  setGrafanaUrl(e.target.value);
-                  setFieldError('grafanaUrl', null);
-                  scheduleGrafanaUpdate(e.target.value);
-                }}
-                onBlur={() => setFieldError('grafanaUrl', validateURL(grafanaUrl, 'Grafana URL'))}
-                className={controlClass(Boolean(fieldErrors.grafanaUrl))}
-              />
-              {fieldErrors.grafanaUrl && (
-                <span className="text-xs text-status-down">{fieldErrors.grafanaUrl}</span>
-              )}
-            </label>
+          <div className="grid gap-4">
             <label className="grid gap-1 text-sm">
               <span className="flex items-center justify-between gap-3">
                 <span className={fieldLabelClass}>Prometheus URL</span>

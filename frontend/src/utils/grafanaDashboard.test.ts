@@ -80,4 +80,60 @@ describe('resolveGrafanaDashboardUrl', () => {
       resolveGrafanaDashboardUrl(config, device(), { mapId: 'map-1', mapName: 'Core Map' }, ''),
     ).toBe('https://grafana.example/d/router?var-device=edge%2001&var-map=Core%20Map');
   });
+
+  it('uses discovered sysName for hostname templates when an existing device was added by IP', () => {
+    const config: GrafanaDashboardConfig = {
+      default_profile_id: 'router-profile',
+      profiles: [
+        {
+          id: 'router-profile',
+          name: 'Router',
+          url_template: 'https://grafana.example/d/router?var-routerboard={{hostname}}',
+          variable_source: 'hostname',
+        },
+      ],
+      device_overrides: {},
+    };
+
+    expect(
+      resolveGrafanaDashboardUrl(
+        config,
+        device({
+          hostname: '10.0.0.1',
+          ip: '10.0.0.1',
+          sys_name: 'edge-router-01',
+        }),
+        { mapId: 'map-1', mapName: 'Core Map' },
+        '',
+      ),
+    ).toBe('https://grafana.example/d/router?var-routerboard=edge-router-01');
+  });
+
+  it('keeps a manually configured hostname before the discovered sysName', () => {
+    const config: GrafanaDashboardConfig = {
+      default_profile_id: 'router-profile',
+      profiles: [
+        {
+          id: 'router-profile',
+          name: 'Router',
+          url_template: 'https://grafana.example/d/router?var-routerboard={{hostname}}',
+          variable_source: 'hostname',
+        },
+      ],
+      device_overrides: {},
+    };
+
+    expect(
+      resolveGrafanaDashboardUrl(
+        config,
+        device({
+          hostname: 'manual-router-name',
+          ip: '10.0.0.1',
+          sys_name: 'edge-router-01',
+        }),
+        { mapId: 'map-1', mapName: 'Core Map' },
+        '',
+      ),
+    ).toBe('https://grafana.example/d/router?var-routerboard=manual-router-name');
+  });
 });
