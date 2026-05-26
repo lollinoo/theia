@@ -22,8 +22,54 @@ type DeviceEntry = {
   jobId?: string;
 };
 
+type BulkBackupSession = {
+  phase: 'idle' | 'running' | 'done';
+  entries: DeviceEntry[];
+  error: string;
+  downloading: boolean;
+};
+
+const BULK_BACKUP_GROUP_SIZE = 10;
 const BULK_DEVICE_BATCH_SIZE = 100;
 const TERMINAL = new Set<DevicePhase>(['skipped', 'success', 'failed']);
+const initialBulkBackupSession: BulkBackupSession = {
+  phase: 'idle',
+  entries: [],
+  error: '',
+  downloading: false,
+};
+let bulkBackupSession: BulkBackupSession = initialBulkBackupSession;
+const bulkBackupSessionListeners = new Set<() => void>();
+
+function notifyBulkBackupSessionListeners(): void {
+  for (const listener of bulkBackupSessionListeners) {
+    listener();
+  }
+}
+
+function setBulkBackupSession(
+  next: BulkBackupSession | ((current: BulkBackupSession) => BulkBackupSession),
+): BulkBackupSession {
+  bulkBackupSession = typeof next === 'function' ? next(bulkBackupSession) : next;
+  notifyBulkBackupSessionListeners();
+  return bulkBackupSession;
+}
+
+function resetBulkBackupSession(): BulkBackupSession {
+  return setBulkBackupSession(initialBulkBackupSession);
+}
+
+function subscribeBulkBackupSession(listener: () => void): () => void {
+  bulkBackupSessionListeners.add(listener);
+  return () => {
+    bulkBackupSessionListeners.delete(listener);
+  };
+}
+
+export function __resetBulkBackupSessionForTests(): void {
+  bulkBackupSession = initialBulkBackupSession;
+  bulkBackupSessionListeners.clear();
+}
 
 function getDeviceName(d: Device): string {
   return d.tags?.display_name || d.sys_name || d.ip;
@@ -71,15 +117,30 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     [allDevices],
   );
   const deviceIdsKey = devices.map((d) => d.id).join('\0');
-  const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
-  const [entries, setEntries] = useState<DeviceEntry[]>([]);
-  const [error, setError] = useState('');
-  const [downloading, setDownloading] = useState(false);
+  const [session, setSession] = useState<BulkBackupSession>(() => bulkBackupSession);
+  const { phase, entries, error, downloading } = session;
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(
     () => new Set(devices.map((d) => d.id)),
   );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const entriesRef = useRef<DeviceEntry[]>([]);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const unsubscribe = subscribeBulkBackupSession(() => {
+      setSession(bulkBackupSession);
+    });
+    setSession(bulkBackupSession);
+    return () => {
+      mountedRef.current = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
 
   useEffect(() => {
     if (phase !== 'idle') return;
@@ -102,7 +163,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
-      setPhase('done');
+      setBulkBackupSession((current) => ({ ...current, phase: 'done' }));
     }
   }, [entries, phase]);
 
@@ -129,17 +190,24 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         }),
       );
 
-      setEntries((prev) => {
-        const next = prev.map((e) => {
+      setBulkBackupSession((current) => {
+        const next = current.entries.map((e) => {
           const r = results.find((x) => x?.deviceId === e.deviceId);
           if (!r) return e;
           return { ...e, phase: r.phase, reason: r.reason };
         });
         entriesRef.current = next;
-        return next;
+        return { ...current, entries: next };
       });
     }, 2000);
   }, []);
+
+  useEffect(() => {
+    if (phase !== 'running') return;
+    if (entries.some((entry) => entry.jobId && !TERMINAL.has(entry.phase))) {
+      startPolling();
+    }
+  }, [entries, phase, startPolling]);
 
   const selectedDevices = devices.filter((device) => selectedDeviceIds.has(device.id));
   const selectedCount = selectedDeviceIds.size;
@@ -165,57 +233,101 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   };
 
   const handleStart = async () => {
-    if (selectedDevices.length === 0) {
-      setError('Select at least one device to back up.');
+    if (bulkBackupSession.phase === 'running') {
       return;
     }
-    setPhase('running');
-    setError('');
+    if (selectedDevices.length === 0) {
+      setBulkBackupSession((current) => ({
+        ...current,
+        error: 'Select at least one device to back up.',
+      }));
+      return;
+    }
+    setBulkBackupSession({ phase: 'running', entries: [], error: '', downloading: false });
+
+    const onlineSelectedDevices = selectedDevices.filter((device) => device.status !== 'down');
+    const offlineEntries: DeviceEntry[] = selectedDevices
+      .filter((device) => device.status === 'down')
+      .map((device) => ({
+        deviceId: device.id,
+        deviceName: getDeviceName(device),
+        phase: 'skipped' as const,
+        reason: 'device offline',
+      }));
+    const preliminaryEntries: DeviceEntry[] = selectedDevices.map((device) => {
+      if (device.status === 'down') {
+        return {
+          deviceId: device.id,
+          deviceName: getDeviceName(device),
+          phase: 'skipped' as const,
+          reason: 'device offline',
+        };
+      }
+      return {
+        deviceId: device.id,
+        deviceName: getDeviceName(device),
+        phase: 'checking' as const,
+      };
+    });
+    entriesRef.current = preliminaryEntries;
+    setBulkBackupSession((current) => ({ ...current, entries: preliminaryEntries }));
+
+    if (onlineSelectedDevices.length === 0) {
+      setBulkBackupSession({
+        phase: 'running',
+        entries: offlineEntries,
+        error: '',
+        downloading: false,
+      });
+      return;
+    }
 
     // Pre-fetch credential profile assignments for all devices in parallel.
     // Eligibility requires at least one assigned credential profile (replaces legacy ssh_profile_id check).
     const profileResults = await Promise.allSettled(
-      selectedDevices.map((d) => fetchDeviceCredentialProfiles(d.id)),
+      onlineSelectedDevices.map((d) => fetchDeviceCredentialProfiles(d.id)),
     );
     const deviceHasProfile = new Map<string, boolean>();
-    for (let i = 0; i < selectedDevices.length; i++) {
+    for (let i = 0; i < onlineSelectedDevices.length; i++) {
       const result = profileResults[i];
       deviceHasProfile.set(
-        selectedDevices[i].id,
+        onlineSelectedDevices[i].id,
         result.status === 'fulfilled' && result.value.length > 0,
       );
     }
 
     // Build entries — pre-check eligibility
-    const initial: DeviceEntry[] = selectedDevices.map((d) => {
-      const name = getDeviceName(d);
-      if (!d.backup_supported) {
-        return {
-          deviceId: d.id,
-          deviceName: name,
-          phase: 'skipped' as const,
-          reason: 'backup not supported for this vendor',
-        };
-      }
-      if (!deviceHasProfile.get(d.id)) {
-        return {
-          deviceId: d.id,
-          deviceName: name,
-          phase: 'skipped' as const,
-          reason: 'no credential profile assigned',
-        };
-      }
-      return { deviceId: d.id, deviceName: name, phase: 'checking' as const };
-    });
+    const initial: DeviceEntry[] = offlineEntries.concat(
+      onlineSelectedDevices.map((d) => {
+        const name = getDeviceName(d);
+        if (!d.backup_supported) {
+          return {
+            deviceId: d.id,
+            deviceName: name,
+            phase: 'skipped' as const,
+            reason: 'backup not supported for this vendor',
+          };
+        }
+        if (!deviceHasProfile.get(d.id)) {
+          return {
+            deviceId: d.id,
+            deviceName: name,
+            phase: 'skipped' as const,
+            reason: 'no credential profile assigned',
+          };
+        }
+        return { deviceId: d.id, deviceName: name, phase: 'checking' as const };
+      }),
+    );
 
-    setEntries(initial);
     entriesRef.current = initial;
+    setBulkBackupSession((current) => ({ ...current, entries: initial }));
 
     const eligible = initial.filter((e) => e.phase === 'checking');
     if (eligible.length === 0) return; // completion useEffect handles phase transition
 
     let queuedCount = 0;
-    for (const batch of chunkArray(eligible, BULK_DEVICE_BATCH_SIZE)) {
+    for (const batch of chunkArray(eligible, BULK_BACKUP_GROUP_SIZE)) {
       try {
         const results = await triggerBulkBackup(batch.map((entry) => entry.deviceId));
         const resultByDevice = new Map(results.map((result) => [result.device_id, result]));
@@ -241,19 +353,18 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
           };
         });
         entriesRef.current = nextEntries;
-        setEntries(nextEntries);
+        setBulkBackupSession((current) => ({ ...current, entries: nextEntries }));
       } catch (err) {
         const reason = backupRequestErrorMessage(err);
-        setError(reason);
         const nextEntries = entriesRef.current.map((entry) =>
           entry.phase === 'checking' ? { ...entry, phase: 'skipped' as const, reason } : entry,
         );
         entriesRef.current = nextEntries;
-        setEntries(nextEntries);
+        setBulkBackupSession((current) => ({ ...current, entries: nextEntries, error: reason }));
         break;
       }
     }
-    if (queuedCount > 0) {
+    if (queuedCount > 0 && mountedRef.current) {
       startPolling();
     }
   };
@@ -266,8 +377,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const downloadBatchCount = Math.ceil(successCount / BULK_DEVICE_BATCH_SIZE);
 
   const handleDownloadZip = async () => {
-    setDownloading(true);
-    setError('');
+    setBulkBackupSession((current) => ({ ...current, downloading: true, error: '' }));
     try {
       const ids = entries.filter((e) => e.phase === 'success').map((e) => e.deviceId);
       const batches = chunkArray(ids, BULK_DEVICE_BATCH_SIZE);
@@ -281,9 +391,12 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Download failed');
+      setBulkBackupSession((current) => ({
+        ...current,
+        error: err instanceof Error ? err.message : 'Download failed',
+      }));
     } finally {
-      setDownloading(false);
+      setBulkBackupSession((current) => ({ ...current, downloading: false }));
     }
   };
 
@@ -295,7 +408,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         {phase === 'idle' && (
           <>
             {' '}
-            · {selectedCount} selected · batches of {BULK_DEVICE_BATCH_SIZE}
+            · {selectedCount} selected · groups of {BULK_BACKUP_GROUP_SIZE}
           </>
         )}
       </div>
@@ -459,6 +572,16 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                 : 'Download All as ZIP'}
           </button>
         </div>
+      )}
+
+      {phase === 'done' && (
+        <button
+          type="button"
+          onClick={resetBulkBackupSession}
+          className="w-full rounded-md border border-outline bg-surface px-3 py-2 text-xs font-medium text-on-bg-secondary hover:bg-surface-high transition-colors"
+        >
+          Start New Bulk Backup
+        </button>
       )}
 
       {/* No eligible devices */}
