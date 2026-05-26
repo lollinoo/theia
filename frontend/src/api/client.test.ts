@@ -2121,6 +2121,26 @@ describe('bulk backup runs', () => {
     );
   });
 
+  it('parses active persistent bulk backup run items', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({
+          data: {
+            ...runPayload,
+            items: [{ ...runPayload.items[0], status: 'active' }],
+          },
+        }),
+      ),
+    );
+
+    await expect(fetchBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({
+        items: [expect.objectContaining({ status: 'active' })],
+      }),
+    );
+  });
+
   it('pauses and resumes persistent bulk backup runs with CSRF', async () => {
     Object.defineProperty(document, 'cookie', {
       configurable: true,

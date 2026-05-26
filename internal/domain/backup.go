@@ -64,6 +64,7 @@ type BulkBackupRunItemStatus string
 const (
 	BulkBackupRunItemStatusChecking  BulkBackupRunItemStatus = "checking"
 	BulkBackupRunItemStatusSkipped   BulkBackupRunItemStatus = "skipped"
+	BulkBackupRunItemStatusActive    BulkBackupRunItemStatus = "active"
 	BulkBackupRunItemStatusQueued    BulkBackupRunItemStatus = "queued"
 	BulkBackupRunItemStatusRunning   BulkBackupRunItemStatus = "running"
 	BulkBackupRunItemStatusSuccess   BulkBackupRunItemStatus = "success"

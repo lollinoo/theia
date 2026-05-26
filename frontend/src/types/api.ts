@@ -705,6 +705,7 @@ export type BulkBackupRunStatus =
 export type BulkBackupRunItemStatus =
   | 'checking'
   | 'skipped'
+  | 'active'
   | 'queued'
   | 'running'
   | 'success'

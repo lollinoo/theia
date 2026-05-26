@@ -349,7 +349,7 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
         mockRunItem({
           device_id: 'dev-1',
           device_name: 'router-01',
-          status: 'running',
+          status: 'active',
         }),
         mockRunItem({
           device_id: 'dev-2',
@@ -387,7 +387,7 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
         mockRunItem({
           device_id: 'dev-1',
           device_name: 'router-01',
-          status: 'running',
+          status: 'active',
         }),
         mockRunItem({
           device_id: 'dev-2',

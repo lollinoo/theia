@@ -381,7 +381,9 @@ func (r *mockBulkBackupRunRepo) RecalculateRunCounters(runID uuid.UUID) (*domain
 	run.CancelledCount = 0
 	for _, item := range items {
 		switch item.Status {
-		case domain.BulkBackupRunItemStatusQueued, domain.BulkBackupRunItemStatusRunning:
+		case domain.BulkBackupRunItemStatusActive,
+			domain.BulkBackupRunItemStatusQueued,
+			domain.BulkBackupRunItemStatusRunning:
 			run.QueuedCount++
 		case domain.BulkBackupRunItemStatusSuccess:
 			run.SuccessCount++
@@ -1200,6 +1202,104 @@ func TestPauseBulkBackupRunMarksRunPausing(t *testing.T) {
 	}
 }
 
+func TestPrepareBulkRunBatchMarksClaimedItemsActive(t *testing.T) {
+	port := listenOnRandomPort(t)
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := newMockBulkBackupRunRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	deviceID := uuid.New()
+	runID := uuid.New()
+	itemID := uuid.New()
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID: uuid.New(), Name: "test-profile", Username: "admin", Port: port,
+		AuthMethod: domain.SSHAuthPassword, Role: "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
+		Status: domain.DeviceStatusUp, Tags: map[string]string{},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	if err := runRepo.CreateRun(
+		&domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusRunning, BatchSize: 10},
+		[]domain.BulkBackupRunItem{{
+			ID: itemID, RunID: runID, DeviceID: deviceID,
+			Status: domain.BulkBackupRunItemStatusChecking,
+		}},
+	); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+
+	queued := svc.prepareBulkRunBatch([]domain.BulkBackupRunItem{{
+		ID: itemID, RunID: runID, DeviceID: deviceID,
+		Status: domain.BulkBackupRunItemStatusChecking,
+	}})
+
+	if len(queued) != 1 {
+		t.Fatalf("queued len = %d, want 1", len(queued))
+	}
+	items, _ := runRepo.ListRunItems(runID)
+	if items[0].Status != domain.BulkBackupRunItemStatusActive || items[0].BackupJobID == nil {
+		t.Fatalf("item = %+v, want active with backup job", items[0])
+	}
+}
+
+func TestMarkBulkRunBatchActiveClaimsEntireBatch(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := newMockBulkBackupRunRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	runID := uuid.New()
+	firstItemID := uuid.New()
+	secondItemID := uuid.New()
+	if err := runRepo.CreateRun(
+		&domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusRunning, BatchSize: 10},
+		[]domain.BulkBackupRunItem{
+			{ID: firstItemID, RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusChecking},
+			{ID: secondItemID, RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusChecking},
+		},
+	); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+
+	active := svc.markBulkRunBatchActive([]domain.BulkBackupRunItem{
+		{ID: firstItemID, RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusChecking},
+		{ID: secondItemID, RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusChecking},
+	})
+
+	if len(active) != 2 {
+		t.Fatalf("active len = %d, want 2", len(active))
+	}
+	items, _ := runRepo.ListRunItems(runID)
+	if items[0].Status != domain.BulkBackupRunItemStatusActive {
+		t.Fatalf("first item status = %s, want active", items[0].Status)
+	}
+	if items[1].Status != domain.BulkBackupRunItemStatusActive {
+		t.Fatalf("second item status = %s, want active", items[1].Status)
+	}
+}
+
 func TestResumeBulkBackupRunRestartsPausedRun(t *testing.T) {
 	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusPaused)
 
@@ -1274,6 +1374,29 @@ func TestCancelPausedBulkBackupRunCancelsAllPendingItems(t *testing.T) {
 		}
 		return len(got) == len(items)
 	})
+}
+
+func TestCancelPendingBulkRunItemsKeepsActiveItemsCompleting(t *testing.T) {
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusCancelling)
+	activeID := uuid.New()
+	pendingID := uuid.New()
+	runRepo.mu.Lock()
+	runRepo.items[runID] = []domain.BulkBackupRunItem{
+		{ID: activeID, RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusActive},
+		{ID: pendingID, RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusChecking},
+	}
+	items := append([]domain.BulkBackupRunItem(nil), runRepo.items[runID]...)
+	runRepo.mu.Unlock()
+
+	svc.cancelPendingBulkRunItems(runID, items)
+
+	got, _ := runRepo.ListRunItems(runID)
+	if got[0].Status != domain.BulkBackupRunItemStatusActive {
+		t.Fatalf("active item status = %s, want active", got[0].Status)
+	}
+	if got[1].Status != domain.BulkBackupRunItemStatusCancelled {
+		t.Fatalf("pending item status = %s, want cancelled", got[1].Status)
+	}
 }
 
 func TestStartBulkBackupRunAcceptsMoreDevicesThanLegacyBulkRequestLimit(t *testing.T) {

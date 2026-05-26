@@ -1502,6 +1502,7 @@ const bulkBackupRunStatuses: BulkBackupRunStatus[] = [
 const bulkBackupRunItemStatuses: BulkBackupRunItemStatus[] = [
   'checking',
   'skipped',
+  'active',
   'queued',
   'running',
   'success',

@@ -184,6 +184,7 @@ func TestBulkBackupRunRepoRecalculatesCounters(t *testing.T) {
 	runID := uuid.New()
 	run := &domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusRunning, BatchSize: 10}
 	items := []domain.BulkBackupRunItem{
+		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusActive},
 		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusQueued},
 		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusSuccess},
 		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusFailed, Reason: "boom"},
@@ -198,12 +199,12 @@ func TestBulkBackupRunRepoRecalculatesCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecalculateRunCounters: %v", err)
 	}
-	if recalculated.TotalCount != 5 ||
-		recalculated.QueuedCount != 1 ||
+	if recalculated.TotalCount != 6 ||
+		recalculated.QueuedCount != 2 ||
 		recalculated.SuccessCount != 1 ||
 		recalculated.FailedCount != 1 ||
 		recalculated.SkippedCount != 1 ||
 		recalculated.CancelledCount != 1 {
-		t.Fatalf("counters = %+v, want 5 total and one per terminal/queued status", recalculated)
+		t.Fatalf("counters = %+v, want 6 total and active counted as queued", recalculated)
 	}
 }

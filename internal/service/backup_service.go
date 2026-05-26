@@ -608,7 +608,8 @@ func (s *BackupService) processBulkBackupRun(runID uuid.UUID) {
 func (s *BackupService) prepareBulkRunBatch(items []domain.BulkBackupRunItem) []queuedDeviceBackup {
 	queued := make([]queuedDeviceBackup, 0, len(items))
 	now := time.Now().UTC()
-	for _, item := range items {
+	activeItems := s.markBulkRunBatchActive(items)
+	for _, item := range activeItems {
 		device, err := s.deviceRepo.GetByID(item.DeviceID)
 		if err != nil {
 			s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusFailed, fmt.Sprintf("getting device: %v", err), nil)
@@ -638,8 +639,7 @@ func (s *BackupService) prepareBulkRunBatch(items []domain.BulkBackupRunItem) []
 			s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusFailed, fmt.Sprintf("failed to create job: %v", err), nil)
 			continue
 		}
-		item.Status = domain.BulkBackupRunItemStatusQueued
-		item.Reason = ""
+		item.Status = domain.BulkBackupRunItemStatusActive
 		item.BackupJobID = &job.ID
 		item.UpdatedAt = now
 		item.CompletedAt = nil
@@ -656,6 +656,24 @@ func (s *BackupService) prepareBulkRunBatch(items []domain.BulkBackupRunItem) []
 		})
 	}
 	return queued
+}
+
+func (s *BackupService) markBulkRunBatchActive(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
+	now := time.Now().UTC()
+	activeItems := make([]domain.BulkBackupRunItem, 0, len(items))
+	for _, item := range items {
+		item.Status = domain.BulkBackupRunItemStatusActive
+		item.Reason = ""
+		item.UpdatedAt = now
+		item.CompletedAt = nil
+		if err := s.bulkRunRepo.UpdateRunItem(&item); err != nil {
+			log.Printf("Warning: failed to mark bulk run item %s active: %v", item.ID, err)
+			continue
+		}
+		s.recalculateBulkRunCounters(item.RunID)
+		activeItems = append(activeItems, item)
+	}
+	return activeItems
 }
 
 func (s *BackupService) waitForBulkRunBatch(runID uuid.UUID, batch []domain.BulkBackupRunItem) {
@@ -719,7 +737,9 @@ func (s *BackupService) completeBulkRunItem(item domain.BulkBackupRunItem, statu
 
 func (s *BackupService) cancelPendingBulkRunItems(runID uuid.UUID, items []domain.BulkBackupRunItem) {
 	for _, item := range items {
-		if bulkRunItemTerminal(item.Status) || item.Status == domain.BulkBackupRunItemStatusRunning {
+		if bulkRunItemTerminal(item.Status) ||
+			item.Status == domain.BulkBackupRunItemStatusActive ||
+			item.Status == domain.BulkBackupRunItemStatusRunning {
 			continue
 		}
 		s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusCancelled, "bulk backup cancelled", nil)
@@ -730,7 +750,8 @@ func (s *BackupService) cancelPendingBulkRunItems(runID uuid.UUID, items []domai
 func runningBulkRunItems(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
 	running := make([]domain.BulkBackupRunItem, 0)
 	for _, item := range items {
-		if item.Status == domain.BulkBackupRunItemStatusRunning {
+		if item.Status == domain.BulkBackupRunItemStatusActive ||
+			item.Status == domain.BulkBackupRunItemStatusRunning {
 			running = append(running, item)
 		}
 	}

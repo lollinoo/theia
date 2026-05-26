@@ -22,6 +22,7 @@ interface BulkBackupPanelProps {
 
 type DevicePhase =
   | 'checking'
+  | 'active'
   | 'queued'
   | 'skipped'
   | 'running'
@@ -173,18 +174,20 @@ function controlProgressSummary(
   entries: DeviceEntry[],
   status?: BulkBackupRunStatus,
 ): string | null {
-  const completingCount = entries.filter((entry) => entry.phase === 'running').length;
+  const activeCount = entries.filter(
+    (entry) => entry.phase === 'active' || entry.phase === 'running',
+  ).length;
   const pendingCount = entries.filter(isPendingControlDevice).length;
 
   if (status === 'pausing') {
     const parts = [];
-    if (completingCount > 0) parts.push(`${completingCount} completing`);
+    if (activeCount > 0) parts.push(`${activeCount} completing`);
     if (pendingCount > 0) parts.push(`${pendingCount} will pause`);
     return parts.length > 0 ? parts.join('; ') : null;
   }
   if (status === 'cancelling') {
     const parts = [];
-    if (completingCount > 0) parts.push(`${completingCount} completing`);
+    if (activeCount > 0) parts.push(`${activeCount} completing`);
     if (pendingCount > 0) parts.push(`${pendingCount} will stop`);
     return parts.length > 0 ? parts.join('; ') : null;
   }
@@ -199,15 +202,18 @@ function deviceStatusLabel(entry: DeviceEntry, runStatus?: BulkBackupRunStatus):
     return 'stopped';
   }
   if (runStatus === 'pausing') {
-    if (entry.phase === 'running') return 'completing';
+    if (entry.phase === 'active' || entry.phase === 'running') return 'completing';
     if (isPendingControlDevice(entry)) return 'will pause';
   }
   if (runStatus === 'paused' && isPendingControlDevice(entry)) {
     return 'paused';
   }
   if (runStatus === 'cancelling') {
-    if (entry.phase === 'running') return 'completing';
+    if (entry.phase === 'active' || entry.phase === 'running') return 'completing';
     if (isPendingControlDevice(entry)) return 'will stop';
+  }
+  if (entry.phase === 'active') {
+    return 'preparing...';
   }
   return entry.phase === 'checking' ? 'checking...' : entry.phase;
 }
@@ -219,7 +225,12 @@ function deviceStatusClassName(entry: DeviceEntry, runStatus?: BulkBackupRunStat
   if (entry.phase === 'skipped') return 'text-warning';
   if (label === 'will stop' || label === 'stopped') return 'text-status-down';
   if (label === 'will pause' || label === 'paused') return 'text-on-bg-secondary';
-  if (label === 'completing' || label === 'checking...' || entry.phase === 'running') {
+  if (
+    label === 'completing' ||
+    label === 'preparing...' ||
+    label === 'checking...' ||
+    entry.phase === 'running'
+  ) {
     return 'text-primary animate-pulse';
   }
   return 'text-on-bg-secondary';

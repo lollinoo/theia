@@ -548,7 +548,10 @@ func (r *bulkBackupRunRepoForHandler) RecalculateRunCounters(runID uuid.UUID) (*
 	run.CancelledCount = 0
 	for _, item := range r.items[runID] {
 		switch item.Status {
-		case domain.BulkBackupRunItemStatusQueued, domain.BulkBackupRunItemStatusRunning, domain.BulkBackupRunItemStatusChecking:
+		case domain.BulkBackupRunItemStatusActive,
+			domain.BulkBackupRunItemStatusQueued,
+			domain.BulkBackupRunItemStatusRunning,
+			domain.BulkBackupRunItemStatusChecking:
 			run.QueuedCount++
 		case domain.BulkBackupRunItemStatusSuccess:
 			run.SuccessCount++
