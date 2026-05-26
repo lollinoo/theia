@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchBackupJob,
   fetchDeviceCredentialProfiles,
@@ -22,6 +22,7 @@ type DeviceEntry = {
   jobId?: string;
 };
 
+const BULK_DEVICE_BATCH_SIZE = 100;
 const TERMINAL = new Set<DevicePhase>(['skipped', 'success', 'failed']);
 
 function getDeviceName(d: Device): string {
@@ -51,14 +52,39 @@ function jobStatusToDevicePhase(status: string): DevicePhase {
   return 'queued';
 }
 
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function bulkDownloadBatchFilename(batchIndex: number, batchCount: number): string {
+  const timestamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  return `THEIA_BACKUPS_batch-${batchIndex + 1}-of-${batchCount}_${timestamp}.zip`;
+}
+
 export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
-  const devices = allDevices.filter((d) => d.device_type !== 'virtual');
+  const devices = useMemo(
+    () => allDevices.filter((d) => d.device_type !== 'virtual'),
+    [allDevices],
+  );
+  const deviceIdsKey = devices.map((d) => d.id).join('\0');
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
   const [entries, setEntries] = useState<DeviceEntry[]>([]);
   const [error, setError] = useState('');
   const [downloading, setDownloading] = useState(false);
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(
+    () => new Set(devices.map((d) => d.id)),
+  );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const entriesRef = useRef<DeviceEntry[]>([]);
+
+  useEffect(() => {
+    if (phase !== 'idle') return;
+    setSelectedDeviceIds(new Set(devices.map((d) => d.id)));
+  }, [deviceIdsKey, phase]);
 
   // Cleanup on unmount
   useEffect(
@@ -115,23 +141,53 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     }, 2000);
   }, []);
 
+  const selectedDevices = devices.filter((device) => selectedDeviceIds.has(device.id));
+  const selectedCount = selectedDeviceIds.size;
+
+  const setAllDevicesSelected = () => {
+    setSelectedDeviceIds(new Set(devices.map((device) => device.id)));
+  };
+
+  const clearSelectedDevices = () => {
+    setSelectedDeviceIds(new Set());
+  };
+
+  const toggleSelectedDevice = (deviceID: string) => {
+    setSelectedDeviceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(deviceID)) {
+        next.delete(deviceID);
+      } else {
+        next.add(deviceID);
+      }
+      return next;
+    });
+  };
+
   const handleStart = async () => {
+    if (selectedDevices.length === 0) {
+      setError('Select at least one device to back up.');
+      return;
+    }
     setPhase('running');
     setError('');
 
     // Pre-fetch credential profile assignments for all devices in parallel.
     // Eligibility requires at least one assigned credential profile (replaces legacy ssh_profile_id check).
     const profileResults = await Promise.allSettled(
-      devices.map((d) => fetchDeviceCredentialProfiles(d.id)),
+      selectedDevices.map((d) => fetchDeviceCredentialProfiles(d.id)),
     );
     const deviceHasProfile = new Map<string, boolean>();
-    for (let i = 0; i < devices.length; i++) {
+    for (let i = 0; i < selectedDevices.length; i++) {
       const result = profileResults[i];
-      deviceHasProfile.set(devices[i].id, result.status === 'fulfilled' && result.value.length > 0);
+      deviceHasProfile.set(
+        selectedDevices[i].id,
+        result.status === 'fulfilled' && result.value.length > 0,
+      );
     }
 
     // Build entries — pre-check eligibility
-    const initial: DeviceEntry[] = devices.map((d) => {
+    const initial: DeviceEntry[] = selectedDevices.map((d) => {
       const name = getDeviceName(d);
       if (!d.backup_supported) {
         return {
@@ -158,45 +214,47 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     const eligible = initial.filter((e) => e.phase === 'checking');
     if (eligible.length === 0) return; // completion useEffect handles phase transition
 
-    try {
-      const results = await triggerBulkBackup(eligible.map((entry) => entry.deviceId));
-      const resultByDevice = new Map(results.map((result) => [result.device_id, result]));
-      let queuedCount = 0;
-      const nextEntries = entriesRef.current.map((entry) => {
-        if (entry.phase !== 'checking') return entry;
-        const result = resultByDevice.get(entry.deviceId);
-        if (!result) {
+    let queuedCount = 0;
+    for (const batch of chunkArray(eligible, BULK_DEVICE_BATCH_SIZE)) {
+      try {
+        const results = await triggerBulkBackup(batch.map((entry) => entry.deviceId));
+        const resultByDevice = new Map(results.map((result) => [result.device_id, result]));
+        const batchIDs = new Set(batch.map((entry) => entry.deviceId));
+        const nextEntries = entriesRef.current.map((entry) => {
+          if (entry.phase !== 'checking' || !batchIDs.has(entry.deviceId)) return entry;
+          const result = resultByDevice.get(entry.deviceId);
+          if (!result) {
+            return {
+              ...entry,
+              phase: 'skipped' as const,
+              reason: 'backup request returned no result',
+            };
+          }
+          if (result.status === 'queued' && result.job_id) {
+            queuedCount++;
+            return { ...entry, phase: 'queued' as const, jobId: result.job_id };
+          }
           return {
             ...entry,
             phase: 'skipped' as const,
-            reason: 'backup request returned no result',
+            reason: result.reason || 'backup job was not queued',
           };
-        }
-        if (result.status === 'queued' && result.job_id) {
-          queuedCount++;
-          return { ...entry, phase: 'queued' as const, jobId: result.job_id };
-        }
-        return {
-          ...entry,
-          phase: 'skipped' as const,
-          reason: result.reason || 'backup job was not queued',
-        };
-      });
-      entriesRef.current = nextEntries;
-      setEntries(nextEntries);
-      if (queuedCount > 0) {
-        startPolling();
-      }
-    } catch (err) {
-      const reason = backupRequestErrorMessage(err);
-      setError(reason);
-      setEntries((prev) => {
-        const next = prev.map((entry) =>
+        });
+        entriesRef.current = nextEntries;
+        setEntries(nextEntries);
+      } catch (err) {
+        const reason = backupRequestErrorMessage(err);
+        setError(reason);
+        const nextEntries = entriesRef.current.map((entry) =>
           entry.phase === 'checking' ? { ...entry, phase: 'skipped' as const, reason } : entry,
         );
-        entriesRef.current = next;
-        return next;
-      });
+        entriesRef.current = nextEntries;
+        setEntries(nextEntries);
+        break;
+      }
+    }
+    if (queuedCount > 0) {
+      startPolling();
     }
   };
 
@@ -205,12 +263,23 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const skippedCount = entries.filter((e) => e.phase === 'skipped').length;
   const doneCount = entries.filter((e) => TERMINAL.has(e.phase)).length;
   const activeCount = entries.length - doneCount;
+  const downloadBatchCount = Math.ceil(successCount / BULK_DEVICE_BATCH_SIZE);
 
   const handleDownloadZip = async () => {
     setDownloading(true);
+    setError('');
     try {
       const ids = entries.filter((e) => e.phase === 'success').map((e) => e.deviceId);
-      await triggerBulkDownload(ids);
+      const batches = chunkArray(ids, BULK_DEVICE_BATCH_SIZE);
+      for (let index = 0; index < batches.length; index++) {
+        const result = await triggerBulkDownload(batches[index], {
+          filename:
+            batches.length > 1 ? bulkDownloadBatchFilename(index, batches.length) : undefined,
+        });
+        if (result === 'cancelled') {
+          break;
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Download failed');
     } finally {
@@ -223,7 +292,59 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       {/* Summary */}
       <div className="rounded-lg bg-surface-high p-3 text-xs text-on-bg-secondary">
         {devices.length} device{devices.length !== 1 ? 's' : ''} in scope
+        {phase === 'idle' && (
+          <>
+            {' '}
+            · {selectedCount} selected · batches of {BULK_DEVICE_BATCH_SIZE}
+          </>
+        )}
       </div>
+
+      {phase === 'idle' && devices.length > 0 && (
+        <div className="space-y-2 rounded-lg border border-outline bg-surface p-2">
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-on-bg-secondary">
+              {selectedCount} of {devices.length} selected
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={setAllDevicesSelected}
+                className="text-primary hover:text-primary/80"
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                onClick={clearSelectedDevices}
+                className="text-on-bg-secondary hover:text-on-bg"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <div className="max-h-48 space-y-1 overflow-y-auto">
+            {devices.map((device) => {
+              const name = getDeviceName(device);
+              return (
+                <label
+                  key={device.id}
+                  className="flex items-center gap-2 rounded-md px-2 py-1 text-xs text-on-bg hover:bg-surface-high"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedDeviceIds.has(device.id)}
+                    onChange={() => toggleSelectedDevice(device.id)}
+                    aria-label={`Select ${name}`}
+                    className="h-3.5 w-3.5"
+                  />
+                  <span className="truncate">{name}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Idle: start button */}
       {phase === 'idle' && (
@@ -232,9 +353,10 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
           onClick={() => {
             void handleStart();
           }}
-          className="w-full rounded-md bg-primary px-3 py-2.5 text-xs font-medium text-white hover:bg-primary/90 transition-colors"
+          disabled={selectedCount === 0}
+          className="w-full rounded-md bg-primary px-3 py-2.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
         >
-          Backup All Devices
+          {selectedCount === devices.length ? 'Backup All Devices' : 'Backup Selected Devices'}
         </button>
       )}
 
@@ -318,7 +440,9 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       {phase === 'done' && successCount > 0 && (
         <div className="space-y-2">
           <p className="text-xs text-on-bg-secondary">
-            Download files individually from each device's backup history, or download all as a zip.
+            {downloadBatchCount > 1
+              ? `Downloads will be split into ${downloadBatchCount} ZIP files of up to ${BULK_DEVICE_BATCH_SIZE} devices each.`
+              : "Download files individually from each device's backup history, or download all as a zip."}
           </p>
           <button
             type="button"
@@ -328,7 +452,11 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
             disabled={downloading}
             className="w-full rounded-md border border-primary bg-primary/10 px-3 py-2.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
           >
-            {downloading ? 'Preparing zip...' : 'Download All as ZIP'}
+            {downloading
+              ? 'Preparing zip...'
+              : downloadBatchCount > 1
+                ? `Download ${downloadBatchCount} ZIP files`
+                : 'Download All as ZIP'}
           </button>
         </div>
       )}

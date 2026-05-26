@@ -13,7 +13,7 @@ vi.mock('../../api/client', () => ({
     .mockResolvedValue([
       { device_id: 'dev-1', device_name: 'router-01', status: 'queued', job_id: 'job-1' },
     ]),
-  triggerBulkDownload: vi.fn().mockResolvedValue(undefined),
+  triggerBulkDownload: vi.fn().mockResolvedValue('saved'),
   fetchBackupJob: vi.fn().mockResolvedValue({ id: 'job-1', status: 'success', error_message: '' }),
   fetchDeviceCredentialProfiles: vi
     .fn()
@@ -156,4 +156,159 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
     expect(triggerBackup).not.toHaveBeenCalled();
     expect(await screen.findByText('device unreachable')).toBeInTheDocument();
   });
+
+  it('backs up only selected devices', async () => {
+    const { triggerBulkBackup } = await import('../../api/client');
+    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { device_id: 'dev-1', device_name: 'router-01', status: 'queued', job_id: 'job-1' },
+    ]);
+
+    render(
+      <BulkBackupPanel
+        devices={[
+          mockDevice({ id: 'dev-1', sys_name: 'router-01' }),
+          mockDevice({ id: 'dev-2', sys_name: 'router-02' }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Select router-02'));
+    fireEvent.click(screen.getByText('Backup Selected Devices'));
+
+    await waitFor(() => {
+      expect(triggerBulkBackup).toHaveBeenCalledWith(['dev-1']);
+    });
+  });
+
+  it('splits selected devices into bulk backup batches of 100', async () => {
+    const { triggerBulkBackup } = await import('../../api/client');
+    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockImplementation((ids: string[]) =>
+      Promise.resolve(
+        ids.map((id) => ({
+          device_id: id,
+          device_name: id,
+          status: 'queued',
+          job_id: `job-${id}`,
+        })),
+      ),
+    );
+    const devices = Array.from({ length: 105 }, (_, index) =>
+      mockDevice({
+        id: `dev-${index + 1}`,
+        sys_name: `router-${index + 1}`,
+      }),
+    );
+
+    render(<BulkBackupPanel devices={devices} />);
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    await waitFor(() => {
+      expect(triggerBulkBackup).toHaveBeenCalledTimes(2);
+    });
+    expect(triggerBulkBackup).toHaveBeenNthCalledWith(
+      1,
+      Array.from({ length: 100 }, (_, index) => `dev-${index + 1}`),
+    );
+    expect(triggerBulkBackup).toHaveBeenNthCalledWith(
+      2,
+      Array.from({ length: 5 }, (_, index) => `dev-${index + 101}`),
+    );
+  });
+
+  it('splits successful devices into bulk download batches of 100', async () => {
+    const { fetchBackupJob, triggerBulkBackup, triggerBulkDownload } = await import(
+      '../../api/client'
+    );
+    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockImplementation((ids: string[]) =>
+      Promise.resolve(
+        ids.map((id) => ({
+          device_id: id,
+          device_name: id,
+          status: 'queued',
+          job_id: `job-${id}`,
+        })),
+      ),
+    );
+    (fetchBackupJob as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'job',
+      status: 'success',
+      error_message: '',
+    });
+    const devices = Array.from({ length: 101 }, (_, index) =>
+      mockDevice({
+        id: `dev-${index + 1}`,
+        sys_name: `router-${index + 1}`,
+      }),
+    );
+
+    render(<BulkBackupPanel devices={devices} />);
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    await waitFor(() => {
+      expect(triggerBulkBackup).toHaveBeenCalledTimes(2);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+    await screen.findByText('Download 2 ZIP files', {}, { timeout: 4000 });
+    expect(
+      screen.getByText('Downloads will be split into 2 ZIP files of up to 100 devices each.'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Download 2 ZIP files'));
+
+    await waitFor(() => {
+      expect(triggerBulkDownload).toHaveBeenCalledTimes(2);
+    });
+    expect(triggerBulkDownload).toHaveBeenNthCalledWith(
+      1,
+      Array.from({ length: 100 }, (_, index) => `dev-${index + 1}`),
+      { filename: expect.stringMatching(/^THEIA_BACKUPS_batch-1-of-2_.*\.zip$/) },
+    );
+    expect(triggerBulkDownload).toHaveBeenNthCalledWith(2, ['dev-101'], {
+      filename: expect.stringMatching(/^THEIA_BACKUPS_batch-2-of-2_.*\.zip$/),
+    });
+  }, 10000);
+
+  it('stops downloading remaining batches when the save dialog is cancelled', async () => {
+    const { fetchBackupJob, triggerBulkBackup, triggerBulkDownload } = await import(
+      '../../api/client'
+    );
+    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockImplementation((ids: string[]) =>
+      Promise.resolve(
+        ids.map((id) => ({
+          device_id: id,
+          device_name: id,
+          status: 'queued',
+          job_id: `job-${id}`,
+        })),
+      ),
+    );
+    (fetchBackupJob as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'job',
+      status: 'success',
+      error_message: '',
+    });
+    (triggerBulkDownload as ReturnType<typeof vi.fn>).mockResolvedValueOnce('cancelled');
+    const devices = Array.from({ length: 101 }, (_, index) =>
+      mockDevice({
+        id: `dev-${index + 1}`,
+        sys_name: `router-${index + 1}`,
+      }),
+    );
+
+    render(<BulkBackupPanel devices={devices} />);
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    await waitFor(() => {
+      expect(triggerBulkBackup).toHaveBeenCalledTimes(2);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+    await screen.findByText('Download 2 ZIP files', {}, { timeout: 4000 });
+    fireEvent.click(screen.getByText('Download 2 ZIP files'));
+
+    await waitFor(() => {
+      expect(triggerBulkDownload).toHaveBeenCalledTimes(1);
+    });
+  }, 10000);
 });

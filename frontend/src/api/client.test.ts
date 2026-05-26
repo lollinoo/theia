@@ -1747,6 +1747,7 @@ describe('triggerBulkDownload', () => {
     const appendChild = vi.spyOn(document.body, 'appendChild');
     const removeChild = vi.spyOn(document.body, 'removeChild');
     const createElement = vi.spyOn(document, 'createElement');
+    let downloadAnchor: HTMLAnchorElement | undefined;
     vi.stubGlobal('URL', {
       createObjectURL: vi.fn(() => 'blob:download'),
       revokeObjectURL: vi.fn(),
@@ -1754,6 +1755,7 @@ describe('triggerBulkDownload', () => {
     createElement.mockImplementation((tagName: string) => {
       const element = document.createElementNS('http://www.w3.org/1999/xhtml', tagName);
       if (tagName === 'a') {
+        downloadAnchor = element as HTMLAnchorElement;
         Object.defineProperty(element, 'click', {
           configurable: true,
           value: clickMock,
@@ -1770,7 +1772,7 @@ describe('triggerBulkDownload', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    await triggerBulkDownload(['dev-1']);
+    const result = await triggerBulkDownload(['dev-1'], { filename: 'custom-backups.zip' });
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/backups/bulk-download',
@@ -1781,6 +1783,8 @@ describe('triggerBulkDownload', () => {
     );
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
     expect(clickMock).toHaveBeenCalled();
+    expect(downloadAnchor?.download).toBe('custom-backups.zip');
+    expect(result).toBe('saved');
     appendChild.mockRestore();
     removeChild.mockRestore();
     createElement.mockRestore();
@@ -1815,13 +1819,14 @@ describe('triggerBulkDownload', () => {
       } as unknown as Response),
     );
 
-    await triggerBulkDownload(['dev-1']);
+    const result = await triggerBulkDownload(['dev-1'], { filename: 'custom-backups.zip' });
 
     expect(showSaveFilePicker).toHaveBeenCalledWith(
-      expect.objectContaining({ suggestedName: expect.stringMatching(/_THEIA_BACKUPS\.zip$/) }),
+      expect.objectContaining({ suggestedName: 'custom-backups.zip' }),
     );
     expect(createWritable).toHaveBeenCalled();
     expect(blob).not.toHaveBeenCalled();
+    expect(result).toBe('saved');
   });
 
   it('cancels the response stream when the save picker is cancelled', async () => {
@@ -1845,10 +1850,11 @@ describe('triggerBulkDownload', () => {
       } as unknown as Response),
     );
 
-    await triggerBulkDownload(['dev-1']);
+    const result = await triggerBulkDownload(['dev-1']);
 
     expect(cancel).toHaveBeenCalled();
     expect(blob).not.toHaveBeenCalled();
+    expect(result).toBe('cancelled');
   });
 
   it('cancels the response stream when the writable file cannot be created', async () => {

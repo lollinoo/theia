@@ -1575,8 +1575,18 @@ export function bulkDownloadUrl(_deviceIds: string[]): string {
   return '/api/v1/backups/bulk-download';
 }
 
-export async function triggerBulkDownload(deviceIds: string[]): Promise<void> {
-  const saveTarget = prepareStreamingSaveTarget(defaultBulkDownloadFilename());
+export type BulkDownloadResult = 'saved' | 'cancelled';
+
+export type BulkDownloadOptions = {
+  filename?: string;
+};
+
+export async function triggerBulkDownload(
+  deviceIds: string[],
+  options: BulkDownloadOptions = {},
+): Promise<BulkDownloadResult> {
+  const suggestedFilename = options.filename ?? defaultBulkDownloadFilename();
+  const saveTarget = prepareStreamingSaveTarget(suggestedFilename);
   const response = await fetch('/api/v1/backups/bulk-download', {
     method: 'POST',
     headers: headersWithCsrf({ 'Content-Type': 'application/json' }),
@@ -1593,9 +1603,9 @@ export async function triggerBulkDownload(deviceIds: string[]): Promise<void> {
   }
   const disposition = response.headers.get('Content-Disposition') ?? '';
   const match = disposition.match(/filename="(.+?)"/);
-  const filename = match?.[1] ?? defaultBulkDownloadFilename();
+  const filename = options.filename ?? match?.[1] ?? suggestedFilename;
 
-  await saveDownloadResponse(response, filename, saveTarget);
+  return saveDownloadResponse(response, filename, saveTarget);
 }
 
 async function requestBulkJSON(path: string, body: unknown, operation: string): Promise<unknown> {
@@ -1710,23 +1720,23 @@ async function saveDownloadResponse(
   response: Response,
   filename: string,
   saveTarget: StreamingSaveTarget,
-): Promise<void> {
+): Promise<BulkDownloadResult> {
   if (response.body && saveTarget) {
     try {
       const handle = await saveTarget;
       if (!handle) {
         await response.body.cancel();
-        return;
+        return 'cancelled';
       }
       const writable = await handle.createWritable().catch(async (error) => {
         await response.body?.cancel();
         throw error;
       });
       await response.body.pipeTo(writable);
-      return;
+      return 'saved';
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
-        return;
+        return 'cancelled';
       }
       throw error;
     }
@@ -1734,6 +1744,7 @@ async function saveDownloadResponse(
 
   const blob = await response.blob();
   saveBlob(blob, filename);
+  return 'saved';
 }
 
 function saveBlob(blob: Blob, filename: string): void {
