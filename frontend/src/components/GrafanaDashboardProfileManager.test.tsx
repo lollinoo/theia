@@ -36,6 +36,33 @@ describe('GrafanaDashboardProfileManager', () => {
     expect(screen.getByText(/Default/)).toBeInTheDocument();
   });
 
+  it('keeps long dashboard URLs constrained inside the profile card', async () => {
+    const { fetchGrafanaDashboardConfig } = await import('../api/client');
+    const longUrl =
+      'https://grafana.example/d/router-overview/very-long-dashboard-slug?orgId=1&var-routerboard={{hostname}}&var-site=main-core&var-link=a-very-long-link-identifier-that-should-not-resize-the-admin-settings-card';
+    vi.mocked(fetchGrafanaDashboardConfig).mockResolvedValueOnce({
+      profiles: [
+        {
+          id: 'profile-long-url',
+          name: 'Long URL profile',
+          url_template: longUrl,
+          variable_source: 'hostname',
+        },
+      ],
+      default_profile_id: 'profile-long-url',
+      device_overrides: {},
+    });
+
+    render(<GrafanaDashboardProfileManager />);
+
+    const url = await screen.findByText(longUrl);
+    expect(url).toHaveClass('max-w-full', 'truncate');
+    expect(screen.getByTestId('grafana-profile-card-profile-long-url')).toHaveClass(
+      'max-w-full',
+      'overflow-hidden',
+    );
+  });
+
   it('creates dashboard profile with URL template and default flag', async () => {
     const { createGrafanaDashboardProfile } = await import('../api/client');
     render(<GrafanaDashboardProfileManager />);

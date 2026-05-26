@@ -247,7 +247,7 @@ export function GrafanaDashboardProfileManager() {
 
   if (mode === 'create') {
     return (
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <button
           type="button"
           onClick={() => setMode('list')}
@@ -268,7 +268,7 @@ export function GrafanaDashboardProfileManager() {
 
   if (mode === 'edit' && editing) {
     return (
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <button
           type="button"
           onClick={() => {
@@ -294,7 +294,7 @@ export function GrafanaDashboardProfileManager() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="min-w-0 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <p className={labelClass}>Grafana Dashboard Profiles</p>
         <button
@@ -315,11 +315,15 @@ export function GrafanaDashboardProfileManager() {
       )}
       {!loading &&
         config.profiles.map((profile) => (
-          <div key={profile.id} className="space-y-2 rounded-lg bg-surface-high p-3">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
+          <div
+            key={profile.id}
+            data-testid={`grafana-profile-card-${profile.id}`}
+            className="max-w-full min-w-0 space-y-2 overflow-hidden rounded-lg bg-surface-high p-3"
+          >
+            <div className="flex min-w-0 items-start justify-between gap-2">
+              <div className="min-w-0 flex-1 overflow-hidden">
                 <p className="truncate text-sm font-medium text-on-bg">{profile.name}</p>
-                <p className="truncate font-mono text-xs text-on-bg-secondary">
+                <p className="block max-w-full truncate font-mono text-xs text-on-bg-secondary">
                   {profile.url_template}
                 </p>
                 <p className="mt-1 text-xs text-on-bg-secondary">

@@ -237,7 +237,7 @@ function SettingsSection({
   return (
     <section
       aria-labelledby={id}
-      className={`flex h-[22rem] self-start flex-col rounded-lg border border-outline-subtle bg-surface-container/80 p-5 shadow-panel ${className}`}
+      className={`flex h-[22rem] min-w-0 self-start flex-col rounded-lg border border-outline-subtle bg-surface-container/80 p-5 shadow-panel ${className}`}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
@@ -256,7 +256,10 @@ function SettingsSection({
         </div>
         {aside}
       </div>
-      <div data-testid="settings-section-body" className="mt-5 min-h-0 flex-1 overflow-y-auto pr-1">
+      <div
+        data-testid="settings-section-body"
+        className="mt-5 min-h-0 min-w-0 flex-1 overflow-y-auto pr-1"
+      >
         {children}
       </div>
     </section>
@@ -561,9 +564,9 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   return (
     <div
       data-testid="settings-panel-layout"
-      className="grid items-start gap-6 p-4 transition-colors duration-200 lg:grid-cols-2"
+      className="grid min-w-0 items-start gap-6 p-4 transition-colors duration-200 lg:grid-cols-2"
     >
-      <div data-testid="settings-panel-left-column" className="grid content-start gap-6">
+      <div data-testid="settings-panel-left-column" className="grid min-w-0 content-start gap-6">
         <SettingsSection
           id="settings-polling-heading"
           title="Polling"
@@ -765,7 +768,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         </SettingsSection>
       </div>
 
-      <div data-testid="settings-panel-right-column" className="grid content-start gap-6">
+      <div data-testid="settings-panel-right-column" className="grid min-w-0 content-start gap-6">
         <SettingsSection
           id="settings-bridge-heading"
           title="Bridge"
@@ -858,7 +861,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
             </div>
             <div
               data-testid="grafana-profile-well"
-              className="rounded-lg bg-surface-container-high p-3"
+              className="min-w-0 overflow-hidden rounded-lg bg-surface-container-high p-3"
             >
               <GrafanaDashboardProfileManager />
             </div>
