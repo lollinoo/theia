@@ -42,16 +42,20 @@ func TestBulkDownloadStreaming(t *testing.T) {
 		{
 			File:      domain.BackupFile{ID: uuid.New(), FileName: "backup1.rsc", FilePath: file1Path},
 			DeviceDir: "device-a",
+			ZipPath:   "device-a/backup1.rsc",
+			SizeBytes: int64(len("file1 content")),
 		},
 		{
 			File:      domain.BackupFile{ID: uuid.New(), FileName: "backup2.rsc", FilePath: file2Path},
 			DeviceDir: "device-b",
+			ZipPath:   "device-b/backup2.rsc",
+			SizeBytes: int64(len("file2 content")),
 		},
 	}
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	zipErrors := writeBulkZipEntries(zw, entries)
+	zipErrors := writeBulkZipEntries(zw, entries, openBulkZipEntryForTest)
 	zw.Close()
 
 	// No errors expected
@@ -70,8 +74,8 @@ func TestBulkDownloadStreaming(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		filepath.Join("device-a", "backup1.rsc"): "file1 content",
-		filepath.Join("device-b", "backup2.rsc"): "file2 content",
+		"device-a/backup1.rsc": "file1 content",
+		"device-b/backup2.rsc": "file2 content",
 	}
 
 	for _, f := range zr.File {
@@ -109,16 +113,20 @@ func TestBulkDownloadErrorManifest(t *testing.T) {
 		{
 			File:      domain.BackupFile{ID: uuid.New(), FileName: "valid.rsc", FilePath: validPath},
 			DeviceDir: "device-ok",
+			ZipPath:   "device-ok/valid.rsc",
+			SizeBytes: int64(len("valid content")),
 		},
 		{
 			File:      domain.BackupFile{ID: uuid.New(), FileName: "missing.rsc", FilePath: "/nonexistent/path/missing.rsc"},
 			DeviceDir: "device-fail",
+			ZipPath:   "device-fail/missing.rsc",
+			SizeBytes: int64(len("missing content")),
 		},
 	}
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	zipErrors := writeBulkZipEntries(zw, entries)
+	zipErrors := writeBulkZipEntries(zw, entries, openBulkZipEntryForTest)
 
 	// Write error manifest if there are errors (same logic as HandleBulkDownload)
 	if len(zipErrors) > 0 {
@@ -177,6 +185,67 @@ func TestBulkDownloadErrorManifest(t *testing.T) {
 	if !foundErrors {
 		t.Fatal("expected _errors.txt in zip, but not found")
 	}
+}
+
+func TestBulkDownloadRejectsEntriesWithoutValidatedZipPath(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "backup.rsc")
+	if err := os.WriteFile(filePath, []byte("backup content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := []service.BulkDownloadEntry{{
+		File:      domain.BackupFile{ID: uuid.New(), FileName: "../backup.rsc", FilePath: filePath},
+		DeviceDir: "device",
+		SizeBytes: int64(len("backup content")),
+	}}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	zipErrors := writeBulkZipEntries(zw, entries, openBulkZipEntryForTest)
+	if err := zw.Close(); err != nil {
+		t.Fatalf("Close zip: %v", err)
+	}
+
+	if len(zipErrors) != 1 {
+		t.Fatalf("zip errors = %d, want 1: %v", len(zipErrors), zipErrors)
+	}
+	if !strings.Contains(zipErrors[0], "missing validated zip entry path") {
+		t.Fatalf("zip error = %q, want missing validated zip entry path", zipErrors[0])
+	}
+}
+
+func TestBulkDownloadRejectsFilesChangedAfterValidation(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "backup.rsc")
+	if err := os.WriteFile(filePath, []byte("larger than expected"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := []service.BulkDownloadEntry{{
+		File:      domain.BackupFile{ID: uuid.New(), FileName: "backup.rsc", FilePath: filePath},
+		DeviceDir: "device",
+		ZipPath:   "device/backup.rsc",
+		SizeBytes: 4,
+	}}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	zipErrors := writeBulkZipEntries(zw, entries, openBulkZipEntryForTest)
+	if err := zw.Close(); err != nil {
+		t.Fatalf("Close zip: %v", err)
+	}
+
+	if len(zipErrors) != 1 {
+		t.Fatalf("zip errors = %d, want 1: %v", len(zipErrors), zipErrors)
+	}
+	if !strings.Contains(zipErrors[0], "file changed after validation") {
+		t.Fatalf("zip error = %q, want file changed after validation", zipErrors[0])
+	}
+}
+
+func openBulkZipEntryForTest(entry service.BulkDownloadEntry) (*os.File, error) {
+	return os.Open(entry.File.FilePath)
 }
 
 // ============================================================================
@@ -650,6 +719,213 @@ func TestBackupHandlerTriggerBackup_InvalidID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
+}
+
+func TestBackupHandlerBulkBackupRejectsInvalidRequestedDeviceID(t *testing.T) {
+	handler, _, _, _, _ := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/backups/bulk",
+		strings.NewReader(`{"device_ids":["not-a-uuid"]}`),
+	)
+	rec := httptest.NewRecorder()
+	handler.HandleBulkBackup(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
+	handler, _, _, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    1,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	firstID := uuid.New()
+	secondID := uuid.New()
+	for i, id := range []uuid.UUID{firstID, secondID} {
+		if err := deviceRepo.Create(&domain.Device{
+			ID: id, IP: fmt.Sprintf("10.0.0.%d", i+1), Vendor: "default",
+			Managed: true, Status: domain.DeviceStatusUp,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkBackup(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
+		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
+	}
+}
+
+func TestBackupHandlerBulkDownloadMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    4,
+	})
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "large.rsc", []byte("12345"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
+		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
+	}
+}
+
+func TestBackupHandlerBulkDownloadMapsUnsafePathToBadRequest(t *testing.T) {
+	backupDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "outside.rsc")
+	if err := os.WriteFile(outsidePath, []byte("outside"), 0644); err != nil {
+		t.Fatalf("WriteFile outside backup: %v", err)
+	}
+
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.1", SysName: "core",
+		Tags: map[string]string{"display_name": "Core"},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	jobID := uuid.New()
+	if err := jobRepo.Create(&domain.BackupJob{
+		ID:       jobID,
+		DeviceID: deviceID,
+		Status:   domain.BackupStatusSuccess,
+	}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	if err := fileRepo.Create(&domain.BackupFile{
+		ID:       uuid.New(),
+		JobID:    jobID,
+		FileType: "running",
+		FileName: "outside.rsc",
+		FilePath: outsidePath,
+	}); err != nil {
+		t.Fatalf("Create file: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
+		t.Fatalf("path rejection must not be a zip response; headers: %#v", rec.Header())
+	}
+}
+
+func setupBackupHandlerForBulkLimitTests(
+	t *testing.T,
+	backupDir string,
+) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler, *mockDeviceRepo, *service.BackupService) {
+	t.Helper()
+
+	jobRepo := newBackupJobRepoForHandler()
+	fileRepo := newBackupFileRepoForHandler()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	encKey := crypto.DeriveKey("test-backup-bulk-limits-key")
+
+	defaultCfg := vendor.DBVendorRecord{
+		Name: "default",
+		ConfigJSON: `{
+			"vendor": {"name": "default", "display_name": "Generic"},
+			"detection": {},
+			"backup": {"supported": false}
+		}`,
+	}
+	reg, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{defaultCfg})
+	if err != nil {
+		t.Fatalf("building vendor registry: %v", err)
+	}
+
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		reg, &mockSSHDialerForBackup{}, encKey, backupDir,
+		gossh.InsecureIgnoreHostKey(),
+	)
+	handler := NewBackupHandler(backupSvc, settingsRepo)
+	return handler, jobRepo, fileRepo, deviceRepo, backupSvc
+}
+
+func seedBulkDownloadBackupFile(
+	t *testing.T,
+	backupDir string,
+	jobRepo *backupJobRepoForHandler,
+	fileRepo *backupFileRepoForHandler,
+	deviceRepo *mockDeviceRepo,
+	fileName string,
+	content []byte,
+) uuid.UUID {
+	t.Helper()
+
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.1", SysName: "core",
+		Tags: map[string]string{"display_name": "Core"},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	jobID := uuid.New()
+	if err := jobRepo.Create(&domain.BackupJob{
+		ID:       jobID,
+		DeviceID: deviceID,
+		Status:   domain.BackupStatusSuccess,
+	}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	path := filepath.Join(backupDir, fileName)
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatalf("WriteFile backup: %v", err)
+	}
+	if err := fileRepo.Create(&domain.BackupFile{
+		ID:       uuid.New(),
+		JobID:    jobID,
+		FileType: "running",
+		FileName: fileName,
+		FilePath: path,
+	}); err != nil {
+		t.Fatalf("Create file: %v", err)
+	}
+	return deviceID
 }
 
 // =============================================================================

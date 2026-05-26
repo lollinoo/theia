@@ -284,8 +284,31 @@ func writeBackupContentMetadata(w http.ResponseWriter, id uuid.UUID, inline bool
 
 // HandleBulkBackup handles POST /api/v1/backups/bulk
 func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request) {
-	results, err := h.svc.TriggerBulkBackup(r.Context())
+	var req struct {
+		DeviceIDs []string `json:"device_ids"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+	}
+
+	deviceIDs := make([]uuid.UUID, 0, len(req.DeviceIDs))
+	for _, idStr := range req.DeviceIDs {
+		parsed, err := uuid.Parse(idStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid device_id: %s", idStr))
+			return
+		}
+		deviceIDs = append(deviceIDs, parsed)
+	}
+
+	results, err := h.svc.TriggerBulkBackup(r.Context(), deviceIDs...)
 	if err != nil {
+		if service.IsBulkLimitError(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
@@ -338,6 +361,14 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 
 	entries, err := h.svc.GetBulkDownloadFiles(r.Context(), deviceIDs)
 	if err != nil {
+		if service.IsBulkLimitError(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
+		if service.IsBulkPathError(err) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
@@ -359,7 +390,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 
-	zipErrors := writeBulkZipEntries(zw, entries)
+	zipErrors := writeBulkZipEntries(zw, entries, h.svc.OpenBulkDownloadEntry)
 	if len(zipErrors) > 0 {
 		if w, err := zw.Create("_errors.txt"); err == nil {
 			for _, e := range zipErrors {
@@ -371,13 +402,42 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 
 // writeBulkZipEntries writes backup file entries into a zip writer using
 // io.Copy streaming. Returns a list of error descriptions for failed files.
-func writeBulkZipEntries(zw *zip.Writer, entries []service.BulkDownloadEntry) []string {
+func writeBulkZipEntries(zw *zip.Writer, entries []service.BulkDownloadEntry, openEntry func(service.BulkDownloadEntry) (*os.File, error)) []string {
 	var zipErrors []string
 	for _, e := range entries {
-		zipPath := filepath.Join(e.DeviceDir, e.File.FileName)
-		f, err := os.Open(e.File.FilePath)
+		zipPath := e.ZipPath
+		if zipPath == "" {
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: missing validated zip entry path", e.File.FileName))
+			continue
+		}
+		if openEntry == nil {
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: missing validated file opener", zipPath))
+			continue
+		}
+		f, err := openEntry(e)
 		if err != nil {
 			zipErrors = append(zipErrors, fmt.Sprintf("%s: %v", zipPath, err))
+			continue
+		}
+		if e.SizeBytes < 0 {
+			f.Close()
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: invalid validated file size", zipPath))
+			continue
+		}
+		info, err := f.Stat()
+		if err != nil {
+			f.Close()
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: stat failed: %v", zipPath, err))
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			f.Close()
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: not a regular file", zipPath))
+			continue
+		}
+		if info.Size() > e.SizeBytes {
+			f.Close()
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: file changed after validation", zipPath))
 			continue
 		}
 		writer, err := zw.Create(zipPath)
@@ -386,8 +446,11 @@ func writeBulkZipEntries(zw *zip.Writer, entries []service.BulkDownloadEntry) []
 			zipErrors = append(zipErrors, fmt.Sprintf("%s: zip entry creation failed: %v", zipPath, err))
 			continue
 		}
-		if _, err := io.Copy(writer, f); err != nil {
+		written, err := io.Copy(writer, io.LimitReader(f, e.SizeBytes))
+		if err != nil {
 			zipErrors = append(zipErrors, fmt.Sprintf("%s: write failed: %v", zipPath, err))
+		} else if written != e.SizeBytes {
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: file changed while streaming", zipPath))
 		}
 		f.Close()
 	}

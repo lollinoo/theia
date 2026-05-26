@@ -387,6 +387,27 @@ func TestConfigureInstanceBackupArchiveLimitsUsesRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestConfigureBackupServiceBulkOperationLimitsUsesRuntimeConfig(t *testing.T) {
+	cfg := &runtimeConfig{}
+	cfg.BulkBackupLimits.MaxDevices = 11
+	cfg.BulkBackupLimits.MaxQueuedJobs = 12
+	cfg.BulkDownloadLimits.MaxDevices = 13
+	cfg.BulkDownloadLimits.MaxFiles = 14
+	cfg.BulkDownloadLimits.MaxBytes = 15
+
+	svc := service.NewBackupService(nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	configureBackupServiceBulkOperationLimits(svc, cfg)
+
+	limits := svc.BulkOperationLimits()
+	if limits.BulkBackupMaxDevices != 11 ||
+		limits.BulkBackupMaxQueuedJobs != 12 ||
+		limits.BulkDownloadMaxDevices != 13 ||
+		limits.BulkDownloadMaxFiles != 14 ||
+		limits.BulkDownloadMaxBytes != 15 {
+		t.Fatalf("bulk operation limits = %#v, want runtime config values", limits)
+	}
+}
+
 func TestRuntimeBootstrapRunRejectsUnsafeProductionSecretsBeforeOpeningDatabase(t *testing.T) {
 	bootstrap := &runtimeBootstrap{}
 	runtimeDir := t.TempDir()

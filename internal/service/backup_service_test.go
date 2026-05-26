@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -698,11 +699,13 @@ func TestBackupGetBulkDownloadEntries_HappyPath(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
 	deviceRepo := newMockDeviceRepo()
+	backupDir := t.TempDir()
 
 	svc := &BackupService{
 		jobRepo:    jobRepo,
 		fileRepo:   fileRepo,
 		deviceRepo: deviceRepo,
+		backupDir:  backupDir,
 	}
 
 	deviceID := uuid.New()
@@ -721,8 +724,7 @@ func TestBackupGetBulkDownloadEntries_HappyPath(t *testing.T) {
 	})
 
 	// Create temp files at the paths referenced by BackupFile records
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "20260319_core-router.rsc")
+	filePath := filepath.Join(backupDir, "20260319_core-router.rsc")
 	if err := os.WriteFile(filePath, []byte("# export"), 0644); err != nil {
 		t.Fatalf("writing temp file: %v", err)
 	}
@@ -761,11 +763,13 @@ func TestBackupGetBulkDownloadEntries_NoBackups(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
 	deviceRepo := newMockDeviceRepo()
+	backupDir := t.TempDir()
 
 	svc := &BackupService{
 		jobRepo:    jobRepo,
 		fileRepo:   fileRepo,
 		deviceRepo: deviceRepo,
+		backupDir:  backupDir,
 	}
 
 	deviceID := uuid.New()
@@ -783,6 +787,441 @@ func TestBackupGetBulkDownloadEntries_NoBackups(t *testing.T) {
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries for device with no backups, got %d", len(entries))
 	}
+}
+
+func TestTriggerBulkBackupRejectsEffectiveDeviceCountOverLimitWithoutQueueing(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    1,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	for i := 0; i < 2; i++ {
+		if err := deviceRepo.Create(&domain.Device{
+			ID: uuid.New(), IP: fmt.Sprintf("10.0.0.%d", i+1), Vendor: "testvendor",
+			Managed: true, Status: domain.DeviceStatusUp,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	_, err := svc.TriggerBulkBackup(context.Background())
+	if err == nil {
+		t.Fatal("TriggerBulkBackup error = nil, want bulk limit error")
+	}
+	if !IsBulkLimitError(err) {
+		t.Fatalf("TriggerBulkBackup error = %v, want bulk limit error", err)
+	}
+	if got := mockBackupJobCount(jobRepo); got != 0 {
+		t.Fatalf("queued jobs = %d, want 0 before limit rejection", got)
+	}
+}
+
+func TestTriggerBulkBackupDeduplicatesRequestedDeviceIDs(t *testing.T) {
+	port := listenOnRandomPort(t)
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    1,
+		BulkBackupMaxQueuedJobs: 1,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID: uuid.New(), Name: "test-profile", Username: "admin", Port: port,
+		AuthMethod: domain.SSHAuthPassword, Role: "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
+		Managed: true, Status: domain.DeviceStatusUp,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+
+	results, err := svc.TriggerBulkBackup(context.Background(), deviceID, deviceID)
+	if err != nil {
+		t.Fatalf("TriggerBulkBackup returned error for duplicate requested ID: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want one deduplicated result", len(results))
+	}
+	if got := mockBackupJobCount(jobRepo); got != 1 {
+		t.Fatalf("queued jobs = %d, want one deduplicated job", got)
+	}
+}
+
+func TestTriggerBulkBackupRejectsQueuedJobCountOverLimitBeforeCreatingJobs(t *testing.T) {
+	port := listenOnRandomPort(t)
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 1,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID: uuid.New(), Name: "test-profile", Username: "admin", Port: port,
+		AuthMethod: domain.SSHAuthPassword, Role: "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := deviceRepo.Create(&domain.Device{
+			ID: uuid.New(), IP: "127.0.0.1", Vendor: "testvendor",
+			Managed: true, Status: domain.DeviceStatusUp,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	_, err := svc.TriggerBulkBackup(context.Background())
+	if err == nil {
+		t.Fatal("TriggerBulkBackup error = nil, want queued job limit error")
+	}
+	if !IsBulkLimitError(err) {
+		t.Fatalf("TriggerBulkBackup error = %v, want bulk limit error", err)
+	}
+	if got := mockBackupJobCount(jobRepo); got != 0 {
+		t.Fatalf("queued jobs = %d, want 0 before queued-job limit rejection", got)
+	}
+}
+
+func TestGetBulkDownloadFilesEnforcesLimitsAndDeduplicatesDevices(t *testing.T) {
+	tests := []struct {
+		name      string
+		limits    BulkOperationLimits
+		deviceIDs func(uuid.UUID) []uuid.UUID
+		fileSizes []int
+		wantLimit bool
+		wantCount int
+	}{
+		{
+			name: "deduplicates requested devices",
+			limits: BulkOperationLimits{
+				BulkBackupMaxDevices:    10,
+				BulkBackupMaxQueuedJobs: 10,
+				BulkDownloadMaxDevices:  1,
+				BulkDownloadMaxFiles:    10,
+				BulkDownloadMaxBytes:    1024,
+			},
+			deviceIDs: func(id uuid.UUID) []uuid.UUID { return []uuid.UUID{id, id} },
+			fileSizes: []int{4},
+			wantCount: 1,
+		},
+		{
+			name: "max files",
+			limits: BulkOperationLimits{
+				BulkBackupMaxDevices:    10,
+				BulkBackupMaxQueuedJobs: 10,
+				BulkDownloadMaxDevices:  10,
+				BulkDownloadMaxFiles:    1,
+				BulkDownloadMaxBytes:    1024,
+			},
+			deviceIDs: func(id uuid.UUID) []uuid.UUID { return []uuid.UUID{id} },
+			fileSizes: []int{4, 4},
+			wantLimit: true,
+		},
+		{
+			name: "max bytes",
+			limits: BulkOperationLimits{
+				BulkBackupMaxDevices:    10,
+				BulkBackupMaxQueuedJobs: 10,
+				BulkDownloadMaxDevices:  10,
+				BulkDownloadMaxFiles:    10,
+				BulkDownloadMaxBytes:    4,
+			},
+			deviceIDs: func(id uuid.UUID) []uuid.UUID { return []uuid.UUID{id} },
+			fileSizes: []int{5},
+			wantLimit: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, deviceID := setupBulkDownloadServiceWithFiles(t, tt.fileSizes, nil)
+			svc.SetBulkOperationLimits(tt.limits)
+
+			entries, err := svc.GetBulkDownloadFiles(context.Background(), tt.deviceIDs(deviceID))
+			if tt.wantLimit {
+				if err == nil {
+					t.Fatal("GetBulkDownloadFiles error = nil, want bulk limit error")
+				}
+				if !IsBulkLimitError(err) {
+					t.Fatalf("GetBulkDownloadFiles error = %v, want bulk limit error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetBulkDownloadFiles returned error: %v", err)
+			}
+			if len(entries) != tt.wantCount {
+				t.Fatalf("entries = %d, want %d", len(entries), tt.wantCount)
+			}
+		})
+	}
+}
+
+func TestGetBulkDownloadFilesRejectsRequestedDeviceCountOverLimit(t *testing.T) {
+	svc, deviceID := setupBulkDownloadServiceWithFiles(t, []int{4}, nil)
+	otherID := uuid.New()
+	if err := svc.deviceRepo.Create(&domain.Device{
+		ID: otherID, IP: "10.0.0.2", SysName: "edge",
+		Tags: map[string]string{},
+	}); err != nil {
+		t.Fatalf("Create other device: %v", err)
+	}
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  1,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	_, err := svc.GetBulkDownloadFiles(context.Background(), []uuid.UUID{deviceID, otherID})
+	if err == nil {
+		t.Fatal("GetBulkDownloadFiles error = nil, want bulk limit error")
+	}
+	if !IsBulkLimitError(err) {
+		t.Fatalf("GetBulkDownloadFiles error = %v, want bulk limit error", err)
+	}
+}
+
+func TestGetBulkDownloadFilesRejectsPathOutsideBackupDir(t *testing.T) {
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "outside.rsc")
+	if err := os.WriteFile(outsidePath, []byte("outside"), 0644); err != nil {
+		t.Fatalf("WriteFile outside backup dir: %v", err)
+	}
+	svc, deviceID := setupBulkDownloadServiceWithFiles(t, nil, []domain.BackupFile{{
+		ID:       uuid.New(),
+		FileType: "running",
+		FileName: "outside.rsc",
+		FilePath: outsidePath,
+	}})
+
+	_, err := svc.GetBulkDownloadFiles(context.Background(), []uuid.UUID{deviceID})
+	if err == nil {
+		t.Fatal("GetBulkDownloadFiles error = nil, want backup path error")
+	}
+	if !IsBulkPathError(err) {
+		t.Fatalf("GetBulkDownloadFiles error = %v, want backup path error", err)
+	}
+}
+
+func TestGetBulkDownloadFilesRejectsUnsafeZipEntryName(t *testing.T) {
+	svc, deviceID := setupBulkDownloadServiceWithFiles(t, []int{4}, func(files []domain.BackupFile) []domain.BackupFile {
+		files[0].FileName = "../escape.rsc"
+		return files
+	})
+
+	_, err := svc.GetBulkDownloadFiles(context.Background(), []uuid.UUID{deviceID})
+	if err == nil {
+		t.Fatal("GetBulkDownloadFiles error = nil, want backup path error")
+	}
+	if !IsBulkPathError(err) {
+		t.Fatalf("GetBulkDownloadFiles error = %v, want backup path error", err)
+	}
+}
+
+func TestGetBulkDownloadFilesRejectsNonRegularFiles(t *testing.T) {
+	backupDir := t.TempDir()
+	pipePath := filepath.Join(backupDir, "backup.pipe")
+	if err := syscall.Mkfifo(pipePath, 0600); err != nil {
+		t.Skipf("Mkfifo unsupported: %v", err)
+	}
+	svc, deviceID := setupBulkDownloadServiceWithFiles(t, nil, []domain.BackupFile{{
+		ID:       uuid.New(),
+		FileType: "running",
+		FileName: "backup.pipe",
+		FilePath: pipePath,
+	}})
+	svc.backupDir = backupDir
+
+	_, err := svc.GetBulkDownloadFiles(context.Background(), []uuid.UUID{deviceID})
+	if err == nil {
+		t.Fatal("GetBulkDownloadFiles error = nil, want backup path error")
+	}
+	if !IsBulkPathError(err) {
+		t.Fatalf("GetBulkDownloadFiles error = %v, want backup path error", err)
+	}
+}
+
+func TestOpenBulkDownloadEntryRejectsSymlinkAfterSelection(t *testing.T) {
+	backupDir := t.TempDir()
+	svc := &BackupService{backupDir: backupDir}
+
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "outside.rsc")
+	if err := os.WriteFile(outsidePath, []byte("safe"), 0644); err != nil {
+		t.Fatalf("WriteFile outside: %v", err)
+	}
+	linkPath := filepath.Join(backupDir, "backup.rsc")
+	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		t.Skipf("Symlink unsupported: %v", err)
+	}
+
+	_, err := svc.OpenBulkDownloadEntry(BulkDownloadEntry{
+		File:      domain.BackupFile{FilePath: linkPath, FileName: "backup.rsc"},
+		ZipPath:   "device/backup.rsc",
+		SizeBytes: int64(len("safe")),
+	})
+	if err == nil {
+		t.Fatal("OpenBulkDownloadEntry error = nil, want backup path error")
+	}
+	if !IsBulkPathError(err) {
+		t.Fatalf("OpenBulkDownloadEntry error = %v, want backup path error", err)
+	}
+}
+
+func TestOpenBulkDownloadEntryRejectsSizeChangedAfterSelection(t *testing.T) {
+	backupDir := t.TempDir()
+	filePath := filepath.Join(backupDir, "backup.rsc")
+	if err := os.WriteFile(filePath, []byte("changed"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	svc := &BackupService{backupDir: backupDir}
+
+	_, err := svc.OpenBulkDownloadEntry(BulkDownloadEntry{
+		File:      domain.BackupFile{FilePath: filePath, FileName: "backup.rsc"},
+		ZipPath:   "device/backup.rsc",
+		SizeBytes: 4,
+	})
+	if err == nil {
+		t.Fatal("OpenBulkDownloadEntry error = nil, want backup path error")
+	}
+	if !IsBulkPathError(err) {
+		t.Fatalf("OpenBulkDownloadEntry error = %v, want backup path error", err)
+	}
+}
+
+func mockBackupJobCount(repo *mockBackupJobRepo) int {
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	return len(repo.jobs)
+}
+
+func setupBulkDownloadServiceWithFiles(
+	t *testing.T,
+	fileSizes []int,
+	override interface{},
+) (*BackupService, uuid.UUID) {
+	t.Helper()
+
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	deviceRepo := newMockDeviceRepo()
+	backupDir := t.TempDir()
+
+	svc := &BackupService{
+		jobRepo:    jobRepo,
+		fileRepo:   fileRepo,
+		deviceRepo: deviceRepo,
+		backupDir:  backupDir,
+	}
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID:      deviceID,
+		IP:      "10.0.0.1",
+		SysName: "core",
+		Tags:    map[string]string{"display_name": "Core Router"},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	jobID := uuid.New()
+	if err := jobRepo.Create(&domain.BackupJob{
+		ID:       jobID,
+		DeviceID: deviceID,
+		Status:   domain.BackupStatusSuccess,
+	}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+
+	files := make([]domain.BackupFile, 0, len(fileSizes))
+	for i, size := range fileSizes {
+		path := filepath.Join(backupDir, fmt.Sprintf("backup-%d.rsc", i))
+		if err := os.WriteFile(path, []byte(strings.Repeat("x", size)), 0644); err != nil {
+			t.Fatalf("WriteFile backup %d: %v", i, err)
+		}
+		files = append(files, domain.BackupFile{
+			ID:       uuid.New(),
+			FileType: "running",
+			FileName: filepath.Base(path),
+			FilePath: path,
+		})
+	}
+
+	switch fn := override.(type) {
+	case nil:
+	case func([]domain.BackupFile) []domain.BackupFile:
+		files = fn(files)
+	case []domain.BackupFile:
+		files = fn
+	default:
+		t.Fatalf("unsupported override type %T", override)
+	}
+
+	for i := range files {
+		files[i].JobID = jobID
+		if files[i].ID == uuid.Nil {
+			files[i].ID = uuid.New()
+		}
+		if err := fileRepo.Create(&files[i]); err != nil {
+			t.Fatalf("Create file %d: %v", i, err)
+		}
+	}
+
+	return svc, deviceID
 }
 
 // ---------------------------------------------------------------------------

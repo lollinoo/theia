@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,11 +25,67 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/vendor"
+	"golang.org/x/sys/unix"
 )
 
 var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
 const defaultBulkBackupWorkerCount = 4
+
+// BulkOperationLimits holds defensive quotas for bulk backup and download requests.
+type BulkOperationLimits struct {
+	BulkBackupMaxDevices    int
+	BulkBackupMaxQueuedJobs int
+	BulkDownloadMaxDevices  int
+	BulkDownloadMaxFiles    int
+	BulkDownloadMaxBytes    int64
+}
+
+// DefaultBulkOperationLimits bounds bulk workflows while preserving ordinary fleet use.
+var DefaultBulkOperationLimits = BulkOperationLimits{
+	BulkBackupMaxDevices:    100,
+	BulkBackupMaxQueuedJobs: 100,
+	BulkDownloadMaxDevices:  100,
+	BulkDownloadMaxFiles:    500,
+	BulkDownloadMaxBytes:    512 << 20,
+}
+
+// BulkLimitError reports a request that exceeds a configured bulk quota.
+type BulkLimitError struct {
+	Operation string
+	Limit     string
+	Max       int64
+	Actual    int64
+}
+
+func (e *BulkLimitError) Error() string {
+	return fmt.Sprintf("%s exceeds %s limit: requested %d, maximum %d", e.Operation, e.Limit, e.Actual, e.Max)
+}
+
+// IsBulkLimitError reports whether err is a bulk quota rejection.
+func IsBulkLimitError(err error) bool {
+	var target *BulkLimitError
+	return errors.As(err, &target)
+}
+
+// BulkPathError reports an unsafe backup file path or zip entry name.
+type BulkPathError struct {
+	Path   string
+	Reason string
+}
+
+func (e *BulkPathError) Error() string {
+	if e.Path == "" {
+		return e.Reason
+	}
+	return fmt.Sprintf("%s: %s", e.Reason, e.Path)
+}
+
+// IsBulkPathError reports whether err is an unsafe bulk download path rejection.
+func IsBulkPathError(err error) bool {
+	var target *BulkPathError
+	return errors.As(err, &target)
+}
 
 // BackupService orchestrates credential profile management and config backups.
 type BackupService struct {
@@ -42,6 +100,7 @@ type BackupService struct {
 	backupDir             string
 	hostKeyCallback       gossh.HostKeyCallback
 	deviceLocks           sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
+	bulkLimits            BulkOperationLimits
 }
 
 // NewBackupService creates a new BackupService.
@@ -68,7 +127,38 @@ func NewBackupService(
 		encryptionKey:         encryptionKey,
 		backupDir:             backupDir,
 		hostKeyCallback:       hostKeyCallback,
+		bulkLimits:            DefaultBulkOperationLimits,
 	}
+}
+
+// SetBulkOperationLimits overrides bulk request quotas.
+func (s *BackupService) SetBulkOperationLimits(limits BulkOperationLimits) {
+	s.bulkLimits = normalizeBulkOperationLimits(limits)
+}
+
+// BulkOperationLimits returns the effective bulk request quotas.
+func (s *BackupService) BulkOperationLimits() BulkOperationLimits {
+	return normalizeBulkOperationLimits(s.bulkLimits)
+}
+
+func normalizeBulkOperationLimits(limits BulkOperationLimits) BulkOperationLimits {
+	defaults := DefaultBulkOperationLimits
+	if limits.BulkBackupMaxDevices <= 0 {
+		limits.BulkBackupMaxDevices = defaults.BulkBackupMaxDevices
+	}
+	if limits.BulkBackupMaxQueuedJobs <= 0 {
+		limits.BulkBackupMaxQueuedJobs = defaults.BulkBackupMaxQueuedJobs
+	}
+	if limits.BulkDownloadMaxDevices <= 0 {
+		limits.BulkDownloadMaxDevices = defaults.BulkDownloadMaxDevices
+	}
+	if limits.BulkDownloadMaxFiles <= 0 {
+		limits.BulkDownloadMaxFiles = defaults.BulkDownloadMaxFiles
+	}
+	if limits.BulkDownloadMaxBytes <= 0 {
+		limits.BulkDownloadMaxBytes = defaults.BulkDownloadMaxBytes
+	}
+	return limits
 }
 
 // getDeviceLock returns or creates a per-device mutex.
@@ -107,16 +197,26 @@ type queuedDeviceBackup struct {
 	jobID     uuid.UUID
 }
 
+type preparedDeviceBackup struct {
+	device      domain.Device
+	profile     *domain.CredentialProfile
+	backupCfg   vendor.BackupConfig
+	resultIndex int
+}
+
 // TriggerBulkBackup validates all devices and queues backups for eligible ones.
-func (s *BackupService) TriggerBulkBackup(ctx context.Context) ([]BulkBackupResult, error) {
-	devices, err := s.deviceRepo.GetAll()
+func (s *BackupService) TriggerBulkBackup(ctx context.Context, requestedDeviceIDs ...uuid.UUID) ([]BulkBackupResult, error) {
+	devices, err := s.bulkBackupDevices(ctx, requestedDeviceIDs)
 	if err != nil {
-		return nil, fmt.Errorf("fetching devices: %w", err)
+		return nil, err
 	}
 
 	var results []BulkBackupResult
-	queuedBackups := make([]queuedDeviceBackup, 0)
+	preparedBackups := make([]preparedDeviceBackup, 0)
 	for i := range devices {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
 		d := &devices[i]
 		name := d.Tags["display_name"]
 		if name == "" {
@@ -153,31 +253,53 @@ func (s *BackupService) TriggerBulkBackup(ctx context.Context) ([]BulkBackupResu
 			continue
 		}
 
+		results = append(results, BulkBackupResult{
+			DeviceID: d.ID, DeviceName: name,
+			Status: "queued",
+		})
+		preparedBackups = append(preparedBackups, preparedDeviceBackup{
+			device:      *d,
+			profile:     profile,
+			backupCfg:   backupCfg,
+			resultIndex: len(results) - 1,
+		})
+	}
+
+	limits := s.BulkOperationLimits()
+	if len(preparedBackups) > limits.BulkBackupMaxQueuedJobs {
+		return nil, &BulkLimitError{
+			Operation: "bulk backup",
+			Limit:     "queued jobs",
+			Max:       int64(limits.BulkBackupMaxQueuedJobs),
+			Actual:    int64(len(preparedBackups)),
+		}
+	}
+
+	queuedBackups := make([]queuedDeviceBackup, 0, len(preparedBackups))
+	for _, prepared := range preparedBackups {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
 		job := &domain.BackupJob{
 			ID:       uuid.New(),
-			DeviceID: d.ID,
+			DeviceID: prepared.device.ID,
 			Status:   domain.BackupStatusPending,
 		}
 		if err := s.jobRepo.Create(job); err != nil {
-			results = append(results, BulkBackupResult{
-				DeviceID: d.ID, DeviceName: name,
-				Status: "skipped", Reason: fmt.Sprintf("failed to create job: %v", err),
-			})
+			results[prepared.resultIndex].Status = "skipped"
+			results[prepared.resultIndex].Reason = fmt.Sprintf("failed to create job: %v", err)
 			continue
 		}
 
 		queuedBackups = append(queuedBackups, queuedDeviceBackup{
-			device:    *d,
-			profile:   profile,
-			backupCfg: backupCfg,
+			device:    prepared.device,
+			profile:   prepared.profile,
+			backupCfg: prepared.backupCfg,
 			jobID:     job.ID,
 		})
 
 		jobID := job.ID
-		results = append(results, BulkBackupResult{
-			DeviceID: d.ID, DeviceName: name,
-			Status: "queued", JobID: &jobID,
-		})
+		results[prepared.resultIndex].JobID = &jobID
 	}
 
 	s.startBulkBackupWorkers(queuedBackups)
@@ -216,18 +338,81 @@ func (s *BackupService) startBulkBackupWorkers(queuedBackups []queuedDeviceBacku
 	}()
 }
 
+func (s *BackupService) bulkBackupDevices(ctx context.Context, requestedDeviceIDs []uuid.UUID) ([]domain.Device, error) {
+	limits := s.BulkOperationLimits()
+	if len(requestedDeviceIDs) == 0 {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
+		devices, err := s.deviceRepo.GetAll()
+		if err != nil {
+			return nil, fmt.Errorf("fetching devices: %w", err)
+		}
+		if len(devices) > limits.BulkBackupMaxDevices {
+			return nil, &BulkLimitError{
+				Operation: "bulk backup",
+				Limit:     "devices",
+				Max:       int64(limits.BulkBackupMaxDevices),
+				Actual:    int64(len(devices)),
+			}
+		}
+		return devices, nil
+	}
+
+	uniqueIDs := dedupeUUIDs(requestedDeviceIDs)
+	if len(uniqueIDs) > limits.BulkBackupMaxDevices {
+		return nil, &BulkLimitError{
+			Operation: "bulk backup",
+			Limit:     "devices",
+			Max:       int64(limits.BulkBackupMaxDevices),
+			Actual:    int64(len(uniqueIDs)),
+		}
+	}
+
+	devices := make([]domain.Device, 0, len(uniqueIDs))
+	for _, id := range uniqueIDs {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
+		device, err := s.deviceRepo.GetByID(id)
+		if err != nil || device == nil {
+			continue
+		}
+		devices = append(devices, *device)
+	}
+	return devices, nil
+}
+
 // BulkDownloadEntry pairs a backup file with a device-derived folder name.
 type BulkDownloadEntry struct {
 	File      domain.BackupFile
 	DeviceDir string // sanitized device name for zip folder
+	ZipPath   string // slash-separated, prevalidated zip entry path
+	SizeBytes int64
 }
 
 // GetBulkDownloadFiles returns file entries from the latest successful backup of each given device.
 func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uuid.UUID) ([]BulkDownloadEntry, error) {
+	limits := s.BulkOperationLimits()
+	deviceIDs = dedupeUUIDs(deviceIDs)
+	if len(deviceIDs) > limits.BulkDownloadMaxDevices {
+		return nil, &BulkLimitError{
+			Operation: "bulk download",
+			Limit:     "devices",
+			Max:       int64(limits.BulkDownloadMaxDevices),
+			Actual:    int64(len(deviceIDs)),
+		}
+	}
+
 	var entries []BulkDownloadEntry
+	var totalBytes int64
+	var backupRoot string
 	for _, did := range deviceIDs {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
 		device, err := s.deviceRepo.GetByID(did)
-		if err != nil {
+		if err != nil || device == nil {
 			continue
 		}
 		job, err := s.jobRepo.GetLatestByDeviceID(did)
@@ -251,10 +436,244 @@ func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uu
 		dirName = sanitizeHostname(dirName)
 
 		for _, f := range files {
-			entries = append(entries, BulkDownloadEntry{File: f, DeviceDir: dirName})
+			if len(entries)+1 > limits.BulkDownloadMaxFiles {
+				return nil, &BulkLimitError{
+					Operation: "bulk download",
+					Limit:     "files",
+					Max:       int64(limits.BulkDownloadMaxFiles),
+					Actual:    int64(len(entries) + 1),
+				}
+			}
+			if backupRoot == "" {
+				backupRoot, err = validatedBackupRoot(s.backupDir)
+				if err != nil {
+					return nil, err
+				}
+			}
+			filePath, sizeBytes, err := validateBulkDownloadFile(backupRoot, f.FilePath)
+			if err != nil {
+				return nil, err
+			}
+			if totalBytes > limits.BulkDownloadMaxBytes-sizeBytes {
+				return nil, &BulkLimitError{
+					Operation: "bulk download",
+					Limit:     "bytes",
+					Max:       limits.BulkDownloadMaxBytes,
+					Actual:    saturatedInt64Sum(totalBytes, sizeBytes),
+				}
+			}
+			zipPath, err := safeBulkDownloadZipPath(dirName, f.FileName)
+			if err != nil {
+				return nil, err
+			}
+			totalBytes += sizeBytes
+			f.FilePath = filePath
+			entries = append(entries, BulkDownloadEntry{
+				File:      f,
+				DeviceDir: dirName,
+				ZipPath:   zipPath,
+				SizeBytes: sizeBytes,
+			})
 		}
 	}
 	return entries, nil
+}
+
+func validatedBackupRoot(backupDir string) (string, error) {
+	backupDir = strings.TrimSpace(backupDir)
+	if backupDir == "" {
+		return "", &BulkPathError{Reason: "backup directory is not configured"}
+	}
+	absRoot, err := filepath.Abs(backupDir)
+	if err != nil {
+		return "", fmt.Errorf("resolving backup directory: %w", err)
+	}
+	root, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolving backup directory symlinks: %w", err)
+	}
+	return root, nil
+}
+
+func validateBulkDownloadFile(backupRoot, filePath string) (string, int64, error) {
+	if strings.TrimSpace(filePath) == "" {
+		return "", 0, &BulkPathError{Reason: "backup file path is empty"}
+	}
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", 0, fmt.Errorf("resolving backup file path: %w", err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", 0, fmt.Errorf("resolving backup file symlinks: %w", err)
+	}
+	if !pathIsUnderDir(backupRoot, resolvedPath) {
+		return "", 0, &BulkPathError{Path: filePath, Reason: "backup file path is outside backup directory"}
+	}
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return "", 0, fmt.Errorf("stat backup file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", 0, &BulkPathError{Path: filePath, Reason: "backup file path is not a regular file"}
+	}
+	return resolvedPath, info.Size(), nil
+}
+
+// OpenBulkDownloadEntry opens a previously selected bulk download entry and
+// revalidates the opened file descriptor before any bytes are streamed.
+func (s *BackupService) OpenBulkDownloadEntry(entry BulkDownloadEntry) (*os.File, error) {
+	if entry.SizeBytes < 0 {
+		return nil, &BulkPathError{Path: entry.File.FilePath, Reason: "backup file size is invalid"}
+	}
+	backupRoot, err := validatedBackupRoot(s.backupDir)
+	if err != nil {
+		return nil, err
+	}
+	f, sizeBytes, err := openValidatedBulkDownloadFile(backupRoot, entry.File.FilePath)
+	if err != nil {
+		return nil, err
+	}
+	if sizeBytes != entry.SizeBytes {
+		f.Close()
+		return nil, &BulkPathError{Path: entry.File.FilePath, Reason: "backup file changed after validation"}
+	}
+	return f, nil
+}
+
+func openValidatedBulkDownloadFile(backupRoot, filePath string) (*os.File, int64, error) {
+	if strings.TrimSpace(filePath) == "" {
+		return nil, 0, &BulkPathError{Reason: "backup file path is empty"}
+	}
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resolving backup file path: %w", err)
+	}
+
+	fd, err := unix.Open(absPath, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return nil, 0, &BulkPathError{Path: filePath, Reason: "backup file path is a symlink"}
+		}
+		return nil, 0, fmt.Errorf("opening backup file: %w", err)
+	}
+	f := os.NewFile(uintptr(fd), absPath)
+	if f == nil {
+		unix.Close(fd)
+		return nil, 0, fmt.Errorf("opening backup file: invalid file descriptor")
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, fmt.Errorf("stat backup file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, 0, &BulkPathError{Path: filePath, Reason: "backup file path is not a regular file"}
+	}
+
+	resolvedPath, err := resolveOpenedBackupPath(absPath, info)
+	if err != nil {
+		f.Close()
+		return nil, 0, err
+	}
+	if !pathIsUnderDir(backupRoot, resolvedPath) {
+		f.Close()
+		return nil, 0, &BulkPathError{Path: filePath, Reason: "backup file path is outside backup directory"}
+	}
+	return f, info.Size(), nil
+}
+
+func resolveOpenedBackupPath(absPath string, openedInfo os.FileInfo) (string, error) {
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", fmt.Errorf("resolving opened backup file path: %w", err)
+	}
+	currentInfo, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("stat opened backup file path: %w", err)
+	}
+	if !os.SameFile(openedInfo, currentInfo) {
+		return "", &BulkPathError{Path: absPath, Reason: "backup file changed after open"}
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func pathIsUnderDir(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func safeBulkDownloadZipPath(deviceDir, fileName string) (string, error) {
+	deviceDir = sanitizeHostname(deviceDir)
+	if deviceDir == "" {
+		deviceDir = "device"
+	}
+	name := strings.ReplaceAll(fileName, "\\", "/")
+	if strings.TrimSpace(name) == "" {
+		return "", &BulkPathError{Path: fileName, Reason: "backup file name is empty"}
+	}
+	if path.IsAbs(name) || hasWindowsDrivePrefix(name) {
+		return "", &BulkPathError{Path: fileName, Reason: "backup file name is absolute"}
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == ".." {
+			return "", &BulkPathError{Path: fileName, Reason: "backup file name contains traversal"}
+		}
+	}
+	cleanName := path.Clean(name)
+	if cleanName == "." || cleanName == ".." || strings.HasPrefix(cleanName, "../") || path.IsAbs(cleanName) || hasWindowsDrivePrefix(cleanName) {
+		return "", &BulkPathError{Path: fileName, Reason: "backup file name is unsafe"}
+	}
+	zipPath := path.Join(deviceDir, cleanName)
+	if zipPath == "." || zipPath == ".." || strings.HasPrefix(zipPath, "../") || path.IsAbs(zipPath) {
+		return "", &BulkPathError{Path: fileName, Reason: "zip entry path is unsafe"}
+	}
+	return zipPath, nil
+}
+
+func hasWindowsDrivePrefix(name string) bool {
+	if len(name) < 2 || name[1] != ':' {
+		return false
+	}
+	first := name[0]
+	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
+}
+
+func dedupeUUIDs(ids []uuid.UUID) []uuid.UUID {
+	if len(ids) <= 1 {
+		return ids
+	}
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	unique := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
+}
+
+func saturatedInt64Sum(a, b int64) int64 {
+	if b > 0 && a > (1<<63-1)-b {
+		return 1<<63 - 1
+	}
+	return a + b
+}
+
+func contextError(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
 
 // TriggerBackup creates a pending backup job and runs all backup types asynchronously.

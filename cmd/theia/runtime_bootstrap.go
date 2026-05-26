@@ -390,6 +390,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	log.Printf("SSH known hosts store: %s", paths.knownHostsPath)
 
 	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback())
+	configureBackupServiceBulkOperationLimits(backupService, cfg)
 	bridgeRepo := postgres.NewBridgeRepo(db)
 	bridgeService, err := service.NewBridgeService(service.BridgeServiceConfig{
 		BridgeRepo:            bridgeRepo,
@@ -562,6 +563,19 @@ func configureInstanceBackupArchiveLimits(instanceBackupService *service.Instanc
 		MaxEntryBytes:  cfg.InstanceBackupArchiveLimits.MaxEntryBytes,
 		MaxFileEntries: cfg.InstanceBackupArchiveLimits.MaxFileEntries,
 		MaxDuration:    time.Duration(cfg.InstanceBackupArchiveLimits.MaxDurationSeconds) * time.Second,
+	})
+}
+
+func configureBackupServiceBulkOperationLimits(backupService *service.BackupService, cfg *runtimeConfig) {
+	if backupService == nil || cfg == nil {
+		return
+	}
+	backupService.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    cfg.BulkBackupLimits.MaxDevices,
+		BulkBackupMaxQueuedJobs: cfg.BulkBackupLimits.MaxQueuedJobs,
+		BulkDownloadMaxDevices:  cfg.BulkDownloadLimits.MaxDevices,
+		BulkDownloadMaxFiles:    cfg.BulkDownloadLimits.MaxFiles,
+		BulkDownloadMaxBytes:    cfg.BulkDownloadLimits.MaxBytes,
 	})
 }
 
