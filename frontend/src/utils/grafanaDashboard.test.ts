@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolveGrafanaDashboardUrl, type GrafanaDashboardConfig } from './grafanaDashboard';
 import type { Device } from '../types/api';
+import { type GrafanaDashboardConfig, resolveGrafanaDashboardUrl } from './grafanaDashboard';
 
 function device(overrides: Partial<Device> = {}): Device {
   return {
@@ -45,9 +45,9 @@ describe('resolveGrafanaDashboardUrl', () => {
       },
     };
 
-    expect(resolveGrafanaDashboardUrl(config, device(), { mapId: 'map-1', mapName: 'Core' }, '')).toBe(
-      'https://grafana.example/d/router?var-device=edge-01',
-    );
+    expect(
+      resolveGrafanaDashboardUrl(config, device(), { mapId: 'map-1', mapName: 'Core' }, ''),
+    ).toBe('https://grafana.example/d/router?var-device=edge-01');
   });
 
   it('uses the assigned profile before the default profile and encodes placeholders', () => {
@@ -63,7 +63,8 @@ describe('resolveGrafanaDashboardUrl', () => {
         {
           id: 'assigned-profile',
           name: 'Assigned',
-          url_template: 'https://grafana.example/d/router?var-device={{hostname}}&var-map={{map_name}}',
+          url_template:
+            'https://grafana.example/d/router?var-device={{hostname}}&var-map={{map_name}}',
           variable_source: 'hostname',
         },
       ],
@@ -75,8 +76,8 @@ describe('resolveGrafanaDashboardUrl', () => {
       },
     };
 
-    expect(resolveGrafanaDashboardUrl(config, device(), { mapId: 'map-1', mapName: 'Core Map' }, '')).toBe(
-      'https://grafana.example/d/router?var-device=edge%2001&var-map=Core%20Map',
-    );
+    expect(
+      resolveGrafanaDashboardUrl(config, device(), { mapId: 'map-1', mapName: 'Core Map' }, ''),
+    ).toBe('https://grafana.example/d/router?var-device=edge%2001&var-map=Core%20Map');
   });
 });

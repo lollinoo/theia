@@ -1253,7 +1253,9 @@ export async function fetchSNMPProfiles(): Promise<SNMPProfile[]> {
 }
 
 export async function fetchGrafanaDashboardConfig(): Promise<GrafanaDashboardConfig> {
-  return parseGrafanaDashboardConfigResponse(await requestJSON('/api/v1/grafana/dashboard-profiles'));
+  return parseGrafanaDashboardConfigResponse(
+    await requestJSON('/api/v1/grafana/dashboard-profiles'),
+  );
 }
 
 export async function createGrafanaDashboardProfile(
