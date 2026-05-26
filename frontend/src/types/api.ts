@@ -154,6 +154,29 @@ export interface InterfaceInfo {
   in_use_by?: string;
 }
 
+export type GrafanaVariableSource = 'hostname' | 'ip' | 'map_name' | 'map_id';
+
+export interface GrafanaDashboardProfile {
+  id: string;
+  name: string;
+  url_template: string;
+  variable_source: GrafanaVariableSource;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface GrafanaDeviceDashboardOverride {
+  profile_id: string | null;
+  custom_url: string;
+  updated_at?: string;
+}
+
+export interface GrafanaDashboardConfig {
+  profiles: GrafanaDashboardProfile[];
+  default_profile_id: string;
+  device_overrides: Record<string, GrafanaDeviceDashboardOverride>;
+}
+
 type APIRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is APIRecord {
@@ -592,6 +615,56 @@ export function parseSNMPProfilesResponse(payload: unknown): SNMPProfile[] {
       updated_at: readString(item, 'updated_at'),
     };
   });
+}
+
+function parseGrafanaVariableSource(value: unknown): GrafanaVariableSource {
+  return value === 'ip' || value === 'map_name' || value === 'map_id' ? value : 'hostname';
+}
+
+export function parseGrafanaDashboardConfigResponse(payload: unknown): GrafanaDashboardConfig {
+  if (!isRecord(payload)) {
+    throw new Error('invalid grafana dashboard config response');
+  }
+  const data = isRecord(payload.data) ? payload.data : {};
+  const profilesData = Array.isArray(data.profiles) ? data.profiles : [];
+  const profiles = profilesData.map((item) => {
+    if (!isRecord(item)) {
+      throw new Error('invalid grafana dashboard profile item');
+    }
+    return {
+      id: readString(item, 'id'),
+      name: readString(item, 'name'),
+      url_template: readString(item, 'url_template'),
+      variable_source: parseGrafanaVariableSource(item.variable_source),
+      created_at: readString(item, 'created_at') || undefined,
+      updated_at: readString(item, 'updated_at') || undefined,
+    };
+  });
+
+  const rawOverrides = isRecord(data.device_overrides) ? data.device_overrides : {};
+  const device_overrides = Object.fromEntries(
+    Object.entries(rawOverrides).flatMap(([deviceId, value]) => {
+      if (!isRecord(value)) {
+        return [];
+      }
+      return [
+        [
+          deviceId,
+          {
+            profile_id: readNullableString(value, 'profile_id'),
+            custom_url: readString(value, 'custom_url'),
+            updated_at: readString(value, 'updated_at') || undefined,
+          },
+        ],
+      ];
+    }),
+  );
+
+  return {
+    profiles,
+    default_profile_id: readString(data, 'default_profile_id'),
+    device_overrides,
+  };
 }
 
 export function parseSNMPProfileResponse(payload: unknown): SNMPProfile {

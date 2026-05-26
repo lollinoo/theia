@@ -11,6 +11,7 @@ import {
   fetchCanvasMapTopology,
   fetchCanvasTopology,
   fetchDevices,
+  fetchGrafanaDashboardConfig,
   fetchLinks,
   fetchSettings,
 } from '../../api/client';
@@ -40,6 +41,7 @@ vi.mock('../../api/client', () => ({
   fetchCanvasMapTopology: vi.fn(),
   fetchCanvasTopology: vi.fn(),
   fetchDevices: vi.fn(),
+  fetchGrafanaDashboardConfig: vi.fn(),
   fetchLinks: vi.fn(),
   fetchSettings: vi.fn(),
   createLink: vi.fn(),
@@ -287,6 +289,11 @@ describe('useCanvasData', () => {
     vi.mocked(fetchDevices).mockResolvedValue([mockDevice()]);
     vi.mocked(fetchLinks).mockResolvedValue([]);
     vi.mocked(fetchSettings).mockResolvedValue({});
+    vi.mocked(fetchGrafanaDashboardConfig).mockResolvedValue({
+      profiles: [],
+      default_profile_id: '',
+      device_overrides: {},
+    });
     vi.mocked(createLink).mockResolvedValue(undefined as never);
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       callback(0);

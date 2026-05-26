@@ -111,6 +111,7 @@ func NewRouter(
 		runtimeSnapshotFunc,
 	)
 	settingsHandler := NewSettingsHandler(settingsRepo)
+	grafanaDashboardHandler := NewGrafanaDashboardHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	areaHandler := NewAreaHandler(areaRepo)
 	backupHandler := NewBackupHandler(backupService, settingsRepo)
@@ -467,6 +468,18 @@ func NewRouter(
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	})
+
+	mux.HandleFunc("/api/v1/grafana/dashboard-profiles", func(w http.ResponseWriter, r *http.Request) {
+		grafanaDashboardHandler.HandleProfiles(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/grafana/dashboard-profiles/", func(w http.ResponseWriter, r *http.Request) {
+		grafanaDashboardHandler.HandleProfile(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/grafana/device-overrides/", func(w http.ResponseWriter, r *http.Request) {
+		grafanaDashboardHandler.HandleDeviceOverride(w, r)
 	})
 
 	// SNMP credential profile routes

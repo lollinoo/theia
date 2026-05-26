@@ -4,6 +4,8 @@ package domain
 const (
 	SettingPrometheusURL                 = "prometheus_url"
 	SettingGrafanaURL                    = "grafana_url"
+	SettingGrafanaDashboardConfig        = "grafana_dashboard_config"
+	SettingGrafanaLegacyDeviceURLPrefix  = "grafana_dashboard_url:"
 	SettingPollingInterval               = "polling_interval_seconds"
 	SettingSNMPWorkerPoolSize            = "snmp_worker_pool_size"
 	SettingSNMPWorkerPoolPerformance     = "snmp_worker_pool_performance_size"
@@ -41,6 +43,7 @@ func DefaultSettings() map[string]string {
 	return map[string]string{
 		SettingPrometheusURL:                 "",
 		SettingGrafanaURL:                    "",
+		SettingGrafanaDashboardConfig:        "{}",
 		SettingPollingInterval:               "60",
 		SettingSNMPWorkerPoolSize:            "5",
 		SettingSNMPWorkerPoolPerformance:     "3",

@@ -16,6 +16,7 @@ import {
   validateURL,
 } from '../utils/validation';
 import { CredentialProfileManager } from './CredentialProfileManager';
+import { GrafanaDashboardProfileManager } from './GrafanaDashboardProfileManager';
 import { InstanceBackupManager } from './InstanceBackupManager';
 import { MaterialIcon } from './MaterialIcon';
 import { SNMPProfileManager } from './SNMPProfileManager';
@@ -838,7 +839,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         <SettingsSection
           id="settings-profiles-heading"
           title="Profiles"
-          description="Credential and SNMP profiles available to managed devices."
+          description="Credential, SNMP, and Grafana profiles available to managed devices."
           icon="badge"
           accent="primary"
         >
@@ -854,6 +855,12 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
               className="rounded-lg bg-surface-container-high p-3"
             >
               <CredentialProfileManager />
+            </div>
+            <div
+              data-testid="grafana-profile-well"
+              className="rounded-lg bg-surface-container-high p-3"
+            >
+              <GrafanaDashboardProfileManager />
             </div>
           </div>
         </SettingsSection>

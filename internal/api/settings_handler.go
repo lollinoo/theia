@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/logging"
 )
@@ -42,6 +43,7 @@ type settingsResponse struct {
 var validSettingKeys = map[string]bool{
 	domain.SettingPrometheusURL:                 true,
 	domain.SettingGrafanaURL:                    true,
+	domain.SettingGrafanaDashboardConfig:        true,
 	domain.SettingPollingInterval:               true,
 	domain.SettingSNMPWorkerPoolSize:            true,
 	domain.SettingSNMPWorkerPoolPerformance:     true,
@@ -120,7 +122,7 @@ var validIntervalHours = map[int]bool{0: true, 6: true, 12: true, 24: true, 48: 
 // validateSetting validates that key is in the allowlist and value matches
 // the expected type for that key. Returns nil if valid, error with specific message if not.
 func validateSetting(key, value string) error {
-	if !validSettingKeys[key] {
+	if !isValidSettingKey(key) {
 		return fmt.Errorf("unknown setting key: %s", key)
 	}
 	if numericSettings[key] {
@@ -140,6 +142,12 @@ func validateSetting(key, value string) error {
 		}
 	}
 	if urlSettings[key] && value != "" {
+		u, err := url.Parse(value)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("%s must be a valid http/https URL", key)
+		}
+	}
+	if isLegacyGrafanaDeviceURLSetting(key) && value != "" {
 		u, err := url.Parse(value)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("%s must be a valid http/https URL", key)
@@ -170,6 +178,19 @@ func validateSetting(key, value string) error {
 	return nil
 }
 
+func isValidSettingKey(key string) bool {
+	return validSettingKeys[key] || isLegacyGrafanaDeviceURLSetting(key)
+}
+
+func isLegacyGrafanaDeviceURLSetting(key string) bool {
+	if !strings.HasPrefix(key, domain.SettingGrafanaLegacyDeviceURLPrefix) {
+		return false
+	}
+	deviceID := strings.TrimPrefix(key, domain.SettingGrafanaLegacyDeviceURLPrefix)
+	_, err := uuid.Parse(deviceID)
+	return err == nil
+}
+
 // HandleGetAll handles GET /api/v1/settings
 func (h *SettingsHandler) HandleGetAll(w http.ResponseWriter, r *http.Request) {
 	settings, err := h.repo.GetAll()
@@ -189,7 +210,7 @@ func (h *SettingsHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !validSettingKeys[key] {
+	if !isValidSettingKey(key) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown setting key: %s", key))
 		return
 	}
@@ -253,7 +274,7 @@ func buildSettingsResponse(settings map[string]string) settingsResponse {
 	data := make(map[string]string, len(settings))
 	secrets := make(map[string]settingSecretState)
 	for key, value := range settings {
-		if !validSettingKeys[key] {
+		if !isValidSettingKey(key) {
 			continue
 		}
 		if settingResponseSensitive(key) {

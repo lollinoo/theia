@@ -201,7 +201,7 @@ vi.mock('./canvas/useCanvasData', () => ({
       loadTopology: vi.fn().mockResolvedValue(undefined),
       runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
       grafanaUrlRef: { current: '' },
-      deviceGrafanaUrlsRef: { current: new Map<string, string>() },
+      grafanaDashboardConfigRef: { current: null },
       refreshSettings: vi.fn(),
       topologyRecoveryNotice: null,
       dismissTopologyRecoveryNotice: vi.fn(),

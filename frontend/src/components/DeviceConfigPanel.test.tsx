@@ -33,6 +33,23 @@ vi.mock('../api/client', () => ({
     },
   ]),
   fetchDeviceCredentialProfiles: vi.fn().mockResolvedValue([]),
+  fetchGrafanaDashboardConfig: vi.fn().mockResolvedValue({
+    profiles: [
+      {
+        id: 'grafana-profile-1',
+        name: 'RouterBoard shared',
+        url_template: 'https://grafana.example/d/router?var-device={{hostname}}',
+        variable_source: 'hostname',
+      },
+    ],
+    default_profile_id: '',
+    device_overrides: {},
+  }),
+  saveDeviceGrafanaDashboardOverride: vi.fn().mockResolvedValue({
+    profiles: [],
+    default_profile_id: '',
+    device_overrides: {},
+  }),
   assignCredentialProfile: vi.fn().mockResolvedValue(undefined),
   unassignCredentialProfile: vi.fn().mockResolvedValue(undefined),
   setWinBoxProfile: vi.fn().mockResolvedValue(undefined),
@@ -668,8 +685,8 @@ describe('DeviceConfigPanel', () => {
       />,
     );
 
-    expect(screen.getByText('Custom Grafana Dashboard URL')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Leave blank to use default')).toBeInTheDocument();
+    expect(screen.getByText('Grafana Dashboard')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Optional custom URL override')).toBeInTheDocument();
   });
 
   it('renders device IP in edit form', () => {
@@ -1011,9 +1028,9 @@ describe('DeviceConfigPanel — backend typed error display', () => {
       />,
     );
 
-    // The Grafana URL field must be present so blur validation can fire on it
-    expect(screen.getByPlaceholderText('Leave blank to use default')).toBeInTheDocument();
-    expect(screen.getByText('Custom Grafana Dashboard URL')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Optional custom URL override')).toBeInTheDocument();
+    expect(screen.getByText('Grafana Dashboard')).toBeInTheDocument();
+    expect(screen.getByText('Dashboard Profile')).toBeInTheDocument();
   });
 });
 
@@ -1027,7 +1044,7 @@ describe('DeviceConfigPanel — Grafana URL autosave validation', () => {
   });
 
   it('does not persist invalid Grafana URLs during debounced autosave', async () => {
-    const { updateSetting } = await import('../api/client');
+    const { saveDeviceGrafanaDashboardOverride } = await import('../api/client');
 
     render(
       <DeviceConfigPanel
@@ -1037,7 +1054,7 @@ describe('DeviceConfigPanel — Grafana URL autosave validation', () => {
       />,
     );
 
-    const grafanaInput = screen.getByPlaceholderText('Leave blank to use default');
+    const grafanaInput = screen.getByPlaceholderText('Optional custom URL override');
     await act(async () => {
       fireEvent.change(grafanaInput, { target: { value: 'not-a-url' } });
       await Promise.resolve();
@@ -1049,11 +1066,11 @@ describe('DeviceConfigPanel — Grafana URL autosave validation', () => {
       await vi.advanceTimersByTimeAsync(500);
     });
 
-    expect(updateSetting).not.toHaveBeenCalled();
+    expect(saveDeviceGrafanaDashboardOverride).not.toHaveBeenCalled();
   });
 
   it('persists valid Grafana URLs after the debounce window', async () => {
-    const { updateSetting } = await import('../api/client');
+    const { saveDeviceGrafanaDashboardOverride } = await import('../api/client');
 
     render(
       <DeviceConfigPanel
@@ -1063,7 +1080,7 @@ describe('DeviceConfigPanel — Grafana URL autosave validation', () => {
       />,
     );
 
-    const grafanaInput = screen.getByPlaceholderText('Leave blank to use default');
+    const grafanaInput = screen.getByPlaceholderText('Optional custom URL override');
     await act(async () => {
       fireEvent.change(grafanaInput, {
         target: { value: 'https://grafana.example/d/router-overview' },
@@ -1076,10 +1093,36 @@ describe('DeviceConfigPanel — Grafana URL autosave validation', () => {
       await Promise.resolve();
     });
 
-    expect(updateSetting).toHaveBeenCalledWith(
-      'grafana_dashboard_url:dev-1',
-      'https://grafana.example/d/router-overview',
+    expect(saveDeviceGrafanaDashboardOverride).toHaveBeenCalledWith('dev-1', {
+      profile_id: null,
+      custom_url: 'https://grafana.example/d/router-overview',
+    });
+  });
+
+  it('saves device Grafana override with selected profile id', async () => {
+    const { saveDeviceGrafanaDashboardOverride } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
     );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const profileSelect = screen.getByRole('combobox', { name: /dashboard profile/i });
+    await act(async () => {
+      fireEvent.change(profileSelect, { target: { value: 'grafana-profile-1' } });
+      await Promise.resolve();
+    });
+
+    expect(saveDeviceGrafanaDashboardOverride).toHaveBeenCalledWith('dev-1', {
+      profile_id: 'grafana-profile-1',
+      custom_url: '',
+    });
   });
 });
 

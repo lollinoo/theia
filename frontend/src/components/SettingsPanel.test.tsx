@@ -25,6 +25,10 @@ vi.mock('./CredentialProfileManager', () => ({
   CredentialProfileManager: () => <div data-testid="credential-profile-manager" />,
 }));
 
+vi.mock('./GrafanaDashboardProfileManager', () => ({
+  GrafanaDashboardProfileManager: () => <div data-testid="grafana-profile-manager" />,
+}));
+
 vi.mock('./InstanceBackupManager', () => ({
   InstanceBackupManager: () => <div data-testid="instance-backup-manager" />,
 }));
@@ -110,6 +114,9 @@ describe('SettingsPanel (COMP-05)', () => {
       'bg-surface-container-high',
     );
     expect(screen.getByTestId('credential-profile-well').className).toContain(
+      'bg-surface-container-high',
+    );
+    expect(screen.getByTestId('grafana-profile-well').className).toContain(
       'bg-surface-container-high',
     );
   });

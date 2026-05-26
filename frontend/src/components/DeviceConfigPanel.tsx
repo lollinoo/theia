@@ -7,17 +7,18 @@ import {
   fetchAreas,
   fetchCredentialProfiles,
   fetchDeviceCredentialProfiles,
+  fetchGrafanaDashboardConfig,
   fetchSNMPProfiles,
   fetchSettings,
   revealSNMPProfile,
   runTopologyDiscovery,
+  saveDeviceGrafanaDashboardOverride,
   setWinBoxProfile,
   testSNMPConnection,
   unassignCredentialProfile,
   updateCanvasMapDeviceAreas,
   updateCanvasMapDeviceVisualColor,
   updateDevice,
-  updateSetting,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type {
@@ -26,6 +27,7 @@ import type {
   Device,
   DeviceCredentialProfile,
   DevicePollClass,
+  GrafanaDashboardProfile,
   MetricsSource,
   SNMPProfile,
   TopologyDiscoveryMode,
@@ -192,12 +194,12 @@ export function DeviceConfigPanel({
   onWinBoxAvailabilityChange,
   isVirtual,
 }: DeviceConfigPanelProps) {
-  const grafanaKey = `grafana_dashboard_url:${device.id}`;
-
   const [pollingValue, setPollingValue] = useState('default');
   const [customPolling, setCustomPolling] = useState('');
   const [pollingEnabled, setPollingEnabled] = useState(device.polling_enabled !== false);
   const [grafanaUrl, setGrafanaUrl] = useState('');
+  const [grafanaProfileId, setGrafanaProfileId] = useState('');
+  const [grafanaProfiles, setGrafanaProfiles] = useState<GrafanaDashboardProfile[]>([]);
 
   const [form, setForm] = useState(() => createDeviceConfigFormModel(device, Boolean(isVirtual)));
   const [editLoading, setEditLoading] = useState(false);
@@ -389,18 +391,24 @@ export function DeviceConfigPanel({
   }, [device.id, isVirtual]);
 
   useEffect(() => {
-    fetchSettings()
+    Promise.all([fetchSettings(), fetchGrafanaDashboardConfig()])
       .then((settings) => {
-        setGrafanaUrl(settings[grafanaKey] ?? '');
+        const [rawSettings, grafanaConfig] = settings;
+        setGrafanaProfiles(grafanaConfig.profiles);
+        const override = grafanaConfig.device_overrides[device.id];
+        setGrafanaProfileId(override?.profile_id ?? '');
+        setGrafanaUrl(
+          override?.custom_url ?? rawSettings[`grafana_dashboard_url:${device.id}`] ?? '',
+        );
         setTopologyDiscoveryDefaultMode(
-          (settings['topology_discovery_default_mode'] as TopologyDiscoveryMode | undefined) ??
+          (rawSettings['topology_discovery_default_mode'] as TopologyDiscoveryMode | undefined) ??
             'lldp_cdp',
         );
       })
       .catch(() => {
         /* non-fatal */
       });
-  }, [device.id, grafanaKey]);
+  }, [device.id]);
 
   // Sync inputs when saved configuration changes. Runtime-only updates such as
   // status changes should not reset in-progress edits.
@@ -532,11 +540,29 @@ export function DeviceConfigPanel({
     }
 
     grafanaTimerRef.current = window.setTimeout(() => {
-      void updateSetting(grafanaKey, value).then(() => {
-        showSaved(setSavedGrafana, savedGrafanaTimerRef);
-        onSettingsChange?.();
-      });
+      void saveGrafanaOverride(grafanaProfileId, value);
     }, 500);
+  }
+
+  async function saveGrafanaOverride(profileId: string, customUrl: string) {
+    const nextConfig = await saveDeviceGrafanaDashboardOverride(device.id, {
+      profile_id: profileId || null,
+      custom_url: customUrl.trim(),
+    });
+    setGrafanaProfiles(nextConfig.profiles);
+    showSaved(setSavedGrafana, savedGrafanaTimerRef);
+    onSettingsChange?.();
+  }
+
+  function handleGrafanaProfileChange(profileId: string) {
+    if (readOnly) return;
+    setGrafanaProfileId(profileId);
+    setFieldError('grafanaUrl', null);
+    if (grafanaTimerRef.current !== null) {
+      window.clearTimeout(grafanaTimerRef.current);
+      grafanaTimerRef.current = null;
+    }
+    void saveGrafanaOverride(profileId, grafanaUrl);
   }
 
   async function handleEditSave(e: React.FormEvent) {
@@ -900,7 +926,7 @@ export function DeviceConfigPanel({
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-              Custom Grafana Dashboard URL
+              Grafana Dashboard
             </p>
             <span
               className={`text-xs text-status-up transition-opacity duration-500 ${savedGrafana ? 'opacity-100' : 'opacity-0'}`}
@@ -908,10 +934,26 @@ export function DeviceConfigPanel({
               Saved
             </span>
           </div>
+          <label className="grid gap-1 text-sm">
+            <span className="text-xs text-on-bg-secondary">Dashboard Profile</span>
+            <select
+              value={grafanaProfileId}
+              disabled={readOnly}
+              onChange={(e) => handleGrafanaProfileChange(e.target.value)}
+              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <option value="">Use global default</option>
+              {grafanaProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <input
             type="url"
             value={grafanaUrl}
-            placeholder="Leave blank to use default"
+            placeholder="Optional custom URL override"
             disabled={readOnly}
             onChange={(e) => {
               setGrafanaUrl(e.target.value);
