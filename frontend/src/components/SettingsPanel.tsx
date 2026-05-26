@@ -885,8 +885,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
                 />
               </button>
               {deviceBackupSectionOpen && (
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <label className="grid gap-1 text-sm">
+                <div className="mt-4 grid items-start gap-4 sm:grid-cols-2">
+                  <label className="grid grid-rows-[2.5rem_auto_1rem] gap-1 text-sm">
                     <span
                       data-testid="device-backup-schedule-label-row"
                       className="flex min-h-10 items-start justify-between gap-3"
@@ -908,12 +908,15 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
                       <option value="48">Every 48 hours</option>
                       <option value="168">Every 7 days</option>
                     </select>
-                    <span className="text-xs text-on-bg-muted">
+                    <span
+                      data-testid="device-backup-schedule-helper-row"
+                      className="min-h-4 text-xs text-on-bg-muted"
+                    >
                       {computeDeviceNextBackupText()}
                     </span>
                   </label>
 
-                  <label className="grid gap-1 text-sm">
+                  <label className="grid grid-rows-[2.5rem_auto_1rem] gap-1 text-sm">
                     <span
                       data-testid="device-backup-retention-label-row"
                       className="flex min-h-10 items-start justify-between gap-3"
@@ -931,11 +934,12 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
                       onChange={(e) => handleDeviceRetentionChange(e.target.value)}
                       className={compactControlClass(Boolean(fieldErrors.deviceBackupRetention))}
                     />
-                    {fieldErrors.deviceBackupRetention && (
-                      <span className="text-xs text-status-down">
-                        {fieldErrors.deviceBackupRetention}
-                      </span>
-                    )}
+                    <span
+                      data-testid="device-backup-retention-helper-row"
+                      className="min-h-4 text-xs text-status-down"
+                    >
+                      {fieldErrors.deviceBackupRetention ?? ''}
+                    </span>
                   </label>
                 </div>
               )}
