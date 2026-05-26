@@ -369,6 +369,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	areaRepo := postgres.NewAreaRepo(db)
 	backupJobRepo := postgres.NewBackupJobRepo(db)
 	backupFileRepo := postgres.NewBackupFileRepo(db)
+	bulkBackupRunRepo := postgres.NewBulkBackupRunRepo(db)
 
 	discoverFunc := newSNMPDiscoverFunc(settingsRepo, vendorRegistry)
 	topologyNotify := make(chan struct{}, 1)
@@ -389,7 +390,11 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	log.Printf("SSH known hosts store: %s", paths.knownHostsPath)
 
-	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback())
+	backupService := service.NewBackupService(
+		backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback(),
+		service.WithBulkBackupRunRepo(bulkBackupRunRepo),
+	)
 	configureBackupServiceBulkOperationLimits(backupService, cfg)
 	bridgeRepo := postgres.NewBridgeRepo(db)
 	bridgeService, err := service.NewBridgeService(service.BridgeServiceConfig{
@@ -430,6 +435,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	deviceBackupScheduler := worker.NewDeviceBackupScheduler(backupService, backupJobRepo, settingsRepo)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	backupService.ResumeBulkBackupRuns(ctx)
 
 	prometheusURL := ""
 	if value, err := settingsRepo.Get(domain.SettingPrometheusURL); err == nil {

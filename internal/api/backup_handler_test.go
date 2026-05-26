@@ -416,6 +416,154 @@ func (r *backupFileRepoForHandler) DeleteByJobID(jobID uuid.UUID) error {
 	return nil
 }
 
+type bulkBackupRunRepoForHandler struct {
+	mu    sync.Mutex
+	runs  map[uuid.UUID]*domain.BulkBackupRun
+	items map[uuid.UUID][]domain.BulkBackupRunItem
+}
+
+func newBulkBackupRunRepoForHandler() *bulkBackupRunRepoForHandler {
+	return &bulkBackupRunRepoForHandler{
+		runs:  make(map[uuid.UUID]*domain.BulkBackupRun),
+		items: make(map[uuid.UUID][]domain.BulkBackupRunItem),
+	}
+}
+
+func (r *bulkBackupRunRepoForHandler) CreateRun(run *domain.BulkBackupRun, items []domain.BulkBackupRunItem) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now().UTC()
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = now
+	}
+	if run.StartedAt == nil {
+		started := now
+		run.StartedAt = &started
+	}
+	cp := *run
+	r.runs[run.ID] = &cp
+	copied := append([]domain.BulkBackupRunItem(nil), items...)
+	r.items[run.ID] = copied
+	return nil
+}
+
+func (r *bulkBackupRunRepoForHandler) GetRun(id uuid.UUID) (*domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.copyRunLocked(id), nil
+}
+
+func (r *bulkBackupRunRepoForHandler) GetLatestRun() (*domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest *domain.BulkBackupRun
+	for _, run := range r.runs {
+		if latest == nil || run.CreatedAt.After(latest.CreatedAt) {
+			cp := *run
+			latest = &cp
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+	latest.Items = append([]domain.BulkBackupRunItem(nil), r.items[latest.ID]...)
+	return latest, nil
+}
+
+func (r *bulkBackupRunRepoForHandler) GetActiveRun() (*domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, run := range r.runs {
+		if run.Status == domain.BulkBackupRunStatusRunning || run.Status == domain.BulkBackupRunStatusCancelling {
+			return r.copyRunLocked(id), nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *bulkBackupRunRepoForHandler) ListResumableRuns() ([]domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var runs []domain.BulkBackupRun
+	for id, run := range r.runs {
+		if run.Status == domain.BulkBackupRunStatusRunning || run.Status == domain.BulkBackupRunStatusCancelling {
+			cp := *run
+			cp.Items = append([]domain.BulkBackupRunItem(nil), r.items[id]...)
+			runs = append(runs, cp)
+		}
+	}
+	return runs, nil
+}
+
+func (r *bulkBackupRunRepoForHandler) UpdateRun(run *domain.BulkBackupRun) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := *run
+	r.runs[run.ID] = &cp
+	return nil
+}
+
+func (r *bulkBackupRunRepoForHandler) ListRunItems(runID uuid.UUID) ([]domain.BulkBackupRunItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]domain.BulkBackupRunItem(nil), r.items[runID]...), nil
+}
+
+func (r *bulkBackupRunRepoForHandler) UpdateRunItem(item *domain.BulkBackupRunItem) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := r.items[item.RunID]
+	for i := range items {
+		if items[i].ID == item.ID {
+			items[i] = *item
+			r.items[item.RunID] = items
+			return nil
+		}
+	}
+	r.items[item.RunID] = append(items, *item)
+	return nil
+}
+
+func (r *bulkBackupRunRepoForHandler) RecalculateRunCounters(runID uuid.UUID) (*domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[runID]
+	if run == nil {
+		return nil, nil
+	}
+	run.TotalCount = len(r.items[runID])
+	run.QueuedCount = 0
+	run.SuccessCount = 0
+	run.FailedCount = 0
+	run.SkippedCount = 0
+	run.CancelledCount = 0
+	for _, item := range r.items[runID] {
+		switch item.Status {
+		case domain.BulkBackupRunItemStatusQueued, domain.BulkBackupRunItemStatusRunning, domain.BulkBackupRunItemStatusChecking:
+			run.QueuedCount++
+		case domain.BulkBackupRunItemStatusSuccess:
+			run.SuccessCount++
+		case domain.BulkBackupRunItemStatusFailed:
+			run.FailedCount++
+		case domain.BulkBackupRunItemStatusSkipped:
+			run.SkippedCount++
+		case domain.BulkBackupRunItemStatusCancelled:
+			run.CancelledCount++
+		}
+	}
+	return r.copyRunLocked(runID), nil
+}
+
+func (r *bulkBackupRunRepoForHandler) copyRunLocked(id uuid.UUID) *domain.BulkBackupRun {
+	run := r.runs[id]
+	if run == nil {
+		return nil
+	}
+	cp := *run
+	cp.Items = append([]domain.BulkBackupRunItem(nil), r.items[id]...)
+	return &cp
+}
+
 // setupBackupHandler creates a BackupHandler backed by mock repos.
 func setupBackupHandler(t *testing.T) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler) {
 	t.Helper()
@@ -737,6 +885,140 @@ func TestBackupHandlerBulkBackupRejectsInvalidRequestedDeviceID(t *testing.T) {
 	}
 }
 
+func TestBackupHandlerStartBulkBackupRunReturnsPersistedRun(t *testing.T) {
+	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.10", SysName: "offline-core",
+		Managed: true, Status: domain.DeviceStatusDown,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID           string `json:"id"`
+			Status       string `json:"status"`
+			TotalCount   int    `json:"total_count"`
+			SkippedCount int    `json:"skipped_count"`
+			Items        []struct {
+				DeviceID string `json:"device_id"`
+				Status   string `json:"status"`
+				Reason   string `json:"reason"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if _, err := uuid.Parse(resp.Data.ID); err != nil {
+		t.Fatalf("expected run id UUID, got %q", resp.Data.ID)
+	}
+	if resp.Data.TotalCount != 1 || resp.Data.SkippedCount != 1 {
+		t.Fatalf("expected one skipped item, got total=%d skipped=%d", resp.Data.TotalCount, resp.Data.SkippedCount)
+	}
+	if len(resp.Data.Items) != 1 || resp.Data.Items[0].DeviceID != deviceID.String() || resp.Data.Items[0].Status != "skipped" {
+		t.Fatalf("unexpected items: %#v", resp.Data.Items)
+	}
+	if resp.Data.Items[0].Reason != "device offline" {
+		t.Fatalf("expected offline reason, got %q", resp.Data.Items[0].Reason)
+	}
+}
+
+func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code string `json:"code"`
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Code != "bulk_backup_run_active" || resp.Data.ID != runID.String() {
+		t.Fatalf("unexpected conflict response: %#v", resp)
+	}
+}
+
+func TestBackupHandlerGetLatestBulkBackupRunReturnsNullWhenMissing(t *testing.T) {
+	handler, _, _, _, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backups/bulk-runs/latest", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetLatestBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if _, ok := resp["data"]; !ok || resp["data"] != nil {
+		t.Fatalf("expected data null, got %#v", resp)
+	}
+}
+
+func TestBackupHandlerCancelBulkBackupRunMarksCancelling(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs/"+runID.String()+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleCancelBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID              string `json:"id"`
+			Status          string `json:"status"`
+			CancelRequested bool   `json:"cancel_requested"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.ID != runID.String() || resp.Data.Status != "cancelling" || !resp.Data.CancelRequested {
+		t.Fatalf("unexpected cancel response: %#v", resp.Data)
+	}
+}
+
 func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
 	handler, _, _, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
 	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
@@ -884,6 +1166,43 @@ func setupBackupHandlerForBulkLimitTests(
 	)
 	handler := NewBackupHandler(backupSvc, settingsRepo)
 	return handler, jobRepo, fileRepo, deviceRepo, backupSvc
+}
+
+func setupBackupHandlerForBulkRunTests(
+	t *testing.T,
+	backupDir string,
+) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler, *mockDeviceRepo, *bulkBackupRunRepoForHandler) {
+	t.Helper()
+
+	jobRepo := newBackupJobRepoForHandler()
+	fileRepo := newBackupFileRepoForHandler()
+	runRepo := newBulkBackupRunRepoForHandler()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	encKey := crypto.DeriveKey("test-backup-bulk-run-key")
+
+	defaultCfg := vendor.DBVendorRecord{
+		Name: "default",
+		ConfigJSON: `{
+			"vendor": {"name": "default", "display_name": "Generic"},
+			"detection": {},
+			"backup": {"supported": false}
+		}`,
+	}
+	reg, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{defaultCfg})
+	if err != nil {
+		t.Fatalf("building vendor registry: %v", err)
+	}
+
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		reg, &mockSSHDialerForBackup{}, encKey, backupDir,
+		gossh.InsecureIgnoreHostKey(),
+		service.WithBulkBackupRunRepo(runRepo),
+	)
+	handler := NewBackupHandler(backupSvc, settingsRepo)
+	return handler, jobRepo, fileRepo, deviceRepo, runRepo
 }
 
 func seedBulkDownloadBackupFile(

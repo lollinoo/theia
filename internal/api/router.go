@@ -553,6 +553,38 @@ func NewRouter(
 	})
 
 	// Bulk backup routes
+	mux.HandleFunc("/api/v1/backups/bulk-runs/latest", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		backupHandler.HandleGetLatestBulkBackupRun(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/backups/bulk-runs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		backupHandler.HandleStartBulkBackupRun(w, r)
+	})
+
+	mux.HandleFunc("/api/v1/backups/bulk-runs/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/cancel") {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			backupHandler.HandleCancelBulkBackupRun(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		backupHandler.HandleGetBulkBackupRun(w, r)
+	})
+
 	mux.HandleFunc("/api/v1/backups/bulk", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
