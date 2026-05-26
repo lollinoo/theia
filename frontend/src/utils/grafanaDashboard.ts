@@ -47,7 +47,7 @@ function grafanaPlaceholderValue(
 ): string {
   switch (token) {
     case 'hostname':
-      return device.hostname || device.sys_name || device.ip || device.id;
+      return resolvedDeviceHostname(device);
     case 'ip':
       return device.ip || device.hostname || device.id;
     case 'map_name':
@@ -55,6 +55,16 @@ function grafanaPlaceholderValue(
     case 'map_id':
       return mapContext.mapId ?? 'default';
   }
+}
+
+function resolvedDeviceHostname(device: Device): string {
+  const hostname = device.hostname.trim();
+  const sysName = device.sys_name.trim();
+  const ip = device.ip.trim();
+  if (sysName && (!hostname || hostname === ip)) {
+    return sysName;
+  }
+  return hostname || sysName || ip || device.id;
 }
 
 export const EMPTY_GRAFANA_DASHBOARD_CONFIG: GrafanaDashboardConfig = {
