@@ -222,6 +222,54 @@ function Get-DeviceIdByIp {
   return ""
 }
 
+function Get-DeviceIdByHostnameAndTag {
+  param(
+    [string]$ApiBase,
+    [string]$Hostname,
+    [string]$TagKey,
+    [string]$TagValue
+  )
+
+  $payload = Invoke-RestMethod -Uri "$ApiBase/api/v1/devices" -Headers (Get-TheiaApiHeaders -ApiBase $ApiBase) -TimeoutSec 10
+  foreach ($item in (@($payload.data) | Where-Object { $null -ne $_ })) {
+    $attributes = $item.attributes
+    if ($null -eq $attributes -or $attributes.hostname -ne $Hostname) {
+      continue
+    }
+
+    $tags = $attributes.tags
+    if ($null -eq $tags) {
+      continue
+    }
+
+    $tagProperty = $tags.PSObject.Properties[$TagKey]
+    if ($null -ne $tagProperty -and [string]$tagProperty.Value -eq $TagValue) {
+      return [string]$item.id
+    }
+  }
+
+  return ""
+}
+
+function Update-DeviceIp {
+  param(
+    [string]$ApiBase,
+    [string]$DeviceId,
+    [string]$Ip
+  )
+
+  $body = @{
+    ip = $Ip
+  } | ConvertTo-Json -Compress
+
+  Invoke-RestMethod `
+    -Method Put `
+    -Uri "$ApiBase/api/v1/devices/$DeviceId" `
+    -ContentType "application/json" `
+    -Headers (Get-TheiaApiHeaders -ApiBase $ApiBase -Mutating) `
+    -Body $body | Out-Null
+}
+
 function Add-DeviceToPrimaryMap {
   param(
     [string]$ApiBase,
