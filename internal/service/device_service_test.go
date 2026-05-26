@@ -2860,6 +2860,63 @@ func TestProbeDevice_ReprobeUpdatesFields(t *testing.T) {
 	}
 }
 
+func TestProbeDevice_PersistsDiscoveredHostnameWhenDeviceWasAddedByIP(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:       "edge-router-01",
+		SysDescr:      "RouterOS RB5009",
+		SysObjectID:   ".1.3.6.1.4.1.14988",
+		HardwareModel: "RB5009",
+		DeviceType:    domain.DeviceTypeRouter,
+	}
+	svc, deviceRepo, _ := newTestService(result, nil)
+
+	device, err := svc.AddDevice(context.Background(), "10.0.0.1", "10.0.0.1",
+		domain.DeviceTypeUnknown,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+	svc.WaitForProbes()
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.Hostname != "edge-router-01" {
+		t.Fatalf("expected discovered hostname to persist, got %q", updated.Hostname)
+	}
+}
+
+func TestProbeDevice_DoesNotOverwriteManualHostnameWithDiscoveredSysName(t *testing.T) {
+	result := &snmp.DiscoveryResult{
+		SysName:    "edge-router-01",
+		DeviceType: domain.DeviceTypeRouter,
+	}
+	svc, deviceRepo, _ := newTestService(result, nil)
+
+	device, err := svc.AddDevice(context.Background(), "10.0.0.1", "manual-router-name",
+		domain.DeviceTypeUnknown,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
+	if err != nil {
+		t.Fatalf("AddDevice failed: %v", err)
+	}
+	svc.WaitForProbes()
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.Hostname != "manual-router-name" {
+		t.Fatalf("expected manual hostname to be preserved, got %q", updated.Hostname)
+	}
+}
+
 // TestPrometheusDevice_SkipsSNMPProbe verifies that adding a device with
 // MetricsSourcePrometheus does NOT call the gosnmp discovery function and
 // immediately sets status to "up" without requiring SNMP credentials.

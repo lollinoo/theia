@@ -51,6 +51,9 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	interfaceChanged := staticInterfaceSetChanged(fresh.Interfaces, input.Interfaces)
 
 	fresh.SysName = input.SysName
+	if shouldPromoteDiscoveredHostname(fresh.Hostname, fresh.IP, input.SysName) {
+		fresh.Hostname = strings.TrimSpace(input.SysName)
+	}
 	fresh.SysDescr = input.SysDescr
 	fresh.SysObjectID = input.SysObjectID
 	fresh.HardwareModel = input.HardwareModel
@@ -148,6 +151,18 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	s.reconcileResolvedBootstrapPeers(fresh.ID)
 
 	return result, nil
+}
+
+func shouldPromoteDiscoveredHostname(currentHostname string, deviceIP string, discoveredSysName string) bool {
+	discovered := strings.TrimSpace(discoveredSysName)
+	if discovered == "" {
+		return false
+	}
+	current := strings.TrimSpace(currentHostname)
+	if current == "" {
+		return true
+	}
+	return current == strings.TrimSpace(deviceIP)
 }
 
 func (s *DeviceService) applyDiscoveryViaObservationStore(
