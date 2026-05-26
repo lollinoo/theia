@@ -369,6 +369,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	areaRepo := postgres.NewAreaRepo(db)
 	backupJobRepo := postgres.NewBackupJobRepo(db)
 	backupFileRepo := postgres.NewBackupFileRepo(db)
+	bulkBackupRunRepo := postgres.NewBulkBackupRunRepo(db)
 
 	discoverFunc := newSNMPDiscoverFunc(settingsRepo, vendorRegistry)
 	topologyNotify := make(chan struct{}, 1)
@@ -389,7 +390,12 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	log.Printf("SSH known hosts store: %s", paths.knownHostsPath)
 
-	backupService := service.NewBackupService(backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo, vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback())
+	backupService := service.NewBackupService(
+		backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback(),
+		service.WithBulkBackupRunRepo(bulkBackupRunRepo),
+	)
+	configureBackupServiceBulkOperationLimits(backupService, cfg)
 	bridgeRepo := postgres.NewBridgeRepo(db)
 	bridgeService, err := service.NewBridgeService(service.BridgeServiceConfig{
 		BridgeRepo:            bridgeRepo,
@@ -421,6 +427,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		cfg.DBDSN,
 		encryptionKey,
 	)
+	configureInstanceBackupArchiveLimits(instanceBackupService, cfg)
 	log.Printf("Instance backup directory: %s", paths.instanceBackupDir)
 	instanceBackupService.FailStaleRunning()
 	backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
@@ -428,6 +435,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	deviceBackupScheduler := worker.NewDeviceBackupScheduler(backupService, backupJobRepo, settingsRepo)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	backupService.ResumeBulkBackupRuns(ctx)
 
 	prometheusURL := ""
 	if value, err := settingsRepo.Get(domain.SettingPrometheusURL); err == nil {
@@ -544,6 +552,37 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	log.Println("Server stopped")
 	return nil
+}
+
+func configureInstanceBackupArchiveLimits(instanceBackupService *service.InstanceBackupService, cfg *runtimeConfig) {
+	if instanceBackupService == nil || cfg == nil {
+		return
+	}
+	instanceBackupService.SetRestoreArchiveLimits(service.RestoreArchiveLimits{
+		MaxCompressedBytes: cfg.RestoreArchiveLimits.MaxCompressedBytes,
+		MaxTotalBytes:      cfg.RestoreArchiveLimits.MaxTotalBytes,
+		MaxEntryBytes:      cfg.RestoreArchiveLimits.MaxEntryBytes,
+		MaxFileEntries:     cfg.RestoreArchiveLimits.MaxFileEntries,
+	})
+	instanceBackupService.SetBackupArchiveLimits(service.BackupArchiveLimits{
+		MaxTotalBytes:  cfg.InstanceBackupArchiveLimits.MaxTotalBytes,
+		MaxEntryBytes:  cfg.InstanceBackupArchiveLimits.MaxEntryBytes,
+		MaxFileEntries: cfg.InstanceBackupArchiveLimits.MaxFileEntries,
+		MaxDuration:    time.Duration(cfg.InstanceBackupArchiveLimits.MaxDurationSeconds) * time.Second,
+	})
+}
+
+func configureBackupServiceBulkOperationLimits(backupService *service.BackupService, cfg *runtimeConfig) {
+	if backupService == nil || cfg == nil {
+		return
+	}
+	backupService.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    cfg.BulkBackupLimits.MaxDevices,
+		BulkBackupMaxQueuedJobs: cfg.BulkBackupLimits.MaxQueuedJobs,
+		BulkDownloadMaxDevices:  cfg.BulkDownloadLimits.MaxDevices,
+		BulkDownloadMaxFiles:    cfg.BulkDownloadLimits.MaxFiles,
+		BulkDownloadMaxBytes:    cfg.BulkDownloadLimits.MaxBytes,
+	})
 }
 
 func minutesToDuration(minutes int) time.Duration {

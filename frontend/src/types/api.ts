@@ -692,6 +692,58 @@ export interface BackupJob {
   files: BackupFile[];
 }
 
+export type BulkBackupRunStatus =
+  | 'running'
+  | 'pausing'
+  | 'paused'
+  | 'cancelling'
+  | 'success'
+  | 'partial'
+  | 'failed'
+  | 'cancelled';
+
+export type BulkBackupRunItemStatus =
+  | 'checking'
+  | 'skipped'
+  | 'active'
+  | 'queued'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'cancelled';
+
+export interface BulkBackupRunItem {
+  id: string;
+  run_id: string;
+  device_id: string;
+  device_name: string;
+  status: BulkBackupRunItemStatus;
+  reason?: string;
+  backup_job_id?: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
+export interface BulkBackupRun {
+  id: string;
+  status: BulkBackupRunStatus;
+  batch_size: number;
+  total_count: number;
+  queued_count: number;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+  cancelled_count: number;
+  error_message: string;
+  cancel_requested: boolean;
+  created_by: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  items: BulkBackupRunItem[];
+}
+
 // Instance backup types
 export type InstanceBackupStatus = 'running' | 'success' | 'failed' | 'cancelled';
 

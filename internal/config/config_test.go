@@ -35,6 +35,53 @@ func TestLoad_DefaultsToPostgresDSNConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoad_DefaultsArchiveLimitsToConservativeValues(t *testing.T) {
+	cfg, err := Load("/nonexistent-config.yaml")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if got, want := cfg.RestoreArchiveLimits.MaxCompressedBytes, int64(256<<20); got != want {
+		t.Fatalf("RestoreArchiveLimits.MaxCompressedBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.RestoreArchiveLimits.MaxTotalBytes, int64(1<<30); got != want {
+		t.Fatalf("RestoreArchiveLimits.MaxTotalBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.RestoreArchiveLimits.MaxEntryBytes, int64(512<<20); got != want {
+		t.Fatalf("RestoreArchiveLimits.MaxEntryBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.RestoreArchiveLimits.MaxFileEntries, 25000; got != want {
+		t.Fatalf("RestoreArchiveLimits.MaxFileEntries = %d, want %d", got, want)
+	}
+	if got, want := cfg.InstanceBackupArchiveLimits.MaxTotalBytes, int64(2<<30); got != want {
+		t.Fatalf("InstanceBackupArchiveLimits.MaxTotalBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.InstanceBackupArchiveLimits.MaxEntryBytes, int64(1<<30); got != want {
+		t.Fatalf("InstanceBackupArchiveLimits.MaxEntryBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.InstanceBackupArchiveLimits.MaxFileEntries, 50000; got != want {
+		t.Fatalf("InstanceBackupArchiveLimits.MaxFileEntries = %d, want %d", got, want)
+	}
+	if got, want := cfg.InstanceBackupArchiveLimits.MaxDurationSeconds, 1800; got != want {
+		t.Fatalf("InstanceBackupArchiveLimits.MaxDurationSeconds = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkBackupLimits.MaxDevices, 100; got != want {
+		t.Fatalf("BulkBackupLimits.MaxDevices = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkBackupLimits.MaxQueuedJobs, 100; got != want {
+		t.Fatalf("BulkBackupLimits.MaxQueuedJobs = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxDevices, 100; got != want {
+		t.Fatalf("BulkDownloadLimits.MaxDevices = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxFiles, 500; got != want {
+		t.Fatalf("BulkDownloadLimits.MaxFiles = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxBytes, int64(512<<20); got != want {
+		t.Fatalf("BulkDownloadLimits.MaxBytes = %d, want %d", got, want)
+	}
+}
+
 func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 	t.Setenv("THEIA_DB_DSN", "postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable")
 	t.Setenv("THEIA_DATA_DIR", "/tmp/theia-data")
@@ -73,6 +120,82 @@ func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
 	}
 	if got, want := cfg.AllowedOrigins, []string{"https://theia.example.com", "http://localhost:3000"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AllowedOrigins = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoad_ArchiveLimitOverridesFromYAMLAndEnvironment(t *testing.T) {
+	t.Setenv("THEIA_RESTORE_MAX_TOTAL_BYTES", "2222")
+	t.Setenv("THEIA_INSTANCE_BACKUP_MAX_DURATION_SECONDS", "88")
+	t.Setenv("THEIA_BULK_BACKUP_MAX_DEVICES", "12")
+	t.Setenv("THEIA_BULK_DOWNLOAD_MAX_BYTES", "9999")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := `
+restore_archive_limits:
+  max_compressed_bytes: 1111
+  max_total_bytes: 2000
+  max_entry_bytes: 3333
+  max_file_entries: 44
+instance_backup_archive_limits:
+  max_total_bytes: 5555
+  max_entry_bytes: 6666
+  max_file_entries: 77
+  max_duration_seconds: 99
+bulk_backup_limits:
+  max_devices: 11
+  max_queued_jobs: 22
+bulk_download_limits:
+  max_devices: 33
+  max_files: 44
+  max_bytes: 8888
+`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if got, want := cfg.RestoreArchiveLimits.MaxCompressedBytes, int64(1111); got != want {
+		t.Fatalf("RestoreArchiveLimits.MaxCompressedBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.RestoreArchiveLimits.MaxTotalBytes, int64(2222); got != want {
+		t.Fatalf("RestoreArchiveLimits.MaxTotalBytes = %d, want env override %d", got, want)
+	}
+	if got, want := cfg.RestoreArchiveLimits.MaxEntryBytes, int64(3333); got != want {
+		t.Fatalf("RestoreArchiveLimits.MaxEntryBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.RestoreArchiveLimits.MaxFileEntries, 44; got != want {
+		t.Fatalf("RestoreArchiveLimits.MaxFileEntries = %d, want %d", got, want)
+	}
+	if got, want := cfg.InstanceBackupArchiveLimits.MaxTotalBytes, int64(5555); got != want {
+		t.Fatalf("InstanceBackupArchiveLimits.MaxTotalBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.InstanceBackupArchiveLimits.MaxEntryBytes, int64(6666); got != want {
+		t.Fatalf("InstanceBackupArchiveLimits.MaxEntryBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.InstanceBackupArchiveLimits.MaxFileEntries, 77; got != want {
+		t.Fatalf("InstanceBackupArchiveLimits.MaxFileEntries = %d, want %d", got, want)
+	}
+	if got, want := cfg.InstanceBackupArchiveLimits.MaxDurationSeconds, 88; got != want {
+		t.Fatalf("InstanceBackupArchiveLimits.MaxDurationSeconds = %d, want env override %d", got, want)
+	}
+	if got, want := cfg.BulkBackupLimits.MaxDevices, 12; got != want {
+		t.Fatalf("BulkBackupLimits.MaxDevices = %d, want env override %d", got, want)
+	}
+	if got, want := cfg.BulkBackupLimits.MaxQueuedJobs, 22; got != want {
+		t.Fatalf("BulkBackupLimits.MaxQueuedJobs = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxDevices, 33; got != want {
+		t.Fatalf("BulkDownloadLimits.MaxDevices = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxFiles, 44; got != want {
+		t.Fatalf("BulkDownloadLimits.MaxFiles = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxBytes, int64(9999); got != want {
+		t.Fatalf("BulkDownloadLimits.MaxBytes = %d, want env override %d", got, want)
 	}
 }
 
@@ -176,6 +299,94 @@ func TestLoad_FileHandling(t *testing.T) {
 			cfg, err := Load(path)
 			tt.assert(t, cfg, err)
 		})
+	}
+}
+
+func TestLoad_RejectsInvalidArchiveLimitOverrides(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "restore compressed zero", key: "THEIA_RESTORE_MAX_COMPRESSED_BYTES", value: "0"},
+		{name: "restore total negative", key: "THEIA_RESTORE_MAX_TOTAL_BYTES", value: "-1"},
+		{name: "restore entry non integer", key: "THEIA_RESTORE_MAX_ENTRY_BYTES", value: "not-an-integer"},
+		{name: "restore entries zero", key: "THEIA_RESTORE_MAX_FILE_ENTRIES", value: "0"},
+		{name: "backup total zero", key: "THEIA_INSTANCE_BACKUP_MAX_TOTAL_BYTES", value: "0"},
+		{name: "backup entry negative", key: "THEIA_INSTANCE_BACKUP_MAX_ENTRY_BYTES", value: "-1"},
+		{name: "backup entries non integer", key: "THEIA_INSTANCE_BACKUP_MAX_FILE_ENTRIES", value: "not-an-integer"},
+		{name: "backup duration zero", key: "THEIA_INSTANCE_BACKUP_MAX_DURATION_SECONDS", value: "0"},
+		{name: "backup duration overflows time duration", key: "THEIA_INSTANCE_BACKUP_MAX_DURATION_SECONDS", value: "9223372037"},
+		{name: "bulk backup devices zero", key: "THEIA_BULK_BACKUP_MAX_DEVICES", value: "0"},
+		{name: "bulk backup queued negative", key: "THEIA_BULK_BACKUP_MAX_QUEUED_JOBS", value: "-1"},
+		{name: "bulk download devices non integer", key: "THEIA_BULK_DOWNLOAD_MAX_DEVICES", value: "not-an-integer"},
+		{name: "bulk download files zero", key: "THEIA_BULK_DOWNLOAD_MAX_FILES", value: "0"},
+		{name: "bulk download bytes negative", key: "THEIA_BULK_DOWNLOAD_MAX_BYTES", value: "-1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.key, tt.value)
+			if _, err := Load("/nonexistent-config.yaml"); err == nil {
+				t.Fatalf("Load() error = nil, want invalid %s rejection", tt.key)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsInvalidArchiveLimitYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	tests := []struct {
+		name     string
+		contents string
+		want     string
+	}{
+		{
+			name:     "restore total",
+			contents: "restore_archive_limits:\n  max_total_bytes: 0\n",
+			want:     "restore_archive_limits.max_total_bytes",
+		},
+		{
+			name:     "bulk backup devices",
+			contents: "bulk_backup_limits:\n  max_devices: 0\n",
+			want:     "bulk_backup_limits.max_devices",
+		},
+		{
+			name:     "bulk download bytes",
+			contents: "bulk_download_limits:\n  max_bytes: -1\n",
+			want:     "bulk_download_limits.max_bytes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(tt.contents), 0o644); err != nil {
+				t.Fatalf("WriteFile failed: %v", err)
+			}
+
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load() error = nil, want invalid YAML limit rejection")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %q, want %s", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsArchiveLimitYAMLDurationOverflow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := "instance_backup_archive_limits:\n  max_duration_seconds: 9223372037\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want duration overflow rejection")
+	}
+	if !strings.Contains(err.Error(), "instance_backup_archive_limits.max_duration_seconds") {
+		t.Fatalf("Load() error = %q, want instance_backup_archive_limits.max_duration_seconds", err.Error())
 	}
 }
 

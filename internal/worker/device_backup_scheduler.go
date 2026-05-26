@@ -2,19 +2,27 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strconv"
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
 )
 
+type deviceBackupService interface {
+	DeleteBackupJob(ctx context.Context, id uuid.UUID) error
+	GetLatestBulkBackupRun(ctx context.Context) (*domain.BulkBackupRun, error)
+	StartBulkBackupRun(ctx context.Context, requestedDeviceIDs []uuid.UUID, createdBy string) (*domain.BulkBackupRun, error)
+}
+
 // DeviceBackupScheduler runs scheduled device config backups and per-device retention cleanup.
 // It follows the same Start/Stop lifecycle pattern as BackupScheduler and Poller.
 type DeviceBackupScheduler struct {
-	backupService *service.BackupService
+	backupService deviceBackupService
 	jobRepo       domain.BackupJobRepository
 	settingsRepo  domain.SettingsRepository
 
@@ -95,6 +103,10 @@ func (s *DeviceBackupScheduler) tick(ctx context.Context) {
 // since the last bulk backup run. Uses the most recent backup job
 // created_at across ALL devices as the schedule reference.
 func (s *DeviceBackupScheduler) checkAndRunBulkBackup(ctx context.Context, interval time.Duration) {
+	if s.checkAndRunBulkBackupFromLatestRun(ctx, interval) {
+		return
+	}
+
 	// Find the most recent backup job globally to determine last bulk run time.
 	deviceIDs, err := s.jobRepo.ListAllDeviceIDs()
 	if err != nil {
@@ -131,31 +143,60 @@ func (s *DeviceBackupScheduler) checkAndRunBulkBackup(ctx context.Context, inter
 	}
 }
 
-// runScheduledBulkBackup calls TriggerBulkBackup on the backup service.
+func (s *DeviceBackupScheduler) checkAndRunBulkBackupFromLatestRun(ctx context.Context, interval time.Duration) bool {
+	run, err := s.backupService.GetLatestBulkBackupRun(ctx)
+	if err != nil {
+		log.Printf("DeviceBackupScheduler: failed to get latest bulk backup run: %v", err)
+		return false
+	}
+	if run == nil {
+		return false
+	}
+	if run.Status == domain.BulkBackupRunStatusRunning ||
+		run.Status == domain.BulkBackupRunStatusPausing ||
+		run.Status == domain.BulkBackupRunStatusPaused ||
+		run.Status == domain.BulkBackupRunStatusCancelling {
+		return true
+	}
+
+	reference := run.CreatedAt
+	if run.CompletedAt != nil {
+		reference = *run.CompletedAt
+	}
+	if time.Since(reference) >= interval {
+		s.runScheduledBulkBackup(ctx)
+	}
+	return true
+}
+
+// runScheduledBulkBackup starts a persistent bulk backup run on the backup service.
 //
 // Authorization model (T-19-03): This function runs as an internal scheduler goroutine
-// with no external trigger surface. TriggerBulkBackup enforces per-device authorization
+// with no external trigger surface. StartBulkBackupRun enforces per-device authorization
 // implicitly: each device must have an SSH profile assigned, the vendor must support
 // backup commands, and the device must be SSH-reachable. There is no user-facing
 // privilege escalation risk since the scheduler operates on the same device set that
-// an authenticated user could trigger manually via POST /api/v1/backups/bulk.
+// an authenticated user could trigger manually via POST /api/v1/backups/bulk-runs.
 func (s *DeviceBackupScheduler) runScheduledBulkBackup(ctx context.Context) {
-	results, err := s.backupService.TriggerBulkBackup(ctx)
+	run, err := s.backupService.StartBulkBackupRun(ctx, nil, "scheduler")
 	if err != nil {
-		log.Printf("DeviceBackupScheduler: failed to trigger bulk backup: %v", err)
+		if errors.Is(err, service.ErrBulkBackupRunAlreadyActive) {
+			if run != nil {
+				log.Printf("DeviceBackupScheduler: bulk backup run already active: %s", run.ID)
+			} else {
+				log.Printf("DeviceBackupScheduler: bulk backup run already active")
+			}
+			return
+		}
+		log.Printf("DeviceBackupScheduler: failed to start persistent bulk backup run: %v", err)
 		return
 	}
 
-	queued := 0
-	skipped := 0
-	for _, r := range results {
-		if r.Status == "queued" {
-			queued++
-		} else {
-			skipped++
-		}
+	if run == nil {
+		log.Printf("DeviceBackupScheduler: persistent bulk backup run did not return a run")
+		return
 	}
-	log.Printf("Scheduled device backup: %d queued, %d skipped", queued, skipped)
+	log.Printf("Scheduled device backup run started: %s (%d devices)", run.ID, run.TotalCount)
 }
 
 // runRetention performs per-device retention (delete oldest successful beyond count)

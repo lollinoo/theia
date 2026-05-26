@@ -42,16 +42,20 @@ func TestBulkDownloadStreaming(t *testing.T) {
 		{
 			File:      domain.BackupFile{ID: uuid.New(), FileName: "backup1.rsc", FilePath: file1Path},
 			DeviceDir: "device-a",
+			ZipPath:   "device-a/backup1.rsc",
+			SizeBytes: int64(len("file1 content")),
 		},
 		{
 			File:      domain.BackupFile{ID: uuid.New(), FileName: "backup2.rsc", FilePath: file2Path},
 			DeviceDir: "device-b",
+			ZipPath:   "device-b/backup2.rsc",
+			SizeBytes: int64(len("file2 content")),
 		},
 	}
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	zipErrors := writeBulkZipEntries(zw, entries)
+	zipErrors := writeBulkZipEntries(zw, entries, openBulkZipEntryForTest)
 	zw.Close()
 
 	// No errors expected
@@ -70,8 +74,8 @@ func TestBulkDownloadStreaming(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		filepath.Join("device-a", "backup1.rsc"): "file1 content",
-		filepath.Join("device-b", "backup2.rsc"): "file2 content",
+		"device-a/backup1.rsc": "file1 content",
+		"device-b/backup2.rsc": "file2 content",
 	}
 
 	for _, f := range zr.File {
@@ -109,16 +113,20 @@ func TestBulkDownloadErrorManifest(t *testing.T) {
 		{
 			File:      domain.BackupFile{ID: uuid.New(), FileName: "valid.rsc", FilePath: validPath},
 			DeviceDir: "device-ok",
+			ZipPath:   "device-ok/valid.rsc",
+			SizeBytes: int64(len("valid content")),
 		},
 		{
 			File:      domain.BackupFile{ID: uuid.New(), FileName: "missing.rsc", FilePath: "/nonexistent/path/missing.rsc"},
 			DeviceDir: "device-fail",
+			ZipPath:   "device-fail/missing.rsc",
+			SizeBytes: int64(len("missing content")),
 		},
 	}
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	zipErrors := writeBulkZipEntries(zw, entries)
+	zipErrors := writeBulkZipEntries(zw, entries, openBulkZipEntryForTest)
 
 	// Write error manifest if there are errors (same logic as HandleBulkDownload)
 	if len(zipErrors) > 0 {
@@ -177,6 +185,67 @@ func TestBulkDownloadErrorManifest(t *testing.T) {
 	if !foundErrors {
 		t.Fatal("expected _errors.txt in zip, but not found")
 	}
+}
+
+func TestBulkDownloadRejectsEntriesWithoutValidatedZipPath(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "backup.rsc")
+	if err := os.WriteFile(filePath, []byte("backup content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := []service.BulkDownloadEntry{{
+		File:      domain.BackupFile{ID: uuid.New(), FileName: "../backup.rsc", FilePath: filePath},
+		DeviceDir: "device",
+		SizeBytes: int64(len("backup content")),
+	}}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	zipErrors := writeBulkZipEntries(zw, entries, openBulkZipEntryForTest)
+	if err := zw.Close(); err != nil {
+		t.Fatalf("Close zip: %v", err)
+	}
+
+	if len(zipErrors) != 1 {
+		t.Fatalf("zip errors = %d, want 1: %v", len(zipErrors), zipErrors)
+	}
+	if !strings.Contains(zipErrors[0], "missing validated zip entry path") {
+		t.Fatalf("zip error = %q, want missing validated zip entry path", zipErrors[0])
+	}
+}
+
+func TestBulkDownloadRejectsFilesChangedAfterValidation(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "backup.rsc")
+	if err := os.WriteFile(filePath, []byte("larger than expected"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := []service.BulkDownloadEntry{{
+		File:      domain.BackupFile{ID: uuid.New(), FileName: "backup.rsc", FilePath: filePath},
+		DeviceDir: "device",
+		ZipPath:   "device/backup.rsc",
+		SizeBytes: 4,
+	}}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	zipErrors := writeBulkZipEntries(zw, entries, openBulkZipEntryForTest)
+	if err := zw.Close(); err != nil {
+		t.Fatalf("Close zip: %v", err)
+	}
+
+	if len(zipErrors) != 1 {
+		t.Fatalf("zip errors = %d, want 1: %v", len(zipErrors), zipErrors)
+	}
+	if !strings.Contains(zipErrors[0], "file changed after validation") {
+		t.Fatalf("zip error = %q, want file changed after validation", zipErrors[0])
+	}
+}
+
+func openBulkZipEntryForTest(entry service.BulkDownloadEntry) (*os.File, error) {
+	return os.Open(entry.File.FilePath)
 }
 
 // ============================================================================
@@ -345,6 +414,166 @@ func (r *backupFileRepoForHandler) DeleteByJobID(jobID uuid.UUID) error {
 		}
 	}
 	return nil
+}
+
+type bulkBackupRunRepoForHandler struct {
+	mu    sync.Mutex
+	runs  map[uuid.UUID]*domain.BulkBackupRun
+	items map[uuid.UUID][]domain.BulkBackupRunItem
+}
+
+func newBulkBackupRunRepoForHandler() *bulkBackupRunRepoForHandler {
+	return &bulkBackupRunRepoForHandler{
+		runs:  make(map[uuid.UUID]*domain.BulkBackupRun),
+		items: make(map[uuid.UUID][]domain.BulkBackupRunItem),
+	}
+}
+
+func (r *bulkBackupRunRepoForHandler) CreateRun(run *domain.BulkBackupRun, items []domain.BulkBackupRunItem) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now().UTC()
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = now
+	}
+	if run.StartedAt == nil {
+		started := now
+		run.StartedAt = &started
+	}
+	cp := *run
+	r.runs[run.ID] = &cp
+	copied := append([]domain.BulkBackupRunItem(nil), items...)
+	r.items[run.ID] = copied
+	return nil
+}
+
+func (r *bulkBackupRunRepoForHandler) GetRun(id uuid.UUID) (*domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.copyRunLocked(id), nil
+}
+
+func (r *bulkBackupRunRepoForHandler) GetLatestRun() (*domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest *domain.BulkBackupRun
+	for _, run := range r.runs {
+		if latest == nil || run.CreatedAt.After(latest.CreatedAt) {
+			cp := *run
+			latest = &cp
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+	latest.Items = append([]domain.BulkBackupRunItem(nil), r.items[latest.ID]...)
+	return latest, nil
+}
+
+func (r *bulkBackupRunRepoForHandler) GetActiveRun() (*domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, run := range r.runs {
+		if bulkRunActiveForHandlerTest(run.Status) {
+			return r.copyRunLocked(id), nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *bulkBackupRunRepoForHandler) ListResumableRuns() ([]domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var runs []domain.BulkBackupRun
+	for id, run := range r.runs {
+		if run.Status == domain.BulkBackupRunStatusRunning ||
+			run.Status == domain.BulkBackupRunStatusCancelling ||
+			run.Status == domain.BulkBackupRunStatusPausing {
+			cp := *run
+			cp.Items = append([]domain.BulkBackupRunItem(nil), r.items[id]...)
+			runs = append(runs, cp)
+		}
+	}
+	return runs, nil
+}
+
+func bulkRunActiveForHandlerTest(status domain.BulkBackupRunStatus) bool {
+	return status == domain.BulkBackupRunStatusRunning ||
+		status == domain.BulkBackupRunStatusCancelling ||
+		status == domain.BulkBackupRunStatusPausing ||
+		status == domain.BulkBackupRunStatusPaused
+}
+
+func (r *bulkBackupRunRepoForHandler) UpdateRun(run *domain.BulkBackupRun) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := *run
+	r.runs[run.ID] = &cp
+	return nil
+}
+
+func (r *bulkBackupRunRepoForHandler) ListRunItems(runID uuid.UUID) ([]domain.BulkBackupRunItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]domain.BulkBackupRunItem(nil), r.items[runID]...), nil
+}
+
+func (r *bulkBackupRunRepoForHandler) UpdateRunItem(item *domain.BulkBackupRunItem) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := r.items[item.RunID]
+	for i := range items {
+		if items[i].ID == item.ID {
+			items[i] = *item
+			r.items[item.RunID] = items
+			return nil
+		}
+	}
+	r.items[item.RunID] = append(items, *item)
+	return nil
+}
+
+func (r *bulkBackupRunRepoForHandler) RecalculateRunCounters(runID uuid.UUID) (*domain.BulkBackupRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[runID]
+	if run == nil {
+		return nil, nil
+	}
+	run.TotalCount = len(r.items[runID])
+	run.QueuedCount = 0
+	run.SuccessCount = 0
+	run.FailedCount = 0
+	run.SkippedCount = 0
+	run.CancelledCount = 0
+	for _, item := range r.items[runID] {
+		switch item.Status {
+		case domain.BulkBackupRunItemStatusActive,
+			domain.BulkBackupRunItemStatusQueued,
+			domain.BulkBackupRunItemStatusRunning,
+			domain.BulkBackupRunItemStatusChecking:
+			run.QueuedCount++
+		case domain.BulkBackupRunItemStatusSuccess:
+			run.SuccessCount++
+		case domain.BulkBackupRunItemStatusFailed:
+			run.FailedCount++
+		case domain.BulkBackupRunItemStatusSkipped:
+			run.SkippedCount++
+		case domain.BulkBackupRunItemStatusCancelled:
+			run.CancelledCount++
+		}
+	}
+	return r.copyRunLocked(runID), nil
+}
+
+func (r *bulkBackupRunRepoForHandler) copyRunLocked(id uuid.UUID) *domain.BulkBackupRun {
+	run := r.runs[id]
+	if run == nil {
+		return nil
+	}
+	cp := *run
+	cp.Items = append([]domain.BulkBackupRunItem(nil), r.items[id]...)
+	return &cp
 }
 
 // setupBackupHandler creates a BackupHandler backed by mock repos.
@@ -650,6 +879,450 @@ func TestBackupHandlerTriggerBackup_InvalidID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
+}
+
+func TestBackupHandlerBulkBackupRejectsInvalidRequestedDeviceID(t *testing.T) {
+	handler, _, _, _, _ := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/backups/bulk",
+		strings.NewReader(`{"device_ids":["not-a-uuid"]}`),
+	)
+	rec := httptest.NewRecorder()
+	handler.HandleBulkBackup(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBackupHandlerStartBulkBackupRunReturnsPersistedRun(t *testing.T) {
+	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.10", SysName: "offline-core",
+		Managed: true, Status: domain.DeviceStatusDown,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID           string `json:"id"`
+			Status       string `json:"status"`
+			TotalCount   int    `json:"total_count"`
+			SkippedCount int    `json:"skipped_count"`
+			Items        []struct {
+				DeviceID string `json:"device_id"`
+				Status   string `json:"status"`
+				Reason   string `json:"reason"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if _, err := uuid.Parse(resp.Data.ID); err != nil {
+		t.Fatalf("expected run id UUID, got %q", resp.Data.ID)
+	}
+	if resp.Data.TotalCount != 1 || resp.Data.SkippedCount != 1 {
+		t.Fatalf("expected one skipped item, got total=%d skipped=%d", resp.Data.TotalCount, resp.Data.SkippedCount)
+	}
+	if len(resp.Data.Items) != 1 || resp.Data.Items[0].DeviceID != deviceID.String() || resp.Data.Items[0].Status != "skipped" {
+		t.Fatalf("unexpected items: %#v", resp.Data.Items)
+	}
+	if resp.Data.Items[0].Reason != "device offline" {
+		t.Fatalf("expected offline reason, got %q", resp.Data.Items[0].Reason)
+	}
+}
+
+func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code string `json:"code"`
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Code != "bulk_backup_run_active" || resp.Data.ID != runID.String() {
+		t.Fatalf("unexpected conflict response: %#v", resp)
+	}
+}
+
+func TestBackupHandlerGetLatestBulkBackupRunReturnsNullWhenMissing(t *testing.T) {
+	handler, _, _, _, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backups/bulk-runs/latest", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetLatestBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if _, ok := resp["data"]; !ok || resp["data"] != nil {
+		t.Fatalf("expected data null, got %#v", resp)
+	}
+}
+
+func TestBackupHandlerCancelBulkBackupRunMarksCancelling(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs/"+runID.String()+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleCancelBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID              string `json:"id"`
+			Status          string `json:"status"`
+			CancelRequested bool   `json:"cancel_requested"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.ID != runID.String() || resp.Data.Status != "cancelling" || !resp.Data.CancelRequested {
+		t.Fatalf("unexpected cancel response: %#v", resp.Data)
+	}
+}
+
+func TestBackupHandlerPauseBulkBackupRunMarksPausing(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs/"+runID.String()+"/pause", nil)
+	rec := httptest.NewRecorder()
+	handler.HandlePauseBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.ID != runID.String() || resp.Data.Status != "pausing" {
+		t.Fatalf("unexpected pause response: %#v", resp.Data)
+	}
+}
+
+func TestBackupHandlerResumeBulkBackupRunMarksRunning(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusPaused,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs/"+runID.String()+"/resume", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleResumeBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.ID != runID.String() || resp.Data.Status != "running" {
+		t.Fatalf("unexpected resume response: %#v", resp.Data)
+	}
+}
+
+func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
+	handler, _, _, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    1,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	firstID := uuid.New()
+	secondID := uuid.New()
+	for i, id := range []uuid.UUID{firstID, secondID} {
+		if err := deviceRepo.Create(&domain.Device{
+			ID: id, IP: fmt.Sprintf("10.0.0.%d", i+1), Vendor: "default",
+			Managed: true, Status: domain.DeviceStatusUp,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkBackup(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
+		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
+	}
+}
+
+func TestBackupHandlerBulkDownloadMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    4,
+	})
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "large.rsc", []byte("12345"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
+		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
+	}
+}
+
+func TestBackupHandlerBulkDownloadMapsUnsafePathToBadRequest(t *testing.T) {
+	backupDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "outside.rsc")
+	if err := os.WriteFile(outsidePath, []byte("outside"), 0644); err != nil {
+		t.Fatalf("WriteFile outside backup: %v", err)
+	}
+
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.1", SysName: "core",
+		Tags: map[string]string{"display_name": "Core"},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	jobID := uuid.New()
+	if err := jobRepo.Create(&domain.BackupJob{
+		ID:       jobID,
+		DeviceID: deviceID,
+		Status:   domain.BackupStatusSuccess,
+	}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	if err := fileRepo.Create(&domain.BackupFile{
+		ID:       uuid.New(),
+		JobID:    jobID,
+		FileType: "running",
+		FileName: "outside.rsc",
+		FilePath: outsidePath,
+	}); err != nil {
+		t.Fatalf("Create file: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
+		t.Fatalf("path rejection must not be a zip response; headers: %#v", rec.Header())
+	}
+}
+
+func setupBackupHandlerForBulkLimitTests(
+	t *testing.T,
+	backupDir string,
+) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler, *mockDeviceRepo, *service.BackupService) {
+	t.Helper()
+
+	jobRepo := newBackupJobRepoForHandler()
+	fileRepo := newBackupFileRepoForHandler()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	encKey := crypto.DeriveKey("test-backup-bulk-limits-key")
+
+	defaultCfg := vendor.DBVendorRecord{
+		Name: "default",
+		ConfigJSON: `{
+			"vendor": {"name": "default", "display_name": "Generic"},
+			"detection": {},
+			"backup": {"supported": false}
+		}`,
+	}
+	reg, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{defaultCfg})
+	if err != nil {
+		t.Fatalf("building vendor registry: %v", err)
+	}
+
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		reg, &mockSSHDialerForBackup{}, encKey, backupDir,
+		gossh.InsecureIgnoreHostKey(),
+	)
+	handler := NewBackupHandler(backupSvc, settingsRepo)
+	return handler, jobRepo, fileRepo, deviceRepo, backupSvc
+}
+
+func setupBackupHandlerForBulkRunTests(
+	t *testing.T,
+	backupDir string,
+) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler, *mockDeviceRepo, *bulkBackupRunRepoForHandler) {
+	t.Helper()
+
+	jobRepo := newBackupJobRepoForHandler()
+	fileRepo := newBackupFileRepoForHandler()
+	runRepo := newBulkBackupRunRepoForHandler()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	encKey := crypto.DeriveKey("test-backup-bulk-run-key")
+
+	defaultCfg := vendor.DBVendorRecord{
+		Name: "default",
+		ConfigJSON: `{
+			"vendor": {"name": "default", "display_name": "Generic"},
+			"detection": {},
+			"backup": {"supported": false}
+		}`,
+	}
+	reg, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{defaultCfg})
+	if err != nil {
+		t.Fatalf("building vendor registry: %v", err)
+	}
+
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		reg, &mockSSHDialerForBackup{}, encKey, backupDir,
+		gossh.InsecureIgnoreHostKey(),
+		service.WithBulkBackupRunRepo(runRepo),
+	)
+	handler := NewBackupHandler(backupSvc, settingsRepo)
+	return handler, jobRepo, fileRepo, deviceRepo, runRepo
+}
+
+func seedBulkDownloadBackupFile(
+	t *testing.T,
+	backupDir string,
+	jobRepo *backupJobRepoForHandler,
+	fileRepo *backupFileRepoForHandler,
+	deviceRepo *mockDeviceRepo,
+	fileName string,
+	content []byte,
+) uuid.UUID {
+	t.Helper()
+
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.1", SysName: "core",
+		Tags: map[string]string{"display_name": "Core"},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	jobID := uuid.New()
+	if err := jobRepo.Create(&domain.BackupJob{
+		ID:       jobID,
+		DeviceID: deviceID,
+		Status:   domain.BackupStatusSuccess,
+	}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	path := filepath.Join(backupDir, fileName)
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatalf("WriteFile backup: %v", err)
+	}
+	if err := fileRepo.Create(&domain.BackupFile{
+		ID:       uuid.New(),
+		JobID:    jobID,
+		FileType: "running",
+		FileName: fileName,
+		FilePath: path,
+	}); err != nil {
+		t.Fatalf("Create file: %v", err)
+	}
+	return deviceID
 }
 
 // =============================================================================

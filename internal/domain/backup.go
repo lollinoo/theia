@@ -46,6 +46,66 @@ type BackupFile struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type BulkBackupRunStatus string
+
+const (
+	BulkBackupRunStatusRunning    BulkBackupRunStatus = "running"
+	BulkBackupRunStatusPausing    BulkBackupRunStatus = "pausing"
+	BulkBackupRunStatusPaused     BulkBackupRunStatus = "paused"
+	BulkBackupRunStatusCancelling BulkBackupRunStatus = "cancelling"
+	BulkBackupRunStatusSuccess    BulkBackupRunStatus = "success"
+	BulkBackupRunStatusPartial    BulkBackupRunStatus = "partial"
+	BulkBackupRunStatusFailed     BulkBackupRunStatus = "failed"
+	BulkBackupRunStatusCancelled  BulkBackupRunStatus = "cancelled"
+)
+
+type BulkBackupRunItemStatus string
+
+const (
+	BulkBackupRunItemStatusChecking  BulkBackupRunItemStatus = "checking"
+	BulkBackupRunItemStatusSkipped   BulkBackupRunItemStatus = "skipped"
+	BulkBackupRunItemStatusActive    BulkBackupRunItemStatus = "active"
+	BulkBackupRunItemStatusQueued    BulkBackupRunItemStatus = "queued"
+	BulkBackupRunItemStatusRunning   BulkBackupRunItemStatus = "running"
+	BulkBackupRunItemStatusSuccess   BulkBackupRunItemStatus = "success"
+	BulkBackupRunItemStatusFailed    BulkBackupRunItemStatus = "failed"
+	BulkBackupRunItemStatusCancelled BulkBackupRunItemStatus = "cancelled"
+)
+
+// BulkBackupRun tracks one durable multi-device backup orchestration.
+type BulkBackupRun struct {
+	ID              uuid.UUID
+	Status          BulkBackupRunStatus
+	BatchSize       int
+	TotalCount      int
+	QueuedCount     int
+	SuccessCount    int
+	FailedCount     int
+	SkippedCount    int
+	CancelledCount  int
+	ErrorMessage    string
+	CancelRequested bool
+	CreatedBy       string
+	CreatedAt       time.Time
+	StartedAt       *time.Time
+	CompletedAt     *time.Time
+	Items           []BulkBackupRunItem
+}
+
+// BulkBackupRunItem tracks one device within a bulk backup run.
+type BulkBackupRunItem struct {
+	ID          uuid.UUID
+	RunID       uuid.UUID
+	DeviceID    uuid.UUID
+	DeviceName  string
+	Status      BulkBackupRunItemStatus
+	Reason      string
+	BackupJobID *uuid.UUID
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	CompletedAt *time.Time
+}
+
 // BackupJobRepository defines persistence operations for backup jobs.
 type BackupJobRepository interface {
 	Create(job *BackupJob) error
@@ -67,6 +127,19 @@ type BackupJobRepository interface {
 	// DeleteFailedOlderThan removes failed backup job records older than the given time.
 	// Returns the count of deleted records.
 	DeleteFailedOlderThan(cutoff time.Time) (int, error)
+}
+
+// BulkBackupRunRepository defines durable orchestration operations for bulk backup runs.
+type BulkBackupRunRepository interface {
+	CreateRun(run *BulkBackupRun, items []BulkBackupRunItem) error
+	GetRun(id uuid.UUID) (*BulkBackupRun, error)
+	GetLatestRun() (*BulkBackupRun, error)
+	GetActiveRun() (*BulkBackupRun, error)
+	ListResumableRuns() ([]BulkBackupRun, error)
+	UpdateRun(run *BulkBackupRun) error
+	ListRunItems(runID uuid.UUID) ([]BulkBackupRunItem, error)
+	UpdateRunItem(item *BulkBackupRunItem) error
+	RecalculateRunCounters(runID uuid.UUID) (*BulkBackupRun, error)
 }
 
 // BackupFileRepository defines persistence operations for backup files.

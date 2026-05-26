@@ -153,6 +153,68 @@ func TestPostgresMigrationsDeclareUserBridgePortOverride(t *testing.T) {
 	}
 }
 
+func TestPostgresMigrationsDeclareBulkBackupRunSchema(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000019_bulk_backup_runs.up.sql")
+	if err != nil {
+		t.Fatalf("reading bulk backup runs migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"CREATE TABLE IF NOT EXISTS backup_bulk_runs",
+		"CREATE TABLE IF NOT EXISTS backup_bulk_run_items",
+		"backup_bulk_runs_one_active",
+		"ON backup_bulk_runs ((TRUE))",
+		"backup_bulk_runs_created_at_idx",
+		"status IN ('running', 'success', 'partial', 'failed', 'cancelled', 'cancelling')",
+		"status IN ('checking', 'skipped', 'queued', 'running', 'success', 'failed', 'cancelled')",
+		"backup_job_id TEXT REFERENCES backup_jobs(id) ON DELETE SET NULL",
+		"cancel_requested BOOLEAN NOT NULL DEFAULT FALSE",
+		"ON DELETE CASCADE",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("bulk backup runs migration missing %q", expected)
+		}
+	}
+}
+
+func TestPostgresMigrationsDeclareBulkBackupRunPauseSchema(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000020_bulk_backup_run_pause.up.sql")
+	if err != nil {
+		t.Fatalf("reading bulk backup run pause migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"backup_bulk_runs_status_check",
+		"status IN ('running', 'pausing', 'paused', 'success', 'partial', 'failed', 'cancelled', 'cancelling')",
+		"WHERE status IN ('running', 'pausing', 'paused', 'cancelling')",
+		"DROP INDEX IF EXISTS backup_bulk_runs_one_active",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("bulk backup run pause migration missing %q", expected)
+		}
+	}
+}
+
+func TestPostgresMigrationsDeclareBulkBackupRunItemActiveSchema(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000021_bulk_backup_run_item_active.up.sql")
+	if err != nil {
+		t.Fatalf("reading bulk backup run item active migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"backup_bulk_run_items_status_check",
+		"status IN ('checking', 'skipped', 'active', 'queued', 'running', 'success', 'failed', 'cancelled')",
+		"ALTER TABLE backup_bulk_run_items DROP CONSTRAINT",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("bulk backup run item active migration missing %q", expected)
+		}
+	}
+}
+
 func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing.T) {
 	managerPermissions := domain.SystemRolePermissionKeys(domain.RoleManager)
 	for _, disallowed := range []string{

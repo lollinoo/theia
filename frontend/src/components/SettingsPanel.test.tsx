@@ -125,6 +125,17 @@ describe('SettingsPanel (COMP-05)', () => {
     expect(screen.getByTestId('device-backup-retention-label-row').className).toContain('min-h-10');
   });
 
+  it('uses stable helper rows for device backup fields', async () => {
+    render(<SettingsPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /device backups/i }));
+    });
+
+    expect(screen.getByTestId('device-backup-schedule-helper-row').className).toContain('min-h-4');
+    expect(screen.getByTestId('device-backup-retention-helper-row').className).toContain('min-h-4');
+  });
+
   it('form inputs use border-outline-subtle (not border-outline)', () => {
     const { container } = render(<SettingsPanel />);
     const inputs = Array.from(container.querySelectorAll('input, select'));

@@ -24,6 +24,7 @@ import {
   fetchBackupFileContent,
   fetchBackupJobs,
   fetchBridgeConnectorConfig,
+  fetchBulkBackupRun,
   fetchCanvasBootstrap,
   fetchCanvasMapAreas,
   fetchCanvasMapBootstrap,
@@ -33,21 +34,26 @@ import {
   fetchCurrentUser,
   fetchDevices,
   fetchInstanceBackups,
+  fetchLatestBulkBackupRun,
   fetchLinks,
   fetchOrphanDevices,
   fetchSettings,
   fetchSettingsWithMetadata,
   loginUser,
   logoutUser,
+  pauseBulkBackupRun,
   removeAdminUserRole,
   removeDeviceFromCanvasMap,
   resetCanvasBootstrapRequestCache,
   resetPasswordWithToken,
   restoreInstanceBackup,
+  resumeBulkBackupRun,
   revealSNMPProfile,
   runTopologyDiscovery,
   setAdminUserStatus,
   setCanvasMapPrimary,
+  startBulkBackupRun,
+  triggerBulkBackup,
   triggerBulkDownload,
   updateAdminUser,
   updateCanvasMap,
@@ -282,7 +288,9 @@ describe('password sessions', () => {
       '/api/v1/auth/password/change',
       expect.objectContaining({
         method: 'POST',
-        headers: expect.not.objectContaining({ 'X-CSRF-Token': expect.any(String) }),
+        headers: expect.not.objectContaining({
+          'X-CSRF-Token': expect.any(String),
+        }),
       }),
     );
   });
@@ -306,7 +314,9 @@ describe('password sessions', () => {
           token: 'one-time-reset-token',
           new_password: 'Correct Horse Battery Staple Reset 2026!',
         }),
-        headers: expect.not.objectContaining({ Authorization: expect.any(String) }),
+        headers: expect.not.objectContaining({
+          Authorization: expect.any(String),
+        }),
       }),
     );
   });
@@ -368,7 +378,12 @@ describe('admin API', () => {
               name: 'admin',
               description: 'Administrators',
               is_system_role: true,
-              permissions: [{ key: 'admin:dashboard:read', description: 'Dashboard access' }],
+              permissions: [
+                {
+                  key: 'admin:dashboard:read',
+                  description: 'Dashboard access',
+                },
+              ],
             },
           ],
         }),
@@ -1746,6 +1761,7 @@ describe('triggerBulkDownload', () => {
     const appendChild = vi.spyOn(document.body, 'appendChild');
     const removeChild = vi.spyOn(document.body, 'removeChild');
     const createElement = vi.spyOn(document, 'createElement');
+    let downloadAnchor: HTMLAnchorElement | undefined;
     vi.stubGlobal('URL', {
       createObjectURL: vi.fn(() => 'blob:download'),
       revokeObjectURL: vi.fn(),
@@ -1753,6 +1769,7 @@ describe('triggerBulkDownload', () => {
     createElement.mockImplementation((tagName: string) => {
       const element = document.createElementNS('http://www.w3.org/1999/xhtml', tagName);
       if (tagName === 'a') {
+        downloadAnchor = element as HTMLAnchorElement;
         Object.defineProperty(element, 'click', {
           configurable: true,
           value: clickMock,
@@ -1769,7 +1786,9 @@ describe('triggerBulkDownload', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    await triggerBulkDownload(['dev-1']);
+    const result = await triggerBulkDownload(['dev-1'], {
+      filename: 'custom-backups.zip',
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/backups/bulk-download',
@@ -1780,9 +1799,381 @@ describe('triggerBulkDownload', () => {
     );
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('Authorization');
     expect(clickMock).toHaveBeenCalled();
+    expect(downloadAnchor?.download).toBe('custom-backups.zip');
+    expect(result).toBe('saved');
     appendChild.mockRestore();
     removeChild.mockRestore();
     createElement.mockRestore();
+  });
+
+  it('uses the File System Access API stream when available', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=download-csrf',
+    });
+    const writable = new WritableStream<Uint8Array>();
+    const createWritable = vi.fn().mockResolvedValue(writable);
+    const showSaveFilePicker = vi.fn().mockResolvedValue({ createWritable });
+    const blob = vi.fn();
+    vi.stubGlobal('showSaveFilePicker', showSaveFilePicker);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({
+          'Content-Disposition': 'attachment; filename="backups.zip"',
+        }),
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]));
+            controller.close();
+          },
+        }),
+        blob,
+      } as unknown as Response),
+    );
+
+    const result = await triggerBulkDownload(['dev-1'], {
+      filename: 'custom-backups.zip',
+    });
+
+    expect(showSaveFilePicker).toHaveBeenCalledWith(
+      expect.objectContaining({ suggestedName: 'custom-backups.zip' }),
+    );
+    expect(createWritable).toHaveBeenCalled();
+    expect(blob).not.toHaveBeenCalled();
+    expect(result).toBe('saved');
+  });
+
+  it('cancels the response stream when the save picker is cancelled', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const showSaveFilePicker = vi
+      .fn()
+      .mockRejectedValue(new DOMException('cancelled', 'AbortError'));
+    const blob = vi.fn();
+    vi.stubGlobal('showSaveFilePicker', showSaveFilePicker);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({
+          'Content-Disposition': 'attachment; filename="backups.zip"',
+        }),
+        body: { cancel },
+        blob,
+      } as unknown as Response),
+    );
+
+    const result = await triggerBulkDownload(['dev-1']);
+
+    expect(cancel).toHaveBeenCalled();
+    expect(blob).not.toHaveBeenCalled();
+    expect(result).toBe('cancelled');
+  });
+
+  it('cancels the response stream when the writable file cannot be created', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const createWritable = vi.fn().mockRejectedValue(new Error('permission denied'));
+    const showSaveFilePicker = vi.fn().mockResolvedValue({ createWritable });
+    vi.stubGlobal('showSaveFilePicker', showSaveFilePicker);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({
+          'Content-Disposition': 'attachment; filename="backups.zip"',
+        }),
+        body: { cancel },
+        blob: vi.fn(),
+      } as unknown as Response),
+    );
+
+    await expect(triggerBulkDownload(['dev-1'])).rejects.toThrow('permission denied');
+
+    expect(createWritable).toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('normalizes 413 responses to a readable bulk download limit error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          {
+            error: 'bulk download exceeds files limit: requested 501, maximum 500',
+          },
+          { ok: false, status: 413, statusText: 'Payload Too Large' },
+        ),
+      ),
+    );
+
+    await expect(triggerBulkDownload(['dev-1'])).rejects.toThrow(
+      'Too many backup files selected for bulk download. Maximum 500, requested 501.',
+    );
+  });
+});
+
+describe('triggerBulkBackup', () => {
+  it('posts selected devices to the bulk backup endpoint and parses results', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=bulk-csrf',
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: [
+          {
+            device_id: 'dev-1',
+            device_name: 'router-01',
+            status: 'queued',
+            job_id: 'job-1',
+          },
+          {
+            device_id: 'dev-2',
+            device_name: 'router-02',
+            status: 'skipped',
+            reason: 'device unreachable',
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const results = await triggerBulkBackup(['dev-1', 'dev-2']);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/backups/bulk',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-csrf' }),
+        body: JSON.stringify({ device_ids: ['dev-1', 'dev-2'] }),
+      }),
+    );
+    expect(results).toEqual([
+      {
+        device_id: 'dev-1',
+        device_name: 'router-01',
+        status: 'queued',
+        job_id: 'job-1',
+      },
+      {
+        device_id: 'dev-2',
+        device_name: 'router-02',
+        status: 'skipped',
+        reason: 'device unreachable',
+      },
+    ]);
+  });
+
+  it('normalizes 413 responses to a readable bulk backup limit error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          {
+            error: 'bulk backup exceeds devices limit: requested 101, maximum 100',
+          },
+          { ok: false, status: 413, statusText: 'Payload Too Large' },
+        ),
+      ),
+    );
+
+    await expect(triggerBulkBackup(['dev-1'])).rejects.toThrow(
+      'Too many devices selected for bulk backup. Maximum 100, requested 101.',
+    );
+  });
+});
+
+describe('bulk backup runs', () => {
+  const runPayload = {
+    id: 'run-1',
+    status: 'running',
+    batch_size: 10,
+    total_count: 2,
+    queued_count: 1,
+    success_count: 0,
+    failed_count: 0,
+    skipped_count: 1,
+    cancelled_count: 0,
+    error_message: '',
+    cancel_requested: false,
+    created_by: '',
+    created_at: '2026-05-26T10:00:00Z',
+    items: [
+      {
+        id: 'item-1',
+        run_id: 'run-1',
+        device_id: 'dev-1',
+        device_name: 'router-01',
+        status: 'queued',
+        backup_job_id: 'job-1',
+        created_at: '2026-05-26T10:00:00Z',
+        updated_at: '2026-05-26T10:00:00Z',
+      },
+      {
+        id: 'item-2',
+        run_id: 'run-1',
+        device_id: 'dev-2',
+        device_name: 'router-02',
+        status: 'skipped',
+        reason: 'device offline',
+        created_at: '2026-05-26T10:00:00Z',
+        updated_at: '2026-05-26T10:00:00Z',
+      },
+    ],
+  };
+
+  it('starts a persistent bulk backup run and parses item progress', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=bulk-run-csrf',
+    });
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ data: runPayload }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const run = await startBulkBackupRun(['dev-1', 'dev-2']);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/backups/bulk-runs',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-run-csrf' }),
+        body: JSON.stringify({ device_ids: ['dev-1', 'dev-2'] }),
+      }),
+    );
+    expect(run.id).toBe('run-1');
+    expect(run.items).toEqual([
+      expect.objectContaining({
+        device_id: 'dev-1',
+        status: 'queued',
+        backup_job_id: 'job-1',
+      }),
+      expect.objectContaining({
+        device_id: 'dev-2',
+        status: 'skipped',
+        reason: 'device offline',
+      }),
+    ]);
+  });
+
+  it('returns the active run from a 409 response so the UI cannot spam starts', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          {
+            code: 'bulk_backup_run_active',
+            error: 'bulk backup run already active',
+            data: runPayload,
+          },
+          { ok: false, status: 409, statusText: 'Conflict' },
+        ),
+      ),
+    );
+
+    const run = await startBulkBackupRun(['dev-1']);
+
+    expect(run.id).toBe('run-1');
+    expect(run.status).toBe('running');
+  });
+
+  it('fetches latest and specific persistent bulk backup runs', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ data: null }))
+      .mockResolvedValueOnce(mockResponse({ data: runPayload }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchLatestBulkBackupRun()).resolves.toBeNull();
+    await expect(fetchBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({ id: 'run-1', total_count: 2 }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/backups/bulk-runs/latest',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: 'application/json' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/backups/bulk-runs/run-1',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: 'application/json' }),
+      }),
+    );
+  });
+
+  it('parses paused persistent bulk backup runs', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockResponse({ data: { ...runPayload, status: 'paused' } })),
+    );
+
+    await expect(fetchBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({ status: 'paused' }),
+    );
+  });
+
+  it('parses active persistent bulk backup run items', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({
+          data: {
+            ...runPayload,
+            items: [{ ...runPayload.items[0], status: 'active' }],
+          },
+        }),
+      ),
+    );
+
+    await expect(fetchBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({
+        items: [expect.objectContaining({ status: 'active' })],
+      }),
+    );
+  });
+
+  it('pauses and resumes persistent bulk backup runs with CSRF', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=bulk-control-csrf',
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ data: { ...runPayload, status: 'pausing' } }))
+      .mockResolvedValueOnce(mockResponse({ data: { ...runPayload, status: 'running' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(pauseBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({ status: 'pausing' }),
+    );
+    await expect(resumeBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({ status: 'running' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/backups/bulk-runs/run-1/pause',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-control-csrf' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/backups/bulk-runs/run-1/resume',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-control-csrf' }),
+      }),
+    );
   });
 });
 

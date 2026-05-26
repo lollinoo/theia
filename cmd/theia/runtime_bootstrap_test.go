@@ -12,8 +12,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/service"
 )
 
 type stubRuntimeStopper struct {
@@ -352,6 +354,57 @@ func TestRuntimeBootstrapRunWrapsLoadConfigError(t *testing.T) {
 	}
 	if got, want := err.Error(), "load config: boom"; got != want {
 		t.Fatalf("Run() error = %q, want %q", got, want)
+	}
+}
+
+func TestConfigureInstanceBackupArchiveLimitsUsesRuntimeConfig(t *testing.T) {
+	cfg := &runtimeConfig{}
+	cfg.RestoreArchiveLimits.MaxCompressedBytes = 101
+	cfg.RestoreArchiveLimits.MaxTotalBytes = 202
+	cfg.RestoreArchiveLimits.MaxEntryBytes = 303
+	cfg.RestoreArchiveLimits.MaxFileEntries = 4
+	cfg.InstanceBackupArchiveLimits.MaxTotalBytes = 505
+	cfg.InstanceBackupArchiveLimits.MaxEntryBytes = 606
+	cfg.InstanceBackupArchiveLimits.MaxFileEntries = 7
+	cfg.InstanceBackupArchiveLimits.MaxDurationSeconds = 8
+
+	svc := service.NewInstanceBackupService(nil, nil, nil, "", "", "", "", "", nil)
+	configureInstanceBackupArchiveLimits(svc, cfg)
+
+	restoreLimits := svc.RestoreArchiveLimits()
+	if restoreLimits.MaxCompressedBytes != 101 ||
+		restoreLimits.MaxTotalBytes != 202 ||
+		restoreLimits.MaxEntryBytes != 303 ||
+		restoreLimits.MaxFileEntries != 4 {
+		t.Fatalf("restore limits = %#v, want runtime config values", restoreLimits)
+	}
+	backupLimits := svc.BackupArchiveLimits()
+	if backupLimits.MaxTotalBytes != 505 ||
+		backupLimits.MaxEntryBytes != 606 ||
+		backupLimits.MaxFileEntries != 7 ||
+		backupLimits.MaxDuration != 8*time.Second {
+		t.Fatalf("backup limits = %#v, want runtime config values", backupLimits)
+	}
+}
+
+func TestConfigureBackupServiceBulkOperationLimitsUsesRuntimeConfig(t *testing.T) {
+	cfg := &runtimeConfig{}
+	cfg.BulkBackupLimits.MaxDevices = 11
+	cfg.BulkBackupLimits.MaxQueuedJobs = 12
+	cfg.BulkDownloadLimits.MaxDevices = 13
+	cfg.BulkDownloadLimits.MaxFiles = 14
+	cfg.BulkDownloadLimits.MaxBytes = 15
+
+	svc := service.NewBackupService(nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
+	configureBackupServiceBulkOperationLimits(svc, cfg)
+
+	limits := svc.BulkOperationLimits()
+	if limits.BulkBackupMaxDevices != 11 ||
+		limits.BulkBackupMaxQueuedJobs != 12 ||
+		limits.BulkDownloadMaxDevices != 13 ||
+		limits.BulkDownloadMaxFiles != 14 ||
+		limits.BulkDownloadMaxBytes != 15 {
+		t.Fatalf("bulk operation limits = %#v, want runtime config values", limits)
 	}
 }
 

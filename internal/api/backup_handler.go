@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -282,10 +283,177 @@ func writeBackupContentMetadata(w http.ResponseWriter, id uuid.UUID, inline bool
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
 }
 
+// HandleStartBulkBackupRun handles POST /api/v1/backups/bulk-runs.
+func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DeviceIDs []string `json:"device_ids"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+	}
+
+	deviceIDs := make([]uuid.UUID, 0, len(req.DeviceIDs))
+	for _, idStr := range req.DeviceIDs {
+		parsed, err := uuid.Parse(idStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid device_id: %s", idStr))
+			return
+		}
+		deviceIDs = append(deviceIDs, parsed)
+	}
+
+	run, err := h.svc.StartBulkBackupRun(r.Context(), deviceIDs, "")
+	if err != nil {
+		if errors.Is(err, service.ErrBulkBackupRunAlreadyActive) {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"code":  "bulk_backup_run_active",
+				"error": err.Error(),
+				"data":  bulkBackupRunToMap(run),
+			})
+			return
+		}
+		if service.IsBulkLimitError(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
+// HandleGetLatestBulkBackupRun handles GET /api/v1/backups/bulk-runs/latest.
+func (h *BackupHandler) HandleGetLatestBulkBackupRun(w http.ResponseWriter, r *http.Request) {
+	run, err := h.svc.GetLatestBulkBackupRun(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
+// HandleGetBulkBackupRun handles GET /api/v1/backups/bulk-runs/{id}.
+func (h *BackupHandler) HandleGetBulkBackupRun(w http.ResponseWriter, r *http.Request) {
+	id, err := extractIDFromPath(r.URL.Path, "/api/v1/backups/bulk-runs/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid bulk backup run ID")
+		return
+	}
+
+	run, err := h.svc.GetBulkBackupRun(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "bulk backup run not found")
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
+// HandleCancelBulkBackupRun handles POST /api/v1/backups/bulk-runs/{id}/cancel.
+func (h *BackupHandler) HandleCancelBulkBackupRun(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/cancel")
+	id, err := extractIDFromPath(path, "/api/v1/backups/bulk-runs/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid bulk backup run ID")
+		return
+	}
+
+	run, err := h.svc.CancelBulkBackupRun(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "bulk backup run not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
+// HandlePauseBulkBackupRun handles POST /api/v1/backups/bulk-runs/{id}/pause.
+func (h *BackupHandler) HandlePauseBulkBackupRun(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/pause")
+	id, err := extractIDFromPath(path, "/api/v1/backups/bulk-runs/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid bulk backup run ID")
+		return
+	}
+
+	run, err := h.svc.PauseBulkBackupRun(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "bulk backup run not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
+// HandleResumeBulkBackupRun handles POST /api/v1/backups/bulk-runs/{id}/resume.
+func (h *BackupHandler) HandleResumeBulkBackupRun(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/resume")
+	id, err := extractIDFromPath(path, "/api/v1/backups/bulk-runs/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid bulk backup run ID")
+		return
+	}
+
+	run, err := h.svc.ResumeBulkBackupRun(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "bulk backup run not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
 // HandleBulkBackup handles POST /api/v1/backups/bulk
 func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request) {
-	results, err := h.svc.TriggerBulkBackup(r.Context())
+	var req struct {
+		DeviceIDs []string `json:"device_ids"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+	}
+
+	deviceIDs := make([]uuid.UUID, 0, len(req.DeviceIDs))
+	for _, idStr := range req.DeviceIDs {
+		parsed, err := uuid.Parse(idStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid device_id: %s", idStr))
+			return
+		}
+		deviceIDs = append(deviceIDs, parsed)
+	}
+
+	results, err := h.svc.TriggerBulkBackup(r.Context(), deviceIDs...)
 	if err != nil {
+		if service.IsBulkLimitError(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
@@ -338,6 +506,14 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 
 	entries, err := h.svc.GetBulkDownloadFiles(r.Context(), deviceIDs)
 	if err != nil {
+		if service.IsBulkLimitError(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
+		if service.IsBulkPathError(err) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}
@@ -359,7 +535,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 
-	zipErrors := writeBulkZipEntries(zw, entries)
+	zipErrors := writeBulkZipEntries(zw, entries, h.svc.OpenBulkDownloadEntry)
 	if len(zipErrors) > 0 {
 		if w, err := zw.Create("_errors.txt"); err == nil {
 			for _, e := range zipErrors {
@@ -371,13 +547,42 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 
 // writeBulkZipEntries writes backup file entries into a zip writer using
 // io.Copy streaming. Returns a list of error descriptions for failed files.
-func writeBulkZipEntries(zw *zip.Writer, entries []service.BulkDownloadEntry) []string {
+func writeBulkZipEntries(zw *zip.Writer, entries []service.BulkDownloadEntry, openEntry func(service.BulkDownloadEntry) (*os.File, error)) []string {
 	var zipErrors []string
 	for _, e := range entries {
-		zipPath := filepath.Join(e.DeviceDir, e.File.FileName)
-		f, err := os.Open(e.File.FilePath)
+		zipPath := e.ZipPath
+		if zipPath == "" {
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: missing validated zip entry path", e.File.FileName))
+			continue
+		}
+		if openEntry == nil {
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: missing validated file opener", zipPath))
+			continue
+		}
+		f, err := openEntry(e)
 		if err != nil {
 			zipErrors = append(zipErrors, fmt.Sprintf("%s: %v", zipPath, err))
+			continue
+		}
+		if e.SizeBytes < 0 {
+			f.Close()
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: invalid validated file size", zipPath))
+			continue
+		}
+		info, err := f.Stat()
+		if err != nil {
+			f.Close()
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: stat failed: %v", zipPath, err))
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			f.Close()
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: not a regular file", zipPath))
+			continue
+		}
+		if info.Size() > e.SizeBytes {
+			f.Close()
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: file changed after validation", zipPath))
 			continue
 		}
 		writer, err := zw.Create(zipPath)
@@ -386,8 +591,11 @@ func writeBulkZipEntries(zw *zip.Writer, entries []service.BulkDownloadEntry) []
 			zipErrors = append(zipErrors, fmt.Sprintf("%s: zip entry creation failed: %v", zipPath, err))
 			continue
 		}
-		if _, err := io.Copy(writer, f); err != nil {
+		written, err := io.Copy(writer, io.LimitReader(f, e.SizeBytes))
+		if err != nil {
 			zipErrors = append(zipErrors, fmt.Sprintf("%s: write failed: %v", zipPath, err))
+		} else if written != e.SizeBytes {
+			zipErrors = append(zipErrors, fmt.Sprintf("%s: file changed while streaming", zipPath))
 		}
 		f.Close()
 	}
@@ -424,4 +632,57 @@ func jobToMap(j domain.BackupJob) map[string]interface{} {
 		"created_at":    j.CreatedAt,
 		"files":         files,
 	}
+}
+
+func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
+	if run == nil {
+		return nil
+	}
+
+	items := make([]map[string]interface{}, 0, len(run.Items))
+	for _, item := range run.Items {
+		entry := map[string]interface{}{
+			"id":          item.ID.String(),
+			"run_id":      item.RunID.String(),
+			"device_id":   item.DeviceID.String(),
+			"device_name": item.DeviceName,
+			"status":      string(item.Status),
+			"created_at":  item.CreatedAt,
+			"updated_at":  item.UpdatedAt,
+		}
+		if item.Reason != "" {
+			entry["reason"] = item.Reason
+		}
+		if item.BackupJobID != nil {
+			entry["backup_job_id"] = item.BackupJobID.String()
+		}
+		if item.CompletedAt != nil {
+			entry["completed_at"] = item.CompletedAt
+		}
+		items = append(items, entry)
+	}
+
+	data := map[string]interface{}{
+		"id":               run.ID.String(),
+		"status":           string(run.Status),
+		"batch_size":       run.BatchSize,
+		"total_count":      run.TotalCount,
+		"queued_count":     run.QueuedCount,
+		"success_count":    run.SuccessCount,
+		"failed_count":     run.FailedCount,
+		"skipped_count":    run.SkippedCount,
+		"cancelled_count":  run.CancelledCount,
+		"error_message":    run.ErrorMessage,
+		"cancel_requested": run.CancelRequested,
+		"created_by":       run.CreatedBy,
+		"created_at":       run.CreatedAt,
+		"items":            items,
+	}
+	if run.StartedAt != nil {
+		data["started_at"] = run.StartedAt
+	}
+	if run.CompletedAt != nil {
+		data["completed_at"] = run.CompletedAt
+	}
+	return data
 }
