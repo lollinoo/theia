@@ -202,14 +202,18 @@ foreach ($seedFile in $wispSeedFiles) {
   $content = Get-Content -Raw -Path $seedFile
   if ($seedFile.EndsWith(".ps1")) {
     Assert-True ($content -match 'topology_discovery_mode\s*=\s*"lldp_cdp"') "$seedFile must force topology_discovery_mode to lldp_cdp"
-    Assert-True (([regex]::Matches($content, 'Invoke-TopologyDiscovery\b')).Count -eq 1) "$seedFile existing-device path must call Invoke-TopologyDiscovery once"
+    Assert-True (([regex]::Matches($content, 'Invoke-TopologyDiscovery\b')).Count -eq 2) "$seedFile existing-device paths must call Invoke-TopologyDiscovery"
+    Assert-True ($content -match 'Get-DeviceIdByHostnameAndTag\s+-ApiBase\s+\$ApiBase\s+-Hostname\s+\$Hostname\s+-TagKey\s+"lab"\s+-TagValue\s+"wisp-ospf"') "$seedFile must look up existing WISP lab devices by hostname and lab tag before creating duplicates"
+    Assert-True ($content -match 'Update-DeviceIp\s+-ApiBase\s+\$ApiBase\s+-DeviceId\s+\$existingId\s+-Ip\s+\$Ip') "$seedFile must migrate existing WISP lab devices to the selected target IP"
 
     $mapCallIndex = $content.IndexOf("Add-DeviceToPrimaryMap")
     $discoveryCallIndex = $content.IndexOf("Invoke-TopologyDiscovery")
   }
   else {
     Assert-True ($content -match '\\?"topology_discovery_mode\\?"\s*:\s*\\?"lldp_cdp\\?"') "$seedFile must force topology_discovery_mode to lldp_cdp"
-    Assert-True (([regex]::Matches($content, 'run_topology_discovery\b')).Count -eq 1) "$seedFile existing-device path must call run_topology_discovery once"
+    Assert-True (([regex]::Matches($content, 'run_topology_discovery\b')).Count -eq 2) "$seedFile existing-device paths must call run_topology_discovery"
+    Assert-True ($content -match 'device_id_by_hostname_and_tag\s+"\$hostname"\s+"lab"\s+"wisp-ospf"') "$seedFile must look up existing WISP lab devices by hostname and lab tag before creating duplicates"
+    Assert-True ($content -match 'update_device_ip\s+"\$existing_id"\s+"\$ip"') "$seedFile must migrate existing WISP lab devices to the selected target IP"
 
     $mapCallIndex = $content.IndexOf("add_device_to_primary_map")
     $discoveryCallIndex = $content.IndexOf("run_topology_discovery")

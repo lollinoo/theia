@@ -41,6 +41,15 @@ function New-WispRouter {
     return
   }
 
+  $existingId = Get-DeviceIdByHostnameAndTag -ApiBase $ApiBase -Hostname $Hostname -TagKey "lab" -TagValue "wisp-ospf"
+  if (-not [string]::IsNullOrWhiteSpace($existingId)) {
+    Write-Output "Updating $Hostname to $Ip - existing WISP lab device found with a different target; ensuring primary map membership and rerunning topology discovery"
+    Update-DeviceIp -ApiBase $ApiBase -DeviceId $existingId -Ip $Ip
+    Add-DeviceToPrimaryMap -ApiBase $ApiBase -DeviceId $existingId
+    Invoke-TopologyDiscovery -ApiBase $ApiBase -DeviceId $existingId
+    return
+  }
+
   Write-Output "Adding $Hostname ($Ip)..."
   $payload = @{
     ip = $Ip

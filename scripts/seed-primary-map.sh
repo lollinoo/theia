@@ -154,6 +154,39 @@ for item in payload.get("data", []):
 ' "$ip"
 }
 
+device_id_by_hostname_and_tag() {
+  local hostname="$1"
+  local tag_key="$2"
+  local tag_value="$3"
+  local payload
+  ensure_theia_api_session
+  payload="$(curl -sf "${THEIA_CURL_AUTH_ARGS[@]}" "$API_BASE/api/v1/devices")"
+  printf '%s' "$payload" | python3 -c 'import json, sys
+target_hostname = sys.argv[1]
+target_tag_key = sys.argv[2]
+target_tag_value = sys.argv[3]
+payload = json.load(sys.stdin)
+for item in payload.get("data", []):
+    attributes = item.get("attributes", {})
+    tags = attributes.get("tags") or {}
+    if attributes.get("hostname") == target_hostname and tags.get(target_tag_key) == target_tag_value:
+        print(item.get("id", ""))
+        raise SystemExit(0)
+' "$hostname" "$tag_key" "$tag_value"
+}
+
+update_device_ip() {
+  local device_id="$1"
+  local ip="$2"
+  local body
+  ensure_theia_api_session
+  body="$(python3 -c 'import json, sys; print(json.dumps({"ip": sys.argv[1]}))' "$ip")"
+  curl -sf -X PUT "$API_BASE/api/v1/devices/${device_id}" \
+    "${THEIA_CURL_AUTH_ARGS[@]}" \
+    -H "Content-Type: application/json" \
+    -d "$body" >/dev/null
+}
+
 THEIA_CURL_AUTH_ARGS=()
 
 add_device_to_primary_map() {

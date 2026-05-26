@@ -39,6 +39,15 @@ create_router() {
     return
   fi
 
+  existing_id="$(device_id_by_hostname_and_tag "$hostname" "lab" "wisp-ospf")"
+  if [ -n "$existing_id" ]; then
+    echo "Updating ${hostname} to ${ip} - existing WISP lab device found with a different target; ensuring primary map membership and rerunning topology discovery"
+    update_device_ip "$existing_id" "$ip"
+    add_device_to_primary_map "$existing_id"
+    run_topology_discovery "$existing_id"
+    return
+  fi
+
   echo "Adding ${hostname} (${ip})..."
   ensure_theia_api_session
   response="$(curl -sf -X POST "$API_BASE/api/v1/devices" \
