@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchBackupJob,
   fetchDeviceCredentialProfiles,
-  triggerBackup,
+  triggerBulkBackup,
   triggerBulkDownload,
 } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
@@ -26,6 +26,29 @@ const TERMINAL = new Set<DevicePhase>(['skipped', 'success', 'failed']);
 
 function getDeviceName(d: Device): string {
   return d.tags?.display_name || d.sys_name || d.ip;
+}
+
+function backupRequestErrorMessage(err: unknown): string {
+  if (err instanceof ServerError) {
+    return err.correlationId ? `server error (ref: ${err.correlationId})` : 'server error';
+  }
+  if (err instanceof ValidationError) {
+    return err.message;
+  }
+  const msg = err instanceof Error ? err.message : 'backup failed';
+  return msg.includes('unreachable')
+    ? 'device unreachable'
+    : msg.includes('no credential')
+      ? 'no credential profile assigned'
+      : msg.includes('not supported')
+        ? 'backup not supported for this vendor'
+        : msg;
+}
+
+function jobStatusToDevicePhase(status: string): DevicePhase {
+  if (status === 'pending') return 'queued';
+  if (status === 'running' || status === 'success' || status === 'failed') return status;
+  return 'queued';
 }
 
 export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
@@ -57,15 +80,6 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     }
   }, [entries, phase]);
 
-  // Helper: patch a single entry and keep ref in sync
-  const patchEntry = useCallback((deviceId: string, patch: Partial<DeviceEntry>) => {
-    setEntries((prev) => {
-      const next = prev.map((e) => (e.deviceId === deviceId ? { ...e, ...patch } : e));
-      entriesRef.current = next;
-      return next;
-    });
-  }, []);
-
   // Poll active jobs for status updates
   const startPolling = useCallback(() => {
     if (pollRef.current) return;
@@ -80,7 +94,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
             const job = await fetchBackupJob(entry.jobId!);
             return {
               deviceId: entry.deviceId,
-              phase: job.status as DevicePhase,
+              phase: jobStatusToDevicePhase(job.status),
               reason: job.error_message || undefined,
             };
           } catch {
@@ -144,33 +158,45 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     const eligible = initial.filter((e) => e.phase === 'checking');
     if (eligible.length === 0) return; // completion useEffect handles phase transition
 
-    // Fire parallel backup triggers — each device independently
-    for (const entry of eligible) {
-      triggerBackup(entry.deviceId)
-        .then((job) => {
-          patchEntry(entry.deviceId, { phase: 'queued', jobId: job.id });
-          startPolling();
-        })
-        .catch((err) => {
-          let reason: string;
-          if (err instanceof ServerError) {
-            reason = err.correlationId
-              ? `server error (ref: ${err.correlationId})`
-              : 'server error';
-          } else if (err instanceof ValidationError) {
-            reason = err.message;
-          } else {
-            const msg = err instanceof Error ? err.message : 'backup failed';
-            reason = msg.includes('unreachable')
-              ? 'device unreachable'
-              : msg.includes('no credential')
-                ? 'no credential profile assigned'
-                : msg.includes('not supported')
-                  ? 'backup not supported for this vendor'
-                  : msg;
-          }
-          patchEntry(entry.deviceId, { phase: 'skipped', reason });
-        });
+    try {
+      const results = await triggerBulkBackup(eligible.map((entry) => entry.deviceId));
+      const resultByDevice = new Map(results.map((result) => [result.device_id, result]));
+      let queuedCount = 0;
+      const nextEntries = entriesRef.current.map((entry) => {
+        if (entry.phase !== 'checking') return entry;
+        const result = resultByDevice.get(entry.deviceId);
+        if (!result) {
+          return {
+            ...entry,
+            phase: 'skipped' as const,
+            reason: 'backup request returned no result',
+          };
+        }
+        if (result.status === 'queued' && result.job_id) {
+          queuedCount++;
+          return { ...entry, phase: 'queued' as const, jobId: result.job_id };
+        }
+        return {
+          ...entry,
+          phase: 'skipped' as const,
+          reason: result.reason || 'backup job was not queued',
+        };
+      });
+      entriesRef.current = nextEntries;
+      setEntries(nextEntries);
+      if (queuedCount > 0) {
+        startPolling();
+      }
+    } catch (err) {
+      const reason = backupRequestErrorMessage(err);
+      setError(reason);
+      setEntries((prev) => {
+        const next = prev.map((entry) =>
+          entry.phase === 'checking' ? { ...entry, phase: 'skipped' as const, reason } : entry,
+        );
+        entriesRef.current = next;
+        return next;
+      });
     }
   };
 
@@ -308,7 +334,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       )}
 
       {/* No eligible devices */}
-      {phase === 'done' && successCount === 0 && failedCount === 0 && (
+      {phase === 'done' && successCount === 0 && failedCount === 0 && !error && (
         <div className="rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down">
           No devices were eligible for backup. Ensure devices have a supported vendor and an SSH
           profile assigned.

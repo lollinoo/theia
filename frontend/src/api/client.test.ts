@@ -48,6 +48,7 @@ import {
   runTopologyDiscovery,
   setAdminUserStatus,
   setCanvasMapPrimary,
+  triggerBulkBackup,
   triggerBulkDownload,
   updateAdminUser,
   updateCanvasMap,
@@ -1783,6 +1784,180 @@ describe('triggerBulkDownload', () => {
     appendChild.mockRestore();
     removeChild.mockRestore();
     createElement.mockRestore();
+  });
+
+  it('uses the File System Access API stream when available', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=download-csrf',
+    });
+    const writable = new WritableStream<Uint8Array>();
+    const createWritable = vi.fn().mockResolvedValue(writable);
+    const showSaveFilePicker = vi.fn().mockResolvedValue({ createWritable });
+    const blob = vi.fn();
+    vi.stubGlobal('showSaveFilePicker', showSaveFilePicker);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({
+          'Content-Disposition': 'attachment; filename="backups.zip"',
+        }),
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]));
+            controller.close();
+          },
+        }),
+        blob,
+      } as unknown as Response),
+    );
+
+    await triggerBulkDownload(['dev-1']);
+
+    expect(showSaveFilePicker).toHaveBeenCalledWith(
+      expect.objectContaining({ suggestedName: expect.stringMatching(/_THEIA_BACKUPS\.zip$/) }),
+    );
+    expect(createWritable).toHaveBeenCalled();
+    expect(blob).not.toHaveBeenCalled();
+  });
+
+  it('cancels the response stream when the save picker is cancelled', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const showSaveFilePicker = vi
+      .fn()
+      .mockRejectedValue(new DOMException('cancelled', 'AbortError'));
+    const blob = vi.fn();
+    vi.stubGlobal('showSaveFilePicker', showSaveFilePicker);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({
+          'Content-Disposition': 'attachment; filename="backups.zip"',
+        }),
+        body: { cancel },
+        blob,
+      } as unknown as Response),
+    );
+
+    await triggerBulkDownload(['dev-1']);
+
+    expect(cancel).toHaveBeenCalled();
+    expect(blob).not.toHaveBeenCalled();
+  });
+
+  it('cancels the response stream when the writable file cannot be created', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const createWritable = vi.fn().mockRejectedValue(new Error('permission denied'));
+    const showSaveFilePicker = vi.fn().mockResolvedValue({ createWritable });
+    vi.stubGlobal('showSaveFilePicker', showSaveFilePicker);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({
+          'Content-Disposition': 'attachment; filename="backups.zip"',
+        }),
+        body: { cancel },
+        blob: vi.fn(),
+      } as unknown as Response),
+    );
+
+    await expect(triggerBulkDownload(['dev-1'])).rejects.toThrow('permission denied');
+
+    expect(createWritable).toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('normalizes 413 responses to a readable bulk download limit error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'bulk download exceeds files limit: requested 501, maximum 500' },
+            { ok: false, status: 413, statusText: 'Payload Too Large' },
+          ),
+        ),
+    );
+
+    await expect(triggerBulkDownload(['dev-1'])).rejects.toThrow(
+      'Too many backup files selected for bulk download. Maximum 500, requested 501.',
+    );
+  });
+});
+
+describe('triggerBulkBackup', () => {
+  it('posts selected devices to the bulk backup endpoint and parses results', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=bulk-csrf',
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: [
+          {
+            device_id: 'dev-1',
+            device_name: 'router-01',
+            status: 'queued',
+            job_id: 'job-1',
+          },
+          {
+            device_id: 'dev-2',
+            device_name: 'router-02',
+            status: 'skipped',
+            reason: 'device unreachable',
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const results = await triggerBulkBackup(['dev-1', 'dev-2']);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/backups/bulk',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-csrf' }),
+        body: JSON.stringify({ device_ids: ['dev-1', 'dev-2'] }),
+      }),
+    );
+    expect(results).toEqual([
+      { device_id: 'dev-1', device_name: 'router-01', status: 'queued', job_id: 'job-1' },
+      {
+        device_id: 'dev-2',
+        device_name: 'router-02',
+        status: 'skipped',
+        reason: 'device unreachable',
+      },
+    ]);
+  });
+
+  it('normalizes 413 responses to a readable bulk backup limit error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'bulk backup exceeds devices limit: requested 101, maximum 100' },
+            { ok: false, status: 413, statusText: 'Payload Too Large' },
+          ),
+        ),
+    );
+
+    await expect(triggerBulkBackup(['dev-1'])).rejects.toThrow(
+      'Too many devices selected for bulk backup. Maximum 100, requested 101.',
+    );
   });
 });
 
