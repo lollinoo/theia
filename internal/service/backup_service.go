@@ -443,12 +443,62 @@ func (s *BackupService) CancelBulkBackupRun(ctx context.Context, id uuid.UUID) (
 	if err != nil || run == nil {
 		return run, err
 	}
-	if run.Status == domain.BulkBackupRunStatusRunning {
+	wasPaused := run.Status == domain.BulkBackupRunStatusPaused
+	if run.Status == domain.BulkBackupRunStatusRunning ||
+		run.Status == domain.BulkBackupRunStatusPausing ||
+		run.Status == domain.BulkBackupRunStatusPaused {
 		run.Status = domain.BulkBackupRunStatusCancelling
 	}
 	run.CancelRequested = true
 	if err := s.bulkRunRepo.UpdateRun(run); err != nil {
 		return nil, err
+	}
+	if wasPaused {
+		go s.processBulkBackupRun(id)
+	}
+	return s.bulkRunRepo.GetRun(id)
+}
+
+func (s *BackupService) PauseBulkBackupRun(ctx context.Context, id uuid.UUID) (*domain.BulkBackupRun, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if s.bulkRunRepo == nil {
+		return nil, errors.New("bulk backup run repository is not configured")
+	}
+	run, err := s.bulkRunRepo.GetRun(id)
+	if err != nil || run == nil {
+		return run, err
+	}
+	if run.Status == domain.BulkBackupRunStatusRunning {
+		run.Status = domain.BulkBackupRunStatusPausing
+	}
+	if err := s.bulkRunRepo.UpdateRun(run); err != nil {
+		return nil, err
+	}
+	return s.bulkRunRepo.GetRun(id)
+}
+
+func (s *BackupService) ResumeBulkBackupRun(ctx context.Context, id uuid.UUID) (*domain.BulkBackupRun, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if s.bulkRunRepo == nil {
+		return nil, errors.New("bulk backup run repository is not configured")
+	}
+	run, err := s.bulkRunRepo.GetRun(id)
+	if err != nil || run == nil {
+		return run, err
+	}
+	wasPaused := run.Status == domain.BulkBackupRunStatusPaused
+	if run.Status == domain.BulkBackupRunStatusPaused || run.Status == domain.BulkBackupRunStatusPausing {
+		run.Status = domain.BulkBackupRunStatusRunning
+	}
+	if err := s.bulkRunRepo.UpdateRun(run); err != nil {
+		return nil, err
+	}
+	if wasPaused {
+		go s.processBulkBackupRun(id)
 	}
 	return s.bulkRunRepo.GetRun(id)
 }
@@ -481,6 +531,14 @@ func (s *BackupService) ResumeBulkBackupRuns(ctx context.Context) {
 				}
 			}
 		}
+		if run.Status == domain.BulkBackupRunStatusPausing {
+			run.Status = domain.BulkBackupRunStatusPaused
+			run.CancelRequested = false
+			if err := s.bulkRunRepo.UpdateRun(&run); err != nil {
+				log.Printf("Warning: failed to pause bulk backup run %s after restart: %v", run.ID, err)
+			}
+			continue
+		}
 		go s.processBulkBackupRun(run.ID)
 	}
 }
@@ -496,6 +554,24 @@ func (s *BackupService) processBulkBackupRun(runID uuid.UUID) {
 			return
 		}
 		if run == nil || bulkRunTerminal(run.Status) {
+			return
+		}
+		if run.Status == domain.BulkBackupRunStatusPaused {
+			return
+		}
+		if run.Status == domain.BulkBackupRunStatusPausing {
+			latest, err := s.bulkRunRepo.GetRun(runID)
+			if err != nil {
+				log.Printf("Warning: failed to reload pausing bulk backup run %s: %v", runID, err)
+				return
+			}
+			if latest == nil || latest.Status != domain.BulkBackupRunStatusPausing {
+				continue
+			}
+			latest.Status = domain.BulkBackupRunStatusPaused
+			if err := s.bulkRunRepo.UpdateRun(latest); err != nil {
+				log.Printf("Warning: failed to pause bulk backup run %s: %v", run.ID, err)
+			}
 			return
 		}
 		items := nextBulkRunBatch(run.Items, run.BatchSize)

@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  cancelBulkBackupRun,
   fetchBulkBackupRun,
   fetchLatestBulkBackupRun,
+  pauseBulkBackupRun,
+  resumeBulkBackupRun,
   startBulkBackupRun,
   triggerBulkDownload,
 } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
-import type { BulkBackupRun, BulkBackupRunItem, Device } from '../../types/api';
+import type {
+  BulkBackupRun,
+  BulkBackupRunItem,
+  BulkBackupRunStatus,
+  Device,
+} from '../../types/api';
 
 interface BulkBackupPanelProps {
   devices: Device[];
@@ -32,6 +40,7 @@ type DeviceEntry = {
 type BulkBackupSession = {
   phase: 'idle' | 'running' | 'done';
   runId?: string;
+  runStatus?: BulkBackupRunStatus;
   entries: DeviceEntry[];
   error: string;
   downloading: boolean;
@@ -123,6 +132,7 @@ function sessionFromRun(run: BulkBackupRun): BulkBackupSession {
   return {
     phase: RUN_TERMINAL.has(run.status) ? 'done' : 'running',
     runId: run.id,
+    runStatus: run.status,
     entries: run.items.map(itemToEntry),
     error: run.error_message,
     downloading: bulkBackupSession.downloading,
@@ -130,7 +140,29 @@ function sessionFromRun(run: BulkBackupRun): BulkBackupSession {
 }
 
 function isActiveRun(run: BulkBackupRun): boolean {
-  return run.status === 'running' || run.status === 'cancelling';
+  return (
+    run.status === 'running' ||
+    run.status === 'pausing' ||
+    run.status === 'paused' ||
+    run.status === 'cancelling'
+  );
+}
+
+function shouldPollRun(run: BulkBackupRun): boolean {
+  return !RUN_TERMINAL.has(run.status) && run.status !== 'paused';
+}
+
+function runStatusLabel(status?: BulkBackupRunStatus): string {
+  switch (status) {
+    case 'pausing':
+      return 'pausing';
+    case 'paused':
+      return 'paused';
+    case 'cancelling':
+      return 'stopping';
+    default:
+      return 'running';
+  }
 }
 
 function bulkDownloadBatchFilename(batchIndex: number, batchCount: number): string {
@@ -149,6 +181,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(
     () => new Set(devices.map((d) => d.id)),
   );
+  const [controlBusy, setControlBusy] = useState<'pause' | 'resume' | 'stop' | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const entriesRef = useRef<DeviceEntry[]>([]);
   const mountedRef = useRef(false);
@@ -166,7 +199,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         entriesRef.current = next.entries;
         runIdRef.current = next.runId;
         setBulkBackupSession((current) => ({ ...next, downloading: current.downloading }));
-        if (next.phase === 'done' && pollRef.current) {
+        if ((next.phase === 'done' || run.status === 'paused') && pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
         }
@@ -196,7 +229,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         entriesRef.current = next.entries;
         runIdRef.current = next.runId;
         setBulkBackupSession(next);
-        if (next.phase === 'running') {
+        if (shouldPollRun(run)) {
           startPolling(run.id);
         }
       })
@@ -239,10 +272,10 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
 
   useEffect(() => {
     if (phase !== 'running') return;
-    if (entries.some((entry) => !TERMINAL.has(entry.phase))) {
+    if (session.runStatus !== 'paused' && entries.some((entry) => !TERMINAL.has(entry.phase))) {
       startPolling(session.runId);
     }
-  }, [entries, phase, session.runId, startPolling]);
+  }, [entries, phase, session.runId, session.runStatus, startPolling]);
 
   const selectedDevices = devices.filter((device) => selectedDeviceIds.has(device.id));
   const selectedCount = selectedDeviceIds.size;
@@ -299,7 +332,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       entriesRef.current = next.entries;
       runIdRef.current = next.runId;
       setBulkBackupSession(next);
-      if (next.phase === 'running' && next.entries.some((entry) => !TERMINAL.has(entry.phase))) {
+      if (shouldPollRun(run) && next.entries.some((entry) => !TERMINAL.has(entry.phase))) {
         startPolling(run.id);
       }
     } catch (err) {
@@ -319,6 +352,64 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const doneCount = entries.filter((e) => TERMINAL.has(e.phase)).length;
   const activeCount = entries.length - doneCount;
   const downloadBatchCount = Math.ceil(successCount / BULK_DEVICE_BATCH_SIZE);
+  const canPause = phase === 'running' && session.runId && session.runStatus === 'running';
+  const canResume = phase === 'running' && session.runId && session.runStatus === 'paused';
+  const canStop =
+    phase === 'running' &&
+    session.runId &&
+    (session.runStatus === 'running' ||
+      session.runStatus === 'pausing' ||
+      session.runStatus === 'paused' ||
+      session.runStatus === 'cancelling');
+
+  const applyRunUpdate = (run: BulkBackupRun) => {
+    const next = sessionFromRun(run);
+    entriesRef.current = next.entries;
+    runIdRef.current = next.runId;
+    setBulkBackupSession((current) => ({ ...next, downloading: current.downloading }));
+    if (shouldPollRun(run)) {
+      startPolling(run.id);
+    } else if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const handlePause = async () => {
+    if (!session.runId || controlBusy) return;
+    setControlBusy('pause');
+    try {
+      applyRunUpdate(await pauseBulkBackupRun(session.runId));
+    } catch (err) {
+      setBulkBackupSession((current) => ({ ...current, error: backupRequestErrorMessage(err) }));
+    } finally {
+      setControlBusy(null);
+    }
+  };
+
+  const handleResume = async () => {
+    if (!session.runId || controlBusy) return;
+    setControlBusy('resume');
+    try {
+      applyRunUpdate(await resumeBulkBackupRun(session.runId));
+    } catch (err) {
+      setBulkBackupSession((current) => ({ ...current, error: backupRequestErrorMessage(err) }));
+    } finally {
+      setControlBusy(null);
+    }
+  };
+
+  const handleStop = async () => {
+    if (!session.runId || controlBusy) return;
+    setControlBusy('stop');
+    try {
+      applyRunUpdate(await cancelBulkBackupRun(session.runId));
+    } catch (err) {
+      setBulkBackupSession((current) => ({ ...current, error: backupRequestErrorMessage(err) }));
+    } finally {
+      setControlBusy(null);
+    }
+  };
 
   const handleDownloadZip = async () => {
     setBulkBackupSession((current) => ({ ...current, downloading: true, error: '' }));
@@ -428,9 +519,60 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                 : `Complete — ${successCount} succeeded, ${failedCount} failed, ${skippedCount} skipped`}
             </span>
             {phase === 'running' && activeCount > 0 && (
-              <span className="text-primary animate-pulse">running</span>
+              <span
+                className={
+                  session.runStatus === 'paused'
+                    ? 'text-on-bg-secondary'
+                    : 'text-primary animate-pulse'
+                }
+              >
+                {runStatusLabel(session.runStatus)}
+              </span>
             )}
           </div>
+
+          {phase === 'running' && (canPause || canResume || canStop) && (
+            <div className="flex gap-2">
+              {canPause && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handlePause();
+                  }}
+                  disabled={controlBusy !== null}
+                  className="flex-1 rounded-md border border-outline bg-surface px-3 py-2 text-xs font-medium text-on-bg-secondary hover:bg-surface-high disabled:opacity-50 transition-colors"
+                >
+                  {controlBusy === 'pause' ? 'Pausing...' : 'Pause'}
+                </button>
+              )}
+              {canResume && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleResume();
+                  }}
+                  disabled={controlBusy !== null}
+                  className="flex-1 rounded-md border border-primary bg-primary/10 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
+                >
+                  {controlBusy === 'resume' ? 'Resuming...' : 'Resume'}
+                </button>
+              )}
+              {canStop && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleStop();
+                  }}
+                  disabled={controlBusy !== null || session.runStatus === 'cancelling'}
+                  className="flex-1 rounded-md border border-status-down/30 bg-status-down/10 px-3 py-2 text-xs font-medium text-status-down hover:bg-status-down/15 disabled:opacity-50 transition-colors"
+                >
+                  {controlBusy === 'stop' || session.runStatus === 'cancelling'
+                    ? 'Stopping...'
+                    : 'Stop'}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Progress bar */}
           <div className="h-1.5 w-full rounded-full bg-elevated overflow-hidden">

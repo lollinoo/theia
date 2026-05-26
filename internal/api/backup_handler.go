@@ -381,6 +381,52 @@ func (h *BackupHandler) HandleCancelBulkBackupRun(w http.ResponseWriter, r *http
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
 }
 
+// HandlePauseBulkBackupRun handles POST /api/v1/backups/bulk-runs/{id}/pause.
+func (h *BackupHandler) HandlePauseBulkBackupRun(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/pause")
+	id, err := extractIDFromPath(path, "/api/v1/backups/bulk-runs/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid bulk backup run ID")
+		return
+	}
+
+	run, err := h.svc.PauseBulkBackupRun(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "bulk backup run not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
+// HandleResumeBulkBackupRun handles POST /api/v1/backups/bulk-runs/{id}/resume.
+func (h *BackupHandler) HandleResumeBulkBackupRun(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/resume")
+	id, err := extractIDFromPath(path, "/api/v1/backups/bulk-runs/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid bulk backup run ID")
+		return
+	}
+
+	run, err := h.svc.ResumeBulkBackupRun(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "bulk backup run not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
 // HandleBulkBackup handles POST /api/v1/backups/bulk
 func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request) {
 	var req struct {

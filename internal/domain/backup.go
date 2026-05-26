@@ -50,6 +50,8 @@ type BulkBackupRunStatus string
 
 const (
 	BulkBackupRunStatusRunning    BulkBackupRunStatus = "running"
+	BulkBackupRunStatusPausing    BulkBackupRunStatus = "pausing"
+	BulkBackupRunStatusPaused     BulkBackupRunStatus = "paused"
 	BulkBackupRunStatusCancelling BulkBackupRunStatus = "cancelling"
 	BulkBackupRunStatusSuccess    BulkBackupRunStatus = "success"
 	BulkBackupRunStatusPartial    BulkBackupRunStatus = "partial"

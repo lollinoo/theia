@@ -41,11 +41,13 @@ import {
   fetchSettingsWithMetadata,
   loginUser,
   logoutUser,
+  pauseBulkBackupRun,
   removeAdminUserRole,
   removeDeviceFromCanvasMap,
   resetCanvasBootstrapRequestCache,
   resetPasswordWithToken,
   restoreInstanceBackup,
+  resumeBulkBackupRun,
   revealSNMPProfile,
   runTopologyDiscovery,
   setAdminUserStatus,
@@ -2104,6 +2106,52 @@ describe('bulk backup runs', () => {
       '/api/v1/backups/bulk-runs/run-1',
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: 'application/json' }),
+      }),
+    );
+  });
+
+  it('parses paused persistent bulk backup runs', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockResponse({ data: { ...runPayload, status: 'paused' } })),
+    );
+
+    await expect(fetchBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({ status: 'paused' }),
+    );
+  });
+
+  it('pauses and resumes persistent bulk backup runs with CSRF', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=bulk-control-csrf',
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ data: { ...runPayload, status: 'pausing' } }))
+      .mockResolvedValueOnce(mockResponse({ data: { ...runPayload, status: 'running' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(pauseBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({ status: 'pausing' }),
+    );
+    await expect(resumeBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({ status: 'running' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/backups/bulk-runs/run-1/pause',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-control-csrf' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/backups/bulk-runs/run-1/resume',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-control-csrf' }),
       }),
     );
   });

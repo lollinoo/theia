@@ -694,6 +694,8 @@ export interface BackupJob {
 
 export type BulkBackupRunStatus =
   | 'running'
+  | 'pausing'
+  | 'paused'
   | 'cancelling'
   | 'success'
   | 'partial'

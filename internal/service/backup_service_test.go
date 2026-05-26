@@ -239,7 +239,7 @@ func (r *mockBulkBackupRunRepo) CreateRun(run *domain.BulkBackupRun, items []dom
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, existing := range r.runs {
-		if existing.Status == domain.BulkBackupRunStatusRunning || existing.Status == domain.BulkBackupRunStatusCancelling {
+		if bulkRunActiveForTest(existing.Status) {
 			return fmt.Errorf("active run exists")
 		}
 	}
@@ -307,7 +307,7 @@ func (r *mockBulkBackupRunRepo) GetActiveRun() (*domain.BulkBackupRun, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, run := range r.runs {
-		if run.Status == domain.BulkBackupRunStatusRunning || run.Status == domain.BulkBackupRunStatusCancelling {
+		if bulkRunActiveForTest(run.Status) {
 			return r.copyRunLocked(id), nil
 		}
 	}
@@ -319,13 +319,22 @@ func (r *mockBulkBackupRunRepo) ListResumableRuns() ([]domain.BulkBackupRun, err
 	defer r.mu.Unlock()
 	var runs []domain.BulkBackupRun
 	for id, run := range r.runs {
-		if run.Status == domain.BulkBackupRunStatusRunning || run.Status == domain.BulkBackupRunStatusCancelling {
+		if run.Status == domain.BulkBackupRunStatusRunning ||
+			run.Status == domain.BulkBackupRunStatusCancelling ||
+			run.Status == domain.BulkBackupRunStatusPausing {
 			cp := *run
 			cp.Items = append([]domain.BulkBackupRunItem(nil), r.items[id]...)
 			runs = append(runs, cp)
 		}
 	}
 	return runs, nil
+}
+
+func bulkRunActiveForTest(status domain.BulkBackupRunStatus) bool {
+	return status == domain.BulkBackupRunStatusRunning ||
+		status == domain.BulkBackupRunStatusCancelling ||
+		status == domain.BulkBackupRunStatusPausing ||
+		status == domain.BulkBackupRunStatusPaused
 }
 
 func (r *mockBulkBackupRunRepo) UpdateRun(run *domain.BulkBackupRun) error {
@@ -1175,6 +1184,60 @@ func TestStartBulkBackupRunRejectsActiveRun(t *testing.T) {
 	}
 }
 
+func TestPauseBulkBackupRunMarksRunPausing(t *testing.T) {
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusRunning)
+
+	run, err := svc.PauseBulkBackupRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("PauseBulkBackupRun: %v", err)
+	}
+	if run == nil || run.Status != domain.BulkBackupRunStatusPausing {
+		t.Fatalf("run = %+v, want pausing", run)
+	}
+	stored, _ := runRepo.GetRun(runID)
+	if stored.Status != domain.BulkBackupRunStatusPausing {
+		t.Fatalf("stored status = %s, want pausing", stored.Status)
+	}
+}
+
+func TestResumeBulkBackupRunRestartsPausedRun(t *testing.T) {
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusPaused)
+
+	run, err := svc.ResumeBulkBackupRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ResumeBulkBackupRun: %v", err)
+	}
+	if run == nil || run.Status != domain.BulkBackupRunStatusRunning {
+		t.Fatalf("run = %+v, want running", run)
+	}
+
+	waitForCondition(t, time.Second, func() bool {
+		stored, _ := runRepo.GetRun(runID)
+		return stored != nil && stored.Status != domain.BulkBackupRunStatusPaused
+	})
+}
+
+func TestCancelPausedBulkBackupRunCancelsPendingItems(t *testing.T) {
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusPaused)
+
+	run, err := svc.CancelBulkBackupRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("CancelBulkBackupRun: %v", err)
+	}
+	if run == nil || run.Status != domain.BulkBackupRunStatusCancelling || !run.CancelRequested {
+		t.Fatalf("run = %+v, want cancelling with cancel requested", run)
+	}
+
+	waitForCondition(t, time.Second, func() bool {
+		stored, _ := runRepo.GetRun(runID)
+		items, _ := runRepo.ListRunItems(runID)
+		return stored != nil &&
+			stored.Status == domain.BulkBackupRunStatusCancelled &&
+			len(items) == 1 &&
+			items[0].Status == domain.BulkBackupRunItemStatusCancelled
+	})
+}
+
 func TestStartBulkBackupRunAcceptsMoreDevicesThanLegacyBulkRequestLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
@@ -1271,6 +1334,44 @@ func TestResumeBulkBackupRunsMarksInterruptedJobsFailedAndRetriesItems(t *testin
 			items[0].Status == domain.BulkBackupRunItemStatusSkipped &&
 			items[0].Reason == "device offline"
 	})
+}
+
+func setupBulkRunControlTest(t *testing.T, status domain.BulkBackupRunStatus) (*BackupService, *mockBulkBackupRunRepo, uuid.UUID) {
+	t.Helper()
+
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := newMockBulkBackupRunRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	deviceID := uuid.New()
+	runID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.12", Vendor: "testvendor",
+		Status: domain.DeviceStatusDown, Tags: map[string]string{},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	if err := runRepo.CreateRun(
+		&domain.BulkBackupRun{ID: runID, Status: status, BatchSize: 10},
+		[]domain.BulkBackupRunItem{{
+			ID:       uuid.New(),
+			RunID:    runID,
+			DeviceID: deviceID,
+			Status:   domain.BulkBackupRunItemStatusChecking,
+		}},
+	); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+	return svc, runRepo, runID
 }
 
 func TestGetBulkDownloadFilesEnforcesLimitsAndDeduplicatesDevices(t *testing.T) {

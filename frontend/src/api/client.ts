@@ -1490,6 +1490,8 @@ function parseBulkBackupResult(data: Record<string, unknown>): BulkBackupResult 
 
 const bulkBackupRunStatuses: BulkBackupRunStatus[] = [
   'running',
+  'pausing',
+  'paused',
   'cancelling',
   'success',
   'partial',
@@ -1605,6 +1607,28 @@ export async function cancelBulkBackupRun(runId: string): Promise<BulkBackupRun>
     `/api/v1/backups/bulk-runs/${encodeURIComponent(runId)}/cancel`,
     {},
     'bulk backup cancel',
+  );
+  const run = parseBulkBackupRunResponse(payload);
+  if (!run) throw new Error('bulk backup run response is missing');
+  return run;
+}
+
+export async function pauseBulkBackupRun(runId: string): Promise<BulkBackupRun> {
+  const payload = await requestBulkJSON(
+    `/api/v1/backups/bulk-runs/${encodeURIComponent(runId)}/pause`,
+    {},
+    'bulk backup pause',
+  );
+  const run = parseBulkBackupRunResponse(payload);
+  if (!run) throw new Error('bulk backup run response is missing');
+  return run;
+}
+
+export async function resumeBulkBackupRun(runId: string): Promise<BulkBackupRun> {
+  const payload = await requestBulkJSON(
+    `/api/v1/backups/bulk-runs/${encodeURIComponent(runId)}/resume`,
+    {},
+    'bulk backup resume',
   );
   const run = parseBulkBackupRunResponse(payload);
   if (!run) throw new Error('bulk backup run response is missing');

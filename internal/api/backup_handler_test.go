@@ -474,7 +474,7 @@ func (r *bulkBackupRunRepoForHandler) GetActiveRun() (*domain.BulkBackupRun, err
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, run := range r.runs {
-		if run.Status == domain.BulkBackupRunStatusRunning || run.Status == domain.BulkBackupRunStatusCancelling {
+		if bulkRunActiveForHandlerTest(run.Status) {
 			return r.copyRunLocked(id), nil
 		}
 	}
@@ -486,13 +486,22 @@ func (r *bulkBackupRunRepoForHandler) ListResumableRuns() ([]domain.BulkBackupRu
 	defer r.mu.Unlock()
 	var runs []domain.BulkBackupRun
 	for id, run := range r.runs {
-		if run.Status == domain.BulkBackupRunStatusRunning || run.Status == domain.BulkBackupRunStatusCancelling {
+		if run.Status == domain.BulkBackupRunStatusRunning ||
+			run.Status == domain.BulkBackupRunStatusCancelling ||
+			run.Status == domain.BulkBackupRunStatusPausing {
 			cp := *run
 			cp.Items = append([]domain.BulkBackupRunItem(nil), r.items[id]...)
 			runs = append(runs, cp)
 		}
 	}
 	return runs, nil
+}
+
+func bulkRunActiveForHandlerTest(status domain.BulkBackupRunStatus) bool {
+	return status == domain.BulkBackupRunStatusRunning ||
+		status == domain.BulkBackupRunStatusCancelling ||
+		status == domain.BulkBackupRunStatusPausing ||
+		status == domain.BulkBackupRunStatusPaused
 }
 
 func (r *bulkBackupRunRepoForHandler) UpdateRun(run *domain.BulkBackupRun) error {
@@ -1016,6 +1025,72 @@ func TestBackupHandlerCancelBulkBackupRunMarksCancelling(t *testing.T) {
 	}
 	if resp.Data.ID != runID.String() || resp.Data.Status != "cancelling" || !resp.Data.CancelRequested {
 		t.Fatalf("unexpected cancel response: %#v", resp.Data)
+	}
+}
+
+func TestBackupHandlerPauseBulkBackupRunMarksPausing(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs/"+runID.String()+"/pause", nil)
+	rec := httptest.NewRecorder()
+	handler.HandlePauseBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.ID != runID.String() || resp.Data.Status != "pausing" {
+		t.Fatalf("unexpected pause response: %#v", resp.Data)
+	}
+}
+
+func TestBackupHandlerResumeBulkBackupRunMarksRunning(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusPaused,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs/"+runID.String()+"/resume", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleResumeBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.ID != runID.String() || resp.Data.Status != "running" {
+		t.Fatalf("unexpected resume response: %#v", resp.Data)
 	}
 }
 

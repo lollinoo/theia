@@ -65,6 +65,8 @@ vi.mock('../../api/client', () => ({
     ],
   }),
   cancelBulkBackupRun: vi.fn(),
+  pauseBulkBackupRun: vi.fn(),
+  resumeBulkBackupRun: vi.fn(),
   triggerBulkBackup: vi.fn().mockResolvedValue([
     {
       device_id: 'dev-1',
@@ -283,6 +285,83 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     expect(await screen.findByText('Processing... 0/2')).toBeInTheDocument();
     expect(screen.queryByText('Backup All Devices')).not.toBeInTheDocument();
     expect(screen.getByText('checking...')).toBeInTheDocument();
+  });
+
+  it('hydrates a paused bulk backup and exposes resume and stop controls', async () => {
+    const { fetchLatestBulkBackupRun, resumeBulkBackupRun, cancelBulkBackupRun } = await import(
+      '../../api/client'
+    );
+    (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'paused' }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+        }),
+      ]),
+    );
+    (resumeBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'running' }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+        }),
+      ]),
+    );
+    (cancelBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'cancelling', cancel_requested: true }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+        }),
+      ]),
+    );
+
+    render(<BulkBackupPanel devices={[mockDevice({ id: 'dev-1', sys_name: 'router-01' })]} />);
+
+    expect(await screen.findByText('paused')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Resume'));
+    await waitFor(() => {
+      expect(resumeBulkBackupRun).toHaveBeenCalledWith('run-1');
+    });
+    fireEvent.click(screen.getByText('Stop'));
+    await waitFor(() => {
+      expect(cancelBulkBackupRun).toHaveBeenCalledWith('run-1');
+    });
+  });
+
+  it('pauses a running bulk backup from the active session', async () => {
+    const { startBulkBackupRun, pauseBulkBackupRun } = await import('../../api/client');
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'running' }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+        }),
+      ]),
+    );
+    (pauseBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'pausing' }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+        }),
+      ]),
+    );
+
+    render(<BulkBackupPanel devices={[mockDevice({ id: 'dev-1', sys_name: 'router-01' })]} />);
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+    fireEvent.click(await screen.findByText('Pause'));
+
+    await waitFor(() => {
+      expect(pauseBulkBackupRun).toHaveBeenCalledWith('run-1');
+    });
+    expect(await screen.findByText('pausing')).toBeInTheDocument();
   });
 
   it('does not hydrate a completed historical bulk backup after a page refresh', async () => {

@@ -518,22 +518,32 @@ func TestCheckAndRunBulkBackup_NoSuccessfulJobsStartsPersistentRun(t *testing.T)
 }
 
 func TestCheckAndRunBulkBackup_ActivePersistentRunSkipsStart(t *testing.T) {
-	svc := &mockScheduledBackupService{
-		latestRun: &domain.BulkBackupRun{
-			ID:        uuid.New(),
-			Status:    domain.BulkBackupRunStatusRunning,
-			CreatedAt: time.Now().Add(-25 * time.Hour),
-		},
+	statuses := []domain.BulkBackupRunStatus{
+		domain.BulkBackupRunStatusRunning,
+		domain.BulkBackupRunStatusPausing,
+		domain.BulkBackupRunStatusPaused,
+		domain.BulkBackupRunStatusCancelling,
 	}
-	scheduler := &DeviceBackupScheduler{
-		backupService: svc,
-		jobRepo:       &checkBulkJobRepo{},
-		settingsRepo:  newMockWorkerSettingsRepo(),
-	}
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			svc := &mockScheduledBackupService{
+				latestRun: &domain.BulkBackupRun{
+					ID:        uuid.New(),
+					Status:    status,
+					CreatedAt: time.Now().Add(-25 * time.Hour),
+				},
+			}
+			scheduler := &DeviceBackupScheduler{
+				backupService: svc,
+				jobRepo:       &checkBulkJobRepo{},
+				settingsRepo:  newMockWorkerSettingsRepo(),
+			}
 
-	scheduler.checkAndRunBulkBackup(context.Background(), 24*time.Hour)
-	if got := svc.startCalls.Load(); got != 0 {
-		t.Fatalf("StartBulkBackupRun calls = %d, want 0", got)
+			scheduler.checkAndRunBulkBackup(context.Background(), 24*time.Hour)
+			if got := svc.startCalls.Load(); got != 0 {
+				t.Fatalf("StartBulkBackupRun calls = %d, want 0", got)
+			}
+		})
 	}
 }
 

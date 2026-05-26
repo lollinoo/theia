@@ -152,7 +152,10 @@ func (s *DeviceBackupScheduler) checkAndRunBulkBackupFromLatestRun(ctx context.C
 	if run == nil {
 		return false
 	}
-	if run.Status == domain.BulkBackupRunStatusRunning || run.Status == domain.BulkBackupRunStatusCancelling {
+	if run.Status == domain.BulkBackupRunStatusRunning ||
+		run.Status == domain.BulkBackupRunStatusPausing ||
+		run.Status == domain.BulkBackupRunStatusPaused ||
+		run.Status == domain.BulkBackupRunStatusCancelling {
 		return true
 	}
 

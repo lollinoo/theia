@@ -153,7 +153,7 @@ func (r *BulkBackupRunRepo) GetActiveRun() (*domain.BulkBackupRun, error) {
 		`SELECT id, status, batch_size, total_count, queued_count, success_count, failed_count,
 			skipped_count, cancelled_count, error_message, cancel_requested, created_by,
 			created_at, started_at, completed_at
-		 FROM backup_bulk_runs WHERE status IN ('running', 'cancelling')
+		 FROM backup_bulk_runs WHERE status IN ('running', 'pausing', 'paused', 'cancelling')
 		 ORDER BY created_at ASC LIMIT 1`,
 	)
 	if err != nil || run == nil {
@@ -172,7 +172,7 @@ func (r *BulkBackupRunRepo) ListResumableRuns() ([]domain.BulkBackupRun, error) 
 		`SELECT id, status, batch_size, total_count, queued_count, success_count, failed_count,
 			skipped_count, cancelled_count, error_message, cancel_requested, created_by,
 			created_at, started_at, completed_at
-		 FROM backup_bulk_runs WHERE status IN ('running', 'cancelling')
+		 FROM backup_bulk_runs WHERE status IN ('running', 'pausing', 'cancelling')
 		 ORDER BY created_at ASC`,
 	)
 	if err != nil {

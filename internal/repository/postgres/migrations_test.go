@@ -178,6 +178,25 @@ func TestPostgresMigrationsDeclareBulkBackupRunSchema(t *testing.T) {
 	}
 }
 
+func TestPostgresMigrationsDeclareBulkBackupRunPauseSchema(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000020_bulk_backup_run_pause.up.sql")
+	if err != nil {
+		t.Fatalf("reading bulk backup run pause migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"backup_bulk_runs_status_check",
+		"status IN ('running', 'pausing', 'paused', 'success', 'partial', 'failed', 'cancelled', 'cancelling')",
+		"WHERE status IN ('running', 'pausing', 'paused', 'cancelling')",
+		"DROP INDEX IF EXISTS backup_bulk_runs_one_active",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("bulk backup run pause migration missing %q", expected)
+		}
+	}
+}
+
 func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing.T) {
 	managerPermissions := domain.SystemRolePermissionKeys(domain.RoleManager)
 	for _, disallowed := range []string{

@@ -132,6 +132,52 @@ func TestBulkBackupRunRepoReturnsLatestAndResumableRuns(t *testing.T) {
 	}
 }
 
+func TestBulkBackupRunRepoTreatsPausedRunsAsActiveButNotResumable(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewBulkBackupRunRepo(db)
+	paused := &domain.BulkBackupRun{
+		ID:        uuid.New(),
+		Status:    domain.BulkBackupRunStatusPaused,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}
+	next := &domain.BulkBackupRun{ID: uuid.New(), Status: domain.BulkBackupRunStatusRunning, BatchSize: 10}
+
+	if err := repo.CreateRun(paused, nil); err != nil {
+		t.Fatalf("CreateRun paused: %v", err)
+	}
+	active, err := repo.GetActiveRun()
+	if err != nil {
+		t.Fatalf("GetActiveRun: %v", err)
+	}
+	if active == nil || active.ID != paused.ID {
+		t.Fatalf("active = %+v, want paused run", active)
+	}
+	if err := repo.CreateRun(next, nil); err == nil {
+		t.Fatal("creating running run while paused exists error = nil, want unique active run violation")
+	}
+
+	resumable, err := repo.ListResumableRuns()
+	if err != nil {
+		t.Fatalf("ListResumableRuns paused: %v", err)
+	}
+	if len(resumable) != 0 {
+		t.Fatalf("resumable paused = %+v, want none", resumable)
+	}
+
+	paused.Status = domain.BulkBackupRunStatusPausing
+	if err := repo.UpdateRun(paused); err != nil {
+		t.Fatalf("UpdateRun pausing: %v", err)
+	}
+	resumable, err = repo.ListResumableRuns()
+	if err != nil {
+		t.Fatalf("ListResumableRuns pausing: %v", err)
+	}
+	if len(resumable) != 1 || resumable[0].ID != paused.ID {
+		t.Fatalf("resumable pausing = %+v, want pausing run", resumable)
+	}
+}
+
 func TestBulkBackupRunRepoRecalculatesCounters(t *testing.T) {
 	db := setupTestDB(t)
 	repo := NewBulkBackupRunRepo(db)
