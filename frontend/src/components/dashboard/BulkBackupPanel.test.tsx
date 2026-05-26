@@ -321,7 +321,8 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
 
     render(<BulkBackupPanel devices={[mockDevice({ id: 'dev-1', sys_name: 'router-01' })]} />);
 
-    expect(await screen.findByText('paused')).toBeInTheDocument();
+    expect(await screen.findAllByText('paused')).toHaveLength(2);
+    expect(screen.queryByText('checking...')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('Resume'));
     await waitFor(() => {
       expect(resumeBulkBackupRun).toHaveBeenCalledWith('run-1');
@@ -348,12 +349,24 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
         mockRunItem({
           device_id: 'dev-1',
           device_name: 'router-01',
+          status: 'running',
+        }),
+        mockRunItem({
+          device_id: 'dev-2',
+          device_name: 'router-02',
           status: 'queued',
         }),
       ]),
     );
 
-    render(<BulkBackupPanel devices={[mockDevice({ id: 'dev-1', sys_name: 'router-01' })]} />);
+    render(
+      <BulkBackupPanel
+        devices={[
+          mockDevice({ id: 'dev-1', sys_name: 'router-01' }),
+          mockDevice({ id: 'dev-2', sys_name: 'router-02' }),
+        ]}
+      />,
+    );
 
     fireEvent.click(screen.getByText('Backup All Devices'));
     fireEvent.click(await screen.findByText('Pause'));
@@ -362,6 +375,72 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
       expect(pauseBulkBackupRun).toHaveBeenCalledWith('run-1');
     });
     expect(await screen.findByText('pausing')).toBeInTheDocument();
+    expect(screen.getByText('1 completing; 1 will pause')).toBeInTheDocument();
+    expect(screen.getByText('completing')).toBeInTheDocument();
+    expect(screen.getByText('will pause')).toBeInTheDocument();
+  });
+
+  it('distinguishes completing and will stop devices while stopping', async () => {
+    const { fetchLatestBulkBackupRun } = await import('../../api/client');
+    (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'cancelling', cancel_requested: true }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'running',
+        }),
+        mockRunItem({
+          device_id: 'dev-2',
+          device_name: 'router-02',
+          status: 'checking',
+        }),
+        mockRunItem({
+          device_id: 'dev-3',
+          device_name: 'router-03',
+          status: 'success',
+        }),
+      ]),
+    );
+
+    render(
+      <BulkBackupPanel
+        devices={[
+          mockDevice({ id: 'dev-1', sys_name: 'router-01' }),
+          mockDevice({ id: 'dev-2', sys_name: 'router-02' }),
+          mockDevice({ id: 'dev-3', sys_name: 'router-03' }),
+        ]}
+      />,
+    );
+
+    expect(await screen.findByText('stopping')).toBeInTheDocument();
+    expect(screen.getByText('1 completing; 1 will stop')).toBeInTheDocument();
+    expect(screen.getByText('completing')).toBeInTheDocument();
+    expect(screen.getByText('will stop')).toBeInTheDocument();
+    expect(screen.queryByText('checking...')).not.toBeInTheDocument();
+  });
+
+  it('renders cancelled devices as stopped', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'cancelled' }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'cancelled',
+        }),
+      ]),
+    );
+
+    render(<BulkBackupPanel devices={[mockDevice({ id: 'dev-1', sys_name: 'router-01' })]} />);
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    expect(await screen.findByText('stopped')).toBeInTheDocument();
+    expect(
+      screen.getByText('Complete — 0 succeeded, 0 failed, 0 skipped, 1 stopped'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('cancelled')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No devices were eligible/)).not.toBeInTheDocument();
   });
 
   it('does not hydrate a completed historical bulk backup after a page refresh', async () => {

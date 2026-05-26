@@ -165,6 +165,66 @@ function runStatusLabel(status?: BulkBackupRunStatus): string {
   }
 }
 
+function isPendingControlDevice(entry: DeviceEntry): boolean {
+  return entry.phase === 'checking' || entry.phase === 'queued';
+}
+
+function controlProgressSummary(
+  entries: DeviceEntry[],
+  status?: BulkBackupRunStatus,
+): string | null {
+  const completingCount = entries.filter((entry) => entry.phase === 'running').length;
+  const pendingCount = entries.filter(isPendingControlDevice).length;
+
+  if (status === 'pausing') {
+    const parts = [];
+    if (completingCount > 0) parts.push(`${completingCount} completing`);
+    if (pendingCount > 0) parts.push(`${pendingCount} will pause`);
+    return parts.length > 0 ? parts.join('; ') : null;
+  }
+  if (status === 'cancelling') {
+    const parts = [];
+    if (completingCount > 0) parts.push(`${completingCount} completing`);
+    if (pendingCount > 0) parts.push(`${pendingCount} will stop`);
+    return parts.length > 0 ? parts.join('; ') : null;
+  }
+  if (status === 'paused') {
+    return pendingCount > 0 ? `${pendingCount} paused` : null;
+  }
+  return null;
+}
+
+function deviceStatusLabel(entry: DeviceEntry, runStatus?: BulkBackupRunStatus): string {
+  if (entry.phase === 'cancelled') {
+    return 'stopped';
+  }
+  if (runStatus === 'pausing') {
+    if (entry.phase === 'running') return 'completing';
+    if (isPendingControlDevice(entry)) return 'will pause';
+  }
+  if (runStatus === 'paused' && isPendingControlDevice(entry)) {
+    return 'paused';
+  }
+  if (runStatus === 'cancelling') {
+    if (entry.phase === 'running') return 'completing';
+    if (isPendingControlDevice(entry)) return 'will stop';
+  }
+  return entry.phase === 'checking' ? 'checking...' : entry.phase;
+}
+
+function deviceStatusClassName(entry: DeviceEntry, runStatus?: BulkBackupRunStatus): string {
+  const label = deviceStatusLabel(entry, runStatus);
+  if (entry.phase === 'success') return 'text-status-up';
+  if (entry.phase === 'failed') return 'text-status-down';
+  if (entry.phase === 'skipped') return 'text-warning';
+  if (label === 'will stop' || label === 'stopped') return 'text-status-down';
+  if (label === 'will pause' || label === 'paused') return 'text-on-bg-secondary';
+  if (label === 'completing' || label === 'checking...' || entry.phase === 'running') {
+    return 'text-primary animate-pulse';
+  }
+  return 'text-on-bg-secondary';
+}
+
 function bulkDownloadBatchFilename(batchIndex: number, batchCount: number): string {
   const timestamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
   return `THEIA_BACKUPS_batch-${batchIndex + 1}-of-${batchCount}_${timestamp}.zip`;
@@ -349,9 +409,11 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const successCount = entries.filter((e) => e.phase === 'success').length;
   const failedCount = entries.filter((e) => e.phase === 'failed').length;
   const skippedCount = entries.filter((e) => e.phase === 'skipped').length;
+  const stoppedCount = entries.filter((e) => e.phase === 'cancelled').length;
   const doneCount = entries.filter((e) => TERMINAL.has(e.phase)).length;
   const activeCount = entries.length - doneCount;
   const downloadBatchCount = Math.ceil(successCount / BULK_DEVICE_BATCH_SIZE);
+  const controlSummary = controlProgressSummary(entries, session.runStatus);
   const canPause = phase === 'running' && session.runId && session.runStatus === 'running';
   const canResume = phase === 'running' && session.runId && session.runStatus === 'paused';
   const canStop =
@@ -516,7 +578,9 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
             <span>
               {phase === 'running'
                 ? `Processing... ${doneCount}/${entries.length}`
-                : `Complete — ${successCount} succeeded, ${failedCount} failed, ${skippedCount} skipped`}
+                : `Complete — ${successCount} succeeded, ${failedCount} failed, ${skippedCount} skipped${
+                    stoppedCount > 0 ? `, ${stoppedCount} stopped` : ''
+                  }`}
             </span>
             {phase === 'running' && activeCount > 0 && (
               <span
@@ -530,6 +594,11 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
               </span>
             )}
           </div>
+          {phase === 'running' && controlSummary && (
+            <div className="rounded-md border border-outline bg-surface px-3 py-2 text-xs text-on-bg-secondary">
+              {controlSummary}
+            </div>
+          )}
 
           {phase === 'running' && (canPause || canResume || canStop) && (
             <div className="flex gap-2">
@@ -586,51 +655,45 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
 
           {/* Per-device status */}
           <div className="space-y-1 max-h-60 overflow-y-auto">
-            {entries.map((e) => (
-              <div
-                key={e.deviceId}
-                className={`flex items-center justify-between rounded-md border px-3 py-1.5 ${
-                  e.phase === 'skipped'
-                    ? 'border-warning/30 bg-warning/10'
-                    : e.phase === 'failed'
-                      ? 'border-status-down/20 bg-status-down/5'
-                      : e.phase === 'success'
-                        ? 'border-status-up/20 bg-status-up/5'
-                        : 'border-outline'
-                }`}
-              >
-                <span className="text-[10px] text-on-bg truncate mr-2">{e.deviceName}</span>
-                <div className="flex items-center gap-2 shrink-0">
-                  {e.reason && e.phase === 'skipped' && (
-                    <span className="text-[9px] text-warning truncate max-w-[140px]">
-                      {e.reason}
+            {entries.map((e) => {
+              const statusLabel = deviceStatusLabel(e, session.runStatus);
+              return (
+                <div
+                  key={e.deviceId}
+                  className={`flex items-center justify-between rounded-md border px-3 py-1.5 ${
+                    e.phase === 'skipped'
+                      ? 'border-warning/30 bg-warning/10'
+                      : e.phase === 'failed' || e.phase === 'cancelled'
+                        ? 'border-status-down/20 bg-status-down/5'
+                        : e.phase === 'success'
+                          ? 'border-status-up/20 bg-status-up/5'
+                          : 'border-outline'
+                  }`}
+                >
+                  <span className="text-[10px] text-on-bg truncate mr-2">{e.deviceName}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {e.reason && e.phase === 'skipped' && (
+                      <span className="text-[9px] text-warning truncate max-w-[140px]">
+                        {e.reason}
+                      </span>
+                    )}
+                    {e.reason && e.phase === 'failed' && (
+                      <span className="text-[9px] text-status-down truncate max-w-[140px]">
+                        {e.reason}
+                      </span>
+                    )}
+                    <span
+                      className={`text-[10px] font-medium ${deviceStatusClassName(
+                        e,
+                        session.runStatus,
+                      )}`}
+                    >
+                      {statusLabel}
                     </span>
-                  )}
-                  {e.reason && e.phase === 'failed' && (
-                    <span className="text-[9px] text-status-down truncate max-w-[140px]">
-                      {e.reason}
-                    </span>
-                  )}
-                  <span
-                    className={`text-[10px] font-medium ${
-                      e.phase === 'success'
-                        ? 'text-status-up'
-                        : e.phase === 'failed'
-                          ? 'text-status-down'
-                          : e.phase === 'skipped'
-                            ? 'text-warning'
-                            : e.phase === 'checking'
-                              ? 'text-primary animate-pulse'
-                              : e.phase === 'running'
-                                ? 'text-primary animate-pulse'
-                                : 'text-on-bg-secondary'
-                    }`}
-                  >
-                    {e.phase === 'checking' ? 'checking...' : e.phase}
-                  </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -671,12 +734,17 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       )}
 
       {/* No eligible devices */}
-      {phase === 'done' && successCount === 0 && failedCount === 0 && !error && (
-        <div className="rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down">
-          No devices were eligible for backup. Ensure devices have a supported vendor and an SSH
-          profile assigned.
-        </div>
-      )}
+      {phase === 'done' &&
+        successCount === 0 &&
+        failedCount === 0 &&
+        skippedCount === 0 &&
+        stoppedCount === 0 &&
+        !error && (
+          <div className="rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down">
+            No devices were eligible for backup. Ensure devices have a supported vendor and an SSH
+            profile assigned.
+          </div>
+        )}
 
       {error && (
         <div className="rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down">

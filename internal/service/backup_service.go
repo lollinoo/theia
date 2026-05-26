@@ -574,13 +574,26 @@ func (s *BackupService) processBulkBackupRun(runID uuid.UUID) {
 			}
 			return
 		}
+		if run.CancelRequested {
+			s.cancelPendingBulkRunItems(run.ID, run.Items)
+			refreshed, err := s.bulkRunRepo.GetRun(runID)
+			if err != nil {
+				log.Printf("Warning: failed to reload cancelling bulk backup run %s: %v", runID, err)
+				return
+			}
+			if refreshed == nil {
+				return
+			}
+			active := runningBulkRunItems(refreshed.Items)
+			if len(active) == 0 {
+				s.finishBulkBackupRun(run.ID)
+				return
+			}
+			s.waitForBulkRunBatch(run.ID, active)
+			continue
+		}
 		items := nextBulkRunBatch(run.Items, run.BatchSize)
 		if len(items) == 0 {
-			s.finishBulkBackupRun(run.ID)
-			return
-		}
-		if run.CancelRequested {
-			s.cancelPendingBulkRunItems(run.ID, items)
 			s.finishBulkBackupRun(run.ID)
 			return
 		}
@@ -706,12 +719,22 @@ func (s *BackupService) completeBulkRunItem(item domain.BulkBackupRunItem, statu
 
 func (s *BackupService) cancelPendingBulkRunItems(runID uuid.UUID, items []domain.BulkBackupRunItem) {
 	for _, item := range items {
-		if bulkRunItemTerminal(item.Status) {
+		if bulkRunItemTerminal(item.Status) || item.Status == domain.BulkBackupRunItemStatusRunning {
 			continue
 		}
 		s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusCancelled, "bulk backup cancelled", nil)
 	}
 	s.recalculateBulkRunCounters(runID)
+}
+
+func runningBulkRunItems(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
+	running := make([]domain.BulkBackupRunItem, 0)
+	for _, item := range items {
+		if item.Status == domain.BulkBackupRunItemStatusRunning {
+			running = append(running, item)
+		}
+	}
+	return running
 }
 
 func (s *BackupService) finishBulkBackupRun(runID uuid.UUID) {

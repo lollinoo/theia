@@ -1238,6 +1238,44 @@ func TestCancelPausedBulkBackupRunCancelsPendingItems(t *testing.T) {
 	})
 }
 
+func TestCancelPausedBulkBackupRunCancelsAllPendingItems(t *testing.T) {
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusPaused)
+	items := make([]domain.BulkBackupRunItem, defaultBulkBackupRunBatchSize+3)
+	for i := range items {
+		items[i] = domain.BulkBackupRunItem{
+			ID:       uuid.New(),
+			RunID:    runID,
+			DeviceID: uuid.New(),
+			Status:   domain.BulkBackupRunItemStatusChecking,
+		}
+	}
+	runRepo.mu.Lock()
+	runRepo.items[runID] = items
+	runRepo.mu.Unlock()
+
+	run, err := svc.CancelBulkBackupRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("CancelBulkBackupRun: %v", err)
+	}
+	if run == nil || run.Status != domain.BulkBackupRunStatusCancelling || !run.CancelRequested {
+		t.Fatalf("run = %+v, want cancelling with cancel requested", run)
+	}
+
+	waitForCondition(t, time.Second, func() bool {
+		stored, _ := runRepo.GetRun(runID)
+		got, _ := runRepo.ListRunItems(runID)
+		if stored == nil || stored.Status != domain.BulkBackupRunStatusCancelled {
+			return false
+		}
+		for _, item := range got {
+			if item.Status != domain.BulkBackupRunItemStatusCancelled {
+				return false
+			}
+		}
+		return len(got) == len(items)
+	})
+}
+
 func TestStartBulkBackupRunAcceptsMoreDevicesThanLegacyBulkRequestLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
