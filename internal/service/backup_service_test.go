@@ -1175,6 +1175,51 @@ func TestStartBulkBackupRunRejectsActiveRun(t *testing.T) {
 	}
 }
 
+func TestStartBulkBackupRunAcceptsMoreDevicesThanLegacyBulkRequestLimit(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := newMockBulkBackupRunRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	encKey := crypto.DeriveKey("bulk-run-large-selection")
+
+	for i := 0; i < 105; i++ {
+		id := uuid.New()
+		if err := deviceRepo.Create(&domain.Device{
+			ID: id, IP: fmt.Sprintf("10.0.0.%d", i+1), SysName: fmt.Sprintf("router-%d", i+1),
+			Vendor: "testvendor", Status: domain.DeviceStatusDown,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, encKey, t.TempDir(), ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    100,
+		BulkBackupMaxQueuedJobs: 100,
+		BulkDownloadMaxDevices:  100,
+		BulkDownloadMaxFiles:    500,
+		BulkDownloadMaxBytes:    512 << 20,
+	})
+
+	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
+	if err != nil {
+		t.Fatalf("StartBulkBackupRun returned error: %v", err)
+	}
+	if run.TotalCount != 105 {
+		t.Fatalf("run.TotalCount = %d, want 105", run.TotalCount)
+	}
+	if run.SkippedCount != 105 {
+		t.Fatalf("run.SkippedCount = %d, want 105", run.SkippedCount)
+	}
+}
+
 func TestResumeBulkBackupRunsMarksInterruptedJobsFailedAndRetriesItems(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()

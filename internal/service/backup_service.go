@@ -364,7 +364,7 @@ func (s *BackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceI
 	} else if active != nil {
 		return active, ErrBulkBackupRunAlreadyActive
 	}
-	devices, err := s.bulkBackupDevices(ctx, requestedDeviceIDs)
+	devices, err := s.bulkBackupRunDevices(ctx, requestedDeviceIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -770,6 +770,33 @@ func (s *BackupService) bulkBackupDevices(ctx context.Context, requestedDeviceID
 		}
 	}
 
+	devices := make([]domain.Device, 0, len(uniqueIDs))
+	for _, id := range uniqueIDs {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
+		device, err := s.deviceRepo.GetByID(id)
+		if err != nil || device == nil {
+			continue
+		}
+		devices = append(devices, *device)
+	}
+	return devices, nil
+}
+
+func (s *BackupService) bulkBackupRunDevices(ctx context.Context, requestedDeviceIDs []uuid.UUID) ([]domain.Device, error) {
+	if len(requestedDeviceIDs) == 0 {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
+		devices, err := s.deviceRepo.GetAll()
+		if err != nil {
+			return nil, fmt.Errorf("fetching devices: %w", err)
+		}
+		return devices, nil
+	}
+
+	uniqueIDs := dedupeUUIDs(requestedDeviceIDs)
 	devices := make([]domain.Device, 0, len(uniqueIDs))
 	for _, id := range uniqueIDs {
 		if err := contextError(ctx); err != nil {

@@ -24,6 +24,7 @@ import {
   fetchBackupFileContent,
   fetchBackupJobs,
   fetchBridgeConnectorConfig,
+  fetchBulkBackupRun,
   fetchCanvasBootstrap,
   fetchCanvasMapAreas,
   fetchCanvasMapBootstrap,
@@ -33,6 +34,7 @@ import {
   fetchCurrentUser,
   fetchDevices,
   fetchInstanceBackups,
+  fetchLatestBulkBackupRun,
   fetchLinks,
   fetchOrphanDevices,
   fetchSettings,
@@ -48,6 +50,7 @@ import {
   runTopologyDiscovery,
   setAdminUserStatus,
   setCanvasMapPrimary,
+  startBulkBackupRun,
   triggerBulkBackup,
   triggerBulkDownload,
   updateAdminUser,
@@ -283,7 +286,9 @@ describe('password sessions', () => {
       '/api/v1/auth/password/change',
       expect.objectContaining({
         method: 'POST',
-        headers: expect.not.objectContaining({ 'X-CSRF-Token': expect.any(String) }),
+        headers: expect.not.objectContaining({
+          'X-CSRF-Token': expect.any(String),
+        }),
       }),
     );
   });
@@ -307,7 +312,9 @@ describe('password sessions', () => {
           token: 'one-time-reset-token',
           new_password: 'Correct Horse Battery Staple Reset 2026!',
         }),
-        headers: expect.not.objectContaining({ Authorization: expect.any(String) }),
+        headers: expect.not.objectContaining({
+          Authorization: expect.any(String),
+        }),
       }),
     );
   });
@@ -369,7 +376,12 @@ describe('admin API', () => {
               name: 'admin',
               description: 'Administrators',
               is_system_role: true,
-              permissions: [{ key: 'admin:dashboard:read', description: 'Dashboard access' }],
+              permissions: [
+                {
+                  key: 'admin:dashboard:read',
+                  description: 'Dashboard access',
+                },
+              ],
             },
           ],
         }),
@@ -1772,7 +1784,9 @@ describe('triggerBulkDownload', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await triggerBulkDownload(['dev-1'], { filename: 'custom-backups.zip' });
+    const result = await triggerBulkDownload(['dev-1'], {
+      filename: 'custom-backups.zip',
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/backups/bulk-download',
@@ -1819,7 +1833,9 @@ describe('triggerBulkDownload', () => {
       } as unknown as Response),
     );
 
-    const result = await triggerBulkDownload(['dev-1'], { filename: 'custom-backups.zip' });
+    const result = await triggerBulkDownload(['dev-1'], {
+      filename: 'custom-backups.zip',
+    });
 
     expect(showSaveFilePicker).toHaveBeenCalledWith(
       expect.objectContaining({ suggestedName: 'custom-backups.zip' }),
@@ -1885,14 +1901,14 @@ describe('triggerBulkDownload', () => {
   it('normalizes 413 responses to a readable bulk download limit error', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          mockResponse(
-            { error: 'bulk download exceeds files limit: requested 501, maximum 500' },
-            { ok: false, status: 413, statusText: 'Payload Too Large' },
-          ),
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          {
+            error: 'bulk download exceeds files limit: requested 501, maximum 500',
+          },
+          { ok: false, status: 413, statusText: 'Payload Too Large' },
         ),
+      ),
     );
 
     await expect(triggerBulkDownload(['dev-1'])).rejects.toThrow(
@@ -1938,7 +1954,12 @@ describe('triggerBulkBackup', () => {
       }),
     );
     expect(results).toEqual([
-      { device_id: 'dev-1', device_name: 'router-01', status: 'queued', job_id: 'job-1' },
+      {
+        device_id: 'dev-1',
+        device_name: 'router-01',
+        status: 'queued',
+        job_id: 'job-1',
+      },
       {
         device_id: 'dev-2',
         device_name: 'router-02',
@@ -1951,18 +1972,139 @@ describe('triggerBulkBackup', () => {
   it('normalizes 413 responses to a readable bulk backup limit error', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          mockResponse(
-            { error: 'bulk backup exceeds devices limit: requested 101, maximum 100' },
-            { ok: false, status: 413, statusText: 'Payload Too Large' },
-          ),
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          {
+            error: 'bulk backup exceeds devices limit: requested 101, maximum 100',
+          },
+          { ok: false, status: 413, statusText: 'Payload Too Large' },
         ),
+      ),
     );
 
     await expect(triggerBulkBackup(['dev-1'])).rejects.toThrow(
       'Too many devices selected for bulk backup. Maximum 100, requested 101.',
+    );
+  });
+});
+
+describe('bulk backup runs', () => {
+  const runPayload = {
+    id: 'run-1',
+    status: 'running',
+    batch_size: 10,
+    total_count: 2,
+    queued_count: 1,
+    success_count: 0,
+    failed_count: 0,
+    skipped_count: 1,
+    cancelled_count: 0,
+    error_message: '',
+    cancel_requested: false,
+    created_by: '',
+    created_at: '2026-05-26T10:00:00Z',
+    items: [
+      {
+        id: 'item-1',
+        run_id: 'run-1',
+        device_id: 'dev-1',
+        device_name: 'router-01',
+        status: 'queued',
+        backup_job_id: 'job-1',
+        created_at: '2026-05-26T10:00:00Z',
+        updated_at: '2026-05-26T10:00:00Z',
+      },
+      {
+        id: 'item-2',
+        run_id: 'run-1',
+        device_id: 'dev-2',
+        device_name: 'router-02',
+        status: 'skipped',
+        reason: 'device offline',
+        created_at: '2026-05-26T10:00:00Z',
+        updated_at: '2026-05-26T10:00:00Z',
+      },
+    ],
+  };
+
+  it('starts a persistent bulk backup run and parses item progress', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=bulk-run-csrf',
+    });
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ data: runPayload }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const run = await startBulkBackupRun(['dev-1', 'dev-2']);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/backups/bulk-runs',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-run-csrf' }),
+        body: JSON.stringify({ device_ids: ['dev-1', 'dev-2'] }),
+      }),
+    );
+    expect(run.id).toBe('run-1');
+    expect(run.items).toEqual([
+      expect.objectContaining({
+        device_id: 'dev-1',
+        status: 'queued',
+        backup_job_id: 'job-1',
+      }),
+      expect.objectContaining({
+        device_id: 'dev-2',
+        status: 'skipped',
+        reason: 'device offline',
+      }),
+    ]);
+  });
+
+  it('returns the active run from a 409 response so the UI cannot spam starts', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          {
+            code: 'bulk_backup_run_active',
+            error: 'bulk backup run already active',
+            data: runPayload,
+          },
+          { ok: false, status: 409, statusText: 'Conflict' },
+        ),
+      ),
+    );
+
+    const run = await startBulkBackupRun(['dev-1']);
+
+    expect(run.id).toBe('run-1');
+    expect(run.status).toBe('running');
+  });
+
+  it('fetches latest and specific persistent bulk backup runs', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ data: null }))
+      .mockResolvedValueOnce(mockResponse({ data: runPayload }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchLatestBulkBackupRun()).resolves.toBeNull();
+    await expect(fetchBulkBackupRun('run-1')).resolves.toEqual(
+      expect.objectContaining({ id: 'run-1', total_count: 2 }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/backups/bulk-runs/latest',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: 'application/json' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/backups/bulk-runs/run-1',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: 'application/json' }),
+      }),
     );
   });
 });

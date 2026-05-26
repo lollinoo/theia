@@ -1,18 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  fetchBackupJob,
-  fetchDeviceCredentialProfiles,
-  triggerBulkBackup,
+  fetchBulkBackupRun,
+  fetchLatestBulkBackupRun,
+  startBulkBackupRun,
   triggerBulkDownload,
 } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
-import type { Device } from '../../types/api';
+import type { BulkBackupRun, BulkBackupRunItem, Device } from '../../types/api';
 
 interface BulkBackupPanelProps {
   devices: Device[];
 }
 
-type DevicePhase = 'checking' | 'queued' | 'skipped' | 'running' | 'success' | 'failed';
+type DevicePhase =
+  | 'checking'
+  | 'queued'
+  | 'skipped'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'cancelled';
 
 type DeviceEntry = {
   deviceId: string;
@@ -24,6 +31,7 @@ type DeviceEntry = {
 
 type BulkBackupSession = {
   phase: 'idle' | 'running' | 'done';
+  runId?: string;
   entries: DeviceEntry[];
   error: string;
   downloading: boolean;
@@ -31,7 +39,8 @@ type BulkBackupSession = {
 
 const BULK_BACKUP_GROUP_SIZE = 10;
 const BULK_DEVICE_BATCH_SIZE = 100;
-const TERMINAL = new Set<DevicePhase>(['skipped', 'success', 'failed']);
+const TERMINAL = new Set<DevicePhase>(['skipped', 'success', 'failed', 'cancelled']);
+const RUN_TERMINAL = new Set(['success', 'partial', 'failed', 'cancelled']);
 const initialBulkBackupSession: BulkBackupSession = {
   phase: 'idle',
   entries: [],
@@ -92,18 +101,36 @@ function backupRequestErrorMessage(err: unknown): string {
         : msg;
 }
 
-function jobStatusToDevicePhase(status: string): DevicePhase {
-  if (status === 'pending') return 'queued';
-  if (status === 'running' || status === 'success' || status === 'failed') return status;
-  return 'queued';
-}
-
 function chunkArray<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
+}
+
+function itemToEntry(item: BulkBackupRunItem): DeviceEntry {
+  return {
+    deviceId: item.device_id,
+    deviceName: item.device_name,
+    phase: item.status,
+    reason: item.reason,
+    jobId: item.backup_job_id,
+  };
+}
+
+function sessionFromRun(run: BulkBackupRun): BulkBackupSession {
+  return {
+    phase: RUN_TERMINAL.has(run.status) ? 'done' : 'running',
+    runId: run.id,
+    entries: run.items.map(itemToEntry),
+    error: run.error_message,
+    downloading: bulkBackupSession.downloading,
+  };
+}
+
+function isActiveRun(run: BulkBackupRun): boolean {
+  return run.status === 'running' || run.status === 'cancelling';
 }
 
 function bulkDownloadBatchFilename(batchIndex: number, batchCount: number): string {
@@ -125,6 +152,29 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const entriesRef = useRef<DeviceEntry[]>([]);
   const mountedRef = useRef(false);
+  const runIdRef = useRef<string | undefined>(bulkBackupSession.runId);
+
+  // Poll the persistent run for status updates.
+  const startPolling = useCallback((runId?: string) => {
+    const id = runId ?? runIdRef.current;
+    if (!id) return;
+    if (pollRef.current) return;
+    pollRef.current = setInterval(async () => {
+      try {
+        const run = await fetchBulkBackupRun(id);
+        const next = sessionFromRun(run);
+        entriesRef.current = next.entries;
+        runIdRef.current = next.runId;
+        setBulkBackupSession((current) => ({ ...next, downloading: current.downloading }));
+        if (next.phase === 'done' && pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      } catch {
+        // Keep the last known progress visible; the next poll may recover.
+      }
+    }, 2000);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -132,15 +182,35 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       setSession(bulkBackupSession);
     });
     setSession(bulkBackupSession);
+    void fetchLatestBulkBackupRun()
+      .then((run) => {
+        if (
+          !mountedRef.current ||
+          !run ||
+          !isActiveRun(run) ||
+          bulkBackupSession.phase !== 'idle'
+        ) {
+          return;
+        }
+        const next = sessionFromRun(run);
+        entriesRef.current = next.entries;
+        runIdRef.current = next.runId;
+        setBulkBackupSession(next);
+        if (next.phase === 'running') {
+          startPolling(run.id);
+        }
+      })
+      .catch(() => {});
     return () => {
       mountedRef.current = false;
       unsubscribe();
     };
-  }, []);
+  }, [startPolling]);
 
   useEffect(() => {
     entriesRef.current = entries;
-  }, [entries]);
+    runIdRef.current = session.runId;
+  }, [entries, session.runId]);
 
   useEffect(() => {
     if (phase !== 'idle') return;
@@ -167,47 +237,12 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     }
   }, [entries, phase]);
 
-  // Poll active jobs for status updates
-  const startPolling = useCallback(() => {
-    if (pollRef.current) return;
-    pollRef.current = setInterval(async () => {
-      const current = entriesRef.current;
-      const active = current.filter((e) => e.jobId && !TERMINAL.has(e.phase));
-      if (active.length === 0) return;
-
-      const results = await Promise.all(
-        active.map(async (entry) => {
-          try {
-            const job = await fetchBackupJob(entry.jobId!);
-            return {
-              deviceId: entry.deviceId,
-              phase: jobStatusToDevicePhase(job.status),
-              reason: job.error_message || undefined,
-            };
-          } catch {
-            return null;
-          }
-        }),
-      );
-
-      setBulkBackupSession((current) => {
-        const next = current.entries.map((e) => {
-          const r = results.find((x) => x?.deviceId === e.deviceId);
-          if (!r) return e;
-          return { ...e, phase: r.phase, reason: r.reason };
-        });
-        entriesRef.current = next;
-        return { ...current, entries: next };
-      });
-    }, 2000);
-  }, []);
-
   useEffect(() => {
     if (phase !== 'running') return;
-    if (entries.some((entry) => entry.jobId && !TERMINAL.has(entry.phase))) {
-      startPolling();
+    if (entries.some((entry) => !TERMINAL.has(entry.phase))) {
+      startPolling(session.runId);
     }
-  }, [entries, phase, startPolling]);
+  }, [entries, phase, session.runId, startPolling]);
 
   const selectedDevices = devices.filter((device) => selectedDeviceIds.has(device.id));
   const selectedCount = selectedDeviceIds.size;
@@ -243,26 +278,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       }));
       return;
     }
-    setBulkBackupSession({ phase: 'running', entries: [], error: '', downloading: false });
-
-    const onlineSelectedDevices = selectedDevices.filter((device) => device.status !== 'down');
-    const offlineEntries: DeviceEntry[] = selectedDevices
-      .filter((device) => device.status === 'down')
-      .map((device) => ({
-        deviceId: device.id,
-        deviceName: getDeviceName(device),
-        phase: 'skipped' as const,
-        reason: 'device offline',
-      }));
     const preliminaryEntries: DeviceEntry[] = selectedDevices.map((device) => {
-      if (device.status === 'down') {
-        return {
-          deviceId: device.id,
-          deviceName: getDeviceName(device),
-          phase: 'skipped' as const,
-          reason: 'device offline',
-        };
-      }
       return {
         deviceId: device.id,
         deviceName: getDeviceName(device),
@@ -270,102 +286,30 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       };
     });
     entriesRef.current = preliminaryEntries;
-    setBulkBackupSession((current) => ({ ...current, entries: preliminaryEntries }));
+    setBulkBackupSession({
+      phase: 'running',
+      entries: preliminaryEntries,
+      error: '',
+      downloading: false,
+    });
 
-    if (onlineSelectedDevices.length === 0) {
+    try {
+      const run = await startBulkBackupRun(selectedDevices.map((device) => device.id));
+      const next = sessionFromRun(run);
+      entriesRef.current = next.entries;
+      runIdRef.current = next.runId;
+      setBulkBackupSession(next);
+      if (next.phase === 'running' && next.entries.some((entry) => !TERMINAL.has(entry.phase))) {
+        startPolling(run.id);
+      }
+    } catch (err) {
+      const reason = backupRequestErrorMessage(err);
       setBulkBackupSession({
-        phase: 'running',
-        entries: offlineEntries,
-        error: '',
+        phase: 'idle',
+        entries: [],
+        error: reason,
         downloading: false,
       });
-      return;
-    }
-
-    // Pre-fetch credential profile assignments for all devices in parallel.
-    // Eligibility requires at least one assigned credential profile (replaces legacy ssh_profile_id check).
-    const profileResults = await Promise.allSettled(
-      onlineSelectedDevices.map((d) => fetchDeviceCredentialProfiles(d.id)),
-    );
-    const deviceHasProfile = new Map<string, boolean>();
-    for (let i = 0; i < onlineSelectedDevices.length; i++) {
-      const result = profileResults[i];
-      deviceHasProfile.set(
-        onlineSelectedDevices[i].id,
-        result.status === 'fulfilled' && result.value.length > 0,
-      );
-    }
-
-    // Build entries — pre-check eligibility
-    const initial: DeviceEntry[] = offlineEntries.concat(
-      onlineSelectedDevices.map((d) => {
-        const name = getDeviceName(d);
-        if (!d.backup_supported) {
-          return {
-            deviceId: d.id,
-            deviceName: name,
-            phase: 'skipped' as const,
-            reason: 'backup not supported for this vendor',
-          };
-        }
-        if (!deviceHasProfile.get(d.id)) {
-          return {
-            deviceId: d.id,
-            deviceName: name,
-            phase: 'skipped' as const,
-            reason: 'no credential profile assigned',
-          };
-        }
-        return { deviceId: d.id, deviceName: name, phase: 'checking' as const };
-      }),
-    );
-
-    entriesRef.current = initial;
-    setBulkBackupSession((current) => ({ ...current, entries: initial }));
-
-    const eligible = initial.filter((e) => e.phase === 'checking');
-    if (eligible.length === 0) return; // completion useEffect handles phase transition
-
-    let queuedCount = 0;
-    for (const batch of chunkArray(eligible, BULK_BACKUP_GROUP_SIZE)) {
-      try {
-        const results = await triggerBulkBackup(batch.map((entry) => entry.deviceId));
-        const resultByDevice = new Map(results.map((result) => [result.device_id, result]));
-        const batchIDs = new Set(batch.map((entry) => entry.deviceId));
-        const nextEntries = entriesRef.current.map((entry) => {
-          if (entry.phase !== 'checking' || !batchIDs.has(entry.deviceId)) return entry;
-          const result = resultByDevice.get(entry.deviceId);
-          if (!result) {
-            return {
-              ...entry,
-              phase: 'skipped' as const,
-              reason: 'backup request returned no result',
-            };
-          }
-          if (result.status === 'queued' && result.job_id) {
-            queuedCount++;
-            return { ...entry, phase: 'queued' as const, jobId: result.job_id };
-          }
-          return {
-            ...entry,
-            phase: 'skipped' as const,
-            reason: result.reason || 'backup job was not queued',
-          };
-        });
-        entriesRef.current = nextEntries;
-        setBulkBackupSession((current) => ({ ...current, entries: nextEntries }));
-      } catch (err) {
-        const reason = backupRequestErrorMessage(err);
-        const nextEntries = entriesRef.current.map((entry) =>
-          entry.phase === 'checking' ? { ...entry, phase: 'skipped' as const, reason } : entry,
-        );
-        entriesRef.current = nextEntries;
-        setBulkBackupSession((current) => ({ ...current, entries: nextEntries, error: reason }));
-        break;
-      }
-    }
-    if (queuedCount > 0 && mountedRef.current) {
-      startPolling();
     }
   };
 

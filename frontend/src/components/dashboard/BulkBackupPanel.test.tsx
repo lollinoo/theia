@@ -8,11 +8,71 @@ import { BulkBackupPanel, __resetBulkBackupSessionForTests } from './BulkBackupP
 // fetchDeviceCredentialProfiles returns one profile by default (device is eligible).
 vi.mock('../../api/client', () => ({
   triggerBackup: vi.fn().mockResolvedValue({ id: 'job-1', status: 'queued' }),
-  triggerBulkBackup: vi
-    .fn()
-    .mockResolvedValue([
-      { device_id: 'dev-1', device_name: 'router-01', status: 'queued', job_id: 'job-1' },
-    ]),
+  startBulkBackupRun: vi.fn().mockResolvedValue({
+    id: 'run-1',
+    status: 'running',
+    batch_size: 10,
+    total_count: 1,
+    queued_count: 1,
+    success_count: 0,
+    failed_count: 0,
+    skipped_count: 0,
+    cancelled_count: 0,
+    error_message: '',
+    cancel_requested: false,
+    created_by: '',
+    created_at: '2026-05-26T10:00:00Z',
+    items: [
+      {
+        id: 'item-1',
+        run_id: 'run-1',
+        device_id: 'dev-1',
+        device_name: 'router-01',
+        status: 'queued',
+        backup_job_id: 'job-1',
+        created_at: '2026-05-26T10:00:00Z',
+        updated_at: '2026-05-26T10:00:00Z',
+      },
+    ],
+  }),
+  fetchLatestBulkBackupRun: vi.fn().mockResolvedValue(null),
+  fetchBulkBackupRun: vi.fn().mockResolvedValue({
+    id: 'run-1',
+    status: 'success',
+    batch_size: 10,
+    total_count: 1,
+    queued_count: 0,
+    success_count: 1,
+    failed_count: 0,
+    skipped_count: 0,
+    cancelled_count: 0,
+    error_message: '',
+    cancel_requested: false,
+    created_by: '',
+    created_at: '2026-05-26T10:00:00Z',
+    items: [
+      {
+        id: 'item-1',
+        run_id: 'run-1',
+        device_id: 'dev-1',
+        device_name: 'router-01',
+        status: 'success',
+        backup_job_id: 'job-1',
+        created_at: '2026-05-26T10:00:00Z',
+        updated_at: '2026-05-26T10:00:01Z',
+        completed_at: '2026-05-26T10:00:01Z',
+      },
+    ],
+  }),
+  cancelBulkBackupRun: vi.fn(),
+  triggerBulkBackup: vi.fn().mockResolvedValue([
+    {
+      device_id: 'dev-1',
+      device_name: 'router-01',
+      status: 'queued',
+      job_id: 'job-1',
+    },
+  ]),
   triggerBulkDownload: vi.fn().mockResolvedValue('saved'),
   fetchBackupJob: vi.fn().mockResolvedValue({ id: 'job-1', status: 'success', error_message: '' }),
   fetchDeviceCredentialProfiles: vi
@@ -42,17 +102,53 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
   };
 }
 
+function mockBulkRun(
+  overrides: Record<string, unknown> = {},
+  items: Record<string, unknown>[] = [],
+) {
+  return {
+    id: 'run-1',
+    status: 'running',
+    batch_size: 10,
+    total_count: items.length,
+    queued_count: items.filter((item) =>
+      ['checking', 'queued', 'running'].includes(String(item.status)),
+    ).length,
+    success_count: items.filter((item) => item.status === 'success').length,
+    failed_count: items.filter((item) => item.status === 'failed').length,
+    skipped_count: items.filter((item) => item.status === 'skipped').length,
+    cancelled_count: items.filter((item) => item.status === 'cancelled').length,
+    error_message: '',
+    cancel_requested: false,
+    created_by: '',
+    created_at: '2026-05-26T10:00:00Z',
+    items,
+    ...overrides,
+  };
+}
+
+function mockRunItem(overrides: Record<string, unknown>) {
+  return {
+    id: `item-${overrides.device_id ?? 'dev'}`,
+    run_id: 'run-1',
+    device_id: 'dev-1',
+    device_name: 'router-01',
+    status: 'queued',
+    created_at: '2026-05-26T10:00:00Z',
+    updated_at: '2026-05-26T10:00:00Z',
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   __resetBulkBackupSessionForTests();
 });
 
-// --- Gap 12: BulkBackupPanel typed errors ---
-
-describe('BulkBackupPanel — triggerBulkBackup .catch handles ServerError', () => {
-  it('shows server error ref when triggerBulkBackup throws ServerError', async () => {
-    const { triggerBulkBackup } = await import('../../api/client');
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+describe('BulkBackupPanel — startBulkBackupRun .catch handles ServerError', () => {
+  it('shows server error ref when startBulkBackupRun throws ServerError', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new ServerError('internal error, ref: bk001', 'bk001'),
     );
 
@@ -64,9 +160,9 @@ describe('BulkBackupPanel — triggerBulkBackup .catch handles ServerError', () 
     expect(await screen.findAllByText(/server error \(ref: bk001\)/i)).not.toHaveLength(0);
   });
 
-  it('shows server error without ref when triggerBulkBackup throws ServerError without correlationId', async () => {
-    const { triggerBulkBackup } = await import('../../api/client');
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+  it('shows server error without ref when startBulkBackupRun throws ServerError without correlationId', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new ServerError('internal error', undefined),
     );
 
@@ -79,10 +175,10 @@ describe('BulkBackupPanel — triggerBulkBackup .catch handles ServerError', () 
   });
 });
 
-describe('BulkBackupPanel — triggerBulkBackup .catch handles ValidationError', () => {
-  it('shows ValidationError message when triggerBulkBackup throws ValidationError', async () => {
-    const { triggerBulkBackup } = await import('../../api/client');
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+describe('BulkBackupPanel — startBulkBackupRun .catch handles ValidationError', () => {
+  it('shows ValidationError message when startBulkBackupRun throws ValidationError', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new ValidationError('Too many devices selected for bulk backup.'),
     );
 
@@ -97,48 +193,27 @@ describe('BulkBackupPanel — triggerBulkBackup .catch handles ValidationError',
   });
 });
 
-describe('BulkBackupPanel — skips devices without credential profile assigned', () => {
-  it('marks device as skipped with "no credential profile assigned" reason', async () => {
-    const { fetchDeviceCredentialProfiles } = await import('../../api/client');
-    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
-
-    const device = mockDevice();
-    render(<BulkBackupPanel devices={[device]} />);
-
-    fireEvent.click(screen.getByText('Backup All Devices'));
-
-    await waitFor(() => {
-      expect(screen.getByText('no credential profile assigned')).toBeInTheDocument();
-    });
-  });
-});
-
-describe('BulkBackupPanel — skips devices where backup_supported is false', () => {
-  it('does not call triggerBulkBackup for unsupported devices', async () => {
-    const { triggerBulkBackup } = await import('../../api/client');
-    const device = mockDevice({ backup_supported: false });
-    render(<BulkBackupPanel devices={[device]} />);
-
-    fireEvent.click(screen.getByText('Backup All Devices'));
-
-    // No eligible devices — triggerBulkBackup never called
-    await new Promise((r) => setTimeout(r, 20));
-    expect(triggerBulkBackup).not.toHaveBeenCalled();
-  });
-});
-
-describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
-  it('sends all eligible devices in one bulk request and maps queued jobs', async () => {
-    const { triggerBackup, triggerBulkBackup } = await import('../../api/client');
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { device_id: 'dev-1', device_name: 'router-01', status: 'queued', job_id: 'job-1' },
-      {
-        device_id: 'dev-2',
-        device_name: 'router-02',
-        status: 'skipped',
-        reason: 'device unreachable',
-      },
-    ]);
+describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
+  it('starts one persistent run and maps queued/skipped items', async () => {
+    const { startBulkBackupRun, triggerBackup, triggerBulkBackup } = await import(
+      '../../api/client'
+    );
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({}, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+          backup_job_id: 'job-1',
+        }),
+        mockRunItem({
+          device_id: 'dev-2',
+          device_name: 'router-02',
+          status: 'skipped',
+          reason: 'device unreachable',
+        }),
+      ]),
+    );
 
     render(
       <BulkBackupPanel
@@ -152,17 +227,15 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
     fireEvent.click(screen.getByText('Backup All Devices'));
 
     await waitFor(() => {
-      expect(triggerBulkBackup).toHaveBeenCalledWith(['dev-1', 'dev-2']);
+      expect(startBulkBackupRun).toHaveBeenCalledWith(['dev-1', 'dev-2']);
     });
     expect(triggerBackup).not.toHaveBeenCalled();
+    expect(triggerBulkBackup).not.toHaveBeenCalled();
     expect(await screen.findByText('device unreachable')).toBeInTheDocument();
   });
 
   it('backs up only selected devices', async () => {
-    const { triggerBulkBackup } = await import('../../api/client');
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { device_id: 'dev-1', device_name: 'router-01', status: 'queued', job_id: 'job-1' },
-    ]);
+    const { startBulkBackupRun } = await import('../../api/client');
 
     render(
       <BulkBackupPanel
@@ -177,27 +250,26 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
     fireEvent.click(screen.getByText('Backup Selected Devices'));
 
     await waitFor(() => {
-      expect(triggerBulkBackup).toHaveBeenCalledWith(['dev-1']);
+      expect(startBulkBackupRun).toHaveBeenCalledWith(['dev-1']);
     });
   });
 
-  it('keeps a running bulk backup visible after the panel is reopened', async () => {
-    const { triggerBulkBackup } = await import('../../api/client');
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockReturnValueOnce(new Promise(() => {}));
-
-    const { unmount } = render(
-      <BulkBackupPanel
-        devices={[
-          mockDevice({ id: 'dev-1', sys_name: 'router-01' }),
-          mockDevice({ id: 'dev-2', sys_name: 'router-02' }),
-        ]}
-      />,
+  it('hydrates a running bulk backup after a page refresh', async () => {
+    const { fetchLatestBulkBackupRun } = await import('../../api/client');
+    (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({}, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+        }),
+        mockRunItem({
+          device_id: 'dev-2',
+          device_name: 'router-02',
+          status: 'checking',
+        }),
+      ]),
     );
-
-    fireEvent.click(screen.getByText('Backup All Devices'));
-
-    await screen.findAllByText('checking...');
-    unmount();
 
     render(
       <BulkBackupPanel
@@ -208,14 +280,47 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
       />,
     );
 
+    expect(await screen.findByText('Processing... 0/2')).toBeInTheDocument();
     expect(screen.queryByText('Backup All Devices')).not.toBeInTheDocument();
-    expect(screen.getByText('Processing... 0/2')).toBeInTheDocument();
-    expect(screen.getAllByText('checking...')).toHaveLength(2);
-    expect(triggerBulkBackup).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('checking...')).toBeInTheDocument();
   });
 
-  it('skips offline devices immediately without calling the bulk endpoint', async () => {
-    const { fetchDeviceCredentialProfiles, triggerBulkBackup } = await import('../../api/client');
+  it('does not hydrate a completed historical bulk backup after a page refresh', async () => {
+    const { fetchLatestBulkBackupRun } = await import('../../api/client');
+    (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'success' }, [
+        mockRunItem({ device_id: 'dev-1', device_name: 'router-01', status: 'success' }),
+      ]),
+    );
+
+    render(<BulkBackupPanel devices={[mockDevice({ id: 'dev-1', sys_name: 'router-01' })]} />);
+
+    await waitFor(() => {
+      expect(fetchLatestBulkBackupRun).toHaveBeenCalled();
+    });
+    expect(screen.getByText('Backup All Devices')).toBeInTheDocument();
+    expect(screen.queryByText(/Complete/)).not.toBeInTheDocument();
+  });
+
+  it('shows offline feedback returned by the persistent run', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'partial' }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'skipped',
+          reason: 'device offline',
+        }),
+        mockRunItem({
+          device_id: 'dev-2',
+          device_name: 'router-02',
+          status: 'skipped',
+          reason: 'device offline',
+        }),
+      ]),
+    );
+
     render(
       <BulkBackupPanel
         devices={[
@@ -229,44 +334,10 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
 
     expect(await screen.findAllByText('device offline')).toHaveLength(2);
     expect(screen.getByText('Complete — 0 succeeded, 0 failed, 2 skipped')).toBeInTheDocument();
-    expect(fetchDeviceCredentialProfiles).not.toHaveBeenCalled();
-    expect(triggerBulkBackup).not.toHaveBeenCalled();
   });
 
-  it('shows offline feedback immediately while online credential checks are still pending', async () => {
-    const { fetchDeviceCredentialProfiles, triggerBulkBackup } = await import('../../api/client');
-    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockReturnValueOnce(
-      new Promise(() => {}),
-    );
-
-    render(
-      <BulkBackupPanel
-        devices={[
-          mockDevice({ id: 'dev-1', sys_name: 'router-01', status: 'down' }),
-          mockDevice({ id: 'dev-2', sys_name: 'router-02', status: 'up' }),
-        ]}
-      />,
-    );
-
-    fireEvent.click(screen.getByText('Backup All Devices'));
-
-    expect(await screen.findByText('device offline')).toBeInTheDocument();
-    expect(screen.getByText('checking...')).toBeInTheDocument();
-    expect(triggerBulkBackup).not.toHaveBeenCalled();
-  });
-
-  it('splits selected devices into operational bulk backup groups of 10', async () => {
-    const { triggerBulkBackup } = await import('../../api/client');
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockImplementation((ids: string[]) =>
-      Promise.resolve(
-        ids.map((id) => ({
-          device_id: id,
-          device_name: id,
-          status: 'queued',
-          job_id: `job-${id}`,
-        })),
-      ),
-    );
+  it('submits large selections as one persistent run while backend performs batching', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
     const devices = Array.from({ length: 105 }, (_, index) =>
       mockDevice({
         id: `dev-${index + 1}`,
@@ -279,37 +350,33 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
     fireEvent.click(screen.getByText('Backup All Devices'));
 
     await waitFor(() => {
-      expect(triggerBulkBackup).toHaveBeenCalledTimes(11);
+      expect(startBulkBackupRun).toHaveBeenCalledTimes(1);
     });
-    expect(triggerBulkBackup).toHaveBeenNthCalledWith(
-      1,
-      Array.from({ length: 10 }, (_, index) => `dev-${index + 1}`),
-    );
-    expect(triggerBulkBackup).toHaveBeenNthCalledWith(
-      11,
-      Array.from({ length: 5 }, (_, index) => `dev-${index + 101}`),
+    expect(startBulkBackupRun).toHaveBeenCalledWith(
+      Array.from({ length: 105 }, (_, index) => `dev-${index + 1}`),
     );
   });
 
   it('splits successful devices into bulk download batches of 100', async () => {
-    const { fetchBackupJob, triggerBulkBackup, triggerBulkDownload } = await import(
+    const { fetchBulkBackupRun, startBulkBackupRun, triggerBulkDownload } = await import(
       '../../api/client'
     );
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockImplementation((ids: string[]) =>
-      Promise.resolve(
-        ids.map((id) => ({
-          device_id: id,
-          device_name: id,
-          status: 'queued',
-          job_id: `job-${id}`,
-        })),
+    const successItems = Array.from({ length: 101 }, (_, index) =>
+      mockRunItem({
+        device_id: `dev-${index + 1}`,
+        device_name: `router-${index + 1}`,
+        status: 'success',
+      }),
+    );
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun(
+        { status: 'running' },
+        successItems.map((item) => ({ ...item, status: 'queued' })),
       ),
     );
-    (fetchBackupJob as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: 'job',
-      status: 'success',
-      error_message: '',
-    });
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'success' }, successItems),
+    );
     const devices = Array.from({ length: 101 }, (_, index) =>
       mockDevice({
         id: `dev-${index + 1}`,
@@ -321,10 +388,6 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
 
     fireEvent.click(screen.getByText('Backup All Devices'));
 
-    await waitFor(() => {
-      expect(triggerBulkBackup).toHaveBeenCalledTimes(11);
-    });
-    await new Promise((resolve) => setTimeout(resolve, 2100));
     await screen.findByText('Download 2 ZIP files', {}, { timeout: 4000 });
     expect(
       screen.getByText('Downloads will be split into 2 ZIP files of up to 100 devices each.'),
@@ -337,7 +400,9 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
     expect(triggerBulkDownload).toHaveBeenNthCalledWith(
       1,
       Array.from({ length: 100 }, (_, index) => `dev-${index + 1}`),
-      { filename: expect.stringMatching(/^THEIA_BACKUPS_batch-1-of-2_.*\.zip$/) },
+      {
+        filename: expect.stringMatching(/^THEIA_BACKUPS_batch-1-of-2_.*\.zip$/),
+      },
     );
     expect(triggerBulkDownload).toHaveBeenNthCalledWith(2, ['dev-101'], {
       filename: expect.stringMatching(/^THEIA_BACKUPS_batch-2-of-2_.*\.zip$/),
@@ -345,24 +410,25 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
   }, 10000);
 
   it('stops downloading remaining batches when the save dialog is cancelled', async () => {
-    const { fetchBackupJob, triggerBulkBackup, triggerBulkDownload } = await import(
+    const { fetchBulkBackupRun, startBulkBackupRun, triggerBulkDownload } = await import(
       '../../api/client'
     );
-    (triggerBulkBackup as ReturnType<typeof vi.fn>).mockImplementation((ids: string[]) =>
-      Promise.resolve(
-        ids.map((id) => ({
-          device_id: id,
-          device_name: id,
-          status: 'queued',
-          job_id: `job-${id}`,
-        })),
+    const successItems = Array.from({ length: 101 }, (_, index) =>
+      mockRunItem({
+        device_id: `dev-${index + 1}`,
+        device_name: `router-${index + 1}`,
+        status: 'success',
+      }),
+    );
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun(
+        { status: 'running' },
+        successItems.map((item) => ({ ...item, status: 'queued' })),
       ),
     );
-    (fetchBackupJob as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: 'job',
-      status: 'success',
-      error_message: '',
-    });
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'success' }, successItems),
+    );
     (triggerBulkDownload as ReturnType<typeof vi.fn>).mockResolvedValueOnce('cancelled');
     const devices = Array.from({ length: 101 }, (_, index) =>
       mockDevice({
@@ -375,10 +441,6 @@ describe('BulkBackupPanel — uses backend bulk backup endpoint', () => {
 
     fireEvent.click(screen.getByText('Backup All Devices'));
 
-    await waitFor(() => {
-      expect(triggerBulkBackup).toHaveBeenCalledTimes(11);
-    });
-    await new Promise((resolve) => setTimeout(resolve, 2100));
     await screen.findByText('Download 2 ZIP files', {}, { timeout: 4000 });
     fireEvent.click(screen.getByText('Download 2 ZIP files'));
 

@@ -4,6 +4,10 @@ import {
   type BackupFileContent,
   type BackupJob,
   type BackupStatus,
+  type BulkBackupRun,
+  type BulkBackupRunItem,
+  type BulkBackupRunItemStatus,
+  type BulkBackupRunStatus,
   type CanvasMap,
   type CanvasMapFilter,
   type CanvasTopologyResponse,
@@ -1484,6 +1488,74 @@ function parseBulkBackupResult(data: Record<string, unknown>): BulkBackupResult 
   };
 }
 
+const bulkBackupRunStatuses: BulkBackupRunStatus[] = [
+  'running',
+  'cancelling',
+  'success',
+  'partial',
+  'failed',
+  'cancelled',
+];
+
+const bulkBackupRunItemStatuses: BulkBackupRunItemStatus[] = [
+  'checking',
+  'skipped',
+  'queued',
+  'running',
+  'success',
+  'failed',
+  'cancelled',
+];
+
+function parseBulkBackupRunItem(data: Record<string, unknown>): BulkBackupRunItem {
+  const status = typeof data.status === 'string' ? data.status : '';
+  return {
+    id: typeof data.id === 'string' ? data.id : '',
+    run_id: typeof data.run_id === 'string' ? data.run_id : '',
+    device_id: typeof data.device_id === 'string' ? data.device_id : '',
+    device_name: typeof data.device_name === 'string' ? data.device_name : '',
+    status: bulkBackupRunItemStatuses.includes(status as BulkBackupRunItemStatus)
+      ? (status as BulkBackupRunItemStatus)
+      : 'checking',
+    reason: typeof data.reason === 'string' ? data.reason : undefined,
+    backup_job_id: typeof data.backup_job_id === 'string' ? data.backup_job_id : undefined,
+    created_at: typeof data.created_at === 'string' ? data.created_at : '',
+    updated_at: typeof data.updated_at === 'string' ? data.updated_at : '',
+    completed_at: typeof data.completed_at === 'string' ? data.completed_at : undefined,
+  };
+}
+
+function parseBulkBackupRun(data: Record<string, unknown>): BulkBackupRun {
+  const status = typeof data.status === 'string' ? data.status : '';
+  const items = Array.isArray(data.items) ? data.items : [];
+  return {
+    id: typeof data.id === 'string' ? data.id : '',
+    status: bulkBackupRunStatuses.includes(status as BulkBackupRunStatus)
+      ? (status as BulkBackupRunStatus)
+      : 'running',
+    batch_size: typeof data.batch_size === 'number' ? data.batch_size : 0,
+    total_count: typeof data.total_count === 'number' ? data.total_count : 0,
+    queued_count: typeof data.queued_count === 'number' ? data.queued_count : 0,
+    success_count: typeof data.success_count === 'number' ? data.success_count : 0,
+    failed_count: typeof data.failed_count === 'number' ? data.failed_count : 0,
+    skipped_count: typeof data.skipped_count === 'number' ? data.skipped_count : 0,
+    cancelled_count: typeof data.cancelled_count === 'number' ? data.cancelled_count : 0,
+    error_message: typeof data.error_message === 'string' ? data.error_message : '',
+    cancel_requested: data.cancel_requested === true,
+    created_by: typeof data.created_by === 'string' ? data.created_by : '',
+    created_at: typeof data.created_at === 'string' ? data.created_at : '',
+    started_at: typeof data.started_at === 'string' ? data.started_at : undefined,
+    completed_at: typeof data.completed_at === 'string' ? data.completed_at : undefined,
+    items: items.map((item) => parseBulkBackupRunItem(item as Record<string, unknown>)),
+  };
+}
+
+function parseBulkBackupRunResponse(payload: unknown): BulkBackupRun | null {
+  const data = (payload as Record<string, unknown>)?.data;
+  if (data === null || typeof data !== 'object') return null;
+  return parseBulkBackupRun(data as Record<string, unknown>);
+}
+
 export async function triggerBackup(deviceId: string): Promise<BackupJob> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/backups`,
@@ -1502,6 +1574,41 @@ export async function triggerBulkBackup(deviceIds: string[]): Promise<BulkBackup
   const data = (payload as Record<string, unknown>)?.data;
   if (!Array.isArray(data)) return [];
   return data.map((item) => parseBulkBackupResult(item as Record<string, unknown>));
+}
+
+export async function startBulkBackupRun(deviceIds: string[]): Promise<BulkBackupRun> {
+  const payload = await requestBulkJSON(
+    '/api/v1/backups/bulk-runs',
+    { device_ids: deviceIds },
+    'bulk backup',
+    { returnConflictPayload: true },
+  );
+  const run = parseBulkBackupRunResponse(payload);
+  if (!run) throw new Error('bulk backup run response is missing');
+  return run;
+}
+
+export async function fetchLatestBulkBackupRun(): Promise<BulkBackupRun | null> {
+  const payload = await requestJSON('/api/v1/backups/bulk-runs/latest');
+  return parseBulkBackupRunResponse(payload);
+}
+
+export async function fetchBulkBackupRun(runId: string): Promise<BulkBackupRun> {
+  const payload = await requestJSON(`/api/v1/backups/bulk-runs/${encodeURIComponent(runId)}`);
+  const run = parseBulkBackupRunResponse(payload);
+  if (!run) throw new Error('bulk backup run not found');
+  return run;
+}
+
+export async function cancelBulkBackupRun(runId: string): Promise<BulkBackupRun> {
+  const payload = await requestBulkJSON(
+    `/api/v1/backups/bulk-runs/${encodeURIComponent(runId)}/cancel`,
+    {},
+    'bulk backup cancel',
+  );
+  const run = parseBulkBackupRunResponse(payload);
+  if (!run) throw new Error('bulk backup run response is missing');
+  return run;
 }
 
 export async function fetchBackupJobs(deviceId: string): Promise<BackupJob[]> {
@@ -1608,7 +1715,12 @@ export async function triggerBulkDownload(
   return saveDownloadResponse(response, filename, saveTarget);
 }
 
-async function requestBulkJSON(path: string, body: unknown, operation: string): Promise<unknown> {
+async function requestBulkJSON(
+  path: string,
+  body: unknown,
+  operation: string,
+  options: { returnConflictPayload?: boolean } = {},
+): Promise<unknown> {
   const response = await fetch(path, {
     method: 'POST',
     headers: headersWithCsrf({
@@ -1619,6 +1731,9 @@ async function requestBulkJSON(path: string, body: unknown, operation: string): 
   });
   const payload = (await response.json().catch(() => null)) as ErrorPayload | unknown;
   if (!response.ok) {
+    if (response.status === 409 && options.returnConflictPayload) {
+      return payload;
+    }
     const errorMessage =
       typeof payload === 'object' &&
       payload !== null &&
