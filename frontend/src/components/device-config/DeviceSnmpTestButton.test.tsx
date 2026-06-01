@@ -1,4 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useLayoutEffect } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { testSNMPConnection } from '../../api/client';
 import { DeviceSnmpTestButton } from './DeviceSnmpTestButton';
@@ -116,5 +119,55 @@ describe('DeviceSnmpTestButton', () => {
     expect(screen.queryByText('SNMP OK')).not.toBeInTheDocument();
     expect(screen.queryByText('sysName: old-device')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Test SNMP Connectivity' })).toBeEnabled();
+  });
+
+  it('ignores a prior-device SNMP result that resolves during the next device commit', async () => {
+    let resolveTest: (value: Awaited<ReturnType<typeof testSNMPConnection>>) => void = () => {};
+    mockTestSNMPConnection.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveTest = resolve;
+      }),
+    );
+
+    function ResolveDuringCommit({ active }: { active: boolean }) {
+      useLayoutEffect(() => {
+        if (!active) return;
+        resolveTest({ success: true, sys_name: 'old-device' });
+      }, [active]);
+      return null;
+    }
+
+    function Harness({ deviceId, resolve }: { deviceId: string; resolve: boolean }) {
+      return (
+        <>
+          <DeviceSnmpTestButton deviceId={deviceId} />
+          <ResolveDuringCommit active={resolve} />
+        </>
+      );
+    }
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      flushSync(() => {
+        root.render(<Harness deviceId="dev-1" resolve={false} />);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Test SNMP Connectivity' }));
+
+      flushSync(() => {
+        root.render(<Harness deviceId="dev-2" resolve={true} />);
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(screen.queryByText('SNMP OK')).not.toBeInTheDocument();
+      expect(screen.queryByText('sysName: old-device')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Test SNMP Connectivity' })).toBeEnabled();
+    } finally {
+      root.unmount();
+      container.remove();
+    }
   });
 });

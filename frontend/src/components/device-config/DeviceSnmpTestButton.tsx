@@ -8,24 +8,33 @@ interface DeviceSnmpTestButtonProps {
 type DeviceSnmpTestResult = Awaited<ReturnType<typeof testSNMPConnection>>;
 
 export function DeviceSnmpTestButton({ deviceId }: DeviceSnmpTestButtonProps) {
-  const [testing, setTesting] = useState(false);
-  const [result, setResult] = useState<DeviceSnmpTestResult | null>(null);
+  const [testingDeviceId, setTestingDeviceId] = useState<string | null>(null);
+  const [resultState, setResultState] = useState<{
+    deviceId: string;
+    result: DeviceSnmpTestResult;
+  } | null>(null);
   const requestGenerationRef = useRef(0);
   const activeDeviceIdRef = useRef(deviceId);
 
-  useEffect(() => {
+  if (activeDeviceIdRef.current !== deviceId) {
     activeDeviceIdRef.current = deviceId;
     requestGenerationRef.current += 1;
-    setTesting(false);
-    setResult(null);
+  }
+
+  const testing = testingDeviceId === deviceId;
+  const result = resultState?.deviceId === deviceId ? resultState.result : null;
+
+  useEffect(() => {
+    setTestingDeviceId(null);
+    setResultState(null);
   }, [deviceId]);
 
   async function handleTest() {
     const requestGeneration = requestGenerationRef.current + 1;
     requestGenerationRef.current = requestGeneration;
     const requestDeviceId = deviceId;
-    setTesting(true);
-    setResult(null);
+    setTestingDeviceId(deviceId);
+    setResultState(null);
     try {
       const r = await testSNMPConnection(deviceId);
       if (
@@ -34,7 +43,7 @@ export function DeviceSnmpTestButton({ deviceId }: DeviceSnmpTestButtonProps) {
       ) {
         return;
       }
-      setResult(r);
+      setResultState({ deviceId: requestDeviceId, result: r });
     } catch (err) {
       if (
         requestGenerationRef.current !== requestGeneration ||
@@ -42,13 +51,16 @@ export function DeviceSnmpTestButton({ deviceId }: DeviceSnmpTestButtonProps) {
       ) {
         return;
       }
-      setResult({ success: false, error: err instanceof Error ? err.message : 'Test failed' });
+      setResultState({
+        deviceId: requestDeviceId,
+        result: { success: false, error: err instanceof Error ? err.message : 'Test failed' },
+      });
     } finally {
       if (
         requestGenerationRef.current === requestGeneration &&
         activeDeviceIdRef.current === requestDeviceId
       ) {
-        setTesting(false);
+        setTestingDeviceId(null);
       }
     }
   }
