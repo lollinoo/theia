@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   deleteDevice,
-  fetchAreas,
   revealSNMPProfile,
   testSNMPConnection,
   updateCanvasMapDeviceAreas,
@@ -16,6 +15,7 @@ import {
   validateMaxLength,
   validateRequired,
 } from '../utils/validation';
+import { DeviceAreasSection } from './device-config/DeviceAreasSection';
 import { DeviceCredentialsSection } from './device-config/DeviceCredentialsSection';
 import { DeviceGrafanaDashboardSection } from './device-config/DeviceGrafanaDashboardSection';
 import { DeviceNetworkSettingsSection } from './device-config/DeviceNetworkSettingsSection';
@@ -25,7 +25,6 @@ import {
   type DeviceFormModel,
   applySNMPProfile,
   createDeviceConfigFormModel,
-  defaultVirtualNodeColor,
   normalizeVirtualNodeColor,
 } from './forms/deviceFormModels';
 import { buildUpdateDevicePayload } from './forms/deviceFormSubmitters';
@@ -155,8 +154,6 @@ export function DeviceConfigPanel({
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [removeFromMapLoading, setRemoveFromMapLoading] = useState(false);
 
-  const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
-
   // Field-level validation errors
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -166,7 +163,6 @@ export function DeviceConfigPanel({
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
   const deviceConfigSyncKey = buildDeviceConfigSyncKey(device, Boolean(isVirtual));
-  const areas = providedAreas ?? loadedAreas;
 
   function updateForm(update: Partial<DeviceFormModel>) {
     setForm((current) => ({ ...current, ...update }));
@@ -206,19 +202,6 @@ export function DeviceConfigPanel({
       validateMaxLength(value, MAX_STRING_LENGTH, 'Display name')
     );
   }
-
-  useEffect(() => {
-    if (providedAreas) {
-      setLoadedAreas([]);
-      return;
-    }
-
-    fetchAreas()
-      .then(setLoadedAreas)
-      .catch(() => {
-        /* non-fatal */
-      });
-  }, [providedAreas]);
 
   // Sync inputs when saved configuration changes. Runtime-only updates such as
   // status changes should not reset in-progress edits.
@@ -471,113 +454,15 @@ export function DeviceConfigPanel({
             />
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-              Areas
-            </label>
-            {form.areaIds.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {form.areaIds.map((id) => {
-                  const area = areas.find((a) => a.id === id);
-                  if (!area) return null;
-                  return (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-on-bg"
-                      style={{
-                        backgroundColor: `${area.color}25`,
-                        border: `1px solid ${area.color}60`,
-                      }}
-                    >
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ backgroundColor: area.color }}
-                      />
-                      {area.name}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          updateForm({ areaIds: form.areaIds.filter((areaId) => areaId !== id) })
-                        }
-                        className="ml-0.5 text-on-bg-secondary hover:text-on-bg"
-                      >
-                        <svg
-                          className="w-3 h-3"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-            <select
-              value=""
-              disabled={areas.filter((a) => !form.areaIds.includes(a.id)).length === 0}
-              onChange={(e) => {
-                if (e.target.value) {
-                  updateForm({ areaIds: [...form.areaIds, e.target.value] });
-                }
-              }}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:opacity-50"
-            >
-              <option value="">
-                {areas.length === 0
-                  ? 'No areas created'
-                  : areas.filter((a) => !form.areaIds.includes(a.id)).length === 0
-                    ? 'All areas assigned'
-                    : form.areaIds.length === 0
-                      ? 'Unassigned - select area...'
-                      : 'Add another area...'}
-              </option>
-              {areas
-                .filter((a) => !form.areaIds.includes(a.id))
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          {isVirtual && mapContext && (
-            <div className="space-y-1">
-              <label
-                htmlFor="device-virtual-node-color"
-                className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary"
-              >
-                Virtual node color
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  id="device-virtual-node-color"
-                  aria-label="Virtual node color"
-                  type="color"
-                  value={form.virtual.visualColor ?? defaultVirtualNodeColor}
-                  onChange={(e) =>
-                    updateVirtual({ visualColor: normalizeVirtualNodeColor(e.target.value) })
-                  }
-                  className="h-10 w-12 shrink-0 cursor-pointer rounded-lg border border-outline-subtle bg-elevated p-1"
-                />
-                <button
-                  type="button"
-                  onClick={() => updateVirtual({ visualColor: null })}
-                  className="rounded-lg bg-surface-high px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
-                >
-                  Use area/default color
-                </button>
-              </div>
-            </div>
-          )}
+          <DeviceAreasSection
+            form={form}
+            areas={providedAreas}
+            readOnly={readOnly}
+            isVirtual={isVirtual}
+            mapContext={mapContext}
+            onFormChange={updateForm}
+            onVirtualChange={updateVirtual}
+          />
 
           <DeviceNetworkSettingsSection
             device={device}
