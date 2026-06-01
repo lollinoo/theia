@@ -176,6 +176,9 @@ export function DevicePollingSection({
     } else if (value !== 'custom') {
       setCustomPolling('');
       schedulePollingUpdate(value);
+    } else {
+      clearPendingPollingUpdate();
+      invalidatePollingSave();
     }
   }
 

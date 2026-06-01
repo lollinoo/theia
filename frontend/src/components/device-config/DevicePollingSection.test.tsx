@@ -133,6 +133,29 @@ describe('DevicePollingSection', () => {
     }
   });
 
+  it('cancels a pending cadence save when custom polling is selected', async () => {
+    vi.useFakeTimers();
+    try {
+      const { updateDevice } = await import('../../api/client');
+      const onDeviceUpdated = vi.fn();
+
+      render(<DevicePollingSection device={mockDevice()} onDeviceUpdated={onDeviceUpdated} />);
+
+      fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+      fireEvent.change(screen.getByDisplayValue('30 seconds'), { target: { value: 'custom' } });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(updateDevice).not.toHaveBeenCalled();
+      expect(onDeviceUpdated).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText('Seconds (5-3600)')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('cancels a pending cadence save when the section becomes read-only', async () => {
     vi.useFakeTimers();
     try {
@@ -224,6 +247,49 @@ describe('DevicePollingSection', () => {
 
       expect(onFirstDeviceUpdated).not.toHaveBeenCalled();
       expect(onSecondDeviceUpdated).not.toHaveBeenCalled();
+      const pollingHeader = screen.getByText('Polling Override').parentElement;
+      expect(pollingHeader).not.toBeNull();
+      expect(within(pollingHeader as HTMLElement).getByText('Saved').className).toContain(
+        'opacity-0',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores an in-flight cadence save resolution when custom polling is selected', async () => {
+    vi.useFakeTimers();
+    try {
+      const { updateDevice } = await import('../../api/client');
+      const onDeviceUpdated = vi.fn();
+      let resolveUpdate: (updated: Device) => void = () => {};
+      let updatePromise: Promise<Device> | undefined;
+      (updateDevice as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+        updatePromise = new Promise<Device>((resolve) => {
+          resolveUpdate = resolve;
+        });
+        return updatePromise;
+      });
+
+      render(<DevicePollingSection device={mockDevice()} onDeviceUpdated={onDeviceUpdated} />);
+
+      fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', { poll_interval_override: 30 });
+
+      fireEvent.change(screen.getByDisplayValue('30 seconds'), { target: { value: 'custom' } });
+
+      await act(async () => {
+        resolveUpdate(mockDevice({ poll_interval_override: 30 }));
+        await updatePromise;
+      });
+
+      expect(onDeviceUpdated).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText('Seconds (5-3600)')).toBeInTheDocument();
       const pollingHeader = screen.getByText('Polling Override').parentElement;
       expect(pollingHeader).not.toBeNull();
       expect(within(pollingHeader as HTMLElement).getByText('Saved').className).toContain(
