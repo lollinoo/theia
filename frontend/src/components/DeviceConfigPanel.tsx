@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  deleteDevice,
   revealSNMPProfile,
   updateCanvasMapDeviceAreas,
   updateCanvasMapDeviceVisualColor,
@@ -16,6 +15,7 @@ import {
 } from '../utils/validation';
 import { DeviceAreasSection } from './device-config/DeviceAreasSection';
 import { DeviceCredentialsSection } from './device-config/DeviceCredentialsSection';
+import { DeviceDestructiveActionsSection } from './device-config/DeviceDestructiveActionsSection';
 import { DeviceGrafanaDashboardSection } from './device-config/DeviceGrafanaDashboardSection';
 import { DeviceNetworkSettingsSection } from './device-config/DeviceNetworkSettingsSection';
 import { DevicePollingSection } from './device-config/DevicePollingSection';
@@ -149,10 +149,6 @@ export function DeviceConfigPanel({
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editSaved, setEditSaved] = useState(false);
-
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleteLoading, setDeleteLoading] = useState(false);
-  const [removeFromMapLoading, setRemoveFromMapLoading] = useState(false);
 
   // Field-level validation errors
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -314,28 +310,6 @@ export function DeviceConfigPanel({
       }
     } finally {
       setEditLoading(false);
-    }
-  }
-
-  async function handleDelete() {
-    if (readOnly) return;
-    setDeleteLoading(true);
-    try {
-      await deleteDevice(device.id);
-      onDeviceDeleted();
-    } catch {
-      setDeleteLoading(false);
-      setConfirmDelete(false);
-    }
-  }
-
-  async function handleRemoveFromMap() {
-    if (readOnly || !mapContext || !onRemoveFromMap) return;
-    setRemoveFromMapLoading(true);
-    try {
-      await onRemoveFromMap(device.id);
-    } finally {
-      setRemoveFromMapLoading(false);
     }
   }
 
@@ -505,63 +479,13 @@ export function DeviceConfigPanel({
       {/* SNMP Test — visible when metrics source uses SNMP (physical only) */}
       {!isVirtual && usesSNMP && <DeviceSnmpTestButton deviceId={device.id} />}
 
-      {mapContext && onRemoveFromMap && (
-        <div className="mt-6 space-y-2 rounded-lg border border-outline-subtle bg-surface-container px-3 py-3">
-          <p className="text-xs text-on-bg-secondary">
-            Removes this device only from {mapContext.mapName}. Inventory and other maps are kept.
-          </p>
-          <button
-            type="button"
-            disabled={readOnly || removeFromMapLoading}
-            onClick={() => {
-              void handleRemoveFromMap();
-            }}
-            className="w-full rounded-lg bg-surface-high px-4 py-2 text-sm font-medium text-on-bg transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {removeFromMapLoading ? 'Removing...' : 'Remove from this map'}
-          </button>
-        </div>
-      )}
-
-      {/* Delete Device Everywhere */}
-      <div className="mt-6 space-y-3">
-        {!confirmDelete ? (
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={() => setConfirmDelete(true)}
-            className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Delete device everywhere
-          </button>
-        ) : (
-          <div className="space-y-2 rounded-lg border border-status-down/30 bg-status-down/10 p-3">
-            <p className="text-sm text-status-down">
-              Are you sure? This deletes the device everywhere and cannot be undone.
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={readOnly}
-                onClick={() => setConfirmDelete(false)}
-                className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={readOnly || deleteLoading}
-                onClick={() => {
-                  void handleDelete();
-                }}
-                className="flex-1 rounded-lg bg-status-down px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {deleteLoading ? 'Deleting...' : 'Confirm Delete'}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <DeviceDestructiveActionsSection
+        deviceId={device.id}
+        readOnly={readOnly}
+        mapContext={mapContext}
+        onRemoveFromMap={onRemoveFromMap}
+        onDeviceDeleted={onDeviceDeleted}
+      />
     </div>
   );
 }
