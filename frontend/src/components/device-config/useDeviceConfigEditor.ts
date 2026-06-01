@@ -58,8 +58,6 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
     prometheusLabelName: device.prometheus_label_name || 'instance',
     prometheusLabelValue: device.prometheus_label_value || '',
     virtualSubtype: device.tags?.virtual_subtype ?? 'internet',
-    pollIntervalOverride: device.poll_interval_override ?? null,
-    pollingEnabled: device.polling_enabled !== false,
     mapVisualColor: device.map_visual_color ?? null,
   });
 }

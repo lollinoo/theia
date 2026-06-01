@@ -204,6 +204,56 @@ describe('useDeviceConfigEditor', () => {
     );
   });
 
+  it('continues map-scoped save after polling-only device refresh', async () => {
+    const save = deferred<Device>();
+    const onDeviceUpdated = vi.fn();
+    apiMocks.updateDevice.mockReturnValueOnce(save.promise);
+    const { result, rerender } = renderEditor({
+      device: mockDevice({ area_ids: [] }),
+      mapContext: { mapId: 'map-1', mapName: 'Backbone' },
+      onDeviceUpdated,
+    });
+
+    act(() => {
+      result.current.updateForm({ areaIds: ['area-1'] });
+    });
+
+    let savePromise: Promise<void> | undefined;
+    act(() => {
+      savePromise = result.current.handleEditSave(submitEvent());
+    });
+
+    expect(apiMocks.updateDevice).toHaveBeenCalledWith(
+      'dev-1',
+      expect.not.objectContaining({ area_ids: expect.anything() }),
+    );
+
+    rerender({
+      device: mockDevice({
+        area_ids: [],
+        poll_interval_override: 60,
+        polling_enabled: false,
+      }),
+      readOnly: false,
+      isVirtual: undefined,
+      mapContext: { mapId: 'map-1', mapName: 'Backbone' },
+      onDeviceUpdated,
+    });
+
+    await act(async () => {
+      save.resolve(mockDevice({ area_ids: [] }));
+      await savePromise;
+    });
+
+    expect(apiMocks.updateCanvasMapDeviceAreas).toHaveBeenCalledWith('map-1', {
+      device_ids: ['dev-1'],
+      area_ids: ['area-1'],
+    });
+    expect(onDeviceUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'dev-1', area_ids: ['area-1'] }),
+    );
+  });
+
   it('saves virtual map-scoped visual color without a global update when only color changed', async () => {
     const onDeviceUpdated = vi.fn();
     const virtualDevice = mockDevice({
