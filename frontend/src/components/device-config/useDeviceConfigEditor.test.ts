@@ -327,6 +327,78 @@ describe('useDeviceConfigEditor', () => {
     expect(result.current.form.snmp.privPassword).toBe('');
   });
 
+  it('keeps the second SNMP profile when the first reveal resolves last', async () => {
+    let resolveFirstProfile: (profile: SNMPProfile) => void = () => {};
+    let resolveSecondProfile: (profile: SNMPProfile) => void = () => {};
+    const firstProfile: SNMPProfile = {
+      id: 'profile-1',
+      name: 'Core v3',
+      description: '',
+      snmp: {
+        version: '3',
+        username: 'first-user',
+        security_level: 'authPriv',
+        auth_protocol: 'SHA',
+        auth_password: 'first-auth-secret',
+        priv_protocol: 'AES',
+        priv_password: 'first-priv-secret',
+      },
+      created_at: '',
+      updated_at: '',
+    };
+    const secondProfile: SNMPProfile = {
+      id: 'profile-2',
+      name: 'Distribution v3',
+      description: '',
+      snmp: {
+        version: '3',
+        username: 'second-user',
+        security_level: 'authPriv',
+        auth_protocol: 'SHA',
+        auth_password: 'second-auth-secret',
+        priv_protocol: 'AES',
+        priv_password: 'second-priv-secret',
+      },
+      created_at: '',
+      updated_at: '',
+    };
+    apiMocks.revealSNMPProfile
+      .mockReturnValueOnce(
+        new Promise<SNMPProfile>((resolve) => {
+          resolveFirstProfile = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<SNMPProfile>((resolve) => {
+          resolveSecondProfile = resolve;
+        }),
+      );
+    const { result } = renderEditor();
+
+    let firstApplyPromise: Promise<void> | undefined;
+    let secondApplyPromise: Promise<void> | undefined;
+    act(() => {
+      firstApplyPromise = result.current.applyProfile('profile-1');
+      secondApplyPromise = result.current.applyProfile('profile-2');
+    });
+
+    await act(async () => {
+      resolveSecondProfile(secondProfile);
+      await secondApplyPromise;
+    });
+    await act(async () => {
+      resolveFirstProfile(firstProfile);
+      await firstApplyPromise;
+    });
+
+    expect(result.current.form.snmp).toMatchObject({
+      version: '3',
+      username: 'second-user',
+      authPassword: 'second-auth-secret',
+      privPassword: 'second-priv-secret',
+    });
+  });
+
   it('clears the saved indicator timeout on unmount after a successful save', async () => {
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');

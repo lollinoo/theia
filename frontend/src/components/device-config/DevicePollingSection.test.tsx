@@ -182,6 +182,93 @@ describe('DevicePollingSection', () => {
     }
   });
 
+  it('ignores an in-flight cadence save resolution after switching devices', async () => {
+    vi.useFakeTimers();
+    try {
+      const { updateDevice } = await import('../../api/client');
+      const onFirstDeviceUpdated = vi.fn();
+      const onSecondDeviceUpdated = vi.fn();
+      let resolveUpdate: (updated: Device) => void = () => {};
+      let updatePromise: Promise<Device> | undefined;
+      (updateDevice as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+        updatePromise = new Promise<Device>((resolve) => {
+          resolveUpdate = resolve;
+        });
+        return updatePromise;
+      });
+
+      const view = render(
+        <DevicePollingSection
+          device={mockDevice({ id: 'dev-1', hostname: 'router-01' })}
+          onDeviceUpdated={onFirstDeviceUpdated}
+        />,
+      );
+
+      fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      view.rerender(
+        <DevicePollingSection
+          device={mockDevice({ id: 'dev-2', hostname: 'router-02' })}
+          onDeviceUpdated={onSecondDeviceUpdated}
+        />,
+      );
+
+      await act(async () => {
+        resolveUpdate(mockDevice({ id: 'dev-1', poll_interval_override: 30 }));
+        await updatePromise;
+      });
+
+      expect(onFirstDeviceUpdated).not.toHaveBeenCalled();
+      expect(onSecondDeviceUpdated).not.toHaveBeenCalled();
+      const pollingHeader = screen.getByText('Polling Override').parentElement;
+      expect(pollingHeader).not.toBeNull();
+      expect(within(pollingHeader as HTMLElement).getByText('Saved').className).toContain(
+        'opacity-0',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores an in-flight polling enabled rejection after switching devices', async () => {
+    const { updateDevice } = await import('../../api/client');
+    let rejectUpdate: (error: Error) => void = () => {};
+    let updatePromise: Promise<Device> | undefined;
+    (updateDevice as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      updatePromise = new Promise<Device>((_resolve, reject) => {
+        rejectUpdate = reject;
+      });
+      return updatePromise;
+    });
+
+    const view = render(
+      <DevicePollingSection
+        device={mockDevice({ id: 'dev-1', hostname: 'router-01' })}
+        onDeviceUpdated={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Continuous Polling' }));
+
+    view.rerender(
+      <DevicePollingSection
+        device={mockDevice({ id: 'dev-2', hostname: 'router-02' })}
+        onDeviceUpdated={vi.fn()}
+      />,
+    );
+
+    await act(async () => {
+      rejectUpdate(new ValidationError('Stale polling failure'));
+      await updatePromise?.catch(() => undefined);
+    });
+
+    expect(screen.queryByText('Stale polling failure')).not.toBeInTheDocument();
+  });
+
   it('shows typed backend errors on polling saves', async () => {
     vi.useFakeTimers();
     try {

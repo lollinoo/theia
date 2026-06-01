@@ -62,6 +62,29 @@ export function DevicePollingSection({
 
   const pollingTimerRef = useRef<number | null>(null);
   const savedPollingTimerRef = useRef<number | null>(null);
+  const pollingSaveGenerationRef = useRef(0);
+  const pollingContextKey = JSON.stringify({
+    deviceId: device.id,
+    readOnly,
+    resetKey: resetKey ?? '',
+  });
+  const pollingContextKeyRef = useRef(pollingContextKey);
+  pollingContextKeyRef.current = pollingContextKey;
+
+  function beginPollingSave() {
+    pollingSaveGenerationRef.current += 1;
+    return {
+      generation: pollingSaveGenerationRef.current,
+      contextKey: pollingContextKey,
+    };
+  }
+
+  function isCurrentPollingSave(save: { generation: number; contextKey: string }): boolean {
+    return (
+      pollingSaveGenerationRef.current === save.generation &&
+      pollingContextKeyRef.current === save.contextKey
+    );
+  }
 
   function clearPendingPollingUpdate() {
     if (pollingTimerRef.current !== null) {
@@ -93,14 +116,17 @@ export function DevicePollingSection({
     if (!pollingEnabled) return;
     clearPendingPollingUpdate();
     pollingTimerRef.current = window.setTimeout(() => {
+      const save = beginPollingSave();
       const pollIntervalOverride = isDelete ? null : Number.parseInt(rawValue, 10);
       void updateDevice(device.id, { poll_interval_override: pollIntervalOverride })
         .then((updated) => {
+          if (!isCurrentPollingSave(save)) return;
           setPollingError(null);
           showSaved();
           onDeviceUpdated(updated);
         })
         .catch((error) => {
+          if (!isCurrentPollingSave(save)) return;
           if (error instanceof ValidationError || error instanceof ServerError) {
             setPollingError(error.message);
             return;
@@ -118,11 +144,14 @@ export function DevicePollingSection({
     const previous = pollingEnabled;
     setPollingEnabled(enabled);
     setPollingError(null);
+    const save = beginPollingSave();
     try {
       const updated = await updateDevice(device.id, { polling_enabled: enabled });
+      if (!isCurrentPollingSave(save)) return;
       showSaved();
       onDeviceUpdated(updated);
     } catch (error) {
+      if (!isCurrentPollingSave(save)) return;
       setPollingEnabled(previous);
       if (error instanceof ValidationError || error instanceof ServerError) {
         setPollingError(error.message);
