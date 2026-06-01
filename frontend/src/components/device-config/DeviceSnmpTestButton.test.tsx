@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { testSNMPConnection } from '../../api/client';
 import { DeviceSnmpTestButton } from './DeviceSnmpTestButton';
@@ -94,5 +94,27 @@ describe('DeviceSnmpTestButton', () => {
 
     expect(await screen.findByText('SNMP Failed')).toBeInTheDocument();
     expect(screen.getByText('Test failed')).toBeInTheDocument();
+  });
+
+  it('ignores delayed SNMP test results after switching devices', async () => {
+    let resolveTest: (value: Awaited<ReturnType<typeof testSNMPConnection>>) => void = () => {};
+    mockTestSNMPConnection.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveTest = resolve;
+      }),
+    );
+    const view = render(<DeviceSnmpTestButton deviceId="dev-1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test SNMP Connectivity' }));
+
+    view.rerender(<DeviceSnmpTestButton deviceId="dev-2" />);
+
+    await act(async () => {
+      resolveTest({ success: true, sys_name: 'old-device' });
+    });
+
+    expect(screen.queryByText('SNMP OK')).not.toBeInTheDocument();
+    expect(screen.queryByText('sysName: old-device')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Test SNMP Connectivity' })).toBeEnabled();
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { testSNMPConnection } from '../../api/client';
 
 interface DeviceSnmpTestButtonProps {
@@ -10,17 +10,46 @@ type DeviceSnmpTestResult = Awaited<ReturnType<typeof testSNMPConnection>>;
 export function DeviceSnmpTestButton({ deviceId }: DeviceSnmpTestButtonProps) {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<DeviceSnmpTestResult | null>(null);
+  const requestGenerationRef = useRef(0);
+  const activeDeviceIdRef = useRef(deviceId);
+
+  useEffect(() => {
+    activeDeviceIdRef.current = deviceId;
+    requestGenerationRef.current += 1;
+    setTesting(false);
+    setResult(null);
+  }, [deviceId]);
 
   async function handleTest() {
+    const requestGeneration = requestGenerationRef.current + 1;
+    requestGenerationRef.current = requestGeneration;
+    const requestDeviceId = deviceId;
     setTesting(true);
     setResult(null);
     try {
       const r = await testSNMPConnection(deviceId);
+      if (
+        requestGenerationRef.current !== requestGeneration ||
+        activeDeviceIdRef.current !== requestDeviceId
+      ) {
+        return;
+      }
       setResult(r);
     } catch (err) {
+      if (
+        requestGenerationRef.current !== requestGeneration ||
+        activeDeviceIdRef.current !== requestDeviceId
+      ) {
+        return;
+      }
       setResult({ success: false, error: err instanceof Error ? err.message : 'Test failed' });
     } finally {
-      setTesting(false);
+      if (
+        requestGenerationRef.current === requestGeneration &&
+        activeDeviceIdRef.current === requestDeviceId
+      ) {
+        setTesting(false);
+      }
     }
   }
 

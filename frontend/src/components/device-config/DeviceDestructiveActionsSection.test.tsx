@@ -20,7 +20,7 @@ function renderSection({
   onRemoveFromMap?: (deviceId: string) => void | Promise<void>;
   onDeviceDeleted?: () => void;
 } = {}) {
-  render(
+  return render(
     <DeviceDestructiveActionsSection
       deviceId={deviceId}
       readOnly={readOnly}
@@ -29,8 +29,6 @@ function renderSection({
       onDeviceDeleted={onDeviceDeleted}
     />,
   );
-
-  return { onDeviceDeleted };
 }
 
 beforeEach(() => {
@@ -106,6 +104,18 @@ describe('DeviceDestructiveActionsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByText('Confirm Delete')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete device everywhere' })).toBeInTheDocument();
+  });
+
+  it('resets delete confirmation after switching devices', () => {
+    const view = renderSection({ deviceId: 'dev-1' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete device everywhere' }));
+    expect(screen.getByRole('button', { name: 'Confirm Delete' })).toBeInTheDocument();
+
+    view.rerender(<DeviceDestructiveActionsSection deviceId="dev-2" onDeviceDeleted={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: 'Confirm Delete' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete device everywhere' })).toBeInTheDocument();
   });
 

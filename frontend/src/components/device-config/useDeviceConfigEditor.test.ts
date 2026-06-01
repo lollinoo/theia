@@ -276,6 +276,57 @@ describe('useDeviceConfigEditor', () => {
     });
   });
 
+  it('ignores a revealed SNMP profile when the editor switches devices before reveal completes', async () => {
+    let resolveProfile: (profile: SNMPProfile) => void = () => {};
+    const profile: SNMPProfile = {
+      id: 'profile-1',
+      name: 'Core v3',
+      description: '',
+      snmp: {
+        version: '3',
+        username: 'snmp-user',
+        security_level: 'authPriv',
+        auth_protocol: 'SHA',
+        auth_password: 'auth-secret',
+        priv_protocol: 'AES',
+        priv_password: 'priv-secret',
+      },
+      created_at: '',
+      updated_at: '',
+    };
+    apiMocks.revealSNMPProfile.mockReturnValueOnce(
+      new Promise<SNMPProfile>((resolve) => {
+        resolveProfile = resolve;
+      }),
+    );
+    const { result, rerender } = renderEditor({
+      device: mockDevice({ id: 'dev-1', hostname: 'router-01' }),
+    });
+
+    let applyPromise: Promise<void> | undefined;
+    act(() => {
+      applyPromise = result.current.applyProfile('profile-1');
+    });
+
+    rerender({
+      device: mockDevice({ id: 'dev-2', hostname: 'router-02' }),
+      readOnly: false,
+      isVirtual: undefined,
+      mapContext: undefined,
+      onDeviceUpdated: vi.fn(),
+    });
+
+    await act(async () => {
+      resolveProfile(profile);
+      await applyPromise;
+    });
+
+    expect(result.current.form.hostname).toBe('router-02');
+    expect(result.current.form.snmp.username).toBe('');
+    expect(result.current.form.snmp.authPassword).toBe('');
+    expect(result.current.form.snmp.privPassword).toBe('');
+  });
+
   it('clears the saved indicator timeout on unmount after a successful save', async () => {
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');

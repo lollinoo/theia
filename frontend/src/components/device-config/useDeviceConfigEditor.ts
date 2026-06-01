@@ -156,6 +156,8 @@ export function useDeviceConfigEditor({
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const usesSNMP = form.metricsMode === 'snmp' || form.metricsMode === 'prometheus_snmp_fallback';
   const deviceConfigSyncKey = buildDeviceConfigSyncKey(device, Boolean(isVirtual));
+  const deviceConfigSyncKeyRef = useRef(deviceConfigSyncKey);
+  deviceConfigSyncKeyRef.current = deviceConfigSyncKey;
 
   useEffect(() => {
     return () => {
@@ -215,11 +217,14 @@ export function useDeviceConfigEditor({
   }, [deviceConfigSyncKey, isVirtual]);
 
   async function applyProfile(profileId: string) {
+    const revealSyncKey = deviceConfigSyncKey;
     setEditError(null);
     try {
       const revealed = await revealSNMPProfile(profileId, 'apply SNMP profile to device config');
+      if (deviceConfigSyncKeyRef.current !== revealSyncKey) return;
       setForm((current) => applySNMPProfile(current, revealed));
     } catch (err) {
+      if (deviceConfigSyncKeyRef.current !== revealSyncKey) return;
       setEditError(err instanceof Error ? err.message : 'Failed to reveal SNMP profile.');
     }
   }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { deleteDevice } from '../../api/client';
 
 interface DeviceDestructiveActionsSectionProps {
@@ -22,6 +22,12 @@ export function DeviceDestructiveActionsSection({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [removeFromMapLoading, setRemoveFromMapLoading] = useState(false);
+
+  useEffect(() => {
+    setConfirmDelete(false);
+    setDeleteLoading(false);
+    setRemoveFromMapLoading(false);
+  }, [deviceId]);
 
   async function handleDelete() {
     if (readOnly) return;

@@ -133,6 +133,55 @@ describe('DevicePollingSection', () => {
     }
   });
 
+  it('cancels a pending cadence save when the section becomes read-only', async () => {
+    vi.useFakeTimers();
+    try {
+      const { updateDevice } = await import('../../api/client');
+      const view = render(
+        <DevicePollingSection device={mockDevice()} readOnly={false} onDeviceUpdated={vi.fn()} />,
+      );
+
+      fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+
+      view.rerender(
+        <DevicePollingSection device={mockDevice()} readOnly={true} onDeviceUpdated={vi.fn()} />,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(updateDevice).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels a pending cadence save when switching devices', async () => {
+    vi.useFakeTimers();
+    try {
+      const { updateDevice } = await import('../../api/client');
+      const view = render(<DevicePollingSection device={mockDevice()} onDeviceUpdated={vi.fn()} />);
+
+      fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+
+      view.rerender(
+        <DevicePollingSection
+          device={mockDevice({ id: 'dev-2', hostname: 'router-02' })}
+          onDeviceUpdated={vi.fn()}
+        />,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(updateDevice).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows typed backend errors on polling saves', async () => {
     vi.useFakeTimers();
     try {

@@ -63,6 +63,13 @@ export function DevicePollingSection({
   const pollingTimerRef = useRef<number | null>(null);
   const savedPollingTimerRef = useRef<number | null>(null);
 
+  function clearPendingPollingUpdate() {
+    if (pollingTimerRef.current !== null) {
+      window.clearTimeout(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+  }
+
   useEffect(() => {
     const nextPollingState = pollingStateFromOverride(device.poll_interval_override);
     setPollingValue(nextPollingState.pollingValue);
@@ -70,6 +77,10 @@ export function DevicePollingSection({
     setPollingEnabled(device.polling_enabled !== false);
     setPollingError(null);
   }, [device.id, device.poll_interval_override, device.polling_enabled, resetKey]);
+
+  useEffect(() => {
+    return () => clearPendingPollingUpdate();
+  }, [device.id, readOnly, resetKey]);
 
   function showSaved() {
     setSavedPolling(true);
@@ -80,7 +91,7 @@ export function DevicePollingSection({
   function schedulePollingUpdate(rawValue: string, isDelete = false) {
     if (readOnly) return;
     if (!pollingEnabled) return;
-    if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
+    clearPendingPollingUpdate();
     pollingTimerRef.current = window.setTimeout(() => {
       const pollIntervalOverride = isDelete ? null : Number.parseInt(rawValue, 10);
       void updateDevice(device.id, { poll_interval_override: pollIntervalOverride })
@@ -103,10 +114,7 @@ export function DevicePollingSection({
 
   async function handlePollingEnabledChange(enabled: boolean) {
     if (readOnly) return;
-    if (pollingTimerRef.current !== null) {
-      window.clearTimeout(pollingTimerRef.current);
-      pollingTimerRef.current = null;
-    }
+    clearPendingPollingUpdate();
     const previous = pollingEnabled;
     setPollingEnabled(enabled);
     setPollingError(null);
@@ -142,14 +150,14 @@ export function DevicePollingSection({
     setCustomPolling(rawValue);
 
     if (!/^\d+$/.test(rawValue)) {
-      if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
+      clearPendingPollingUpdate();
       setPollingError(POLLING_OVERRIDE_ERROR);
       return;
     }
 
     const parsedValue = Number.parseInt(rawValue, 10);
     if (!Number.isInteger(parsedValue) || parsedValue < 5 || parsedValue > 3600) {
-      if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
+      clearPendingPollingUpdate();
       setPollingError(POLLING_OVERRIDE_ERROR);
       return;
     }
