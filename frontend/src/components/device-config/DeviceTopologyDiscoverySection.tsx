@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { fetchSettings, runTopologyDiscovery } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
 import type { Device, MetricsSource, TopologyDiscoveryMode } from '../../types/api';
+import { createAsyncStaleGuard } from '../../utils/asyncStaleGuard';
 import {
   TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyBootstrapState,
@@ -49,20 +50,21 @@ export function DeviceTopologyDiscoverySection({
   }
 
   useEffect(() => {
-    let cancelled = false;
+    const staleGuard = createAsyncStaleGuard();
     fetchSettings()
       .then((rawSettings) => {
-        if (cancelled) return;
-        setTopologyDiscoveryDefaultMode(
-          (rawSettings['topology_discovery_default_mode'] as TopologyDiscoveryMode | undefined) ??
-            'lldp_cdp',
+        staleGuard.run(() =>
+          setTopologyDiscoveryDefaultMode(
+            (rawSettings['topology_discovery_default_mode'] as TopologyDiscoveryMode | undefined) ??
+              'lldp_cdp',
+          ),
         );
       })
       .catch(() => {
-        if (!cancelled) setTopologyDiscoveryDefaultMode('lldp_cdp');
+        staleGuard.run(() => setTopologyDiscoveryDefaultMode('lldp_cdp'));
       });
     return () => {
-      cancelled = true;
+      staleGuard.cancel();
     };
   }, [device.id]);
 

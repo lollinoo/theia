@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { checkPrometheusHealth, fetchSNMPProfiles } from '../../api/client';
 import type { Device, MetricsSource, SNMPProfile } from '../../types/api';
+import { createAsyncStaleGuard } from '../../utils/asyncStaleGuard';
 import { MAX_STRING_LENGTH, validateMaxLength } from '../../utils/validation';
 import type { DeviceFormModel } from '../forms/deviceFormModels';
 
@@ -45,24 +46,24 @@ export function DeviceNetworkSettingsSection({
       return;
     }
 
-    let cancelled = false;
+    const staleGuard = createAsyncStaleGuard();
     fetchSNMPProfiles()
       .then((nextProfiles) => {
-        if (!cancelled) setProfiles(nextProfiles);
+        staleGuard.run(() => setProfiles(nextProfiles));
       })
       .catch(() => {
         /* non-fatal */
       });
     checkPrometheusHealth()
       .then((result) => {
-        if (!cancelled) setPrometheusAvailable(result.enabled !== false && result.available);
+        staleGuard.run(() => setPrometheusAvailable(result.enabled !== false && result.available));
       })
       .catch(() => {
-        if (!cancelled) setPrometheusAvailable(false);
+        staleGuard.run(() => setPrometheusAvailable(false));
       });
 
     return () => {
-      cancelled = true;
+      staleGuard.cancel();
     };
   }, [isVirtual]);
 

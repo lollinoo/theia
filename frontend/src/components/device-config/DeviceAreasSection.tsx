@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchAreas } from '../../api/client';
 import type { Area } from '../../types/api';
+import { createAsyncStaleGuard } from '../../utils/asyncStaleGuard';
 import {
   type DeviceFormModel,
   defaultVirtualNodeColor,
@@ -39,17 +40,17 @@ export function DeviceAreasSection({
       return;
     }
 
-    let cancelled = false;
+    const staleGuard = createAsyncStaleGuard();
     fetchAreas()
       .then((nextAreas) => {
-        if (!cancelled) setLoadedAreas(nextAreas);
+        staleGuard.run(() => setLoadedAreas(nextAreas));
       })
       .catch(() => {
         /* non-fatal */
       });
 
     return () => {
-      cancelled = true;
+      staleGuard.cancel();
     };
   }, [providedAreas]);
 
