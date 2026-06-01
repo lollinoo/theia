@@ -26,7 +26,6 @@ import type {
   CredentialProfile,
   Device,
   DeviceCredentialProfile,
-  DevicePollClass,
   GrafanaDashboardProfile,
   MetricsSource,
   SNMPProfile,
@@ -48,6 +47,7 @@ import {
   validateURL,
 } from '../utils/validation';
 import { MaterialIcon } from './MaterialIcon';
+import { DevicePollingSection } from './device-config/DevicePollingSection';
 import {
   type DeviceFormModel,
   applySNMPProfile,
@@ -56,27 +56,6 @@ import {
   normalizeVirtualNodeColor,
 } from './forms/deviceFormModels';
 import { buildUpdateDevicePayload } from './forms/deviceFormSubmitters';
-
-const POLLING_PRESETS = [
-  { label: 'Use device default', value: 'default' },
-  { label: '15 seconds', value: '15' },
-  { label: '30 seconds', value: '30' },
-  { label: '60 seconds', value: '60' },
-  { label: '5 minutes', value: '300' },
-  { label: 'Custom...', value: 'custom' },
-];
-
-const PRESET_VALUES = new Set(
-  POLLING_PRESETS.map((p) => p.value).filter((v) => v !== 'custom' && v !== 'default'),
-);
-
-const DEFAULT_POLLING_DURATION_BY_CLASS: Record<DevicePollClass, string> = {
-  core: '30s',
-  standard: '1m',
-  low: '5m',
-};
-
-const POLLING_OVERRIDE_ERROR = 'Polling override must be an integer between 5 and 3600 seconds';
 
 type DeviceUpdatePayload = Parameters<typeof updateDevice>[1];
 
@@ -194,9 +173,6 @@ export function DeviceConfigPanel({
   onWinBoxAvailabilityChange,
   isVirtual,
 }: DeviceConfigPanelProps) {
-  const [pollingValue, setPollingValue] = useState('default');
-  const [customPolling, setCustomPolling] = useState('');
-  const [pollingEnabled, setPollingEnabled] = useState(device.polling_enabled !== false);
   const [grafanaUrl, setGrafanaUrl] = useState('');
   const [grafanaProfileId, setGrafanaProfileId] = useState('');
   const [grafanaProfiles, setGrafanaProfiles] = useState<GrafanaDashboardProfile[]>([]);
@@ -219,7 +195,6 @@ export function DeviceConfigPanel({
   const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
-  const [savedPolling, setSavedPolling] = useState(false);
   const [savedGrafana, setSavedGrafana] = useState(false);
   const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] =
     useState<TopologyDiscoveryMode>('lldp_cdp');
@@ -230,9 +205,7 @@ export function DeviceConfigPanel({
   // Field-level validation errors
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  const pollingTimerRef = useRef<number | null>(null);
   const grafanaTimerRef = useRef<number | null>(null);
-  const savedPollingTimerRef = useRef<number | null>(null);
   const savedGrafanaTimerRef = useRef<number | null>(null);
   const editSavedTimerRef = useRef<number | null>(null);
   const winBoxAvailabilityCallbackRef = useRef(onWinBoxAvailabilityChange);
@@ -257,24 +230,6 @@ export function DeviceConfigPanel({
 
   function updateVirtual(update: Partial<DeviceFormModel['virtual']>) {
     setForm((current) => ({ ...current, virtual: { ...current.virtual, ...update } }));
-  }
-
-  function syncPollingState(pollIntervalOverride: number | null | undefined) {
-    if (pollIntervalOverride === null || pollIntervalOverride === undefined) {
-      setPollingValue('default');
-      setCustomPolling('');
-      return;
-    }
-
-    const overrideValue = String(pollIntervalOverride);
-    if (PRESET_VALUES.has(overrideValue)) {
-      setPollingValue(overrideValue);
-      setCustomPolling('');
-      return;
-    }
-
-    setPollingValue('custom');
-    setCustomPolling(overrideValue);
   }
 
   function setFieldError(field: string, err: string | null) {
@@ -414,8 +369,6 @@ export function DeviceConfigPanel({
   // status changes should not reset in-progress edits.
   useEffect(() => {
     setForm(createDeviceConfigFormModel(device, Boolean(isVirtual)));
-    syncPollingState(device.poll_interval_override);
-    setPollingEnabled(device.polling_enabled !== false);
     setTopologyDiscoveryMessage(null);
     setTopologyDiscoveryError(null);
     setTopologyDiscoveryRunning(false);
@@ -441,91 +394,6 @@ export function DeviceConfigPanel({
     setter(true);
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => setter(false), 2000);
-  }
-
-  function schedulePollingUpdate(rawValue: string, isDelete = false) {
-    if (readOnly) return;
-    if (!pollingEnabled) return;
-    if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
-    pollingTimerRef.current = window.setTimeout(() => {
-      const pollIntervalOverride = isDelete ? null : Number.parseInt(rawValue, 10);
-      void updateDevice(device.id, { poll_interval_override: pollIntervalOverride })
-        .then((updated) => {
-          setFieldError('polling', null);
-          showSaved(setSavedPolling, savedPollingTimerRef);
-          onDeviceUpdated(updated);
-        })
-        .catch((error) => {
-          if (error instanceof ValidationError || error instanceof ServerError) {
-            setFieldError('polling', error.message);
-            return;
-          }
-          setFieldError(
-            'polling',
-            error instanceof Error ? error.message : 'Failed to update polling override',
-          );
-        });
-    }, 500);
-  }
-
-  async function handlePollingEnabledChange(enabled: boolean) {
-    if (readOnly) return;
-    if (pollingTimerRef.current !== null) {
-      window.clearTimeout(pollingTimerRef.current);
-      pollingTimerRef.current = null;
-    }
-    const previous = pollingEnabled;
-    setPollingEnabled(enabled);
-    setFieldError('polling', null);
-    try {
-      const updated = await updateDevice(device.id, { polling_enabled: enabled });
-      showSaved(setSavedPolling, savedPollingTimerRef);
-      onDeviceUpdated(updated);
-    } catch (error) {
-      setPollingEnabled(previous);
-      if (error instanceof ValidationError || error instanceof ServerError) {
-        setFieldError('polling', error.message);
-        return;
-      }
-      setFieldError(
-        'polling',
-        error instanceof Error ? error.message : 'Failed to update polling state',
-      );
-    }
-  }
-
-  function handlePollingChange(value: string) {
-    if (readOnly) return;
-    setPollingValue(value);
-    setFieldError('polling', null);
-    if (value === 'default') {
-      setCustomPolling('');
-      schedulePollingUpdate('', true);
-    } else if (value !== 'custom') {
-      setCustomPolling('');
-      schedulePollingUpdate(value);
-    }
-  }
-
-  function handleCustomPollingChange(rawValue: string) {
-    if (readOnly) return;
-    setCustomPolling(rawValue);
-
-    if (!/^\d+$/.test(rawValue)) {
-      if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
-      setFieldError('polling', POLLING_OVERRIDE_ERROR);
-      return;
-    }
-
-    const parsedValue = Number.parseInt(rawValue, 10);
-    if (!Number.isInteger(parsedValue) || parsedValue < 5 || parsedValue > 3600) {
-      if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
-      setFieldError('polling', POLLING_OVERRIDE_ERROR);
-      return;
-    }
-
-    setFieldError('polling', null);
-    schedulePollingUpdate(rawValue);
   }
 
   function scheduleGrafanaUpdate(value: string) {
@@ -734,8 +602,6 @@ export function DeviceConfigPanel({
     }
   }
 
-  const pollClass = device.poll_class || 'standard';
-  const defaultPollingDuration = DEFAULT_POLLING_DURATION_BY_CLASS[pollClass];
   const discoveryState = device.topology_bootstrap_state || 'idle';
   const discoveryBusy =
     topologyDiscoveryRunning ||
@@ -757,72 +623,12 @@ export function DeviceConfigPanel({
     <div className="space-y-6 p-4 transition-colors duration-200">
       {/* Polling Override — physical devices only */}
       {!isVirtual && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-              Polling Override
-            </p>
-            <span
-              className={`text-xs text-status-up transition-opacity duration-500 ${savedPolling ? 'opacity-100' : 'opacity-0'}`}
-            >
-              Saved
-            </span>
-          </div>
-          <div className="rounded-lg bg-surface-high px-3 py-2">
-            <p className="text-sm text-on-bg">
-              Default cadence: every {defaultPollingDuration} ({pollClass} class)
-            </p>
-          </div>
-          <label className="flex items-center justify-between gap-3 rounded-lg bg-surface-high px-3 py-2">
-            <span className="min-w-0">
-              <span className="block text-sm font-medium text-on-bg">Continuous Polling</span>
-              <span className="block text-xs text-on-bg-secondary">
-                {pollingEnabled
-                  ? 'Backend recurring polling is active.'
-                  : 'Continuous polling is suspended for this device.'}
-              </span>
-            </span>
-            <input
-              type="checkbox"
-              role="switch"
-              aria-label="Continuous Polling"
-              aria-checked={pollingEnabled}
-              checked={pollingEnabled}
-              disabled={readOnly}
-              onChange={(e) => {
-                void handlePollingEnabledChange(e.target.checked);
-              }}
-              className="h-5 w-9 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-60"
-            />
-          </label>
-          <select
-            value={pollingValue}
-            disabled={readOnly || !pollingEnabled}
-            onChange={(e) => handlePollingChange(e.target.value)}
-            className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {POLLING_PRESETS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          {pollingValue === 'custom' && (
-            <input
-              type="number"
-              min={5}
-              max={3600}
-              value={customPolling}
-              placeholder="Seconds (5-3600)"
-              disabled={readOnly || !pollingEnabled}
-              onChange={(e) => handleCustomPollingChange(e.target.value)}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-            />
-          )}
-          {fieldErrors['polling'] && (
-            <p className="text-xs text-status-down">{fieldErrors['polling']}</p>
-          )}
-        </div>
+        <DevicePollingSection
+          device={device}
+          readOnly={readOnly}
+          resetKey={deviceConfigSyncKey}
+          onDeviceUpdated={onDeviceUpdated}
+        />
       )}
 
       {!isVirtual && (
