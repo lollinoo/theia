@@ -1,20 +1,10 @@
 import type { ReactFlowInstance } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import {
-  createLink,
-  fetchCanvasBootstrap,
-  fetchCanvasMapBootstrap,
-  fetchCanvasMapTopology,
-  fetchCanvasTopology,
-  fetchDevices,
-  fetchGrafanaDashboardConfig,
-  fetchLinks,
-  fetchSettings,
-} from '../../api/client';
+import { createLink, fetchGrafanaDashboardConfig, fetchSettings } from '../../api/client';
 import { publishCanvasRuntimeBootstrap } from '../../hooks/canvasRuntimeBootstrap';
 import { type PositionState, usePositions } from '../../hooks/usePositions';
-import type { Area, Device, DevicePosition, GrafanaDashboardConfig, Link } from '../../types/api';
+import type { Area, Device, GrafanaDashboardConfig, Link } from '../../types/api';
 import {
   type AlertDTO,
   type PrometheusStatusPayload,
@@ -38,6 +28,7 @@ import {
   measureCanvasWork,
 } from './canvasInstrumentation';
 import { patchAlertStatuses } from './canvasPresentationPatches';
+import { canvasMapKey, loadCanvasTopologySource } from './canvasTopologySource';
 import { buildTopologyEdges } from './edgeBuilder';
 import {
   buildIncrementalLayoutInputs,
@@ -62,6 +53,15 @@ import {
   createCanvasTopologyCompositionCache,
 } from './topologyCompositionCache';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
+import {
+  type StructuralRefreshCause,
+  type TopologyRecoveryNotice,
+  buildTopologyRecoveryFailureNotice,
+  buildTopologyRecoveryNotice,
+  measurementTriggerForCauses,
+} from './topologyRecovery';
+
+export type { TopologyRecoveryNotice } from './topologyRecovery';
 
 interface UseCanvasDataParams {
   mapId: string | null;
@@ -108,17 +108,6 @@ interface UseCanvasDataReturn {
   updateNodePosition: (deviceId: string, position: { x: number; y: number }) => void;
 }
 
-type StructuralRefreshCause =
-  | 'backend-reconnected'
-  | 'backend-resync-required'
-  | 'topology-changed';
-
-export interface TopologyRecoveryNotice {
-  tone: 'success' | 'warning';
-  message: string;
-  actionLabel?: string;
-}
-
 interface RuntimeSummary {
   alertCount: number;
   prometheusDiagnosticsVisible: boolean;
@@ -133,74 +122,8 @@ interface LoadTopologyOptions {
 
 type LoadTopologyResult = 'applied' | 'stale' | 'failed';
 
-type CanvasTopologySource =
-  | {
-      status: 'ok';
-      devices: Device[];
-      links: Link[];
-      areas: Area[];
-      positions: Map<string, PositionState>;
-      etag?: string;
-      topologyVersion?: string;
-      runtimeVersion?: number;
-      runtimeIdentity?: string;
-      runtimeSnapshot?: SnapshotPayload;
-      schemaVersion?: number;
-    }
-  | {
-      status: 'not-modified';
-      etag?: string;
-    };
-
 const structuralRefreshDebounceMs = 250;
-const topologyRefreshRetryActionLabel = 'Retry topology refresh';
-const topologyRefreshDelayedMessage = 'Live topology refresh delayed';
 const emptyAlerts: AlertDTO[] = [];
-
-function canvasMapKey(mapId: string | null): string {
-  return mapId === null ? 'default:' : `map:${mapId}`;
-}
-
-function measurementTriggerForCauses(
-  causes: Set<StructuralRefreshCause>,
-): CanvasMeasurementTrigger {
-  if (causes.has('backend-reconnected') || causes.has('backend-resync-required')) {
-    return 'backend_reconnected';
-  }
-
-  return 'topology_changed';
-}
-
-function buildTopologyRecoveryNotice(
-  causes: Set<StructuralRefreshCause>,
-): TopologyRecoveryNotice | null {
-  const hasReconnect = causes.has('backend-reconnected');
-  const hasResync = causes.has('backend-resync-required');
-  const hasTopologyChanged = causes.has('topology-changed');
-
-  if (!hasReconnect && !hasResync) {
-    return null;
-  }
-
-  if ((hasReconnect && hasResync) || hasTopologyChanged) {
-    return {
-      tone: 'success',
-      message: 'Topology refreshed',
-    };
-  }
-
-  if (hasResync) {
-    return {
-      tone: 'success',
-      message: 'Live topology resynced',
-    };
-  }
-
-  return {
-    tone: 'success',
-    message: 'Topology refreshed after reconnect',
-  };
-}
 
 function hasUsablePosition(position: PositionState | undefined): position is PositionState {
   return position !== undefined && Number.isFinite(position.x) && Number.isFinite(position.y);
@@ -250,19 +173,6 @@ function positionsChanged(
   return false;
 }
 
-function toPositionMap(positions: Iterable<DevicePosition>): Map<string, PositionState> {
-  return new Map(
-    Array.from(positions).map((position) => [
-      position.device_id,
-      {
-        x: position.x,
-        y: position.y,
-        pinned: position.pinned,
-      },
-    ]),
-  );
-}
-
 function nodePositionsToPositionMap(nodes: DeviceNode[]): Map<string, PositionState> {
   return new Map(
     nodes.map((node) => [
@@ -274,95 +184,6 @@ function nodePositionsToPositionMap(nodes: DeviceNode[]): Map<string, PositionSt
       },
     ]),
   );
-}
-
-function isCanvasTopologyUnsupported(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null || !('status' in error)) {
-    return false;
-  }
-
-  const status = (error as { status?: unknown }).status;
-  return status === 404 || status === 405 || status === 501;
-}
-
-async function loadCanvasTopologySource(
-  mapId: string | null,
-  fetchPositions: () => Promise<Map<string, PositionState>>,
-  etag: string | null,
-  includeRuntimeBootstrap = false,
-  forceRuntimeBootstrap = false,
-): Promise<CanvasTopologySource> {
-  try {
-    if (includeRuntimeBootstrap) {
-      const result =
-        mapId === null
-          ? await fetchCanvasBootstrap({ force: forceRuntimeBootstrap })
-          : await fetchCanvasMapBootstrap(mapId, { force: forceRuntimeBootstrap });
-      const topology = result.topology;
-      return {
-        status: 'ok',
-        devices: topology.devices,
-        links: topology.links,
-        areas: topology.areas,
-        positions: toPositionMap(Object.values(topology.positions)),
-        topologyVersion: topology.topology_version,
-        runtimeVersion: topology.runtime_version,
-        runtimeIdentity: topology.runtime_identity,
-        runtimeSnapshot: topology.runtime_snapshot,
-        schemaVersion: topology.schema_version,
-      };
-    }
-
-    const result =
-      mapId === null
-        ? await fetchCanvasTopology(etag ?? undefined)
-        : await fetchCanvasMapTopology(mapId, etag ?? undefined);
-    if (result.status === 'not-modified') {
-      return {
-        status: 'not-modified',
-        etag: result.etag,
-      };
-    }
-
-    const topology = result.topology;
-    return {
-      status: 'ok',
-      devices: topology.devices,
-      links: topology.links,
-      areas: topology.areas,
-      positions: toPositionMap(Object.values(topology.positions)),
-      etag: result.etag,
-      topologyVersion: topology.topology_version,
-      runtimeVersion: topology.runtime_version,
-      runtimeIdentity: topology.runtime_identity,
-      runtimeSnapshot: topology.runtime_snapshot,
-      schemaVersion: topology.schema_version,
-    };
-  } catch (error) {
-    if (includeRuntimeBootstrap && isCanvasTopologyUnsupported(error)) {
-      return loadCanvasTopologySource(mapId, fetchPositions, etag, false);
-    }
-    if (!isCanvasTopologyUnsupported(error)) {
-      throw error;
-    }
-    if (mapId !== null) {
-      throw error;
-    }
-  }
-
-  const [devices, links, positions] = await Promise.all([
-    fetchDevices(),
-    fetchLinks(),
-    fetchPositions(),
-  ]);
-
-  return {
-    status: 'ok',
-    devices,
-    links,
-    areas: [],
-    positions,
-  };
 }
 
 function mergeNodePresentationState(
@@ -683,13 +504,13 @@ export function useCanvasData({
             !renderedNodesOwnedByMap
               ? null
               : lastCanvasTopologyEtag;
-          const topologySource = await loadCanvasTopologySource(
+          const topologySource = await loadCanvasTopologySource({
             mapId,
             fetchPositions,
-            topologyEtag,
+            etag: topologyEtag,
             includeRuntimeBootstrap,
             forceRuntimeBootstrap,
-          );
+          });
           if (topologySource.status === 'ok' && topologySource.runtimeSnapshot !== undefined) {
             publishCanvasRuntimeBootstrap({
               snapshot: topologySource.runtimeSnapshot,
@@ -1153,11 +974,7 @@ export function useCanvasData({
         }
         setTopologyRecoveryNotice(buildTopologyRecoveryNotice(refreshCauses));
       } catch {
-        setTopologyRecoveryNotice({
-          tone: 'warning',
-          message: topologyRefreshDelayedMessage,
-          actionLabel: topologyRefreshRetryActionLabel,
-        });
+        setTopologyRecoveryNotice(buildTopologyRecoveryFailureNotice());
       }
     },
     [loadTopology],
