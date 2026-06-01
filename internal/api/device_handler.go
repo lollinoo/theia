@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/service/canvasmap"
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
@@ -321,7 +322,7 @@ func (h *DeviceHandler) addDeviceToPrimaryCanvasMap(device *domain.Device) error
 		if err != nil {
 			return fmt.Errorf("loading primary canvas map connected links: %w", err)
 		}
-		linkIDs = canvasMapConnectedBaseLinkIDs(device.ID, membership, links)
+		linkIDs = canvasmap.ConnectedBaseLinkIDs(device.ID, membership, links)
 	}
 	return adder.AddDeviceMembership(
 		primaryMap.ID,

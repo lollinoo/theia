@@ -1,4 +1,4 @@
-package api
+package canvasmap
 
 import (
 	"testing"
@@ -21,7 +21,7 @@ func TestProjectCanvasTopologyForMapUsesAreaAndGhosts(t *testing.T) {
 		TargetDeviceID: remoteID,
 	}}
 
-	result := projectCanvasTopologyForMap(devices, links, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, links, domain.CanvasMapFilter{
 		AreaID:                &areaID,
 		IncludeCrossAreaLinks: true,
 		IncludeGhostDevices:   true,
@@ -47,7 +47,7 @@ func TestProjectCanvasTopologyForMapDeviceIDsTakePrecedenceOverArea(t *testing.T
 		{ID: areaDeviceID, Hostname: "area", AreaIDs: []uuid.UUID{areaID}, Tags: map[string]string{}},
 	}
 
-	result := projectCanvasTopologyForMap(devices, nil, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, nil, domain.CanvasMapFilter{
 		AreaID:    &areaID,
 		DeviceIDs: []uuid.UUID{selectedID},
 	})
@@ -65,7 +65,7 @@ func TestProjectCanvasTopologyForMapTagsNarrowBaseDevices(t *testing.T) {
 		{ID: accessID, Hostname: "access", Tags: map[string]string{"role": "access"}},
 	}
 
-	result := projectCanvasTopologyForMap(devices, nil, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, nil, domain.CanvasMapFilter{
 		Tags: map[string]string{"role": "core"},
 	})
 
@@ -84,7 +84,7 @@ func TestProjectCanvasTopologyForMapEmptyStringTagRequiresKeyPresence(t *testing
 		{ID: nilTagsID, Hostname: "nil-tags", Tags: nil},
 	}
 
-	result := projectCanvasTopologyForMap(devices, nil, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, nil, domain.CanvasMapFilter{
 		Tags: map[string]string{"rack": ""},
 	})
 
@@ -101,7 +101,7 @@ func TestProjectCanvasTopologyForMapNilTagsDoNotMatchRequiredTags(t *testing.T) 
 		{ID: emptyTagID, Hostname: "empty-tag", Tags: map[string]string{"role": ""}},
 	}
 
-	result := projectCanvasTopologyForMap(devices, nil, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, nil, domain.CanvasMapFilter{
 		Tags: map[string]string{"role": ""},
 	})
 
@@ -131,7 +131,7 @@ func TestProjectCanvasTopologyForMapCrossAreaLinksFalseRequiresBothEndpointsBase
 		TargetDeviceID: remoteID,
 	}
 
-	result := projectCanvasTopologyForMap(devices, []domain.Link{localPeerLink, localRemoteLink}, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, []domain.Link{localPeerLink, localRemoteLink}, domain.CanvasMapFilter{
 		AreaID:                &areaID,
 		IncludeCrossAreaLinks: false,
 		IncludeGhostDevices:   true,
@@ -159,7 +159,7 @@ func TestProjectCanvasTopologyForMapCrossAreaLinksDoNotRequireGhostDevices(t *te
 		TargetDeviceID: remoteID,
 	}}
 
-	result := projectCanvasTopologyForMap(devices, links, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, links, domain.CanvasMapFilter{
 		AreaID:                &areaID,
 		IncludeCrossAreaLinks: true,
 		IncludeGhostDevices:   false,
@@ -192,7 +192,7 @@ func TestProjectCanvasTopologyForMapDuplicateLinksKeepLinksAndDedupeGhosts(t *te
 		TargetDeviceID: remoteID,
 	}
 
-	result := projectCanvasTopologyForMap(devices, []domain.Link{firstLink, duplicateEndpointLink}, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, []domain.Link{firstLink, duplicateEndpointLink}, domain.CanvasMapFilter{
 		AreaID:                &areaID,
 		IncludeCrossAreaLinks: true,
 		IncludeGhostDevices:   true,
@@ -213,7 +213,7 @@ func TestProjectCanvasTopologyForMapUnknownExplicitDeviceIDsAreIgnored(t *testin
 		{ID: knownID, Hostname: "known", Tags: map[string]string{}},
 	}
 
-	result := projectCanvasTopologyForMap(devices, nil, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, nil, domain.CanvasMapFilter{
 		DeviceIDs: []uuid.UUID{unknownID},
 	})
 
@@ -235,7 +235,7 @@ func TestProjectCanvasTopologyForMapCrossAreaLinkWithUnknownEndpointIsExcluded(t
 		TargetDeviceID: unknownID,
 	}
 
-	result := projectCanvasTopologyForMap(devices, []domain.Link{unknownEndpointLink}, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, []domain.Link{unknownEndpointLink}, domain.CanvasMapFilter{
 		AreaID:                &areaID,
 		IncludeCrossAreaLinks: true,
 		IncludeGhostDevices:   true,
@@ -272,7 +272,7 @@ func TestProjectCanvasTopologyForMapPreservesOutputOrder(t *testing.T) {
 		TargetDeviceID: ghostFirstID,
 	}
 
-	result := projectCanvasTopologyForMap(devices, []domain.Link{firstLink, secondLink}, domain.CanvasMapFilter{
+	result := ProjectTopologyForFilter(devices, []domain.Link{firstLink, secondLink}, domain.CanvasMapFilter{
 		AreaID:                &areaID,
 		IncludeCrossAreaLinks: true,
 		IncludeGhostDevices:   true,
