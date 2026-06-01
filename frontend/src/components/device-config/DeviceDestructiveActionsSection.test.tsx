@@ -134,10 +134,7 @@ describe('DeviceDestructiveActionsSection', () => {
     function Harness({ deviceId, probe }: { deviceId: string; probe: boolean }) {
       return (
         <>
-          <DeviceDestructiveActionsSection
-            deviceId={deviceId}
-            onDeviceDeleted={onDeviceDeleted}
-          />
+          <DeviceDestructiveActionsSection deviceId={deviceId} onDeviceDeleted={onDeviceDeleted} />
           <DeleteProbe active={probe} />
         </>
       );
