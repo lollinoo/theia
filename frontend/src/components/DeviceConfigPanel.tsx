@@ -7,12 +7,10 @@ import {
   fetchAreas,
   fetchCredentialProfiles,
   fetchDeviceCredentialProfiles,
-  fetchGrafanaDashboardConfig,
   fetchSNMPProfiles,
   fetchSettings,
   revealSNMPProfile,
   runTopologyDiscovery,
-  saveDeviceGrafanaDashboardOverride,
   setWinBoxProfile,
   testSNMPConnection,
   unassignCredentialProfile,
@@ -26,7 +24,6 @@ import type {
   CredentialProfile,
   Device,
   DeviceCredentialProfile,
-  GrafanaDashboardProfile,
   MetricsSource,
   SNMPProfile,
   TopologyDiscoveryMode,
@@ -44,9 +41,9 @@ import {
   validateIPOrHostname,
   validateMaxLength,
   validateRequired,
-  validateURL,
 } from '../utils/validation';
 import { MaterialIcon } from './MaterialIcon';
+import { DeviceGrafanaDashboardSection } from './device-config/DeviceGrafanaDashboardSection';
 import { DevicePollingSection } from './device-config/DevicePollingSection';
 import {
   type DeviceFormModel,
@@ -173,10 +170,6 @@ export function DeviceConfigPanel({
   onWinBoxAvailabilityChange,
   isVirtual,
 }: DeviceConfigPanelProps) {
-  const [grafanaUrl, setGrafanaUrl] = useState('');
-  const [grafanaProfileId, setGrafanaProfileId] = useState('');
-  const [grafanaProfiles, setGrafanaProfiles] = useState<GrafanaDashboardProfile[]>([]);
-
   const [form, setForm] = useState(() => createDeviceConfigFormModel(device, Boolean(isVirtual)));
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -195,7 +188,6 @@ export function DeviceConfigPanel({
   const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
-  const [savedGrafana, setSavedGrafana] = useState(false);
   const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] =
     useState<TopologyDiscoveryMode>('lldp_cdp');
   const [topologyDiscoveryMessage, setTopologyDiscoveryMessage] = useState<string | null>(null);
@@ -205,8 +197,6 @@ export function DeviceConfigPanel({
   // Field-level validation errors
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  const grafanaTimerRef = useRef<number | null>(null);
-  const savedGrafanaTimerRef = useRef<number | null>(null);
   const editSavedTimerRef = useRef<number | null>(null);
   const winBoxAvailabilityCallbackRef = useRef(onWinBoxAvailabilityChange);
 
@@ -346,15 +336,10 @@ export function DeviceConfigPanel({
   }, [device.id, isVirtual]);
 
   useEffect(() => {
-    Promise.all([fetchSettings(), fetchGrafanaDashboardConfig()])
-      .then((settings) => {
-        const [rawSettings, grafanaConfig] = settings;
-        setGrafanaProfiles(grafanaConfig.profiles);
-        const override = grafanaConfig.device_overrides[device.id];
-        setGrafanaProfileId(override?.profile_id ?? '');
-        setGrafanaUrl(
-          override?.custom_url ?? rawSettings[`grafana_dashboard_url:${device.id}`] ?? '',
-        );
+    let cancelled = false;
+    fetchSettings()
+      .then((rawSettings) => {
+        if (cancelled) return;
         setTopologyDiscoveryDefaultMode(
           (rawSettings['topology_discovery_default_mode'] as TopologyDiscoveryMode | undefined) ??
             'lldp_cdp',
@@ -363,6 +348,9 @@ export function DeviceConfigPanel({
       .catch(() => {
         /* non-fatal */
       });
+    return () => {
+      cancelled = true;
+    };
   }, [device.id]);
 
   // Sync inputs when saved configuration changes. Runtime-only updates such as
@@ -394,43 +382,6 @@ export function DeviceConfigPanel({
     setter(true);
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => setter(false), 2000);
-  }
-
-  function scheduleGrafanaUpdate(value: string) {
-    if (readOnly) return;
-    if (grafanaTimerRef.current !== null) window.clearTimeout(grafanaTimerRef.current);
-    grafanaTimerRef.current = null;
-
-    const err = value.trim() === '' ? null : validateURL(value, 'Grafana URL');
-    setFieldError('grafanaUrl', err);
-    if (err) {
-      return;
-    }
-
-    grafanaTimerRef.current = window.setTimeout(() => {
-      void saveGrafanaOverride(grafanaProfileId, value);
-    }, 500);
-  }
-
-  async function saveGrafanaOverride(profileId: string, customUrl: string) {
-    const nextConfig = await saveDeviceGrafanaDashboardOverride(device.id, {
-      profile_id: profileId || null,
-      custom_url: customUrl.trim(),
-    });
-    setGrafanaProfiles(nextConfig.profiles);
-    showSaved(setSavedGrafana, savedGrafanaTimerRef);
-    onSettingsChange?.();
-  }
-
-  function handleGrafanaProfileChange(profileId: string) {
-    if (readOnly) return;
-    setGrafanaProfileId(profileId);
-    setFieldError('grafanaUrl', null);
-    if (grafanaTimerRef.current !== null) {
-      window.clearTimeout(grafanaTimerRef.current);
-      grafanaTimerRef.current = null;
-    }
-    void saveGrafanaOverride(profileId, grafanaUrl);
   }
 
   async function handleEditSave(e: React.FormEvent) {
@@ -727,52 +678,12 @@ export function DeviceConfigPanel({
         </div>
       )}
 
-      {/* Custom Grafana URL — only for devices with IP */}
-      {(!isVirtual || device.ip) && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-              Grafana Dashboard
-            </p>
-            <span
-              className={`text-xs text-status-up transition-opacity duration-500 ${savedGrafana ? 'opacity-100' : 'opacity-0'}`}
-            >
-              Saved
-            </span>
-          </div>
-          <label className="grid gap-1 text-sm">
-            <span className="text-xs text-on-bg-secondary">Dashboard Profile</span>
-            <select
-              value={grafanaProfileId}
-              disabled={readOnly}
-              onChange={(e) => handleGrafanaProfileChange(e.target.value)}
-              className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <option value="">Use global default</option>
-              {grafanaProfiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <input
-            type="url"
-            value={grafanaUrl}
-            placeholder="Optional custom URL override"
-            disabled={readOnly}
-            onChange={(e) => {
-              setGrafanaUrl(e.target.value);
-              scheduleGrafanaUpdate(e.target.value);
-            }}
-            onBlur={handleBlur('grafanaUrl', () => validateURL(grafanaUrl, 'Grafana URL'))}
-            className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60${fieldErrors['grafanaUrl'] ? ' border-status-down' : ' border-outline-subtle'}`}
-          />
-          {fieldErrors['grafanaUrl'] && (
-            <p className="mt-1 text-xs text-status-down">{fieldErrors['grafanaUrl']}</p>
-          )}
-        </div>
-      )}
+      <DeviceGrafanaDashboardSection
+        device={device}
+        readOnly={readOnly}
+        isVirtual={isVirtual}
+        onSettingsChange={onSettingsChange}
+      />
 
       {/* Edit Device */}
       <form
