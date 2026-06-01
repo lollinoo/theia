@@ -234,6 +234,110 @@ describe('DevicePollingSection', () => {
     }
   });
 
+  it('ignores an in-flight cadence save resolution while a newer cadence save is debounced', async () => {
+    vi.useFakeTimers();
+    try {
+      const { updateDevice } = await import('../../api/client');
+      const onDeviceUpdated = vi.fn();
+      let resolveFirstUpdate: (updated: Device) => void = () => {};
+      let firstUpdatePromise: Promise<Device> | undefined;
+      (updateDevice as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+        firstUpdatePromise = new Promise<Device>((resolve) => {
+          resolveFirstUpdate = resolve;
+        });
+        return firstUpdatePromise;
+      });
+
+      render(<DevicePollingSection device={mockDevice()} onDeviceUpdated={onDeviceUpdated} />);
+
+      fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', { poll_interval_override: 30 });
+
+      fireEvent.change(screen.getByDisplayValue('30 seconds'), { target: { value: '60' } });
+
+      await act(async () => {
+        resolveFirstUpdate(mockDevice({ poll_interval_override: 30 }));
+        await firstUpdatePromise;
+      });
+
+      expect(onDeviceUpdated).not.toHaveBeenCalled();
+      const pollingHeader = screen.getByText('Polling Override').parentElement;
+      expect(pollingHeader).not.toBeNull();
+      expect(within(pollingHeader as HTMLElement).getByText('Saved').className).toContain(
+        'opacity-0',
+      );
+
+      (updateDevice as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        mockDevice({ poll_interval_override: 60 }),
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(updateDevice).toHaveBeenCalledWith('dev-1', { poll_interval_override: 60 });
+      expect(onDeviceUpdated).toHaveBeenCalledTimes(1);
+      expect(onDeviceUpdated).toHaveBeenCalledWith(mockDevice({ poll_interval_override: 60 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps custom validation errors when a stale in-flight cadence save resolves', async () => {
+    vi.useFakeTimers();
+    try {
+      const { updateDevice } = await import('../../api/client');
+      const onDeviceUpdated = vi.fn();
+      let resolveUpdate: (updated: Device) => void = () => {};
+      let updatePromise: Promise<Device> | undefined;
+      (updateDevice as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+        updatePromise = new Promise<Device>((resolve) => {
+          resolveUpdate = resolve;
+        });
+        return updatePromise;
+      });
+
+      render(<DevicePollingSection device={mockDevice()} onDeviceUpdated={onDeviceUpdated} />);
+
+      fireEvent.change(screen.getByDisplayValue('Use device default'), { target: { value: '30' } });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      fireEvent.change(screen.getByDisplayValue('30 seconds'), { target: { value: 'custom' } });
+      fireEvent.change(screen.getByPlaceholderText('Seconds (5-3600)'), {
+        target: { value: '3601' },
+      });
+
+      expect(
+        screen.getByText('Polling override must be an integer between 5 and 3600 seconds'),
+      ).toBeInTheDocument();
+
+      await act(async () => {
+        resolveUpdate(mockDevice({ poll_interval_override: 30 }));
+        await updatePromise;
+      });
+
+      expect(onDeviceUpdated).not.toHaveBeenCalled();
+      expect(
+        screen.getByText('Polling override must be an integer between 5 and 3600 seconds'),
+      ).toBeInTheDocument();
+      const pollingHeader = screen.getByText('Polling Override').parentElement;
+      expect(pollingHeader).not.toBeNull();
+      expect(within(pollingHeader as HTMLElement).getByText('Saved').className).toContain(
+        'opacity-0',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ignores an in-flight polling enabled rejection after switching devices', async () => {
     const { updateDevice } = await import('../../api/client');
     let rejectUpdate: (error: Error) => void = () => {};

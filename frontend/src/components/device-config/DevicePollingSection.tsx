@@ -79,6 +79,10 @@ export function DevicePollingSection({
     };
   }
 
+  function invalidatePollingSave() {
+    pollingSaveGenerationRef.current += 1;
+  }
+
   function isCurrentPollingSave(save: { generation: number; contextKey: string }): boolean {
     return (
       pollingSaveGenerationRef.current === save.generation &&
@@ -115,6 +119,7 @@ export function DevicePollingSection({
     if (readOnly) return;
     if (!pollingEnabled) return;
     clearPendingPollingUpdate();
+    invalidatePollingSave();
     pollingTimerRef.current = window.setTimeout(() => {
       const save = beginPollingSave();
       const pollIntervalOverride = isDelete ? null : Number.parseInt(rawValue, 10);
@@ -180,6 +185,7 @@ export function DevicePollingSection({
 
     if (!/^\d+$/.test(rawValue)) {
       clearPendingPollingUpdate();
+      invalidatePollingSave();
       setPollingError(POLLING_OVERRIDE_ERROR);
       return;
     }
@@ -187,6 +193,7 @@ export function DevicePollingSection({
     const parsedValue = Number.parseInt(rawValue, 10);
     if (!Number.isInteger(parsedValue) || parsedValue < 5 || parsedValue > 3600) {
       clearPendingPollingUpdate();
+      invalidatePollingSave();
       setPollingError(POLLING_OVERRIDE_ERROR);
       return;
     }
