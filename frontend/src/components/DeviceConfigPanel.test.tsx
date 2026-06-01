@@ -1187,6 +1187,45 @@ describe('DeviceConfigPanel — Credentials section', () => {
     expect(screen.queryByText('Admin SSH')).not.toBeInTheDocument();
   });
 
+  it('clears WinBox availability and hides credentials when switching to a virtual device', async () => {
+    const { fetchDeviceCredentialProfiles } = await import('../api/client');
+    (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { profile_id: 'p1', name: 'Admin SSH', role: 'Admin', is_winbox: true },
+    ]);
+
+    const onWinBoxAvailabilityChange = vi.fn();
+
+    const { rerender } = render(
+      <DeviceConfigPanel
+        device={mockDevice({ id: 'dev-1', hostname: 'router-01' })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+        onWinBoxAvailabilityChange={onWinBoxAvailabilityChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin SSH')).toBeInTheDocument();
+      expect(onWinBoxAvailabilityChange).toHaveBeenLastCalledWith(true);
+    });
+
+    rerender(
+      <DeviceConfigPanel
+        device={mockDevice({ id: 'virtual-1', hostname: 'Virtual Router', ip: '' })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+        onWinBoxAvailabilityChange={onWinBoxAvailabilityChange}
+        isVirtual
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onWinBoxAvailabilityChange).toHaveBeenLastCalledWith(false);
+    });
+    expect(screen.queryByText('Credentials')).not.toBeInTheDocument();
+    expect(screen.queryByText('Admin SSH')).not.toBeInTheDocument();
+  });
+
   it('shows empty state when no profiles assigned', async () => {
     const { fetchDeviceCredentialProfiles } = await import('../api/client');
     (fetchDeviceCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);

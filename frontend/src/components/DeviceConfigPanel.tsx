@@ -1,37 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  assignCredentialProfile,
   checkPrometheusHealth,
-  clearWinBoxProfile,
   deleteDevice,
   fetchAreas,
-  fetchCredentialProfiles,
-  fetchDeviceCredentialProfiles,
   fetchSNMPProfiles,
   revealSNMPProfile,
-  setWinBoxProfile,
   testSNMPConnection,
-  unassignCredentialProfile,
   updateCanvasMapDeviceAreas,
   updateCanvasMapDeviceVisualColor,
   updateDevice,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
-import type {
-  Area,
-  CredentialProfile,
-  Device,
-  DeviceCredentialProfile,
-  MetricsSource,
-  SNMPProfile,
-} from '../types/api';
+import type { Area, Device, MetricsSource, SNMPProfile } from '../types/api';
 import {
   MAX_STRING_LENGTH,
   validateIPOrHostname,
   validateMaxLength,
   validateRequired,
 } from '../utils/validation';
-import { MaterialIcon } from './MaterialIcon';
+import { DeviceCredentialsSection } from './device-config/DeviceCredentialsSection';
 import { DeviceGrafanaDashboardSection } from './device-config/DeviceGrafanaDashboardSection';
 import { DevicePollingSection } from './device-config/DevicePollingSection';
 import { DeviceTopologyDiscoverySection } from './device-config/DeviceTopologyDiscoverySection';
@@ -170,11 +157,6 @@ export function DeviceConfigPanel({
   const [removeFromMapLoading, setRemoveFromMapLoading] = useState(false);
 
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
-  const [credentialProfiles, setCredentialProfiles] = useState<CredentialProfile[]>([]);
-  const [assignments, setAssignments] = useState<DeviceCredentialProfile[]>([]);
-  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
-  const [showAddSelect, setShowAddSelect] = useState(false);
-  const [removingId, setRemovingId] = useState<string | null>(null);
   const [loadedAreas, setLoadedAreas] = useState<Area[]>([]);
   const [prometheusAvailable, setPrometheusAvailable] = useState<boolean | null>(null);
 
@@ -182,7 +164,6 @@ export function DeviceConfigPanel({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const editSavedTimerRef = useRef<number | null>(null);
-  const winBoxAvailabilityCallbackRef = useRef(onWinBoxAvailabilityChange);
 
   const usesPrometheus =
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
@@ -230,33 +211,9 @@ export function DeviceConfigPanel({
   }
 
   useEffect(() => {
-    winBoxAvailabilityCallbackRef.current = onWinBoxAvailabilityChange;
-  }, [onWinBoxAvailabilityChange]);
-
-  async function loadAssignments(deviceId = device.id) {
-    setAssignmentsLoading(true);
-    try {
-      const nextAssignments = await fetchDeviceCredentialProfiles(deviceId);
-      setAssignments(nextAssignments);
-      winBoxAvailabilityCallbackRef.current?.(
-        nextAssignments.some((assignment) => assignment.is_winbox),
-      );
-    } catch {
-      // non-fatal — section shows empty
-    } finally {
-      setAssignmentsLoading(false);
-    }
-  }
-
-  useEffect(() => {
     if (!isVirtual) {
       fetchSNMPProfiles()
         .then(setProfiles)
-        .catch(() => {
-          /* non-fatal */
-        });
-      fetchCredentialProfiles()
-        .then(setCredentialProfiles)
         .catch(() => {
           /* non-fatal */
         });
@@ -282,42 +239,6 @@ export function DeviceConfigPanel({
         /* non-fatal */
       });
   }, [providedAreas]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setShowAddSelect(false);
-    setRemovingId(null);
-
-    if (isVirtual) {
-      setAssignments([]);
-      setAssignmentsLoading(false);
-      winBoxAvailabilityCallbackRef.current?.(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    setAssignments([]);
-    setAssignmentsLoading(true);
-    fetchDeviceCredentialProfiles(device.id)
-      .then((nextAssignments) => {
-        if (cancelled) return;
-        setAssignments(nextAssignments);
-        winBoxAvailabilityCallbackRef.current?.(
-          nextAssignments.some((assignment) => assignment.is_winbox),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setAssignments([]);
-      })
-      .finally(() => {
-        if (!cancelled) setAssignmentsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [device.id, isVirtual]);
 
   // Sync inputs when saved configuration changes. Runtime-only updates such as
   // status changes should not reset in-progress edits.
@@ -454,42 +375,6 @@ export function DeviceConfigPanel({
       await onRemoveFromMap(device.id);
     } finally {
       setRemoveFromMapLoading(false);
-    }
-  }
-
-  async function handleAssign(profileId: string) {
-    if (readOnly) return;
-    try {
-      await assignCredentialProfile(device.id, profileId);
-      setShowAddSelect(false);
-      void loadAssignments(device.id);
-    } catch {
-      // non-fatal
-    }
-  }
-
-  async function handleUnassign(profileId: string) {
-    if (readOnly) return;
-    try {
-      await unassignCredentialProfile(device.id, profileId);
-      setRemovingId(null);
-      void loadAssignments(device.id);
-    } catch {
-      // non-fatal
-    }
-  }
-
-  async function handleToggleWinBox(profileId: string, currentlyDesignated: boolean) {
-    if (readOnly) return;
-    try {
-      if (currentlyDesignated) {
-        await clearWinBoxProfile(device.id);
-      } else {
-        await setWinBoxProfile(device.id, profileId);
-      }
-      void loadAssignments(device.id);
-    } catch {
-      // non-fatal
     }
   }
 
@@ -718,149 +603,33 @@ export function DeviceConfigPanel({
 
           {/* Vendor, SSH, Metrics Source, Prometheus, SNMP — physical devices only */}
           {!isVirtual && (
+            <div className="space-y-1">
+              <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+                Vendor
+              </label>
+              <select
+                value={form.vendor}
+                onChange={(e) => updateForm({ vendor: e.target.value })}
+                className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              >
+                <option value="">— Select vendor —</option>
+                <option value="mikrotik">MikroTik</option>
+              </select>
+              <p className="text-xs text-on-bg-secondary">
+                Vendor tag determines backup commands and metric queries.
+              </p>
+            </div>
+          )}
+
+          <DeviceCredentialsSection
+            device={device}
+            readOnly={readOnly}
+            isVirtual={isVirtual}
+            onWinBoxAvailabilityChange={onWinBoxAvailabilityChange}
+          />
+
+          {!isVirtual && (
             <>
-              <div className="space-y-1">
-                <label className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-                  Vendor
-                </label>
-                <select
-                  value={form.vendor}
-                  onChange={(e) => updateForm({ vendor: e.target.value })}
-                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                >
-                  <option value="">— Select vendor —</option>
-                  <option value="mikrotik">MikroTik</option>
-                </select>
-                <p className="text-xs text-on-bg-secondary">
-                  Vendor tag determines backup commands and metric queries.
-                </p>
-              </div>
-
-              {/* Credentials section */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
-                    Credentials
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddSelect((v) => !v)}
-                    className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg-secondary hover:text-on-bg"
-                  >
-                    + Add
-                  </button>
-                </div>
-
-                {showAddSelect && (
-                  <div className="flex items-center gap-2">
-                    <select
-                      defaultValue=""
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          void handleAssign(e.target.value);
-                        }
-                      }}
-                      className="flex-1 rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
-                    >
-                      <option value="" disabled>
-                        Select a profile...
-                      </option>
-                      {credentialProfiles
-                        .filter((p) => !assignments.some((a) => a.profile_id === p.id))
-                        .map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddSelect(false)}
-                      className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg-secondary hover:text-on-bg"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                )}
-
-                {assignmentsLoading && (
-                  <p className="text-xs text-on-bg-secondary">Loading credentials...</p>
-                )}
-
-                {!assignmentsLoading && assignments.length === 0 && (
-                  <p className="text-xs text-on-bg-secondary">
-                    No credentials assigned. Add a profile to enable WinBox launch.
-                  </p>
-                )}
-
-                {!assignmentsLoading &&
-                  assignments.map((assignment) => (
-                    <div key={assignment.profile_id} className="rounded-lg bg-surface-high p-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-sm font-medium text-on-bg truncate">
-                            {assignment.name}
-                          </span>
-                          <span className="text-xs font-medium px-2 py-0.5 bg-surface rounded-full text-on-bg-secondary shrink-0">
-                            {assignment.role}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0 ml-2">
-                          {/* WinBox key toggle */}
-                          <button
-                            type="button"
-                            title={
-                              assignment.is_winbox
-                                ? 'Clear WinBox designation'
-                                : 'Designate as WinBox profile'
-                            }
-                            onClick={() => {
-                              void handleToggleWinBox(assignment.profile_id, assignment.is_winbox);
-                            }}
-                            className={`p-1 rounded-md transition-colors${assignment.is_winbox ? ' text-primary' : ' text-on-bg-secondary hover:text-on-bg'}`}
-                          >
-                            <MaterialIcon name="key" size={18} />
-                          </button>
-                          {/* Remove button */}
-                          <button
-                            type="button"
-                            title="Remove assignment"
-                            onClick={() => setRemovingId(assignment.profile_id)}
-                            className="p-1 rounded-md text-on-bg-secondary hover:text-status-down transition-colors"
-                          >
-                            <MaterialIcon name="remove" size={18} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Inline removal confirmation */}
-                      {removingId === assignment.profile_id && (
-                        <div className="mt-2 border border-status-down/30 bg-status-down/10 rounded-lg px-3 py-2 flex items-center justify-between">
-                          <p className="text-xs text-status-down">Delete this profile?</p>
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setRemovingId(null)}
-                              className="px-2 py-1 text-xs rounded bg-surface-high text-on-bg hover:bg-elevated"
-                            >
-                              Keep Profile
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void handleUnassign(assignment.profile_id);
-                              }}
-                              className="px-2 py-1 text-xs rounded bg-status-down text-white hover:opacity-90"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-              </div>
-
               {prometheusAvailable === false && (
                 <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
                   Prometheus is not configured or unreachable. Only SNMP Direct is available.
