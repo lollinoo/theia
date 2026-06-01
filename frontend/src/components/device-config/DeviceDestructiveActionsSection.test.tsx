@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useLayoutEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteDevice } from '../../api/client';
 import { DeviceDestructiveActionsSection } from './DeviceDestructiveActionsSection';
@@ -117,6 +118,40 @@ describe('DeviceDestructiveActionsSection', () => {
 
     expect(screen.queryByRole('button', { name: 'Confirm Delete' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete device everywhere' })).toBeInTheDocument();
+  });
+
+  it('does not expose stale delete confirmation during the first render after switching devices', () => {
+    const onDeviceDeleted = vi.fn();
+
+    function DeleteProbe({ active }: { active: boolean }) {
+      useLayoutEffect(() => {
+        if (!active) return;
+        screen.queryByRole('button', { name: 'Confirm Delete' })?.click();
+      }, [active]);
+      return null;
+    }
+
+    function Harness({ deviceId, probe }: { deviceId: string; probe: boolean }) {
+      return (
+        <>
+          <DeviceDestructiveActionsSection
+            deviceId={deviceId}
+            onDeviceDeleted={onDeviceDeleted}
+          />
+          <DeleteProbe active={probe} />
+        </>
+      );
+    }
+
+    const view = render(<Harness deviceId="dev-1" probe={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete device everywhere' }));
+
+    view.rerender(<Harness deviceId="dev-2" probe={true} />);
+
+    expect(deleteDevice).not.toHaveBeenCalled();
+    expect(onDeviceDeleted).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Confirm Delete' })).not.toBeInTheDocument();
   });
 
   it('disables action entry points when read-only', () => {

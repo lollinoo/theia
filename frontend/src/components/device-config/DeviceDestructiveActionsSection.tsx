@@ -19,25 +19,26 @@ export function DeviceDestructiveActionsSection({
   onDeviceDeleted,
   onRemoveFromMap,
 }: DeviceDestructiveActionsSectionProps) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDeleteDeviceId, setConfirmDeleteDeviceId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [removeFromMapLoading, setRemoveFromMapLoading] = useState(false);
+  const confirmDelete = confirmDeleteDeviceId === deviceId;
 
   useEffect(() => {
-    setConfirmDelete(false);
+    setConfirmDeleteDeviceId(null);
     setDeleteLoading(false);
     setRemoveFromMapLoading(false);
   }, [deviceId]);
 
   async function handleDelete() {
-    if (readOnly) return;
+    if (readOnly || confirmDeleteDeviceId !== deviceId) return;
     setDeleteLoading(true);
     try {
       await deleteDevice(deviceId);
       onDeviceDeleted();
     } catch {
       setDeleteLoading(false);
-      setConfirmDelete(false);
+      setConfirmDeleteDeviceId(null);
     }
   }
 
@@ -77,7 +78,7 @@ export function DeviceDestructiveActionsSection({
           <button
             type="button"
             disabled={readOnly}
-            onClick={() => setConfirmDelete(true)}
+            onClick={() => setConfirmDeleteDeviceId(deviceId)}
             className="w-full rounded-lg border border-status-down/30 bg-status-down/10 px-4 py-2 text-sm font-medium text-status-down transition-colors hover:bg-status-down/20 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Delete device everywhere
@@ -91,7 +92,7 @@ export function DeviceDestructiveActionsSection({
               <button
                 type="button"
                 disabled={readOnly}
-                onClick={() => setConfirmDelete(false)}
+                onClick={() => setConfirmDeleteDeviceId(null)}
                 className="flex-1 rounded-lg bg-surface-high px-3 py-1.5 text-xs text-on-bg hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel
