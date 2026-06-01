@@ -1541,10 +1541,6 @@ func loadCanvasMapLinksByIDs(repo domain.LinkRepository, ids []uuid.UUID) ([]dom
 	return filtered, nil
 }
 
-func canvasMapConnectedBaseLinkIDs(deviceID uuid.UUID, membership domain.CanvasMapMembership, links []domain.Link) []uuid.UUID {
-	return canvasmap.ConnectedBaseLinkIDs(deviceID, membership, links)
-}
-
 func (h *CanvasMapHandler) canvasMapAreaMembershipsForDevice(device *domain.Device) ([]domain.CanvasMapAreaMembership, error) {
 	if device == nil || len(device.AreaIDs) == 0 {
 		return []domain.CanvasMapAreaMembership{}, nil
