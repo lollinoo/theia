@@ -152,6 +152,7 @@ export function useDeviceConfigEditor({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const editSavedTimerRef = useRef<number | null>(null);
   const applyProfileGenerationRef = useRef(0);
+  const saveGenerationRef = useRef(0);
 
   const usesPrometheus =
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
@@ -213,8 +214,10 @@ export function useDeviceConfigEditor({
   }
 
   useEffect(() => {
+    saveGenerationRef.current += 1;
     setForm(createDeviceConfigFormModel(device, Boolean(isVirtual)));
     setFieldErrors({});
+    setEditLoading(false);
   }, [deviceConfigSyncKey, isVirtual]);
 
   async function applyProfile(profileId: string) {
@@ -280,6 +283,13 @@ export function useDeviceConfigEditor({
       return;
     }
 
+    const saveSyncKey = deviceConfigSyncKey;
+    const saveGeneration = saveGenerationRef.current + 1;
+    saveGenerationRef.current = saveGeneration;
+    const isCurrentSave = () =>
+      deviceConfigSyncKeyRef.current === saveSyncKey &&
+      saveGenerationRef.current === saveGeneration;
+
     setEditLoading(true);
     setEditError(null);
     try {
@@ -296,16 +306,19 @@ export function useDeviceConfigEditor({
       const updatedGlobal = shouldUpdateGlobal
         ? await updateDevice(device.id, globalPayload)
         : device;
+      if (!isCurrentSave()) return;
       if (mapScopedAreaEdit && mapContext && !sameAreaIds(device.area_ids ?? [], form.areaIds)) {
         await updateCanvasMapDeviceAreas(mapContext.mapId, {
           device_ids: [device.id],
           area_ids: form.areaIds,
         });
+        if (!isCurrentSave()) return;
       }
       if (mapScopedVisualColorEdit && mapContext) {
         await updateCanvasMapDeviceVisualColor(mapContext.mapId, device.id, {
           visual_color: nextVisualColor,
         });
+        if (!isCurrentSave()) return;
       }
       const updated = mapScopedAreaEdit
         ? { ...updatedGlobal, area_ids: [...form.areaIds], map_visual_color: nextVisualColor }
@@ -313,6 +326,7 @@ export function useDeviceConfigEditor({
       showSaved(setEditSaved, editSavedTimerRef);
       onDeviceUpdated(updated);
     } catch (err) {
+      if (!isCurrentSave()) return;
       if (err instanceof ServerError) {
         setEditError(
           err.correlationId
@@ -325,7 +339,9 @@ export function useDeviceConfigEditor({
         setEditError(err instanceof Error ? err.message : 'Failed to update device.');
       }
     } finally {
-      setEditLoading(false);
+      if (isCurrentSave()) {
+        setEditLoading(false);
+      }
     }
   }
 

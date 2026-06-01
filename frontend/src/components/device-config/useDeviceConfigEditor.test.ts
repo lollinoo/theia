@@ -80,6 +80,16 @@ function submitEvent() {
   return { preventDefault: vi.fn() } as unknown as FormEvent;
 }
 
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('useDeviceConfigEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -236,6 +246,90 @@ describe('useDeviceConfigEditor', () => {
     });
 
     expect(result.current.editError).toBe('Something went wrong (ref: dc001)');
+  });
+
+  it('ignores a stale successful save after switching devices while a current save is pending', async () => {
+    const firstSave = deferred<Device>();
+    const secondSave = deferred<Device>();
+    const onDeviceUpdated = vi.fn();
+    apiMocks.updateDevice
+      .mockReturnValueOnce(firstSave.promise)
+      .mockReturnValueOnce(secondSave.promise);
+    const { result, rerender } = renderEditor({
+      device: mockDevice({ id: 'dev-1', hostname: 'router-01' }),
+      onDeviceUpdated,
+    });
+
+    let firstSavePromise: Promise<void> | undefined;
+    act(() => {
+      firstSavePromise = result.current.handleEditSave(submitEvent());
+    });
+
+    rerender({
+      device: mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+      readOnly: false,
+      isVirtual: undefined,
+      mapContext: undefined,
+      onDeviceUpdated,
+    });
+
+    let secondSavePromise: Promise<void> | undefined;
+    act(() => {
+      secondSavePromise = result.current.handleEditSave(submitEvent());
+    });
+
+    await act(async () => {
+      firstSave.resolve(mockDevice({ id: 'dev-1', hostname: 'router-01-updated' }));
+      await firstSavePromise;
+    });
+
+    expect(onDeviceUpdated).not.toHaveBeenCalled();
+    expect(result.current.editSaved).toBe(false);
+    expect(result.current.editError).toBeNull();
+    expect(result.current.editLoading).toBe(true);
+
+    await act(async () => {
+      secondSave.resolve(mockDevice({ id: 'dev-2', hostname: 'router-02-updated' }));
+      await secondSavePromise;
+    });
+
+    expect(onDeviceUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'dev-2', hostname: 'router-02-updated' }),
+    );
+    expect(result.current.editSaved).toBe(true);
+    expect(result.current.editLoading).toBe(false);
+  });
+
+  it('ignores a stale save error after switching devices', async () => {
+    const firstSave = deferred<Device>();
+    const onDeviceUpdated = vi.fn();
+    apiMocks.updateDevice.mockReturnValueOnce(firstSave.promise);
+    const { result, rerender } = renderEditor({
+      device: mockDevice({ id: 'dev-1', hostname: 'router-01' }),
+      onDeviceUpdated,
+    });
+
+    let firstSavePromise: Promise<void> | undefined;
+    act(() => {
+      firstSavePromise = result.current.handleEditSave(submitEvent());
+    });
+
+    rerender({
+      device: mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+      readOnly: false,
+      isVirtual: undefined,
+      mapContext: undefined,
+      onDeviceUpdated,
+    });
+
+    await act(async () => {
+      firstSave.reject(new Error('stale save failed'));
+      await firstSavePromise;
+    });
+
+    expect(onDeviceUpdated).not.toHaveBeenCalled();
+    expect(result.current.editError).toBeNull();
+    expect(result.current.editSaved).toBe(false);
   });
 
   it('applies a revealed SNMP profile with the device config purpose string', async () => {
