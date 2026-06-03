@@ -25,7 +25,10 @@ import (
 // the download endpoint.
 const maxInlineBackupContentBytes int64 = 1 << 20
 
-const maxConcurrentBulkDownloadsPerActor = 1
+const (
+	maxConcurrentBulkDownloadsPerActor = 1
+	bulkDownloadRetryAfterSeconds      = 30
+)
 
 // BackupHandler provides HTTP handlers for SSH credentials and config backups.
 type BackupHandler struct {
@@ -539,7 +542,10 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 
 	actorKey := bulkDownloadActorKey(r)
 	if h.bulkDownloadLimiter != nil && !h.bulkDownloadLimiter.TryAcquire(actorKey) {
-		w.Header().Set("Retry-After", "30")
+		if err := h.auditBulkDownloadRejected(r, len(deviceIDs), "actor_concurrency_limit"); err != nil {
+			log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
+		}
+		w.Header().Set("Retry-After", fmt.Sprint(bulkDownloadRetryAfterSeconds))
 		writeError(w, http.StatusTooManyRequests, "bulk download already in progress for this user")
 		return
 	}
@@ -681,6 +687,26 @@ func (h *BackupHandler) auditBulkDownloadCompleted(
 	return h.appendBackupAuditLog(
 		r,
 		"backup.bulk_download_completed",
+		"backup_bulk_download",
+		"bulk-download",
+		metadata,
+	)
+}
+
+func (h *BackupHandler) auditBulkDownloadRejected(r *http.Request, requestedDeviceCount int, reason string) error {
+	if h.auditLogs == nil {
+		return nil
+	}
+
+	metadata := map[string]interface{}{
+		"requested_device_count": requestedDeviceCount,
+		"reason":                 reason,
+		"per_actor_limit":        maxConcurrentBulkDownloadsPerActor,
+		"retry_after_seconds":    bulkDownloadRetryAfterSeconds,
+	}
+	return h.appendBackupAuditLog(
+		r,
+		"backup.bulk_download_rejected",
 		"backup_bulk_download",
 		"bulk-download",
 		metadata,

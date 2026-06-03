@@ -1498,6 +1498,68 @@ func TestBackupHandlerBulkDownloadRejectsConcurrentRequestForSameActor(t *testin
 	}
 }
 
+func TestBackupHandlerBulkDownloadAuditsConcurrentRequestRejection(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBackupAuditLogs(auditRepo)(handler)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	actorID := uuid.New()
+
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.HandleBulkDownload(firstRec, firstReq)
+	}()
+
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	secondRec := httptest.NewRecorder()
+	handler.HandleBulkDownload(secondRec, secondReq)
+
+	close(firstRec.release)
+	<-firstDone
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second response status = %d, want 429; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+
+	logEntry, ok := findBackupAuditAction(auditRepo.auditLogs(), "backup.bulk_download_rejected")
+	if !ok {
+		t.Fatalf("expected backup.bulk_download_rejected audit log, got %#v", auditRepo.auditLogs())
+	}
+	if logEntry.ActorUserID == nil || *logEntry.ActorUserID != actorID {
+		t.Fatalf("ActorUserID = %#v, want %s", logEntry.ActorUserID, actorID)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	if reason, ok := metadata["reason"].(string); !ok || reason != "actor_concurrency_limit" {
+		t.Fatalf("metadata reason = %#v, want actor_concurrency_limit", metadata["reason"])
+	}
+	assertAuditNumber(t, metadata, "requested_device_count", 1)
+	assertAuditNumber(t, metadata, "per_actor_limit", 1)
+}
+
 func TestBackupHandlerBulkDownloadMapsUnsafePathToBadRequest(t *testing.T) {
 	backupDir := t.TempDir()
 	outsideDir := t.TempDir()
@@ -1629,6 +1691,15 @@ func assertAuditNumber(t *testing.T, metadata map[string]interface{}, key string
 	if !ok || got != want {
 		t.Fatalf("metadata[%q] = %#v, want %v", key, metadata[key], want)
 	}
+}
+
+func findBackupAuditAction(logs []domain.AuditLog, action string) (domain.AuditLog, bool) {
+	for _, logEntry := range logs {
+		if logEntry.Action == action {
+			return logEntry, true
+		}
+	}
+	return domain.AuditLog{}, false
 }
 
 type blockingResponseWriterForBulkDownloadTest struct {
