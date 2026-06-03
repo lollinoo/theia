@@ -18,6 +18,7 @@ import (
 	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
+	"github.com/lollinoo/theia/internal/pollingbudget"
 )
 
 func captureSchedulerDebugLogs(t *testing.T) *bytes.Buffer {
@@ -1467,6 +1468,108 @@ func TestSchedulerDispatchReady_AllowsLowerPriorityWhenHigherPriorityAtClassLimi
 	}
 }
 
+func TestSchedulerDispatchReady_SnapshotsSettingsForDispatchPass(t *testing.T) {
+	repo := &countingSettingsRepo{values: map[string]string{
+		domain.SettingSNMPWorkerPoolSize:            "24",
+		domain.SettingSNMPWorkerPoolPerformance:     "8",
+		domain.SettingSNMPWorkerPoolOperational:     "8",
+		domain.SettingSNMPWorkerPoolStatic:          "8",
+		domain.SettingPollingEssentialWorkers:       "8",
+		domain.SettingPollingMaxWorkersPerDevice:    "16",
+		domain.SettingPollingMaxWorkersPerSite:      "16",
+		domain.SettingPollingMaxWorkersPerSubnet:    "16",
+		domain.SettingPollingMaxInflightPerProfile:  "16",
+		domain.SettingPollingWebSocketCoalesceMS:    "500",
+		domain.SettingPollingPersistenceBatchMS:     "1000",
+		domain.SettingPollingCapacitySafetyMargin:   "1.5",
+		domain.SettingPollingForceOverCapacity:      "false",
+		domain.SettingPollingEssentialTimeoutMillis: "1200",
+		domain.SettingPollingEssentialRetries:       "1",
+	}}
+	scheduler := NewScheduler(&fakeDeviceSource{}, repo)
+	scheduler.tasks = make(chan PollTask, 4)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	deviceIDs := []uuid.UUID{
+		uuid.MustParse("52000000-0000-0000-0000-000000000101"),
+		uuid.MustParse("52000000-0000-0000-0000-000000000102"),
+		uuid.MustParse("52000000-0000-0000-0000-000000000103"),
+	}
+
+	for index, volatility := range []domain.VolatilityClass{
+		domain.VolatilityClassPerformance,
+		domain.VolatilityClassOperational,
+		domain.VolatilityClassStatic,
+	} {
+		deviceID := deviceIDs[index]
+		item := &heapItem{
+			task: PollTask{
+				Key:             NewTaskKey(deviceID, volatility),
+				Device:          domain.Device{ID: deviceID},
+				VolatilityClass: volatility,
+			},
+			dueAt:  now.Add(-time.Minute),
+			queued: true,
+			index:  -1,
+		}
+		scheduler.ready[VolatilityPriority(volatility)] = append(scheduler.ready[VolatilityPriority(volatility)], item)
+	}
+
+	repo.ResetCount()
+	_ = pollingbudget.Resolve(repo)
+	_, _ = polling.PolicyFromSettings(repo, 0, 0, 0)
+	singleSnapshotReads := repo.GetCount()
+
+	repo.ResetCount()
+	scheduler.dispatchReady(context.Background(), now)
+
+	if got := repo.GetCount(); got > singleSnapshotReads {
+		t.Fatalf("settings Get calls during one dispatch pass = %d, want at most one budget/policy snapshot (%d)", got, singleSnapshotReads)
+	}
+	if scheduler.inFlight != 3 {
+		t.Fatalf("inFlight = %d, want 3", scheduler.inFlight)
+	}
+}
+
+func TestSchedulerDispatchReady_SkipsSettingsSnapshotWhenReadyQueuesEmpty(t *testing.T) {
+	repo := &countingSettingsRepo{}
+	scheduler := NewScheduler(&fakeDeviceSource{}, repo)
+
+	scheduler.dispatchReady(context.Background(), time.Unix(1_700_000_000, 0).UTC())
+
+	if got := repo.GetCount(); got != 0 {
+		t.Fatalf("settings Get calls with empty ready queues = %d, want 0", got)
+	}
+	if scheduler.inFlight != 0 {
+		t.Fatalf("inFlight = %d, want 0", scheduler.inFlight)
+	}
+}
+
+func TestSchedulerIsolationBlockReasonAvoidsSiteKeySliceAllocation(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	task := PollTask{
+		Kind: polling.TaskKindBackground,
+		Device: domain.Device{
+			ID: uuid.MustParse("52000000-0000-0000-0000-000000000201"),
+			AreaIDs: []uuid.UUID{
+				uuid.MustParse("52000000-0000-0000-0000-000000000202"),
+				uuid.MustParse("52000000-0000-0000-0000-000000000203"),
+			},
+		},
+	}
+	policy := polling.Policy{MaxWorkersPerSite: 16}
+
+	var reason string
+	allocs := testing.AllocsPerRun(100, func() {
+		reason = scheduler.isolationBlockReason(task, policy)
+	})
+	if reason != "" {
+		t.Fatalf("isolationBlockReason() = %q, want empty", reason)
+	}
+	if allocs > 2 {
+		t.Fatalf("isolationBlockReason allocations = %.0f, want at most 2", allocs)
+	}
+}
+
 func TestSchedulerPollingHealth_ReportsQueueDepthLagAndWorkersByClass(t *testing.T) {
 	scheduler := NewScheduler(
 		&fakeDeviceSource{},
@@ -2170,4 +2273,60 @@ func (r fakeSettingsRepo) GetAll() (map[string]string, error) {
 		out[key] = value
 	}
 	return out, nil
+}
+
+type countingSettingsRepo struct {
+	mu     sync.Mutex
+	values map[string]string
+	count  int
+	err    error
+}
+
+func (r *countingSettingsRepo) Get(key string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.count++
+	if r.err != nil {
+		return "", r.err
+	}
+	value, ok := r.values[key]
+	if !ok {
+		return "", errors.New("missing key")
+	}
+	return value, nil
+}
+
+func (r *countingSettingsRepo) Set(key, value string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.values == nil {
+		r.values = make(map[string]string)
+	}
+	r.values[key] = value
+	return nil
+}
+
+func (r *countingSettingsRepo) GetAll() (map[string]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return nil, r.err
+	}
+	out := make(map[string]string, len(r.values))
+	for key, value := range r.values {
+		out[key] = value
+	}
+	return out, nil
+}
+
+func (r *countingSettingsRepo) ResetCount() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.count = 0
+}
+
+func (r *countingSettingsRepo) GetCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.count
 }
