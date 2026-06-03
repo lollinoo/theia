@@ -121,7 +121,11 @@ func NewRouter(
 	grafanaDashboardHandler := NewGrafanaDashboardHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	areaHandler := NewAreaHandler(areaRepo)
-	backupHandler := NewBackupHandler(backupService, settingsRepo, WithBackupAuditLogs(routerOpts.auditLogs))
+	backupHandlerOptions := []BackupHandlerOption{WithBackupAuditLogs(routerOpts.auditLogs)}
+	if db != nil {
+		backupHandlerOptions = append(backupHandlerOptions, WithBulkDownloadLeaseRepository(postgres.NewBulkOperationLeaseRepo(db)))
+	}
+	backupHandler := NewBackupHandler(backupService, settingsRepo, backupHandlerOptions...)
 	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
 	deviceCredHandler := NewDeviceCredentialProfileHandler(backupService, credentialProfileRepo)
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)

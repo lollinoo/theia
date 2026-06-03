@@ -32,10 +32,11 @@ const (
 
 // BackupHandler provides HTTP handlers for SSH credentials and config backups.
 type BackupHandler struct {
-	svc                 *service.BackupService
-	settingsRepo        domain.SettingsRepository
-	auditLogs           domain.AuditLogRepository
-	bulkDownloadLimiter *bulkOperationLimiter
+	svc                   *service.BackupService
+	settingsRepo          domain.SettingsRepository
+	auditLogs             domain.AuditLogRepository
+	bulkDownloadLimiter   *bulkOperationLimiter
+	bulkDownloadLeaseRepo domain.BulkOperationLeaseRepository
 }
 
 type BackupHandlerOption func(*BackupHandler)
@@ -43,6 +44,12 @@ type BackupHandlerOption func(*BackupHandler)
 func WithBackupAuditLogs(auditLogs domain.AuditLogRepository) BackupHandlerOption {
 	return func(h *BackupHandler) {
 		h.auditLogs = auditLogs
+	}
+}
+
+func WithBulkDownloadLeaseRepository(repo domain.BulkOperationLeaseRepository) BackupHandlerOption {
+	return func(h *BackupHandler) {
+		h.bulkDownloadLeaseRepo = repo
 	}
 }
 
@@ -552,6 +559,29 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	if h.bulkDownloadLimiter != nil {
 		defer h.bulkDownloadLimiter.Release(actorKey)
 	}
+	if h.bulkDownloadLeaseRepo != nil {
+		lease, acquired, err := h.bulkDownloadLeaseRepo.TryAcquireBulkOperationLease(r.Context(), bulkDownloadLeaseKey(actorKey))
+		if err != nil {
+			if auditErr := h.auditBulkDownloadRejected(r, len(deviceIDs), "distributed_limiter_unavailable"); auditErr != nil {
+				log.Printf("backup: failed to append bulk download rejection audit log: %v", auditErr)
+			}
+			writeError(w, http.StatusServiceUnavailable, "bulk download limiter unavailable")
+			return
+		}
+		if !acquired {
+			if err := h.auditBulkDownloadRejected(r, len(deviceIDs), "distributed_actor_concurrency_limit"); err != nil {
+				log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
+			}
+			w.Header().Set("Retry-After", fmt.Sprint(bulkDownloadRetryAfterSeconds))
+			writeError(w, http.StatusTooManyRequests, "bulk download already in progress for this user")
+			return
+		}
+		defer func() {
+			if err := lease.Release(); err != nil {
+				log.Printf("backup: failed to release bulk download lease: %v", err)
+			}
+		}()
+	}
 
 	entries, err := h.svc.GetBulkDownloadFiles(r.Context(), deviceIDs)
 	if err != nil {
@@ -846,6 +876,14 @@ func bulkDownloadActorKey(r *http.Request) string {
 		return "ip:" + ip
 	}
 	return "anonymous"
+}
+
+func bulkDownloadLeaseKey(actorKey string) string {
+	actorKey = strings.TrimSpace(actorKey)
+	if actorKey == "" {
+		actorKey = "anonymous"
+	}
+	return "backup.bulk_download:" + actorKey
 }
 
 func bulkDownloadSelectedDeviceCount(entries []service.BulkDownloadEntry) int {

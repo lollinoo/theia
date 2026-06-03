@@ -1498,6 +1498,83 @@ func TestBackupHandlerBulkDownloadRejectsConcurrentRequestForSameActor(t *testin
 	}
 }
 
+func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAcrossHandlersForSameActor(t *testing.T) {
+	backupDir := t.TempDir()
+	firstHandler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	leaseRepo := newBulkOperationLeaseRepoForHandler()
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBulkDownloadLeaseRepository(leaseRepo)(firstHandler)
+	WithBackupAuditLogs(auditRepo)(firstHandler)
+	secondHandler := NewBackupHandler(backupSvc, firstHandler.settingsRepo, WithBulkDownloadLeaseRepository(leaseRepo), WithBackupAuditLogs(auditRepo))
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	actorID := uuid.New()
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		firstHandler.HandleBulkDownload(firstRec, firstReq)
+	}()
+
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	secondRec := httptest.NewRecorder()
+	secondHandler.HandleBulkDownload(secondRec, secondReq)
+	if secondRec.Code != http.StatusTooManyRequests {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("second status = %d, want 429; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	if got := secondRec.Header().Get("Retry-After"); got != fmt.Sprint(bulkDownloadRetryAfterSeconds) {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("Retry-After = %q, want %d", got, bulkDownloadRetryAfterSeconds)
+	}
+	logEntry, ok := findBackupAuditAction(auditRepo.auditLogs(), "backup.bulk_download_rejected")
+	if !ok {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("expected backup.bulk_download_rejected audit log, got %#v", auditRepo.auditLogs())
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	if reason, ok := metadata["reason"].(string); !ok || reason != "distributed_actor_concurrency_limit" {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("metadata reason = %#v, want distributed_actor_concurrency_limit", metadata["reason"])
+	}
+
+	close(firstRec.release)
+	<-firstDone
+
+	thirdReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	thirdRec := httptest.NewRecorder()
+	secondHandler.HandleBulkDownload(thirdRec, thirdReq)
+	if thirdRec.Code != http.StatusOK {
+		t.Fatalf("third status after release = %d, want 200; body: %s", thirdRec.Code, thirdRec.Body.String())
+	}
+}
+
 func TestBackupHandlerBulkDownloadAuditsConcurrentRequestRejection(t *testing.T) {
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
@@ -1700,6 +1777,42 @@ func findBackupAuditAction(logs []domain.AuditLog, action string) (domain.AuditL
 		}
 	}
 	return domain.AuditLog{}, false
+}
+
+type bulkOperationLeaseRepoForHandler struct {
+	mu     sync.Mutex
+	active map[string]struct{}
+}
+
+func newBulkOperationLeaseRepoForHandler() *bulkOperationLeaseRepoForHandler {
+	return &bulkOperationLeaseRepoForHandler{
+		active: make(map[string]struct{}),
+	}
+}
+
+func (r *bulkOperationLeaseRepoForHandler) TryAcquireBulkOperationLease(_ context.Context, key string) (domain.BulkOperationLease, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.active[key]; ok {
+		return nil, false, nil
+	}
+	r.active[key] = struct{}{}
+	return bulkOperationLeaseForHandler{release: func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		delete(r.active, key)
+	}}, true, nil
+}
+
+type bulkOperationLeaseForHandler struct {
+	release func()
+}
+
+func (l bulkOperationLeaseForHandler) Release() error {
+	if l.release != nil {
+		l.release()
+	}
+	return nil
 }
 
 type blockingResponseWriterForBulkDownloadTest struct {
