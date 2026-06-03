@@ -357,6 +357,7 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 	run, err := h.svc.StartBulkBackupRun(r.Context(), deviceIDs, createdBy)
 	if err != nil {
 		if errors.Is(err, service.ErrBulkBackupRunAlreadyActive) {
+			observability.Default().IncBulkOperationRejection("bulk_backup_run", "active_run", "local")
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"code":  "bulk_backup_run_active",
@@ -366,6 +367,7 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 			return
 		}
 		if service.IsBulkLimitError(err) {
+			observability.Default().IncBulkOperationRejection("bulk_backup_run", bulkLimitRejectionReason(err), "local")
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
@@ -796,6 +798,19 @@ func bulkOperationRejectionSource(reason string) string {
 		return "distributed"
 	}
 	return "local"
+}
+
+func bulkLimitRejectionReason(err error) string {
+	var limitErr *service.BulkLimitError
+	if !errors.As(err, &limitErr) || strings.TrimSpace(limitErr.Limit) == "" {
+		return "limit"
+	}
+	limit := strings.ToLower(strings.TrimSpace(limitErr.Limit))
+	limit = strings.ReplaceAll(limit, " ", "_")
+	if limit == "devices" {
+		return "device_count_limit"
+	}
+	return strings.TrimSuffix(limit, "s") + "_limit"
 }
 
 func (h *BackupHandler) appendBackupAuditLog(

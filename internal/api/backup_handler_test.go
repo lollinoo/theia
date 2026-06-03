@@ -1023,6 +1023,7 @@ func TestBackupHandlerStartBulkBackupRunPersistsAuditLog(t *testing.T) {
 }
 
 func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
 	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
 	runID := uuid.New()
 	if err := runRepo.CreateRun(&domain.BulkBackupRun{
@@ -1052,6 +1053,46 @@ func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
 	}
 	if resp.Code != "bulk_backup_run_active" || resp.Data.ID != runID.String() {
 		t.Fatalf("unexpected conflict response: %#v", resp)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_run",reason="active_run",source="local"} 1`) {
+		t.Fatalf("expected active bulk run rejection metric, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerStartBulkBackupRunReportsLimitRejection(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	handler.svc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    1,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	firstID := uuid.New()
+	secondID := uuid.New()
+	for i, id := range []uuid.UUID{firstID, secondID} {
+		if err := deviceRepo.Create(&domain.Device{
+			ID: id, IP: fmt.Sprintf("10.0.1.%d", i+1), SysName: fmt.Sprintf("bulk-run-%d", i+1),
+			Managed: true, Status: domain.DeviceStatusDown,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_run",reason="device_count_limit",source="local"} 1`) {
+		t.Fatalf("expected bulk run limit rejection metric, got:\n%s", metrics)
 	}
 }
 
