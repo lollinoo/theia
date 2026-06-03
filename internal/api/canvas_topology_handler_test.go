@@ -282,6 +282,88 @@ func TestCanvasTopologyHandlerTopologyVersionIgnoresVolatileRuntimeFields(t *tes
 	}
 }
 
+func TestBuildCanvasMapTopologyVersionIgnoresRuntimeBootstrapFields(t *testing.T) {
+	runtimeVersionA := uint64(7)
+	runtimeVersionB := uint64(8)
+	deviceID := uuid.New().String()
+	mapID := uuid.New().String()
+
+	base := canvasTopologyResponse{
+		SchemaVersion:   2,
+		RuntimeVersion:  &runtimeVersionA,
+		RuntimeIdentity: "rt-sha256:old",
+		RuntimeSnapshot: &ws.SnapshotPayload{
+			Devices: map[string]ws.DeviceRuntimeDTO{
+				deviceID: {
+					DeviceID:          deviceID,
+					OperationalStatus: "up",
+				},
+			},
+		},
+		GeneratedAt: "2026-05-01T10:00:00Z",
+		Map: &canvasMapResponse{
+			ID:            mapID,
+			Name:          "Operations",
+			Description:   "Backbone map",
+			Filter:        domain.CanvasMapFilter{},
+			DeviceCount:   1,
+			PositionCount: 1,
+			CreatedAt:     "2026-05-01T09:00:00Z",
+			UpdatedAt:     "2026-05-01T09:00:00Z",
+		},
+		Devices: []jsonAPIResource{{
+			Type: "device",
+			ID:   deviceID,
+			Attributes: map[string]interface{}{
+				"hostname": "router-01",
+				"status":   "up",
+			},
+		}},
+		Positions: map[string]canvasPosition{
+			deviceID: {
+				DeviceID: deviceID,
+				X:        10,
+				Y:        20,
+				Pinned:   true,
+			},
+		},
+		Capabilities: canvasTopologyCapabilities{
+			SupportsTopologyDelta:    true,
+			SupportsPositionRevision: true,
+			SupportsAreaFiltering:    true,
+		},
+		Settings: canvasTopologyCanvasSettings{Layout: canvasTopologyLayoutSettings{Version: 1}},
+	}
+
+	withNewRuntime := base
+	withNewRuntime.RuntimeVersion = &runtimeVersionB
+	withNewRuntime.RuntimeIdentity = "rt-sha256:new"
+	withNewRuntime.RuntimeSnapshot = &ws.SnapshotPayload{
+		Devices: map[string]ws.DeviceRuntimeDTO{
+			deviceID: {
+				DeviceID:          deviceID,
+				OperationalStatus: "down",
+				PrimaryHealth:     "unreachable",
+				FiringAlertCount:  1,
+			},
+		},
+	}
+	withNewRuntime.GeneratedAt = "2026-05-01T10:01:00Z"
+
+	if got, want := buildCanvasMapTopologyVersion(withNewRuntime), buildCanvasMapTopologyVersion(base); got != want {
+		t.Fatalf("map topology version changed for runtime bootstrap fields: got %s want %s", got, want)
+	}
+
+	withStructuralChange := base
+	changedMap := *base.Map
+	changedMap.Name = "Operations - changed"
+	withStructuralChange.Map = &changedMap
+
+	if got, want := buildCanvasMapTopologyVersion(withStructuralChange), buildCanvasMapTopologyVersion(base); got == want {
+		t.Fatalf("map topology version did not change for structural map metadata: got %s", got)
+	}
+}
+
 func TestCanvasTopologyHandlerHandleGetCanvas_ReturnsRuntimeBootstrap(t *testing.T) {
 	handler, deviceRepo, _, _, _ := newTestCanvasTopologyHandler(t)
 	deviceID := uuid.New()
