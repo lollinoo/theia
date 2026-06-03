@@ -1414,6 +1414,15 @@ type wsVersionedSnapshotDeltaMessage struct {
 	} `json:"payload"`
 }
 
+type wsVersionedRuntimeDeltaMessage struct {
+	Type    string `json:"type"`
+	Payload struct {
+		BaseVersion uint64                 `json:"base_version"`
+		Version     uint64                 `json:"version"`
+		Delta       ws.RuntimeDeltaPayload `json:"delta"`
+	} `json:"payload"`
+}
+
 type wsVersionedAlertMessage struct {
 	Type    string `json:"type"`
 	Payload struct {
@@ -2237,6 +2246,79 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshBroadcastsAlertMessage(t 
 	if len(alertMessage.Payload.Alerts) != 1 || alertMessage.Payload.Alerts[0].DeviceID != deviceID.String() {
 		t.Fatalf("alert payload = %#v, want single alert for %s", alertMessage.Payload.Alerts, deviceID)
 	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_AlertResolutionWithoutRuntimeBaseUsesNarrowPatch(t *testing.T) {
+	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+			Summary:   "device down",
+		}},
+	})
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = nil
+	pipeline.runtime.prevHashes = nil
+	pipeline.runtime.mu.Unlock()
+	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{})
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, true, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 2 || types[0] != ws.MessageTypeRuntimeDelta || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected alert resolution to broadcast runtime_delta then alert, got %v", types)
+	}
+
+	var deltaMessage wsVersionedRuntimeDeltaMessage
+	if err := json.Unmarshal(messages[0], &deltaMessage); err != nil {
+		t.Fatalf("decode alert resolution delta: %v", err)
+	}
+	deviceRuntime, ok := deltaMessage.Payload.Delta.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected alert resolution delta for device %s", deviceID)
+	}
+	if got, ok := deviceRuntime["alert_status"]; !ok || got != string(domain.AlertStatusNormal) {
+		t.Fatalf("alert_status patch = %#v, want %q", deviceRuntime["alert_status"], domain.AlertStatusNormal)
+	}
+	if got, ok := deviceRuntime["firing_alert_count"]; !ok || got != float64(0) {
+		t.Fatalf("firing_alert_count patch = %#v, want explicit 0", deviceRuntime["firing_alert_count"])
+	}
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	}
+	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
 }
 
 func TestPipelineOrchestratorBroadcastLoop_DisabledFullResyncDoesNotSendSnapshot(t *testing.T) {
