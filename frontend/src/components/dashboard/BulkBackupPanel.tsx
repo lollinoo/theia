@@ -40,6 +40,8 @@ type DeviceEntry = {
   phase: DevicePhase;
   reason?: string;
   jobId?: string;
+  fileCount: number;
+  byteCount: number;
 };
 
 type BulkBackupReport = {
@@ -51,6 +53,8 @@ type BulkBackupReport = {
   failedCount: number;
   skippedCount: number;
   stoppedCount: number;
+  fileCount: number;
+  byteCount: number;
   currentDeviceName?: string;
   currentJobId?: string;
 };
@@ -158,6 +162,17 @@ function backupJobByteCount(job: BackupJob): number {
   }, 0);
 }
 
+function formatByteCount(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatFileCount(count: number): string {
+  return `${count} file${count === 1 ? '' : 's'}`;
+}
+
 async function loadBulkDownloadCandidates(
   entries: DeviceEntry[],
 ): Promise<BulkDownloadCandidate[]> {
@@ -255,6 +270,8 @@ function itemToEntry(item: BulkBackupRunItem): DeviceEntry {
     phase: item.status,
     reason: item.reason,
     jobId: item.backup_job_id,
+    fileCount: Number.isFinite(item.file_count) ? item.file_count : 0,
+    byteCount: Number.isFinite(item.byte_count) ? item.byte_count : 0,
   };
 }
 
@@ -271,6 +288,8 @@ function reportFromEntries(entries: DeviceEntry[]): BulkBackupReport {
   const skippedCount = entries.filter((entry) => entry.phase === 'skipped').length;
   const stoppedCount = entries.filter((entry) => entry.phase === 'cancelled').length;
   const completedCount = successCount + failedCount + skippedCount + stoppedCount;
+  const fileCount = entries.reduce((sum, entry) => sum + entry.fileCount, 0);
+  const byteCount = entries.reduce((sum, entry) => sum + entry.byteCount, 0);
 
   return {
     totalCount: entries.length,
@@ -281,6 +300,8 @@ function reportFromEntries(entries: DeviceEntry[]): BulkBackupReport {
     failedCount,
     skippedCount,
     stoppedCount,
+    fileCount,
+    byteCount,
     currentDeviceName: runningEntry?.deviceName,
     currentJobId: runningEntry?.jobId,
   };
@@ -301,6 +322,8 @@ function reportFromRun(run: BulkBackupRun, entries: DeviceEntry[]): BulkBackupRe
     failedCount: run.failed_count,
     skippedCount: run.skipped_count,
     stoppedCount: run.cancelled_count,
+    fileCount: run.file_count || entryReport.fileCount,
+    byteCount: run.byte_count || entryReport.byteCount,
     currentDeviceName: run.current_device_name || entryReport.currentDeviceName,
     currentJobId: run.current_job_id || entryReport.currentJobId,
   };
@@ -593,6 +616,8 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         deviceId: device.id,
         deviceName: getDeviceName(device),
         phase: 'checking' as const,
+        fileCount: 0,
+        byteCount: 0,
       };
     });
     entriesRef.current = preliminaryEntries;
@@ -849,6 +874,11 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
               Queued {report.queuedCount} · Running {report.runningCount} · Completed{' '}
               {report.completedCount} · Failed {report.failedCount} · Skipped {report.skippedCount}
             </div>
+            {(report.fileCount > 0 || report.byteCount > 0) && (
+              <div className="mt-1 text-[10px] text-on-bg">
+                Files {report.fileCount} · {formatByteCount(report.byteCount)}
+              </div>
+            )}
             {session.startedBy && (
               <div className="mt-1 truncate text-[10px] text-on-bg">
                 Started by {session.startedBy}
@@ -949,6 +979,11 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                     {e.reason && e.phase === 'failed' && (
                       <span className="text-[9px] text-status-down truncate max-w-[140px]">
                         {e.reason}
+                      </span>
+                    )}
+                    {e.fileCount > 0 && (
+                      <span className="text-[9px] text-on-bg-secondary">
+                        {formatFileCount(e.fileCount)} · {formatByteCount(e.byteCount)}
                       </span>
                     )}
                     <span

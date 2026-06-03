@@ -1214,6 +1214,8 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 			"device_id":   item.DeviceID.String(),
 			"device_name": item.DeviceName,
 			"status":      string(item.Status),
+			"file_count":  item.FileCount,
+			"byte_count":  item.ByteCount,
 			"created_at":  item.CreatedAt,
 			"updated_at":  item.UpdatedAt,
 		}
@@ -1259,6 +1261,8 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 		"failed_count":     run.FailedCount,
 		"skipped_count":    run.SkippedCount,
 		"cancelled_count":  run.CancelledCount,
+		"file_count":       run.FileCount,
+		"byte_count":       run.ByteCount,
 		"error_message":    run.ErrorMessage,
 		"cancel_requested": run.CancelRequested,
 		"created_by":       run.CreatedBy,

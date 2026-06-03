@@ -793,6 +793,8 @@ export interface BulkBackupRunItem {
   status: BulkBackupRunItemStatus;
   reason?: string;
   backup_job_id?: string;
+  file_count: number;
+  byte_count: number;
   created_at: string;
   updated_at: string;
   completed_at?: string;
@@ -810,6 +812,8 @@ export interface BulkBackupRun {
   failed_count: number;
   skipped_count: number;
   cancelled_count: number;
+  file_count: number;
+  byte_count: number;
   current_device_id?: string;
   current_device_name?: string;
   current_job_id?: string;

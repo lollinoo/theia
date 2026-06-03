@@ -83,6 +83,8 @@ type BulkBackupRun struct {
 	FailedCount     int
 	SkippedCount    int
 	CancelledCount  int
+	FileCount       int
+	ByteCount       int64
 	ErrorMessage    string
 	CancelRequested bool
 	CreatedBy       string
@@ -101,6 +103,8 @@ type BulkBackupRunItem struct {
 	Status      BulkBackupRunItemStatus
 	Reason      string
 	BackupJobID *uuid.UUID
+	FileCount   int
+	ByteCount   int64
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	CompletedAt *time.Time

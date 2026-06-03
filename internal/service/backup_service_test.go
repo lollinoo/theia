@@ -1230,6 +1230,72 @@ func TestStartBulkBackupRunCreatesPersistentItemsAndSkipsDownDevices(t *testing.
 	}
 }
 
+func TestGetBulkBackupRunHydratesFileAndByteTotals(t *testing.T) {
+	runID := uuid.New()
+	jobID := uuid.New()
+	runRepo := newMockBulkBackupRunRepo()
+	fileRepo := newMockBackupFileRepo()
+	svc := NewBackupService(
+		newMockBackupJobRepo(),
+		fileRepo,
+		newMockCredentialProfileRepo(),
+		newMockDeviceRepo(),
+		newMockBackupSettingsRepo(),
+		nil,
+		nil,
+		[]byte("0123456789abcdef"),
+		t.TempDir(),
+		nil,
+		WithBulkBackupRunRepo(runRepo),
+	)
+	if err := runRepo.CreateRun(
+		&domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusSuccess, BatchSize: 10},
+		[]domain.BulkBackupRunItem{
+			{
+				ID:          uuid.New(),
+				RunID:       runID,
+				DeviceID:    uuid.New(),
+				DeviceName:  "router-01",
+				Status:      domain.BulkBackupRunItemStatusSuccess,
+				BackupJobID: &jobID,
+			},
+			{
+				ID:         uuid.New(),
+				RunID:      runID,
+				DeviceID:   uuid.New(),
+				DeviceName: "router-02",
+				Status:     domain.BulkBackupRunItemStatusSkipped,
+			},
+		},
+	); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for _, file := range []domain.BackupFile{
+		{JobID: jobID, FileName: "running.rsc", SizeBytes: 123},
+		{JobID: jobID, FileName: "compact.rsc", SizeBytes: 456},
+	} {
+		file := file
+		if err := fileRepo.Create(&file); err != nil {
+			t.Fatalf("Create file: %v", err)
+		}
+	}
+
+	run, err := svc.GetBulkBackupRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("GetBulkBackupRun: %v", err)
+	}
+
+	if run.FileCount != 2 || run.ByteCount != 579 {
+		t.Fatalf("run totals = files %d bytes %d, want 2/579", run.FileCount, run.ByteCount)
+	}
+	if run.Items[0].FileCount != 2 || run.Items[0].ByteCount != 579 {
+		t.Fatalf("item totals = files %d bytes %d, want 2/579", run.Items[0].FileCount, run.Items[0].ByteCount)
+	}
+	if run.Items[1].FileCount != 0 || run.Items[1].ByteCount != 0 {
+		t.Fatalf("skipped item totals = files %d bytes %d, want 0/0", run.Items[1].FileCount, run.Items[1].ByteCount)
+	}
+}
+
 func TestStartBulkBackupRunRejectsActiveRun(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()

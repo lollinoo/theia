@@ -409,6 +409,45 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     expect(screen.getByText('Current running-router · job job-2')).toBeInTheDocument();
   });
 
+  it('shows persistent run file and byte totals', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ file_count: 3, byte_count: 1536 }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'success',
+          backup_job_id: 'job-1',
+          file_count: 2,
+          byte_count: 1024,
+        }),
+        mockRunItem({
+          device_id: 'dev-2',
+          device_name: 'router-02',
+          status: 'success',
+          backup_job_id: 'job-2',
+          file_count: 1,
+          byte_count: 512,
+        }),
+      ]),
+    );
+
+    render(
+      <BulkBackupPanel
+        devices={[
+          mockDevice({ id: 'dev-1', sys_name: 'router-01' }),
+          mockDevice({ id: 'dev-2', sys_name: 'router-02' }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    expect(await screen.findByText('Files 3 · 1.5 KB')).toBeInTheDocument();
+    expect(screen.getByText('2 files · 1.0 KB')).toBeInTheDocument();
+    expect(screen.getByText('1 file · 512 B')).toBeInTheDocument();
+  });
+
   it('backs up only selected devices', async () => {
     const { startBulkBackupRun } = await import('../../api/client');
 

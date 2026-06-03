@@ -2027,6 +2027,8 @@ describe('bulk backup runs', () => {
     failed_count: 0,
     skipped_count: 1,
     cancelled_count: 0,
+    file_count: 2,
+    byte_count: 579,
     current_device_id: 'dev-1',
     current_device_name: 'router-01',
     current_job_id: 'job-1',
@@ -2042,6 +2044,8 @@ describe('bulk backup runs', () => {
         device_name: 'router-01',
         status: 'queued',
         backup_job_id: 'job-1',
+        file_count: 2,
+        byte_count: 579,
         created_at: '2026-05-26T10:00:00Z',
         updated_at: '2026-05-26T10:00:00Z',
       },
@@ -2052,6 +2056,8 @@ describe('bulk backup runs', () => {
         device_name: 'router-02',
         status: 'skipped',
         reason: 'device offline',
+        file_count: 0,
+        byte_count: 0,
         created_at: '2026-05-26T10:00:00Z',
         updated_at: '2026-05-26T10:00:00Z',
       },
@@ -2083,12 +2089,16 @@ describe('bulk backup runs', () => {
       current_device_id: 'dev-1',
       current_device_name: 'router-01',
       current_job_id: 'job-1',
+      file_count: 2,
+      byte_count: 579,
     });
     expect(run.items).toEqual([
       expect.objectContaining({
         device_id: 'dev-1',
         status: 'queued',
         backup_job_id: 'job-1',
+        file_count: 2,
+        byte_count: 579,
       }),
       expect.objectContaining({
         device_id: 'dev-2',

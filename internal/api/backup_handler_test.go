@@ -1217,7 +1217,7 @@ func TestBackupHandlerGetLatestBulkBackupRunReturnsNullWhenMissing(t *testing.T)
 }
 
 func TestBackupHandlerBulkBackupRunReportsAggregateProgressAndCurrentJob(t *testing.T) {
-	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	handler, _, fileRepo, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
 	runID := uuid.New()
 	jobID := uuid.New()
 	if err := runRepo.CreateRun(&domain.BulkBackupRun{
@@ -1238,6 +1238,15 @@ func TestBackupHandlerBulkBackupRunReportsAggregateProgressAndCurrentJob(t *test
 	if _, err := runRepo.RecalculateRunCounters(runID); err != nil {
 		t.Fatalf("RecalculateRunCounters: %v", err)
 	}
+	for _, file := range []domain.BackupFile{
+		{ID: uuid.New(), JobID: jobID, FileName: "running.rsc", SizeBytes: 123},
+		{ID: uuid.New(), JobID: jobID, FileName: "compact.rsc", SizeBytes: 456},
+	} {
+		file := file
+		if err := fileRepo.Create(&file); err != nil {
+			t.Fatalf("Create file: %v", err)
+		}
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/backups/bulk-runs/"+runID.String(), nil)
 	rec := httptest.NewRecorder()
@@ -1255,8 +1264,15 @@ func TestBackupHandlerBulkBackupRunReportsAggregateProgressAndCurrentJob(t *test
 			SuccessCount      int    `json:"success_count"`
 			FailedCount       int    `json:"failed_count"`
 			SkippedCount      int    `json:"skipped_count"`
+			FileCount         int    `json:"file_count"`
+			ByteCount         int64  `json:"byte_count"`
 			CurrentDeviceName string `json:"current_device_name"`
 			CurrentJobID      string `json:"current_job_id"`
+			Items             []struct {
+				DeviceName string `json:"device_name"`
+				FileCount  int    `json:"file_count"`
+				ByteCount  int64  `json:"byte_count"`
+			} `json:"items"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -1271,8 +1287,25 @@ func TestBackupHandlerBulkBackupRunReportsAggregateProgressAndCurrentJob(t *test
 		resp.Data.SkippedCount != 1 {
 		t.Fatalf("unexpected aggregate counts: %#v", resp.Data)
 	}
+	if resp.Data.FileCount != 2 || resp.Data.ByteCount != 579 {
+		t.Fatalf("unexpected aggregate file totals: %#v", resp.Data)
+	}
 	if resp.Data.CurrentDeviceName != "running-router" || resp.Data.CurrentJobID != jobID.String() {
 		t.Fatalf("unexpected current job details: %#v", resp.Data)
+	}
+	var runningItem *struct {
+		DeviceName string `json:"device_name"`
+		FileCount  int    `json:"file_count"`
+		ByteCount  int64  `json:"byte_count"`
+	}
+	for index := range resp.Data.Items {
+		if resp.Data.Items[index].DeviceName == "running-router" {
+			runningItem = &resp.Data.Items[index]
+			break
+		}
+	}
+	if runningItem == nil || runningItem.FileCount != 2 || runningItem.ByteCount != 579 {
+		t.Fatalf("unexpected running item file totals: %#v", resp.Data.Items)
 	}
 }
 

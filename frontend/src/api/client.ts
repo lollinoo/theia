@@ -1584,6 +1584,8 @@ function parseBulkBackupRunItem(data: Record<string, unknown>): BulkBackupRunIte
       : 'checking',
     reason: typeof data.reason === 'string' ? data.reason : undefined,
     backup_job_id: typeof data.backup_job_id === 'string' ? data.backup_job_id : undefined,
+    file_count: typeof data.file_count === 'number' ? data.file_count : 0,
+    byte_count: typeof data.byte_count === 'number' ? data.byte_count : 0,
     created_at: typeof data.created_at === 'string' ? data.created_at : '',
     updated_at: typeof data.updated_at === 'string' ? data.updated_at : '',
     completed_at: typeof data.completed_at === 'string' ? data.completed_at : undefined,
@@ -1607,6 +1609,8 @@ function parseBulkBackupRun(data: Record<string, unknown>): BulkBackupRun {
     failed_count: typeof data.failed_count === 'number' ? data.failed_count : 0,
     skipped_count: typeof data.skipped_count === 'number' ? data.skipped_count : 0,
     cancelled_count: typeof data.cancelled_count === 'number' ? data.cancelled_count : 0,
+    file_count: typeof data.file_count === 'number' ? data.file_count : 0,
+    byte_count: typeof data.byte_count === 'number' ? data.byte_count : 0,
     current_device_id:
       typeof data.current_device_id === 'string' ? data.current_device_id : undefined,
     current_device_name:
