@@ -221,12 +221,34 @@ func (s *Store) Snapshot() map[uuid.UUID]DeviceState {
 	defer s.mu.RUnlock()
 	out := make(map[uuid.UUID]DeviceState, len(s.devices))
 	for id, ds := range s.devices {
-		cp := ds
-		cp.Metrics = cloneMetrics(ds.Metrics)
-		cp.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
-		cp.FieldStates = cloneFieldStates(ds.FieldStates)
-		cp.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
-		out[id] = cp
+		out[id] = cloneDeviceState(ds)
+	}
+	return out
+}
+
+// SnapshotFor returns a deep copy of the requested device states. Unknown IDs
+// are ignored. It preserves Snapshot's clone semantics while avoiding a full
+// store clone for callers that already have a bounded changed-device set.
+func (s *Store) SnapshotFor(ids []uuid.UUID) map[uuid.UUID]DeviceState {
+	out := make(map[uuid.UUID]DeviceState, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, alreadyCloned := out[id]; alreadyCloned {
+			continue
+		}
+		ds, ok := s.devices[id]
+		if !ok {
+			continue
+		}
+		out[id] = cloneDeviceState(ds)
 	}
 	return out
 }
@@ -239,11 +261,7 @@ func (s *Store) GetDevice(id uuid.UUID) (DeviceState, bool) {
 	if !ok {
 		return DeviceState{}, false
 	}
-	ds.Metrics = cloneMetrics(ds.Metrics)
-	ds.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
-	ds.FieldStates = cloneFieldStates(ds.FieldStates)
-	ds.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
-	return ds, true
+	return cloneDeviceState(ds), true
 }
 
 // Remove deletes a device from the store and emits its ID on the Changes
@@ -458,6 +476,15 @@ func cloneMetrics(m domain.DeviceMetrics) domain.DeviceMetrics {
 		out.UptimeSecs = &v
 	}
 	return out
+}
+
+func cloneDeviceState(ds DeviceState) DeviceState {
+	cp := ds
+	cp.Metrics = cloneMetrics(ds.Metrics)
+	cp.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
+	cp.FieldStates = cloneFieldStates(ds.FieldStates)
+	cp.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
+	return cp
 }
 
 func applyFreshnessMetadata(next *DeviceState, update StateUpdate) {

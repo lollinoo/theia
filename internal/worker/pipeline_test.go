@@ -1745,6 +1745,23 @@ func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertOnlyChangeIncludesAler
 		}},
 	}
 
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
 	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(nil, true)
 	if err != nil {
 		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
@@ -1766,6 +1783,65 @@ func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertOnlyChangeIncludesAler
 	if deviceRuntime.FiringAlertCount != 1 {
 		t.Fatalf("FiringAlertCount = %d, want 1", deviceRuntime.FiringAlertCount)
 	}
+	if fullSnapshotCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0 for alert-only delta", narrowSnapshotCalls)
+	}
+}
+
+func TestPipelineOrchestratorBuildDirtyOverviewDelta_UsesNarrowStateSnapshotForDeviceOnlyChange(t *testing.T) {
+	pipeline, _, _, _, deviceID := newBroadcastTestPipeline(t)
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(map[uuid.UUID]struct{}{deviceID: {}}, false)
+	if err != nil {
+		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
+	}
+	if requireFull {
+		t.Fatal("requireFull = true, want false")
+	}
+	if delta == nil {
+		t.Fatal("expected dirty overview delta")
+	}
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	}
+
+	links, err := pipeline.cache.GetLinks()
+	if err != nil {
+		t.Fatalf("GetLinks returned error: %v", err)
+	}
+	wantIDs := map[uuid.UUID]struct{}{deviceID: {}}
+	for _, link := range links {
+		if link.SourceDeviceID == deviceID || link.TargetDeviceID == deviceID {
+			wantIDs[link.SourceDeviceID] = struct{}{}
+			wantIDs[link.TargetDeviceID] = struct{}{}
+		}
+	}
+	assertUUIDSliceSetEqual(t, requestedIDs, wantIDs)
 }
 
 func TestPipelineOrchestratorBuildDirtyOverviewDelta_PreservesPeerContextForLinks(t *testing.T) {
@@ -2353,6 +2429,26 @@ func clearBufferedStateChanges(store *state.Store) {
 		case <-store.Changes():
 		default:
 			return
+		}
+	}
+}
+
+func assertUUIDSliceSetEqual(t *testing.T, got []uuid.UUID, want map[uuid.UUID]struct{}) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("UUID set length = %d, want %d: got=%v want=%v", len(got), len(want), got, want)
+	}
+	seen := make(map[uuid.UUID]struct{}, len(got))
+	for _, id := range got {
+		if _, ok := want[id]; !ok {
+			t.Fatalf("unexpected UUID %s in set %v, want %v", id, got, want)
+		}
+		seen[id] = struct{}{}
+	}
+	for id := range want {
+		if _, ok := seen[id]; !ok {
+			t.Fatalf("missing UUID %s from set %v", id, got)
 		}
 	}
 }

@@ -14,12 +14,22 @@ import (
 	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
+	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/ws"
 )
 
 type pipelineSnapshotBroadcaster struct {
 	pipeline *PipelineOrchestrator
 }
+
+var (
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		return store.SnapshotFor(ids)
+	}
+)
 
 func (b *pipelineSnapshotBroadcaster) broadcastLoop(ctx context.Context) {
 	p := b.pipeline
@@ -149,7 +159,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	p.runtime.mu.RUnlock()
 
 	startedAt := time.Now()
-	snapshot := buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, promStatus)
+	snapshot := buildPipelineSnapshot(devices, links, snapshotAllPipelineState(p.stateStore), alerts, promStatus)
 	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeFull, time.Since(startedAt), true)
 	currentHashes := computeSnapshotHashes(snapshot)
 	drainedTopology := drainTopologyNotify(p.topologyNotify)
@@ -481,7 +491,7 @@ func (b *pipelineSnapshotBroadcaster) buildFullOverviewSnapshot() (_ *ws.Snapsho
 	promStatus := p.runtime.promStatus
 	p.runtime.mu.RUnlock()
 
-	return buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, promStatus), nil
+	return buildPipelineSnapshot(devices, links, snapshotAllPipelineState(p.stateStore), alerts, promStatus), nil
 }
 
 func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUID]struct{}, alertsDirty bool) (*ws.SnapshotPayload, bool, error) {
@@ -505,12 +515,12 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 	promStatus := p.runtime.promStatus
 	previousHashes := p.runtime.prevHashes
 	p.runtime.mu.RUnlock()
-	states := p.stateStore.Snapshot()
 
 	if alertsDirty {
 		if previousHashes == nil {
 			return nil, true, nil
 		}
+		states := snapshotAllPipelineState(p.stateStore)
 		current := buildPipelineSnapshot(devices, links, states, alerts, promStatus)
 		currentHashes := computeSnapshotHashes(current)
 		return buildDelta(current, currentHashes, previousHashes), false, nil
@@ -529,6 +539,7 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 			contextIDs[link.TargetDeviceID] = struct{}{}
 		}
 
+		states := snapshotPipelineStateFor(p.stateStore, deviceIDSetToSlice(contextIDs))
 		partial := buildPipelineSnapshot(filterDevicesByID(devices, contextIDs), filteredLinks, states, alerts, promStatus)
 		for id := range dirtyDevices {
 			deviceRuntime, ok := partial.Devices[id.String()]
@@ -547,4 +558,18 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 	}
 
 	return delta, false, nil
+}
+
+func deviceIDSetToSlice(ids map[uuid.UUID]struct{}) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(ids))
+	for id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].String() < out[j].String()
+	})
+	return out
 }
