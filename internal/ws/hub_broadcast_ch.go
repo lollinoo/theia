@@ -1,7 +1,13 @@
 package ws
 
 // BroadcastCh returns the broadcast channel for test inspection.
-// The channel is buffered (capacity 32); in tests without hub.Run(), messages accumulate.
+// Calling it enables an opt-in recorder; production hubs do not retain
+// broadcast payloads unless this test seam is used.
 func (h *Hub) BroadcastCh() chan []byte {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.broadcast == nil {
+		h.broadcast = make(chan []byte, 32)
+	}
 	return h.broadcast
 }

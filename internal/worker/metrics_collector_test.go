@@ -401,7 +401,7 @@ func TestBuildSnapshot_WithMockPrometheus(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
@@ -475,7 +475,7 @@ func TestBuildSnapshot_PrometheusDeviceWithoutMetricsRemainsAwaitingPoll(t *test
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{{
 			ID:                   devID,
@@ -536,7 +536,7 @@ func TestBuildSnapshot_PrometheusMetricsLeaveLastPolledAtUnset(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{{
 			ID:                   devID,
@@ -601,7 +601,7 @@ func TestBuildSnapshot_PrometheusInterfaceDiscoveryDoesNotMutateCachedDevices(t 
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{{
 			ID:                   devID,
@@ -671,7 +671,7 @@ func TestMetricsCollectorAppliesContractNormalizedRuntimeOutcome(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
 			{
@@ -764,7 +764,7 @@ func TestBuildSnapshot_VirtualNoIPNormalizesLegacyStatus(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
 			{
@@ -940,7 +940,7 @@ func TestCollectAndBroadcast_BroadcastsOnCollect(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
@@ -1009,7 +1009,7 @@ func TestBuildSnapshot_PromUnavailable(t *testing.T) {
 	promServer.Close()
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
@@ -1078,7 +1078,7 @@ func TestBuildSnapshot_SNMPPollPath(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
@@ -1399,7 +1399,7 @@ func newMockCollector(t *testing.T) (*MetricsCollector, *ws.Hub) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
@@ -1544,7 +1544,7 @@ func newMockCollectorWithChangingData(t *testing.T) (*MetricsCollector, *ws.Hub,
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
@@ -1802,7 +1802,7 @@ func TestBuildSnapshot_SNMPLinkPollSkipsDeviceWithNoValidLinks(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
@@ -1885,7 +1885,7 @@ func TestBuildSnapshot_SNMPLinkPollCalledWithValidLinks(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
@@ -2068,7 +2068,7 @@ func newSNMPLinkRateTestCollector(t *testing.T, snmpLinkPollFunc SNMPLinkPollFun
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	deviceRepo := &mockWorkerDeviceRepo{
 		devices: []domain.Device{
 			{
@@ -2196,7 +2196,7 @@ func TestBuildSnapshot_UsesSlimOverviewSections(t *testing.T) {
 	settingsRepo := newMockWorkerSettingsRepo()
 	registry := buildEmptyVendorRegistry()
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 
 	mc := NewMetricsCollector(promClient, hub, dlCache, deviceRepo, settingsRepo, registry, nil, nil, nil)
 
@@ -2246,7 +2246,7 @@ func TestCollectAndBroadcast_TopologyChangedEvent(t *testing.T) {
 	t.Cleanup(promServer.Close)
 
 	promClient := metrics.NewPromClient(promServer.URL, nil)
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	go hub.Run()
 
 	deviceRepo := &mockWorkerDeviceRepo{

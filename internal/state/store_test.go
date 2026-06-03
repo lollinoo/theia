@@ -390,6 +390,73 @@ func TestStoreConsumeOverflowed_IsStickyUntilConsumed(t *testing.T) {
 	}
 }
 
+func TestStoreEmitChangesCoalescesDuplicateQueuedIDsWhenChannelFull(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	s := NewStore()
+	id := uuid.New()
+	for i := 0; i < cap(s.changes); i++ {
+		s.changes <- []uuid.UUID{id}
+	}
+
+	s.emitChanges([]uuid.UUID{id})
+
+	if s.ConsumeOverflowed() {
+		t.Fatal("duplicate-only coalescing should not mark overflowed")
+	}
+
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != 1 || batch[0] != id {
+			t.Fatalf("coalesced batch = %v, want [%s]", batch, id)
+		}
+	default:
+		t.Fatal("expected coalesced state-change batch")
+	}
+	if len(s.changes) != 0 {
+		t.Fatalf("expected only one coalesced batch, found %d queued batches", len(s.changes)+1)
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if strings.Contains(metrics, `theia_state_changes_dropped_total 1`) {
+		t.Fatalf("duplicate-only coalescing should not record dropped changes, got:\n%s", metrics)
+	}
+}
+
+func TestStoreEmitChangesKeepsOverflowWhenUniqueCoalescedIDsExceedCapacity(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	s := NewStore()
+	for i := 0; i < cap(s.changes); i++ {
+		s.changes <- []uuid.UUID{uuid.New()}
+	}
+
+	s.emitChanges([]uuid.UUID{uuid.New()})
+
+	if !s.ConsumeOverflowed() {
+		t.Fatal("expected overflow marker when unique coalesced IDs exceed capacity")
+	}
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != cap(s.changes) {
+			t.Fatalf("coalesced unique batch length = %d, want %d", len(batch), cap(s.changes))
+		}
+	default:
+		t.Fatal("expected bounded coalesced state-change batch")
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_state_changes_dropped_total 1`) {
+		t.Fatalf("expected one dropped state change, got:\n%s", metrics)
+	}
+}
+
 func TestStoreUpdate_OperationalPollDoesNotOverwritePerformanceFreshnessMetadata(t *testing.T) {
 	t.Parallel()
 

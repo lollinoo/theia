@@ -31,7 +31,7 @@ func capturePipelineDebugLogs(t *testing.T) *bytes.Buffer {
 
 func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthOnlyWhenChanged(t *testing.T) {
 	sched := newPipelineTestScheduler()
-	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(ws.WithBroadcastRecorder()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	broadcaster := &pipelineSnapshotBroadcaster{pipeline: pipeline}
 
 	sched.health = polling.HealthSnapshot{
@@ -79,7 +79,7 @@ func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthOnlyWhenChanged(t *te
 func TestPipelineSnapshotBroadcasterDebugLogsPollingHealthChange(t *testing.T) {
 	logs := capturePipelineDebugLogs(t)
 	sched := newPipelineTestScheduler()
-	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(ws.WithBroadcastRecorder()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	broadcaster := &pipelineSnapshotBroadcaster{pipeline: pipeline}
 
 	sched.health = polling.HealthSnapshot{
@@ -116,7 +116,7 @@ func TestPipelineSnapshotBroadcasterDebugLogsPollingHealthChange(t *testing.T) {
 
 func TestPipelinePrometheusMonitor_DebugLogsStatusTransition(t *testing.T) {
 	logs := capturePipelineDebugLogs(t)
-	pipeline := NewPipelineOrchestrator(newPipelineTestScheduler(), nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	pipeline := NewPipelineOrchestrator(newPipelineTestScheduler(), nil, nil, ws.NewHub(ws.WithBroadcastRecorder()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	monitor := &pipelinePrometheusMonitor{pipeline: pipeline}
 
 	monitor.publishStatus(ws.PrometheusStatusPayload{
@@ -139,7 +139,7 @@ func TestPipelinePrometheusMonitor_DebugLogsStatusTransition(t *testing.T) {
 
 func TestPipelineSnapshotBroadcasterThrottlesActiveWorkerOnlyPollingHealth(t *testing.T) {
 	sched := newPipelineTestScheduler()
-	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(ws.WithBroadcastRecorder()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	broadcaster := &pipelineSnapshotBroadcaster{pipeline: pipeline}
 
 	now := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
@@ -178,7 +178,7 @@ func TestPipelineSnapshotBroadcasterThrottlesActiveWorkerOnlyPollingHealth(t *te
 
 func TestPipelineSnapshotBroadcasterIgnoresSubBucketPollingHealthLagDrift(t *testing.T) {
 	sched := newPipelineTestScheduler()
-	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(ws.WithBroadcastRecorder()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	broadcaster := &pipelineSnapshotBroadcaster{pipeline: pipeline}
 
 	sched.health = polling.HealthSnapshot{
@@ -212,7 +212,7 @@ func TestPipelineSnapshotBroadcasterIgnoresSubBucketPollingHealthLagDrift(t *tes
 
 func TestPipelineSnapshotBroadcasterBroadcastsPollingHealthWhenClassQueueLagBucketChanges(t *testing.T) {
 	sched := newPipelineTestScheduler()
-	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	pipeline := NewPipelineOrchestrator(sched, nil, nil, ws.NewHub(ws.WithBroadcastRecorder()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	broadcaster := &pipelineSnapshotBroadcaster{pipeline: pipeline}
 
 	sched.health = polling.HealthSnapshot{

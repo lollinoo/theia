@@ -53,6 +53,14 @@ type Hub struct {
 	mu         sync.RWMutex
 }
 
+type HubOption func(*Hub)
+
+func WithBroadcastRecorder() HubOption {
+	return func(h *Hub) {
+		h.broadcast = make(chan []byte, 32)
+	}
+}
+
 // Client is a single WebSocket connection.
 type Client struct {
 	hub                      *Hub
@@ -71,13 +79,16 @@ type Client struct {
 }
 
 // NewHub creates an empty WebSocket hub.
-func NewHub() *Hub {
-	return &Hub{
+func NewHub(options ...HubOption) *Hub {
+	hub := &Hub{
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte, 32),
 		register:   make(chan *Client, 32),
 		unregister: make(chan *Client, 32),
 	}
+	for _, option := range options {
+		option(hub)
+	}
+	return hub
 }
 
 // Run processes hub registration, unregistration, and broadcast events.
@@ -631,10 +642,16 @@ func (c *Client) writePayload(message []byte, ok bool) bool {
 }
 
 func (h *Hub) recordBroadcast(payload []byte) {
+	h.mu.RLock()
+	recorder := h.broadcast
+	h.mu.RUnlock()
+	if recorder == nil {
+		return
+	}
+
 	select {
-	case h.broadcast <- payload:
+	case recorder <- payload:
 	default:
-		observability.Default().IncWSBackpressure(wsBackpressureScopeBroadcast, wsBackpressureReasonHubBufferFull)
 	}
 }
 

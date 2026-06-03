@@ -479,7 +479,7 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 			TargetDeviceID: uuid.New(),
 			TargetIfName:   "ether9",
 		}}),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -575,7 +575,7 @@ func TestPipelineOrchestratorPerformanceTaskCompletionUsesWallClockFinish(t *tes
 		sched,
 		state.NewStore(),
 		newPipelineTestCache([]domain.Device{task.Device}, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		performance,
 		newOperationalTestCollector(t),
@@ -639,7 +639,7 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 		sched,
 		store,
 		nil,
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -766,7 +766,7 @@ func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t
 		sched,
 		store,
 		nil,
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		nil,
 		nil,
@@ -915,7 +915,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		newPipelineTestScheduler(),
 		state.NewStore(),
 		cache,
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -986,7 +986,7 @@ func TestPipelineOrchestratorWorkerCount_UsesVolatilityBudgets(t *testing.T) {
 		newPipelineTestScheduler(),
 		state.NewStore(),
 		nil,
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1010,7 +1010,7 @@ func TestPipelineOrchestratorStatusReflectsLifecycle(t *testing.T) {
 		sched,
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1048,7 +1048,7 @@ func TestPipelineOrchestratorStartReturnsErrAlreadyStarted(t *testing.T) {
 		sched,
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1080,7 +1080,7 @@ func TestPipelineOrchestratorStopIsIdempotent(t *testing.T) {
 		sched,
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1130,7 +1130,7 @@ func TestPipelineOrchestratorStartRollsBackStoreWhenSchedulerStartFails(t *testi
 		sched,
 		store,
 		newPipelineTestCache(nil, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1199,7 +1199,7 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 		sched,
 		store,
 		newPipelineTestCache([]domain.Device{task.Device}, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		operational,
@@ -1299,7 +1299,7 @@ func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *st
 		Timestamp:        time.Date(2026, 4, 13, 12, 0, 1, 0, time.UTC),
 	})
 
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	topologyNotify := make(chan struct{}, 4)
 	pipeline := NewPipelineOrchestrator(
 		newPipelineTestScheduler(),
@@ -2074,7 +2074,7 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 		TargetIfName:   "ether2",
 	}
 
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	store := state.NewStore()
 	pipeline := NewPipelineOrchestrator(
 		newPipelineTestScheduler(),
@@ -2256,7 +2256,7 @@ func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing
 	})
 }
 
-func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredThenSnapshot(t *testing.T) {
+func TestPipelineOrchestratorBroadcastDirty_DuplicateStateBurstBroadcastsRuntimeDelta(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
 	pipeline.broadcaster.broadcastOnce(context.Background())
@@ -2285,59 +2285,42 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredT
 
 	messages := drainBroadcastCh(hub)
 	types := broadcastMessageTypes(t, messages)
-	if len(types) < 2 {
-		t.Fatalf("expected resync_required and snapshot, got %v", types)
-	}
-	if types[0] != ws.MessageTypeResyncRequired || types[1] != ws.MessageTypeSnapshot {
-		t.Fatalf("expected resync_required before snapshot, got %v", types)
-	}
-
-	var message struct {
-		Type    string                   `json:"type"`
-		Payload ws.ResyncRequiredPayload `json:"payload"`
-	}
-	if err := json.Unmarshal(messages[0], &message); err != nil {
-		t.Fatalf("decode resync_required message: %v", err)
-	}
-	if message.Payload.Scope != ws.ResyncScopeOverview {
-		t.Fatalf("resync scope = %q, want %q", message.Payload.Scope, ws.ResyncScopeOverview)
-	}
-	if message.Payload.Reason != ws.ResyncReasonStateChangesDrop {
-		t.Fatalf("resync reason = %q, want %q", message.Payload.Reason, ws.ResyncReasonStateChangesDrop)
+	if len(types) != 1 || types[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("expected duplicate state burst to broadcast runtime_delta, got %v", types)
 	}
 }
 
-func TestPipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay(t *testing.T) {
+func TestPipelineDuplicateStateBurstSequenceStaysStableAcrossReplay(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
 	pipeline.broadcaster.broadcastOnce(context.Background())
 	drainBroadcastCh(hub)
 
-	first := forcePipelineOverviewOverflow(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 20, 0, 0, time.UTC))
-	second := forcePipelineOverviewOverflow(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 21, 0, 0, time.UTC))
+	first := forcePipelineDuplicateStateBurst(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 20, 0, 0, time.UTC))
+	second := forcePipelineDuplicateStateBurst(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 21, 0, 0, time.UTC))
 
-	if len(first) < 2 {
-		t.Fatalf("first overflow sequence too short: %v", first)
+	if len(first) != 1 {
+		t.Fatalf("first duplicate-burst sequence = %v, want [runtime_delta]", first)
 	}
-	if len(second) < 2 {
-		t.Fatalf("second overflow sequence too short: %v", second)
+	if len(second) != 1 {
+		t.Fatalf("second duplicate-burst sequence = %v, want [runtime_delta]", second)
 	}
-	if first[0] != ws.MessageTypeResyncRequired || first[1] != ws.MessageTypeSnapshot {
-		t.Fatalf("first overflow ordering = %v, want [resync_required snapshot ...]", first)
+	if first[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("first duplicate-burst ordering = %v, want [runtime_delta]", first)
 	}
-	if second[0] != ws.MessageTypeResyncRequired || second[1] != ws.MessageTypeSnapshot {
-		t.Fatalf("second overflow ordering = %v, want [resync_required snapshot ...]", second)
+	if second[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("second duplicate-burst ordering = %v, want [runtime_delta]", second)
 	}
-	if first[0] != second[0] || first[1] != second[1] {
-		t.Fatalf("overflow ordering changed across bursts: first=%v second=%v", first, second)
+	if first[0] != second[0] {
+		t.Fatalf("duplicate-burst ordering changed across bursts: first=%v second=%v", first, second)
 	}
 }
 
-func forcePipelineOverviewOverflow(t *testing.T, pipeline *PipelineOrchestrator, store *state.Store, deviceID uuid.UUID, updates int, startedAt time.Time) []string {
+func forcePipelineDuplicateStateBurst(t *testing.T, pipeline *PipelineOrchestrator, store *state.Store, deviceID uuid.UUID, updates int, startedAt time.Time) []string {
 	t.Helper()
 
-	// Overflow the state change mailbox without timing assumptions by issuing
-	// more updates than the buffered channel can hold before any consumer drains it.
+	// Issue more updates than the buffered channel can hold. Repeated updates
+	// for one device should coalesce to one dirty ID instead of forcing resync.
 	for i := 0; i < 32+updates; i++ {
 		cpu := float64(110 + i)
 		at := startedAt.Add(time.Duration(i) * time.Second)
@@ -2374,7 +2357,7 @@ func clearBufferedStateChanges(store *state.Store) {
 	}
 }
 
-func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreservesOrdering(t *testing.T) {
+func TestPipelineOrchestratorBroadcastDirty_DuplicateStateBurstWithTopologyDirtyInvalidatesTopology(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
 	pipeline.broadcaster.broadcastOnce(context.Background())
@@ -2402,11 +2385,11 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreser
 	}
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
-	if len(types) < 3 {
-		t.Fatalf("expected resync_required, snapshot, and topology_changed, got %v", types)
+	if len(types) != 1 {
+		t.Fatalf("expected topology_changed only for topology-dirty duplicate burst, got %v", types)
 	}
-	if types[0] != ws.MessageTypeResyncRequired || types[1] != ws.MessageTypeSnapshot || types[2] != ws.MessageTypeTopologyChanged {
-		t.Fatalf("expected resync_required before snapshot before topology_changed, got %v", types)
+	if types[0] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology_changed for topology-dirty duplicate burst, got %v", types)
 	}
 }
 
@@ -2477,7 +2460,7 @@ func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testi
 }
 
 func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkMetricsToSubscribedClient(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	device.MetricsSource = domain.MetricsSourcePrometheus
@@ -2555,7 +2538,7 @@ func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkM
 func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 	t.Helper()
 
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
@@ -2640,7 +2623,7 @@ func TestPipelineOrchestratorRunTask_OperationalPollSendsDetailDeltaToSubscribed
 }
 
 func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
@@ -2683,7 +2666,7 @@ func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t
 }
 
 func TestPipelineOrchestratorPublishSubscribedDetailDeltaJSONIncludesDetailOnlyDeviceMetricFields(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
@@ -2796,7 +2779,7 @@ func TestPipelineOrchestratorPublishSubscribedDetailDeltaJSONIncludesDetailOnlyD
 }
 
 func TestPipelineOrchestratorPublishSubscribedDetailDelta_UsesPrometheusStatusAndAlerts(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	device.MetricsSource = domain.MetricsSourcePrometheus

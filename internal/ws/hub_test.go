@@ -94,31 +94,36 @@ func TestHubRemoveClient_DropsSubscriptionState(t *testing.T) {
 	}
 }
 
-func TestHubBroadcast_RecordsHubBufferBackpressure(t *testing.T) {
+func TestHubBroadcast_DefaultRecorderDisabledDoesNotEmitHubBufferBackpressure(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {
 		observability.ResetDefaultForTest()
 	})
 
 	hub := NewHub()
-	for i := 0; i < cap(hub.broadcast); i++ {
-		hub.broadcast <- []byte("prefill")
-	}
-
-	hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
-
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		metrics := string(registry.MarshalPrometheus())
-		if strings.Contains(metrics, `theia_ws_backpressure_total{reason="hub_buffer_full",scope="broadcast"} 1`) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	for i := 0; i < sendBufferSize*3; i++ {
+		hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
 	}
 
 	metrics := string(registry.MarshalPrometheus())
-	if !strings.Contains(metrics, `theia_ws_backpressure_total{reason="hub_buffer_full",scope="broadcast"} 1`) {
-		t.Fatalf("expected hub buffer backpressure metric, got:\n%s", metrics)
+	if strings.Contains(metrics, `reason="hub_buffer_full",scope="broadcast"`) {
+		t.Fatalf("unexpected hub recorder backpressure metric, got:\n%s", metrics)
+	}
+}
+
+func TestHubBroadcastCh_EnablesTestRecorder(t *testing.T) {
+	hub := NewHub()
+	recorded := hub.BroadcastCh()
+
+	hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
+
+	select {
+	case payload := <-recorded:
+		if !strings.Contains(string(payload), MessageTypeSnapshot) {
+			t.Fatalf("expected snapshot payload, got %s", string(payload))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recorded broadcast")
 	}
 }
 

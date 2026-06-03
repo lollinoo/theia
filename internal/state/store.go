@@ -377,12 +377,61 @@ func (s *Store) emitChanges(ids []uuid.UUID) {
 	select {
 	case s.changes <- ids:
 	default:
-		s.mu.Lock()
-		s.overflowed = true
-		s.mu.Unlock()
-		observability.Default().AddDroppedStateChanges(len(ids))
-		log.Printf("state: changes channel full, %d device change(s) dropped", len(ids))
+		merged, dropped := s.coalesceQueuedChanges(ids)
+		if len(merged) > 0 {
+			select {
+			case s.changes <- merged:
+			default:
+				dropped += len(merged)
+				merged = nil
+			}
+		}
+		if dropped > 0 {
+			s.markChangesOverflowed(dropped)
+			log.Printf("state: changes channel full, %d device change(s) dropped", dropped)
+		}
 	}
+}
+
+func (s *Store) coalesceQueuedChanges(ids []uuid.UUID) ([]uuid.UUID, int) {
+	limit := cap(s.changes)
+	if limit <= 0 {
+		return nil, len(ids)
+	}
+
+	seen := make(map[uuid.UUID]struct{}, limit)
+	merged := make([]uuid.UUID, 0, limit)
+	dropped := 0
+	add := func(batch []uuid.UUID) {
+		for _, id := range batch {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			if len(merged) >= limit {
+				dropped++
+				continue
+			}
+			merged = append(merged, id)
+		}
+	}
+
+	for {
+		select {
+		case queued := <-s.changes:
+			add(queued)
+		default:
+			add(ids)
+			return merged, dropped
+		}
+	}
+}
+
+func (s *Store) markChangesOverflowed(dropped int) {
+	s.mu.Lock()
+	s.overflowed = true
+	s.mu.Unlock()
+	observability.Default().AddDroppedStateChanges(dropped)
 }
 
 // cloneMetrics returns a deep copy of DeviceMetrics with independently
