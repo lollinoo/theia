@@ -67,6 +67,54 @@ groups:
         annotations:
           summary: "WebSocket clients require repeated {{ $labels.scope }} resyncs"
 
+      - alert: PollingEssentialOverloaded
+        expr: theia_polling_essential_overloaded == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Essential polling lane is overloaded"
+
+      - alert: PollingDeadlineMisses
+        expr: increase(theia_polling_deadline_miss_total[5m]) > 0
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Essential polling deadlines are being missed"
+
+      - alert: PollingFailuresHigh
+        expr: sum by (job, instance, volatility_class) (increase(theia_poll_results_total{outcome="failure"}[5m])) > 5
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Polling failures are elevated for {{ $labels.volatility_class }} tasks"
+
+      - alert: SchedulerQueueLagHigh
+        expr: max by (job, instance, volatility_class) (theia_scheduler_queue_lag_seconds) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler {{ $labels.volatility_class }} queue lag is high"
+
+      - alert: SchedulerBackpressure
+        expr: sum by (job, instance, volatility_class, reason) (increase(theia_scheduler_backpressure_total[5m])) > 10
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler {{ $labels.volatility_class }} backpressure is recurring"
+
+      - alert: SchedulerTaskDurationHigh
+        expr: histogram_quantile(0.95, sum by (job, instance, volatility_class, le) (rate(theia_scheduler_task_duration_seconds_bucket[5m]))) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler {{ $labels.volatility_class }} task duration is high"
+
       - alert: SNMPBulkWalkErrors
         expr: sum by (job, instance, collector, result) (increase(theia_snmp_collector_operations_total{operation="bulk_walk",result=~"timeout|error"}[5m])) > 3
         for: 60s

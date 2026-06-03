@@ -406,6 +406,54 @@ func TestPrometheusAlertRulesCoverRuntimePerformanceSignals(t *testing.T) {
 			},
 		},
 		{
+			alert:        "PollingEssentialOverloaded",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_polling_essential_overloaded",
+				"== 1",
+			},
+		},
+		{
+			alert:        "PollingDeadlineMisses",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_polling_deadline_miss_total",
+				"increase(",
+			},
+		},
+		{
+			alert:        "PollingFailuresHigh",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_poll_results_total",
+				`outcome="failure"`,
+			},
+		},
+		{
+			alert:        "SchedulerQueueLagHigh",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_scheduler_queue_lag_seconds",
+				"max by",
+			},
+		},
+		{
+			alert:        "SchedulerBackpressure",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_scheduler_backpressure_total",
+				"increase(",
+			},
+		},
+		{
+			alert:        "SchedulerTaskDurationHigh",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_scheduler_task_duration_seconds_bucket",
+				"histogram_quantile",
+			},
+		},
+		{
 			alert:        "SNMPBulkWalkErrors",
 			wantSeverity: "warning",
 			wantFragments: []string{
