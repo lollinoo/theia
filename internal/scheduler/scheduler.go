@@ -79,6 +79,12 @@ type blockedDispatchMetric struct {
 	reason     string
 }
 
+type dispatchScanState struct {
+	classLimited     [3]bool
+	essentialLimited bool
+	blockedMetrics   map[blockedDispatchMetric]struct{}
+}
+
 type reduePerformanceTaskRequest struct {
 	device    domain.Device
 	changedAt time.Time
@@ -486,6 +492,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 	limits := s.dispatchLimits()
 	dispatched := 0
 	stopReason := ""
+	scanState := dispatchScanState{}
 	defer func() {
 		if dispatched == 0 && (stopReason == "" || stopReason == "no_eligible_task") {
 			return
@@ -510,7 +517,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 			return
 		}
 
-		item := s.popReadyEligible(limits)
+		item := s.popReadyEligible(limits, &scanState)
 		if item == nil {
 			stopReason = "no_eligible_task"
 			return
@@ -628,9 +635,7 @@ func (s *Scheduler) popReady() *heapItem {
 	return nil
 }
 
-func (s *Scheduler) popReadyEligible(limits dispatchLimits) *heapItem {
-	var blockedMetrics map[blockedDispatchMetric]struct{}
-
+func (s *Scheduler) popReadyEligible(limits dispatchLimits, scanState *dispatchScanState) *heapItem {
 	for priority := range s.ready {
 		if len(s.ready[priority]) == 0 {
 			continue
@@ -638,8 +643,11 @@ func (s *Scheduler) popReadyEligible(limits dispatchLimits) *heapItem {
 
 		for index, item := range s.ready[priority] {
 			item.task = normalizeTask(item.task)
+			if scanState.isKnownBlocked(item.task) {
+				continue
+			}
 			if reason := s.dispatchBlockReasonWithLimits(item.task, limits); reason != "" {
-				recordBlockedDispatchMetrics(&blockedMetrics, item.task, reason)
+				scanState.recordBlocked(item.task, reason)
 				continue
 			}
 
@@ -652,10 +660,45 @@ func (s *Scheduler) popReadyEligible(limits dispatchLimits) *heapItem {
 		}
 	}
 
-	for metric := range blockedMetrics {
+	scanState.flushBlockedMetrics()
+	return nil
+}
+
+func (state *dispatchScanState) isKnownBlocked(task PollTask) bool {
+	task = normalizeTask(task)
+	if task.Kind == polling.TaskKindEssential {
+		return state.essentialLimited
+	}
+
+	priority := VolatilityPriority(task.VolatilityClass)
+	return priority >= 0 && priority < len(state.classLimited) && state.classLimited[priority]
+}
+
+func (state *dispatchScanState) recordBlocked(task PollTask, reason string) {
+	recordBlockedDispatchMetrics(&state.blockedMetrics, task, reason)
+
+	task = normalizeTask(task)
+	if task.Kind == polling.TaskKindEssential {
+		if reason == "essential_limit" {
+			state.essentialLimited = true
+		}
+		return
+	}
+	if reason != "class_limit" {
+		return
+	}
+
+	priority := VolatilityPriority(task.VolatilityClass)
+	if priority >= 0 && priority < len(state.classLimited) {
+		state.classLimited[priority] = true
+	}
+}
+
+func (state *dispatchScanState) flushBlockedMetrics() {
+	for metric := range state.blockedMetrics {
 		observability.Default().IncSchedulerBackpressure(metric.volatility, metric.reason)
 	}
-	return nil
+	state.blockedMetrics = nil
 }
 
 func (s *Scheduler) readyQueuesEmpty() bool {

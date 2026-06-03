@@ -1468,6 +1468,77 @@ func TestSchedulerDispatchReady_AllowsLowerPriorityWhenHigherPriorityAtClassLimi
 	}
 }
 
+func TestSchedulerDispatchReady_DoesNotRepeatedlyAllocateForKnownClassLimitedQueues(t *testing.T) {
+	const operationalCount = 64
+
+	runDispatch := func(includeBlockedPerformance bool) int {
+		scheduler := NewScheduler(
+			&fakeDeviceSource{},
+			fakeSettingsRepo{values: map[string]string{
+				domain.SettingSNMPWorkerPoolPerformance: "1",
+				domain.SettingSNMPWorkerPoolOperational: "64",
+				domain.SettingSNMPWorkerPoolStatic:      "1",
+				domain.SettingPollingEssentialWorkers:   "1",
+			}},
+		)
+		scheduler.tasks = make(chan PollTask, operationalCount+8)
+		scheduler.inFlight = 1
+		scheduler.inFlightByClass[domain.VolatilityClassPerformance] = 1
+		now := time.Unix(1_700_000_000, 0).UTC()
+
+		if includeBlockedPerformance {
+			deviceID := uuid.MustParse("52000000-0000-0000-0000-000000000301")
+			blocked := &heapItem{
+				task: PollTask{
+					Key:             NewTaskKey(deviceID, domain.VolatilityClassPerformance),
+					Device:          domain.Device{ID: deviceID},
+					VolatilityClass: domain.VolatilityClassPerformance,
+				},
+				dueAt:  now.Add(-time.Minute),
+				queued: true,
+				index:  -1,
+			}
+			scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)] = []*heapItem{blocked}
+		}
+
+		for index := 0; index < operationalCount; index++ {
+			deviceID := uuid.UUID{15: byte(index + 1)}
+			item := &heapItem{
+				task: PollTask{
+					Key:             NewTaskKey(deviceID, domain.VolatilityClassOperational),
+					Device:          domain.Device{ID: deviceID},
+					VolatilityClass: domain.VolatilityClassOperational,
+				},
+				dueAt:  now.Add(-time.Minute),
+				queued: true,
+				index:  -1,
+			}
+			scheduler.ready[VolatilityPriority(domain.VolatilityClassOperational)] = append(
+				scheduler.ready[VolatilityPriority(domain.VolatilityClassOperational)],
+				item,
+			)
+		}
+
+		scheduler.dispatchReady(context.Background(), now)
+		return scheduler.inFlight
+	}
+
+	withoutBlockedAllocs := testing.AllocsPerRun(10, func() {
+		if got := runDispatch(false); got != operationalCount+1 {
+			t.Fatalf("inFlight without blocked performance = %d, want %d", got, operationalCount+1)
+		}
+	})
+	withBlockedAllocs := testing.AllocsPerRun(10, func() {
+		if got := runDispatch(true); got != operationalCount+1 {
+			t.Fatalf("inFlight with blocked performance = %d, want %d", got, operationalCount+1)
+		}
+	})
+
+	if extra := withBlockedAllocs - withoutBlockedAllocs; extra > 8 {
+		t.Fatalf("extra allocations from known class-limited performance queue = %.0f, want at most 8 (with %.0f, without %.0f)", extra, withBlockedAllocs, withoutBlockedAllocs)
+	}
+}
+
 func TestSchedulerDispatchReady_SnapshotsSettingsForDispatchPass(t *testing.T) {
 	repo := &countingSettingsRepo{values: map[string]string{
 		domain.SettingSNMPWorkerPoolSize:            "24",
