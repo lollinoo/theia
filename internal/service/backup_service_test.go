@@ -1543,14 +1543,25 @@ func TestFinishBulkBackupRunRecordsCompletionMetrics(t *testing.T) {
 		observability.ResetDefaultForTest()
 	})
 	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusRunning)
+	fileRepo := svc.fileRepo.(*mockBackupFileRepo)
 	startedAt := time.Now().UTC().Add(-2 * time.Second)
+	jobID := uuid.New()
 	runRepo.mu.Lock()
 	runRepo.runs[runID].StartedAt = &startedAt
 	runRepo.items[runID] = []domain.BulkBackupRunItem{
-		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusSuccess},
+		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusSuccess, BackupJobID: &jobID},
 		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusSkipped},
 	}
 	runRepo.mu.Unlock()
+	for _, file := range []domain.BackupFile{
+		{JobID: jobID, FileName: "running.rsc", SizeBytes: 123},
+		{JobID: jobID, FileName: "compact.rsc", SizeBytes: 456},
+	} {
+		file := file
+		if err := fileRepo.Create(&file); err != nil {
+			t.Fatalf("Create file: %v", err)
+		}
+	}
 
 	svc.finishBulkBackupRun(runID)
 
@@ -1566,6 +1577,8 @@ func TestFinishBulkBackupRunRecordsCompletionMetrics(t *testing.T) {
 		`theia_bulk_operation_completions_total{operation="bulk_backup_run",result="partial",source="distributed"} 1`,
 		`theia_bulk_operation_duration_seconds_count{operation="bulk_backup_run",result="partial",source="distributed"} 1`,
 		`theia_bulk_operation_selected_devices_total{operation="bulk_backup_run",result="partial",source="distributed"} 2`,
+		`theia_bulk_operation_selected_files_total{operation="bulk_backup_run",result="partial",source="distributed"} 2`,
+		`theia_bulk_operation_selected_bytes_total{operation="bulk_backup_run",result="partial",source="distributed"} 579`,
 	} {
 		if !strings.Contains(metrics, needle) {
 			t.Fatalf("expected bulk backup run metric %q, got:\n%s", needle, metrics)

@@ -1039,14 +1039,19 @@ func (s *BackupService) finishBulkBackupRun(runID uuid.UUID) {
 	if run.CompletedAt != nil && !durationStart.IsZero() {
 		duration = run.CompletedAt.Sub(durationStart)
 	}
+	if hydratedRun, err := s.hydrateBulkBackupRunFileTotals(run); err != nil {
+		log.Printf("Warning: failed to hydrate bulk backup run %s file totals for metrics: %v", runID, err)
+	} else if hydratedRun != nil {
+		run = hydratedRun
+	}
 	observability.Default().ObserveBulkOperationCompletion(
 		"bulk_backup_run",
 		"distributed",
 		string(run.Status),
 		duration,
 		run.TotalCount,
-		0,
-		0,
+		run.FileCount,
+		run.ByteCount,
 	)
 }
 
