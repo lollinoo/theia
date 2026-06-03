@@ -279,6 +279,29 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     expect(await screen.findByText(/groups of 7/)).toBeInTheDocument();
   });
 
+  it('blocks persistent runs that exceed the fetched device limit', async () => {
+    const { fetchBulkOperationStatus, startBulkBackupRun } = await import('../../api/client');
+    (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkOperationStatus({ bulkBackupRun: { batch_size: 7, max_devices: 2 } }),
+    );
+    const devices = Array.from({ length: 3 }, (_, index) =>
+      mockDevice({
+        id: `dev-${index + 1}`,
+        sys_name: `router-${index + 1}`,
+      }),
+    );
+
+    render(<BulkBackupPanel devices={devices} />);
+
+    await screen.findByText(/groups of 7/);
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    expect(startBulkBackupRun).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText('Too many devices selected for bulk backup. Maximum 2, selected 3.'),
+    ).toBeInTheDocument();
+  });
+
   it('starts one persistent run and maps queued/skipped items', async () => {
     const { startBulkBackupRun, triggerBackup, triggerBulkBackup } = await import(
       '../../api/client'
@@ -632,7 +655,10 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
   });
 
   it('submits large selections as one persistent run while backend performs batching', async () => {
-    const { startBulkBackupRun } = await import('../../api/client');
+    const { fetchBulkOperationStatus, startBulkBackupRun } = await import('../../api/client');
+    (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkOperationStatus({ bulkBackupRun: { batch_size: 11, max_devices: 200 } }),
+    );
     const devices = Array.from({ length: 105 }, (_, index) =>
       mockDevice({
         id: `dev-${index + 1}`,
@@ -642,6 +668,7 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
 
     render(<BulkBackupPanel devices={devices} />);
 
+    await screen.findByText(/groups of 11/);
     fireEvent.click(screen.getByText('Backup All Devices'));
 
     await waitFor(() => {
