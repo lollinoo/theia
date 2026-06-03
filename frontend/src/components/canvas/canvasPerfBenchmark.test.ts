@@ -47,6 +47,12 @@ describe('canvasPerfBenchmark', () => {
 
     expect(result.version).toBe(1);
     expect(result.iterations).toBe(1);
+    expect(result.iterationsByScenario).toEqual({
+      small: 1,
+      medium: 1,
+      large: 1,
+      stress: 1,
+    });
     expect(Object.keys(result.scenarios)).toEqual(Object.keys(CANVAS_PERF_SCENARIOS));
 
     for (const scenarioName of Object.keys(CANVAS_PERF_SCENARIOS) as CanvasPerfScenarioName[]) {
@@ -63,6 +69,31 @@ describe('canvasPerfBenchmark', () => {
       }
     }
   }, 15_000);
+
+  it('reports effective sample counts when scenario defaults or overrides are used', () => {
+    const defaultResult = runCanvasPerfBenchmark({
+      warmupIterations: 0,
+      scenarioNames: ['small'],
+    });
+
+    expect(defaultResult.iterations).toBe(50);
+    expect(defaultResult.iterationsByScenario).toEqual({ small: 50 });
+    expect(defaultResult.scenarios.small.metrics.computeForceLayout.count).toBe(50);
+
+    const mixedResult = runCanvasPerfBenchmark({
+      iterations: 2,
+      warmupIterations: 0,
+      iterationsByScenario: {
+        small: 1,
+      },
+      scenarioNames: ['small', 'medium'],
+    });
+
+    expect(mixedResult.iterations).toBe(2);
+    expect(mixedResult.iterationsByScenario).toEqual({ small: 1, medium: 2 });
+    expect(mixedResult.scenarios.small.metrics.computeForceLayout.count).toBe(1);
+    expect(mixedResult.scenarios.medium.metrics.computeForceLayout.count).toBe(2);
+  });
 
   it('returns a JSON-serializable contract without timing thresholds', () => {
     const result = runCanvasPerfBenchmark({

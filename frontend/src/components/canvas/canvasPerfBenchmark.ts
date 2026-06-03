@@ -64,6 +64,7 @@ export interface CanvasPerfBenchmarkResult {
   version: 1;
   generatedAt: string;
   iterations: number;
+  iterationsByScenario?: Partial<Record<CanvasPerfScenarioName, number>>;
   scenarios: Record<CanvasPerfScenarioName, CanvasPerfBenchmarkScenarioResult>;
 }
 
@@ -80,6 +81,17 @@ const defaultIterationsByScenario: Record<CanvasPerfScenarioName, number> = {
   large: 15,
   stress: 5,
 };
+
+function iterationsForScenario(
+  options: RunCanvasPerfBenchmarkOptions,
+  scenarioName: CanvasPerfScenarioName,
+): number {
+  return (
+    options.iterationsByScenario?.[scenarioName] ??
+    options.iterations ??
+    defaultIterationsByScenario[scenarioName]
+  );
+}
 
 const prometheusStatus: PrometheusStatusPayload = {
   enabled: true,
@@ -553,17 +565,17 @@ export function runCanvasPerfBenchmark(
   const scenarioNames =
     options.scenarioNames ?? (Object.keys(CANVAS_PERF_SCENARIOS) as CanvasPerfScenarioName[]);
   const warmupIterations = options.warmupIterations ?? 3;
-  const benchmarkIterations = options.iterations ?? 20;
+  let benchmarkIterations = 0;
+  const iterationsByScenario: Partial<Record<CanvasPerfScenarioName, number>> = {};
   const scenarios = {} as Record<CanvasPerfScenarioName, CanvasPerfBenchmarkScenarioResult>;
 
   for (const scenarioName of scenarioNames) {
     const scenario = generateCanvasPerfScenario(scenarioName);
     const measuredSamples: CanvasMetricSample[] = [];
     const warmupSamples: CanvasMetricSample[] = [];
-    const iterations =
-      options.iterationsByScenario?.[scenarioName] ??
-      options.iterations ??
-      defaultIterationsByScenario[scenarioName];
+    const iterations = iterationsForScenario(options, scenarioName);
+    iterationsByScenario[scenarioName] = iterations;
+    benchmarkIterations = Math.max(benchmarkIterations, iterations);
 
     for (let index = 0; index < warmupIterations; index += 1) {
       benchmarkOperations(warmupSamples, scenarioName, scenario);
@@ -583,6 +595,7 @@ export function runCanvasPerfBenchmark(
     version: 1,
     generatedAt: new Date().toISOString(),
     iterations: benchmarkIterations,
+    iterationsByScenario,
     scenarios,
   };
 }
