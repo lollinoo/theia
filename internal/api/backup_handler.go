@@ -27,7 +27,7 @@ const maxInlineBackupContentBytes int64 = 1 << 20
 
 const (
 	maxConcurrentBulkDownloadsPerActor = 1
-	bulkDownloadRetryAfterSeconds      = 30
+	bulkOperationRetryAfterSeconds     = 30
 )
 
 // BackupHandler provides HTTP handlers for SSH credentials and config backups.
@@ -493,6 +493,15 @@ func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request)
 
 	results, err := h.svc.TriggerBulkBackup(r.Context(), deviceIDs...)
 	if err != nil {
+		if errors.Is(err, service.ErrBulkBackupAlreadyActive) {
+			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
+			writeError(w, http.StatusTooManyRequests, "bulk backup already in progress")
+			return
+		}
+		if errors.Is(err, service.ErrBulkOperationLimiterUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "bulk backup limiter unavailable")
+			return
+		}
 		if service.IsBulkLimitError(err) {
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
@@ -552,7 +561,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 		if err := h.auditBulkDownloadRejected(r, len(deviceIDs), "actor_concurrency_limit"); err != nil {
 			log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
 		}
-		w.Header().Set("Retry-After", fmt.Sprint(bulkDownloadRetryAfterSeconds))
+		w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
 		writeError(w, http.StatusTooManyRequests, "bulk download already in progress for this user")
 		return
 	}
@@ -572,7 +581,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 			if err := h.auditBulkDownloadRejected(r, len(deviceIDs), "distributed_actor_concurrency_limit"); err != nil {
 				log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
 			}
-			w.Header().Set("Retry-After", fmt.Sprint(bulkDownloadRetryAfterSeconds))
+			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
 			writeError(w, http.StatusTooManyRequests, "bulk download already in progress for this user")
 			return
 		}
@@ -732,7 +741,7 @@ func (h *BackupHandler) auditBulkDownloadRejected(r *http.Request, requestedDevi
 		"requested_device_count": requestedDeviceCount,
 		"reason":                 reason,
 		"per_actor_limit":        maxConcurrentBulkDownloadsPerActor,
-		"retry_after_seconds":    bulkDownloadRetryAfterSeconds,
+		"retry_after_seconds":    bulkOperationRetryAfterSeconds,
 	}
 	return h.appendBackupAuditLog(
 		r,

@@ -1068,6 +1068,38 @@ func TestTriggerBulkBackupDeduplicatesRequestedDeviceIDs(t *testing.T) {
 	}
 }
 
+func TestTriggerBulkBackupRejectsConcurrentLegacyBulkBackupAcrossServices(t *testing.T) {
+	port := listenOnRandomPort(t)
+	leaseRepo := newMockBulkOperationLeaseRepo()
+	firstSvc, firstJobRepo, firstDeviceID := setupLegacyBulkBackupService(t, port, leaseRepo, 400*time.Millisecond)
+	secondSvc, secondJobRepo, secondDeviceID := setupLegacyBulkBackupService(t, port, leaseRepo, 0)
+
+	if _, err := firstSvc.TriggerBulkBackup(context.Background(), firstDeviceID); err != nil {
+		t.Fatalf("first TriggerBulkBackup: %v", err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		return mockBackupJobCount(firstJobRepo) == 1 && leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+
+	_, err := secondSvc.TriggerBulkBackup(context.Background(), secondDeviceID)
+	if !errors.Is(err, ErrBulkBackupAlreadyActive) {
+		t.Fatalf("second TriggerBulkBackup error = %v, want ErrBulkBackupAlreadyActive", err)
+	}
+	if got := mockBackupJobCount(secondJobRepo); got != 0 {
+		t.Fatalf("second service queued jobs = %d, want 0 while lease is held", got)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+	if _, err := secondSvc.TriggerBulkBackup(context.Background(), secondDeviceID); err != nil {
+		t.Fatalf("third TriggerBulkBackup after lease release: %v", err)
+	}
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+}
+
 func TestTriggerBulkBackupRejectsQueuedJobCountOverLimitBeforeCreatingJobs(t *testing.T) {
 	port := listenOnRandomPort(t)
 	jobRepo := newMockBackupJobRepo()
@@ -1767,6 +1799,92 @@ func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition was not met before timeout")
+}
+
+func setupLegacyBulkBackupService(
+	t *testing.T,
+	port int,
+	leaseRepo domain.BulkOperationLeaseRepository,
+	sshDelay time.Duration,
+) (*BackupService, *mockBackupJobRepo, uuid.UUID) {
+	t.Helper()
+
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{delay: sshDelay}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkOperationLeaseRepository(leaseRepo),
+	)
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID: uuid.New(), Name: "test-profile", Username: "admin", Port: port,
+		AuthMethod: domain.SSHAuthPassword, Role: "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
+		Managed: true, Status: domain.DeviceStatusUp,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	return svc, jobRepo, deviceID
+}
+
+type mockBulkOperationLeaseRepo struct {
+	mu     sync.Mutex
+	active map[string]struct{}
+}
+
+func newMockBulkOperationLeaseRepo() *mockBulkOperationLeaseRepo {
+	return &mockBulkOperationLeaseRepo{active: make(map[string]struct{})}
+}
+
+func (r *mockBulkOperationLeaseRepo) TryAcquireBulkOperationLease(_ context.Context, key string) (domain.BulkOperationLease, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.active[key]; ok {
+		return nil, false, nil
+	}
+	r.active[key] = struct{}{}
+	return mockBulkOperationLease{release: func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		delete(r.active, key)
+	}}, true, nil
+}
+
+func (r *mockBulkOperationLeaseRepo) isActive(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.active[key]
+	return ok
+}
+
+type mockBulkOperationLease struct {
+	release func()
+}
+
+func (l mockBulkOperationLease) Release() error {
+	if l.release != nil {
+		l.release()
+	}
+	return nil
 }
 
 func setupBulkDownloadServiceWithFiles(

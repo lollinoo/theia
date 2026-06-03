@@ -1267,6 +1267,35 @@ func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing
 	}
 }
 
+func TestBackupHandlerBulkBackupMapsActiveLegacyBulkLeaseToTooManyRequests(t *testing.T) {
+	handler, _, _, _, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
+	leaseRepo := newBulkOperationLeaseRepoForHandler()
+	lease, acquired, err := leaseRepo.TryAcquireBulkOperationLease(context.Background(), "backup.bulk_backup:legacy")
+	if err != nil {
+		t.Fatalf("TryAcquireBulkOperationLease: %v", err)
+	}
+	if !acquired {
+		t.Fatal("expected test lease acquisition")
+	}
+	t.Cleanup(func() {
+		if err := lease.Release(); err != nil {
+			t.Fatalf("Release lease: %v", err)
+		}
+	})
+	backupSvc.SetBulkOperationLeaseRepository(leaseRepo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkBackup(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("expected Retry-After header, got headers: %#v", rec.Header())
+	}
+}
+
 func TestBackupHandlerBulkDownloadMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
@@ -1541,10 +1570,10 @@ func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAcrossHandlersForSameA
 		<-firstDone
 		t.Fatalf("second status = %d, want 429; body: %s", secondRec.Code, secondRec.Body.String())
 	}
-	if got := secondRec.Header().Get("Retry-After"); got != fmt.Sprint(bulkDownloadRetryAfterSeconds) {
+	if got := secondRec.Header().Get("Retry-After"); got != fmt.Sprint(bulkOperationRetryAfterSeconds) {
 		close(firstRec.release)
 		<-firstDone
-		t.Fatalf("Retry-After = %q, want %d", got, bulkDownloadRetryAfterSeconds)
+		t.Fatalf("Retry-After = %q, want %d", got, bulkOperationRetryAfterSeconds)
 	}
 	logEntry, ok := findBackupAuditAction(auditRepo.auditLogs(), "backup.bulk_download_rejected")
 	if !ok {

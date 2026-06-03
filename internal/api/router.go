@@ -123,7 +123,11 @@ func NewRouter(
 	areaHandler := NewAreaHandler(areaRepo)
 	backupHandlerOptions := []BackupHandlerOption{WithBackupAuditLogs(routerOpts.auditLogs)}
 	if db != nil {
-		backupHandlerOptions = append(backupHandlerOptions, WithBulkDownloadLeaseRepository(postgres.NewBulkOperationLeaseRepo(db)))
+		bulkOperationLeaseRepo := postgres.NewBulkOperationLeaseRepo(db)
+		if backupService != nil {
+			backupService.SetBulkOperationLeaseRepository(bulkOperationLeaseRepo)
+		}
+		backupHandlerOptions = append(backupHandlerOptions, WithBulkDownloadLeaseRepository(bulkOperationLeaseRepo))
 	}
 	backupHandler := NewBackupHandler(backupService, settingsRepo, backupHandlerOptions...)
 	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
