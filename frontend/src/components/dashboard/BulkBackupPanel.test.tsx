@@ -540,6 +540,32 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     expect(screen.getByText('will pause')).toBeInTheDocument();
   });
 
+  it('hides pause control when bulk run status reports pause disabled', async () => {
+    const { fetchBulkOperationStatus, startBulkBackupRun, pauseBulkBackupRun } = await import(
+      '../../api/client'
+    );
+    (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkOperationStatus({ bulkBackupRun: { can_pause: false } }),
+    );
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'running' }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+        }),
+      ]),
+    );
+
+    render(<BulkBackupPanel devices={[mockDevice({ id: 'dev-1', sys_name: 'router-01' })]} />);
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    await screen.findByText('Processing... 0/1');
+    expect(screen.queryByText('Pause')).not.toBeInTheDocument();
+    expect(pauseBulkBackupRun).not.toHaveBeenCalled();
+  });
+
   it('distinguishes completing and will stop devices while stopping', async () => {
     const { fetchLatestBulkBackupRun } = await import('../../api/client');
     (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(

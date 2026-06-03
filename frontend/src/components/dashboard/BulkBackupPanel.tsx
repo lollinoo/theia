@@ -650,9 +650,15 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   );
   const downloadBatchCount = Math.ceil(downloadableSuccessCount / bulkDownloadBatchSize);
   const controlSummary = controlProgressSummary(entries, session.runStatus);
-  const canPause = phase === 'running' && session.runId && session.runStatus === 'running';
-  const canResume = phase === 'running' && session.runId && session.runStatus === 'paused';
+  const pauseSupported = bulkOperationStatus?.bulk_backup_run.can_pause !== false;
+  const resumeSupported = bulkOperationStatus?.bulk_backup_run.can_resume !== false;
+  const cancelSupported = bulkOperationStatus?.bulk_backup_run.can_cancel !== false;
+  const canPause =
+    pauseSupported && phase === 'running' && session.runId && session.runStatus === 'running';
+  const canResume =
+    resumeSupported && phase === 'running' && session.runId && session.runStatus === 'paused';
   const canStop =
+    cancelSupported &&
     phase === 'running' &&
     session.runId &&
     (session.runStatus === 'running' ||
