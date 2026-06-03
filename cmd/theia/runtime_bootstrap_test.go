@@ -16,6 +16,7 @@ import (
 
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
+	"gopkg.in/yaml.v3"
 )
 
 type stubRuntimeStopper struct {
@@ -265,6 +266,179 @@ func TestSetupRequiredOperatorInputsIncludeMetricsToken(t *testing.T) {
 	}
 }
 
+func TestPrometheusConfigsScrapeBackendMetrics(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	tests := []struct {
+		path     string
+		wantAuth bool
+	}{
+		{path: "docker/prometheus/prometheus.yml"},
+		{path: "docker/prometheus/prometheus.prod.yml", wantAuth: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			cfg := readPrometheusConfig(t, filepath.Join(repoRoot, tt.path))
+			job := requirePrometheusScrapeJob(t, cfg, "theia-backend")
+			if job.MetricsPath != "/metrics" {
+				t.Fatalf("%s theia-backend metrics_path = %q, want /metrics", tt.path, job.MetricsPath)
+			}
+			if !prometheusScrapeJobHasTarget(job, "backend:8080") {
+				t.Fatalf("%s theia-backend targets = %#v, want backend:8080", tt.path, job.StaticConfigs)
+			}
+
+			if !tt.wantAuth {
+				if job.Authorization.Type != "" || job.Authorization.Credentials != "" || job.Authorization.CredentialsFile != "" {
+					t.Fatalf("%s dev backend scrape must not require auth by default: %#v", tt.path, job.Authorization)
+				}
+				return
+			}
+
+			if job.Authorization.Type != "Bearer" {
+				t.Fatalf("%s authorization.type = %q, want Bearer", tt.path, job.Authorization.Type)
+			}
+			if job.Authorization.Credentials != "" {
+				t.Fatalf("%s must not embed a literal bearer token", tt.path)
+			}
+			if job.Authorization.CredentialsFile != "/run/secrets/theia_metrics_token" {
+				t.Fatalf("%s authorization.credentials_file = %q, want /run/secrets/theia_metrics_token", tt.path, job.Authorization.CredentialsFile)
+			}
+			if !stringSliceContains(cfg.RuleFiles, "/etc/prometheus/alert_rules.yml") {
+				t.Fatalf("%s rule_files = %#v, want absolute alert rules path for generated production config", tt.path, cfg.RuleFiles)
+			}
+		})
+	}
+}
+
+func TestProductionMetricsStackUsesComposeNetworkAndMetricsSecret(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	compose := readComposeConfig(t, filepath.Join(repoRoot, "docker-compose.prod.yml"))
+	prometheus, ok := compose.Services["prometheus"]
+	if !ok {
+		t.Fatal("docker-compose.prod.yml missing prometheus service")
+	}
+	if prometheus.NetworkMode != "" {
+		t.Fatalf("prometheus network_mode = %q, want Compose network so backend service DNS is reachable", prometheus.NetworkMode)
+	}
+	if !stringSliceContains(prometheus.Networks, "theia-net") {
+		t.Fatalf("prometheus networks = %#v, want theia-net", prometheus.Networks)
+	}
+	if !stringSliceContains(prometheus.Ports, "${PROMETHEUS_BIND_ADDR:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090") {
+		t.Fatalf("prometheus ports = %#v, want loopback-bound PROMETHEUS_PORT mapping", prometheus.Ports)
+	}
+	if !stringSliceContains(prometheus.Secrets, "theia_metrics_token") {
+		t.Fatalf("prometheus secrets = %#v, want theia_metrics_token", prometheus.Secrets)
+	}
+	if !reflect.DeepEqual(prometheus.Entrypoint, []string{"/bin/sh", "-c"}) {
+		t.Fatalf("prometheus entrypoint = %#v, want shell templating entrypoint", prometheus.Entrypoint)
+	}
+	if len(prometheus.Command) != 1 {
+		t.Fatalf("prometheus command = %#v, want single shell command", prometheus.Command)
+	}
+	for _, fragment := range []string{
+		`sed "s/backend:8080/backend:${BACKEND_PORT:-8080}/g"`,
+		"--config.file=/tmp/prometheus.yml",
+		"exec /bin/prometheus",
+	} {
+		if !strings.Contains(prometheus.Command[0], fragment) {
+			t.Fatalf("prometheus command = %q, want fragment %q", prometheus.Command[0], fragment)
+		}
+	}
+	secret, ok := compose.Secrets["theia_metrics_token"]
+	if !ok {
+		t.Fatal("docker-compose.prod.yml missing theia_metrics_token secret")
+	}
+	if secret.Environment != "THEIA_METRICS_TOKEN" {
+		t.Fatalf("theia_metrics_token secret environment = %q, want THEIA_METRICS_TOKEN", secret.Environment)
+	}
+
+	snmpExporter, ok := compose.Services["snmp-exporter"]
+	if !ok {
+		t.Fatal("docker-compose.prod.yml missing snmp-exporter service")
+	}
+	if snmpExporter.NetworkMode != "" {
+		t.Fatalf("snmp-exporter network_mode = %q, want Compose network so Prometheus can scrape by service DNS", snmpExporter.NetworkMode)
+	}
+	if !stringSliceContains(snmpExporter.Networks, "theia-net") {
+		t.Fatalf("snmp-exporter networks = %#v, want theia-net", snmpExporter.Networks)
+	}
+}
+
+func TestPrometheusAlertRulesCoverRuntimePerformanceSignals(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	rules := readPrometheusRules(t, filepath.Join(repoRoot, "docker/prometheus/alert_rules.yml"))
+	tests := []struct {
+		alert         string
+		wantSeverity  string
+		wantFragments []string
+	}{
+		{
+			alert:        "BulkOperationRejections",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_bulk_operation_rejections_total",
+				"increase(",
+			},
+		},
+		{
+			alert:        "BulkOperationSaturated",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_bulk_operation_in_flight",
+				"theia_bulk_operation_concurrency_limit",
+				`scope="global"`,
+			},
+		},
+		{
+			alert:        "WebSocketBackpressure",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_ws_backpressure_total",
+				"increase(",
+			},
+		},
+		{
+			alert:        "WebSocketResyncRequired",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_ws_client_resync_required_total",
+				"increase(",
+			},
+		},
+		{
+			alert:        "SNMPBulkWalkErrors",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_snmp_collector_operations_total",
+				`operation="bulk_walk"`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.alert, func(t *testing.T) {
+			rule := requirePrometheusAlertRule(t, rules, tt.alert)
+			if rule.Expr == "" {
+				t.Fatalf("%s expression is empty", tt.alert)
+			}
+			for _, fragment := range tt.wantFragments {
+				if !strings.Contains(rule.Expr, fragment) {
+					t.Fatalf("%s expression = %q, want fragment %q", tt.alert, rule.Expr, fragment)
+				}
+			}
+			if got := rule.Labels["severity"]; got != tt.wantSeverity {
+				t.Fatalf("%s severity = %q, want %q", tt.alert, got, tt.wantSeverity)
+			}
+			if rule.For == "" {
+				t.Fatalf("%s must define a for duration", tt.alert)
+			}
+			if rule.Annotations["summary"] == "" {
+				t.Fatalf("%s must define a summary annotation", tt.alert)
+			}
+		})
+	}
+}
+
 func markdownBlockBetween(content, start, end string) string {
 	startIndex := strings.Index(content, start)
 	if startIndex < 0 {
@@ -338,6 +512,143 @@ func envExampleAssignment(content, key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+type prometheusConfigFile struct {
+	RuleFiles     []string                 `yaml:"rule_files"`
+	ScrapeConfigs []prometheusScrapeConfig `yaml:"scrape_configs"`
+}
+
+type prometheusScrapeConfig struct {
+	JobName        string                    `yaml:"job_name"`
+	MetricsPath    string                    `yaml:"metrics_path"`
+	StaticConfigs  []prometheusStaticConfig  `yaml:"static_configs"`
+	Authorization  prometheusAuthorization   `yaml:"authorization"`
+	RelabelConfigs []prometheusRelabelConfig `yaml:"relabel_configs"`
+}
+
+type prometheusStaticConfig struct {
+	Targets []string `yaml:"targets"`
+}
+
+type prometheusAuthorization struct {
+	Type            string `yaml:"type"`
+	Credentials     string `yaml:"credentials"`
+	CredentialsFile string `yaml:"credentials_file"`
+}
+
+type prometheusRelabelConfig struct {
+	TargetLabel string `yaml:"target_label"`
+	Replacement string `yaml:"replacement"`
+}
+
+type prometheusRuleFile struct {
+	Groups []prometheusRuleGroup `yaml:"groups"`
+}
+
+type prometheusRuleGroup struct {
+	Name  string                `yaml:"name"`
+	Rules []prometheusAlertRule `yaml:"rules"`
+}
+
+type prometheusAlertRule struct {
+	Alert       string            `yaml:"alert"`
+	Expr        string            `yaml:"expr"`
+	For         string            `yaml:"for"`
+	Labels      map[string]string `yaml:"labels"`
+	Annotations map[string]string `yaml:"annotations"`
+}
+
+type composeConfigFile struct {
+	Services map[string]composeService `yaml:"services"`
+	Secrets  map[string]composeSecret  `yaml:"secrets"`
+}
+
+type composeService struct {
+	NetworkMode string   `yaml:"network_mode"`
+	Networks    []string `yaml:"networks"`
+	Ports       []string `yaml:"ports"`
+	Secrets     []string `yaml:"secrets"`
+	Entrypoint  []string `yaml:"entrypoint"`
+	Command     []string `yaml:"command"`
+}
+
+type composeSecret struct {
+	Environment string `yaml:"environment"`
+}
+
+func readPrometheusConfig(t *testing.T, path string) prometheusConfigFile {
+	t.Helper()
+	var cfg prometheusConfigFile
+	readYAMLFile(t, path, &cfg)
+	return cfg
+}
+
+func readPrometheusRules(t *testing.T, path string) prometheusRuleFile {
+	t.Helper()
+	var rules prometheusRuleFile
+	readYAMLFile(t, path, &rules)
+	return rules
+}
+
+func readComposeConfig(t *testing.T, path string) composeConfigFile {
+	t.Helper()
+	var compose composeConfigFile
+	readYAMLFile(t, path, &compose)
+	return compose
+}
+
+func readYAMLFile(t *testing.T, path string, target any) {
+	t.Helper()
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	if err := yaml.Unmarshal(contentBytes, target); err != nil {
+		t.Fatalf("yaml.Unmarshal(%s): %v", path, err)
+	}
+}
+
+func requirePrometheusScrapeJob(t *testing.T, cfg prometheusConfigFile, jobName string) prometheusScrapeConfig {
+	t.Helper()
+	for _, job := range cfg.ScrapeConfigs {
+		if job.JobName == jobName {
+			return job
+		}
+	}
+	t.Fatalf("missing Prometheus scrape job %q", jobName)
+	return prometheusScrapeConfig{}
+}
+
+func prometheusScrapeJobHasTarget(job prometheusScrapeConfig, target string) bool {
+	for _, staticConfig := range job.StaticConfigs {
+		if stringSliceContains(staticConfig.Targets, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func requirePrometheusAlertRule(t *testing.T, rules prometheusRuleFile, alert string) prometheusAlertRule {
+	t.Helper()
+	for _, group := range rules.Groups {
+		for _, rule := range group.Rules {
+			if rule.Alert == alert {
+				return rule
+			}
+		}
+	}
+	t.Fatalf("missing Prometheus alert %q", alert)
+	return prometheusAlertRule{}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRuntimeBootstrapRunWrapsLoadConfigError(t *testing.T) {

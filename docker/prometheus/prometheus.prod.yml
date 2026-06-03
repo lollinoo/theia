@@ -3,13 +3,22 @@ global:
   evaluation_interval: 15s
 
 rule_files:
-  - "alert_rules.yml"
+  - "/etc/prometheus/alert_rules.yml"
 
 scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets:
           - localhost:9090
+
+  - job_name: theia-backend
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/theia_metrics_token
+    static_configs:
+      - targets:
+          - backend:8080
 
   # SNMP targets — add your real device IPs here.
   # Each IP is scraped via the snmp-exporter using the IF-MIB module.
@@ -34,4 +43,4 @@ scrape_configs:
       - source_labels: [__param_target]
         target_label: identity
       - target_label: __address__
-        replacement: localhost:9116
+        replacement: snmp-exporter:9116

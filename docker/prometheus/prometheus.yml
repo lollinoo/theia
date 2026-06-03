@@ -11,6 +11,12 @@ scrape_configs:
       - targets:
           - localhost:9090
 
+  - job_name: theia-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - backend:8080
+
   - job_name: snmp
     metrics_path: /snmp
     static_configs:

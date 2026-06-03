@@ -32,3 +32,53 @@ groups:
           severity: warning
         annotations:
           summary: "High utilization on {{ $labels.ifDescr }} of {{ $labels.instance }}"
+
+  - name: theia_runtime_alerts
+    rules:
+      - alert: BulkOperationRejections
+        expr: sum by (job, instance, operation, reason, source) (increase(theia_bulk_operation_rejections_total[5m])) > 5
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bulk {{ $labels.operation }} requests are being rejected"
+
+      - alert: BulkOperationSaturated
+        expr: (theia_bulk_operation_in_flight / on(job, instance, operation, source) group_left(scope) theia_bulk_operation_concurrency_limit{scope="global"}) >= 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bulk {{ $labels.operation }} concurrency is saturated"
+
+      - alert: WebSocketBackpressure
+        expr: sum by (job, instance, scope, reason) (increase(theia_ws_backpressure_total[5m])) > 25
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket backpressure is dropping {{ $labels.scope }} messages"
+
+      - alert: WebSocketResyncRequired
+        expr: sum by (job, instance, scope, reason, bootstrap) (increase(theia_ws_client_resync_required_total[5m])) > 10
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket clients require repeated {{ $labels.scope }} resyncs"
+
+      - alert: SNMPBulkWalkErrors
+        expr: sum by (job, instance, collector, result) (increase(theia_snmp_collector_operations_total{operation="bulk_walk",result=~"timeout|error"}[5m])) > 3
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "SNMP bulk walk failures detected for {{ $labels.collector }}"
+
+      - alert: SNMPBulkWalkSlow
+        expr: histogram_quantile(0.95, sum by (job, instance, collector, le) (rate(theia_snmp_collector_operation_seconds_bucket{operation="bulk_walk"}[5m]))) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SNMP bulk walk latency is high for {{ $labels.collector }}"
