@@ -19,6 +19,7 @@ type routerOptions struct {
 	security      SecurityConfig
 	auth          authProvider
 	bridgeService *service.BridgeService
+	auditLogs     domain.AuditLogRepository
 }
 
 // RouterOption customizes router middleware behavior.
@@ -41,6 +42,12 @@ func WithAuthService(authService *service.AuthService) RouterOption {
 func WithBridgeService(bridgeService *service.BridgeService) RouterOption {
 	return func(options *routerOptions) {
 		options.bridgeService = bridgeService
+	}
+}
+
+func WithAuditLogRepository(auditLogs domain.AuditLogRepository) RouterOption {
+	return func(options *routerOptions) {
+		options.auditLogs = auditLogs
 	}
 }
 
@@ -114,7 +121,7 @@ func NewRouter(
 	grafanaDashboardHandler := NewGrafanaDashboardHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	areaHandler := NewAreaHandler(areaRepo)
-	backupHandler := NewBackupHandler(backupService, settingsRepo)
+	backupHandler := NewBackupHandler(backupService, settingsRepo, WithBackupAuditLogs(routerOpts.auditLogs))
 	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
 	deviceCredHandler := NewDeviceCredentialProfileHandler(backupService, credentialProfileRepo)
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)

@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -976,6 +977,50 @@ func TestBackupHandlerStartBulkBackupRunRecordsAuthenticatedActor(t *testing.T) 
 	}
 }
 
+func TestBackupHandlerStartBulkBackupRunPersistsAuditLog(t *testing.T) {
+	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBackupAuditLogs(auditRepo)(handler)
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.12", SysName: "audit-core",
+		Managed: true, Status: domain.DeviceStatusDown,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := withTestOperator(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(body)))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	logs := auditRepo.auditLogs()
+	if len(logs) != 1 {
+		t.Fatalf("audit log count = %d, want 1", len(logs))
+	}
+	logEntry := logs[0]
+	if logEntry.Action != "backup.bulk_run_started" {
+		t.Fatalf("audit action = %q, want backup.bulk_run_started", logEntry.Action)
+	}
+	if logEntry.Resource != "backup_bulk_run" || logEntry.ResourceID == "" {
+		t.Fatalf("audit resource = %q/%q, want backup bulk run with id", logEntry.Resource, logEntry.ResourceID)
+	}
+	if logEntry.ActorUserID == nil || *logEntry.ActorUserID == uuid.Nil {
+		t.Fatalf("ActorUserID = %#v, want authenticated actor", logEntry.ActorUserID)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	assertAuditNumber(t, metadata, "requested_device_count", 1)
+	assertAuditNumber(t, metadata, "total_count", 1)
+	assertAuditNumber(t, metadata, "skipped_count", 1)
+}
+
 func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
 	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
 	runID := uuid.New()
@@ -1342,6 +1387,71 @@ func TestBackupHandlerBulkDownloadStreamsSelectedFilesAndKeepsPrevalidatedTotals
 	}
 }
 
+func TestBackupHandlerBulkDownloadPersistsAuditLogWithPartialStreamErrors(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBackupAuditLogs(auditRepo)(handler)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	goodContent := []byte("streamed-good")
+	missingContent := []byte("selected-then-removed")
+	goodID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "good.rsc", goodContent)
+	missingID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "missing-after-selection.rsc", missingContent)
+	unselectedID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: unselectedID, IP: "10.0.0.200", SysName: "empty",
+		Tags: map[string]string{"display_name": "Empty"},
+	}); err != nil {
+		t.Fatalf("Create unselected device: %v", err)
+	}
+
+	missingPath := filepath.Join(backupDir, "missing-after-selection.rsc")
+	handler.settingsRepo = &bulkDownloadDeletingSettingsRepo{
+		mockSettingsRepo: newMockSettingsRepo(),
+		path:             missingPath,
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q,%q,%q]}`, goodID.String(), missingID.String(), unselectedID.String())
+	req := withTestOperator(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	logs := auditRepo.auditLogs()
+	if len(logs) != 1 {
+		t.Fatalf("audit log count = %d, want 1", len(logs))
+	}
+	logEntry := logs[0]
+	if logEntry.Action != "backup.bulk_download_completed" {
+		t.Fatalf("audit action = %q, want backup.bulk_download_completed", logEntry.Action)
+	}
+	if logEntry.ActorUserID == nil || *logEntry.ActorUserID == uuid.Nil {
+		t.Fatalf("ActorUserID = %#v, want authenticated actor", logEntry.ActorUserID)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	assertAuditNumber(t, metadata, "requested_device_count", 3)
+	assertAuditNumber(t, metadata, "selected_device_count", 2)
+	assertAuditNumber(t, metadata, "selected_file_count", 2)
+	assertAuditNumber(t, metadata, "selected_bytes", float64(len(goodContent)+len(missingContent)))
+	assertAuditNumber(t, metadata, "stream_error_count", 1)
+	if partial, ok := metadata["partial"].(bool); !ok || !partial {
+		t.Fatalf("metadata partial = %#v, want true", metadata["partial"])
+	}
+}
+
 func TestBackupHandlerBulkDownloadMapsUnsafePathToBadRequest(t *testing.T) {
 	backupDir := t.TempDir()
 	outsideDir := t.TempDir()
@@ -1430,6 +1540,49 @@ func setupBackupHandlerForBulkLimitTests(
 	)
 	handler := NewBackupHandler(backupSvc, settingsRepo)
 	return handler, jobRepo, fileRepo, deviceRepo, backupSvc
+}
+
+type backupAuditRepoForHandler struct {
+	mu   sync.Mutex
+	logs []domain.AuditLog
+}
+
+func newBackupAuditRepoForHandler() *backupAuditRepoForHandler {
+	return &backupAuditRepoForHandler{}
+}
+
+func (r *backupAuditRepoForHandler) AppendAuditLog(_ context.Context, log *domain.AuditLog) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if log == nil {
+		return nil
+	}
+	r.logs = append(r.logs, *log)
+	return nil
+}
+
+func (r *backupAuditRepoForHandler) ListAuditLogs(_ context.Context, _ domain.AuditLogFilter) ([]domain.AuditLog, error) {
+	return r.auditLogs(), nil
+}
+
+func (r *backupAuditRepoForHandler) DashboardStats(context.Context) (*domain.AdminDashboardStats, error) {
+	return &domain.AdminDashboardStats{}, nil
+}
+
+func (r *backupAuditRepoForHandler) auditLogs() []domain.AuditLog {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.AuditLog, len(r.logs))
+	copy(out, r.logs)
+	return out
+}
+
+func assertAuditNumber(t *testing.T, metadata map[string]interface{}, key string, want float64) {
+	t.Helper()
+	got, ok := metadata[key].(float64)
+	if !ok || got != want {
+		t.Fatalf("metadata[%q] = %#v, want %v", key, metadata[key], want)
+	}
 }
 
 func setupBackupHandlerForBulkRunTests(

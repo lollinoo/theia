@@ -2,10 +2,12 @@ package api
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,11 +28,26 @@ const maxInlineBackupContentBytes int64 = 1 << 20
 type BackupHandler struct {
 	svc          *service.BackupService
 	settingsRepo domain.SettingsRepository
+	auditLogs    domain.AuditLogRepository
+}
+
+type BackupHandlerOption func(*BackupHandler)
+
+func WithBackupAuditLogs(auditLogs domain.AuditLogRepository) BackupHandlerOption {
+	return func(h *BackupHandler) {
+		h.auditLogs = auditLogs
+	}
 }
 
 // NewBackupHandler creates a new BackupHandler.
-func NewBackupHandler(svc *service.BackupService, settingsRepo domain.SettingsRepository) *BackupHandler {
-	return &BackupHandler{svc: svc, settingsRepo: settingsRepo}
+func NewBackupHandler(svc *service.BackupService, settingsRepo domain.SettingsRepository, opts ...BackupHandlerOption) *BackupHandler {
+	handler := &BackupHandler{svc: svc, settingsRepo: settingsRepo}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(handler)
+		}
+	}
+	return handler
 }
 
 // HandleTestSSH handles POST /api/v1/devices/{id}/ssh-credentials/test
@@ -327,6 +344,10 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 		return
 	}
 
+	if err := h.auditBulkRunStarted(r, len(deviceIDs), run); err != nil {
+		log.Printf("backup: failed to append bulk run audit log: %v", err)
+	}
+
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
 }
@@ -544,7 +565,6 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("X-Bulk-Download-Size-Bytes", fmt.Sprint(totalBytes))
 
 	zw := zip.NewWriter(w)
-	defer zw.Close()
 
 	zipErrors := writeBulkZipEntries(zw, entries, h.svc.OpenBulkDownloadEntry)
 	if len(zipErrors) > 0 {
@@ -552,7 +572,15 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 			for _, e := range zipErrors {
 				fmt.Fprintln(w, e)
 			}
+		} else {
+			zipErrors = append(zipErrors, fmt.Sprintf("_errors.txt: zip entry creation failed: %v", err))
 		}
+	}
+	if err := zw.Close(); err != nil {
+		zipErrors = append(zipErrors, fmt.Sprintf("zip close failed: %v", err))
+	}
+	if err := h.auditBulkDownloadCompleted(r, len(deviceIDs), entries, totalBytes, len(zipErrors)); err != nil {
+		log.Printf("backup: failed to append bulk download audit log: %v", err)
 	}
 }
 
@@ -611,6 +639,99 @@ func writeBulkZipEntries(zw *zip.Writer, entries []service.BulkDownloadEntry, op
 		f.Close()
 	}
 	return zipErrors
+}
+
+func (h *BackupHandler) auditBulkDownloadCompleted(
+	r *http.Request,
+	requestedDeviceCount int,
+	entries []service.BulkDownloadEntry,
+	totalBytes int64,
+	streamErrorCount int,
+) error {
+	if h.auditLogs == nil {
+		return nil
+	}
+
+	metadata := map[string]interface{}{
+		"requested_device_count": requestedDeviceCount,
+		"selected_device_count":  bulkDownloadSelectedDeviceCount(entries),
+		"selected_file_count":    len(entries),
+		"selected_bytes":         totalBytes,
+		"stream_error_count":     streamErrorCount,
+		"partial":                streamErrorCount > 0,
+	}
+	return h.appendBackupAuditLog(
+		r,
+		"backup.bulk_download_completed",
+		"backup_bulk_download",
+		"bulk-download",
+		metadata,
+	)
+}
+
+func (h *BackupHandler) auditBulkRunStarted(r *http.Request, requestedDeviceCount int, run *domain.BulkBackupRun) error {
+	if h.auditLogs == nil || run == nil {
+		return nil
+	}
+
+	metadata := map[string]interface{}{
+		"requested_device_count": requestedDeviceCount,
+		"total_count":            run.TotalCount,
+		"queued_count":           run.QueuedCount,
+		"skipped_count":          run.SkippedCount,
+		"batch_size":             run.BatchSize,
+	}
+	return h.appendBackupAuditLog(
+		r,
+		"backup.bulk_run_started",
+		"backup_bulk_run",
+		run.ID.String(),
+		metadata,
+	)
+}
+
+func (h *BackupHandler) appendBackupAuditLog(
+	r *http.Request,
+	action string,
+	resource string,
+	resourceID string,
+	metadata map[string]interface{},
+) error {
+	if h.auditLogs == nil {
+		return nil
+	}
+
+	metadataJSON := "{}"
+	if len(metadata) > 0 {
+		data, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("marshalling backup audit metadata: %w", err)
+		}
+		metadataJSON = string(data)
+	}
+
+	var actorUserID *uuid.UUID
+	if user, ok := AuthenticatedUserFromRequest(r); ok && user.User.User.ID != uuid.Nil {
+		id := user.User.User.ID
+		actorUserID = &id
+	}
+
+	logEntry := domain.AuditLog{
+		ID:           uuid.New(),
+		ActorUserID:  actorUserID,
+		TargetUserID: actorUserID,
+		Action:       action,
+		Resource:     resource,
+		ResourceID:   resourceID,
+		MetadataJSON: metadataJSON,
+		IPAddress:    clientIPAddress(r),
+		UserAgent:    r.UserAgent(),
+		CreatedAt:    time.Now().UTC(),
+	}
+	if err := h.auditLogs.AppendAuditLog(context.WithoutCancel(r.Context()), &logEntry); err != nil {
+		return fmt.Errorf("appending backup audit log: %w", err)
+	}
+	return nil
 }
 
 // --- Helpers ---
