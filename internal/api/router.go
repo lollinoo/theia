@@ -581,6 +581,14 @@ func NewRouter(
 	})
 
 	// Bulk backup routes
+	mux.HandleFunc("/api/v1/backups/bulk/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		backupHandler.HandleGetBulkOperationStatus(w, r)
+	})
+
 	mux.HandleFunc("/api/v1/backups/bulk-runs/latest", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")

@@ -179,6 +179,10 @@ func (s *BackupService) BulkOperationLimits() BulkOperationLimits {
 	return normalizeBulkOperationLimits(s.bulkLimits)
 }
 
+func (s *BackupService) BulkBackupRunBatchSize() int {
+	return defaultBulkBackupRunBatchSize
+}
+
 func (s *BackupService) SetBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) {
 	s.bulkOperationLeaseRepo = repo
 	if repo != nil {
