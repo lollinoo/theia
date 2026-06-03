@@ -652,6 +652,7 @@ func (h *Hub) recordBroadcast(payload []byte) {
 	select {
 	case recorder <- payload:
 	default:
+		observability.Default().IncWSBackpressure(wsBackpressureScopeBroadcast, wsBackpressureReasonHubBufferFull)
 	}
 }
 
