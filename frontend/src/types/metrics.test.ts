@@ -87,6 +87,42 @@ describe('parseWSMessage', () => {
     });
   });
 
+  it('preserves polling health queue details and warnings', () => {
+    const message = parseWSMessage({
+      type: 'polling_health_changed',
+      payload: {
+        essential_overloaded: false,
+        degraded_risk: true,
+        essential_queue_lag_seconds: 12.5,
+        deadline_miss_total: 3,
+        active_workers: 64,
+        configured_workers: 64,
+        queues: {
+          performance: {
+            ready_depth: 9,
+            lag_seconds: 125.5,
+            active_workers: 32,
+            configured_workers: 32,
+          },
+        },
+        warnings: [
+          {
+            code: 'estimated_workers_exceeded',
+            message: 'estimated essential worker demand exceeds configured workers',
+          },
+        ],
+      },
+    });
+
+    expect(message.type).toBe('polling_health_changed');
+    if (message.type !== 'polling_health_changed') {
+      throw new Error(`unexpected message type ${message.type}`);
+    }
+    expect(message.payload.queues?.performance.ready_depth).toBe(9);
+    expect(message.payload.queues?.performance.lag_seconds).toBe(125.5);
+    expect(message.payload.warnings?.[0]?.code).toBe('estimated_workers_exceeded');
+  });
+
   it('parses a versioned snapshot_delta envelope with normalized runtime records', () => {
     const message = parseWSMessage({
       type: 'snapshot_delta',
