@@ -23,6 +23,7 @@ import (
 
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/vendor"
 	"golang.org/x/sys/unix"
@@ -33,6 +34,7 @@ var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 const defaultBulkBackupWorkerCount = 4
 const defaultBulkBackupRunBatchSize = 10
 const legacyBulkBackupLeaseKey = "backup.bulk_backup:legacy"
+const legacyBulkBackupMetricOperation = "bulk_backup_legacy"
 
 var ErrBulkBackupRunAlreadyActive = errors.New("bulk backup run already active")
 var ErrBulkBackupAlreadyActive = errors.New("bulk backup already active")
@@ -127,6 +129,9 @@ func WithBulkBackupRunRepo(repo domain.BulkBackupRunRepository) BackupServiceOpt
 func WithBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) BackupServiceOption {
 	return func(s *BackupService) {
 		s.bulkOperationLeaseRepo = repo
+		if repo != nil {
+			recordLegacyBulkBackupDistributedConcurrencyLimit()
+		}
 	}
 }
 
@@ -160,6 +165,7 @@ func NewBackupService(
 	for _, opt := range opts {
 		opt(svc)
 	}
+	recordLegacyBulkBackupLocalConcurrencyLimit()
 	return svc
 }
 
@@ -175,6 +181,9 @@ func (s *BackupService) BulkOperationLimits() BulkOperationLimits {
 
 func (s *BackupService) SetBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) {
 	s.bulkOperationLeaseRepo = repo
+	if repo != nil {
+		recordLegacyBulkBackupDistributedConcurrencyLimit()
+	}
 }
 
 func normalizeBulkOperationLimits(limits BulkOperationLimits) BulkOperationLimits {
@@ -309,6 +318,7 @@ func (s *BackupService) acquireLegacyBulkBackupLease(ctx context.Context) (domai
 	if !acquired {
 		return nil, ErrBulkBackupAlreadyActive
 	}
+	localLease = newBulkOperationMetricLease(localLease, legacyBulkBackupMetricOperation, "local")
 	if s.bulkOperationLeaseRepo == nil {
 		return localLease, nil
 	}
@@ -326,8 +336,41 @@ func (s *BackupService) acquireLegacyBulkBackupLease(ctx context.Context) (domai
 		}
 		return nil, ErrBulkBackupAlreadyActive
 	}
+	distributedLease = newBulkOperationMetricLease(distributedLease, legacyBulkBackupMetricOperation, "distributed")
 
 	return &compositeBulkOperationLease{leases: []domain.BulkOperationLease{localLease, distributedLease}}, nil
+}
+
+func recordLegacyBulkBackupLocalConcurrencyLimit() {
+	observability.Default().SetBulkOperationConcurrencyLimit(legacyBulkBackupMetricOperation, "global", "local", 1)
+}
+
+func recordLegacyBulkBackupDistributedConcurrencyLimit() {
+	observability.Default().SetBulkOperationConcurrencyLimit(legacyBulkBackupMetricOperation, "global", "distributed", 1)
+}
+
+func newBulkOperationMetricLease(lease domain.BulkOperationLease, operation, source string) domain.BulkOperationLease {
+	if lease == nil {
+		return nil
+	}
+	observability.Default().SetBulkOperationInFlight(operation, source, 1)
+	return &bulkOperationMetricLease{
+		lease:     lease,
+		operation: operation,
+		source:    source,
+	}
+}
+
+type bulkOperationMetricLease struct {
+	lease     domain.BulkOperationLease
+	operation string
+	source    string
+}
+
+func (l *bulkOperationMetricLease) Release() error {
+	err := l.lease.Release()
+	observability.Default().SetBulkOperationInFlight(l.operation, l.source, 0)
+	return err
 }
 
 func releaseBulkOperationLease(label string, lease domain.BulkOperationLease) {

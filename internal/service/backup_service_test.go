@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	internalssh "github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/vendor"
 	"github.com/pkg/sftp"
@@ -1098,6 +1099,45 @@ func TestTriggerBulkBackupRejectsConcurrentLegacyBulkBackupAcrossServices(t *tes
 	waitForCondition(t, 2*time.Second, func() bool {
 		return !leaseRepo.isActive(legacyBulkBackupLeaseKey)
 	})
+}
+
+func TestTriggerBulkBackupReportsLegacyBulkGateMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	port := listenOnRandomPort(t)
+	leaseRepo := newMockBulkOperationLeaseRepo()
+	svc, jobRepo, deviceID := setupLegacyBulkBackupService(t, port, leaseRepo, 400*time.Millisecond)
+
+	if _, err := svc.TriggerBulkBackup(context.Background(), deviceID); err != nil {
+		t.Fatalf("TriggerBulkBackup: %v", err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		return mockBackupJobCount(jobRepo) == 1 && leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, want := range []string{
+		`theia_bulk_operation_in_flight{operation="bulk_backup_legacy",source="local"} 1`,
+		`theia_bulk_operation_in_flight{operation="bulk_backup_legacy",source="distributed"} 1`,
+		`theia_bulk_operation_concurrency_limit{operation="bulk_backup_legacy",scope="global",source="local"} 1`,
+		`theia_bulk_operation_concurrency_limit{operation="bulk_backup_legacy",scope="global",source="distributed"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("expected metric %q while legacy bulk backup is running, got:\n%s", want, metrics)
+		}
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+	metrics = string(registry.MarshalPrometheus())
+	for _, want := range []string{
+		`theia_bulk_operation_in_flight{operation="bulk_backup_legacy",source="local"} 0`,
+		`theia_bulk_operation_in_flight{operation="bulk_backup_legacy",source="distributed"} 0`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("expected metric %q after legacy bulk backup releases, got:\n%s", want, metrics)
+		}
+	}
 }
 
 func TestTriggerBulkBackupRejectsQueuedJobCountOverLimitBeforeCreatingJobs(t *testing.T) {
