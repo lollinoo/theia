@@ -36,6 +36,37 @@ vi.mock('../../api/client', () => ({
     ],
   }),
   fetchLatestBulkBackupRun: vi.fn().mockResolvedValue(null),
+  fetchBulkOperationStatus: vi.fn().mockResolvedValue({
+    bulk_backup: {
+      max_devices: 100,
+      max_queued_jobs: 1000,
+      concurrency: {
+        max_concurrent: 1,
+        configurable: false,
+      },
+      legacy_endpoint: {
+        path: '/api/v1/backups/bulk',
+        deprecated: true,
+      },
+    },
+    bulk_backup_run: {
+      max_devices: 100,
+      max_queued_jobs: 1000,
+      batch_size: 10,
+      max_active_runs: 1,
+      configurable_concurrency: false,
+      can_pause: true,
+      can_resume: true,
+      can_cancel: true,
+    },
+    bulk_download: {
+      max_devices: 100,
+      max_files: 500,
+      max_bytes: 104857600,
+      max_concurrent_per_actor: 1,
+      max_concurrent_global: 4,
+    },
+  }),
   fetchBulkBackupRun: vi.fn().mockResolvedValue({
     id: 'run-1',
     status: 'success',
@@ -142,6 +173,47 @@ function mockRunItem(overrides: Record<string, unknown>) {
   };
 }
 
+function mockBulkOperationStatus(
+  overrides: {
+    bulkBackupRun?: Record<string, unknown>;
+    bulkDownload?: Record<string, unknown>;
+  } = {},
+) {
+  return {
+    bulk_backup: {
+      max_devices: 100,
+      max_queued_jobs: 1000,
+      concurrency: {
+        max_concurrent: 1,
+        configurable: false,
+      },
+      legacy_endpoint: {
+        path: '/api/v1/backups/bulk',
+        deprecated: true,
+      },
+    },
+    bulk_backup_run: {
+      max_devices: 100,
+      max_queued_jobs: 1000,
+      batch_size: 10,
+      max_active_runs: 1,
+      configurable_concurrency: false,
+      can_pause: true,
+      can_resume: true,
+      can_cancel: true,
+      ...overrides.bulkBackupRun,
+    },
+    bulk_download: {
+      max_devices: 100,
+      max_files: 500,
+      max_bytes: 104857600,
+      max_concurrent_per_actor: 1,
+      max_concurrent_global: 4,
+      ...overrides.bulkDownload,
+    },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   __resetBulkBackupSessionForTests();
@@ -196,6 +268,17 @@ describe('BulkBackupPanel — startBulkBackupRun .catch handles ValidationError'
 });
 
 describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
+  it('shows the fetched persistent run batch size in the idle summary', async () => {
+    const { fetchBulkOperationStatus } = await import('../../api/client');
+    (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkOperationStatus({ bulkBackupRun: { batch_size: 7 } }),
+    );
+
+    render(<BulkBackupPanel devices={[mockDevice()]} />);
+
+    expect(await screen.findByText(/groups of 7/)).toBeInTheDocument();
+  });
+
   it('starts one persistent run and maps queued/skipped items', async () => {
     const { startBulkBackupRun, triggerBackup, triggerBulkBackup } = await import(
       '../../api/client'
@@ -312,21 +395,18 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
   it('hydrates a running bulk backup after a page refresh', async () => {
     const { fetchLatestBulkBackupRun } = await import('../../api/client');
     (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      mockBulkRun(
-        { created_by: 'test-operator' },
-        [
-          mockRunItem({
-            device_id: 'dev-1',
-            device_name: 'router-01',
-            status: 'queued',
-          }),
-          mockRunItem({
-            device_id: 'dev-2',
-            device_name: 'router-02',
-            status: 'checking',
-          }),
-        ],
-      ),
+      mockBulkRun({ created_by: 'test-operator' }, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'router-01',
+          status: 'queued',
+        }),
+        mockRunItem({
+          device_id: 'dev-2',
+          device_name: 'router-02',
+          status: 'checking',
+        }),
+      ]),
     );
 
     render(
@@ -621,6 +701,75 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     );
     expect(triggerBulkDownload).toHaveBeenNthCalledWith(2, ['dev-101'], {
       filename: expect.stringMatching(/^THEIA_BACKUPS_batch-2-of-2_.*\.zip$/),
+    });
+  }, 10000);
+
+  it('uses the fetched bulk download device limit for ZIP batches', async () => {
+    const {
+      fetchBulkOperationStatus,
+      fetchBulkBackupRun,
+      startBulkBackupRun,
+      triggerBulkDownload,
+    } = await import('../../api/client');
+    const successItems = Array.from({ length: 81 }, (_, index) =>
+      mockRunItem({
+        device_id: `dev-${index + 1}`,
+        device_name: `router-${index + 1}`,
+        status: 'success',
+      }),
+    );
+    (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkOperationStatus({
+        bulkBackupRun: { batch_size: 7 },
+        bulkDownload: { max_devices: 40 },
+      }),
+    );
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun(
+        { status: 'running' },
+        successItems.map((item) => ({ ...item, status: 'queued' })),
+      ),
+    );
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'success' }, successItems),
+    );
+    const devices = Array.from({ length: 81 }, (_, index) =>
+      mockDevice({
+        id: `dev-${index + 1}`,
+        sys_name: `router-${index + 1}`,
+      }),
+    );
+
+    render(<BulkBackupPanel devices={devices} />);
+
+    await screen.findByText(/groups of 7/);
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    await screen.findByText('Download 3 ZIP files', {}, { timeout: 4000 });
+    expect(
+      screen.getByText('Downloads will be split into 3 ZIP files of up to 40 devices each.'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Download 3 ZIP files'));
+
+    await waitFor(() => {
+      expect(triggerBulkDownload).toHaveBeenCalledTimes(3);
+    });
+    expect(triggerBulkDownload).toHaveBeenNthCalledWith(
+      1,
+      Array.from({ length: 40 }, (_, index) => `dev-${index + 1}`),
+      {
+        filename: expect.stringMatching(/^THEIA_BACKUPS_batch-1-of-3_.*\.zip$/),
+      },
+    );
+    expect(triggerBulkDownload).toHaveBeenNthCalledWith(
+      2,
+      Array.from({ length: 40 }, (_, index) => `dev-${index + 41}`),
+      {
+        filename: expect.stringMatching(/^THEIA_BACKUPS_batch-2-of-3_.*\.zip$/),
+      },
+    );
+    expect(triggerBulkDownload).toHaveBeenNthCalledWith(3, ['dev-81'], {
+      filename: expect.stringMatching(/^THEIA_BACKUPS_batch-3-of-3_.*\.zip$/),
     });
   }, 10000);
 

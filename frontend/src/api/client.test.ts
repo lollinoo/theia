@@ -25,6 +25,7 @@ import {
   fetchBackupJobs,
   fetchBridgeConnectorConfig,
   fetchBulkBackupRun,
+  fetchBulkOperationStatus,
   fetchCanvasBootstrap,
   fetchCanvasMapAreas,
   fetchCanvasMapBootstrap,
@@ -2116,6 +2117,101 @@ describe('bulk backup runs', () => {
 
     expect(run.id).toBe('run-1');
     expect(run.status).toBe('running');
+  });
+
+  it('normalizes 413 responses from persistent runs to a readable limit error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          {
+            error: 'bulk backup run exceeds devices limit: requested 101, maximum 100',
+          },
+          { ok: false, status: 413, statusText: 'Payload Too Large' },
+        ),
+      ),
+    );
+
+    await expect(startBulkBackupRun(['dev-1'])).rejects.toThrow(
+      'Too many devices selected for bulk backup. Maximum 100, requested 101.',
+    );
+  });
+
+  it('fetches bulk operation status limits and capabilities', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: {
+          bulk_backup: {
+            max_devices: 101,
+            max_queued_jobs: 202,
+            concurrency: {
+              max_concurrent: 1,
+              configurable: false,
+            },
+            legacy_endpoint: {
+              path: '/api/v1/backups/bulk',
+              deprecated: true,
+            },
+          },
+          bulk_backup_run: {
+            max_devices: 303,
+            max_queued_jobs: 404,
+            batch_size: 7,
+            max_active_runs: 1,
+            configurable_concurrency: false,
+            can_pause: true,
+            can_resume: true,
+            can_cancel: true,
+          },
+          bulk_download: {
+            max_devices: 40,
+            max_files: 500,
+            max_bytes: 104857600,
+            max_concurrent_per_actor: 2,
+            max_concurrent_global: 3,
+          },
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchBulkOperationStatus()).resolves.toEqual({
+      bulk_backup: {
+        max_devices: 101,
+        max_queued_jobs: 202,
+        concurrency: {
+          max_concurrent: 1,
+          configurable: false,
+        },
+        legacy_endpoint: {
+          path: '/api/v1/backups/bulk',
+          deprecated: true,
+        },
+      },
+      bulk_backup_run: {
+        max_devices: 303,
+        max_queued_jobs: 404,
+        batch_size: 7,
+        max_active_runs: 1,
+        configurable_concurrency: false,
+        can_pause: true,
+        can_resume: true,
+        can_cancel: true,
+      },
+      bulk_download: {
+        max_devices: 40,
+        max_files: 500,
+        max_bytes: 104857600,
+        max_concurrent_per_actor: 2,
+        max_concurrent_global: 3,
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/backups/bulk/status',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: 'application/json' }),
+      }),
+    );
   });
 
   it('fetches latest and specific persistent bulk backup runs', async () => {

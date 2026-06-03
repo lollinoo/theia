@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelBulkBackupRun,
   fetchBulkBackupRun,
+  fetchBulkOperationStatus,
   fetchLatestBulkBackupRun,
   pauseBulkBackupRun,
   resumeBulkBackupRun,
@@ -13,6 +14,7 @@ import type {
   BulkBackupRun,
   BulkBackupRunItem,
   BulkBackupRunStatus,
+  BulkOperationStatus,
   Device,
 } from '../../types/api';
 
@@ -132,6 +134,10 @@ function chunkArray<T>(items: T[], size: number): T[][] {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
+}
+
+function positiveIntegerOrFallback(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && value !== undefined && value > 0 ? Math.floor(value) : fallback;
 }
 
 function itemToEntry(item: BulkBackupRunItem): DeviceEntry {
@@ -318,6 +324,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(
     () => new Set(devices.map((d) => d.id)),
   );
+  const [bulkOperationStatus, setBulkOperationStatus] = useState<BulkOperationStatus | null>(null);
   const [controlBusy, setControlBusy] = useState<'pause' | 'resume' | 'stop' | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const entriesRef = useRef<DeviceEntry[]>([]);
@@ -376,6 +383,20 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       unsubscribe();
     };
   }, [startPolling]);
+
+  useEffect(() => {
+    let active = true;
+    void fetchBulkOperationStatus()
+      .then((status) => {
+        if (active) {
+          setBulkOperationStatus(status);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     entriesRef.current = entries;
@@ -492,7 +513,15 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const doneCount = report.completedCount;
   const activeCount = Math.max(report.totalCount - report.completedCount, 0);
   const downloadableSuccessCount = entries.filter((e) => e.phase === 'success').length;
-  const downloadBatchCount = Math.ceil(downloadableSuccessCount / BULK_DEVICE_BATCH_SIZE);
+  const bulkBackupGroupSize = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_backup_run.batch_size,
+    BULK_BACKUP_GROUP_SIZE,
+  );
+  const bulkDownloadBatchSize = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_download.max_devices,
+    BULK_DEVICE_BATCH_SIZE,
+  );
+  const downloadBatchCount = Math.ceil(downloadableSuccessCount / bulkDownloadBatchSize);
   const controlSummary = controlProgressSummary(entries, session.runStatus);
   const canPause = phase === 'running' && session.runId && session.runStatus === 'running';
   const canResume = phase === 'running' && session.runId && session.runStatus === 'paused';
@@ -557,7 +586,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     setBulkBackupSession((current) => ({ ...current, downloading: true, error: '' }));
     try {
       const ids = entries.filter((e) => e.phase === 'success').map((e) => e.deviceId);
-      const batches = chunkArray(ids, BULK_DEVICE_BATCH_SIZE);
+      const batches = chunkArray(ids, bulkDownloadBatchSize);
       for (let index = 0; index < batches.length; index++) {
         const result = await triggerBulkDownload(batches[index], {
           filename:
@@ -585,7 +614,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         {phase === 'idle' && (
           <>
             {' '}
-            · {selectedCount} selected · groups of {BULK_BACKUP_GROUP_SIZE}
+            · {selectedCount} selected · groups of {bulkBackupGroupSize}
           </>
         )}
       </div>
@@ -802,7 +831,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         <div className="space-y-2">
           <p className="text-xs text-on-bg-secondary">
             {downloadBatchCount > 1
-              ? `Downloads will be split into ${downloadBatchCount} ZIP files of up to ${BULK_DEVICE_BATCH_SIZE} devices each.`
+              ? `Downloads will be split into ${downloadBatchCount} ZIP files of up to ${bulkDownloadBatchSize} devices each.`
               : "Download files individually from each device's backup history, or download all as a zip."}
           </p>
           <button

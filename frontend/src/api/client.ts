@@ -8,6 +8,7 @@ import {
   type BulkBackupRunItem,
   type BulkBackupRunItemStatus,
   type BulkBackupRunStatus,
+  type BulkOperationStatus,
   type CanvasMap,
   type CanvasMapFilter,
   type CanvasTopologyResponse,
@@ -1627,6 +1628,56 @@ function parseBulkBackupRunResponse(payload: unknown): BulkBackupRun | null {
   return parseBulkBackupRun(data as Record<string, unknown>);
 }
 
+function numericField(record: Record<string, unknown> | undefined, key: string): number {
+  return record && typeof record[key] === 'number' ? record[key] : 0;
+}
+
+function booleanField(record: Record<string, unknown> | undefined, key: string): boolean {
+  return record?.[key] === true;
+}
+
+function parseBulkOperationStatus(payload: unknown): BulkOperationStatus {
+  const payloadRecord = recordField(payload) ?? {};
+  const data = recordField(payloadRecord.data) ?? {};
+  const bulkBackup = recordField(data.bulk_backup) ?? {};
+  const bulkBackupConcurrency = recordField(bulkBackup.concurrency) ?? {};
+  const bulkBackupLegacyEndpoint = recordField(bulkBackup.legacy_endpoint) ?? {};
+  const bulkBackupRun = recordField(data.bulk_backup_run) ?? {};
+  const bulkDownload = recordField(data.bulk_download) ?? {};
+
+  return {
+    bulk_backup: {
+      max_devices: numericField(bulkBackup, 'max_devices'),
+      max_queued_jobs: numericField(bulkBackup, 'max_queued_jobs'),
+      concurrency: {
+        max_concurrent: numericField(bulkBackupConcurrency, 'max_concurrent'),
+        configurable: booleanField(bulkBackupConcurrency, 'configurable'),
+      },
+      legacy_endpoint: {
+        path: stringField(bulkBackupLegacyEndpoint, 'path'),
+        deprecated: booleanField(bulkBackupLegacyEndpoint, 'deprecated'),
+      },
+    },
+    bulk_backup_run: {
+      max_devices: numericField(bulkBackupRun, 'max_devices'),
+      max_queued_jobs: numericField(bulkBackupRun, 'max_queued_jobs'),
+      batch_size: numericField(bulkBackupRun, 'batch_size'),
+      max_active_runs: numericField(bulkBackupRun, 'max_active_runs'),
+      configurable_concurrency: booleanField(bulkBackupRun, 'configurable_concurrency'),
+      can_pause: booleanField(bulkBackupRun, 'can_pause'),
+      can_resume: booleanField(bulkBackupRun, 'can_resume'),
+      can_cancel: booleanField(bulkBackupRun, 'can_cancel'),
+    },
+    bulk_download: {
+      max_devices: numericField(bulkDownload, 'max_devices'),
+      max_files: numericField(bulkDownload, 'max_files'),
+      max_bytes: numericField(bulkDownload, 'max_bytes'),
+      max_concurrent_per_actor: numericField(bulkDownload, 'max_concurrent_per_actor'),
+      max_concurrent_global: numericField(bulkDownload, 'max_concurrent_global'),
+    },
+  };
+}
+
 export async function triggerBackup(deviceId: string): Promise<BackupJob> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/backups`,
@@ -1657,6 +1708,11 @@ export async function startBulkBackupRun(deviceIds: string[]): Promise<BulkBacku
   const run = parseBulkBackupRunResponse(payload);
   if (!run) throw new Error('bulk backup run response is missing');
   return run;
+}
+
+export async function fetchBulkOperationStatus(): Promise<BulkOperationStatus> {
+  const payload = await requestJSON('/api/v1/backups/bulk/status');
+  return parseBulkOperationStatus(payload);
 }
 
 export async function fetchLatestBulkBackupRun(): Promise<BulkBackupRun | null> {
@@ -1855,26 +1911,28 @@ async function requestBulkJSON(
 
 function formatBulkLimitMessage(message: string): string {
   const match =
-    /^bulk (backup|download) exceeds (devices|queued jobs|files|bytes) limit: requested (\d+), maximum (\d+)$/i.exec(
+    /^bulk (backup(?: run)?|download) exceeds (devices|queued jobs|files|bytes) limit: requested (\d+), maximum (\d+)$/i.exec(
       message,
     );
   if (!match) {
     return message;
   }
   const [, operation, limit, requested, maximum] = match;
-  if (operation === 'backup' && limit === 'devices') {
+  const normalizedOperation = operation.toLowerCase().replace(/ run$/, '');
+  const normalizedLimit = limit.toLowerCase();
+  if (normalizedOperation === 'backup' && normalizedLimit === 'devices') {
     return `Too many devices selected for bulk backup. Maximum ${maximum}, requested ${requested}.`;
   }
-  if (operation === 'backup' && limit === 'queued jobs') {
+  if (normalizedOperation === 'backup' && normalizedLimit === 'queued jobs') {
     return `Too many backup jobs would be queued. Maximum ${maximum}, requested ${requested}.`;
   }
-  if (operation === 'download' && limit === 'devices') {
+  if (normalizedOperation === 'download' && normalizedLimit === 'devices') {
     return `Too many devices selected for bulk download. Maximum ${maximum}, requested ${requested}.`;
   }
-  if (operation === 'download' && limit === 'files') {
+  if (normalizedOperation === 'download' && normalizedLimit === 'files') {
     return `Too many backup files selected for bulk download. Maximum ${maximum}, requested ${requested}.`;
   }
-  if (operation === 'download' && limit === 'bytes') {
+  if (normalizedOperation === 'download' && normalizedLimit === 'bytes') {
     return `Bulk download is too large. Maximum ${maximum} bytes, requested ${requested} bytes.`;
   }
   return message;

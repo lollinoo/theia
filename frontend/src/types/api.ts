@@ -822,6 +822,38 @@ export interface BulkBackupRun {
   items: BulkBackupRunItem[];
 }
 
+export interface BulkOperationStatus {
+  bulk_backup: {
+    max_devices: number;
+    max_queued_jobs: number;
+    concurrency: {
+      max_concurrent: number;
+      configurable: boolean;
+    };
+    legacy_endpoint: {
+      path: string;
+      deprecated: boolean;
+    };
+  };
+  bulk_backup_run: {
+    max_devices: number;
+    max_queued_jobs: number;
+    batch_size: number;
+    max_active_runs: number;
+    configurable_concurrency: boolean;
+    can_pause: boolean;
+    can_resume: boolean;
+    can_cancel: boolean;
+  };
+  bulk_download: {
+    max_devices: number;
+    max_files: number;
+    max_bytes: number;
+    max_concurrent_per_actor: number;
+    max_concurrent_global: number;
+  };
+}
+
 // Instance backup types
 export type InstanceBackupStatus = 'running' | 'success' | 'failed' | 'cancelled';
 
