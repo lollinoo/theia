@@ -34,6 +34,9 @@ const (
 	wsBackpressureReasonClientBufferFull  = "client_buffer_full"
 	wsBackpressureReasonClientMailboxFull = "client_mailbox_full"
 
+	wsConnectionEventConnected    = "connected"
+	wsConnectionEventDisconnected = "disconnected"
+
 	wsResyncBootstrapHTTP   = "http"
 	wsResyncBootstrapLegacy = "legacy"
 
@@ -106,9 +109,13 @@ func (h *Hub) Run() {
 
 func (h *Hub) addClient(client *Client) {
 	h.mu.Lock()
+	_, existed := h.clients[client]
 	h.clients[client] = true
 	clientCount := len(h.clients)
 	h.mu.Unlock()
+	if !existed {
+		observability.Default().IncWSConnectionEvent(wsConnectionEventConnected)
+	}
 	observability.Default().SetWSConnectedClients(clientCount)
 	logging.Debugf("websocket client registered clients=%d", clientCount)
 }
@@ -495,6 +502,7 @@ func (h *Hub) removeClient(client *Client) {
 		_ = client.conn.Close()
 	}
 	if ok {
+		observability.Default().IncWSConnectionEvent(wsConnectionEventDisconnected)
 		observability.Default().SetWSConnectedClients(clientCount)
 		logging.Debugf("websocket client unregistered clients=%d", clientCount)
 	}

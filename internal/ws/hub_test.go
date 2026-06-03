@@ -94,6 +94,34 @@ func TestHubRemoveClient_DropsSubscriptionState(t *testing.T) {
 	}
 }
 
+func TestHubClientConnectionChurnMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	hub := NewHub()
+	first := newObservedTestClient(hub)
+	second := newObservedTestClient(hub)
+
+	hub.addClient(first)
+	hub.addClient(first)
+	hub.addClient(second)
+	hub.removeClient(first)
+	hub.removeClient(second)
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_ws_connections_total{event="connected"} 2`) {
+		t.Fatalf("expected connected churn metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_connections_total{event="disconnected"} 2`) {
+		t.Fatalf("expected disconnected churn metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_connected_clients 0`) {
+		t.Fatalf("expected connected client gauge to return to zero, got:\n%s", metrics)
+	}
+}
+
 func TestHubBroadcast_DefaultRecorderDisabledDoesNotEmitHubBufferBackpressure(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {
@@ -547,6 +575,14 @@ func registerTestClient(hub *Hub) *Client {
 	hub.mu.Unlock()
 
 	return client
+}
+
+func newObservedTestClient(hub *Hub) *Client {
+	return &Client{
+		hub:          hub,
+		send:         make(chan []byte, 1),
+		overviewSend: make(chan []byte, overviewBufferSize),
+	}
 }
 
 func containsClient(clients []*Client, target *Client) bool {

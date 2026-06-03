@@ -139,6 +139,7 @@ type Registry struct {
 	snmpCollectorDuration      map[snmpCollectorOperationKey]*histogram
 	snmpCollectorEarlyExit     map[snmpCollectorEarlyExitKey]uint64
 	wsConnectedClients         float64
+	wsConnectionsTotal         map[string]uint64
 	wsMessagesTotal            map[wsMetricKey]uint64
 	wsBackpressureTotal        map[wsBackpressureKey]uint64
 	wsClientResyncTotal        map[wsClientResyncKey]uint64
@@ -195,6 +196,7 @@ func NewRegistry() *Registry {
 		snmpCollectorOperations:    make(map[snmpCollectorOperationKey]uint64),
 		snmpCollectorDuration:      make(map[snmpCollectorOperationKey]*histogram),
 		snmpCollectorEarlyExit:     make(map[snmpCollectorEarlyExitKey]uint64),
+		wsConnectionsTotal:         make(map[string]uint64),
 		wsMessagesTotal:            make(map[wsMetricKey]uint64),
 		wsBackpressureTotal:        make(map[wsBackpressureKey]uint64),
 		wsClientResyncTotal:        make(map[wsClientResyncKey]uint64),
@@ -357,6 +359,11 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_ws_messages_total",
 		"WebSocket messages emitted by scope and type.",
 		sortedWSRows(r.wsMessagesTotal),
+	)
+	writeCounterVec(&b,
+		"theia_ws_connections_total",
+		"WebSocket connection lifecycle events by event.",
+		sortedStringCounterRows("event", r.wsConnectionsTotal),
 	)
 	writeCounterVec(&b,
 		"theia_ws_backpressure_total",
@@ -729,6 +736,16 @@ func (r *Registry) SetWSConnectedClients(count int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.wsConnectedClients = float64(count)
+}
+
+func (r *Registry) IncWSConnectionEvent(event string) {
+	if event == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsConnectionsTotal[event]++
 }
 
 func (r *Registry) AddUnknownNeighbors(deviceID uuid.UUID, protocol domain.DiscoveryProtocol, count int) {
