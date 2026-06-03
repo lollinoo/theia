@@ -25,10 +25,7 @@ import (
 // the download endpoint.
 const maxInlineBackupContentBytes int64 = 1 << 20
 
-const (
-	maxConcurrentBulkDownloadsPerActor = 1
-	bulkOperationRetryAfterSeconds     = 30
-)
+const bulkOperationRetryAfterSeconds = 30
 
 // BackupHandler provides HTTP handlers for SSH credentials and config backups.
 type BackupHandler struct {
@@ -55,10 +52,17 @@ func WithBulkDownloadLeaseRepository(repo domain.BulkOperationLeaseRepository) B
 
 // NewBackupHandler creates a new BackupHandler.
 func NewBackupHandler(svc *service.BackupService, settingsRepo domain.SettingsRepository, opts ...BackupHandlerOption) *BackupHandler {
+	bulkLimits := service.DefaultBulkOperationLimits
+	if svc != nil {
+		bulkLimits = svc.BulkOperationLimits()
+	}
 	handler := &BackupHandler{
-		svc:                 svc,
-		settingsRepo:        settingsRepo,
-		bulkDownloadLimiter: newBulkOperationLimiter(maxConcurrentBulkDownloadsPerActor),
+		svc:          svc,
+		settingsRepo: settingsRepo,
+		bulkDownloadLimiter: newBulkOperationLimiter(
+			bulkLimits.BulkDownloadMaxConcurrentPerActor,
+			bulkLimits.BulkDownloadMaxConcurrentGlobal,
+		),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -557,15 +561,16 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	}
 
 	actorKey := bulkDownloadActorKey(r)
-	if h.bulkDownloadLimiter != nil && !h.bulkDownloadLimiter.TryAcquire(actorKey) {
-		if err := h.auditBulkDownloadRejected(r, len(deviceIDs), "actor_concurrency_limit"); err != nil {
-			log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
-		}
-		w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
-		writeError(w, http.StatusTooManyRequests, "bulk download already in progress for this user")
-		return
-	}
 	if h.bulkDownloadLimiter != nil {
+		acquired, reason := h.bulkDownloadLimiter.TryAcquire(actorKey)
+		if !acquired {
+			if err := h.auditBulkDownloadRejected(r, len(deviceIDs), reason); err != nil {
+				log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
+			}
+			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
+			writeError(w, http.StatusTooManyRequests, "bulk download already in progress")
+			return
+		}
 		defer h.bulkDownloadLimiter.Release(actorKey)
 	}
 	if h.bulkDownloadLeaseRepo != nil {
@@ -740,8 +745,11 @@ func (h *BackupHandler) auditBulkDownloadRejected(r *http.Request, requestedDevi
 	metadata := map[string]interface{}{
 		"requested_device_count": requestedDeviceCount,
 		"reason":                 reason,
-		"per_actor_limit":        maxConcurrentBulkDownloadsPerActor,
 		"retry_after_seconds":    bulkOperationRetryAfterSeconds,
+	}
+	if h.bulkDownloadLimiter != nil {
+		metadata["per_actor_limit"] = h.bulkDownloadLimiter.PerKeyLimit()
+		metadata["global_limit"] = h.bulkDownloadLimiter.GlobalLimit()
 	}
 	return h.appendBackupAuditLog(
 		r,
@@ -826,33 +834,55 @@ func extractDeviceIDForBackup(path, suffix string) (uuid.UUID, error) {
 }
 
 type bulkOperationLimiter struct {
-	mu     sync.Mutex
-	limit  int
-	active map[string]int
+	mu          sync.Mutex
+	perKeyLimit int
+	globalLimit int
+	totalActive int
+	active      map[string]int
 }
 
-func newBulkOperationLimiter(limit int) *bulkOperationLimiter {
-	if limit <= 0 {
-		limit = 1
+func newBulkOperationLimiter(perKeyLimit, globalLimit int) *bulkOperationLimiter {
+	if perKeyLimit <= 0 {
+		perKeyLimit = 1
+	}
+	if globalLimit <= 0 {
+		globalLimit = 1
 	}
 	return &bulkOperationLimiter{
-		limit:  limit,
-		active: make(map[string]int),
+		perKeyLimit: perKeyLimit,
+		globalLimit: globalLimit,
+		active:      make(map[string]int),
 	}
 }
 
-func (l *bulkOperationLimiter) TryAcquire(key string) bool {
+func (l *bulkOperationLimiter) PerKeyLimit() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.perKeyLimit
+}
+
+func (l *bulkOperationLimiter) GlobalLimit() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.globalLimit
+}
+
+func (l *bulkOperationLimiter) TryAcquire(key string) (bool, string) {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		key = "anonymous"
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.active[key] >= l.limit {
-		return false
+	if l.active[key] >= l.perKeyLimit {
+		return false, "actor_concurrency_limit"
+	}
+	if l.totalActive >= l.globalLimit {
+		return false, "global_concurrency_limit"
 	}
 	l.active[key]++
-	return true
+	l.totalActive++
+	return true, ""
 }
 
 func (l *bulkOperationLimiter) Release(key string) {
@@ -864,9 +894,12 @@ func (l *bulkOperationLimiter) Release(key string) {
 	defer l.mu.Unlock()
 	if l.active[key] <= 1 {
 		delete(l.active, key)
-		return
+	} else {
+		l.active[key]--
 	}
-	l.active[key]--
+	if l.totalActive > 0 {
+		l.totalActive--
+	}
 }
 
 func bulkDownloadActorKey(r *http.Request) string {

@@ -394,6 +394,8 @@ func TestConfigureBackupServiceBulkOperationLimitsUsesRuntimeConfig(t *testing.T
 	cfg.BulkDownloadLimits.MaxDevices = 13
 	cfg.BulkDownloadLimits.MaxFiles = 14
 	cfg.BulkDownloadLimits.MaxBytes = 15
+	cfg.BulkDownloadLimits.MaxConcurrentPerActor = 16
+	cfg.BulkDownloadLimits.MaxConcurrentGlobal = 17
 
 	svc := service.NewBackupService(nil, nil, nil, nil, nil, nil, nil, nil, "", nil)
 	configureBackupServiceBulkOperationLimits(svc, cfg)
@@ -403,7 +405,9 @@ func TestConfigureBackupServiceBulkOperationLimitsUsesRuntimeConfig(t *testing.T
 		limits.BulkBackupMaxQueuedJobs != 12 ||
 		limits.BulkDownloadMaxDevices != 13 ||
 		limits.BulkDownloadMaxFiles != 14 ||
-		limits.BulkDownloadMaxBytes != 15 {
+		limits.BulkDownloadMaxBytes != 15 ||
+		limits.BulkDownloadMaxConcurrentPerActor != 16 ||
+		limits.BulkDownloadMaxConcurrentGlobal != 17 {
 		t.Fatalf("bulk operation limits = %#v, want runtime config values", limits)
 	}
 }

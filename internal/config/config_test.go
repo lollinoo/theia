@@ -80,6 +80,12 @@ func TestLoad_DefaultsArchiveLimitsToConservativeValues(t *testing.T) {
 	if got, want := cfg.BulkDownloadLimits.MaxBytes, int64(512<<20); got != want {
 		t.Fatalf("BulkDownloadLimits.MaxBytes = %d, want %d", got, want)
 	}
+	if got, want := cfg.BulkDownloadLimits.MaxConcurrentPerActor, 1; got != want {
+		t.Fatalf("BulkDownloadLimits.MaxConcurrentPerActor = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxConcurrentGlobal, 4; got != want {
+		t.Fatalf("BulkDownloadLimits.MaxConcurrentGlobal = %d, want %d", got, want)
+	}
 }
 
 func TestLoad_EnvironmentOverridesDatabaseFields(t *testing.T) {
@@ -128,6 +134,7 @@ func TestLoad_ArchiveLimitOverridesFromYAMLAndEnvironment(t *testing.T) {
 	t.Setenv("THEIA_INSTANCE_BACKUP_MAX_DURATION_SECONDS", "88")
 	t.Setenv("THEIA_BULK_BACKUP_MAX_DEVICES", "12")
 	t.Setenv("THEIA_BULK_DOWNLOAD_MAX_BYTES", "9999")
+	t.Setenv("THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_GLOBAL", "6")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	contents := `
@@ -148,6 +155,8 @@ bulk_download_limits:
   max_devices: 33
   max_files: 44
   max_bytes: 8888
+  max_concurrent_per_actor: 5
+  max_concurrent_global: 7
 `
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
@@ -196,6 +205,12 @@ bulk_download_limits:
 	}
 	if got, want := cfg.BulkDownloadLimits.MaxBytes, int64(9999); got != want {
 		t.Fatalf("BulkDownloadLimits.MaxBytes = %d, want env override %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxConcurrentPerActor, 5; got != want {
+		t.Fatalf("BulkDownloadLimits.MaxConcurrentPerActor = %d, want %d", got, want)
+	}
+	if got, want := cfg.BulkDownloadLimits.MaxConcurrentGlobal, 6; got != want {
+		t.Fatalf("BulkDownloadLimits.MaxConcurrentGlobal = %d, want env override %d", got, want)
 	}
 }
 
@@ -322,6 +337,8 @@ func TestLoad_RejectsInvalidArchiveLimitOverrides(t *testing.T) {
 		{name: "bulk download devices non integer", key: "THEIA_BULK_DOWNLOAD_MAX_DEVICES", value: "not-an-integer"},
 		{name: "bulk download files zero", key: "THEIA_BULK_DOWNLOAD_MAX_FILES", value: "0"},
 		{name: "bulk download bytes negative", key: "THEIA_BULK_DOWNLOAD_MAX_BYTES", value: "-1"},
+		{name: "bulk download actor concurrency zero", key: "THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_PER_ACTOR", value: "0"},
+		{name: "bulk download global concurrency negative", key: "THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_GLOBAL", value: "-1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

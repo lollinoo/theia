@@ -40,20 +40,24 @@ var ErrBulkOperationLimiterUnavailable = errors.New("bulk operation limiter unav
 
 // BulkOperationLimits holds defensive quotas for bulk backup and download requests.
 type BulkOperationLimits struct {
-	BulkBackupMaxDevices    int
-	BulkBackupMaxQueuedJobs int
-	BulkDownloadMaxDevices  int
-	BulkDownloadMaxFiles    int
-	BulkDownloadMaxBytes    int64
+	BulkBackupMaxDevices              int
+	BulkBackupMaxQueuedJobs           int
+	BulkDownloadMaxDevices            int
+	BulkDownloadMaxFiles              int
+	BulkDownloadMaxBytes              int64
+	BulkDownloadMaxConcurrentPerActor int
+	BulkDownloadMaxConcurrentGlobal   int
 }
 
 // DefaultBulkOperationLimits bounds bulk workflows while preserving ordinary fleet use.
 var DefaultBulkOperationLimits = BulkOperationLimits{
-	BulkBackupMaxDevices:    100,
-	BulkBackupMaxQueuedJobs: 100,
-	BulkDownloadMaxDevices:  100,
-	BulkDownloadMaxFiles:    500,
-	BulkDownloadMaxBytes:    512 << 20,
+	BulkBackupMaxDevices:              100,
+	BulkBackupMaxQueuedJobs:           100,
+	BulkDownloadMaxDevices:            100,
+	BulkDownloadMaxFiles:              500,
+	BulkDownloadMaxBytes:              512 << 20,
+	BulkDownloadMaxConcurrentPerActor: 1,
+	BulkDownloadMaxConcurrentGlobal:   4,
 }
 
 // BulkLimitError reports a request that exceeds a configured bulk quota.
@@ -189,6 +193,12 @@ func normalizeBulkOperationLimits(limits BulkOperationLimits) BulkOperationLimit
 	}
 	if limits.BulkDownloadMaxBytes <= 0 {
 		limits.BulkDownloadMaxBytes = defaults.BulkDownloadMaxBytes
+	}
+	if limits.BulkDownloadMaxConcurrentPerActor <= 0 {
+		limits.BulkDownloadMaxConcurrentPerActor = defaults.BulkDownloadMaxConcurrentPerActor
+	}
+	if limits.BulkDownloadMaxConcurrentGlobal <= 0 {
+		limits.BulkDownloadMaxConcurrentGlobal = defaults.BulkDownloadMaxConcurrentGlobal
 	}
 	return limits
 }

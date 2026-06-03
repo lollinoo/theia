@@ -1604,6 +1604,49 @@ func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAcrossHandlersForSameA
 	}
 }
 
+func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAtGlobalLimit(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, _ := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, service.BulkOperationLimits{
+		BulkBackupMaxDevices:              10,
+		BulkBackupMaxQueuedJobs:           10,
+		BulkDownloadMaxDevices:            10,
+		BulkDownloadMaxFiles:              10,
+		BulkDownloadMaxBytes:              1024,
+		BulkDownloadMaxConcurrentPerActor: 10,
+		BulkDownloadMaxConcurrentGlobal:   1,
+	})
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.HandleBulkDownload(firstRec, firstReq)
+	}()
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	secondRec := httptest.NewRecorder()
+	handler.HandleBulkDownload(secondRec, secondReq)
+	close(firstRec.release)
+	<-firstDone
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429 at global limit; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	if got := secondRec.Header().Get("Retry-After"); got != fmt.Sprint(bulkOperationRetryAfterSeconds) {
+		t.Fatalf("Retry-After = %q, want %d", got, bulkOperationRetryAfterSeconds)
+	}
+}
+
 func TestBackupHandlerBulkDownloadAuditsConcurrentRequestRejection(t *testing.T) {
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
@@ -1752,6 +1795,43 @@ func setupBackupHandlerForBulkLimitTests(
 		reg, &mockSSHDialerForBackup{}, encKey, backupDir,
 		gossh.InsecureIgnoreHostKey(),
 	)
+	handler := NewBackupHandler(backupSvc, settingsRepo)
+	return handler, jobRepo, fileRepo, deviceRepo, backupSvc
+}
+
+func setupBackupHandlerForBulkDownloadConcurrencyTest(
+	t *testing.T,
+	backupDir string,
+	limits service.BulkOperationLimits,
+) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler, *mockDeviceRepo, *service.BackupService) {
+	t.Helper()
+
+	jobRepo := newBackupJobRepoForHandler()
+	fileRepo := newBackupFileRepoForHandler()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	encKey := crypto.DeriveKey("test-backup-bulk-concurrency-key")
+
+	defaultCfg := vendor.DBVendorRecord{
+		Name: "default",
+		ConfigJSON: `{
+			"vendor": {"name": "default", "display_name": "Generic"},
+			"detection": {},
+			"backup": {"supported": false}
+		}`,
+	}
+	reg, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{defaultCfg})
+	if err != nil {
+		t.Fatalf("building vendor registry: %v", err)
+	}
+
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		reg, &mockSSHDialerForBackup{}, encKey, backupDir,
+		gossh.InsecureIgnoreHostKey(),
+	)
+	backupSvc.SetBulkOperationLimits(limits)
 	handler := NewBackupHandler(backupSvc, settingsRepo)
 	return handler, jobRepo, fileRepo, deviceRepo, backupSvc
 }
