@@ -4,6 +4,7 @@ export type CanvasMetricName =
   | 'snapshot-apply'
   | 'buildTopologyNodes'
   | 'buildTopologyEdges'
+  | 'buildCanvasTopologyCompositionCacheKey'
   | 'composeCanvasTopology'
   | 'composeCanvasTopologyCached'
   | 'areaProjection'

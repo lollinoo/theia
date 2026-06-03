@@ -12,6 +12,7 @@ describe('canvasPerfBenchmark', () => {
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('computeForceLayout');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('incrementalLayout');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('runtimePatch');
+    expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('buildCanvasTopologyCompositionCacheKey');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('composeCanvasTopologyCached');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('renderProjection');
 
@@ -23,6 +24,7 @@ describe('canvasPerfBenchmark', () => {
 
     expect(result.scenarios.small.metrics.incrementalLayout.count).toBe(1);
     expect(result.scenarios.small.metrics.runtimePatch.count).toBe(1);
+    expect(result.scenarios.small.metrics.buildCanvasTopologyCompositionCacheKey.count).toBe(1);
     expect(result.scenarios.small.metrics.composeCanvasTopologyCached.count).toBe(1);
     expect(result.scenarios.small.metrics.renderProjection.count).toBe(1);
   });

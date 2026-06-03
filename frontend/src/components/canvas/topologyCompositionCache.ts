@@ -119,64 +119,130 @@ function linkPresentationSignature(links: Link[]): unknown[] {
     .sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function positionMapSignature(map: PositionMap | ComputedPositionMap): unknown[] {
-  return Array.from(map.entries())
-    .map(([deviceId, position]) => [
-      deviceId,
-      position.x,
-      position.y,
-      'pinned' in position ? position.pinned === true : false,
-    ])
-    .sort(([left], [right]) => String(left).localeCompare(String(right)));
-}
-
-function placementSignature(deviceIds: Set<string>): string[] {
-  return Array.from(deviceIds).sort();
-}
-
-function alertSignature(alerts: AlertDTO[]): unknown[] {
-  return alerts
-    .map((alert) => [alert.device_id, alert.severity, alert.alert_name, alert.state, alert.summary])
-    .sort(([leftDeviceId, leftName], [rightDeviceId, rightName]) => {
-      const deviceDelta = String(leftDeviceId).localeCompare(String(rightDeviceId));
-      return deviceDelta === 0 ? String(leftName).localeCompare(String(rightName)) : deviceDelta;
-    });
-}
-
-function prometheusStatusSignature(status: PrometheusStatusPayload | null): unknown {
-  if (status === null) {
-    return null;
+function encodeSignaturePart(value: unknown): string {
+  if (value === undefined) {
+    return 'u:';
+  }
+  if (value === null) {
+    return 'n:';
   }
 
-  return {
-    enabled: status.enabled ?? null,
-    available: status.available,
-    error: status.error ?? null,
-  };
+  const encoded = String(value);
+  return `${encoded.length}:${encoded}`;
+}
+
+function encodeSignatureParts(values: unknown[]): string {
+  return values.map(encodeSignaturePart).join('');
+}
+
+function positionMapSignature(map: PositionMap | ComputedPositionMap): string {
+  const parts = [`size:${map.size}`];
+  for (const [deviceId, position] of map.entries()) {
+    parts.push(
+      encodeSignatureParts([
+        deviceId,
+        position.x,
+        position.y,
+        'pinned' in position ? position.pinned === true : false,
+      ]),
+    );
+  }
+  return parts.join('|');
+}
+
+function placementSignature(deviceIds: Set<string>): string {
+  const parts = [`size:${deviceIds.size}`];
+  for (const deviceId of deviceIds.values()) {
+    parts.push(encodeSignaturePart(deviceId));
+  }
+  return parts.join('|');
+}
+
+function alertSignature(alerts: AlertDTO[]): string {
+  const parts = [`size:${alerts.length}`];
+  for (const alert of alerts) {
+    parts.push(
+      encodeSignatureParts([
+        alert.device_id,
+        alert.severity,
+        alert.alert_name,
+        alert.state,
+        alert.summary,
+      ]),
+    );
+  }
+  return parts.join('|');
+}
+
+function prometheusStatusSignature(status: PrometheusStatusPayload | null): string {
+  if (status === null) {
+    return 'null';
+  }
+
+  return encodeSignatureParts([status.enabled ?? null, status.available, status.error ?? null]);
+}
+
+function normalizedRuntimeIdentity(
+  input: BuildCanvasTopologyCompositionCacheKeyInput,
+): string | null {
+  if (input.runtimeIdentity !== undefined && input.runtimeIdentity !== '') {
+    return input.runtimeIdentity;
+  }
+  return null;
+}
+
+function normalizedRuntimeVersion(
+  input: BuildCanvasTopologyCompositionCacheKeyInput,
+): number | null {
+  return input.runtimeVersion ?? null;
 }
 
 function runtimeSignature(input: BuildCanvasTopologyCompositionCacheKeyInput): string {
-  if (input.runtimeIdentity !== undefined && input.runtimeIdentity !== '') {
-    return `identity:${input.runtimeIdentity}`;
+  const runtimeIdentity = normalizedRuntimeIdentity(input);
+  const runtimeVersion = normalizedRuntimeVersion(input);
+
+  if (runtimeIdentity !== null || runtimeVersion !== null) {
+    return encodeSignatureParts(['runtime', runtimeIdentity, runtimeVersion]);
   }
-  if (input.runtimeVersion !== undefined) {
-    return `version:${input.runtimeVersion}`;
-  }
+
   return 'snapshot-ref';
+}
+
+function hasServerTopologyIdentifier(input: BuildCanvasTopologyCompositionCacheKeyInput): boolean {
+  return (
+    (input.topologyEtag !== undefined &&
+      input.topologyEtag !== null &&
+      input.topologyEtag !== '') ||
+    (input.topologyVersion !== undefined && input.topologyVersion !== '')
+  );
+}
+
+function topologySignatureLayer(input: BuildCanvasTopologyCompositionCacheKeyInput): unknown {
+  if (hasServerTopologyIdentifier(input)) {
+    return {
+      etag: input.topologyEtag ?? null,
+      version: input.topologyVersion ?? null,
+    };
+  }
+
+  return {
+    signature: input.topologySignature,
+    devices: devicePresentationSignature(input.devices),
+    links: linkPresentationSignature(input.links),
+  };
 }
 
 export function buildCanvasTopologyCompositionCacheKey(
   input: BuildCanvasTopologyCompositionCacheKeyInput,
 ): CanvasTopologyCompositionCacheKey {
+  const runtimeIdentity = normalizedRuntimeIdentity(input);
+  const runtimeVersion = normalizedRuntimeVersion(input);
+
   return {
     signature: JSON.stringify({
       mapKey: input.mapKey,
-      topologySignature: input.topologySignature,
-      topologyVersion: input.topologyVersion ?? null,
-      topologyEtag: input.topologyEtag ?? null,
       schemaVersion: input.schemaVersion ?? null,
-      devices: devicePresentationSignature(input.devices),
-      links: linkPresentationSignature(input.links),
+      topology: topologySignatureLayer(input),
       savedPositions: positionMapSignature(input.savedPositions),
       computedPositions: positionMapSignature(input.computedPositions),
       currentPositions: positionMapSignature(input.currentPositions),
@@ -187,8 +253,8 @@ export function buildCanvasTopologyCompositionCacheKey(
       alerts: alertSignature(input.alerts),
       prometheusStatus: prometheusStatusSignature(input.prometheusStatus),
     }),
-    runtimeIdentity: input.runtimeIdentity ?? null,
-    runtimeVersion: input.runtimeVersion ?? null,
+    runtimeIdentity,
+    runtimeVersion,
     runtimeSnapshot: input.runtimeSnapshot ?? null,
     openDeviceMenu: input.openDeviceMenu,
     openEdgeMenu: input.openEdgeMenu,
@@ -210,7 +276,10 @@ function cacheKeysEqual(
   }
 
   if (previous.runtimeIdentity !== null || next.runtimeIdentity !== null) {
-    return previous.runtimeIdentity === next.runtimeIdentity;
+    return (
+      previous.runtimeIdentity === next.runtimeIdentity &&
+      previous.runtimeVersion === next.runtimeVersion
+    );
   }
   if (previous.runtimeVersion !== null || next.runtimeVersion !== null) {
     return previous.runtimeVersion === next.runtimeVersion;

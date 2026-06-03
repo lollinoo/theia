@@ -1,0 +1,206 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import type { Device, Link } from '../../types/api';
+import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
+import {
+  type BuildCanvasTopologyCompositionCacheKeyInput,
+  buildCanvasTopologyCompositionCacheKey,
+  createCanvasTopologyCompositionCache,
+} from './topologyCompositionCache';
+
+const noopDeviceMenu = vi.fn();
+const noopEdgeMenu = vi.fn();
+
+function mockDevice(overrides: Partial<Device> = {}): Device {
+  return {
+    id: 'dev-1',
+    hostname: 'router-01',
+    ip: '10.0.0.1',
+    device_type: 'router',
+    poll_class: 'standard',
+    poll_interval_override: null,
+    polling_enabled: true,
+    status: 'up',
+    sys_name: 'router-01',
+    sys_descr: 'RouterOS',
+    hardware_model: 'RB4011',
+    vendor: 'mikrotik',
+    managed: true,
+    tags: {},
+    interfaces: [],
+    area_ids: [],
+    backup_supported: true,
+    metrics_source: 'prometheus',
+    prometheus_label_name: 'instance',
+    prometheus_label_value: '10.0.0.1:9100',
+    ...overrides,
+  };
+}
+
+function mockLink(overrides: Partial<Link> = {}): Link {
+  return {
+    id: 'link-1',
+    source_device_id: 'dev-1',
+    source_if_name: 'ether1',
+    target_device_id: 'dev-2',
+    target_if_name: 'ether2',
+    discovery_protocol: 'lldp',
+    source_if_speed: 1_000_000_000,
+    source_if_oper_status: 'up',
+    target_if_speed: 1_000_000_000,
+    target_if_oper_status: 'up',
+    ...overrides,
+  };
+}
+
+function baseInput(
+  overrides: Partial<BuildCanvasTopologyCompositionCacheKeyInput> = {},
+): BuildCanvasTopologyCompositionCacheKeyInput {
+  return {
+    mapKey: 'map:default',
+    topologySignature: '{"deviceKeys":["dev-1"],"linkKeys":["link-1"]}',
+    topologyVersion: 'topo-1',
+    topologyEtag: '"canvas-topology-1"',
+    schemaVersion: 1,
+    devices: [mockDevice()],
+    links: [mockLink()],
+    savedPositions: new Map([['dev-1', { x: 100, y: 120, pinned: true }]]),
+    computedPositions: new Map(),
+    currentPositions: new Map(),
+    defaultPosition: { x: 20, y: 30 },
+    editMode: false,
+    placementDeviceIds: new Set(),
+    runtimeIdentity: 'rt-sha256:abc',
+    runtimeVersion: 7,
+    runtimeSnapshot: null,
+    alerts: [],
+    prometheusStatus: { enabled: true, available: true },
+    openDeviceMenu: noopDeviceMenu,
+    openEdgeMenu: noopEdgeMenu,
+    ...overrides,
+  };
+}
+
+function buildKey(overrides: Partial<BuildCanvasTopologyCompositionCacheKeyInput> = {}) {
+  return buildCanvasTopologyCompositionCacheKey(baseInput(overrides));
+}
+
+function expectCacheInvalidates(
+  first: Partial<BuildCanvasTopologyCompositionCacheKeyInput>,
+  second: Partial<BuildCanvasTopologyCompositionCacheKeyInput>,
+) {
+  const firstResult = { nodes: [], edges: [] };
+  const secondResult = { nodes: [], edges: [] };
+  const composer = vi.fn().mockReturnValueOnce(firstResult).mockReturnValueOnce(secondResult);
+  const cache = createCanvasTopologyCompositionCache(composer);
+  const compositionInput = {} as Parameters<
+    ReturnType<typeof createCanvasTopologyCompositionCache>['compose']
+  >[0];
+
+  const firstComposed = cache.compose(compositionInput, buildKey(first));
+  const secondComposed = cache.compose(compositionInput, buildKey(second));
+
+  expect(firstComposed).toBe(firstResult);
+  expect(secondComposed).toBe(secondResult);
+  expect(composer).toHaveBeenCalledTimes(2);
+}
+
+describe('buildCanvasTopologyCompositionCacheKey', () => {
+  it('uses server topology identity without traversing device or link presentation fields', () => {
+    const explodingDevice = Object.defineProperties(
+      {},
+      {
+        hostname: {
+          get() {
+            throw new Error('device presentation should not be read');
+          },
+        },
+        interfaces: {
+          get() {
+            throw new Error('interfaces should not be read');
+          },
+        },
+      },
+    ) as Device;
+    const explodingLink = Object.defineProperties(
+      {},
+      {
+        source_device_id: {
+          get() {
+            throw new Error('link presentation should not be read');
+          },
+        },
+      },
+    ) as Link;
+
+    expect(() =>
+      buildKey({
+        topologyVersion: 'topo-2',
+        topologyEtag: '"canvas-topology-2"',
+        devices: [explodingDevice],
+        links: [explodingLink],
+      }),
+    ).not.toThrow();
+  });
+
+  it('invalidates when saved positions change under the same topology and runtime ids', () => {
+    expectCacheInvalidates(
+      { savedPositions: new Map([['dev-1', { x: 100, y: 120, pinned: true }]]) },
+      { savedPositions: new Map([['dev-1', { x: 101, y: 120, pinned: true }]]) },
+    );
+  });
+
+  it('invalidates when alerts change under the same topology and runtime ids', () => {
+    const alert: AlertDTO = {
+      device_id: 'dev-1',
+      alert_name: 'HighCPU',
+      state: 'firing',
+      severity: 'critical',
+      summary: 'CPU high',
+    };
+
+    expectCacheInvalidates({ alerts: [] }, { alerts: [alert] });
+  });
+
+  it('invalidates when Prometheus status changes under the same topology and runtime ids', () => {
+    const unavailable: PrometheusStatusPayload = {
+      enabled: true,
+      available: false,
+      error: 'connection refused',
+    };
+
+    expectCacheInvalidates({ prometheusStatus: null }, { prometheusStatus: unavailable });
+  });
+
+  it('invalidates when runtime version changes even if runtime identity is stable', () => {
+    expectCacheInvalidates(
+      { runtimeIdentity: 'rt-sha256:abc', runtimeVersion: 7 },
+      { runtimeIdentity: 'rt-sha256:abc', runtimeVersion: 8 },
+    );
+  });
+
+  it('falls back to device and link presentation signatures when server topology ids are absent', () => {
+    const first = buildKey({
+      topologyVersion: undefined,
+      topologyEtag: null,
+      devices: [mockDevice({ hostname: 'router-01' })],
+    });
+    const second = buildKey({
+      topologyVersion: undefined,
+      topologyEtag: null,
+      devices: [mockDevice({ hostname: 'router-02' })],
+    });
+
+    expect(first.signature).not.toBe(second.signature);
+  });
+
+  it('uses runtime snapshot reference only when runtime identity and version are absent', () => {
+    const firstSnapshot = { devices: {}, links: {} } as SnapshotPayload;
+    const secondSnapshot = { devices: {}, links: {} } as SnapshotPayload;
+
+    expectCacheInvalidates(
+      { runtimeIdentity: undefined, runtimeVersion: undefined, runtimeSnapshot: firstSnapshot },
+      { runtimeIdentity: undefined, runtimeVersion: undefined, runtimeSnapshot: secondSnapshot },
+    );
+  });
+});
