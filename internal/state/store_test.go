@@ -421,7 +421,8 @@ func TestStoreEmitChangesCoalescesDuplicateQueuedIDsWhenChannelFull(t *testing.T
 	}
 
 	metrics := string(registry.MarshalPrometheus())
-	if strings.Contains(metrics, `theia_state_changes_dropped_total 1`) {
+	if strings.Contains(metrics, `theia_state_changes_dropped_total`) &&
+		!strings.Contains(metrics, `theia_state_changes_dropped_total 0`) {
 		t.Fatalf("duplicate-only coalescing should not record dropped changes, got:\n%s", metrics)
 	}
 }

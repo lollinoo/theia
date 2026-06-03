@@ -407,16 +407,16 @@ func (s *Store) coalesceQueuedChanges(ids []uuid.UUID) ([]uuid.UUID, int) {
 			if _, ok := seen[id]; ok {
 				continue
 			}
-			seen[id] = struct{}{}
 			if len(merged) >= limit {
 				dropped++
 				continue
 			}
+			seen[id] = struct{}{}
 			merged = append(merged, id)
 		}
 	}
 
-	for {
+	for drainedBatches := 0; drainedBatches < limit; drainedBatches++ {
 		select {
 		case queued := <-s.changes:
 			add(queued)
@@ -425,6 +425,8 @@ func (s *Store) coalesceQueuedChanges(ids []uuid.UUID) ([]uuid.UUID, int) {
 			return merged, dropped
 		}
 	}
+	add(ids)
+	return merged, dropped
 }
 
 func (s *Store) markChangesOverflowed(dropped int) {
