@@ -2321,6 +2321,147 @@ func TestPipelineOrchestratorBroadcastDirty_AlertResolutionWithoutRuntimeBaseUse
 	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
 }
 
+func TestPipelineOrchestratorBroadcastDirty_DeviceOnlyWithoutRuntimeBaseFallsBackToFullSnapshot(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+	peerID := uuid.New()
+	pipeline.cache = newPipelineTestCache([]domain.Device{
+		{
+			ID:            deviceID,
+			IP:            "192.0.2.40",
+			Status:        domain.DeviceStatusProbing,
+			SysName:       "dist-sw-1",
+			HardwareModel: "CRS328-24P-4S+",
+			Interfaces:    []domain.Interface{{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000}},
+		},
+		{
+			ID:            peerID,
+			IP:            "192.0.2.41",
+			Status:        domain.DeviceStatusProbing,
+			SysName:       "edge-sw-1",
+			HardwareModel: "CRS326-24G-2S+",
+			Interfaces:    []domain.Interface{{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000}},
+		},
+	}, nil)
+	store.Update(state.StateUpdate{
+		DeviceID:        peerID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    peerID,
+			CPUPercent:  floatPtr(18),
+			CollectedAt: time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC),
+	})
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = nil
+	pipeline.runtime.prevHashes = nil
+	pipeline.runtime.mu.Unlock()
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 1 || types[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected dirty device without runtime base to broadcast full snapshot, got %v", types)
+	}
+
+	var snapshotMessage wsVersionedSnapshotMessage
+	if err := json.Unmarshal(messages[0], &snapshotMessage); err != nil {
+		t.Fatalf("decode dirty-device fallback snapshot: %v", err)
+	}
+	if snapshotMessage.Payload.Snapshot == nil {
+		t.Fatal("expected fallback snapshot payload")
+	}
+	if _, ok := snapshotMessage.Payload.Snapshot.Devices[deviceID.String()]; !ok {
+		t.Fatalf("expected fallback snapshot to include dirty device %s", deviceID)
+	}
+	if _, ok := snapshotMessage.Payload.Snapshot.Devices[peerID.String()]; !ok {
+		t.Fatalf("expected fallback snapshot to include non-dirty peer device %s", peerID)
+	}
+	if len(snapshotMessage.Payload.Snapshot.Devices) != 2 {
+		t.Fatalf("fallback snapshot device count = %d, want 2", len(snapshotMessage.Payload.Snapshot.Devices))
+	}
+	if fullSnapshotCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", narrowSnapshotCalls)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_DeviceAndAlertWithoutRuntimeBaseFallsBackToFullSnapshotAndAlert(t *testing.T) {
+	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+			Summary:   "device down",
+		}},
+	})
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = nil
+	pipeline.runtime.prevHashes = nil
+	pipeline.runtime.mu.Unlock()
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, true, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 2 || types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected dirty device and alert without runtime base to broadcast snapshot then alert, got %v", types)
+	}
+	if fullSnapshotCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", narrowSnapshotCalls)
+	}
+}
+
 func TestPipelineOrchestratorBroadcastLoop_DisabledFullResyncDoesNotSendSnapshot(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond

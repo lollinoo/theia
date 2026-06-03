@@ -229,6 +229,17 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 		return nil
 	}
 
+	p.runtime.mu.RLock()
+	missingDirtyDeviceRuntimeBase := len(dirtyDevices) > 0 && snapshotPayloadEmpty(p.runtime.lastSnapshot)
+	p.runtime.mu.RUnlock()
+	if missingDirtyDeviceRuntimeBase {
+		if err := b.broadcastFullSnapshot(ctx, refreshReloadReasonDirtyDeltaFallback, false); err != nil {
+			return err
+		}
+		b.broadcastAlertsIfDirty(alertsDirty)
+		return nil
+	}
+
 	startedAt := time.Now()
 	delta, requireFullSnapshot, err := b.buildDirtyOverviewDelta(dirtyDevices, alertsDirty)
 	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeDirty, time.Since(startedAt), err == nil)
