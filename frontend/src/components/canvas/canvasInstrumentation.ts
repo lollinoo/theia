@@ -5,6 +5,7 @@ export type CanvasMetricName =
   | 'buildTopologyNodes'
   | 'buildTopologyEdges'
   | 'buildCanvasTopologyCompositionCacheKey'
+  | 'buildCanvasTopologyCompositionCacheKeyLegacy'
   | 'composeCanvasTopology'
   | 'composeCanvasTopologyCached'
   | 'areaProjection'

@@ -32,6 +32,7 @@ import {
 } from './runtimePatches';
 import { composeCanvasTopology } from './topologyComposer';
 import {
+  type BuildCanvasTopologyCompositionCacheKeyInput,
   buildCanvasTopologyCompositionCacheKey,
   createCanvasTopologyCompositionCache,
 } from './topologyCompositionCache';
@@ -41,6 +42,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'buildTopologyNodes',
   'buildTopologyEdges',
   'buildCanvasTopologyCompositionCacheKey',
+  'buildCanvasTopologyCompositionCacheKeyLegacy',
   'composeCanvasTopology',
   'composeCanvasTopologyCached',
   'areaProjection',
@@ -118,6 +120,62 @@ function measureLocalMetric<T>(
       timestamp: Date.now(),
     });
   }
+}
+
+function legacyPositionEntries(
+  positions: Map<string, { x: number; y: number; pinned?: boolean }>,
+): unknown[] {
+  return [...positions.entries()]
+    .map(([deviceId, position]) => ({
+      deviceId,
+      x: position.x,
+      y: position.y,
+      pinned: position.pinned === true,
+    }))
+    .sort((left, right) => left.deviceId.localeCompare(right.deviceId));
+}
+
+function buildLegacyStructuralCompositionCacheSignature(
+  input: BuildCanvasTopologyCompositionCacheKeyInput,
+): string {
+  return JSON.stringify({
+    mapKey: input.mapKey,
+    topologySignature: input.topologySignature,
+    topologyVersion: input.topologyVersion ?? null,
+    topologyEtag: input.topologyEtag ?? null,
+    schemaVersion: input.schemaVersion ?? null,
+    devices: input.devices
+      .map((device) => ({
+        ...device,
+        tags: Object.entries(device.tags ?? {}).sort(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+        interfaces: device.interfaces.map((iface) => ({ ...iface })),
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    links: input.links
+      .map((link) => ({ ...link }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    savedPositions: legacyPositionEntries(input.savedPositions),
+    computedPositions: legacyPositionEntries(input.computedPositions),
+    currentPositions: legacyPositionEntries(input.currentPositions),
+    defaultPosition: input.defaultPosition ?? null,
+    editMode: input.editMode,
+    placementDeviceIds: [...input.placementDeviceIds].sort((left, right) =>
+      left.localeCompare(right),
+    ),
+    runtimeIdentity: input.runtimeIdentity ?? null,
+    runtimeVersion: input.runtimeVersion ?? null,
+    runtimeSnapshot: input.runtimeSnapshot ?? null,
+    alerts: input.alerts
+      .map((alert) => ({ ...alert }))
+      .sort((left, right) =>
+        `${left.device_id}:${left.severity}:${left.alert_name}:${left.state}:${left.summary}`.localeCompare(
+          `${right.device_id}:${right.severity}:${right.alert_name}:${right.state}:${right.summary}`,
+        ),
+      ),
+    prometheusStatus: input.prometheusStatus,
+  });
 }
 
 function buildCurrentPositions(
@@ -321,33 +379,39 @@ function benchmarkOperations(
 
   const compositionCache = createCanvasTopologyCompositionCache();
   const topologySignature = buildTopologyIdentity(scenario.devices, scenario.links).signature;
+  const buildCompositionCacheKeyInput = (): BuildCanvasTopologyCompositionCacheKeyInput => ({
+    mapKey: `benchmark:${scenarioName}`,
+    topologySignature,
+    topologyVersion: `benchmark-topology:${scenarioName}`,
+    topologyEtag: `"benchmark-${scenarioName}"`,
+    schemaVersion: 1,
+    devices: scenario.devices,
+    links: scenario.links,
+    savedPositions: scenario.positions,
+    computedPositions: compositionInput.computedPositions,
+    currentPositions: compositionInput.currentPositions,
+    defaultPosition: compositionInput.defaultPosition,
+    editMode: compositionInput.editMode,
+    placementDeviceIds,
+    runtimeIdentity: `benchmark:${scenarioName}`,
+    runtimeVersion: 1,
+    runtimeSnapshot: scenario.runtimeSnapshot,
+    alerts: scenario.alerts,
+    prometheusStatus,
+    openDeviceMenu: noopDeviceMenu,
+    openEdgeMenu: noopEdgeMenu,
+  });
   const buildCompositionCacheKey = () =>
-    buildCanvasTopologyCompositionCacheKey({
-      mapKey: `benchmark:${scenarioName}`,
-      topologySignature,
-      topologyVersion: `benchmark-topology:${scenarioName}`,
-      topologyEtag: `"benchmark-${scenarioName}"`,
-      schemaVersion: 1,
-      devices: scenario.devices,
-      links: scenario.links,
-      savedPositions: scenario.positions,
-      computedPositions: compositionInput.computedPositions,
-      currentPositions: compositionInput.currentPositions,
-      defaultPosition: compositionInput.defaultPosition,
-      editMode: compositionInput.editMode,
-      placementDeviceIds,
-      runtimeIdentity: `benchmark:${scenarioName}`,
-      runtimeVersion: 1,
-      runtimeSnapshot: scenario.runtimeSnapshot,
-      alerts: scenario.alerts,
-      prometheusStatus,
-      openDeviceMenu: noopDeviceMenu,
-      openEdgeMenu: noopEdgeMenu,
-    });
+    buildCanvasTopologyCompositionCacheKey(buildCompositionCacheKeyInput());
+  const buildLegacyCompositionCacheSignature = () =>
+    buildLegacyStructuralCompositionCacheSignature(buildCompositionCacheKeyInput());
   const compositionCacheKey = buildCompositionCacheKey();
   compositionCache.compose(compositionInput, compositionCacheKey);
   measureLocalMetric(samples, scenarioName, 'buildCanvasTopologyCompositionCacheKey', () =>
     buildCompositionCacheKey(),
+  );
+  measureLocalMetric(samples, scenarioName, 'buildCanvasTopologyCompositionCacheKeyLegacy', () =>
+    buildLegacyCompositionCacheSignature(),
   );
   measureLocalMetric(samples, scenarioName, 'composeCanvasTopologyCached', () =>
     compositionCache.compose(compositionInput, compositionCacheKey),
