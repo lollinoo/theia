@@ -1394,6 +1394,68 @@ func TestPrepareBulkRunBatchMarksClaimedItemsActive(t *testing.T) {
 	}
 }
 
+func TestWaitForBulkRunBatchPreservesBackupJobIDForHydration(t *testing.T) {
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusRunning)
+	jobRepo := svc.jobRepo.(*mockBackupJobRepo)
+	fileRepo := svc.fileRepo.(*mockBackupFileRepo)
+	itemID := uuid.New()
+	deviceID := uuid.New()
+	jobID := uuid.New()
+
+	if err := jobRepo.Create(&domain.BackupJob{
+		ID:       jobID,
+		DeviceID: deviceID,
+		Status:   domain.BackupStatusSuccess,
+	}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	for _, file := range []domain.BackupFile{
+		{JobID: jobID, FileName: "running.rsc", SizeBytes: 123},
+		{JobID: jobID, FileName: "compact.rsc", SizeBytes: 456},
+	} {
+		file := file
+		if err := fileRepo.Create(&file); err != nil {
+			t.Fatalf("Create file: %v", err)
+		}
+	}
+	runRepo.mu.Lock()
+	runRepo.items[runID] = []domain.BulkBackupRunItem{{
+		ID:          itemID,
+		RunID:       runID,
+		DeviceID:    deviceID,
+		Status:      domain.BulkBackupRunItemStatusActive,
+		BackupJobID: &jobID,
+	}}
+	runRepo.mu.Unlock()
+
+	svc.waitForBulkRunBatch(runID, []domain.BulkBackupRunItem{{
+		ID:          itemID,
+		RunID:       runID,
+		DeviceID:    deviceID,
+		Status:      domain.BulkBackupRunItemStatusActive,
+		BackupJobID: &jobID,
+	}})
+
+	run, err := svc.GetBulkBackupRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("GetBulkBackupRun: %v", err)
+	}
+	if len(run.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(run.Items))
+	}
+	item := run.Items[0]
+	if item.Status != domain.BulkBackupRunItemStatusSuccess {
+		t.Fatalf("item status = %s, want success", item.Status)
+	}
+	if item.BackupJobID == nil || *item.BackupJobID != jobID {
+		t.Fatalf("item backup job id = %v, want %s", item.BackupJobID, jobID)
+	}
+	if run.FileCount != 2 || run.ByteCount != 579 || item.FileCount != 2 || item.ByteCount != 579 {
+		t.Fatalf("hydrated totals = run %d/%d item %d/%d, want 2/579",
+			run.FileCount, run.ByteCount, item.FileCount, item.ByteCount)
+	}
+}
+
 func TestMarkBulkRunBatchActiveClaimsEntireBatch(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
@@ -1635,6 +1697,61 @@ func TestStartBulkBackupRunRejectsDeviceCountOverLimit(t *testing.T) {
 	}
 	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
 		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
+	}
+}
+
+func TestStartBulkBackupRunRejectsQueuedJobCountOverLimit(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := newMockBulkBackupRunRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	encKey := crypto.DeriveKey("bulk-run-queued-limit")
+
+	for i := 0; i < 2; i++ {
+		id := uuid.New()
+		if err := deviceRepo.Create(&domain.Device{
+			ID: id, IP: fmt.Sprintf("10.1.0.%d", i+1), SysName: fmt.Sprintf("router-%d", i+1),
+			Vendor: "testvendor", Status: domain.DeviceStatusDown,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, encKey, t.TempDir(), ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 1,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
+	if err == nil {
+		t.Fatal("StartBulkBackupRun error = nil, want queued job limit error")
+	}
+	var limitErr *BulkLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("StartBulkBackupRun error = %v, want bulk limit error", err)
+	}
+	if limitErr.Limit != "queued jobs" || limitErr.Max != 1 || limitErr.Actual != 2 {
+		t.Fatalf("limit error = %+v, want queued jobs max=1 actual=2", limitErr)
+	}
+	if run != nil {
+		t.Fatalf("run = %#v, want nil on limit error", run)
+	}
+	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
+		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
+	}
+	if got := mockBackupJobCount(jobRepo); got != 0 {
+		t.Fatalf("queued jobs = %d, want 0 after limit error", got)
 	}
 }
 
