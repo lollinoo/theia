@@ -997,6 +997,66 @@ func TestBackupHandlerGetLatestBulkBackupRunReturnsNullWhenMissing(t *testing.T)
 	}
 }
 
+func TestBackupHandlerBulkBackupRunReportsAggregateProgressAndCurrentJob(t *testing.T) {
+	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	jobID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, []domain.BulkBackupRunItem{
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "queued-router", Status: domain.BulkBackupRunItemStatusQueued},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "running-router", Status: domain.BulkBackupRunItemStatusRunning, BackupJobID: &jobID},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "active-router", Status: domain.BulkBackupRunItemStatusActive},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "ok-router", Status: domain.BulkBackupRunItemStatusSuccess},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "bad-router", Status: domain.BulkBackupRunItemStatusFailed},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "skipped-router", Status: domain.BulkBackupRunItemStatusSkipped},
+	}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if _, err := runRepo.RecalculateRunCounters(runID); err != nil {
+		t.Fatalf("RecalculateRunCounters: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backups/bulk-runs/"+runID.String(), nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			TotalCount        int    `json:"total_count"`
+			QueuedCount       int    `json:"queued_count"`
+			RunningCount      int    `json:"running_count"`
+			CompletedCount    int    `json:"completed_count"`
+			SuccessCount      int    `json:"success_count"`
+			FailedCount       int    `json:"failed_count"`
+			SkippedCount      int    `json:"skipped_count"`
+			CurrentDeviceName string `json:"current_device_name"`
+			CurrentJobID      string `json:"current_job_id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.TotalCount != 6 ||
+		resp.Data.QueuedCount != 3 ||
+		resp.Data.RunningCount != 2 ||
+		resp.Data.CompletedCount != 3 ||
+		resp.Data.SuccessCount != 1 ||
+		resp.Data.FailedCount != 1 ||
+		resp.Data.SkippedCount != 1 {
+		t.Fatalf("unexpected aggregate counts: %#v", resp.Data)
+	}
+	if resp.Data.CurrentDeviceName != "running-router" || resp.Data.CurrentJobID != jobID.String() {
+		t.Fatalf("unexpected current job details: %#v", resp.Data)
+	}
+}
+
 func TestBackupHandlerCancelBulkBackupRunMarksCancelling(t *testing.T) {
 	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
 	runID := uuid.New()
@@ -1156,6 +1216,38 @@ func TestBackupHandlerBulkDownloadMapsLimitErrorToRequestEntityTooLarge(t *testi
 	}
 }
 
+func TestBackupHandlerBulkDownloadReportsSelectedFileAndByteTotals(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	firstID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "first.rsc", []byte("12345"))
+	secondID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "second.rsc", []byte("abcdefg"))
+	body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Bulk-Download-File-Count"); got != "2" {
+		t.Fatalf("X-Bulk-Download-File-Count = %q, want 2", got)
+	}
+	if got := rec.Header().Get("X-Bulk-Download-Size-Bytes"); got != "12" {
+		t.Fatalf("X-Bulk-Download-Size-Bytes = %q, want 12", got)
+	}
+	if got := rec.Header().Get("X-Bulk-Download-Device-Count"); got != "2" {
+		t.Fatalf("X-Bulk-Download-Device-Count = %q, want 2", got)
+	}
+}
+
 func TestBackupHandlerBulkDownloadMapsUnsafePathToBadRequest(t *testing.T) {
 	backupDir := t.TempDir()
 	outsideDir := t.TempDir()
@@ -1296,7 +1388,7 @@ func seedBulkDownloadBackupFile(
 
 	deviceID := uuid.New()
 	if err := deviceRepo.Create(&domain.Device{
-		ID: deviceID, IP: "10.0.0.1", SysName: "core",
+		ID: deviceID, IP: fmt.Sprintf("10.%d.%d.%d", deviceID[0], deviceID[1], deviceID[2]), SysName: "core",
 		Tags: map[string]string{"display_name": "Core"},
 	}); err != nil {
 		t.Fatalf("Create device: %v", err)

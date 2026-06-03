@@ -1997,10 +1997,15 @@ describe('bulk backup runs', () => {
     batch_size: 10,
     total_count: 2,
     queued_count: 1,
+    running_count: 1,
+    completed_count: 1,
     success_count: 0,
     failed_count: 0,
     skipped_count: 1,
     cancelled_count: 0,
+    current_device_id: 'dev-1',
+    current_device_name: 'router-01',
+    current_job_id: 'job-1',
     error_message: '',
     cancel_requested: false,
     created_by: '',
@@ -2048,6 +2053,13 @@ describe('bulk backup runs', () => {
       }),
     );
     expect(run.id).toBe('run-1');
+    expect(run).toMatchObject({
+      running_count: 1,
+      completed_count: 1,
+      current_device_id: 'dev-1',
+      current_device_name: 'router-01',
+      current_job_id: 'job-1',
+    });
     expect(run.items).toEqual([
       expect.objectContaining({
         device_id: 'dev-1',

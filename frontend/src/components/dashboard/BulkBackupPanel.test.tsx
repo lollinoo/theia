@@ -236,6 +236,59 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     expect(await screen.findByText('device unreachable')).toBeInTheDocument();
   });
 
+  it('shows aggregate progress counts and the current running device', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({}, [
+        mockRunItem({
+          device_id: 'dev-1',
+          device_name: 'queued-router',
+          status: 'queued',
+        }),
+        mockRunItem({
+          device_id: 'dev-2',
+          device_name: 'running-router',
+          status: 'running',
+          backup_job_id: 'job-2',
+        }),
+        mockRunItem({
+          device_id: 'dev-3',
+          device_name: 'ok-router',
+          status: 'success',
+        }),
+        mockRunItem({
+          device_id: 'dev-4',
+          device_name: 'bad-router',
+          status: 'failed',
+        }),
+        mockRunItem({
+          device_id: 'dev-5',
+          device_name: 'skipped-router',
+          status: 'skipped',
+        }),
+      ]),
+    );
+
+    render(
+      <BulkBackupPanel
+        devices={[
+          mockDevice({ id: 'dev-1', sys_name: 'queued-router' }),
+          mockDevice({ id: 'dev-2', sys_name: 'running-router' }),
+          mockDevice({ id: 'dev-3', sys_name: 'ok-router' }),
+          mockDevice({ id: 'dev-4', sys_name: 'bad-router' }),
+          mockDevice({ id: 'dev-5', sys_name: 'skipped-router' }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    expect(
+      await screen.findByText('Queued 1 · Running 1 · Completed 3 · Failed 1 · Skipped 1'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Current running-router · job job-2')).toBeInTheDocument();
+  });
+
   it('backs up only selected devices', async () => {
     const { startBulkBackupRun } = await import('../../api/client');
 

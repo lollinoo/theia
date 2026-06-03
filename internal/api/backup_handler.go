@@ -521,6 +521,10 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "no backup files found for the given devices")
 		return
 	}
+	var totalBytes int64
+	for _, entry := range entries {
+		totalBytes += entry.SizeBytes
+	}
 
 	now := time.Now().UTC()
 	if tzName, err := h.settingsRepo.Get(domain.SettingTimezone); err == nil && tzName != "" {
@@ -531,6 +535,9 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	zipName := now.Format("20060102_150405") + "_THEIA_BACKUPS.zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
+	w.Header().Set("X-Bulk-Download-Device-Count", fmt.Sprint(uniqueUUIDCount(deviceIDs)))
+	w.Header().Set("X-Bulk-Download-File-Count", fmt.Sprint(len(entries)))
+	w.Header().Set("X-Bulk-Download-Size-Bytes", fmt.Sprint(totalBytes))
 
 	zw := zip.NewWriter(w)
 	defer zw.Close()
@@ -610,6 +617,14 @@ func extractDeviceIDForBackup(path, suffix string) (uuid.UUID, error) {
 	return extractIDFromPath(trimmed, "/api/v1/devices/")
 }
 
+func uniqueUUIDCount(ids []uuid.UUID) int {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		seen[id] = struct{}{}
+	}
+	return len(seen)
+}
+
 func jobToMap(j domain.BackupJob) map[string]interface{} {
 	files := make([]map[string]interface{}, 0, len(j.Files))
 	for _, f := range j.Files {
@@ -640,6 +655,11 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 	}
 
 	items := make([]map[string]interface{}, 0, len(run.Items))
+	runningCount := 0
+	completedCount := 0
+	currentDeviceID := ""
+	currentDeviceName := ""
+	currentJobID := ""
 	for _, item := range run.Items {
 		entry := map[string]interface{}{
 			"id":          item.ID.String(),
@@ -660,6 +680,24 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 			entry["completed_at"] = item.CompletedAt
 		}
 		items = append(items, entry)
+
+		switch item.Status {
+		case domain.BulkBackupRunItemStatusActive,
+			domain.BulkBackupRunItemStatusRunning:
+			runningCount++
+			if currentDeviceID == "" {
+				currentDeviceID = item.DeviceID.String()
+				currentDeviceName = item.DeviceName
+				if item.BackupJobID != nil {
+					currentJobID = item.BackupJobID.String()
+				}
+			}
+		case domain.BulkBackupRunItemStatusSuccess,
+			domain.BulkBackupRunItemStatusFailed,
+			domain.BulkBackupRunItemStatusSkipped,
+			domain.BulkBackupRunItemStatusCancelled:
+			completedCount++
+		}
 	}
 
 	data := map[string]interface{}{
@@ -668,6 +706,8 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 		"batch_size":       run.BatchSize,
 		"total_count":      run.TotalCount,
 		"queued_count":     run.QueuedCount,
+		"running_count":    runningCount,
+		"completed_count":  completedCount,
 		"success_count":    run.SuccessCount,
 		"failed_count":     run.FailedCount,
 		"skipped_count":    run.SkippedCount,
@@ -677,6 +717,13 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 		"created_by":       run.CreatedBy,
 		"created_at":       run.CreatedAt,
 		"items":            items,
+	}
+	if currentDeviceID != "" {
+		data["current_device_id"] = currentDeviceID
+		data["current_device_name"] = currentDeviceName
+	}
+	if currentJobID != "" {
+		data["current_job_id"] = currentJobID
 	}
 	if run.StartedAt != nil {
 		data["started_at"] = run.StartedAt

@@ -38,11 +38,25 @@ type DeviceEntry = {
   jobId?: string;
 };
 
+type BulkBackupReport = {
+  totalCount: number;
+  queuedCount: number;
+  runningCount: number;
+  completedCount: number;
+  successCount: number;
+  failedCount: number;
+  skippedCount: number;
+  stoppedCount: number;
+  currentDeviceName?: string;
+  currentJobId?: string;
+};
+
 type BulkBackupSession = {
   phase: 'idle' | 'running' | 'done';
   runId?: string;
   runStatus?: BulkBackupRunStatus;
   entries: DeviceEntry[];
+  report?: BulkBackupReport;
   error: string;
   downloading: boolean;
 };
@@ -129,12 +143,62 @@ function itemToEntry(item: BulkBackupRunItem): DeviceEntry {
   };
 }
 
+function isRunningResource(entry: DeviceEntry): boolean {
+  return entry.phase === 'active' || entry.phase === 'running';
+}
+
+function reportFromEntries(entries: DeviceEntry[]): BulkBackupReport {
+  const runningEntry =
+    entries.find((entry) => entry.phase === 'running') ??
+    entries.find((entry) => entry.phase === 'active');
+  const successCount = entries.filter((entry) => entry.phase === 'success').length;
+  const failedCount = entries.filter((entry) => entry.phase === 'failed').length;
+  const skippedCount = entries.filter((entry) => entry.phase === 'skipped').length;
+  const stoppedCount = entries.filter((entry) => entry.phase === 'cancelled').length;
+  const completedCount = successCount + failedCount + skippedCount + stoppedCount;
+
+  return {
+    totalCount: entries.length,
+    queuedCount: entries.filter(isPendingControlDevice).length,
+    runningCount: entries.filter(isRunningResource).length,
+    completedCount,
+    successCount,
+    failedCount,
+    skippedCount,
+    stoppedCount,
+    currentDeviceName: runningEntry?.deviceName,
+    currentJobId: runningEntry?.jobId,
+  };
+}
+
+function reportFromRun(run: BulkBackupRun, entries: DeviceEntry[]): BulkBackupReport {
+  const entryReport = reportFromEntries(entries);
+  const runningCount = run.running_count || entryReport.runningCount;
+  const completedCount =
+    run.completed_count ||
+    run.success_count + run.failed_count + run.skipped_count + run.cancelled_count;
+  return {
+    totalCount: run.total_count || entryReport.totalCount,
+    queuedCount: Math.max(entryReport.queuedCount, run.queued_count - runningCount),
+    runningCount,
+    completedCount,
+    successCount: run.success_count,
+    failedCount: run.failed_count,
+    skippedCount: run.skipped_count,
+    stoppedCount: run.cancelled_count,
+    currentDeviceName: run.current_device_name || entryReport.currentDeviceName,
+    currentJobId: run.current_job_id || entryReport.currentJobId,
+  };
+}
+
 function sessionFromRun(run: BulkBackupRun): BulkBackupSession {
+  const entries = run.items.map(itemToEntry);
   return {
     phase: RUN_TERMINAL.has(run.status) ? 'done' : 'running',
     runId: run.id,
     runStatus: run.status,
-    entries: run.items.map(itemToEntry),
+    entries,
+    report: reportFromRun(run, entries),
     error: run.error_message,
     downloading: bulkBackupSession.downloading,
   };
@@ -393,6 +457,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     setBulkBackupSession({
       phase: 'running',
       entries: preliminaryEntries,
+      report: reportFromEntries(preliminaryEntries),
       error: '',
       downloading: false,
     });
@@ -417,13 +482,15 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     }
   };
 
-  const successCount = entries.filter((e) => e.phase === 'success').length;
-  const failedCount = entries.filter((e) => e.phase === 'failed').length;
-  const skippedCount = entries.filter((e) => e.phase === 'skipped').length;
-  const stoppedCount = entries.filter((e) => e.phase === 'cancelled').length;
-  const doneCount = entries.filter((e) => TERMINAL.has(e.phase)).length;
-  const activeCount = entries.length - doneCount;
-  const downloadBatchCount = Math.ceil(successCount / BULK_DEVICE_BATCH_SIZE);
+  const report = session.report ?? reportFromEntries(entries);
+  const successCount = report.successCount;
+  const failedCount = report.failedCount;
+  const skippedCount = report.skippedCount;
+  const stoppedCount = report.stoppedCount;
+  const doneCount = report.completedCount;
+  const activeCount = Math.max(report.totalCount - report.completedCount, 0);
+  const downloadableSuccessCount = entries.filter((e) => e.phase === 'success').length;
+  const downloadBatchCount = Math.ceil(downloadableSuccessCount / BULK_DEVICE_BATCH_SIZE);
   const controlSummary = controlProgressSummary(entries, session.runStatus);
   const canPause = phase === 'running' && session.runId && session.runStatus === 'running';
   const canResume = phase === 'running' && session.runId && session.runStatus === 'paused';
@@ -588,7 +655,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
           <div className="flex items-center justify-between text-xs text-on-bg-secondary">
             <span>
               {phase === 'running'
-                ? `Processing... ${doneCount}/${entries.length}`
+                ? `Processing... ${doneCount}/${report.totalCount}`
                 : `Complete — ${successCount} succeeded, ${failedCount} failed, ${skippedCount} skipped${
                     stoppedCount > 0 ? `, ${stoppedCount} stopped` : ''
                   }`}
@@ -603,6 +670,18 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
               >
                 {runStatusLabel(session.runStatus)}
               </span>
+            )}
+          </div>
+          <div className="rounded-md border border-outline bg-surface px-3 py-2 text-xs text-on-bg-secondary">
+            <div>
+              Queued {report.queuedCount} · Running {report.runningCount} · Completed{' '}
+              {report.completedCount} · Failed {report.failedCount} · Skipped {report.skippedCount}
+            </div>
+            {report.currentDeviceName && (
+              <div className="mt-1 truncate text-[10px] text-on-bg">
+                Current {report.currentDeviceName}
+                {report.currentJobId ? ` · job ${report.currentJobId}` : ''}
+              </div>
             )}
           </div>
           {phase === 'running' && controlSummary && (
@@ -660,7 +739,9 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
               className={`h-full transition-all duration-300 ${
                 failedCount > 0 && successCount === 0 ? 'bg-status-down' : 'bg-primary'
               }`}
-              style={{ width: `${entries.length > 0 ? (doneCount / entries.length) * 100 : 0}%` }}
+              style={{
+                width: `${report.totalCount > 0 ? (doneCount / report.totalCount) * 100 : 0}%`,
+              }}
             />
           </div>
 
@@ -710,7 +791,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       )}
 
       {/* Done: download */}
-      {phase === 'done' && successCount > 0 && (
+      {phase === 'done' && downloadableSuccessCount > 0 && (
         <div className="space-y-2">
           <p className="text-xs text-on-bg-secondary">
             {downloadBatchCount > 1

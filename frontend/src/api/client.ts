@@ -1600,10 +1600,17 @@ function parseBulkBackupRun(data: Record<string, unknown>): BulkBackupRun {
     batch_size: typeof data.batch_size === 'number' ? data.batch_size : 0,
     total_count: typeof data.total_count === 'number' ? data.total_count : 0,
     queued_count: typeof data.queued_count === 'number' ? data.queued_count : 0,
+    running_count: typeof data.running_count === 'number' ? data.running_count : 0,
+    completed_count: typeof data.completed_count === 'number' ? data.completed_count : 0,
     success_count: typeof data.success_count === 'number' ? data.success_count : 0,
     failed_count: typeof data.failed_count === 'number' ? data.failed_count : 0,
     skipped_count: typeof data.skipped_count === 'number' ? data.skipped_count : 0,
     cancelled_count: typeof data.cancelled_count === 'number' ? data.cancelled_count : 0,
+    current_device_id:
+      typeof data.current_device_id === 'string' ? data.current_device_id : undefined,
+    current_device_name:
+      typeof data.current_device_name === 'string' ? data.current_device_name : undefined,
+    current_job_id: typeof data.current_job_id === 'string' ? data.current_job_id : undefined,
     error_message: typeof data.error_message === 'string' ? data.error_message : '',
     cancel_requested: data.cancel_requested === true,
     created_by: typeof data.created_by === 'string' ? data.created_by : '',

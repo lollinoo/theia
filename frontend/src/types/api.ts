@@ -804,10 +804,15 @@ export interface BulkBackupRun {
   batch_size: number;
   total_count: number;
   queued_count: number;
+  running_count: number;
+  completed_count: number;
   success_count: number;
   failed_count: number;
   skipped_count: number;
   cancelled_count: number;
+  current_device_id?: string;
+  current_device_name?: string;
+  current_job_id?: string;
   error_message: string;
   cancel_requested: boolean;
   created_by: string;
