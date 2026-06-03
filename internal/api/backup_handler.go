@@ -574,7 +574,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 		defer h.bulkDownloadLimiter.Release(actorKey)
 	}
 	if h.bulkDownloadLeaseRepo != nil {
-		lease, acquired, err := h.bulkDownloadLeaseRepo.TryAcquireBulkOperationLease(r.Context(), bulkDownloadLeaseKey(actorKey))
+		lease, rejectionReason, err := h.acquireBulkDownloadDistributedLeases(r.Context(), actorKey)
 		if err != nil {
 			if auditErr := h.auditBulkDownloadRejected(r, len(deviceIDs), "distributed_limiter_unavailable"); auditErr != nil {
 				log.Printf("backup: failed to append bulk download rejection audit log: %v", auditErr)
@@ -582,12 +582,12 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusServiceUnavailable, "bulk download limiter unavailable")
 			return
 		}
-		if !acquired {
-			if err := h.auditBulkDownloadRejected(r, len(deviceIDs), "distributed_actor_concurrency_limit"); err != nil {
+		if rejectionReason != "" {
+			if err := h.auditBulkDownloadRejected(r, len(deviceIDs), rejectionReason); err != nil {
 				log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
 			}
 			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
-			writeError(w, http.StatusTooManyRequests, "bulk download already in progress for this user")
+			writeError(w, http.StatusTooManyRequests, "bulk download already in progress")
 			return
 		}
 		defer func() {
@@ -926,6 +926,78 @@ func bulkDownloadLeaseKey(actorKey string) string {
 		actorKey = "anonymous"
 	}
 	return "backup.bulk_download:" + actorKey
+}
+
+func (h *BackupHandler) acquireBulkDownloadDistributedLeases(ctx context.Context, actorKey string) (domain.BulkOperationLease, string, error) {
+	globalLease, acquired, err := h.acquireBulkDownloadGlobalSlotLease(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if !acquired {
+		return nil, "distributed_global_concurrency_limit", nil
+	}
+
+	actorLease, acquired, err := h.bulkDownloadLeaseRepo.TryAcquireBulkOperationLease(ctx, bulkDownloadLeaseKey(actorKey))
+	if err != nil {
+		if releaseErr := globalLease.Release(); releaseErr != nil {
+			log.Printf("backup: failed to release bulk download global slot lease after actor limiter error: %v", releaseErr)
+		}
+		return nil, "", err
+	}
+	if !acquired {
+		if releaseErr := globalLease.Release(); releaseErr != nil {
+			log.Printf("backup: failed to release bulk download global slot lease after actor limiter rejection: %v", releaseErr)
+		}
+		return nil, "distributed_actor_concurrency_limit", nil
+	}
+	return &bulkDownloadCompositeLease{leases: []domain.BulkOperationLease{globalLease, actorLease}}, "", nil
+}
+
+func (h *BackupHandler) acquireBulkDownloadGlobalSlotLease(ctx context.Context) (domain.BulkOperationLease, bool, error) {
+	limit := service.DefaultBulkOperationLimits.BulkDownloadMaxConcurrentGlobal
+	if h.svc != nil {
+		limit = h.svc.BulkOperationLimits().BulkDownloadMaxConcurrentGlobal
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	for slot := 0; slot < limit; slot++ {
+		lease, acquired, err := h.bulkDownloadLeaseRepo.TryAcquireBulkOperationLease(ctx, bulkDownloadGlobalLeaseKey(slot))
+		if err != nil {
+			return nil, false, err
+		}
+		if acquired {
+			return lease, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func bulkDownloadGlobalLeaseKey(slot int) string {
+	if slot < 0 {
+		slot = 0
+	}
+	return fmt.Sprintf("backup.bulk_download:global:%d", slot)
+}
+
+type bulkDownloadCompositeLease struct {
+	once   sync.Once
+	leases []domain.BulkOperationLease
+}
+
+func (l *bulkDownloadCompositeLease) Release() error {
+	var releaseErr error
+	l.once.Do(func() {
+		for i := len(l.leases) - 1; i >= 0; i-- {
+			if l.leases[i] == nil {
+				continue
+			}
+			if err := l.leases[i].Release(); err != nil && releaseErr == nil {
+				releaseErr = err
+			}
+		}
+	})
+	return releaseErr
 }
 
 func bulkDownloadSelectedDeviceCount(entries []service.BulkDownloadEntry) int {

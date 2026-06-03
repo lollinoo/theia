@@ -1647,6 +1647,64 @@ func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAtGlobalLimit(t *testi
 	}
 }
 
+func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAcrossHandlersAtGlobalLimit(t *testing.T) {
+	backupDir := t.TempDir()
+	limits := service.BulkOperationLimits{
+		BulkBackupMaxDevices:              10,
+		BulkBackupMaxQueuedJobs:           10,
+		BulkDownloadMaxDevices:            10,
+		BulkDownloadMaxFiles:              10,
+		BulkDownloadMaxBytes:              1024,
+		BulkDownloadMaxConcurrentPerActor: 10,
+		BulkDownloadMaxConcurrentGlobal:   1,
+	}
+	firstHandler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, limits)
+	leaseRepo := newBulkOperationLeaseRepoForHandler()
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBulkDownloadLeaseRepository(leaseRepo)(firstHandler)
+	WithBackupAuditLogs(auditRepo)(firstHandler)
+	secondHandler := NewBackupHandler(backupSvc, firstHandler.settingsRepo, WithBulkDownloadLeaseRepository(leaseRepo), WithBackupAuditLogs(auditRepo))
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		firstHandler.HandleBulkDownload(firstRec, firstReq)
+	}()
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	secondRec := httptest.NewRecorder()
+	secondHandler.HandleBulkDownload(secondRec, secondReq)
+	close(firstRec.release)
+	<-firstDone
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429 at distributed global limit; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	logEntry, ok := findBackupAuditAction(auditRepo.auditLogs(), "backup.bulk_download_rejected")
+	if !ok {
+		t.Fatalf("expected backup.bulk_download_rejected audit log, got %#v", auditRepo.auditLogs())
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	if reason, ok := metadata["reason"].(string); !ok || reason != "distributed_global_concurrency_limit" {
+		t.Fatalf("metadata reason = %#v, want distributed_global_concurrency_limit", metadata["reason"])
+	}
+}
+
 func TestBackupHandlerBulkDownloadAuditsConcurrentRequestRejection(t *testing.T) {
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
