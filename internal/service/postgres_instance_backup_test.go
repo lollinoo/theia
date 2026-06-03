@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -530,6 +531,75 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 	}
 	if !strings.HasSuffix(marker.StagedDB, postgresArchiveDBEntry) {
 		t.Fatalf("marker.StagedDB = %q, want suffix %q", marker.StagedDB, postgresArchiveDBEntry)
+	}
+}
+
+func TestMoveOrCopyFileForRestoreStagingRenamesOnSameFilesystem(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "extracted", "database.dump")
+	dst := filepath.Join(root, "staging", "database.dump")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatalf("creating source dir: %v", err)
+	}
+	if err := os.WriteFile(src, []byte("postgres-dump"), 0o644); err != nil {
+		t.Fatalf("writing source file: %v", err)
+	}
+
+	if err := moveOrCopyFileForRestoreStagingContext(context.Background(), src, dst); err != nil {
+		t.Fatalf("moveOrCopyFileForRestoreStagingContext: %v", err)
+	}
+
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("source should be moved after same-filesystem staging, stat err = %v", err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("reading staged file: %v", err)
+	}
+	if string(data) != "postgres-dump" {
+		t.Fatalf("staged file = %q, want postgres-dump", string(data))
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("stat staged file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("staged file mode = %o, want 600", got)
+	}
+}
+
+func TestMoveOrCopyFileForRestoreStagingFallsBackOnCrossDeviceRename(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "extracted", "known_hosts")
+	dst := filepath.Join(root, "staging", "known_hosts")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatalf("creating source dir: %v", err)
+	}
+	if err := os.WriteFile(src, []byte("host-key"), 0o644); err != nil {
+		t.Fatalf("writing source file: %v", err)
+	}
+
+	originalRename := renameRestoreStagingPath
+	renameRestoreStagingPath = func(oldPath, newPath string) error {
+		return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() {
+		renameRestoreStagingPath = originalRename
+	})
+
+	if err := moveOrCopyFileForRestoreStagingContext(context.Background(), src, dst); err != nil {
+		t.Fatalf("moveOrCopyFileForRestoreStagingContext: %v", err)
+	}
+
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("source should remain after copy fallback: %v", err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("reading staged file: %v", err)
+	}
+	if string(data) != "host-key" {
+		t.Fatalf("staged file = %q, want host-key", string(data))
 	}
 }
 
