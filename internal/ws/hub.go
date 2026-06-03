@@ -28,6 +28,7 @@ const (
 	wsBackpressureScopeBroadcast    = "broadcast"
 	wsBackpressureScopeClientSend   = "client_send"
 	wsBackpressureScopeOverviewSend = "overview_send"
+	wsMessageScopeOverviewFallback  = "overview_fallback"
 
 	wsBackpressureReasonHubBufferFull     = "hub_buffer_full"
 	wsBackpressureReasonClientBufferFull  = "client_buffer_full"
@@ -225,7 +226,9 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 			}
 			fallbackPayloadReady = true
 		}
-		h.enqueueOverviewLegacyFallback(client, deltaPayload, resyncPayload, fallbackPayload, observedOverviewEpoch)
+		if h.enqueueOverviewLegacyFallback(client, deltaPayload, resyncPayload, fallbackPayload, observedOverviewEpoch) {
+			observability.Default().ObserveWSMessage(wsMessageScopeOverviewFallback, MessageTypeSnapshot, len(fallbackPayload))
+		}
 	}
 }
 

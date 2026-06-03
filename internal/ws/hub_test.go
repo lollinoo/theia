@@ -161,6 +161,37 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshotForLegacyClient(t
 	}
 }
 
+func TestHubOverviewDelta_RecordsLegacyFallbackSnapshotPayloadMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	hub := NewHub()
+	firstClient := registerTestClient(hub)
+	secondClient := registerTestClient(hub)
+	for _, client := range []*Client{firstClient, secondClient} {
+		for i := 0; i < cap(client.overviewSend); i++ {
+			client.overviewSend <- []byte("occupied")
+		}
+	}
+
+	fallback := EmptySnapshot()
+	fallback.Devices["dev-1"] = DeviceRuntimeDTO{
+		DeviceID:      "dev-1",
+		PrimaryHealth: "up_fresh",
+	}
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_ws_messages_total{scope="overview_fallback",type="snapshot"} 2`) {
+		t.Fatalf("expected legacy fallback snapshot message metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_message_payload_bytes_count{scope="overview_fallback",type="snapshot"} 2`) {
+		t.Fatalf("expected legacy fallback snapshot payload histogram, got:\n%s", metrics)
+	}
+}
+
 func TestHubOverviewDelta_FullMailboxSchedulesResyncOnlyForHTTPBootstrapClient(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
