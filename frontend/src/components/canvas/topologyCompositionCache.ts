@@ -137,7 +137,8 @@ function encodeSignatureParts(values: unknown[]): string {
 
 function positionMapSignature(map: PositionMap | ComputedPositionMap): string {
   const parts = [`size:${map.size}`];
-  for (const [deviceId, position] of map.entries()) {
+  const entries = Array.from(map.entries()).sort(([left], [right]) => left.localeCompare(right));
+  for (const [deviceId, position] of entries) {
     parts.push(
       encodeSignatureParts([
         deviceId,
@@ -152,7 +153,10 @@ function positionMapSignature(map: PositionMap | ComputedPositionMap): string {
 
 function placementSignature(deviceIds: Set<string>): string {
   const parts = [`size:${deviceIds.size}`];
-  for (const deviceId of deviceIds.values()) {
+  const sortedDeviceIds = Array.from(deviceIds.values()).sort((left, right) =>
+    left.localeCompare(right),
+  );
+  for (const deviceId of sortedDeviceIds) {
     parts.push(encodeSignaturePart(deviceId));
   }
   return parts.join('|');
@@ -160,8 +164,8 @@ function placementSignature(deviceIds: Set<string>): string {
 
 function alertSignature(alerts: AlertDTO[]): string {
   const parts = [`size:${alerts.length}`];
-  for (const alert of alerts) {
-    parts.push(
+  const sortedAlertSignatures = alerts
+    .map((alert) =>
       encodeSignatureParts([
         alert.device_id,
         alert.severity,
@@ -169,7 +173,10 @@ function alertSignature(alerts: AlertDTO[]): string {
         alert.state,
         alert.summary,
       ]),
-    );
+    )
+    .sort((left, right) => left.localeCompare(right));
+  for (const alertSignatureValue of sortedAlertSignatures) {
+    parts.push(alertSignatureValue);
   }
   return parts.join('|');
 }

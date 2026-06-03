@@ -2030,6 +2030,71 @@ describe('useCanvasData', () => {
     );
   });
 
+  it('refreshes composed runtime data when backend resync changes only runtime identity', async () => {
+    const bootstrapResponse = (runtimeIdentity: string, cpu: number) => ({
+      topology: {
+        schema_version: 1,
+        topology_version: 'topo-stable',
+        runtime_version: 1,
+        runtime_identity: runtimeIdentity,
+        runtime_snapshot: mockSnapshot({
+          devices: {
+            'dev-1': {
+              ...mockSnapshot().devices['dev-1'],
+              cpu_percent: cpu,
+            },
+          },
+        }),
+        generated_at: '2026-04-30T12:00:00Z',
+        devices: [mockDevice()],
+        links: [],
+        positions: {},
+        areas: [],
+        capabilities: {
+          supports_topology_delta: false,
+          supports_position_revision: false,
+          supports_area_filtering: true,
+        },
+        settings: { layout: { version: 1 } },
+      },
+    });
+    vi.mocked(fetchCanvasBootstrap)
+      .mockResolvedValueOnce(bootstrapResponse('rt-sha256:before-restart', 42))
+      .mockResolvedValueOnce(bootstrapResponse('rt-sha256:after-restart', 84));
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenNthCalledWith(1, { force: false });
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeVersion: 1,
+      runtimeIdentity: 'rt-sha256:before-restart',
+    });
+    expect(result.current.nodes.find((node) => node.id === 'dev-1')?.data.runtime.metrics).toEqual(
+      expect.objectContaining({ cpu_percent: 42 }),
+    );
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-resync-required'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenNthCalledWith(2, { force: true });
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeVersion: 1,
+      runtimeIdentity: 'rt-sha256:after-restart',
+    });
+    expect(result.current.nodes.find((node) => node.id === 'dev-1')?.data.runtime.metrics).toEqual(
+      expect.objectContaining({ cpu_percent: 84 }),
+    );
+  });
+
   it('skips structural recomposition when the canvas read model is not modified', async () => {
     vi.mocked(fetchCanvasTopology)
       .mockResolvedValueOnce({

@@ -150,6 +150,57 @@ describe('buildCanvasTopologyCompositionCacheKey', () => {
     );
   });
 
+  it('keeps mutable input signatures stable when equal values arrive in different orders', () => {
+    const highCpuAlert: AlertDTO = {
+      device_id: 'dev-1',
+      alert_name: 'HighCPU',
+      state: 'firing',
+      severity: 'critical',
+      summary: 'CPU high',
+    };
+    const linkDownAlert: AlertDTO = {
+      device_id: 'dev-2',
+      alert_name: 'LinkDown',
+      state: 'firing',
+      severity: 'warning',
+      summary: 'Link down',
+    };
+    const first = buildKey({
+      savedPositions: new Map([
+        ['dev-1', { x: 10, y: 20, pinned: true }],
+        ['dev-2', { x: 30, y: 40, pinned: false }],
+      ]),
+      computedPositions: new Map([
+        ['dev-1', { x: 50, y: 60 }],
+        ['dev-2', { x: 70, y: 80 }],
+      ]),
+      currentPositions: new Map([
+        ['dev-1', { x: 90, y: 100, pinned: true }],
+        ['dev-2', { x: 110, y: 120, pinned: false }],
+      ]),
+      placementDeviceIds: new Set(['dev-1', 'dev-2']),
+      alerts: [highCpuAlert, linkDownAlert],
+    });
+    const second = buildKey({
+      savedPositions: new Map([
+        ['dev-2', { x: 30, y: 40, pinned: false }],
+        ['dev-1', { x: 10, y: 20, pinned: true }],
+      ]),
+      computedPositions: new Map([
+        ['dev-2', { x: 70, y: 80 }],
+        ['dev-1', { x: 50, y: 60 }],
+      ]),
+      currentPositions: new Map([
+        ['dev-2', { x: 110, y: 120, pinned: false }],
+        ['dev-1', { x: 90, y: 100, pinned: true }],
+      ]),
+      placementDeviceIds: new Set(['dev-2', 'dev-1']),
+      alerts: [linkDownAlert, highCpuAlert],
+    });
+
+    expect(first.signature).toBe(second.signature);
+  });
+
   it('invalidates when alerts change under the same topology and runtime ids', () => {
     const alert: AlertDTO = {
       device_id: 'dev-1',
@@ -176,6 +227,13 @@ describe('buildCanvasTopologyCompositionCacheKey', () => {
     expectCacheInvalidates(
       { runtimeIdentity: 'rt-sha256:abc', runtimeVersion: 7 },
       { runtimeIdentity: 'rt-sha256:abc', runtimeVersion: 8 },
+    );
+  });
+
+  it('invalidates when runtime identity changes even if runtime version is reused', () => {
+    expectCacheInvalidates(
+      { runtimeIdentity: 'rt-sha256:before-restart', runtimeVersion: 1 },
+      { runtimeIdentity: 'rt-sha256:after-restart', runtimeVersion: 1 },
     );
   });
 
