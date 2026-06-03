@@ -1749,12 +1749,14 @@ func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertOnlyChangeIncludesAler
 	previousSnapshotFor := snapshotPipelineStateFor
 	fullSnapshotCalls := 0
 	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
 	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
 		fullSnapshotCalls++
 		return store.Snapshot()
 	}
 	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
 		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
 		return store.SnapshotFor(ids)
 	}
 	t.Cleanup(func() {
@@ -1783,12 +1785,87 @@ func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertOnlyChangeIncludesAler
 	if deviceRuntime.FiringAlertCount != 1 {
 		t.Fatalf("FiringAlertCount = %d, want 1", deviceRuntime.FiringAlertCount)
 	}
-	if fullSnapshotCalls != 1 {
-		t.Fatalf("full state snapshot calls = %d, want 1", fullSnapshotCalls)
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
 	}
-	if narrowSnapshotCalls != 0 {
-		t.Fatalf("narrow state snapshot calls = %d, want 0 for alert-only delta", narrowSnapshotCalls)
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
 	}
+	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
+}
+
+func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertResolutionUsesNarrowStateSnapshotForPreviouslyAlertingDevice(t *testing.T) {
+	pipeline, _, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	devices, err := pipeline.cache.GetDevices()
+	if err != nil {
+		t.Fatalf("GetDevices returned error: %v", err)
+	}
+	links, err := pipeline.cache.GetLinks()
+	if err != nil {
+		t.Fatalf("GetLinks returned error: %v", err)
+	}
+
+	firingAlerts := map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "HighCPU",
+			State:     "firing",
+		}},
+	}
+	firingSnapshot := buildPipelineSnapshot(devices, links, store.Snapshot(), firingAlerts, ws.PrometheusStatusPayload{})
+	pipeline.runtime.lastSnapshot = firingSnapshot
+	pipeline.runtime.prevHashes = computeSnapshotHashes(firingSnapshot)
+	pipeline.runtime.alerts = map[uuid.UUID][]domain.AlertState{}
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(nil, true)
+	if err != nil {
+		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
+	}
+	if requireFull {
+		t.Fatal("requireFull = true, want false")
+	}
+	if delta == nil {
+		t.Fatal("expected alert resolution dirty delta")
+	}
+
+	deviceRuntime, ok := delta.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected devices[%s] in alert resolution delta", deviceID)
+	}
+	if deviceRuntime.AlertStatus != string(domain.AlertStatusNormal) {
+		t.Fatalf("AlertStatus = %q, want %q", deviceRuntime.AlertStatus, domain.AlertStatusNormal)
+	}
+	if deviceRuntime.FiringAlertCount != 0 {
+		t.Fatalf("FiringAlertCount = %d, want 0", deviceRuntime.FiringAlertCount)
+	}
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	}
+	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
 }
 
 func TestPipelineOrchestratorBuildDirtyOverviewDelta_UsesNarrowStateSnapshotForDeviceOnlyChange(t *testing.T) {

@@ -514,23 +514,27 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 	alerts := cloneAlertGroups(p.runtime.alerts)
 	promStatus := p.runtime.promStatus
 	previousHashes := p.runtime.prevHashes
+	previousSnapshotAvailable := false
+	previousAlertDeviceIDs := make(map[uuid.UUID]struct{})
+	if alertsDirty {
+		previousSnapshotAvailable = p.runtime.lastSnapshot != nil
+		if previousSnapshotAvailable {
+			addPreviousAlertRuntimeDeviceIDs(previousAlertDeviceIDs, p.runtime.lastSnapshot)
+		}
+	}
 	p.runtime.mu.RUnlock()
 
 	if alertsDirty {
-		if previousHashes == nil {
+		if previousHashes == nil || !previousSnapshotAvailable {
 			return nil, true, nil
 		}
-		states := snapshotAllPipelineState(p.stateStore)
-		current := buildPipelineSnapshot(devices, links, states, alerts, promStatus)
-		currentHashes := computeSnapshotHashes(current)
-		return buildDelta(current, currentHashes, previousHashes), false, nil
 	}
 
 	delta := ws.EmptySnapshot()
 	filteredDevices := filterDevicesByID(devices, dirtyDevices)
 	filteredLinks := filterLinksByDeviceID(links, dirtyDevices)
+	contextIDs := make(map[uuid.UUID]struct{}, len(dirtyDevices)+len(filteredLinks))
 	if len(filteredDevices) > 0 {
-		contextIDs := make(map[uuid.UUID]struct{}, len(dirtyDevices)+len(filteredLinks))
 		for id := range dirtyDevices {
 			contextIDs[id] = struct{}{}
 		}
@@ -538,9 +542,27 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 			contextIDs[link.SourceDeviceID] = struct{}{}
 			contextIDs[link.TargetDeviceID] = struct{}{}
 		}
+	}
 
-		states := snapshotPipelineStateFor(p.stateStore, deviceIDSetToSlice(contextIDs))
-		partial := buildPipelineSnapshot(filterDevicesByID(devices, contextIDs), filteredLinks, states, alerts, promStatus)
+	alertDeviceIDs := make(map[uuid.UUID]struct{})
+	if alertsDirty {
+		addCurrentAlertRuntimeDeviceIDs(alertDeviceIDs, alerts)
+		for id := range previousAlertDeviceIDs {
+			alertDeviceIDs[id] = struct{}{}
+		}
+		for id := range alertDeviceIDs {
+			contextIDs[id] = struct{}{}
+		}
+	}
+
+	if len(contextIDs) == 0 {
+		return nil, false, nil
+	}
+
+	states := snapshotPipelineStateFor(p.stateStore, deviceIDSetToSlice(contextIDs))
+	partial := buildPipelineSnapshot(filterDevicesByID(devices, contextIDs), filteredLinks, states, alerts, promStatus)
+
+	if len(filteredDevices) > 0 {
 		for id := range dirtyDevices {
 			deviceRuntime, ok := partial.Devices[id.String()]
 			if !ok {
@@ -550,6 +572,19 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 		}
 		for id, linkRuntime := range partial.Links {
 			delta.Links[id] = linkRuntime
+		}
+	}
+	if alertsDirty {
+		partialHashes := computeSnapshotHashes(partial)
+		for id := range alertDeviceIDs {
+			deviceID := id.String()
+			currentHash, ok := partialHashes.devices[deviceID]
+			if !ok {
+				continue
+			}
+			if previousHash, ok := previousHashes.devices[deviceID]; !ok || previousHash != currentHash {
+				delta.Devices[deviceID] = partial.Devices[deviceID]
+			}
 		}
 	}
 
@@ -572,4 +607,42 @@ func deviceIDSetToSlice(ids map[uuid.UUID]struct{}) []uuid.UUID {
 		return out[i].String() < out[j].String()
 	})
 	return out
+}
+
+func addCurrentAlertRuntimeDeviceIDs(target map[uuid.UUID]struct{}, alerts map[uuid.UUID][]domain.AlertState) {
+	for id, grouped := range alerts {
+		if id == uuid.Nil || !alertStatesAffectRuntime(grouped) {
+			continue
+		}
+		target[id] = struct{}{}
+	}
+}
+
+func addPreviousAlertRuntimeDeviceIDs(target map[uuid.UUID]struct{}, snapshot *ws.SnapshotPayload) {
+	if snapshot == nil {
+		return
+	}
+
+	for id, runtime := range snapshot.Devices {
+		if !deviceRuntimeHadAlertEffect(runtime) {
+			continue
+		}
+		deviceID, err := uuid.Parse(id)
+		if err != nil || deviceID == uuid.Nil {
+			continue
+		}
+		target[deviceID] = struct{}{}
+	}
+}
+
+func alertStatesAffectRuntime(alerts []domain.AlertState) bool {
+	status, firingCount := summarizeAlerts(alerts)
+	return firingCount > 0 || status != domain.AlertStatusNormal
+}
+
+func deviceRuntimeHadAlertEffect(runtime ws.DeviceRuntimeDTO) bool {
+	if runtime.FiringAlertCount > 0 {
+		return true
+	}
+	return runtime.AlertStatus != "" && !strings.EqualFold(runtime.AlertStatus, string(domain.AlertStatusNormal))
 }
