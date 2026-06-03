@@ -201,6 +201,117 @@ describe('buildCanvasTopologyCompositionCacheKey', () => {
     expect(first.signature).toBe(second.signature);
   });
 
+  it('invalidates when a cached position map reference changes values', () => {
+    const savedPositions = new Map([['dev-1', { x: 100, y: 120, pinned: true }]]);
+
+    const first = buildKey({ savedPositions });
+    savedPositions.set('dev-1', { x: 101, y: 120, pinned: true });
+    const second = buildKey({ savedPositions });
+
+    expect(first.signature).not.toBe(second.signature);
+  });
+
+  it('invalidates when a cached position map reference changes keys at the same size', () => {
+    const savedPositions = new Map([['dev-1', { x: 100, y: 120, pinned: true }]]);
+
+    const first = buildKey({ savedPositions });
+    savedPositions.delete('dev-1');
+    savedPositions.set('dev-2', { x: 100, y: 120, pinned: true });
+    const second = buildKey({ savedPositions });
+
+    expect(first.signature).not.toBe(second.signature);
+  });
+
+  it('invalidates when a cached placement set reference changes values at the same size', () => {
+    const placementDeviceIds = new Set(['dev-1']);
+
+    const first = buildKey({ placementDeviceIds });
+    placementDeviceIds.delete('dev-1');
+    placementDeviceIds.add('dev-2');
+    const second = buildKey({ placementDeviceIds });
+
+    expect(first.signature).not.toBe(second.signature);
+  });
+
+  it('invalidates when a cached alerts array reference changes content', () => {
+    const alerts: AlertDTO[] = [
+      {
+        device_id: 'dev-1',
+        alert_name: 'HighCPU',
+        state: 'firing',
+        severity: 'critical',
+        summary: 'CPU high',
+      },
+    ];
+
+    const first = buildKey({ alerts });
+    alerts[0] = { ...alerts[0]!, severity: 'warning' };
+    const second = buildKey({ alerts });
+
+    expect(first.signature).not.toBe(second.signature);
+  });
+
+  it('reuses sorted mutable input signatures for unchanged references', () => {
+    const nativeSort = Array.prototype.sort;
+    const savedPositions = new Map([
+      ['dev-2', { x: 30, y: 40, pinned: false }],
+      ['dev-1', { x: 10, y: 20, pinned: true }],
+    ]);
+    const computedPositions = new Map([
+      ['dev-2', { x: 70, y: 80 }],
+      ['dev-1', { x: 50, y: 60 }],
+    ]);
+    const currentPositions = new Map([
+      ['dev-2', { x: 110, y: 120, pinned: false }],
+      ['dev-1', { x: 90, y: 100, pinned: true }],
+    ]);
+    const placementDeviceIds = new Set(['dev-2', 'dev-1']);
+    const alerts: AlertDTO[] = [
+      {
+        device_id: 'dev-2',
+        alert_name: 'LinkDown',
+        state: 'firing',
+        severity: 'warning',
+        summary: 'Link down',
+      },
+      {
+        device_id: 'dev-1',
+        alert_name: 'HighCPU',
+        state: 'firing',
+        severity: 'critical',
+        summary: 'CPU high',
+      },
+    ];
+
+    const sortSpy = vi
+      .spyOn(Array.prototype, 'sort')
+      .mockImplementation(function sortWithNative(compareFn) {
+        return nativeSort.call(this, compareFn);
+      });
+
+    try {
+      buildKey({
+        savedPositions,
+        computedPositions,
+        currentPositions,
+        placementDeviceIds,
+        alerts,
+      });
+      sortSpy.mockClear();
+      buildKey({
+        savedPositions,
+        computedPositions,
+        currentPositions,
+        placementDeviceIds,
+        alerts,
+      });
+
+      expect(sortSpy).not.toHaveBeenCalled();
+    } finally {
+      sortSpy.mockRestore();
+    }
+  });
+
   it('invalidates when alerts change under the same topology and runtime ids', () => {
     const alert: AlertDTO = {
       device_id: 'dev-1',

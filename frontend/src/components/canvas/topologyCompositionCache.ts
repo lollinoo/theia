@@ -55,6 +55,20 @@ interface CanvasTopologyCompositionCache {
   clear: () => void;
 }
 
+interface SortedStringCacheEntry {
+  size: number;
+  values: string[];
+}
+
+interface AlertSignatureCacheEntry {
+  inputSignatures: string[];
+  sortedSignatures: string[];
+}
+
+const sortedMapKeysCache = new WeakMap<object, SortedStringCacheEntry>();
+const sortedSetValuesCache = new WeakMap<object, SortedStringCacheEntry>();
+const sortedAlertSignaturesCache = new WeakMap<AlertDTO[], AlertSignatureCacheEntry>();
+
 function sortedRecordEntries(record: Record<string, string> | undefined): string[][] {
   return Object.entries(record ?? {}).sort(([left], [right]) => left.localeCompare(right));
 }
@@ -135,10 +149,43 @@ function encodeSignatureParts(values: unknown[]): string {
   return values.map(encodeSignaturePart).join('');
 }
 
+function cachedSortedMapKeys<T>(map: Map<string, T>): string[] {
+  const cached = sortedMapKeysCache.get(map);
+  if (
+    cached !== undefined &&
+    cached.size === map.size &&
+    cached.values.every((deviceId) => map.has(deviceId))
+  ) {
+    return cached.values;
+  }
+
+  const values = Array.from(map.keys()).sort((left, right) => left.localeCompare(right));
+  sortedMapKeysCache.set(map, { size: map.size, values });
+  return values;
+}
+
+function cachedSortedSetValues(values: Set<string>): string[] {
+  const cached = sortedSetValuesCache.get(values);
+  if (
+    cached !== undefined &&
+    cached.size === values.size &&
+    cached.values.every((deviceId) => values.has(deviceId))
+  ) {
+    return cached.values;
+  }
+
+  const sortedValues = Array.from(values.values()).sort((left, right) => left.localeCompare(right));
+  sortedSetValuesCache.set(values, { size: values.size, values: sortedValues });
+  return sortedValues;
+}
+
 function positionMapSignature(map: PositionMap | ComputedPositionMap): string {
   const parts = [`size:${map.size}`];
-  const entries = Array.from(map.entries()).sort(([left], [right]) => left.localeCompare(right));
-  for (const [deviceId, position] of entries) {
+  for (const deviceId of cachedSortedMapKeys(map)) {
+    const position = map.get(deviceId);
+    if (position === undefined) {
+      continue;
+    }
     parts.push(
       encodeSignatureParts([
         deviceId,
@@ -153,29 +200,41 @@ function positionMapSignature(map: PositionMap | ComputedPositionMap): string {
 
 function placementSignature(deviceIds: Set<string>): string {
   const parts = [`size:${deviceIds.size}`];
-  const sortedDeviceIds = Array.from(deviceIds.values()).sort((left, right) =>
-    left.localeCompare(right),
-  );
-  for (const deviceId of sortedDeviceIds) {
+  for (const deviceId of cachedSortedSetValues(deviceIds)) {
     parts.push(encodeSignaturePart(deviceId));
   }
   return parts.join('|');
 }
 
+function encodeAlertSignature(alert: AlertDTO): string {
+  return encodeSignatureParts([
+    alert.device_id,
+    alert.severity,
+    alert.alert_name,
+    alert.state,
+    alert.summary,
+  ]);
+}
+
+function cachedSortedAlertSignatures(alerts: AlertDTO[]): string[] {
+  const inputSignatures = alerts.map(encodeAlertSignature);
+  const cached = sortedAlertSignaturesCache.get(alerts);
+  if (
+    cached !== undefined &&
+    cached.inputSignatures.length === inputSignatures.length &&
+    cached.inputSignatures.every((signature, index) => signature === inputSignatures[index])
+  ) {
+    return cached.sortedSignatures;
+  }
+
+  const sortedSignatures = [...inputSignatures].sort((left, right) => left.localeCompare(right));
+  sortedAlertSignaturesCache.set(alerts, { inputSignatures, sortedSignatures });
+  return sortedSignatures;
+}
+
 function alertSignature(alerts: AlertDTO[]): string {
   const parts = [`size:${alerts.length}`];
-  const sortedAlertSignatures = alerts
-    .map((alert) =>
-      encodeSignatureParts([
-        alert.device_id,
-        alert.severity,
-        alert.alert_name,
-        alert.state,
-        alert.summary,
-      ]),
-    )
-    .sort((left, right) => left.localeCompare(right));
-  for (const alertSignatureValue of sortedAlertSignatures) {
+  for (const alertSignatureValue of cachedSortedAlertSignatures(alerts)) {
     parts.push(alertSignatureValue);
   }
   return parts.join('|');
