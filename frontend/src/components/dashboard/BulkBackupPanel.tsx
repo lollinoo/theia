@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelBulkBackupRun,
+  fetchBackupJob,
   fetchBulkBackupRun,
   fetchBulkOperationStatus,
   fetchLatestBulkBackupRun,
@@ -11,6 +12,7 @@ import {
 } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
 import type {
+  BackupJob,
   BulkBackupRun,
   BulkBackupRunItem,
   BulkBackupRunStatus,
@@ -62,6 +64,24 @@ type BulkBackupSession = {
   report?: BulkBackupReport;
   error: string;
   downloading: boolean;
+};
+
+type BulkDownloadCandidate = {
+  deviceId: string;
+  fileCount: number;
+  byteCount: number;
+  hasMetadata: boolean;
+};
+
+type BulkDownloadLimits = {
+  maxDevices: number;
+  maxFiles: number;
+  maxBytes: number;
+};
+
+type BulkDownloadBatchPlan = {
+  batches: string[][];
+  error?: string;
 };
 
 const BULK_BACKUP_GROUP_SIZE = 10;
@@ -128,16 +148,104 @@ function backupRequestErrorMessage(err: unknown): string {
         : msg;
 }
 
-function chunkArray<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks;
-}
-
 function positiveIntegerOrFallback(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) && value !== undefined && value > 0 ? Math.floor(value) : fallback;
+}
+
+function backupJobByteCount(job: BackupJob): number {
+  return job.files.reduce((sum, file) => {
+    return sum + (Number.isFinite(file.size_bytes) && file.size_bytes > 0 ? file.size_bytes : 0);
+  }, 0);
+}
+
+async function loadBulkDownloadCandidates(
+  entries: DeviceEntry[],
+): Promise<BulkDownloadCandidate[]> {
+  const successEntries = entries.filter((entry) => entry.phase === 'success');
+  return Promise.all(
+    successEntries.map(async (entry) => {
+      if (!entry.jobId) {
+        return {
+          deviceId: entry.deviceId,
+          fileCount: 0,
+          byteCount: 0,
+          hasMetadata: false,
+        };
+      }
+      try {
+        const job = await fetchBackupJob(entry.jobId);
+        return {
+          deviceId: entry.deviceId,
+          fileCount: job.files.length,
+          byteCount: backupJobByteCount(job),
+          hasMetadata: true,
+        };
+      } catch {
+        return {
+          deviceId: entry.deviceId,
+          fileCount: 0,
+          byteCount: 0,
+          hasMetadata: false,
+        };
+      }
+    }),
+  );
+}
+
+function planBulkDownloadBatches(
+  candidates: BulkDownloadCandidate[],
+  limits: BulkDownloadLimits,
+): BulkDownloadBatchPlan {
+  const batches: string[][] = [];
+  let currentBatch: string[] = [];
+  let currentFiles = 0;
+  let currentBytes = 0;
+
+  const flush = () => {
+    if (currentBatch.length === 0) return;
+    batches.push(currentBatch);
+    currentBatch = [];
+    currentFiles = 0;
+    currentBytes = 0;
+  };
+
+  for (const candidate of candidates) {
+    if (candidate.hasMetadata && limits.maxFiles > 0 && candidate.fileCount > limits.maxFiles) {
+      return {
+        batches: [],
+        error: `Too many backup files selected for bulk download. Maximum ${limits.maxFiles}, selected ${candidate.fileCount}.`,
+      };
+    }
+    if (candidate.hasMetadata && limits.maxBytes > 0 && candidate.byteCount > limits.maxBytes) {
+      return {
+        batches: [],
+        error: `Bulk download is too large. Maximum ${limits.maxBytes} bytes, selected ${candidate.byteCount} bytes.`,
+      };
+    }
+
+    const exceedsDeviceLimit = limits.maxDevices > 0 && currentBatch.length + 1 > limits.maxDevices;
+    const exceedsFileLimit =
+      candidate.hasMetadata &&
+      limits.maxFiles > 0 &&
+      currentFiles + candidate.fileCount > limits.maxFiles;
+    const exceedsByteLimit =
+      candidate.hasMetadata &&
+      limits.maxBytes > 0 &&
+      currentBytes + candidate.byteCount > limits.maxBytes;
+
+    if (currentBatch.length > 0 && (exceedsDeviceLimit || exceedsFileLimit || exceedsByteLimit)) {
+      flush();
+    }
+
+    currentBatch.push(candidate.deviceId);
+    if (candidate.hasMetadata) {
+      currentFiles += candidate.fileCount;
+      currentBytes += candidate.byteCount;
+    }
+  }
+
+  flush();
+  return { batches };
 }
 
 function itemToEntry(item: BulkBackupRunItem): DeviceEntry {
@@ -532,6 +640,14 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     bulkOperationStatus?.bulk_download.max_devices,
     BULK_DEVICE_BATCH_SIZE,
   );
+  const bulkDownloadMaxFiles = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_download.max_files,
+    0,
+  );
+  const bulkDownloadMaxBytes = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_download.max_bytes,
+    0,
+  );
   const downloadBatchCount = Math.ceil(downloadableSuccessCount / bulkDownloadBatchSize);
   const controlSummary = controlProgressSummary(entries, session.runStatus);
   const canPause = phase === 'running' && session.runId && session.runStatus === 'running';
@@ -596,8 +712,16 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const handleDownloadZip = async () => {
     setBulkBackupSession((current) => ({ ...current, downloading: true, error: '' }));
     try {
-      const ids = entries.filter((e) => e.phase === 'success').map((e) => e.deviceId);
-      const batches = chunkArray(ids, bulkDownloadBatchSize);
+      const candidates = await loadBulkDownloadCandidates(entries);
+      const { batches, error } = planBulkDownloadBatches(candidates, {
+        maxDevices: bulkDownloadBatchSize,
+        maxFiles: bulkDownloadMaxFiles,
+        maxBytes: bulkDownloadMaxBytes,
+      });
+      if (error) {
+        setBulkBackupSession((current) => ({ ...current, error }));
+        return;
+      }
       for (let index = 0; index < batches.length; index++) {
         const result = await triggerBulkDownload(batches[index], {
           filename:

@@ -800,6 +800,135 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     });
   }, 10000);
 
+  it('uses the fetched bulk download file limit for ZIP batches', async () => {
+    const {
+      fetchBackupJob,
+      fetchBulkOperationStatus,
+      fetchBulkBackupRun,
+      startBulkBackupRun,
+      triggerBulkDownload,
+    } = await import('../../api/client');
+    const successItems = [
+      mockRunItem({
+        device_id: 'dev-1',
+        device_name: 'router-1',
+        status: 'success',
+        backup_job_id: 'job-1',
+      }),
+      mockRunItem({
+        device_id: 'dev-2',
+        device_name: 'router-2',
+        status: 'success',
+        backup_job_id: 'job-2',
+      }),
+    ];
+    (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkOperationStatus({
+        bulkDownload: { max_devices: 10, max_files: 3, max_bytes: 1024 },
+      }),
+    );
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun(
+        { status: 'running' },
+        successItems.map((item) => ({ ...item, status: 'queued' })),
+      ),
+    );
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'success' }, successItems),
+    );
+    (fetchBackupJob as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        id: 'job-1',
+        status: 'success',
+        error_message: '',
+        files: [
+          { id: 'file-1', file_name: 'a.rsc', download_url: '', size_bytes: 100 },
+          { id: 'file-2', file_name: 'b.rsc', download_url: '', size_bytes: 100 },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: 'job-2',
+        status: 'success',
+        error_message: '',
+        files: [
+          { id: 'file-3', file_name: 'c.rsc', download_url: '', size_bytes: 100 },
+          { id: 'file-4', file_name: 'd.rsc', download_url: '', size_bytes: 100 },
+        ],
+      });
+
+    render(
+      <BulkBackupPanel
+        devices={[
+          mockDevice({ id: 'dev-1', sys_name: 'router-1' }),
+          mockDevice({ id: 'dev-2', sys_name: 'router-2' }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    await screen.findByText('Download All as ZIP', {}, { timeout: 4000 });
+    fireEvent.click(screen.getByText('Download All as ZIP'));
+
+    await waitFor(() => {
+      expect(triggerBulkDownload).toHaveBeenCalledTimes(2);
+    });
+    expect(triggerBulkDownload).toHaveBeenNthCalledWith(1, ['dev-1'], {
+      filename: expect.stringMatching(/^THEIA_BACKUPS_batch-1-of-2_.*\.zip$/),
+    });
+    expect(triggerBulkDownload).toHaveBeenNthCalledWith(2, ['dev-2'], {
+      filename: expect.stringMatching(/^THEIA_BACKUPS_batch-2-of-2_.*\.zip$/),
+    });
+  }, 10000);
+
+  it('blocks a bulk ZIP when one successful device exceeds the fetched byte limit', async () => {
+    const {
+      fetchBackupJob,
+      fetchBulkOperationStatus,
+      fetchBulkBackupRun,
+      startBulkBackupRun,
+      triggerBulkDownload,
+    } = await import('../../api/client');
+    const successItems = [
+      mockRunItem({
+        device_id: 'dev-1',
+        device_name: 'router-1',
+        status: 'success',
+        backup_job_id: 'job-1',
+      }),
+    ];
+    (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkOperationStatus({
+        bulkDownload: { max_devices: 10, max_files: 10, max_bytes: 150 },
+      }),
+    );
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun(
+        { status: 'running' },
+        successItems.map((item) => ({ ...item, status: 'queued' })),
+      ),
+    );
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'success' }, successItems),
+    );
+    (fetchBackupJob as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: 'job-1',
+      status: 'success',
+      error_message: '',
+      files: [{ id: 'file-1', file_name: 'large.rsc', download_url: '', size_bytes: 200 }],
+    });
+
+    render(<BulkBackupPanel devices={[mockDevice({ id: 'dev-1', sys_name: 'router-1' })]} />);
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    await screen.findByText('Download All as ZIP', {}, { timeout: 4000 });
+    fireEvent.click(screen.getByText('Download All as ZIP'));
+
+    await screen.findByText('Bulk download is too large. Maximum 150 bytes, selected 200 bytes.');
+    expect(triggerBulkDownload).not.toHaveBeenCalled();
+  }, 10000);
+
   it('stops downloading remaining batches when the save dialog is cancelled', async () => {
     const { fetchBulkBackupRun, startBulkBackupRun, triggerBulkDownload } = await import(
       '../../api/client'
