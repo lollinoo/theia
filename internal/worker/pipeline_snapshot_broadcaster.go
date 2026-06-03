@@ -514,19 +514,26 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 	alerts := cloneAlertGroups(p.runtime.alerts)
 	promStatus := p.runtime.promStatus
 	previousHashes := p.runtime.prevHashes
+	var previousSnapshotForHash *ws.SnapshotPayload
 	previousSnapshotAvailable := false
 	previousAlertDeviceIDs := make(map[uuid.UUID]struct{})
 	if alertsDirty {
 		previousSnapshotAvailable = p.runtime.lastSnapshot != nil
 		if previousSnapshotAvailable {
 			addPreviousAlertRuntimeDeviceIDs(previousAlertDeviceIDs, p.runtime.lastSnapshot)
+			if previousHashes == nil {
+				previousSnapshotForHash = ws.CloneSnapshot(p.runtime.lastSnapshot)
+			}
 		}
 	}
 	p.runtime.mu.RUnlock()
 
 	if alertsDirty {
-		if previousHashes == nil || !previousSnapshotAvailable {
+		if !previousSnapshotAvailable {
 			return nil, true, nil
+		}
+		if previousHashes == nil {
+			previousHashes = computeSnapshotHashes(previousSnapshotForHash)
 		}
 	}
 
