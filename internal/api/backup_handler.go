@@ -28,6 +28,8 @@ const maxInlineBackupContentBytes int64 = 1 << 20
 
 const bulkOperationRetryAfterSeconds = 30
 
+var bulkDownloadDistributedInFlight = newBulkOperationInFlightTracker("bulk_download", "distributed")
+
 // BackupHandler provides HTTP handlers for SSH credentials and config backups.
 type BackupHandler struct {
 	svc                   *service.BackupService
@@ -48,6 +50,9 @@ func WithBackupAuditLogs(auditLogs domain.AuditLogRepository) BackupHandlerOptio
 func WithBulkDownloadLeaseRepository(repo domain.BulkOperationLeaseRepository) BackupHandlerOption {
 	return func(h *BackupHandler) {
 		h.bulkDownloadLeaseRepo = repo
+		if repo != nil {
+			recordBulkDownloadDistributedConcurrencyLimits(h.bulkOperationLimits())
+		}
 	}
 }
 
@@ -65,6 +70,7 @@ func NewBackupHandler(svc *service.BackupService, settingsRepo domain.SettingsRe
 			bulkLimits.BulkDownloadMaxConcurrentGlobal,
 		),
 	}
+	recordBulkDownloadConcurrencyLimits(bulkLimits)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(handler)
@@ -591,10 +597,12 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusTooManyRequests, "bulk download already in progress")
 			return
 		}
+		bulkDownloadDistributedInFlight.Acquire()
 		defer func() {
 			if err := lease.Release(); err != nil {
 				log.Printf("backup: failed to release bulk download lease: %v", err)
 			}
+			bulkDownloadDistributedInFlight.Release()
 		}()
 	}
 
@@ -891,6 +899,7 @@ func (l *bulkOperationLimiter) TryAcquire(key string) (bool, string) {
 	}
 	l.active[key]++
 	l.totalActive++
+	observability.Default().SetBulkOperationInFlight("bulk_download", "local", l.totalActive)
 	return true, ""
 }
 
@@ -909,6 +918,54 @@ func (l *bulkOperationLimiter) Release(key string) {
 	if l.totalActive > 0 {
 		l.totalActive--
 	}
+	observability.Default().SetBulkOperationInFlight("bulk_download", "local", l.totalActive)
+}
+
+func recordBulkDownloadConcurrencyLimits(limits service.BulkOperationLimits) {
+	observability.Default().SetBulkOperationConcurrencyLimit("bulk_download", "per_actor", "local", limits.BulkDownloadMaxConcurrentPerActor)
+	observability.Default().SetBulkOperationConcurrencyLimit("bulk_download", "global", "local", limits.BulkDownloadMaxConcurrentGlobal)
+}
+
+func recordBulkDownloadDistributedConcurrencyLimits(limits service.BulkOperationLimits) {
+	observability.Default().SetBulkOperationConcurrencyLimit("bulk_download", "per_actor", "distributed", 1)
+	observability.Default().SetBulkOperationConcurrencyLimit("bulk_download", "global", "distributed", limits.BulkDownloadMaxConcurrentGlobal)
+}
+
+func (h *BackupHandler) bulkOperationLimits() service.BulkOperationLimits {
+	if h == nil || h.svc == nil {
+		return service.DefaultBulkOperationLimits
+	}
+	return h.svc.BulkOperationLimits()
+}
+
+type bulkOperationInFlightTracker struct {
+	mu        sync.Mutex
+	operation string
+	source    string
+	active    int
+}
+
+func newBulkOperationInFlightTracker(operation, source string) *bulkOperationInFlightTracker {
+	return &bulkOperationInFlightTracker{
+		operation: operation,
+		source:    source,
+	}
+}
+
+func (t *bulkOperationInFlightTracker) Acquire() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.active++
+	observability.Default().SetBulkOperationInFlight(t.operation, t.source, t.active)
+}
+
+func (t *bulkOperationInFlightTracker) Release() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active > 0 {
+		t.active--
+	}
+	observability.Default().SetBulkOperationInFlight(t.operation, t.source, t.active)
 }
 
 func bulkDownloadActorKey(r *http.Request) string {

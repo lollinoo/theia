@@ -1528,6 +1528,119 @@ func TestBackupHandlerBulkDownloadRejectsConcurrentRequestForSameActor(t *testin
 	}
 }
 
+func TestBackupHandlerBulkDownloadReportsLocalInFlightAndLimits(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, _ := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, service.BulkOperationLimits{
+		BulkBackupMaxDevices:              10,
+		BulkBackupMaxQueuedJobs:           10,
+		BulkDownloadMaxDevices:            10,
+		BulkDownloadMaxFiles:              10,
+		BulkDownloadMaxBytes:              1024,
+		BulkDownloadMaxConcurrentPerActor: 2,
+		BulkDownloadMaxConcurrentGlobal:   3,
+	})
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	rec := newBlockingResponseWriterForBulkDownloadTest()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.HandleBulkDownload(rec, req)
+	}()
+
+	select {
+	case <-rec.firstWrite:
+	case <-time.After(time.Second):
+		close(rec.release)
+		<-done
+		t.Fatal("bulk download did not start streaming")
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="local"} 1`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected in-flight metric while streaming, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="per_actor",source="local"} 2`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected per-actor limit metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="global",source="local"} 3`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected global limit metric, got:\n%s", metrics)
+	}
+
+	close(rec.release)
+	<-done
+	metrics = string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="local"} 0`) {
+		t.Fatalf("expected in-flight metric to return to zero, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerBulkDownloadReportsDistributedInFlightAndLimits(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, _ := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, service.BulkOperationLimits{
+		BulkBackupMaxDevices:              10,
+		BulkBackupMaxQueuedJobs:           10,
+		BulkDownloadMaxDevices:            10,
+		BulkDownloadMaxFiles:              10,
+		BulkDownloadMaxBytes:              1024,
+		BulkDownloadMaxConcurrentPerActor: 1,
+		BulkDownloadMaxConcurrentGlobal:   2,
+	})
+	WithBulkDownloadLeaseRepository(newBulkOperationLeaseRepoForHandler())(handler)
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	rec := newBlockingResponseWriterForBulkDownloadTest()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.HandleBulkDownload(rec, req)
+	}()
+
+	select {
+	case <-rec.firstWrite:
+	case <-time.After(time.Second):
+		close(rec.release)
+		<-done
+		t.Fatal("bulk download did not start streaming")
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="distributed"} 1`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected distributed in-flight metric while streaming, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="per_actor",source="distributed"} 1`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected distributed per-actor limit metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="global",source="distributed"} 2`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected distributed global limit metric, got:\n%s", metrics)
+	}
+
+	close(rec.release)
+	<-done
+	metrics = string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="distributed"} 0`) {
+		t.Fatalf("expected distributed in-flight metric to return to zero, got:\n%s", metrics)
+	}
+}
+
 func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAcrossHandlersForSameActor(t *testing.T) {
 	backupDir := t.TempDir()
 	firstHandler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)

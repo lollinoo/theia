@@ -49,6 +49,17 @@ type bulkOperationRejectionKey struct {
 	Source    string
 }
 
+type bulkOperationInFlightKey struct {
+	Operation string
+	Source    string
+}
+
+type bulkOperationLimitKey struct {
+	Operation string
+	Scope     string
+	Source    string
+}
+
 type wsMetricKey struct {
 	Scope string
 	Type  string
@@ -109,6 +120,8 @@ type Registry struct {
 	schedulerTaskDispatchTotal map[domain.VolatilityClass]uint64
 	schedulerBackpressureTotal map[schedulerBackpressureKey]uint64
 	schedulerTaskDuration      map[domain.VolatilityClass]*histogram
+	bulkOperationInFlight      map[bulkOperationInFlightKey]float64
+	bulkOperationLimits        map[bulkOperationLimitKey]float64
 	bulkOperationRejections    map[bulkOperationRejectionKey]uint64
 	pollingEssentialOverloaded float64
 	pollingDeadlineMissTotal   uint64
@@ -154,6 +167,8 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassStatic:      0,
 		},
 		schedulerBackpressureTotal: make(map[schedulerBackpressureKey]uint64),
+		bulkOperationInFlight:      make(map[bulkOperationInFlightKey]float64),
+		bulkOperationLimits:        make(map[bulkOperationLimitKey]float64),
 		bulkOperationRejections:    make(map[bulkOperationRejectionKey]uint64),
 		schedulerTaskDuration: map[domain.VolatilityClass]*histogram{
 			domain.VolatilityClassPerformance: newHistogram(durationBucketsSeconds),
@@ -247,6 +262,16 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_bulk_operation_rejections_total",
 		"Bulk operation request rejections by operation, reason, and source.",
 		sortedBulkOperationRejectionRows(r.bulkOperationRejections),
+	)
+	writeGaugeVec(&b,
+		"theia_bulk_operation_in_flight",
+		"Current in-flight bulk operations by operation and source.",
+		sortedBulkOperationInFlightRows(r.bulkOperationInFlight),
+	)
+	writeGaugeVec(&b,
+		"theia_bulk_operation_concurrency_limit",
+		"Configured bulk operation concurrency limits by operation, scope, and source.",
+		sortedBulkOperationLimitRows(r.bulkOperationLimits),
 	)
 	writeHistogramVec(&b,
 		"theia_scheduler_task_duration_seconds",
@@ -425,6 +450,39 @@ func (r *Registry) IncBulkOperationRejection(operation, reason, source string) {
 		Reason:    reason,
 		Source:    source,
 	}]++
+}
+
+func (r *Registry) SetBulkOperationInFlight(operation, source string, count int) {
+	if operation == "" || source == "" {
+		return
+	}
+	if count < 0 {
+		count = 0
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bulkOperationInFlight[bulkOperationInFlightKey{
+		Operation: operation,
+		Source:    source,
+	}] = float64(count)
+}
+
+func (r *Registry) SetBulkOperationConcurrencyLimit(operation, scope, source string, limit int) {
+	if operation == "" || scope == "" || source == "" {
+		return
+	}
+	if limit < 0 {
+		limit = 0
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bulkOperationLimits[bulkOperationLimitKey{
+		Operation: operation,
+		Scope:     scope,
+		Source:    source,
+	}] = float64(limit)
 }
 
 func (r *Registry) ObserveSchedulerTaskDuration(volatility domain.VolatilityClass, duration time.Duration) {
@@ -816,6 +874,60 @@ func sortedBulkOperationRejectionRows(values map[bulkOperationRejectionKey]uint6
 			labels: map[string]string{
 				"operation": key.Operation,
 				"reason":    key.Reason,
+				"source":    key.Source,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedBulkOperationInFlightRows(values map[bulkOperationInFlightKey]float64) []gaugeRow {
+	keys := make([]bulkOperationInFlightKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		return keys[i].Source < keys[j].Source
+	})
+
+	rows := make([]gaugeRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, gaugeRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"source":    key.Source,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedBulkOperationLimitRows(values map[bulkOperationLimitKey]float64) []gaugeRow {
+	keys := make([]bulkOperationLimitKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		if keys[i].Scope != keys[j].Scope {
+			return keys[i].Scope < keys[j].Scope
+		}
+		return keys[i].Source < keys[j].Source
+	})
+
+	rows := make([]gaugeRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, gaugeRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"scope":     key.Scope,
 				"source":    key.Source,
 			},
 			value: values[key],
