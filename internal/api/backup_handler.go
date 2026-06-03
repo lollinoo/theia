@@ -304,7 +304,11 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 		deviceIDs = append(deviceIDs, parsed)
 	}
 
-	run, err := h.svc.StartBulkBackupRun(r.Context(), deviceIDs, "")
+	createdBy := ""
+	if subject := OperatorSubjectFromRequest(r); subject.Authenticated {
+		createdBy = subject.Name
+	}
+	run, err := h.svc.StartBulkBackupRun(r.Context(), deviceIDs, createdBy)
 	if err != nil {
 		if errors.Is(err, service.ErrBulkBackupRunAlreadyActive) {
 			w.WriteHeader(http.StatusConflict)

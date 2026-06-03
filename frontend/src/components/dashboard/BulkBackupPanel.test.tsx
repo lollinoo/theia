@@ -312,18 +312,21 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
   it('hydrates a running bulk backup after a page refresh', async () => {
     const { fetchLatestBulkBackupRun } = await import('../../api/client');
     (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      mockBulkRun({}, [
-        mockRunItem({
-          device_id: 'dev-1',
-          device_name: 'router-01',
-          status: 'queued',
-        }),
-        mockRunItem({
-          device_id: 'dev-2',
-          device_name: 'router-02',
-          status: 'checking',
-        }),
-      ]),
+      mockBulkRun(
+        { created_by: 'test-operator' },
+        [
+          mockRunItem({
+            device_id: 'dev-1',
+            device_name: 'router-01',
+            status: 'queued',
+          }),
+          mockRunItem({
+            device_id: 'dev-2',
+            device_name: 'router-02',
+            status: 'checking',
+          }),
+        ],
+      ),
     );
 
     render(
@@ -336,6 +339,7 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     );
 
     expect(await screen.findByText('Processing... 0/2')).toBeInTheDocument();
+    expect(screen.getByText('Started by test-operator')).toBeInTheDocument();
     expect(screen.queryByText('Backup All Devices')).not.toBeInTheDocument();
     expect(screen.getByText('checking...')).toBeInTheDocument();
   });

@@ -55,6 +55,7 @@ type BulkBackupSession = {
   phase: 'idle' | 'running' | 'done';
   runId?: string;
   runStatus?: BulkBackupRunStatus;
+  startedBy?: string;
   entries: DeviceEntry[];
   report?: BulkBackupReport;
   error: string;
@@ -197,6 +198,7 @@ function sessionFromRun(run: BulkBackupRun): BulkBackupSession {
     phase: RUN_TERMINAL.has(run.status) ? 'done' : 'running',
     runId: run.id,
     runStatus: run.status,
+    startedBy: run.created_by || undefined,
     entries,
     report: reportFromRun(run, entries),
     error: run.error_message,
@@ -677,6 +679,11 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
               Queued {report.queuedCount} · Running {report.runningCount} · Completed{' '}
               {report.completedCount} · Failed {report.failedCount} · Skipped {report.skippedCount}
             </div>
+            {session.startedBy && (
+              <div className="mt-1 truncate text-[10px] text-on-bg">
+                Started by {session.startedBy}
+              </div>
+            )}
             {report.currentDeviceName && (
               <div className="mt-1 truncate text-[10px] text-on-bg">
                 Current {report.currentDeviceName}

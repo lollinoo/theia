@@ -945,6 +945,37 @@ func TestBackupHandlerStartBulkBackupRunReturnsPersistedRun(t *testing.T) {
 	}
 }
 
+func TestBackupHandlerStartBulkBackupRunRecordsAuthenticatedActor(t *testing.T) {
+	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.11", SysName: "actor-core",
+		Managed: true, Status: domain.DeviceStatusDown,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := withTestOperator(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(body)))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			CreatedBy string `json:"created_by"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.CreatedBy != "test-operator" {
+		t.Fatalf("created_by = %q, want test-operator", resp.Data.CreatedBy)
+	}
+}
+
 func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
 	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
 	runID := uuid.New()
