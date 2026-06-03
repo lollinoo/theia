@@ -550,6 +550,7 @@ func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request)
 	results, err := h.svc.TriggerBulkBackup(r.Context(), deviceIDs...)
 	if err != nil {
 		if errors.Is(err, service.ErrBulkBackupAlreadyActive) {
+			observability.Default().IncBulkOperationRejection("bulk_backup_legacy", "global_concurrency_limit", "local")
 			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
 			writeError(w, http.StatusTooManyRequests, "bulk backup already in progress")
 			return
@@ -559,6 +560,7 @@ func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if service.IsBulkLimitError(err) {
+			observability.Default().IncBulkOperationRejection("bulk_backup_legacy", bulkLimitRejectionReason(err), "local")
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
@@ -654,6 +656,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	entries, err := h.svc.GetBulkDownloadFiles(r.Context(), deviceIDs)
 	if err != nil {
 		if service.IsBulkLimitError(err) {
+			observability.Default().IncBulkOperationRejection("bulk_download", bulkLimitRejectionReason(err), "local")
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}

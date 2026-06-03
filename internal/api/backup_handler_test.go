@@ -1360,6 +1360,10 @@ func TestBackupHandlerResumeBulkBackupRunMarksRunning(t *testing.T) {
 }
 
 func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 	handler, _, _, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
 	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
 		BulkBackupMaxDevices:    1,
@@ -1391,9 +1395,17 @@ func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing
 	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
 		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
 	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_legacy",reason="device_count_limit",source="local"} 1`) {
+		t.Fatalf("expected legacy bulk backup limit rejection metric, got:\n%s", metrics)
+	}
 }
 
 func TestBackupHandlerBulkBackupMapsActiveLegacyBulkLeaseToTooManyRequests(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 	handler, _, _, _, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
 	leaseRepo := newBulkOperationLeaseRepoForHandler()
 	lease, acquired, err := leaseRepo.TryAcquireBulkOperationLease(context.Background(), "backup.bulk_backup:legacy")
@@ -1420,9 +1432,17 @@ func TestBackupHandlerBulkBackupMapsActiveLegacyBulkLeaseToTooManyRequests(t *te
 	if rec.Header().Get("Retry-After") == "" {
 		t.Fatalf("expected Retry-After header, got headers: %#v", rec.Header())
 	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_legacy",reason="global_concurrency_limit",source="local"} 1`) {
+		t.Fatalf("expected legacy bulk backup active rejection metric, got:\n%s", metrics)
+	}
 }
 
 func TestBackupHandlerBulkDownloadMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
 	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
@@ -1444,6 +1464,69 @@ func TestBackupHandlerBulkDownloadMapsLimitErrorToRequestEntityTooLarge(t *testi
 	}
 	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
 		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_download",reason="byte_limit",source="local"} 1`) {
+		t.Fatalf("expected bulk download byte limit rejection metric, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerBulkDownloadReportsQuotaRejectionMetrics(t *testing.T) {
+	tests := []struct {
+		name   string
+		limits service.BulkOperationLimits
+		reason string
+	}{
+		{
+			name: "device limit",
+			limits: service.BulkOperationLimits{
+				BulkBackupMaxDevices:    10,
+				BulkBackupMaxQueuedJobs: 10,
+				BulkDownloadMaxDevices:  1,
+				BulkDownloadMaxFiles:    10,
+				BulkDownloadMaxBytes:    1024,
+			},
+			reason: "device_count_limit",
+		},
+		{
+			name: "file limit",
+			limits: service.BulkOperationLimits{
+				BulkBackupMaxDevices:    10,
+				BulkBackupMaxQueuedJobs: 10,
+				BulkDownloadMaxDevices:  10,
+				BulkDownloadMaxFiles:    1,
+				BulkDownloadMaxBytes:    1024,
+			},
+			reason: "file_limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := observability.ResetDefaultForTest()
+			t.Cleanup(func() {
+				observability.ResetDefaultForTest()
+			})
+
+			backupDir := t.TempDir()
+			handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+			backupSvc.SetBulkOperationLimits(tt.limits)
+			firstID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "first.rsc", []byte("12345"))
+			secondID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "second.rsc", []byte("67890"))
+			body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			handler.HandleBulkDownload(rec, req)
+
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+			metrics := string(registry.MarshalPrometheus())
+			needle := fmt.Sprintf(`theia_bulk_operation_rejections_total{operation="bulk_download",reason="%s",source="local"} 1`, tt.reason)
+			if !strings.Contains(metrics, needle) {
+				t.Fatalf("expected bulk download quota rejection metric %q, got:\n%s", needle, metrics)
+			}
+		})
 	}
 }
 
