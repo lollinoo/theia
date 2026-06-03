@@ -1399,7 +1399,7 @@ func TestCancelPendingBulkRunItemsKeepsActiveItemsCompleting(t *testing.T) {
 	}
 }
 
-func TestStartBulkBackupRunAcceptsMoreDevicesThanLegacyBulkRequestLimit(t *testing.T) {
+func TestStartBulkBackupRunRejectsDeviceCountOverLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
 	credentialProfileRepo := newMockCredentialProfileRepo()
@@ -1433,14 +1433,21 @@ func TestStartBulkBackupRunAcceptsMoreDevicesThanLegacyBulkRequestLimit(t *testi
 	})
 
 	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
-	if err != nil {
-		t.Fatalf("StartBulkBackupRun returned error: %v", err)
+	if err == nil {
+		t.Fatal("StartBulkBackupRun error = nil, want bulk limit error")
 	}
-	if run.TotalCount != 105 {
-		t.Fatalf("run.TotalCount = %d, want 105", run.TotalCount)
+	var limitErr *BulkLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("StartBulkBackupRun error = %v, want bulk limit error", err)
 	}
-	if run.SkippedCount != 105 {
-		t.Fatalf("run.SkippedCount = %d, want 105", run.SkippedCount)
+	if limitErr.Limit != "devices" || limitErr.Max != 100 || limitErr.Actual != 105 {
+		t.Fatalf("limit error = %+v, want devices max=100 actual=105", limitErr)
+	}
+	if run != nil {
+		t.Fatalf("run = %#v, want nil on limit error", run)
+	}
+	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
+		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
 	}
 }
 
