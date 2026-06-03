@@ -1030,6 +1030,59 @@ func TestSchedulerHealthReportsEssentialOverload(t *testing.T) {
 	}
 }
 
+func TestSchedulerRecordMetricsLocked_UpdatesEssentialOverloadGaugeAfterDispatchBackpressure(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers: "1",
+		},
+	})
+	scheduler.tasks = make(chan PollTask, 2)
+	now := time.Date(2026, 4, 24, 10, 5, 0, 0, time.UTC)
+	firstDeviceID := uuid.MustParse("52200000-0000-0000-0000-000000000001")
+	blockedDeviceID := uuid.MustParse("52200000-0000-0000-0000-000000000002")
+	first := &heapItem{
+		task: PollTask{
+			Key:    NewEssentialTaskKey(firstDeviceID),
+			Kind:   polling.TaskKindEssential,
+			Device: domain.Device{ID: firstDeviceID, Hostname: "essential-dispatched"},
+		},
+		dueAt:    now.Add(-time.Minute),
+		interval: 10 * time.Second,
+		queued:   true,
+		index:    -1,
+	}
+	blocked := &heapItem{
+		task: PollTask{
+			Key:    NewEssentialTaskKey(blockedDeviceID),
+			Kind:   polling.TaskKindEssential,
+			Device: domain.Device{ID: blockedDeviceID, Hostname: "essential-blocked"},
+		},
+		dueAt:    now.Add(-30 * time.Second),
+		interval: 10 * time.Second,
+		queued:   true,
+		index:    -1,
+	}
+	scheduler.ready[readyPriority(first.task)] = []*heapItem{first, blocked}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_scheduler_backpressure_total{reason="essential_limit",volatility_class="performance"} 1`) {
+		t.Fatalf("expected essential_limit backpressure metric after dispatch, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_polling_essential_overloaded 0`) {
+		t.Fatalf("essential overload gauge changed before recordMetricsLocked, got:\n%s", metrics)
+	}
+
+	scheduler.recordMetricsLocked(now)
+
+	metrics = string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_polling_essential_overloaded 1`) {
+		t.Fatalf("expected essential overload gauge after recordMetricsLocked, got:\n%s", metrics)
+	}
+}
+
 func TestSchedulerPollingHealthIsSafeDuringRuntimeMutations(t *testing.T) {
 	devices := make([]domain.Device, 0, 16)
 	for i := 0; i < 16; i++ {

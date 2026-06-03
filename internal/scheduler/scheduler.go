@@ -527,7 +527,6 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 				s.deadlineMissTotal++
 				observability.Default().IncPollingDeadlineMiss()
 			}
-			observability.Default().SetPollingEssentialOverloaded(s.pollingEssentialOverloadedLocked(now))
 			observability.Default().IncSchedulerTaskDispatch(taskVolatilityForMetrics(task))
 		case <-ctx.Done():
 			stopReason = "context_done"
