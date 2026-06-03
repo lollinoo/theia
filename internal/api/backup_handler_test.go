@@ -1248,6 +1248,69 @@ func TestBackupHandlerBulkDownloadReportsSelectedFileAndByteTotals(t *testing.T)
 	}
 }
 
+func TestBackupHandlerBulkDownloadStreamsSelectedFilesAndKeepsPrevalidatedTotalsOnFileError(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	goodContent := []byte("streamed-good")
+	missingContent := []byte("selected-then-removed")
+	goodID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "good.rsc", goodContent)
+	missingID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "missing-after-selection.rsc", missingContent)
+	unselectedID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: unselectedID, IP: "10.0.0.200", SysName: "empty",
+		Tags: map[string]string{"display_name": "Empty"},
+	}); err != nil {
+		t.Fatalf("Create unselected device: %v", err)
+	}
+
+	missingPath := filepath.Join(backupDir, "missing-after-selection.rsc")
+	handler.settingsRepo = &bulkDownloadDeletingSettingsRepo{
+		mockSettingsRepo: newMockSettingsRepo(),
+		path:             missingPath,
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q,%q,%q]}`, goodID.String(), missingID.String(), unselectedID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Bulk-Download-File-Count"); got != "2" {
+		t.Fatalf("X-Bulk-Download-File-Count = %q, want 2", got)
+	}
+	if got := rec.Header().Get("X-Bulk-Download-Size-Bytes"); got != fmt.Sprint(len(goodContent)+len(missingContent)) {
+		t.Fatalf("X-Bulk-Download-Size-Bytes = %q, want %d", got, len(goodContent)+len(missingContent))
+	}
+
+	zipEntries := readZipEntriesForBulkDownloadTest(t, rec.Body.Bytes())
+	if got := zipEntries["Core/good.rsc"]; got != string(goodContent) {
+		t.Fatalf("Core/good.rsc = %q, want %q", got, goodContent)
+	}
+	if _, ok := zipEntries["Core/missing-after-selection.rsc"]; ok {
+		t.Fatal("removed file must not be included as a partial zip entry")
+	}
+	errorManifest, ok := zipEntries["_errors.txt"]
+	if !ok {
+		t.Fatal("expected _errors.txt for removed selected file")
+	}
+	if !strings.Contains(errorManifest, "Core/missing-after-selection.rsc") {
+		t.Fatalf("_errors.txt = %q, want selected zip path", errorManifest)
+	}
+	if got := rec.Header().Get("X-Bulk-Download-Device-Count"); got != "2" {
+		t.Fatalf("X-Bulk-Download-Device-Count = %q, want 2 selected devices", got)
+	}
+}
+
 func TestBackupHandlerBulkDownloadMapsUnsafePathToBadRequest(t *testing.T) {
 	backupDir := t.TempDir()
 	outsideDir := t.TempDir()
@@ -1415,6 +1478,42 @@ func seedBulkDownloadBackupFile(
 		t.Fatalf("Create file: %v", err)
 	}
 	return deviceID
+}
+
+type bulkDownloadDeletingSettingsRepo struct {
+	*mockSettingsRepo
+	path string
+	once sync.Once
+}
+
+func (r *bulkDownloadDeletingSettingsRepo) Get(key string) (string, error) {
+	r.once.Do(func() {
+		_ = os.Remove(r.path)
+	})
+	return r.mockSettingsRepo.Get(key)
+}
+
+func readZipEntriesForBulkDownloadTest(t *testing.T, body []byte) map[string]string {
+	t.Helper()
+
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("read zip response: %v", err)
+	}
+	entries := make(map[string]string, len(zr.File))
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %s: %v", f.Name, err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read zip entry %s: %v", f.Name, err)
+		}
+		entries[f.Name] = string(content)
+	}
+	return entries
 }
 
 // =============================================================================

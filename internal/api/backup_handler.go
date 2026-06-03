@@ -535,7 +535,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	zipName := now.Format("20060102_150405") + "_THEIA_BACKUPS.zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
-	w.Header().Set("X-Bulk-Download-Device-Count", fmt.Sprint(uniqueUUIDCount(deviceIDs)))
+	w.Header().Set("X-Bulk-Download-Device-Count", fmt.Sprint(bulkDownloadSelectedDeviceCount(entries)))
 	w.Header().Set("X-Bulk-Download-File-Count", fmt.Sprint(len(entries)))
 	w.Header().Set("X-Bulk-Download-Size-Bytes", fmt.Sprint(totalBytes))
 
@@ -617,10 +617,13 @@ func extractDeviceIDForBackup(path, suffix string) (uuid.UUID, error) {
 	return extractIDFromPath(trimmed, "/api/v1/devices/")
 }
 
-func uniqueUUIDCount(ids []uuid.UUID) int {
-	seen := make(map[uuid.UUID]struct{}, len(ids))
-	for _, id := range ids {
-		seen[id] = struct{}{}
+func bulkDownloadSelectedDeviceCount(entries []service.BulkDownloadEntry) int {
+	seen := make(map[uuid.UUID]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.DeviceID == uuid.Nil {
+			continue
+		}
+		seen[entry.DeviceID] = struct{}{}
 	}
 	return len(seen)
 }

@@ -952,6 +952,7 @@ func (s *BackupService) bulkBackupRunDevices(ctx context.Context, requestedDevic
 // BulkDownloadEntry pairs a backup file with a device-derived folder name.
 type BulkDownloadEntry struct {
 	File      domain.BackupFile
+	DeviceID  uuid.UUID
 	DeviceDir string // sanitized device name for zip folder
 	ZipPath   string // slash-separated, prevalidated zip entry path
 	SizeBytes int64
@@ -1036,6 +1037,7 @@ func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uu
 			f.FilePath = filePath
 			entries = append(entries, BulkDownloadEntry{
 				File:      f,
+				DeviceID:  did,
 				DeviceDir: dirName,
 				ZipPath:   zipPath,
 				SizeBytes: sizeBytes,
