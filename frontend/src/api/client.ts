@@ -1652,6 +1652,11 @@ function parseBulkOperationStatus(payload: unknown): BulkOperationStatus {
       concurrency: {
         max_concurrent: numericField(bulkBackupConcurrency, 'max_concurrent'),
         configurable: booleanField(bulkBackupConcurrency, 'configurable'),
+        distributed: booleanField(bulkBackupConcurrency, 'distributed'),
+        distributed_max_concurrent: numericField(
+          bulkBackupConcurrency,
+          'distributed_max_concurrent',
+        ),
       },
       legacy_endpoint: {
         path: stringField(bulkBackupLegacyEndpoint, 'path'),
@@ -1664,6 +1669,8 @@ function parseBulkOperationStatus(payload: unknown): BulkOperationStatus {
       batch_size: numericField(bulkBackupRun, 'batch_size'),
       max_active_runs: numericField(bulkBackupRun, 'max_active_runs'),
       configurable_concurrency: booleanField(bulkBackupRun, 'configurable_concurrency'),
+      distributed: booleanField(bulkBackupRun, 'distributed'),
+      distributed_max_active_runs: numericField(bulkBackupRun, 'distributed_max_active_runs'),
       can_pause: booleanField(bulkBackupRun, 'can_pause'),
       can_resume: booleanField(bulkBackupRun, 'can_resume'),
       can_cancel: booleanField(bulkBackupRun, 'can_cancel'),
@@ -1674,6 +1681,15 @@ function parseBulkOperationStatus(payload: unknown): BulkOperationStatus {
       max_bytes: numericField(bulkDownload, 'max_bytes'),
       max_concurrent_per_actor: numericField(bulkDownload, 'max_concurrent_per_actor'),
       max_concurrent_global: numericField(bulkDownload, 'max_concurrent_global'),
+      distributed: booleanField(bulkDownload, 'distributed'),
+      distributed_max_concurrent_per_actor: numericField(
+        bulkDownload,
+        'distributed_max_concurrent_per_actor',
+      ),
+      distributed_max_concurrent_global: numericField(
+        bulkDownload,
+        'distributed_max_concurrent_global',
+      ),
     },
   };
 }

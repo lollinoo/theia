@@ -829,6 +829,8 @@ export interface BulkOperationStatus {
     concurrency: {
       max_concurrent: number;
       configurable: boolean;
+      distributed: boolean;
+      distributed_max_concurrent: number;
     };
     legacy_endpoint: {
       path: string;
@@ -841,6 +843,8 @@ export interface BulkOperationStatus {
     batch_size: number;
     max_active_runs: number;
     configurable_concurrency: boolean;
+    distributed: boolean;
+    distributed_max_active_runs: number;
     can_pause: boolean;
     can_resume: boolean;
     can_cancel: boolean;
@@ -851,6 +855,9 @@ export interface BulkOperationStatus {
     max_bytes: number;
     max_concurrent_per_actor: number;
     max_concurrent_global: number;
+    distributed: boolean;
+    distributed_max_concurrent_per_actor: number;
+    distributed_max_concurrent_global: number;
   };
 }
 

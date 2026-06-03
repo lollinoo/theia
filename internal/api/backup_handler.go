@@ -386,10 +386,15 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 func (h *BackupHandler) HandleGetBulkOperationStatus(w http.ResponseWriter, r *http.Request) {
 	limits := service.DefaultBulkOperationLimits
 	batchSize := 10
+	legacyBackupDistributed := false
+	bulkBackupRunDistributed := false
 	if h.svc != nil {
 		limits = h.svc.BulkOperationLimits()
 		batchSize = h.svc.BulkBackupRunBatchSize()
+		legacyBackupDistributed = h.svc.BulkOperationLeaseRepositoryConfigured()
+		bulkBackupRunDistributed = h.svc.BulkBackupRunRepositoryConfigured()
 	}
+	bulkDownloadDistributed := h.bulkDownloadLeaseRepo != nil
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"data": map[string]interface{}{
@@ -397,8 +402,10 @@ func (h *BackupHandler) HandleGetBulkOperationStatus(w http.ResponseWriter, r *h
 				"max_devices":     limits.BulkBackupMaxDevices,
 				"max_queued_jobs": limits.BulkBackupMaxQueuedJobs,
 				"concurrency": map[string]interface{}{
-					"max_concurrent": 1,
-					"configurable":   false,
+					"max_concurrent":             1,
+					"configurable":               false,
+					"distributed":                legacyBackupDistributed,
+					"distributed_max_concurrent": 1,
 				},
 				"legacy_endpoint": map[string]interface{}{
 					"path":       "/api/v1/backups/bulk",
@@ -406,21 +413,26 @@ func (h *BackupHandler) HandleGetBulkOperationStatus(w http.ResponseWriter, r *h
 				},
 			},
 			"bulk_backup_run": map[string]interface{}{
-				"max_devices":              limits.BulkBackupMaxDevices,
-				"max_queued_jobs":          limits.BulkBackupMaxQueuedJobs,
-				"batch_size":               batchSize,
-				"max_active_runs":          1,
-				"configurable_concurrency": false,
-				"can_pause":                true,
-				"can_resume":               true,
-				"can_cancel":               true,
+				"max_devices":                 limits.BulkBackupMaxDevices,
+				"max_queued_jobs":             limits.BulkBackupMaxQueuedJobs,
+				"batch_size":                  batchSize,
+				"max_active_runs":             1,
+				"configurable_concurrency":    false,
+				"distributed":                 bulkBackupRunDistributed,
+				"distributed_max_active_runs": 1,
+				"can_pause":                   true,
+				"can_resume":                  true,
+				"can_cancel":                  true,
 			},
 			"bulk_download": map[string]interface{}{
-				"max_devices":              limits.BulkDownloadMaxDevices,
-				"max_files":                limits.BulkDownloadMaxFiles,
-				"max_bytes":                limits.BulkDownloadMaxBytes,
-				"max_concurrent_per_actor": limits.BulkDownloadMaxConcurrentPerActor,
-				"max_concurrent_global":    limits.BulkDownloadMaxConcurrentGlobal,
+				"max_devices":                          limits.BulkDownloadMaxDevices,
+				"max_files":                            limits.BulkDownloadMaxFiles,
+				"max_bytes":                            limits.BulkDownloadMaxBytes,
+				"max_concurrent_per_actor":             limits.BulkDownloadMaxConcurrentPerActor,
+				"max_concurrent_global":                limits.BulkDownloadMaxConcurrentGlobal,
+				"distributed":                          bulkDownloadDistributed,
+				"distributed_max_concurrent_per_actor": 1,
+				"distributed_max_concurrent_global":    limits.BulkDownloadMaxConcurrentGlobal,
 			},
 		},
 	})

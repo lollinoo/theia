@@ -179,6 +179,14 @@ func (s *BackupService) BulkOperationLimits() BulkOperationLimits {
 	return normalizeBulkOperationLimits(s.bulkLimits)
 }
 
+func (s *BackupService) BulkOperationLeaseRepositoryConfigured() bool {
+	return s != nil && s.bulkOperationLeaseRepo != nil
+}
+
+func (s *BackupService) BulkBackupRunRepositoryConfigured() bool {
+	return s != nil && s.bulkRunRepo != nil
+}
+
 func (s *BackupService) BulkBackupRunBatchSize() int {
 	return defaultBulkBackupRunBatchSize
 }

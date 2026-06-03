@@ -43,6 +43,8 @@ vi.mock('../../api/client', () => ({
       concurrency: {
         max_concurrent: 1,
         configurable: false,
+        distributed: true,
+        distributed_max_concurrent: 1,
       },
       legacy_endpoint: {
         path: '/api/v1/backups/bulk',
@@ -55,6 +57,8 @@ vi.mock('../../api/client', () => ({
       batch_size: 10,
       max_active_runs: 1,
       configurable_concurrency: false,
+      distributed: true,
+      distributed_max_active_runs: 1,
       can_pause: true,
       can_resume: true,
       can_cancel: true,
@@ -65,6 +69,9 @@ vi.mock('../../api/client', () => ({
       max_bytes: 104857600,
       max_concurrent_per_actor: 1,
       max_concurrent_global: 4,
+      distributed: true,
+      distributed_max_concurrent_per_actor: 1,
+      distributed_max_concurrent_global: 4,
     },
   }),
   fetchBulkBackupRun: vi.fn().mockResolvedValue({
@@ -186,6 +193,8 @@ function mockBulkOperationStatus(
       concurrency: {
         max_concurrent: 1,
         configurable: false,
+        distributed: true,
+        distributed_max_concurrent: 1,
       },
       legacy_endpoint: {
         path: '/api/v1/backups/bulk',
@@ -198,6 +207,8 @@ function mockBulkOperationStatus(
       batch_size: 10,
       max_active_runs: 1,
       configurable_concurrency: false,
+      distributed: true,
+      distributed_max_active_runs: 1,
       can_pause: true,
       can_resume: true,
       can_cancel: true,
@@ -209,6 +220,9 @@ function mockBulkOperationStatus(
       max_bytes: 104857600,
       max_concurrent_per_actor: 1,
       max_concurrent_global: 4,
+      distributed: true,
+      distributed_max_concurrent_per_actor: 1,
+      distributed_max_concurrent_global: 4,
       ...overrides.bulkDownload,
     },
   };

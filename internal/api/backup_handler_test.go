@@ -1097,8 +1097,8 @@ func TestBackupHandlerStartBulkBackupRunReportsLimitRejection(t *testing.T) {
 }
 
 func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilities(t *testing.T) {
-	handler, _, _, _, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
-	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+	handler, _, _, _, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	handler.svc.SetBulkOperationLimits(service.BulkOperationLimits{
 		BulkBackupMaxDevices:              11,
 		BulkBackupMaxQueuedJobs:           12,
 		BulkDownloadMaxDevices:            13,
@@ -1107,6 +1107,8 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 		BulkDownloadMaxConcurrentPerActor: 2,
 		BulkDownloadMaxConcurrentGlobal:   3,
 	})
+	handler.svc.SetBulkOperationLeaseRepository(newBulkOperationLeaseRepoForHandler())
+	WithBulkDownloadLeaseRepository(newBulkOperationLeaseRepoForHandler())(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/backups/bulk/status", nil)
 	rec := httptest.NewRecorder()
@@ -1121,8 +1123,10 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 				MaxDevices    int `json:"max_devices"`
 				MaxQueuedJobs int `json:"max_queued_jobs"`
 				Concurrency   struct {
-					MaxConcurrent int  `json:"max_concurrent"`
-					Configurable  bool `json:"configurable"`
+					MaxConcurrent            int  `json:"max_concurrent"`
+					Configurable             bool `json:"configurable"`
+					Distributed              bool `json:"distributed"`
+					DistributedMaxConcurrent int  `json:"distributed_max_concurrent"`
 				} `json:"concurrency"`
 				LegacyEndpoint struct {
 					Path       string `json:"path"`
@@ -1130,21 +1134,26 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 				} `json:"legacy_endpoint"`
 			} `json:"bulk_backup"`
 			BulkBackupRun struct {
-				MaxDevices    int  `json:"max_devices"`
-				MaxQueuedJobs int  `json:"max_queued_jobs"`
-				BatchSize     int  `json:"batch_size"`
-				MaxActiveRuns int  `json:"max_active_runs"`
-				Configurable  bool `json:"configurable_concurrency"`
-				CanPause      bool `json:"can_pause"`
-				CanResume     bool `json:"can_resume"`
-				CanCancel     bool `json:"can_cancel"`
+				MaxDevices               int  `json:"max_devices"`
+				MaxQueuedJobs            int  `json:"max_queued_jobs"`
+				BatchSize                int  `json:"batch_size"`
+				MaxActiveRuns            int  `json:"max_active_runs"`
+				Configurable             bool `json:"configurable_concurrency"`
+				Distributed              bool `json:"distributed"`
+				DistributedMaxActiveRuns int  `json:"distributed_max_active_runs"`
+				CanPause                 bool `json:"can_pause"`
+				CanResume                bool `json:"can_resume"`
+				CanCancel                bool `json:"can_cancel"`
 			} `json:"bulk_backup_run"`
 			BulkDownload struct {
-				MaxDevices            int   `json:"max_devices"`
-				MaxFiles              int   `json:"max_files"`
-				MaxBytes              int64 `json:"max_bytes"`
-				MaxConcurrentPerActor int   `json:"max_concurrent_per_actor"`
-				MaxConcurrentGlobal   int   `json:"max_concurrent_global"`
+				MaxDevices                       int   `json:"max_devices"`
+				MaxFiles                         int   `json:"max_files"`
+				MaxBytes                         int64 `json:"max_bytes"`
+				MaxConcurrentPerActor            int   `json:"max_concurrent_per_actor"`
+				MaxConcurrentGlobal              int   `json:"max_concurrent_global"`
+				Distributed                      bool  `json:"distributed"`
+				DistributedMaxConcurrentPerActor int   `json:"distributed_max_concurrent_per_actor"`
+				DistributedMaxConcurrentGlobal   int   `json:"distributed_max_concurrent_global"`
 			} `json:"bulk_download"`
 		} `json:"data"`
 	}
@@ -1155,7 +1164,10 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 	if resp.Data.BulkBackup.MaxDevices != 11 || resp.Data.BulkBackup.MaxQueuedJobs != 12 {
 		t.Fatalf("bulk backup limits = %#v", resp.Data.BulkBackup)
 	}
-	if resp.Data.BulkBackup.Concurrency.MaxConcurrent != 1 || resp.Data.BulkBackup.Concurrency.Configurable {
+	if resp.Data.BulkBackup.Concurrency.MaxConcurrent != 1 ||
+		resp.Data.BulkBackup.Concurrency.Configurable ||
+		!resp.Data.BulkBackup.Concurrency.Distributed ||
+		resp.Data.BulkBackup.Concurrency.DistributedMaxConcurrent != 1 {
 		t.Fatalf("legacy backup concurrency = %#v", resp.Data.BulkBackup.Concurrency)
 	}
 	if resp.Data.BulkBackup.LegacyEndpoint.Path != "/api/v1/backups/bulk" || !resp.Data.BulkBackup.LegacyEndpoint.Deprecated {
@@ -1166,6 +1178,8 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 		resp.Data.BulkBackupRun.BatchSize != 10 ||
 		resp.Data.BulkBackupRun.MaxActiveRuns != 1 ||
 		resp.Data.BulkBackupRun.Configurable ||
+		!resp.Data.BulkBackupRun.Distributed ||
+		resp.Data.BulkBackupRun.DistributedMaxActiveRuns != 1 ||
 		!resp.Data.BulkBackupRun.CanPause ||
 		!resp.Data.BulkBackupRun.CanResume ||
 		!resp.Data.BulkBackupRun.CanCancel {
@@ -1175,7 +1189,10 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 		resp.Data.BulkDownload.MaxFiles != 14 ||
 		resp.Data.BulkDownload.MaxBytes != 15 ||
 		resp.Data.BulkDownload.MaxConcurrentPerActor != 2 ||
-		resp.Data.BulkDownload.MaxConcurrentGlobal != 3 {
+		resp.Data.BulkDownload.MaxConcurrentGlobal != 3 ||
+		!resp.Data.BulkDownload.Distributed ||
+		resp.Data.BulkDownload.DistributedMaxConcurrentPerActor != 1 ||
+		resp.Data.BulkDownload.DistributedMaxConcurrentGlobal != 3 {
 		t.Fatalf("bulk download limits = %#v", resp.Data.BulkDownload)
 	}
 }

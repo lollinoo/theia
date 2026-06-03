@@ -2147,6 +2147,8 @@ describe('bulk backup runs', () => {
             concurrency: {
               max_concurrent: 1,
               configurable: false,
+              distributed: true,
+              distributed_max_concurrent: 1,
             },
             legacy_endpoint: {
               path: '/api/v1/backups/bulk',
@@ -2159,6 +2161,8 @@ describe('bulk backup runs', () => {
             batch_size: 7,
             max_active_runs: 1,
             configurable_concurrency: false,
+            distributed: true,
+            distributed_max_active_runs: 1,
             can_pause: true,
             can_resume: true,
             can_cancel: true,
@@ -2169,6 +2173,9 @@ describe('bulk backup runs', () => {
             max_bytes: 104857600,
             max_concurrent_per_actor: 2,
             max_concurrent_global: 3,
+            distributed: true,
+            distributed_max_concurrent_per_actor: 1,
+            distributed_max_concurrent_global: 3,
           },
         },
       }),
@@ -2182,6 +2189,8 @@ describe('bulk backup runs', () => {
         concurrency: {
           max_concurrent: 1,
           configurable: false,
+          distributed: true,
+          distributed_max_concurrent: 1,
         },
         legacy_endpoint: {
           path: '/api/v1/backups/bulk',
@@ -2194,6 +2203,8 @@ describe('bulk backup runs', () => {
         batch_size: 7,
         max_active_runs: 1,
         configurable_concurrency: false,
+        distributed: true,
+        distributed_max_active_runs: 1,
         can_pause: true,
         can_resume: true,
         can_cancel: true,
@@ -2204,6 +2215,9 @@ describe('bulk backup runs', () => {
         max_bytes: 104857600,
         max_concurrent_per_actor: 2,
         max_concurrent_global: 3,
+        distributed: true,
+        distributed_max_concurrent_per_actor: 1,
+        distributed_max_concurrent_global: 3,
       },
     });
     expect(fetchMock).toHaveBeenCalledWith(
