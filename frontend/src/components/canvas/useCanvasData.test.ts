@@ -365,7 +365,10 @@ describe('useCanvasData', () => {
 
   it('uses saved map topology on silent refresh when mapId is set', async () => {
     vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
-    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(canvasTopologyOkResponse());
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce({
+      status: 'not-modified',
+      etag: '"topo-abc123"',
+    });
     const { result } = renderUseCanvasData(null, null, {
       mapId: 'map-1',
       mapName: 'Core Map',
@@ -376,12 +379,15 @@ describe('useCanvasData', () => {
       await Promise.resolve();
     });
 
+    const edgeBuildCallsAfterBootstrap = vi.mocked(buildTopologyEdges).mock.calls.length;
+
     await act(async () => {
       await result.current.loadTopology(true);
     });
 
-    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('map-1', undefined);
+    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('map-1', '"topo-abc123"');
     expect(fetchCanvasTopology).not.toHaveBeenCalled();
+    expect(buildTopologyEdges).toHaveBeenCalledTimes(edgeBuildCallsAfterBootstrap);
   });
 
   it('reuses composed topology when repeated forced bootstraps return the same canvas input', async () => {
@@ -560,7 +566,7 @@ describe('useCanvasData', () => {
       await result.current.loadTopology(true);
     });
 
-    expect(fetchCanvasTopology).toHaveBeenCalledWith(undefined);
+    expect(fetchCanvasTopology).toHaveBeenCalledWith('"topo-abc123"');
     expect(fetchCanvasMapTopology).toHaveBeenNthCalledWith(1, 'map-1', undefined);
     expect(fetchCanvasMapTopology).toHaveBeenNthCalledWith(2, 'map-1', '"map-etag"');
   });

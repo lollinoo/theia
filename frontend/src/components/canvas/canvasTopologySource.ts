@@ -65,6 +65,11 @@ export function isCanvasTopologyUnsupported(error: unknown): boolean {
   return status === 404 || status === 405 || status === 501;
 }
 
+function etagFromTopologyVersion(topologyVersion: string | undefined): string | undefined {
+  const version = topologyVersion?.trim();
+  return version ? JSON.stringify(version) : undefined;
+}
+
 export async function loadCanvasTopologySource({
   mapId,
   fetchPositions,
@@ -85,6 +90,7 @@ export async function loadCanvasTopologySource({
         links: topology.links,
         areas: topology.areas,
         positions: topologyPositionsToPositionMap(Object.values(topology.positions)),
+        etag: etagFromTopologyVersion(topology.topology_version),
         topologyVersion: topology.topology_version,
         runtimeVersion: topology.runtime_version,
         runtimeIdentity: topology.runtime_identity,
