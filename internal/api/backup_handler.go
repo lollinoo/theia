@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,11 +25,14 @@ import (
 // the download endpoint.
 const maxInlineBackupContentBytes int64 = 1 << 20
 
+const maxConcurrentBulkDownloadsPerActor = 1
+
 // BackupHandler provides HTTP handlers for SSH credentials and config backups.
 type BackupHandler struct {
-	svc          *service.BackupService
-	settingsRepo domain.SettingsRepository
-	auditLogs    domain.AuditLogRepository
+	svc                 *service.BackupService
+	settingsRepo        domain.SettingsRepository
+	auditLogs           domain.AuditLogRepository
+	bulkDownloadLimiter *bulkOperationLimiter
 }
 
 type BackupHandlerOption func(*BackupHandler)
@@ -41,7 +45,11 @@ func WithBackupAuditLogs(auditLogs domain.AuditLogRepository) BackupHandlerOptio
 
 // NewBackupHandler creates a new BackupHandler.
 func NewBackupHandler(svc *service.BackupService, settingsRepo domain.SettingsRepository, opts ...BackupHandlerOption) *BackupHandler {
-	handler := &BackupHandler{svc: svc, settingsRepo: settingsRepo}
+	handler := &BackupHandler{
+		svc:                 svc,
+		settingsRepo:        settingsRepo,
+		bulkDownloadLimiter: newBulkOperationLimiter(maxConcurrentBulkDownloadsPerActor),
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(handler)
@@ -529,6 +537,16 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	actorKey := bulkDownloadActorKey(r)
+	if h.bulkDownloadLimiter != nil && !h.bulkDownloadLimiter.TryAcquire(actorKey) {
+		w.Header().Set("Retry-After", "30")
+		writeError(w, http.StatusTooManyRequests, "bulk download already in progress for this user")
+		return
+	}
+	if h.bulkDownloadLimiter != nil {
+		defer h.bulkDownloadLimiter.Release(actorKey)
+	}
+
 	entries, err := h.svc.GetBulkDownloadFiles(r.Context(), deviceIDs)
 	if err != nil {
 		if service.IsBulkLimitError(err) {
@@ -740,6 +758,68 @@ func extractDeviceIDForBackup(path, suffix string) (uuid.UUID, error) {
 	// Path: /api/v1/devices/{id}/suffix
 	trimmed := strings.TrimSuffix(path, suffix)
 	return extractIDFromPath(trimmed, "/api/v1/devices/")
+}
+
+type bulkOperationLimiter struct {
+	mu     sync.Mutex
+	limit  int
+	active map[string]int
+}
+
+func newBulkOperationLimiter(limit int) *bulkOperationLimiter {
+	if limit <= 0 {
+		limit = 1
+	}
+	return &bulkOperationLimiter{
+		limit:  limit,
+		active: make(map[string]int),
+	}
+}
+
+func (l *bulkOperationLimiter) TryAcquire(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "anonymous"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active[key] >= l.limit {
+		return false
+	}
+	l.active[key]++
+	return true
+}
+
+func (l *bulkOperationLimiter) Release(key string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "anonymous"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active[key] <= 1 {
+		delete(l.active, key)
+		return
+	}
+	l.active[key]--
+}
+
+func bulkDownloadActorKey(r *http.Request) string {
+	if user, ok := AuthenticatedUserFromRequest(r); ok {
+		if id := user.User.User.ID; id != uuid.Nil {
+			return "user:" + id.String()
+		}
+		if username := strings.TrimSpace(user.User.User.UsernameNormalized); username != "" {
+			return "user:" + strings.ToLower(username)
+		}
+		if username := strings.TrimSpace(user.User.User.Username); username != "" {
+			return "user:" + strings.ToLower(username)
+		}
+	}
+	if ip := strings.TrimSpace(clientIPAddress(r)); ip != "" {
+		return "ip:" + ip
+	}
+	return "anonymous"
 }
 
 func bulkDownloadSelectedDeviceCount(entries []service.BulkDownloadEntry) int {

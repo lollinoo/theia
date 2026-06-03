@@ -1452,6 +1452,52 @@ func TestBackupHandlerBulkDownloadPersistsAuditLogWithPartialStreamErrors(t *tes
 	}
 }
 
+func TestBackupHandlerBulkDownloadRejectsConcurrentRequestForSameActor(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	actorID := uuid.New()
+
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.HandleBulkDownload(firstRec, firstReq)
+	}()
+
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	secondRec := httptest.NewRecorder()
+	handler.HandleBulkDownload(secondRec, secondReq)
+
+	close(firstRec.release)
+	<-firstDone
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second response status = %d, want 429; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	if strings.Contains(secondRec.Header().Get("Content-Type"), "application/zip") {
+		t.Fatalf("rejected concurrent request must not start a zip response; headers: %#v", secondRec.Header())
+	}
+}
+
 func TestBackupHandlerBulkDownloadMapsUnsafePathToBadRequest(t *testing.T) {
 	backupDir := t.TempDir()
 	outsideDir := t.TempDir()
@@ -1583,6 +1629,60 @@ func assertAuditNumber(t *testing.T, metadata map[string]interface{}, key string
 	if !ok || got != want {
 		t.Fatalf("metadata[%q] = %#v, want %v", key, metadata[key], want)
 	}
+}
+
+type blockingResponseWriterForBulkDownloadTest struct {
+	header     http.Header
+	firstWrite chan struct{}
+	release    chan struct{}
+	once       sync.Once
+	body       bytes.Buffer
+	code       int
+}
+
+func newBlockingResponseWriterForBulkDownloadTest() *blockingResponseWriterForBulkDownloadTest {
+	return &blockingResponseWriterForBulkDownloadTest{
+		header:     http.Header{},
+		firstWrite: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (w *blockingResponseWriterForBulkDownloadTest) Header() http.Header {
+	return w.header
+}
+
+func (w *blockingResponseWriterForBulkDownloadTest) WriteHeader(code int) {
+	w.code = code
+}
+
+func (w *blockingResponseWriterForBulkDownloadTest) Write(p []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.firstWrite)
+		<-w.release
+	})
+	if w.code == 0 {
+		w.code = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+func withBulkDownloadTestActor(req *http.Request, userID uuid.UUID) *http.Request {
+	return req.WithContext(withAuthenticatedUser(req.Context(), &service.AuthenticatedUser{
+		User: domain.UserWithRolesAndPermissions{
+			User: domain.User{
+				ID:          userID,
+				Username:    "bulk-operator",
+				Email:       "bulk-operator@example.test",
+				DisplayName: "Bulk Operator",
+				Status:      domain.UserStatusActive,
+			},
+		},
+		Session: service.AuthenticatedSession{
+			ID:     uuid.New(),
+			UserID: userID,
+		},
+	}))
 }
 
 func setupBackupHandlerForBulkRunTests(
