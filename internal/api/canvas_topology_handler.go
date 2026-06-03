@@ -118,14 +118,16 @@ type canvasTopologyVersionDevice struct {
 }
 
 type canvasTopologyVersionLink struct {
-	ID                string `json:"id"`
-	SourceDeviceID    string `json:"source_device_id"`
-	SourceIfName      string `json:"source_if_name"`
-	TargetDeviceID    string `json:"target_device_id"`
-	TargetIfName      string `json:"target_if_name"`
-	DiscoveryProtocol string `json:"discovery_protocol"`
-	SourceIfSpeed     int64  `json:"source_if_speed"`
-	TargetIfSpeed     int64  `json:"target_if_speed"`
+	ID                 string `json:"id"`
+	SourceDeviceID     string `json:"source_device_id"`
+	SourceIfName       string `json:"source_if_name"`
+	TargetDeviceID     string `json:"target_device_id"`
+	TargetIfName       string `json:"target_if_name"`
+	DiscoveryProtocol  string `json:"discovery_protocol"`
+	SourceIfSpeed      int64  `json:"source_if_speed"`
+	SourceIfOperStatus string `json:"source_if_oper_status"`
+	TargetIfSpeed      int64  `json:"target_if_speed"`
+	TargetIfOperStatus string `json:"target_if_oper_status"`
 }
 
 type canvasTopologyVersionPosition struct {
@@ -347,14 +349,16 @@ func buildCanvasTopologyVersionInput(
 	versionLinks := make([]canvasTopologyVersionLink, 0, len(links))
 	for _, link := range links {
 		versionLinks = append(versionLinks, canvasTopologyVersionLink{
-			ID:                link.ID,
-			SourceDeviceID:    link.SourceDeviceID,
-			SourceIfName:      link.SourceIfName,
-			TargetDeviceID:    link.TargetDeviceID,
-			TargetIfName:      link.TargetIfName,
-			DiscoveryProtocol: link.DiscoveryProtocol,
-			SourceIfSpeed:     link.SourceIfSpeed,
-			TargetIfSpeed:     link.TargetIfSpeed,
+			ID:                 link.ID,
+			SourceDeviceID:     link.SourceDeviceID,
+			SourceIfName:       link.SourceIfName,
+			TargetDeviceID:     link.TargetDeviceID,
+			TargetIfName:       link.TargetIfName,
+			DiscoveryProtocol:  link.DiscoveryProtocol,
+			SourceIfSpeed:      link.SourceIfSpeed,
+			SourceIfOperStatus: link.SourceIfOperStatus,
+			TargetIfSpeed:      link.TargetIfSpeed,
+			TargetIfOperStatus: link.TargetIfOperStatus,
 		})
 	}
 

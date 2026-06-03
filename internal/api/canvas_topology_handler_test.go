@@ -264,7 +264,6 @@ func TestCanvasTopologyHandlerTopologyVersionIgnoresVolatileRuntimeFields(t *tes
 	updatedSource.TopologyBootstrapState = domain.TopologyBootstrapStateCompleted
 	updatedSource.LastTopologyDiscoveryAt = &updatedDiscoveryAt
 	updatedSource.LastTopologyDiscoveryResult = "no new neighbors"
-	updatedSource.Interfaces[0].OperStatus = "down"
 	if err := deviceRepo.Update(updatedSource); err != nil {
 		t.Fatalf("update source device: %v", err)
 	}
@@ -279,6 +278,84 @@ func TestCanvasTopologyHandlerTopologyVersionIgnoresVolatileRuntimeFields(t *tes
 
 	if first.TopologyVersion != second.TopologyVersion {
 		t.Fatalf("topology version changed for volatile runtime fields: first=%s second=%s", first.TopologyVersion, second.TopologyVersion)
+	}
+}
+
+func TestCanvasTopologyHandlerTopologyVersionChangesForRenderedLinkOperStatus(t *testing.T) {
+	handler, deviceRepo, linkRepo, positionRepo, areaRepo := newTestCanvasTopologyHandler(t)
+
+	sourceID := uuid.New()
+	targetID := uuid.New()
+	linkID := uuid.New()
+	source := &domain.Device{
+		ID:         sourceID,
+		Hostname:   "router-01",
+		IP:         "10.0.0.1",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		SysName:    "router-01",
+		Vendor:     "default",
+		Managed:    true,
+		Tags:       map[string]string{},
+		Interfaces: []domain.Interface{
+			{IfName: "ether1", Speed: 1000000000, OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(source); err != nil {
+		t.Fatalf("seed source device: %v", err)
+	}
+	target := &domain.Device{
+		ID:         targetID,
+		Hostname:   "router-02",
+		IP:         "10.0.0.2",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		SysName:    "router-02",
+		Vendor:     "default",
+		Managed:    true,
+		Tags:       map[string]string{},
+		Interfaces: []domain.Interface{
+			{IfName: "ether2", Speed: 100000000, OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(target); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+	if err := linkRepo.Create(&domain.Link{
+		ID:                linkID,
+		SourceDeviceID:    sourceID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    targetID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+
+	first := handler.buildResponse(
+		mustGetAllDevices(t, deviceRepo),
+		mustGetAllLinks(t, linkRepo),
+		positionRepo.positions,
+		mustGetAllAreas(t, areaRepo),
+	)
+
+	updatedSource, err := deviceRepo.GetByID(sourceID)
+	if err != nil {
+		t.Fatalf("load source device: %v", err)
+	}
+	updatedSource.Interfaces[0].OperStatus = "down"
+	if err := deviceRepo.Update(updatedSource); err != nil {
+		t.Fatalf("update source device: %v", err)
+	}
+	second := handler.buildResponse(
+		mustGetAllDevices(t, deviceRepo),
+		mustGetAllLinks(t, linkRepo),
+		positionRepo.positions,
+		mustGetAllAreas(t, areaRepo),
+	)
+
+	if first.TopologyVersion == second.TopologyVersion {
+		t.Fatalf("topology version did not change for rendered link oper status: %s", first.TopologyVersion)
 	}
 }
 
