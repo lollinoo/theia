@@ -1468,6 +1468,163 @@ func TestSchedulerDispatchReady_AllowsLowerPriorityWhenHigherPriorityAtClassLimi
 	}
 }
 
+func TestSchedulerDispatchReady_HeavyBackpressureDispatchesEligibleLowerPriorityAndFlushesBoundedMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	const (
+		essentialBlockedCount   = 96
+		performanceBlockedCount = 96
+		profileBlockedCount     = 64
+		eligibleOperational     = 8
+		eligibleStatic          = 4
+	)
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance:    "1",
+			domain.SettingSNMPWorkerPoolOperational:    "9",
+			domain.SettingSNMPWorkerPoolStatic:         "4",
+			domain.SettingPollingEssentialWorkers:      "1",
+			domain.SettingPollingMaxWorkersPerDevice:   "256",
+			domain.SettingPollingMaxWorkersPerSite:     "256",
+			domain.SettingPollingMaxWorkersPerSubnet:   "256",
+			domain.SettingPollingMaxInflightPerProfile: "1",
+		}},
+	)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	sharedProfile := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: "shared-backpressure"},
+	}
+	scheduler.tasks = make(chan PollTask, 16)
+	seedInFlight := func(task PollTask) {
+		scheduler.inFlight++
+		scheduler.incrementInFlight(task)
+	}
+	seedInFlight(PollTask{
+		Key:    NewEssentialTaskKey(uuid.MustParse("52000000-0000-0000-0000-000000000401")),
+		Kind:   polling.TaskKindEssential,
+		Device: domain.Device{ID: uuid.MustParse("52000000-0000-0000-0000-000000000401")},
+	})
+	seedInFlight(PollTask{
+		Key:             NewTaskKey(uuid.MustParse("52000000-0000-0000-0000-000000000402"), domain.VolatilityClassPerformance),
+		Device:          domain.Device{ID: uuid.MustParse("52000000-0000-0000-0000-000000000402")},
+		VolatilityClass: domain.VolatilityClassPerformance,
+	})
+	seedInFlight(PollTask{
+		Key: NewTaskKey(
+			uuid.MustParse("52000000-0000-0000-0000-000000000403"),
+			domain.VolatilityClassOperational,
+		),
+		Device: domain.Device{
+			ID:              uuid.MustParse("52000000-0000-0000-0000-000000000403"),
+			SNMPCredentials: sharedProfile,
+		},
+		VolatilityClass: domain.VolatilityClassOperational,
+	})
+
+	newReadyItem := func(task PollTask, index int) *heapItem {
+		return &heapItem{
+			task:   task,
+			dueAt:  now.Add(-time.Duration(index+1) * time.Minute),
+			queued: true,
+			index:  -1,
+		}
+	}
+	for index := 0; index < essentialBlockedCount; index++ {
+		deviceID := uuid.UUID{0: 0x52, 14: 0x01, 15: byte(index + 1)}
+		item := newReadyItem(PollTask{
+			Key:    NewEssentialTaskKey(deviceID),
+			Kind:   polling.TaskKindEssential,
+			Device: domain.Device{ID: deviceID},
+		}, index)
+		scheduler.ready[readyPriority(item.task)] = append(scheduler.ready[readyPriority(item.task)], item)
+	}
+	for index := 0; index < performanceBlockedCount; index++ {
+		deviceID := uuid.UUID{0: 0x52, 14: 0x02, 15: byte(index + 1)}
+		item := newReadyItem(PollTask{
+			Key:             NewTaskKey(deviceID, domain.VolatilityClassPerformance),
+			Device:          domain.Device{ID: deviceID},
+			VolatilityClass: domain.VolatilityClassPerformance,
+		}, index)
+		scheduler.ready[readyPriority(item.task)] = append(scheduler.ready[readyPriority(item.task)], item)
+	}
+	for index := 0; index < profileBlockedCount; index++ {
+		deviceID := uuid.UUID{0: 0x52, 14: 0x03, 15: byte(index + 1)}
+		item := newReadyItem(PollTask{
+			Key: NewTaskKey(
+				deviceID,
+				domain.VolatilityClassOperational,
+			),
+			Device: domain.Device{
+				ID:              deviceID,
+				SNMPCredentials: sharedProfile,
+			},
+			VolatilityClass: domain.VolatilityClassOperational,
+		}, index)
+		scheduler.ready[readyPriority(item.task)] = append(scheduler.ready[readyPriority(item.task)], item)
+	}
+	for index := 0; index < eligibleOperational; index++ {
+		deviceID := uuid.UUID{0: 0x52, 14: 0x04, 15: byte(index + 1)}
+		item := newReadyItem(PollTask{
+			Key: NewTaskKey(
+				deviceID,
+				domain.VolatilityClassOperational,
+			),
+			Device: domain.Device{
+				ID: deviceID,
+				SNMPCredentials: domain.SNMPCredentials{
+					Version: domain.SNMPVersionV2c,
+					V2c:     &domain.SNMPv2cCredentials{Community: "eligible-operational-" + string(rune('a'+index))},
+				},
+			},
+			VolatilityClass: domain.VolatilityClassOperational,
+		}, index)
+		scheduler.ready[readyPriority(item.task)] = append(scheduler.ready[readyPriority(item.task)], item)
+	}
+	for index := 0; index < eligibleStatic; index++ {
+		deviceID := uuid.UUID{0: 0x52, 14: 0x05, 15: byte(index + 1)}
+		item := newReadyItem(PollTask{
+			Key:             NewTaskKey(deviceID, domain.VolatilityClassStatic),
+			Device:          domain.Device{ID: deviceID},
+			VolatilityClass: domain.VolatilityClassStatic,
+		}, index)
+		scheduler.ready[readyPriority(item.task)] = append(scheduler.ready[readyPriority(item.task)], item)
+	}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	if scheduler.inFlight != 15 {
+		t.Fatalf("inFlight = %d, want 15 after filling remaining capacity", scheduler.inFlight)
+	}
+	dispatchedByClass := map[domain.VolatilityClass]int{}
+	for index := 0; index < eligibleOperational+eligibleStatic; index++ {
+		task := <-scheduler.tasks
+		if task.Kind == polling.TaskKindEssential || task.VolatilityClass == domain.VolatilityClassPerformance {
+			t.Fatalf("unexpected high-priority blocked task dispatched: %+v", task)
+		}
+		dispatchedByClass[task.VolatilityClass]++
+	}
+	if dispatchedByClass[domain.VolatilityClassOperational] != eligibleOperational {
+		t.Fatalf("operational dispatch count = %d, want %d", dispatchedByClass[domain.VolatilityClassOperational], eligibleOperational)
+	}
+	if dispatchedByClass[domain.VolatilityClassStatic] != eligibleStatic {
+		t.Fatalf("static dispatch count = %d, want %d", dispatchedByClass[domain.VolatilityClassStatic], eligibleStatic)
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, line := range []string{
+		`theia_scheduler_backpressure_total{reason="class_limit",volatility_class="performance"} 1`,
+		`theia_scheduler_backpressure_total{reason="essential_limit",volatility_class="performance"} 1`,
+		`theia_scheduler_backpressure_total{reason="global_limit",volatility_class="performance"} 1`,
+		`theia_scheduler_backpressure_total{reason="global_limit",volatility_class="operational"} 1`,
+		`theia_scheduler_backpressure_total{reason="profile_limit",volatility_class="operational"} 1`,
+	} {
+		if !strings.Contains(metrics, line+"\n") {
+			t.Fatalf("missing bounded backpressure metric %q, got:\n%s", line, metrics)
+		}
+	}
+}
+
 func TestSchedulerDispatchReady_DoesNotRepeatedlyAllocateForKnownClassLimitedQueues(t *testing.T) {
 	const operationalCount = 64
 

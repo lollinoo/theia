@@ -493,6 +493,7 @@ func (s *Scheduler) dispatchReady(ctx context.Context, now time.Time) {
 	dispatched := 0
 	stopReason := ""
 	scanState := dispatchScanState{}
+	defer scanState.flushBlockedMetrics()
 	defer func() {
 		if dispatched == 0 && (stopReason == "" || stopReason == "no_eligible_task") {
 			return
