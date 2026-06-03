@@ -60,6 +60,12 @@ type bulkOperationLimitKey struct {
 	Source    string
 }
 
+type bulkOperationCompletionKey struct {
+	Operation string
+	Source    string
+	Result    string
+}
+
 type wsMetricKey struct {
 	Scope string
 	Type  string
@@ -123,6 +129,11 @@ type Registry struct {
 	bulkOperationInFlight      map[bulkOperationInFlightKey]float64
 	bulkOperationLimits        map[bulkOperationLimitKey]float64
 	bulkOperationRejections    map[bulkOperationRejectionKey]uint64
+	bulkOperationCompletions   map[bulkOperationCompletionKey]uint64
+	bulkOperationDuration      map[bulkOperationCompletionKey]*histogram
+	bulkOperationDevices       map[bulkOperationCompletionKey]uint64
+	bulkOperationFiles         map[bulkOperationCompletionKey]uint64
+	bulkOperationBytes         map[bulkOperationCompletionKey]uint64
 	pollingEssentialOverloaded float64
 	pollingDeadlineMissTotal   uint64
 	pollResultsTotal           map[taskResultKey]uint64
@@ -171,6 +182,11 @@ func NewRegistry() *Registry {
 		bulkOperationInFlight:      make(map[bulkOperationInFlightKey]float64),
 		bulkOperationLimits:        make(map[bulkOperationLimitKey]float64),
 		bulkOperationRejections:    make(map[bulkOperationRejectionKey]uint64),
+		bulkOperationCompletions:   make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationDuration:      make(map[bulkOperationCompletionKey]*histogram),
+		bulkOperationDevices:       make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationFiles:         make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationBytes:         make(map[bulkOperationCompletionKey]uint64),
 		schedulerTaskDuration: map[domain.VolatilityClass]*histogram{
 			domain.VolatilityClassPerformance: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassOperational: newHistogram(durationBucketsSeconds),
@@ -274,6 +290,31 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_bulk_operation_concurrency_limit",
 		"Configured bulk operation concurrency limits by operation, scope, and source.",
 		sortedBulkOperationLimitRows(r.bulkOperationLimits),
+	)
+	writeCounterVec(&b,
+		"theia_bulk_operation_completions_total",
+		"Bulk operation completions by operation, result, and source.",
+		sortedBulkOperationCompletionCounterRows(r.bulkOperationCompletions),
+	)
+	writeHistogramVec(&b,
+		"theia_bulk_operation_duration_seconds",
+		"Bulk operation completion duration by operation, result, and source.",
+		sortedBulkOperationCompletionHistogramRows(r.bulkOperationDuration),
+	)
+	writeCounterVec(&b,
+		"theia_bulk_operation_selected_devices_total",
+		"Bulk operation selected device totals by operation, result, and source.",
+		sortedBulkOperationCompletionCounterRows(r.bulkOperationDevices),
+	)
+	writeCounterVec(&b,
+		"theia_bulk_operation_selected_files_total",
+		"Bulk operation selected file totals by operation, result, and source.",
+		sortedBulkOperationCompletionCounterRows(r.bulkOperationFiles),
+	)
+	writeCounterVec(&b,
+		"theia_bulk_operation_selected_bytes_total",
+		"Bulk operation selected byte totals by operation, result, and source.",
+		sortedBulkOperationCompletionCounterRows(r.bulkOperationBytes),
 	)
 	writeHistogramVec(&b,
 		"theia_scheduler_task_duration_seconds",
@@ -490,6 +531,48 @@ func (r *Registry) SetBulkOperationConcurrencyLimit(operation, scope, source str
 		Scope:     scope,
 		Source:    source,
 	}] = float64(limit)
+}
+
+func (r *Registry) ObserveBulkOperationCompletion(operation, source, result string, duration time.Duration, selectedDevices, selectedFiles int, selectedBytes int64) {
+	if operation == "" || source == "" || result == "" {
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	if selectedDevices < 0 {
+		selectedDevices = 0
+	}
+	if selectedFiles < 0 {
+		selectedFiles = 0
+	}
+	if selectedBytes < 0 {
+		selectedBytes = 0
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := bulkOperationCompletionKey{
+		Operation: operation,
+		Source:    source,
+		Result:    result,
+	}
+	r.bulkOperationCompletions[key]++
+	h, ok := r.bulkOperationDuration[key]
+	if !ok {
+		h = newHistogram(durationBucketsSeconds)
+		r.bulkOperationDuration[key] = h
+	}
+	h.observe(duration.Seconds())
+	if selectedDevices > 0 {
+		r.bulkOperationDevices[key] += uint64(selectedDevices)
+	}
+	if selectedFiles > 0 {
+		r.bulkOperationFiles[key] += uint64(selectedFiles)
+	}
+	if selectedBytes > 0 {
+		r.bulkOperationBytes[key] += uint64(selectedBytes)
+	}
 }
 
 func (r *Registry) ObserveSchedulerTaskDuration(volatility domain.VolatilityClass, duration time.Duration) {
@@ -951,6 +1034,64 @@ func sortedBulkOperationLimitRows(values map[bulkOperationLimitKey]float64) []ga
 		})
 	}
 	return rows
+}
+
+func sortedBulkOperationCompletionCounterRows(values map[bulkOperationCompletionKey]uint64) []counterRow {
+	keys := make([]bulkOperationCompletionKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortBulkOperationCompletionKeys(keys)
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"result":    key.Result,
+				"source":    key.Source,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedBulkOperationCompletionHistogramRows(values map[bulkOperationCompletionKey]*histogram) []histogramRow {
+	keys := make([]bulkOperationCompletionKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortBulkOperationCompletionKeys(keys)
+
+	rows := make([]histogramRow, 0, len(keys))
+	for _, key := range keys {
+		h := values[key]
+		if h == nil {
+			continue
+		}
+		rows = append(rows, histogramRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"result":    key.Result,
+				"source":    key.Source,
+			},
+			value: h.snapshot(),
+		})
+	}
+	return rows
+}
+
+func sortBulkOperationCompletionKeys(keys []bulkOperationCompletionKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		if keys[i].Result != keys[j].Result {
+			return keys[i].Result < keys[j].Result
+		}
+		return keys[i].Source < keys[j].Source
+	})
 }
 
 func sortedVolatilityHistogramRows(values map[domain.VolatilityClass]*histogram) []histogramRow {

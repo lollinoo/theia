@@ -52,6 +52,7 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.SetBulkOperationInFlight("bulk_download", "local", 2)
 	registry.SetBulkOperationConcurrencyLimit("bulk_download", "global", "local", 4)
 	registry.IncBulkOperationRejection("bulk_download", "global_concurrency_limit", "local")
+	registry.ObserveBulkOperationCompletion("bulk_download", "local", "success", 150*time.Millisecond, 2, 3, 128)
 	registry.AddUnknownNeighbors(deviceID, domain.DiscoveryProtocolLLDP, 4)
 	registry.AddDroppedStateChanges(7)
 
@@ -104,6 +105,11 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_bulk_operation_in_flight{operation="bulk_download",source="local"} 2`)
 	assertContainsMetric(t, body, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="global",source="local"} 4`)
 	assertContainsMetric(t, body, `theia_bulk_operation_rejections_total{operation="bulk_download",reason="global_concurrency_limit",source="local"} 1`)
+	assertContainsMetric(t, body, `theia_bulk_operation_completions_total{operation="bulk_download",result="success",source="local"} 1`)
+	assertContainsMetric(t, body, `theia_bulk_operation_duration_seconds_count{operation="bulk_download",result="success",source="local"} 1`)
+	assertContainsMetric(t, body, `theia_bulk_operation_selected_devices_total{operation="bulk_download",result="success",source="local"} 2`)
+	assertContainsMetric(t, body, `theia_bulk_operation_selected_files_total{operation="bulk_download",result="success",source="local"} 3`)
+	assertContainsMetric(t, body, `theia_bulk_operation_selected_bytes_total{operation="bulk_download",result="success",source="local"} 128`)
 	assertContainsMetric(t, body, `theia_unknown_neighbors_total{device_id="`+deviceID.String()+`",protocol="lldp"} 4`)
 	assertContainsMetric(t, body, `theia_state_changes_dropped_total 7`)
 }

@@ -1471,6 +1471,42 @@ func TestCancelPendingBulkRunItemsKeepsActiveItemsCompleting(t *testing.T) {
 	}
 }
 
+func TestFinishBulkBackupRunRecordsCompletionMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusRunning)
+	startedAt := time.Now().UTC().Add(-2 * time.Second)
+	runRepo.mu.Lock()
+	runRepo.runs[runID].StartedAt = &startedAt
+	runRepo.items[runID] = []domain.BulkBackupRunItem{
+		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusSuccess},
+		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusSkipped},
+	}
+	runRepo.mu.Unlock()
+
+	svc.finishBulkBackupRun(runID)
+
+	stored, err := runRepo.GetRun(runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if stored.Status != domain.BulkBackupRunStatusPartial {
+		t.Fatalf("run status = %s, want partial", stored.Status)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	for _, needle := range []string{
+		`theia_bulk_operation_completions_total{operation="bulk_backup_run",result="partial",source="distributed"} 1`,
+		`theia_bulk_operation_duration_seconds_count{operation="bulk_backup_run",result="partial",source="distributed"} 1`,
+		`theia_bulk_operation_selected_devices_total{operation="bulk_backup_run",result="partial",source="distributed"} 2`,
+	} {
+		if !strings.Contains(metrics, needle) {
+			t.Fatalf("expected bulk backup run metric %q, got:\n%s", needle, metrics)
+		}
+	}
+}
+
 func TestStartBulkBackupRunRejectsDeviceCountOverLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()

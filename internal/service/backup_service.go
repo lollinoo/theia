@@ -983,7 +983,25 @@ func (s *BackupService) finishBulkBackupRun(runID uuid.UUID) {
 	}
 	if err := s.bulkRunRepo.UpdateRun(run); err != nil {
 		log.Printf("Warning: failed to finish bulk backup run %s: %v", runID, err)
+		return
 	}
+	durationStart := run.CreatedAt
+	if run.StartedAt != nil {
+		durationStart = *run.StartedAt
+	}
+	duration := time.Duration(0)
+	if run.CompletedAt != nil && !durationStart.IsZero() {
+		duration = run.CompletedAt.Sub(durationStart)
+	}
+	observability.Default().ObserveBulkOperationCompletion(
+		"bulk_backup_run",
+		"distributed",
+		string(run.Status),
+		duration,
+		run.TotalCount,
+		0,
+		0,
+	)
 }
 
 func (s *BackupService) recalculateBulkRunCounters(runID uuid.UUID) {

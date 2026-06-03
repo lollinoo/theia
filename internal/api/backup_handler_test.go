@@ -1548,6 +1548,10 @@ func TestBackupHandlerBulkDownloadReportsQuotaRejectionMetrics(t *testing.T) {
 }
 
 func TestBackupHandlerBulkDownloadReportsSelectedFileAndByteTotals(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
 	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
@@ -1577,9 +1581,25 @@ func TestBackupHandlerBulkDownloadReportsSelectedFileAndByteTotals(t *testing.T)
 	if got := rec.Header().Get("X-Bulk-Download-Device-Count"); got != "2" {
 		t.Fatalf("X-Bulk-Download-Device-Count = %q, want 2", got)
 	}
+	metrics := string(registry.MarshalPrometheus())
+	for _, needle := range []string{
+		`theia_bulk_operation_completions_total{operation="bulk_download",result="success",source="local"} 1`,
+		`theia_bulk_operation_duration_seconds_count{operation="bulk_download",result="success",source="local"} 1`,
+		`theia_bulk_operation_selected_devices_total{operation="bulk_download",result="success",source="local"} 2`,
+		`theia_bulk_operation_selected_files_total{operation="bulk_download",result="success",source="local"} 2`,
+		`theia_bulk_operation_selected_bytes_total{operation="bulk_download",result="success",source="local"} 12`,
+	} {
+		if !strings.Contains(metrics, needle) {
+			t.Fatalf("expected bulk download metric %q, got:\n%s", needle, metrics)
+		}
+	}
 }
 
 func TestBackupHandlerBulkDownloadStreamsSelectedFilesAndKeepsPrevalidatedTotalsOnFileError(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
 	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
@@ -1639,6 +1659,16 @@ func TestBackupHandlerBulkDownloadStreamsSelectedFilesAndKeepsPrevalidatedTotals
 	}
 	if got := rec.Header().Get("X-Bulk-Download-Device-Count"); got != "2" {
 		t.Fatalf("X-Bulk-Download-Device-Count = %q, want 2 selected devices", got)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	for _, needle := range []string{
+		`theia_bulk_operation_completions_total{operation="bulk_download",result="partial",source="local"} 1`,
+		`theia_bulk_operation_duration_seconds_count{operation="bulk_download",result="partial",source="local"} 1`,
+		fmt.Sprintf(`theia_bulk_operation_selected_bytes_total{operation="bulk_download",result="partial",source="local"} %d`, len(goodContent)+len(missingContent)),
+	} {
+		if !strings.Contains(metrics, needle) {
+			t.Fatalf("expected partial bulk download metric %q, got:\n%s", needle, metrics)
+		}
 	}
 }
 
@@ -1863,6 +1893,9 @@ func TestBackupHandlerBulkDownloadReportsDistributedInFlightAndLimits(t *testing
 	metrics = string(registry.MarshalPrometheus())
 	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="distributed"} 0`) {
 		t.Fatalf("expected distributed in-flight metric to return to zero, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_completions_total{operation="bulk_download",result="success",source="distributed"} 1`) {
+		t.Fatalf("expected distributed completion metric, got:\n%s", metrics)
 	}
 }
 

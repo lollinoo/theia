@@ -604,6 +604,7 @@ func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request)
 // Body: {"device_ids": ["uuid", ...]}
 // Returns a zip file containing the latest successful backup files for each device.
 func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
 	var req struct {
 		DeviceIDs []string `json:"device_ids"`
 	}
@@ -683,6 +684,7 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "no backup files found for the given devices")
 		return
 	}
+	completionSource := h.bulkDownloadCompletionSource()
 	var totalBytes int64
 	for _, entry := range entries {
 		totalBytes += entry.SizeBytes
@@ -716,9 +718,29 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	if err := zw.Close(); err != nil {
 		zipErrors = append(zipErrors, fmt.Sprintf("zip close failed: %v", err))
 	}
+	result := "success"
+	if len(zipErrors) > 0 {
+		result = "partial"
+	}
+	observability.Default().ObserveBulkOperationCompletion(
+		"bulk_download",
+		completionSource,
+		result,
+		time.Since(startedAt),
+		bulkDownloadSelectedDeviceCount(entries),
+		len(entries),
+		totalBytes,
+	)
 	if err := h.auditBulkDownloadCompleted(r, len(deviceIDs), entries, totalBytes, len(zipErrors)); err != nil {
 		log.Printf("backup: failed to append bulk download audit log: %v", err)
 	}
+}
+
+func (h *BackupHandler) bulkDownloadCompletionSource() string {
+	if h != nil && h.bulkDownloadLeaseRepo != nil {
+		return "distributed"
+	}
+	return "local"
 }
 
 // writeBulkZipEntries writes backup file entries into a zip writer using
