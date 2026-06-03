@@ -1917,6 +1917,29 @@ describe('triggerBulkDownload', () => {
       'Too many backup files selected for bulk download. Maximum 500, requested 501.',
     );
   });
+
+  it('does not open the save picker when the bulk download is rejected before streaming', async () => {
+    const showSaveFilePicker = vi.fn().mockResolvedValue({
+      createWritable: vi.fn(),
+    });
+    vi.stubGlobal('showSaveFilePicker', showSaveFilePicker);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(
+          {
+            error: 'bulk download already in progress for this user',
+          },
+          { ok: false, status: 429, statusText: 'Too Many Requests' },
+        ),
+      ),
+    );
+
+    await expect(triggerBulkDownload(['dev-1'])).rejects.toThrow(
+      'bulk download already in progress for this user',
+    );
+    expect(showSaveFilePicker).not.toHaveBeenCalled();
+  });
 });
 
 describe('triggerBulkBackup', () => {

@@ -1786,7 +1786,6 @@ export async function triggerBulkDownload(
   options: BulkDownloadOptions = {},
 ): Promise<BulkDownloadResult> {
   const suggestedFilename = options.filename ?? defaultBulkDownloadFilename();
-  const saveTarget = prepareStreamingSaveTarget(suggestedFilename);
   const response = await fetch('/api/v1/backups/bulk-download', {
     method: 'POST',
     headers: headersWithCsrf({ 'Content-Type': 'application/json' }),
@@ -1804,6 +1803,7 @@ export async function triggerBulkDownload(
   const disposition = response.headers.get('Content-Disposition') ?? '';
   const match = disposition.match(/filename="(.+?)"/);
   const filename = options.filename ?? match?.[1] ?? suggestedFilename;
+  const saveTarget = prepareStreamingSaveTarget(filename);
 
   return saveDownloadResponse(response, filename, saveTarget);
 }
