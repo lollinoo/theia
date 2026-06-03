@@ -43,6 +43,12 @@ type schedulerBackpressureKey struct {
 	Reason          string
 }
 
+type bulkOperationRejectionKey struct {
+	Operation string
+	Reason    string
+	Source    string
+}
+
 type wsMetricKey struct {
 	Scope string
 	Type  string
@@ -103,6 +109,7 @@ type Registry struct {
 	schedulerTaskDispatchTotal map[domain.VolatilityClass]uint64
 	schedulerBackpressureTotal map[schedulerBackpressureKey]uint64
 	schedulerTaskDuration      map[domain.VolatilityClass]*histogram
+	bulkOperationRejections    map[bulkOperationRejectionKey]uint64
 	pollingEssentialOverloaded float64
 	pollingDeadlineMissTotal   uint64
 	pollResultsTotal           map[taskResultKey]uint64
@@ -147,6 +154,7 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassStatic:      0,
 		},
 		schedulerBackpressureTotal: make(map[schedulerBackpressureKey]uint64),
+		bulkOperationRejections:    make(map[bulkOperationRejectionKey]uint64),
 		schedulerTaskDuration: map[domain.VolatilityClass]*histogram{
 			domain.VolatilityClassPerformance: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassOperational: newHistogram(durationBucketsSeconds),
@@ -234,6 +242,11 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_scheduler_backpressure_total",
 		"Scheduler backpressure events by volatility class and reason.",
 		sortedSchedulerBackpressureRows(r.schedulerBackpressureTotal),
+	)
+	writeCounterVec(&b,
+		"theia_bulk_operation_rejections_total",
+		"Bulk operation request rejections by operation, reason, and source.",
+		sortedBulkOperationRejectionRows(r.bulkOperationRejections),
 	)
 	writeHistogramVec(&b,
 		"theia_scheduler_task_duration_seconds",
@@ -397,6 +410,20 @@ func (r *Registry) IncSchedulerBackpressure(volatility domain.VolatilityClass, r
 	r.schedulerBackpressureTotal[schedulerBackpressureKey{
 		VolatilityClass: string(volatility),
 		Reason:          reason,
+	}]++
+}
+
+func (r *Registry) IncBulkOperationRejection(operation, reason, source string) {
+	if operation == "" || reason == "" || source == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bulkOperationRejections[bulkOperationRejectionKey{
+		Operation: operation,
+		Reason:    reason,
+		Source:    source,
 	}]++
 }
 
@@ -761,6 +788,35 @@ func sortedSchedulerBackpressureRows(values map[schedulerBackpressureKey]uint64)
 			labels: map[string]string{
 				"volatility_class": key.VolatilityClass,
 				"reason":           key.Reason,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedBulkOperationRejectionRows(values map[bulkOperationRejectionKey]uint64) []counterRow {
+	keys := make([]bulkOperationRejectionKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		if keys[i].Reason != keys[j].Reason {
+			return keys[i].Reason < keys[j].Reason
+		}
+		return keys[i].Source < keys[j].Source
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"reason":    key.Reason,
+				"source":    key.Source,
 			},
 			value: values[key],
 		})

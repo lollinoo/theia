@@ -47,6 +47,7 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.AddWSOverviewMailboxCleared("client_mailbox_full", 2)
 	registry.IncWSOverviewResyncSuppressed("client_resync_scheduled")
 	registry.SetWSConnectedClients(3)
+	registry.IncBulkOperationRejection("bulk_download", "global_concurrency_limit", "local")
 	registry.AddUnknownNeighbors(deviceID, domain.DiscoveryProtocolLLDP, 4)
 	registry.AddDroppedStateChanges(7)
 
@@ -94,6 +95,7 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_ws_overview_mailbox_clear_total{reason="client_mailbox_full"} 2`)
 	assertContainsMetric(t, body, `theia_ws_overview_resync_suppressed_total{reason="client_resync_scheduled"} 1`)
 	assertContainsMetric(t, body, `theia_ws_connected_clients 3`)
+	assertContainsMetric(t, body, `theia_bulk_operation_rejections_total{operation="bulk_download",reason="global_concurrency_limit",source="local"} 1`)
 	assertContainsMetric(t, body, `theia_unknown_neighbors_total{device_id="`+deviceID.String()+`",protocol="lldp"} 4`)
 	assertContainsMetric(t, body, `theia_state_changes_dropped_total 7`)
 }

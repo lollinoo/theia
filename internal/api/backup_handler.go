@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/service"
 )
 
@@ -738,6 +739,7 @@ func (h *BackupHandler) auditBulkDownloadCompleted(
 }
 
 func (h *BackupHandler) auditBulkDownloadRejected(r *http.Request, requestedDeviceCount int, reason string) error {
+	observability.Default().IncBulkOperationRejection("bulk_download", reason, bulkOperationRejectionSource(reason))
 	if h.auditLogs == nil {
 		return nil
 	}
@@ -779,6 +781,13 @@ func (h *BackupHandler) auditBulkRunStarted(r *http.Request, requestedDeviceCoun
 		run.ID.String(),
 		metadata,
 	)
+}
+
+func bulkOperationRejectionSource(reason string) string {
+	if strings.HasPrefix(reason, "distributed_") {
+		return "distributed"
+	}
+	return "local"
 }
 
 func (h *BackupHandler) appendBackupAuditLog(

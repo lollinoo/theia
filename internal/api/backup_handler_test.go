@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/vendor"
 	gossh "golang.org/x/crypto/ssh"
@@ -1605,6 +1606,7 @@ func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAcrossHandlersForSameA
 }
 
 func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAtGlobalLimit(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, _ := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, service.BulkOperationLimits{
 		BulkBackupMaxDevices:              10,
@@ -1644,6 +1646,10 @@ func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAtGlobalLimit(t *testi
 	}
 	if got := secondRec.Header().Get("Retry-After"); got != fmt.Sprint(bulkOperationRetryAfterSeconds) {
 		t.Fatalf("Retry-After = %q, want %d", got, bulkOperationRetryAfterSeconds)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_download",reason="global_concurrency_limit",source="local"} 1`) {
+		t.Fatalf("expected local global-limit rejection metric, got:\n%s", metrics)
 	}
 }
 
