@@ -405,6 +405,7 @@ func (h *CanvasMapHandler) HandleRemoveDevice(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleAddDevice adds map-local device membership and optionally connected links.
 func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -438,68 +439,18 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		includeConnectedLinks = *req.IncludeConnectedLinks
 	}
 
-	device, err := h.deviceService.GetDevice(r.Context(), deviceID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "canvas map device not found")
-		return
-	}
-	membership, err := h.mapRepo.GetMembership(canvasMap.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
-		return
-	}
-	adder, ok := h.mapRepo.(interface {
-		AddDeviceMembership(uuid.UUID, domain.CanvasMapDeviceMembership, []uuid.UUID, []domain.CanvasMapAreaMembership) error
-	})
+	adder, ok := h.mapRepo.(canvasmap.AddDeviceMembershipMapRepository)
 	if !ok {
 		writeError(w, http.StatusNotImplemented, "canvas map incremental membership unavailable")
 		return
 	}
-
-	memberDevices := []domain.Device{}
-	areas := []domain.CanvasMapAreaMembership{}
-	_, existingMember := canvasmap.MemberByDeviceID(membership, deviceID)
-	if !existingMember && canvasmap.NormalizeDeviceAddress(device.IP) != "" {
-		memberDevices, err = h.deviceService.GetDevicesByIDs(r.Context(), canvasmap.MembershipDeviceIDs(membership.Devices))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list canvas map devices", err)
-			return
-		}
-		if _, err := canvasmap.PlanAddDeviceMembership(*device, membership, memberDevices, nil, nil, false); err != nil {
-			h.writeCanvasMapAddDevicePlanError(w, err)
-			return
-		}
-	}
-
-	links := []domain.Link{}
-	if includeConnectedLinks {
-		links, err = h.linkRepo.GetByDeviceID(deviceID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list canvas map device links", err)
-			return
-		}
-	}
-
-	if !existingMember {
-		areas, err = h.canvasMapAreaMembershipsForDevice(device)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load canvas map device areas", err)
-			return
-		}
-	}
-	plan, err := canvasmap.PlanAddDeviceMembership(*device, membership, memberDevices, links, areas, includeConnectedLinks)
-	if err != nil {
-		h.writeCanvasMapAddDevicePlanError(w, err)
-		return
-	}
-
-	if err := adder.AddDeviceMembership(
-		canvasMap.ID,
-		plan.Device,
-		plan.LinkIDs,
-		plan.Areas,
-	); err != nil {
-		h.writeMapRepoMutationError(w, err)
+	if err := canvasmap.AddDeviceToMaterializedMembership(r.Context(), canvasMap.ID, deviceID, includeConnectedLinks, canvasmap.AddDeviceMembershipDeps{
+		Maps:    adder,
+		Devices: h.deviceService,
+		Links:   h.linkRepo,
+		Areas:   h.areaRepo,
+	}); err != nil {
+		h.writeCanvasMapAddDeviceWorkflowError(w, err)
 		return
 	}
 
@@ -1241,6 +1192,32 @@ func (h *CanvasMapHandler) writeCanvasMapDefaultPositionCopyError(w http.Respons
 	}
 }
 
+// writeCanvasMapAddDeviceWorkflowError maps add-device service stages and plan errors to existing HTTP errors.
+func (h *CanvasMapHandler) writeCanvasMapAddDeviceWorkflowError(w http.ResponseWriter, err error) {
+	var workflowErr canvasmap.AddDeviceMembershipError
+	if !errors.As(err, &workflowErr) {
+		h.writeCanvasMapAddDevicePlanError(w, err)
+		return
+	}
+
+	switch workflowErr.Stage {
+	case canvasmap.AddDeviceMembershipStageDevice:
+		writeError(w, http.StatusNotFound, "canvas map device not found")
+	case canvasmap.AddDeviceMembershipStageMembership:
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", workflowErr.Err)
+	case canvasmap.AddDeviceMembershipStageMemberDevices:
+		writeError(w, http.StatusInternalServerError, "failed to list canvas map devices", workflowErr.Err)
+	case canvasmap.AddDeviceMembershipStageLinks:
+		writeError(w, http.StatusInternalServerError, "failed to list canvas map device links", workflowErr.Err)
+	case canvasmap.AddDeviceMembershipStageAreas:
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map device areas", workflowErr.Err)
+	case canvasmap.AddDeviceMembershipStagePersist:
+		h.writeMapRepoMutationError(w, workflowErr.Err)
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to add canvas map device", workflowErr.Err)
+	}
+}
+
 func (h *CanvasMapHandler) writeCanvasMapAreaMutationError(w http.ResponseWriter, err error) {
 	switch {
 	case isCanvasMapNotFoundError(err), isAreaNotFoundError(err):
@@ -1289,21 +1266,6 @@ func (h *CanvasMapHandler) writeCanvasMapTopologyLoadError(w http.ResponseWriter
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to load canvas map topology", err)
 	}
-}
-
-func (h *CanvasMapHandler) canvasMapAreaMembershipsForDevice(device *domain.Device) ([]domain.CanvasMapAreaMembership, error) {
-	if device == nil || len(device.AreaIDs) == 0 {
-		return []domain.CanvasMapAreaMembership{}, nil
-	}
-	areas := make([]domain.Area, 0, len(device.AreaIDs))
-	for _, areaID := range device.AreaIDs {
-		area, err := h.areaRepo.GetByID(areaID)
-		if err != nil {
-			return nil, err
-		}
-		areas = append(areas, *area)
-	}
-	return canvasmap.AreasToMembership(areas), nil
 }
 
 func parseCanvasMapDeviceAction(action string) (uuid.UUID, bool) {
