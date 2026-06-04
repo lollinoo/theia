@@ -862,6 +862,7 @@ func (h *CanvasMapHandler) HandleSavePositions(w http.ResponseWriter, r *http.Re
 	})
 }
 
+// buildMapTopologyResponse keeps the HTTP response shape while canvasmap loads and projects saved-map topology.
 func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *http.Request) (canvasTopologyResponse, bool) {
 	if !h.requireMapRepos(w) {
 		return canvasTopologyResponse{}, false
@@ -874,43 +875,19 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 	if !ok {
 		return canvasTopologyResponse{}, false
 	}
-	if err := h.isolateCanvasMapVirtualDevices(r.Context(), canvasMap.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to isolate canvas map virtual devices", err)
-		return canvasTopologyResponse{}, false
-	}
-	canvasMap, err := h.mapRepo.GetByID(canvasMap.ID)
+	loaded, err := canvasmap.LoadTopology(r.Context(), canvasMap.ID, canvasmap.TopologyLoadDeps{
+		Maps:      h.mapRepo,
+		Positions: h.mapPositionRepo,
+		Devices:   canvasMapVirtualIsolationDeviceService{service: h.deviceService},
+		Links:     h.linkRepo,
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load canvas map", err)
+		h.writeCanvasMapTopologyLoadError(w, err)
 		return canvasTopologyResponse{}, false
 	}
 
-	positions, err := h.mapPositionRepo.GetAllForMap(canvasMap.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list canvas map positions", err)
-		return canvasTopologyResponse{}, false
-	}
-	var responsePlan canvasmap.TopologyResponsePlan
-	if canvasMap.MembershipMaterialized {
-		membership, err := h.mapRepo.GetMembership(canvasMap.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
-			return canvasTopologyResponse{}, false
-		}
-		devices, err := h.deviceService.GetDevicesByIDs(r.Context(), canvasmap.MembershipDeviceIDs(membership.Devices))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list canvas map devices", err)
-			return canvasTopologyResponse{}, false
-		}
-		links, err := canvasmap.LoadLinksByIDs(h.linkRepo, membership.LinkIDs)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list canvas map links", err)
-			return canvasTopologyResponse{}, false
-		}
-		responsePlan = canvasmap.BuildMaterializedTopologyResponsePlan(membership, devices, links, positions)
-	} else {
-		responsePlan = canvasmap.EmptyTopologyResponsePlan()
-	}
-
+	canvasMap = loaded.Map
+	responsePlan := loaded.Plan
 	response := h.canvasTopology.buildResponse(responsePlan.Devices, responsePlan.Links, responsePlan.Positions, responsePlan.Areas)
 	applyCanvasMapDeviceVisualColors(response.Devices, responsePlan.VisualColors)
 	mapResponse := mapToResponse(canvasMap)
@@ -1300,6 +1277,31 @@ func (h *CanvasMapHandler) writeCanvasMapAddDevicePlanError(w http.ResponseWrite
 		writeError(w, http.StatusConflict, duplicateAddress.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to plan canvas map device membership", err)
+	}
+}
+
+// writeCanvasMapTopologyLoadError maps service load stages back to the existing HTTP error messages.
+func (h *CanvasMapHandler) writeCanvasMapTopologyLoadError(w http.ResponseWriter, err error) {
+	var loadErr canvasmap.TopologyLoadError
+	if !errors.As(err, &loadErr) {
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map topology", err)
+		return
+	}
+	switch loadErr.Stage {
+	case canvasmap.TopologyLoadStageIsolate:
+		writeError(w, http.StatusInternalServerError, "failed to isolate canvas map virtual devices", err)
+	case canvasmap.TopologyLoadStageMap:
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map", err)
+	case canvasmap.TopologyLoadStagePositions:
+		writeError(w, http.StatusInternalServerError, "failed to list canvas map positions", err)
+	case canvasmap.TopologyLoadStageMembership:
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
+	case canvasmap.TopologyLoadStageDevices:
+		writeError(w, http.StatusInternalServerError, "failed to list canvas map devices", err)
+	case canvasmap.TopologyLoadStageLinks:
+		writeError(w, http.StatusInternalServerError, "failed to list canvas map links", err)
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map topology", err)
 	}
 }
 
