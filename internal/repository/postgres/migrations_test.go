@@ -1,10 +1,13 @@
 package postgres
 
 import (
+	"encoding/base64"
 	"io/fs"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	theiacrypto "github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
@@ -303,6 +306,140 @@ func TestRunMigrationsOnConfiguredPostgresTestDB(t *testing.T) {
 		if assignedCount != len(domain.SystemRolePermissionKeys(roleName)) {
 			t.Fatalf("permission count for role %q = %d, want %d", roleName, assignedCount, len(domain.SystemRolePermissionKeys(roleName)))
 		}
+	}
+}
+
+func TestNormalizeSensitiveMigrationField(t *testing.T) {
+	keyring := mustTestKeyring(t, "kid-new", map[string]string{
+		"kid-old": "old migration secret",
+		"kid-new": "new migration secret",
+	})
+
+	t.Run("plaintext becomes active envelope", func(t *testing.T) {
+		normalized, changed, err := normalizeSensitiveMigrationField("plain-secret", keyring)
+		if err != nil {
+			t.Fatalf("normalizeSensitiveMigrationField failed: %v", err)
+		}
+		if !changed {
+			t.Fatal("changed = false, want true")
+		}
+		assertEnvelopeWithKeyID(t, normalized, "kid-new")
+	})
+
+	t.Run("legacy ciphertext becomes active envelope", func(t *testing.T) {
+		legacyRaw, err := theiacrypto.Encrypt([]byte("legacy-secret"), theiacrypto.DeriveKey("kid legacy passphrase"))
+		if err != nil {
+			t.Fatalf("legacy Encrypt failed: %v", err)
+		}
+		keyring := mustTestKeyring(t, "kid-new", map[string]string{
+			"kid-new": "new migration secret",
+			"legacy":  "kid legacy passphrase",
+		})
+
+		normalized, changed, err := normalizeSensitiveMigrationField(base64.StdEncoding.EncodeToString(legacyRaw), keyring)
+		if err != nil {
+			t.Fatalf("normalizeSensitiveMigrationField failed: %v", err)
+		}
+		if !changed {
+			t.Fatal("changed = false, want true")
+		}
+		assertEnvelopeWithKeyID(t, normalized, "kid-new")
+	})
+
+	t.Run("old key envelope becomes active envelope", func(t *testing.T) {
+		oldKeyring := mustTestKeyring(t, "kid-old", map[string]string{
+			"kid-old": "old migration secret",
+			"kid-new": "new migration secret",
+		})
+		oldEnvelope, err := oldKeyring.EncryptString("old-envelope-secret")
+		if err != nil {
+			t.Fatalf("EncryptString failed: %v", err)
+		}
+
+		normalized, changed, err := normalizeSensitiveMigrationField(oldEnvelope, keyring)
+		if err != nil {
+			t.Fatalf("normalizeSensitiveMigrationField failed: %v", err)
+		}
+		if !changed {
+			t.Fatal("changed = false, want true")
+		}
+		assertEnvelopeWithKeyID(t, normalized, "kid-new")
+	})
+
+	t.Run("active envelope is unchanged", func(t *testing.T) {
+		activeEnvelope, err := keyring.EncryptString("active-envelope-secret")
+		if err != nil {
+			t.Fatalf("EncryptString failed: %v", err)
+		}
+
+		normalized, changed, err := normalizeSensitiveMigrationField(activeEnvelope, keyring)
+		if err != nil {
+			t.Fatalf("normalizeSensitiveMigrationField failed: %v", err)
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+		if normalized != activeEnvelope {
+			t.Fatal("active envelope should remain byte-for-byte unchanged")
+		}
+	})
+
+	t.Run("undecryptable encrypted-looking field errors", func(t *testing.T) {
+		bogus := base64.StdEncoding.EncodeToString([]byte("1234567890121234567890123456"))
+		_, _, err := normalizeSensitiveMigrationField(bogus, keyring)
+		if err == nil {
+			t.Fatal("normalizeSensitiveMigrationField error = nil, want error")
+		}
+	})
+}
+
+func TestRunMigrationsNormalizesCredentialProfileSecrets(t *testing.T) {
+	db := setupTestDB(t)
+	keyring := mustTestKeyring(t, "kid-active", map[string]string{
+		"kid-active": "active credential migration secret",
+	})
+	profileID := uuid.New()
+	if _, err := db.Exec(
+		`INSERT INTO credential_profiles (id, name, description, username, port, auth_method, encrypted_secret, role, created_at, updated_at)
+		 VALUES ($1, 'ssh-profile', '', 'admin', 22, 'password', 'plain-ssh-secret', 'Admin', NOW(), NOW())`,
+		profileID.String(),
+	); err != nil {
+		t.Fatalf("inserting credential profile: %v", err)
+	}
+
+	if err := RunMigrations(db, keyring); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	var normalized string
+	if err := db.QueryRow(`SELECT encrypted_secret FROM credential_profiles WHERE id = $1`, profileID.String()).Scan(&normalized); err != nil {
+		t.Fatalf("querying normalized secret: %v", err)
+	}
+	assertEnvelopeWithKeyID(t, normalized, "kid-active")
+	if strings.Contains(normalized, "plain-ssh-secret") {
+		t.Fatal("normalized secret contains plaintext")
+	}
+
+	if err := RunMigrations(db, keyring); err != nil {
+		t.Fatalf("second RunMigrations failed: %v", err)
+	}
+	var afterSecondRun string
+	if err := db.QueryRow(`SELECT encrypted_secret FROM credential_profiles WHERE id = $1`, profileID.String()).Scan(&afterSecondRun); err != nil {
+		t.Fatalf("querying secret after second run: %v", err)
+	}
+	if afterSecondRun != normalized {
+		t.Fatal("credential profile secret migration is not idempotent")
+	}
+}
+
+func assertEnvelopeWithKeyID(t *testing.T, value, wantKeyID string) {
+	t.Helper()
+	keyID, err := theiacrypto.EnvelopeKeyID(value)
+	if err != nil {
+		t.Fatalf("EnvelopeKeyID failed: %v", err)
+	}
+	if keyID != wantKeyID {
+		t.Fatalf("envelope key id = %q, want %q", keyID, wantKeyID)
 	}
 }
 

@@ -277,6 +277,17 @@ func IsEnvelope(value string) bool {
 	return strings.HasPrefix(value, EnvelopePrefix)
 }
 
+func EnvelopeKeyID(value string) (string, error) {
+	env, err := decodeEnvelope(value)
+	if err != nil {
+		return "", err
+	}
+	if env.KeyID == "" {
+		return "", fmt.Errorf("encryption envelope key_id is required")
+	}
+	return env.KeyID, nil
+}
+
 func (k *Keyring) decryptEnvelope(env envelope) ([]byte, error) {
 	if k == nil {
 		return nil, fmt.Errorf("encryption keyring is nil")

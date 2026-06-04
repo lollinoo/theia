@@ -110,9 +110,13 @@ func migrateEncryptSNMPCredentials(db *sql.DB, encryptionKey any) error {
 	if err != nil {
 		return fmt.Errorf("migrating SNMP profile credentials: %w", err)
 	}
+	credentialProfileCount, err := migrateCredentialProfileSecrets(db, encryptionKey)
+	if err != nil {
+		return fmt.Errorf("migrating credential profile secrets: %w", err)
+	}
 
-	if deviceCount > 0 || profileCount > 0 {
-		log.Printf("SNMP credential encryption migration: %d devices, %d profiles updated", deviceCount, profileCount)
+	if deviceCount > 0 || profileCount > 0 || credentialProfileCount > 0 {
+		log.Printf("Credential encryption migration: %d devices, %d SNMP profiles, %d credential profiles updated", deviceCount, profileCount, credentialProfileCount)
 	}
 	return nil
 }
@@ -153,19 +157,11 @@ func migrateDeviceSNMPCredentials(db *sql.DB, key any) (int, error) {
 			continue
 		}
 
-		if hasUndecryptableEncryptedSNMPCredentials(&creds, key) {
-			log.Printf("Warning: skipping device %s SNMP migration (credentials look encrypted but cannot be decrypted with current key)", r.id)
-			continue
+		changed, err := normalizeSNMPCredentialsForMigration(&creds, key)
+		if err != nil {
+			return updated, fmt.Errorf("device %s has SNMP credentials that cannot be normalized: %w", r.id, err)
 		}
-
-		// Check if already encrypted by attempting decrypt
-		if isAlreadyEncrypted(&creds, key) {
-			continue
-		}
-
-		// Encrypt plaintext credentials
-		if err := encryptSNMPCredentials(&creds, key); err != nil {
-			log.Printf("Warning: failed to encrypt SNMP creds for device %s: %v", r.id, err)
+		if !changed {
 			continue
 		}
 
@@ -219,17 +215,11 @@ func migrateSNMPProfileCredentials(db *sql.DB, key any) (int, error) {
 			continue
 		}
 
-		if hasUndecryptableEncryptedSNMPCredentials(&creds, key) {
-			log.Printf("Warning: skipping profile %s SNMP migration (credentials look encrypted but cannot be decrypted with current key)", r.id)
-			continue
+		changed, err := normalizeSNMPCredentialsForMigration(&creds, key)
+		if err != nil {
+			return updated, fmt.Errorf("SNMP profile %s has credentials that cannot be normalized: %w", r.id, err)
 		}
-
-		if isAlreadyEncrypted(&creds, key) {
-			continue
-		}
-
-		if err := encryptSNMPCredentials(&creds, key); err != nil {
-			log.Printf("Warning: failed to encrypt SNMP creds for profile %s: %v", r.id, err)
+		if !changed {
 			continue
 		}
 
@@ -247,6 +237,47 @@ func migrateSNMPProfileCredentials(db *sql.DB, key any) (int, error) {
 	return updated, nil
 }
 
+func migrateCredentialProfileSecrets(db *sql.DB, key any) (int, error) {
+	queryDB := wrapDB(db)
+	rows, err := db.Query("SELECT id, encrypted_secret FROM credential_profiles WHERE encrypted_secret != ''")
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	type row struct {
+		id              string
+		encryptedSecret string
+	}
+	var toUpdate []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.encryptedSecret); err != nil {
+			return 0, err
+		}
+		toUpdate = append(toUpdate, r)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, r := range toUpdate {
+		normalized, changed, err := normalizeSensitiveMigrationField(r.encryptedSecret, key)
+		if err != nil {
+			return updated, fmt.Errorf("credential profile %s secret cannot be normalized: %w", r.id, err)
+		}
+		if !changed {
+			continue
+		}
+		if _, err := queryDB.Exec("UPDATE credential_profiles SET encrypted_secret = ? WHERE id = ?", normalized, r.id); err != nil {
+			return updated, fmt.Errorf("updating credential profile %s secret: %w", r.id, err)
+		}
+		updated++
+	}
+	return updated, nil
+}
+
 func hasSensitiveSNMPCredentials(creds *domain.SNMPCredentials) bool {
 	if creds == nil {
 		return false
@@ -258,6 +289,95 @@ func hasSensitiveSNMPCredentials(creds *domain.SNMPCredentials) bool {
 		return creds.V3.AuthPassword != "" || creds.V3.PrivPassword != ""
 	}
 	return false
+}
+
+func normalizeSNMPCredentialsForMigration(creds *domain.SNMPCredentials, key any) (bool, error) {
+	changed := false
+	if creds.V2c != nil && creds.V2c.Community != "" {
+		normalized, fieldChanged, err := normalizeSensitiveMigrationField(creds.V2c.Community, key)
+		if err != nil {
+			return false, fmt.Errorf("v2c community: %w", err)
+		}
+		creds.V2c.Community = normalized
+		changed = changed || fieldChanged
+	}
+	if creds.V3 != nil {
+		if creds.V3.AuthPassword != "" {
+			normalized, fieldChanged, err := normalizeSensitiveMigrationField(creds.V3.AuthPassword, key)
+			if err != nil {
+				return false, fmt.Errorf("v3 auth password: %w", err)
+			}
+			creds.V3.AuthPassword = normalized
+			changed = changed || fieldChanged
+		}
+		if creds.V3.PrivPassword != "" {
+			normalized, fieldChanged, err := normalizeSensitiveMigrationField(creds.V3.PrivPassword, key)
+			if err != nil {
+				return false, fmt.Errorf("v3 priv password: %w", err)
+			}
+			creds.V3.PrivPassword = normalized
+			changed = changed || fieldChanged
+		}
+	}
+	return changed, nil
+}
+
+func normalizeSensitiveMigrationField(value string, key any) (string, bool, error) {
+	if value == "" {
+		return value, false, nil
+	}
+	keyring, ok := key.(*crypto.Keyring)
+	if !ok || keyring == nil {
+		if _, legacyOK := key.([]byte); legacyOK {
+			if _, alreadyEncrypted := tryDecryptFieldWithKeySource(value, key); alreadyEncrypted {
+				return value, false, nil
+			}
+			if looksLikeEncryptedSNMPField(value) {
+				return "", false, fmt.Errorf("legacy ciphertext cannot be decrypted with the configured key")
+			}
+			encrypted, err := encryptSensitiveSNMPField(value, key)
+			if err != nil {
+				return "", false, err
+			}
+			return encrypted, true, nil
+		}
+		return "", false, fmt.Errorf("encryption keyring is required")
+	}
+
+	if crypto.IsEnvelope(value) {
+		keyID, err := crypto.EnvelopeKeyID(value)
+		if err != nil {
+			return "", false, err
+		}
+		plaintext, err := keyring.DecryptString(value)
+		if err != nil {
+			return "", false, err
+		}
+		if keyID == keyring.ActiveKeyID() {
+			return value, false, nil
+		}
+		rewrapped, err := keyring.EncryptString(plaintext)
+		if err != nil {
+			return "", false, err
+		}
+		return rewrapped, true, nil
+	}
+
+	if plaintext, _, err := keyring.DecryptLegacyString(value); err == nil {
+		rewrapped, err := keyring.EncryptString(plaintext)
+		if err != nil {
+			return "", false, err
+		}
+		return rewrapped, true, nil
+	}
+	if looksLikeEncryptedSNMPField(value) {
+		return "", false, fmt.Errorf("encrypted-looking value cannot be decrypted with any configured key")
+	}
+	encrypted, err := keyring.EncryptString(value)
+	if err != nil {
+		return "", false, err
+	}
+	return encrypted, true, nil
 }
 
 func hasUndecryptableEncryptedSNMPCredentials(creds *domain.SNMPCredentials, key any) bool {
