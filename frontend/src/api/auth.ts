@@ -1,5 +1,6 @@
-import { permissionKeysArray, stringArray, stringField } from './parsers';
+import { parseAuthSession } from './authParsers';
 import { requestJSON, requestJSONWithBody } from './transport';
+export { parseAuthUser } from './authParsers';
 
 export interface AuthUser {
   id: string;
@@ -32,47 +33,29 @@ export interface ResetPasswordPayload {
   new_password: string;
 }
 
-export function parseAuthUser(value: unknown): AuthUser {
-  const record =
-    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
-  return {
-    id: stringField(record, 'id'),
-    username: stringField(record, 'username'),
-    email: stringField(record, 'email'),
-    display_name: stringField(record, 'display_name'),
-    status: stringField(record, 'status') || 'unknown',
-    must_change_password: record.must_change_password === true,
-    roles: stringArray(record.roles),
-    permissions: permissionKeysArray(record.permissions),
-  };
-}
-
-function parseAuthSession(payload: unknown): AuthSession {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  const authenticated = record.authenticated === true;
-  const user = authenticated && record.user !== undefined ? parseAuthUser(record.user) : undefined;
-  return user ? { authenticated, user } : { authenticated };
-}
-
+// fetchCurrentUser loads the current password session without adding legacy bearer headers.
 export async function fetchCurrentUser(): Promise<AuthSession> {
   return parseAuthSession(await requestJSON('/api/v1/auth/me'));
 }
 
+// loginUser starts a password session using the public login endpoint.
 export async function loginUser(payload: LoginPayload): Promise<AuthSession> {
   return parseAuthSession(await requestJSONWithBody('/api/v1/auth/login', 'POST', payload));
 }
 
+// logoutUser ends the current password session and returns the unauthenticated session envelope.
 export async function logoutUser(): Promise<AuthSession> {
   return parseAuthSession(await requestJSONWithBody('/api/v1/auth/logout', 'POST'));
 }
 
+// changePassword updates the current password and preserves the returned session contract.
 export async function changePassword(payload: ChangePasswordPayload): Promise<AuthSession> {
   return parseAuthSession(
     await requestJSONWithBody('/api/v1/auth/password/change', 'POST', payload),
   );
 }
 
+// resetPasswordWithToken completes a public password reset token flow.
 export async function resetPasswordWithToken(payload: ResetPasswordPayload): Promise<void> {
   await requestJSONWithBody('/api/v1/auth/password/reset', 'POST', payload);
 }
